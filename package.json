@@ -1,18 +1,23 @@
 {
-  "name": "viride",
+  "name": "orvyn",
   "version": "0.1.0",
   "private": true,
-  "description": "VirIDE — Your Code. Your Models. Your AI.",
+  "description": "ORVYN — Your Code. Your Models. Your AI.",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm run build -w @orvyn/ai-core",
     "backend:dev": "npm run dev -w apps/backend",
     "desktop:dev": "npm run dev -w apps/desktop",
     "build": "npm run build --workspaces --if-present"
   },
   "engines": {
     "node": ">=18"
+  },
+  "allowScripts": {
+    "electron@31.7.7": true,
+    "esbuild@0.21.5": true
   }
 }

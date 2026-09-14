@@ -1,4 +1,4 @@
-# VirIDE
+# ORVYN
 
 **Your Code. Your Models. Your AI.**
 
@@ -12,7 +12,7 @@ Backend and renderer both build and boot successfully (verified below).
 ## Architecture
 
 ```
-VirIDE Desktop (Electron + React + Monaco)
+ORVYN Desktop (Electron + React + Monaco)
         │  IPC (secure preload bridge — no Node in renderer)
         ▼
 Electron Main Process (file system, project root sandboxing)
@@ -42,7 +42,7 @@ Desktop Renderer  ──HTTP/WS──▶  Backend (Express + TS)
 - **`apps/backend`** — Express server, versioned REST API (`/api/v1/models`,
   `/api/v1/tools`, `/api/v1/chat/completions`), WebSocket streaming chat
   (`/ws/chat`), an AI Orchestrator that builds context-aware prompts
-  (current file, selection, `.viride/rules.md`), and a Tool framework with
+  (current file, selection, `.orvyn/rules.md`), and a Tool framework with
   a permission model (`allowed` / `ask` / `denied`) plus three real,
   project-sandboxed tools: `read_file`, `list_directory`, `search_files`,
   `write_file` (defaults to `ask`).
@@ -51,7 +51,7 @@ Desktop Renderer  ──HTTP/WS──▶  Backend (Express + TS)
   a preload bridge exposing only `project.open/listDirectory/readFile/writeFile`,
   and a React renderer: activity-bar layout, file explorer, Monaco editor,
   and a streaming AI chat panel wired to the backend over WebSocket.
-- **`.viride/`** — project config convention: `rules.md` (instructions
+- **`.orvyn/`** — project config convention: `rules.md` (instructions
   auto-included in every AI request), `models.json`, `config.json`
   (tool permission defaults).
 
@@ -88,7 +88,7 @@ npm run desktop:dev
 Click **Open Folder**, pick a project, click a file to open it in Monaco,
 and use the AI Assistant panel on the right — it streams from the backend,
 which currently routes to the zero-config Mock adapter. To point it at a
-real model, add one via `POST /api/v1/models` (or edit `.viride/models.json`
+real model, add one via `POST /api/v1/models` (or edit `.orvyn/models.json`
 and wire it into `ModelService`), e.g. for a local Ollama install:
 
 ```json
@@ -160,7 +160,7 @@ See **`docs/DEPLOYMENT.md`** for the full walkthrough. Summary:
   give you a one-command (`docker compose up -d`) deployment on any Linux
   cloud VM, with automatic HTTPS (Caddy/Let's Encrypt) and an optional
   self-hosted Ollama container.
-- Real API-key auth (`VIRIDE_API_KEY`) now gates every route except
+- Real API-key auth (`ORVYN_API_KEY`) now gates every route except
   `/health`, and the WebSocket chat stream — verified working (401 on
   missing/wrong key, 200/stream on correct key).
 - The desktop app's backend URL + API key are configurable via a new
@@ -184,7 +184,7 @@ TODO — Real embedding model wired in by default (currently: hashing bag-of-wor
 TODO — Inline Ctrl+K editing (select code, ask for an edit, get an inline diff)
 TODO — Terminal panel, Git panel (the Agent has terminal/git *tools*; there's no standalone UI panel for them yet)
 TODO — Background/worker-queued indexing for large repos (currently runs synchronously per request)
-MOCK — the seeded "viride-mock" model is not a real model; its Composer/Agent behavior is scripted for demo/testing, not real reasoning
+MOCK — the seeded "orvyn-mock" model is not a real model; its Composer/Agent behavior is scripted for demo/testing, not real reasoning
 ```
 
 ## Phase plan (per the build spec)

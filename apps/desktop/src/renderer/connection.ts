@@ -4,7 +4,7 @@
 // change instead of editing every component.
 
 export interface ConnectionConfig {
-  backendUrl: string; // e.g. https://viride.yourdomain.com or http://localhost:4570
+  backendUrl: string; // e.g. https://orvyn.yourdomain.com or http://localhost:4570
   apiKey: string;
 }
 
@@ -12,13 +12,13 @@ let current: ConnectionConfig = { backendUrl: "http://localhost:4570", apiKey: "
 const listeners = new Set<(c: ConnectionConfig) => void>();
 
 export async function loadConnectionConfig(): Promise<ConnectionConfig> {
-  current = await window.viride.config.get();
+  current = await window.orvyn.config.get();
   listeners.forEach((l) => l(current));
   return current;
 }
 
 export async function saveConnectionConfig(config: ConnectionConfig): Promise<void> {
-  current = await window.viride.config.set(config);
+  current = await window.orvyn.config.set(config);
   listeners.forEach((l) => l(current));
 }
 

@@ -22,17 +22,45 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     return headers;
   }
 
+  private openaiMessages(request: AIRequest) {
+    return request.messages.map((m) => {
+      if (m.role === "tool") {
+        return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+      }
+      if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+        return {
+          role: "assistant",
+          content: m.content || null,
+          tool_calls: m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+          })),
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
+  }
+
+  private openaiTools(request: AIRequest) {
+    if (!request.tools || request.tools.length === 0) return undefined;
+    return request.tools.map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+  }
+
   async generate(request: AIRequest): Promise<AIResponse> {
     const res = await fetch(`${this.config.endpoint}/v1/chat/completions`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({
         model: this.config.id,
-        messages: request.messages,
+        messages: this.openaiMessages(request),
         temperature: request.temperature ?? this.config.defaultTemperature,
         top_p: request.topP ?? this.config.defaultTopP,
         max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
-        tools: request.tools,
+        tools: this.openaiTools(request),
         stream: false,
       }),
     });
@@ -45,11 +73,15 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     const choice = data.choices?.[0];
     return {
       content: choice?.message?.content ?? "",
-      toolCalls: choice?.message?.tool_calls?.map((tc: any) => ({
-        id: tc.id,
-        name: tc.function?.name,
-        arguments: JSON.parse(tc.function?.arguments ?? "{}"),
-      })),
+      toolCalls: choice?.message?.tool_calls?.map((tc: any) => {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function?.arguments ?? "{}");
+        } catch {
+          args = {};
+        }
+        return { id: tc.id, name: tc.function?.name, arguments: args };
+      }),
       finishReason: choice?.finish_reason === "tool_calls" ? "tool_call" : (choice?.finish_reason ?? "stop"),
       usage: data.usage
         ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
@@ -63,8 +95,10 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
       headers: this.headers(),
       body: JSON.stringify({
         model: this.config.id,
-        messages: request.messages,
+        messages: this.openaiMessages(request),
         temperature: request.temperature ?? this.config.defaultTemperature,
+        top_p: request.topP ?? this.config.defaultTopP,
+        max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
         stream: true,
       }),
     });

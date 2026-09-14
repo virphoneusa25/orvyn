@@ -13,7 +13,7 @@ function resolveSafe(projectRoot: string, relativePath: string): string {
   return resolved;
 }
 
-const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".viride"]);
+const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);
 
 export function makeReadFileTool(projectRoot: string): AITool {
   return {

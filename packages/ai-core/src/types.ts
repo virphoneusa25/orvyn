@@ -9,6 +9,7 @@ export interface AIMessage {
   content: string;
   toolCallId?: string;
   name?: string;
+  toolCalls?: ToolCall[];
 }
 
 export interface ToolDefinition {

@@ -19,7 +19,13 @@ interface SearchHit {
 }
 
 
-export function SearchPanel({ projectRoot }: { projectRoot: string | null }) {
+export function SearchPanel({
+  workspaceRoot,
+  workspaceKind,
+}: {
+  workspaceRoot: string | null;
+  workspaceKind: "folder" | "default";
+}) {
   const [stats, setStats] = useState<IndexStats | null>(null);
   const [building, setBuilding] = useState(false);
   const [query, setQuery] = useState("");
@@ -37,13 +43,13 @@ export function SearchPanel({ projectRoot }: { projectRoot: string | null }) {
   }, []);
 
   async function handleBuild() {
-    if (!projectRoot) return;
+    if (!workspaceRoot) return;
     setBuilding(true);
     try {
       const res = await fetch(apiUrl("/index/build"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ projectRoot }),
+        body: JSON.stringify({ projectRoot: workspaceRoot }),
       });
       const data = await res.json();
       setStats(data.stats);
@@ -68,16 +74,17 @@ export function SearchPanel({ projectRoot }: { projectRoot: string | null }) {
     }
   }
 
-  if (!projectRoot) {
-    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Open a project to build a codebase index.</div>;
+  if (!workspaceRoot) {
+    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Workspace is still starting…</div>;
   }
 
   return (
     <div style={{ padding: 16, color: "#c9d1e0", height: "100%", overflowY: "auto" }}>
       <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Codebase Search (RAG)</div>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 12 }}>
-        Lexical/bag-of-words similarity by default — works with zero external services. Swap in a real
-        embedding model in Settings &gt; AI Models for true semantic ranking on natural-language queries.
+        {workspaceKind === "default"
+          ? "Indexes the built-in ORVYN workspace. Open a folder to search a real project."
+          : "Lexical/bag-of-words similarity by default — works with zero external services. Swap in a real embedding model in Settings > AI Models for true semantic ranking."}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 12 }}>

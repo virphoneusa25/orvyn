@@ -6,6 +6,7 @@ import { Orchestrator } from "../ai/Orchestrator";
 import { IndexService } from "../indexing/IndexService";
 import { HashingEmbedder } from "../indexing/embeddings";
 import { InMemoryVectorStore } from "../indexing/vectorStore";
+import { InlineEditService } from "../edit/InlineEditService";
 
 export const v1Router = Router();
 export const indexService = new IndexService(new HashingEmbedder(), new InMemoryVectorStore());
@@ -201,6 +202,16 @@ v1Router.post("/tools/:name/execute", async (req, res) => {
   }
   const result = await toolRegistry.execute(req.params.name, req.body.args ?? {});
   res.json(result);
+});
+
+// --- Inline edit (Ctrl+K) ---
+v1Router.post("/edit/inline", async (req, res) => {
+  try {
+    const result = await new InlineEditService(modelService).edit(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // --- Chat (non-streaming; use WS /ws/chat for streaming) ---

@@ -1,4 +1,5 @@
 // apps/backend/src/index.ts
+import "./loadEnv";
 import express from "express";
 import cors from "cors";
 import { createServer } from "http";
@@ -12,7 +13,7 @@ app.use(express.json({ limit: "10mb" }));
 
 // Health check stays unauthenticated (needed for load balancer / container
 // health probes); everything else requires the API key when one is set.
-app.get("/api/v1/health", (_req, res) => res.json({ status: "ok", service: "viride-backend", version: "0.1.0" }));
+app.get("/api/v1/health", (_req, res) => res.json({ status: "ok", service: "orvyn-backend", version: "0.1.0" }));
 app.use("/api/v1", apiKeyAuth, v1Router);
 
 const server = createServer(app);
@@ -52,14 +53,14 @@ wss.on("connection", (socket, req) => {
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
 server.listen(PORT, () => {
-  console.log(`VirIDE backend listening on http://localhost:${PORT}`);
+  console.log(`ORVYN backend listening on http://localhost:${PORT}`);
   console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
   console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
-  if (!process.env.VIRIDE_API_KEY) {
+  if (!process.env.ORVYN_API_KEY) {
     console.warn(
-      "\n⚠️  VIRIDE_API_KEY is not set — the API is UNAUTHENTICATED.\n" +
+      "\n⚠️  ORVYN_API_KEY is not set — the API is UNAUTHENTICATED.\n" +
         "   This is fine for local development only. Before deploying to a\n" +
-        "   cloud server or any network reachable by others, set VIRIDE_API_KEY\n" +
+        "   cloud server or any network reachable by others, set ORVYN_API_KEY\n" +
         "   and put this behind HTTPS (see docs/DEPLOYMENT.md).\n"
     );
   }

@@ -6,14 +6,76 @@ import { promises as fs } from "fs";
 let mainWindow: BrowserWindow | null = null;
 let currentProjectRoot: string | null = null;
 
+const MAX_RECENTS = 8;
+
+function defaultWorkspacePath(): string {
+  return path.join(app.getPath("userData"), "workspace");
+}
+
+function recentsPath(): string {
+  return path.join(app.getPath("userData"), "orvyn-recents.json");
+}
+
+async function ensureDefaultWorkspace(): Promise<string> {
+  const root = defaultWorkspacePath();
+  await fs.mkdir(root, { recursive: true });
+  const readme = path.join(root, "README.md");
+  try {
+    await fs.access(readme);
+  } catch {
+    await fs.writeFile(
+      readme,
+      [
+        "# ORVYN workspace",
+        "",
+        "This is your default ORVYN workspace. You can chat, run Agent, and create files here",
+        "without opening a project folder. Use **Open Folder** when you want to work inside",
+        "an existing codebase.",
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+  }
+  return root;
+}
+
+function activeRoot(): string {
+  return currentProjectRoot ?? defaultWorkspacePath();
+}
+
+async function loadRecents(): Promise<string[]> {
+  try {
+    const raw = await fs.readFile(recentsPath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function pushRecent(folder: string): Promise<string[]> {
+  const recents = (await loadRecents()).filter((p) => path.resolve(p) !== path.resolve(folder));
+  recents.unshift(folder);
+  const next = recents.slice(0, MAX_RECENTS);
+  await fs.writeFile(recentsPath(), JSON.stringify(next, null, 2), "utf-8");
+  return next;
+}
+
+function appIconPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "icon.ico");
+  }
+  return path.join(__dirname, "../../resources/icon.ico");
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     backgroundColor: "#0b0e14",
+    title: "ORVYN",
+    icon: appIconPath(),
     webPreferences: {
-      // Security: no direct Node access in the renderer. All privileged
-      // operations (file system, dialogs) go through the preload bridge.
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
@@ -29,7 +91,10 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await ensureDefaultWorkspace();
+  createWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -39,24 +104,66 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-// --- Secure IPC surface. Renderer never touches `fs` or `child_process`
-// directly — every operation is validated here against currentProjectRoot. ---
-
 function resolveInProject(relativePath: string): string {
-  if (!currentProjectRoot) throw new Error("No project is open");
-  const resolved = path.resolve(currentProjectRoot, relativePath);
-  if (!resolved.startsWith(path.resolve(currentProjectRoot))) {
+  const root = activeRoot();
+  const resolved = path.resolve(root, relativePath);
+  if (!resolved.startsWith(path.resolve(root))) {
     throw new Error("Path escapes project root — refused");
   }
   return resolved;
 }
+
+ipcMain.handle("project:getWorkspace", async () => {
+  const defaultRoot = await ensureDefaultWorkspace();
+  const root = currentProjectRoot ?? defaultRoot;
+  return {
+    root,
+    kind: currentProjectRoot ? "folder" : "default",
+    recents: await loadRecents(),
+  };
+});
 
 ipcMain.handle("project:open", async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   currentProjectRoot = result.filePaths[0];
-  return currentProjectRoot;
+  const recents = await pushRecent(currentProjectRoot);
+  return { root: currentProjectRoot, kind: "folder" as const, recents };
+});
+
+ipcMain.handle("project:openPath", async (_evt, folder: string) => {
+  const resolved = path.resolve(folder);
+  try {
+    const stat = await fs.stat(resolved);
+    if (!stat.isDirectory()) throw new Error("Not a folder");
+  } catch {
+    return null;
+  }
+  currentProjectRoot = resolved;
+  const recents = await pushRecent(resolved);
+  return { root: currentProjectRoot, kind: "folder" as const, recents };
+});
+
+ipcMain.handle("project:openFile", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openFile"] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  currentProjectRoot = path.dirname(filePath);
+  const recents = await pushRecent(currentProjectRoot);
+  return {
+    root: currentProjectRoot,
+    kind: "folder" as const,
+    recents,
+    fileRelative: path.basename(filePath),
+  };
+});
+
+ipcMain.handle("project:close", async () => {
+  currentProjectRoot = null;
+  const root = await ensureDefaultWorkspace();
+  return { root, kind: "default" as const, recents: await loadRecents() };
 });
 
 ipcMain.handle("project:listDirectory", async (_evt, relativePath: string) => {
@@ -80,9 +187,7 @@ ipcMain.handle("project:writeFile", async (_evt, relativePath: string, content: 
   return true;
 });
 
-// --- Connection settings (backend URL + API key), persisted to disk so the
-// desktop client can point at a cloud-deployed backend instead of localhost. ---
-const CONFIG_PATH = path.join(app.getPath("userData"), "viride-connection.json");
+const CONFIG_PATH = path.join(app.getPath("userData"), "orvyn-connection.json");
 const DEFAULT_CONFIG = { backendUrl: "http://localhost:4570", apiKey: "" };
 
 async function readConfig(): Promise<typeof DEFAULT_CONFIG> {

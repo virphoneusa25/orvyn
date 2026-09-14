@@ -42,7 +42,7 @@ async function readIfExists(target: string): Promise<{ content: string; existed:
 // for a model to satisfy correctly, at the cost of larger responses.
 function buildComposerPrompt(instruction: string, rules?: string): string {
   return [
-    "You are VirIDE's Composer. The user wants a multi-file code change.",
+    "You are ORVYN's Composer. The user wants a multi-file code change.",
     rules ? `Project rules:\n${rules}` : "",
     "Respond with ONLY a single JSON object, no prose, no markdown fences:",
     `{"summary": "one-line description", "files": [{"path": "relative/path.ts", "content": "full new file content"}]}`,

@@ -1,7 +1,7 @@
 # apps/backend/Dockerfile
 # Multi-stage build so the runtime image doesn't carry devDependencies or
 # the TypeScript compiler. Build context must be the monorepo root, e.g.:
-#   docker build -f apps/backend/Dockerfile -t viride-backend .
+#   docker build -f apps/backend/Dockerfile -t orvyn-backend .
 FROM node:20-slim AS build
 WORKDIR /repo
 

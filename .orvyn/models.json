@@ -1,7 +1,7 @@
 [
   {
-    "id": "viride-mock",
-    "name": "VirIDE Mock (no model configured)",
+    "id": "orvyn-mock",
+    "name": "ORVYN Mock (no model configured)",
     "provider": "mock",
     "endpoint": "",
     "contextWindow": 8192,

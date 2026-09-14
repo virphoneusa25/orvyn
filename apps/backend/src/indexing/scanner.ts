@@ -8,7 +8,7 @@ export const DEFAULT_IGNORE_DIRS = new Set([
   "dist",
   "build",
   "coverage",
-  ".viride",
+  ".orvyn",
 ]);
 
 // Skip obvious binaries/large-asset extensions rather than trying to index

@@ -27,21 +27,27 @@ interface AgentSession {
 }
 
 
-export function AgentPanel({ projectRoot }: { projectRoot: string | null }) {
+export function AgentPanel({
+  workspaceRoot,
+  workspaceKind,
+}: {
+  workspaceRoot: string | null;
+  workspaceKind: "folder" | "default";
+}) {
   const [instruction, setInstruction] = useState("");
   const [session, setSession] = useState<AgentSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleStart() {
-    if (!projectRoot || !instruction.trim()) return;
+    if (!workspaceRoot || !instruction.trim()) return;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(apiUrl("/agent/runs"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ projectRoot, instruction }),
+        body: JSON.stringify({ projectRoot: workspaceRoot, instruction }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Agent failed to start");
@@ -72,19 +78,24 @@ export function AgentPanel({ projectRoot }: { projectRoot: string | null }) {
     }
   }
 
-  if (!projectRoot) {
-    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Open a project to use Agent mode.</div>;
+  if (!workspaceRoot) {
+    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Workspace is still starting…</div>;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: "#c9d1e0" }}>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1c2330", fontSize: 13, fontWeight: 600 }}>Agent</div>
+      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1c2330", fontSize: 13, fontWeight: 600 }}>
+        Agent
+        <div style={{ fontWeight: 400, opacity: 0.55, fontSize: 11, marginTop: 2 }}>
+          {workspaceKind === "folder" ? "Using the opened folder" : "Using the built-in workspace — open a folder to work in a real project"}
+        </div>
+      </div>
 
       <div style={{ padding: 12, borderBottom: "1px solid #1c2330" }}>
         <textarea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
-          placeholder="Give the agent a task, e.g. 'Fix the failing build.'"
+          placeholder="Give the agent a task. A folder is optional."
           rows={2}
           disabled={session?.status === "running" || session?.status === "pending_approval"}
           style={{ width: "100%", background: "#0f1420", border: "1px solid #1c2330", borderRadius: 6, color: "#e6e9f0", padding: 8, fontSize: 13, resize: "vertical" }}

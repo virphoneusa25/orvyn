@@ -3,9 +3,20 @@ export interface DirEntry {
   isDirectory: boolean;
 }
 
-export interface VirideBridge {
+export interface WorkspaceState {
+  root: string;
+  kind: "folder" | "default";
+  recents: string[];
+  fileRelative?: string;
+}
+
+export interface OrvynBridge {
   project: {
-    open(): Promise<string | null>;
+    getWorkspace(): Promise<WorkspaceState>;
+    open(): Promise<WorkspaceState | null>;
+    openPath(folder: string): Promise<WorkspaceState | null>;
+    openFile(): Promise<WorkspaceState | null>;
+    close(): Promise<WorkspaceState>;
     listDirectory(relativePath: string): Promise<DirEntry[]>;
     readFile(relativePath: string): Promise<string>;
     writeFile(relativePath: string, content: string): Promise<boolean>;
@@ -18,6 +29,6 @@ export interface VirideBridge {
 
 declare global {
   interface Window {
-    viride: VirideBridge;
+    orvyn: OrvynBridge;
   }
 }

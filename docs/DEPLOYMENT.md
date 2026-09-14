@@ -1,4 +1,4 @@
-# Deploying VirIDE: cloud backend + Windows desktop client
+# Deploying ORVYN: cloud backend + Windows desktop client
 
 This is the real path from "runs on my laptop" to "backend on a cloud
 server, IDE installed on Windows machines pointing at it" — the same
@@ -7,8 +7,8 @@ shape as Cursor's client/server split, except you own every layer.
 ```
 Windows PC(s)                     Your cloud server
 ┌───────────────────┐             ┌───────────────────────────────┐
-│ VirIDE.exe         │  HTTPS/WSS │ Caddy (TLS termination)        │
-│ (Electron desktop) │ ─────────► │   └─ VirIDE backend (Docker)   │
+│ ORVYN.exe         │  HTTPS/WSS │ Caddy (TLS termination)        │
+│ (Electron desktop) │ ─────────► │   └─ ORVYN backend (Docker)   │
 │                    │            │        └─ Model Gateway         │
 └───────────────────┘             │             └─ Ollama/vLLM/etc  │
                                    └───────────────────────────────┘
@@ -21,7 +21,7 @@ Hetzner is plenty for the backend itself; add a GPU instance (AWS/Azure/
 Lambda/RunPod/etc) only if you're also self-hosting the model there.
 
 1. **Provision a server** and point a DNS A record at its IP, e.g.
-   `viride.yourdomain.com`. Open ports 80 and 443 (443 for HTTPS, 80 only
+   `orvyn.yourdomain.com`. Open ports 80 and 443 (443 for HTTPS, 80 only
    for the Let's Encrypt challenge).
 
 2. **Install Docker + Docker Compose** on the server (`curl -fsSL
@@ -36,8 +36,8 @@ Lambda/RunPod/etc) only if you're also self-hosting the model there.
    cp .env.example .env
    # generate a real key:
    openssl rand -hex 32
-   # put it in .env as VIRIDE_API_KEY=<the generated value>
-   # set DOMAIN=viride.yourdomain.com in .env
+   # put it in .env as ORVYN_API_KEY=<the generated value>
+   # set DOMAIN=orvyn.yourdomain.com in .env
    ```
 
 5. **Start everything:**
@@ -51,8 +51,8 @@ Lambda/RunPod/etc) only if you're also self-hosting the model there.
 
 6. **Verify:**
    ```bash
-   curl https://viride.yourdomain.com/api/v1/health
-   # {"status":"ok","service":"viride-backend","version":"0.1.0"}
+   curl https://orvyn.yourdomain.com/api/v1/health
+   # {"status":"ok","service":"orvyn-backend","version":"0.1.0"}
    ```
 
 7. **(Optional) Pull a real model into the self-hosted Ollama container:**
@@ -62,12 +62,12 @@ Lambda/RunPod/etc) only if you're also self-hosting the model there.
    Then register it the same way you would locally — either
    `POST /api/v1/models` with `"endpoint": "http://ollama:11434"` (the
    Docker Compose service name, reachable from the backend container), or
-   edit `.viride/models.json` in the project you open. See
+   edit `.orvyn/models.json` in the project you open. See
    `apps/desktop` README section "Model Manager" for the exact fields.
 
 ### What's already handled for you here
 - **HTTPS** — Caddy does this automatically; you never touch a certificate.
-- **Auth** — every route except `/health` requires `VIRIDE_API_KEY`
+- **Auth** — every route except `/health` requires `ORVYN_API_KEY`
   (verified working: wrong/missing key → 401, correct key → 200, and the
   WebSocket chat stream is gated by the same key via a `?token=` param).
 - **Project isolation** — every file/terminal/git tool is sandboxed to the
@@ -109,12 +109,12 @@ natively on Windows is simpler and what most people do:
 ```bash
 # On a Windows machine, or CI runner with Node 18+:
 git clone <this repo>
-cd viride
+cd orvyn
 npm install
 npm run dist:win -w apps/desktop
 ```
 
-This produces a `VirIDE Setup <version>.exe` NSIS installer in
+This produces a `ORVYN Setup <version>.exe` NSIS installer in
 `apps/desktop/release/`. Distribute that `.exe` to any Windows machine —
 double-click to install, no admin rights required beyond the standard
 Windows install prompt (`"oneClick": false` in the build config means the
@@ -122,16 +122,16 @@ user picks the install directory, matching normal Windows installer UX).
 
 ### Pointing it at your cloud server
 
-After installing and opening VirIDE:
+After installing and opening ORVYN:
 
 1. Click the ⚙️ **Connection** icon in the Activity Bar.
-2. Set **Backend URL** to `https://viride.yourdomain.com` (no trailing
+2. Set **Backend URL** to `https://orvyn.yourdomain.com` (no trailing
    slash, no `/api/v1` suffix — the app adds that).
-3. Set **API Key** to the same `VIRIDE_API_KEY` value from your server's
+3. Set **API Key** to the same `ORVYN_API_KEY` value from your server's
    `.env`.
-4. Click **Test Connection** — it should show `✓ Connected — viride-backend
+4. Click **Test Connection** — it should show `✓ Connected — orvyn-backend
    v0.1.0`.
-5. Click **Save**. This is persisted to disk (`viride-connection.json` in
+5. Click **Save**. This is persisted to disk (`orvyn-connection.json` in
    the app's user-data folder) so it survives restarts — every panel
    (Chat, Composer, Agent, Search, Model Manager) automatically uses this
    connection from then on.
@@ -144,6 +144,6 @@ index live on your cloud server.
 ### Multiple machines / a small team
 
 Every teammate installs the same `.exe`, points it at the same
-`https://viride.yourdomain.com` with the same API key, and gets the same
+`https://orvyn.yourdomain.com` with the same API key, and gets the same
 backend and configured models — a real shared setup, with the caveat
 above that it's currently one shared key rather than individual accounts.

@@ -1,5 +1,5 @@
 // apps/backend/src/indexing/embeddings.ts
-import { AIModelProvider } from "@viride/ai-core";
+import { AIModelProvider } from "@orvyn/ai-core";
 
 export interface Embedder {
   embed(text: string): Promise<number[]>;

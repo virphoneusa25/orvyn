@@ -39,7 +39,7 @@ export function ConnectionSettings() {
     <div style={{ padding: 20, color: "#c9d1e0", maxWidth: 480 }}>
       <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Connection</div>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 16 }}>
-        Point VirIDE at a local backend (default) or a backend you've deployed to a cloud server.
+        Point ORVYN at a local backend (default) or a backend you've deployed to a cloud server.
         Every panel — Chat, Composer, Agent, Search, Model Manager — uses this connection.
       </div>
 
@@ -47,12 +47,12 @@ export function ConnectionSettings() {
       <input
         value={backendUrl}
         onChange={(e) => setBackendUrl(e.target.value)}
-        placeholder="http://localhost:4570 or https://viride.yourdomain.com"
+        placeholder="http://localhost:4570 or https://orvyn.yourdomain.com"
         style={inputStyle()}
       />
 
       <label style={{ display: "block", fontSize: 11, opacity: 0.6, marginBottom: 4, marginTop: 12 }}>
-        API Key (required once the backend has VIRIDE_API_KEY set — e.g. any cloud deployment)
+        API Key (required once the backend has ORVYN_API_KEY set — e.g. any cloud deployment)
       </label>
       <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" style={inputStyle()} />
 

@@ -1,6 +1,6 @@
 // apps/backend/src/agent/AgentService.ts
 import { randomUUID } from "crypto";
-import { AIMessage, ToolCall, ToolDefinition } from "@viride/ai-core";
+import { AIMessage, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { toolRegistry } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
@@ -17,7 +17,15 @@ export interface AgentSession {
   pendingToolCall?: ToolCall & { destructive: boolean };
   finalOutput?: string;
   errorMessage?: string;
-  toolLog: { tool: string; args: unknown; result?: string; approved?: boolean }[];
+  toolLog: {
+    tool: string;
+    args: unknown;
+    result?: string;
+    approved?: boolean;
+    failed?: boolean;
+    recoveryAttempt?: number;
+  }[];
+  consecutiveFailures: number;
 }
 
 const sessions = new Map<string, AgentSession>();
@@ -29,12 +37,55 @@ function toolDefinitions(): ToolDefinition[] {
 export class AgentService {
   constructor(private modelService: ModelService) {}
 
+  private recordResult(
+    session: AgentSession,
+    call: ToolCall,
+    ok: boolean,
+    output: string,
+    approved?: boolean
+  ): void {
+    if (ok) session.consecutiveFailures = 0;
+    else session.consecutiveFailures++;
+
+    session.toolLog.push({
+      tool: call.name,
+      args: call.arguments,
+      result: output,
+      approved,
+      failed: !ok,
+      recoveryAttempt: ok ? undefined : session.consecutiveFailures,
+    });
+
+    session.messages.push({
+      role: "tool",
+      name: call.name,
+      toolCallId: call.id,
+      content: ok
+        ? output
+        : [
+            `The tool "${call.name}" FAILED with this error:`,
+            output,
+            "",
+            "Diagnose the cause and try a different approach. Do not repeat the",
+            "identical call. If you cannot proceed, explain why to the user.",
+          ].join("\n"),
+    });
+  }
+
   private async step(session: AgentSession): Promise<void> {
     if (session.stepCount >= session.maxSteps) {
       session.status = "error";
       session.errorMessage = `Agent stopped after ${session.maxSteps} steps without finishing.`;
       return;
     }
+
+    if (session.consecutiveFailures >= 4) {
+      session.status = "error";
+      session.errorMessage =
+        "Agent stopped: 4 consecutive tool failures without recovery. See the tool log for the underlying error.";
+      return;
+    }
+
     session.stepCount++;
 
     const provider = this.modelService.router.resolve("agent");
@@ -43,41 +94,36 @@ export class AgentService {
       response = await provider.generate({ messages: session.messages, tools: toolDefinitions() });
     } catch (err: any) {
       session.status = "error";
-      session.errorMessage = err.message;
+      session.errorMessage = `Model call failed: ${err.message}`;
       return;
     }
 
     if (response.toolCalls && response.toolCalls.length > 0) {
       const call = response.toolCalls[0];
+      // Record the assistant tool_calls turn before any tool result — required
+      // by OpenAI-style APIs.
+      session.messages.push({
+        role: "assistant",
+        content: response.content || "",
+        toolCalls: response.toolCalls,
+      });
       const permission = toolRegistry.getPermission(call.name);
 
       if (permission === "denied") {
-        session.messages.push({
-          role: "tool",
-          name: call.name,
-          toolCallId: call.id,
-          content: `Tool "${call.name}" is denied by project permissions.`,
-        });
-        session.toolLog.push({ tool: call.name, args: call.arguments, result: "denied by permissions" });
-        return this.step(session); // let the model react and try something else
+        this.recordResult(session, call, false, `Tool "${call.name}" is denied by project permissions.`);
+        return this.step(session);
       }
 
       if (permission === "ask") {
-        const destructive = call.name === "terminal" && isDestructiveCommand(String((call.arguments as any).command ?? ""));
+        const destructive =
+          call.name === "terminal" && isDestructiveCommand(String((call.arguments as any).command ?? ""));
         session.status = "pending_approval";
         session.pendingToolCall = { ...call, destructive };
         return;
       }
 
-      // "allowed" — execute immediately
       const result = await toolRegistry.execute(call.name, call.arguments);
-      session.toolLog.push({ tool: call.name, args: call.arguments, result: result.output ?? result.error });
-      session.messages.push({
-        role: "tool",
-        name: call.name,
-        toolCallId: call.id,
-        content: result.ok ? result.output ?? "" : `Error: ${result.error}`,
-      });
+      this.recordResult(session, call, result.ok, result.ok ? result.output ?? "" : result.error ?? "unknown error");
       return this.step(session);
     }
 
@@ -85,7 +131,7 @@ export class AgentService {
     session.finalOutput = response.content;
   }
 
-  async start(projectRoot: string, instruction: string, rules?: string, maxSteps = 8): Promise<AgentSession> {
+  async start(projectRoot: string, instruction: string, rules?: string, maxSteps = 16): Promise<AgentSession> {
     const session: AgentSession = {
       id: randomUUID(),
       projectRoot,
@@ -94,17 +140,29 @@ export class AgentService {
         {
           role: "system",
           content: [
-            "You are VirIDE's Agent. You can use tools to read files, search, and (with approval) write files or run commands.",
-            rules ? `Project rules:\n${rules}` : "",
+            "You are ORVYN's coding Agent. You can read files, search, and — with",
+            "user approval — write files, run terminal commands, and use git.",
+            "",
+            "Work iteratively and verify your own work:",
+            "1. Investigate before changing anything (read/search relevant files).",
+            "2. Make the change.",
+            "3. VERIFY it — run the build or tests via the terminal tool where possible.",
+            "4. If verification fails, read the error, diagnose it, and fix it. Do not",
+            "   repeat a call that just failed; change your approach.",
+            "5. Finish only when the task is done and verified, then summarise what",
+            "   you changed and how you confirmed it.",
+            "If the workspace is the built-in ORVYN folder rather than a user project, still help.",
+            rules ? `\nProject rules:\n${rules}` : "",
           ]
             .filter(Boolean)
-            .join("\n\n"),
+            .join("\n"),
         },
         { role: "user", content: instruction },
       ],
       stepCount: 0,
       maxSteps,
       toolLog: [],
+      consecutiveFailures: 0,
     };
     sessions.set(session.id, session);
     await this.step(session);
@@ -121,20 +179,14 @@ export class AgentService {
     const call = session.pendingToolCall;
     if (approved) {
       const result = await toolRegistry.execute(call.name, call.arguments);
-      session.toolLog.push({ tool: call.name, args: call.arguments, result: result.output ?? result.error, approved: true });
-      session.messages.push({
-        role: "tool",
-        name: call.name,
-        toolCallId: call.id,
-        content: result.ok ? result.output ?? "" : `Error: ${result.error}`,
-      });
+      this.recordResult(session, call, result.ok, result.ok ? result.output ?? "" : result.error ?? "unknown error", true);
     } else {
       session.toolLog.push({ tool: call.name, args: call.arguments, result: "denied by user", approved: false });
       session.messages.push({
         role: "tool",
         name: call.name,
         toolCallId: call.id,
-        content: "The user denied this action. Do not repeat it; consider an alternative or explain to the user why it was needed.",
+        content: "The user denied this action. Do not repeat it; consider an alternative or explain why it was needed.",
       });
     }
 

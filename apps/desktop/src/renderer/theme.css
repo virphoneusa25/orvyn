@@ -1,0 +1,123 @@
+/* apps/desktop/src/renderer/theme.css
+   Design tokens for Orvyn. Import once in main.tsx.
+   Everything else references these vars, so retuning the product's look is a
+   single-file change instead of a hunt through inline styles. */
+
+:root {
+  /* Surfaces — layered, so panels read as distinct planes */
+  --bg-app: #080A0F;
+  --bg-panel: #0B0E14;
+  --bg-elevated: #11151F;
+  --bg-hover: #171C28;
+  --bg-active: #1E2536;
+
+  /* Borders */
+  --border: #1A2030;
+  --border-strong: #262E42;
+
+  /* Text */
+  --text: #D8DEE9;
+  --text-secondary: #8B93A7;
+  --text-muted: #5A6478;
+
+  /* Brand — matches the Orvyn mark */
+  --accent: #5B6CFF;
+  --accent-hover: #6E7DFF;
+  --accent-dim: #2E3AA0;
+  --accent-fg: #FFFFFF;
+
+  /* Status */
+  --success: #3FD68A;
+  --warning: #E8B93F;
+  --danger: #F0546A;
+
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --font-ui: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  /* Crisper text rendering on Windows */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Nothing in a desktop app chrome should be text-selectable except content */
+body {
+  user-select: none;
+  cursor: default;
+}
+input,
+textarea,
+.selectable {
+  user-select: text;
+}
+
+/* Slim scrollbars — the default Windows ones look out of place in a dark IDE */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #232B3D;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #313B52;
+  background-clip: content-box;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+/* Focus rings: visible for keyboard users, absent for mouse clicks */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Draggable window regions for the frameless title bar */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+@keyframes orvyn-caret-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.orvyn-caret {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--accent);
+  font-weight: 400;
+  animation: orvyn-caret-blink 1s step-end infinite;
+}

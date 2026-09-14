@@ -4,11 +4,11 @@
 # DigitalOcean/Vultr/bare metal) with Docker + Docker Compose installed.
 #
 # Quick start:
-#   1. Point a DNS A record at the server (e.g. viride.yourdomain.com)
-#   2. cp .env.example .env  and fill in VIRIDE_API_KEY + DOMAIN
+#   1. Point a DNS A record at the server (e.g. orvyn.yourdomain.com)
+#   2. cp .env.example .env  and fill in ORVYN_API_KEY + DOMAIN
 #   3. docker compose up -d
 #
-# The desktop client then connects to https://viride.yourdomain.com
+# The desktop client then connects to https://orvyn.yourdomain.com
 # (see docs/DEPLOYMENT.md for the Windows client side).
 
 services:
@@ -19,14 +19,14 @@ services:
     restart: unless-stopped
     environment:
       - PORT=4570
-      - VIRIDE_API_KEY=${VIRIDE_API_KEY}
+      - ORVYN_API_KEY=${ORVYN_API_KEY}
     expose:
       - "4570"
     # Uncomment to persist future Postgres-backed state (Phase 7):
     # depends_on: [postgres]
 
   # Optional: self-hosted model server. Comment this whole block out if
-  # you're pointing VirIDE at a different GPU box or a custom model API
+  # you're pointing ORVYN at a different GPU box or a custom model API
   # instead — the backend doesn't care where models live.
   ollama:
     image: ollama/ollama:latest

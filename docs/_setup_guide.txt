@@ -1,0 +1,177 @@
+ORVYN
+Complete Setup Guide
+From zero to a working cloud backend + Windows desktop client
+This assumes you already have orvyn-full.zip from earlier. Follow the parts in order — Part 1 gets the backend live on the internet, Part 2 gets ORVYN installed and connected on your Windows laptop. Total time: 30-60 minutes, most of it waiting on installs.
+What you'll need before starting
+A cloud provider account. This guide covers DigitalOcean and OVH side by side — the same steps work almost identically on Vultr, Hetzner, AWS Lightsail, or Azure too, just with different button labels.
+A domain name you control (e.g. yourdomain.com), so you can point a subdomain like orvyn.yourdomain.com at the server. Needed for automatic HTTPS — see the 'No domain name?' note in Part 1, Step 1.2 if you don't have one.
+A free GitHub account, to host the code your server will pull from.
+Your Windows laptop, with permission to install software on it.
+About 20 minutes of waiting for a Windows installer build near the end.
+Part 0 — Put the code on GitHub
+Do this once, before touching any cloud server. You'll clone this repo onto your server directly from GitHub instead of uploading a zip file — cleaner, and it gives you real version history.
+Step 0.1 — Create the repository
+Go to github.com and click New repository.
+Name it orvyn (or anything you like). Leave it empty — do not add a README, license, or .gitignore on GitHub's side, since your local folder already has files.
+Choose Private unless you have a specific reason to make it public — see the security note below.
+Step 0.2 — Push your local code to it
+On your Windows laptop, open PowerShell in the extracted orvyn folder (from orvyn-full.zip):
+cd Documents\orvyn
+Create a .gitignore first so build output and secrets never get committed:
+node_modules/dist/release/.env*.log
+Save that as a file named exactly .gitignore in the orvyn folder, then run:
+git initgit add .git commit -m "Initial ORVYN commit"git branch -M maingit remote add origin https://github.com/yourusername/orvyn.gitgit push -u origin main
+Security note:  Never commit your .env file or your ORVYN_API_KEY — that key is a password. The .gitignore above prevents this as long as you don't manually git add .env. If you make the repo public, double-check this before pushing.
+Part 1 — Cloud backend
+Choosing a provider:  Steps below are written for DigitalOcean and OVH side by side — look for the labeled sub-steps for whichever you're using. Everything else (Docker, .env, docker compose) is identical either way.
+Step 1.1 — Create the server
+If using DigitalOcean:
+Sign in to DigitalOcean and create a new Droplet (their term for a VM):
+Image: Ubuntu 22.04 LTS
+Size: the cheapest "Basic" plan (1 GB RAM / 1 vCPU) is enough for the backend alone. Go up to at least 8 GB RAM only if you'll also run a real model via Ollama on this same box.
+Authentication: choose "SSH Key" and add your public key (see Step 1.1's shared instructions below).
+Click Create. Note the server's public IP once it's up (looks like 164.90.xxx.xxx). The login user is root.
+If using OVH:
+Sign in to the OVHcloud Control Panel. You have two options — either works:
+VPS (simpler, cheaper, recommended for this): Public Cloud → VPS → choose Ubuntu 22.04, the cheapest plan, and your region.
+Public Cloud instance (more like a DigitalOcean droplet, pay-as-you-go): Public Cloud → Compute → Instances → create one with the Ubuntu 22.04 image.
+Either way, you'll be prompted for an SSH public key during creation — add it (see the shared instructions right below).
+Important difference:  OVH's Ubuntu images log you in as ubuntu, not root. Every command below that says ssh root@... becomes ssh ubuntu@... on OVH, and server-side commands need sudo in front (or run sudo -i once to become root for the whole session).
+Note the server's public IP once it's up.
+Generating an SSH key (needed for either provider, only once):
+If you've never made one, open PowerShell on your Windows laptop and run:
+ssh-keygen -t ed25519
+Press Enter through the prompts to accept the defaults. Then open the printed .pub file location (default C:\Users\<you>\.ssh\id_ed25519.pub) in Notepad, copy its contents, and paste that into your provider's SSH key box during server creation.
+Step 1.2 — Point your domain at the server
+In your domain registrar's DNS settings (GoDaddy, Namecheap, Cloudflare, wherever you bought the domain), add an A record:
+Type
+Name
+Value (points to)
+A
+orvyn
+164.90.xxx.xxx (your server's IP)
+
+This makes orvyn.yourdomain.com resolve to your server. DNS changes can take a few minutes up to an hour to propagate — you can move on and check back later.
+No domain name?  You can skip DNS/HTTPS and use the server's bare IP over plain HTTP instead — it works, but the connection won't be encrypted, so treat it as fine for testing/personal use only. Skip Step 1.5's Caddy/HTTPS setup and use http://164.90.xxx.xxx:4570 as your backend URL everywhere below instead of https://orvyn.yourdomain.com.
+Step 1.3 — Connect and install Docker
+If using DigitalOcean:
+From PowerShell on your Windows laptop:
+ssh root@164.90.xxx.xxx
+(Replace with your actual server IP. Type yes if asked to trust the host.)
+If using OVH:
+From PowerShell on your Windows laptop:
+ssh ubuntu@<your-ovh-ip>
+Then become root for the rest of this session so the commands below match exactly:
+sudo -i
+Then, on either provider, once connected:
+curl -fsSL https://get.docker.com | shapt-get update && apt-get install -y docker-compose-plugin gitdocker --versiondocker compose version
+Both version commands should print something — if either errors, stop and re-run the install lines above.
+Step 1.4 — Get the code onto the server
+Now that the code is on GitHub (Part 0), pull it directly onto the server — no file upload needed. Still connected via SSH:
+cd ~git clone https://github.com/yourusername/orvyn.gitcd orvyn
+Private repo?  If your GitHub repo is private, this clone will prompt for credentials. The simplest fix: generate a GitHub Personal Access Token (GitHub → Settings → Developer settings → Personal access tokens → generate one with 'repo' scope), and use it as the password when prompted (username is still your GitHub username).
+Whenever you push updates to GitHub later, pull them onto the server the same way — from inside the orvyn folder:
+git pulldocker compose up -d --build
+Step 1.5 — Configure secrets and start it
+Still on the server, inside the orvyn directory:
+cp .env.example .envopenssl rand -hex 32
+Copy the random string that prints out. Now edit the .env file:
+nano .env
+Fill it in like this (paste your actual generated key and your actual domain), then save with Ctrl+O, Enter, then exit with Ctrl+X:
+ORVYN_API_KEY=paste-the-generated-string-hereDOMAIN=orvyn.yourdomain.com
+Important:  Write this API key down somewhere safe — you'll need to type it into the Windows app in Part 2. Anyone who has it has full access to your backend, so treat it like a password.
+Now start everything:
+docker compose up -d --build
+This takes a few minutes the first time (building the backend image, pulling Ollama and Caddy). Watch it if you want:
+docker compose logs -f
+Press Ctrl+C to stop watching (this does not stop the containers).
+Step 1.6 — Verify it's live
+From your Windows laptop (or the server, either works):
+curl https://orvyn.yourdomain.com/api/v1/health
+You should get back:
+{"status":"ok","service":"orvyn-backend","version":"0.1.0"}
+If this fails:
+Connection refused / timeout — DNS probably hasn't propagated yet, or ports 80/443 aren't open. Check docker compose ps on the server — all three containers (backend, ollama, caddy) should say Up.
+Certificate error — Caddy is still requesting the certificate; wait a minute and retry. Check docker compose logs caddy for errors — the most common cause is DNS not actually pointing at this server yet.
+Your backend is now live on the internet. Part 2 gets your laptop talking to it.
+Part 2 — Windows desktop client
+Step 2.1 — Install prerequisites on your Windows laptop
+You need Node.js to build the app once. Download and install the LTS version from nodejs.org (accept the defaults). Verify it worked by opening a new PowerShell window:
+node --versionnpm --version
+Both should print version numbers.
+Step 2.2 — Get the code and build the installer
+If you still have the extracted orvyn folder from Part 1's zip on your laptop, cd into it. Otherwise, extract orvyn-full.zip again somewhere on your laptop (e.g. Documents\orvyn), then in PowerShell:
+cd Documents\orvynnpm installnpm run dist:win -w apps/desktop
+This takes a few minutes the first time. When it finishes, you'll find:
+apps\desktop\release\ORVYN Setup 0.1.0.exe
+That's your installer.
+Step 2.3 — Install ORVYN
+Double-click "ORVYN Setup 0.1.0.exe". Windows may show a SmartScreen warning since this isn't a signed/notarized installer yet — click More info → Run anyway. Choose an install location when prompted, finish the install, and launch ORVYN.
+Step 2.4 — Connect it to your cloud backend
+In the ORVYN window:
+Click the ⚙️ (Connection) icon in the left Activity Bar.
+Set Backend URL to https://orvyn.yourdomain.com (exactly what you put in DOMAIN, with https:// in front, no trailing slash).
+Set API Key to the value you generated and saved in Step 1.5.
+Click Test Connection. You should see: ✓ Connected — orvyn-backend v0.1.0
+Click Save.
+If Test Connection fails, double check the URL has no typo and that Step 1.6's curl check worked from this same laptop.
+Step 2.5 — Try it end to end
+Click the 📁 (Explorer) icon, then Open Folder, and pick any folder on your laptop (a real project, or just an empty test folder).
+Click the Chat tab in the AI panel on the right and send a message. You'll get the mock model's response by default — that confirms the full round trip (your laptop → your cloud server → back) is working.
+Try 🔍 Search / RAG: click Rebuild Index, then search for a term you know is in one of your files.
+Try Agent: give it an instruction, watch it list your directory, and approve or deny when it asks to write a file.
+Everything is now running against your own cloud server instead of localhost.
+Optional next step — connect a real model
+Right now ORVYN is talking to the built-in mock model. To get real AI responses instead of the placeholder text, pull a real model into the Ollama container already running on your server:
+# on the server, inside the orvyn directorydocker compose exec ollama ollama pull llama3
+Then in ORVYN, go to 🧠 AI Models → Add Model:
+Field
+Value
+Model ID
+llama3
+Display Name
+Llama 3
+Provider
+ollama
+Endpoint
+http://ollama:11434
+Context Window
+8192
+Capabilities
+check chat, code, agent, tools
+
+Click Add Model, then Test Model to confirm it responds. Then go to the Model Routing section further down and set chat/code/agent to point at llama3 instead of the mock.
+Note:  http://ollama:11434 only resolves from inside the Docker network on your server (that's the Compose service name) — this is correct as written, since the backend (not your laptop) is what talks to Ollama.
+Quick troubleshooting reference
+Symptom
+Likely cause
+Fix
+"Permission denied (publickey)" on ssh
+Wrong username for the provider (root vs ubuntu), or key not added at creation
+OVH uses ubuntu@, DigitalOcean uses root@ — double check which; re-add your SSH key in the provider's panel if needed
+git clone asks for a password and rejects it
+GitHub no longer accepts account passwords for git operations
+Use a Personal Access Token as the password instead (GitHub → Settings → Developer settings → Personal access tokens)
+curl to health endpoint hangs/fails
+DNS not propagated, or firewall blocking 80/443
+Wait for DNS, check docker compose ps, check cloud provider's firewall rules allow 80/443
+Windows "Test Connection" fails but curl works
+Typo'd URL or API key in the app
+Re-check Backend URL has https://, no trailing slash; re-paste API key
+401 Unauthorized even with correct-looking key
+Key in the request doesn't match .env on server
+Re-check .env on the server; restart with docker compose up -d after any .env change
+Agent/Composer/Chat all say "Configure a real model"
+Expected — that's the mock model
+Follow "Optional next step" above
+npm run dist:win fails
+Node version too old, or antivirus interfering
+Install Node 18+ LTS; temporarily disable antivirus real-time scan for the build folder
+SmartScreen blocks the installer
+Installer isn't code-signed
+Click "More info → Run anyway" — expected for an unsigned installer
+Security reminders
+Worth re-reading before you invite anyone else in:
+The ORVYN_API_KEY is currently the only thing standing between the internet and your backend — treat it like a password. Regenerate it (openssl rand -hex 32, update .env, docker compose up -d) if you ever suspect it leaked.
+Everyone who has this key has full access — there's no per-user permissions yet. Only share it with people you'd trust with shell access to that server.
+The Agent's terminal tool runs real shell commands on your cloud server when approved. It requires your explicit approval each time, but there's no sandboxing beyond that — don't approve commands you don't understand.

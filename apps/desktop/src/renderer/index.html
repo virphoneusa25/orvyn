@@ -2,12 +2,12 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: http://localhost:4570 ws://localhost:4570" />
-    <title>VirIDE</title>
-    <style>
-      html, body, #root { height: 100%; margin: 0; background: #0b0e14; }
-      * { box-sizing: border-box; font-family: -apple-system, "Segoe UI", sans-serif; }
-    </style>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' http://localhost:* ws://localhost:* https: wss:"
+    />
+    <link rel="icon" href="./favicon.png" />
+    <title>ORVYN</title>
   </head>
   <body>
     <div id="root"></div>

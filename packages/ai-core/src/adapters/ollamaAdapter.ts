@@ -30,7 +30,15 @@ export class OllamaAdapter implements AIModelProvider {
     const res = await fetch(`${this.config.endpoint}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.config.id, messages: request.messages, stream: true }),
+      body: JSON.stringify({
+        model: this.config.id,
+        messages: request.messages,
+        stream: true,
+        options: {
+          temperature: request.temperature ?? this.config.defaultTemperature,
+          top_p: request.topP ?? this.config.defaultTopP,
+        },
+      }),
     });
     if (!res.ok || !res.body) throw new Error(`Ollama stream failed: HTTP ${res.status}`);
 

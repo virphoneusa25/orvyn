@@ -298,7 +298,7 @@ export function ModelManager() {
     <div style={{ padding: 20, color: "#c9d1e0", overflowY: "auto", height: "100%" }}>
       <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>AI Models</div>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 16 }}>
-        Configure the models VirIDE talks to. Nothing here is tied to a specific vendor —
+        Configure the models ORVYN talks to. Nothing here is tied to a specific vendor —
         point it at Ollama, vLLM, llama.cpp, or any custom HTTP model server.
       </div>
 

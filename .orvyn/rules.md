@@ -1,4 +1,4 @@
-# VirIDE Project Rules
+# ORVYN Project Rules
 
 These instructions are automatically included in AI requests for this project.
 

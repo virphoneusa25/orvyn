@@ -1,6 +1,6 @@
 {
   "backendUrl": "http://localhost:4570",
-  "defaultModelId": "viride-mock",
+  "defaultModelId": "orvyn-mock",
   "toolPermissions": {
     "read_file": "allowed",
     "list_directory": "allowed",

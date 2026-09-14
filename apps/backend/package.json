@@ -1,5 +1,5 @@
 {
-  "name": "@viride/backend",
+  "name": "@orvyn/backend",
   "version": "0.1.0",
   "private": true,
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@viride/ai-core": "file:../../packages/ai-core",
+    "@orvyn/ai-core": "file:../../packages/ai-core",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "ws": "^8.17.0"

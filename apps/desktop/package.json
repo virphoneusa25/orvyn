@@ -1,5 +1,5 @@
 {
-  "name": "@viride/desktop",
+  "name": "@orvyn/desktop",
   "version": "0.1.0",
   "private": true,
   "main": "dist/main/main.js",
@@ -9,13 +9,12 @@
     "build:renderer:dev": "vite build --mode development",
     "dist:win": "npm run build && electron-builder --win"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@monaco-editor/react": "^4.6.0",
     "monaco-editor": "^0.49.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
+    "react-dom": "^18.3.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
@@ -24,14 +23,22 @@
     "typescript": "^5.4.5",
     "vite": "^5.3.1"
   },
+  "description": "ORVYN desktop client",
+  "author": "VirPhone",
   "build": {
-    "appId": "com.viride.desktop",
-    "productName": "VirIDE",
-    "directories": { "output": "release" },
+    "appId": "com.orvyn.desktop",
+    "productName": "ORVYN",
+    "electronVersion": "31.7.7",
+    "npmRebuild": false,
+    "directories": { "output": "release", "buildResources": "resources" },
     "files": ["dist/**/*"],
+    "extraResources": [
+      { "from": "resources/icon.ico", "to": "icon.ico" }
+    ],
     "win": {
       "target": ["nsis"],
-      "icon": "build/icon.ico"
+      "icon": "resources/icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,

@@ -42,7 +42,13 @@ function DiffView({ diff }: { diff: DiffLine[] }) {
   );
 }
 
-export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
+export function ComposerPanel({
+  workspaceRoot,
+  workspaceKind,
+}: {
+  workspaceRoot: string | null;
+  workspaceKind: "folder" | "default";
+}) {
   const [instruction, setInstruction] = useState("");
   const [plan, setPlan] = useState<ComposerPlan | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -52,7 +58,7 @@ export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
   const [applied, setApplied] = useState<string[] | null>(null);
 
   async function handlePlan() {
-    if (!projectRoot || !instruction.trim()) return;
+    if (!workspaceRoot || !instruction.trim()) return;
     setLoading(true);
     setError(null);
     setPlan(null);
@@ -61,7 +67,7 @@ export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
       const res = await fetch(apiUrl("/composer/plan"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ projectRoot, instruction }),
+        body: JSON.stringify({ projectRoot: workspaceRoot, instruction }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Composer failed");
@@ -75,7 +81,7 @@ export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
   }
 
   async function handleApply(paths?: string[]) {
-    if (!plan || !projectRoot) return;
+    if (!plan || !workspaceRoot) return;
     const targetPaths = paths ?? Array.from(selected);
     const files = plan.files.filter((f) => targetPaths.includes(f.path)).map((f) => ({ path: f.path, content: f.after }));
     setApplying(true);
@@ -83,7 +89,7 @@ export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
       const res = await fetch(apiUrl("/composer/apply"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ projectRoot, files }),
+        body: JSON.stringify({ projectRoot: workspaceRoot, files }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Apply failed");
@@ -104,13 +110,18 @@ export function ComposerPanel({ projectRoot }: { projectRoot: string | null }) {
     });
   }
 
-  if (!projectRoot) {
-    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Open a project to use Composer.</div>;
+  if (!workspaceRoot) {
+    return <div style={{ padding: 16, color: "#8b93a7", fontSize: 13 }}>Workspace is still starting…</div>;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", color: "#c9d1e0" }}>
-      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1c2330", fontSize: 13, fontWeight: 600 }}>Composer</div>
+      <div style={{ padding: "8px 12px", borderBottom: "1px solid #1c2330", fontSize: 13, fontWeight: 600 }}>
+        Composer
+        <div style={{ fontWeight: 400, opacity: 0.55, fontSize: 11, marginTop: 2 }}>
+          {workspaceKind === "folder" ? "Edits go into the opened folder" : "Edits go into the built-in workspace until you open a folder"}
+        </div>
+      </div>
 
       <div style={{ padding: 12, borderBottom: "1px solid #1c2330" }}>
         <textarea

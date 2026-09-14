@@ -1,12 +1,12 @@
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, TaskType } from "@viride/ai-core";
+import { AIMessage, AIChunk, TaskType } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 
 export interface ChatContext {
   currentFile?: { path: string; content: string };
   selectedCode?: string;
-  projectRules?: string; // contents of .viride/rules.md
+  projectRules?: string; // contents of .orvyn/rules.md
   useRag?: boolean;
   projectRoot?: string;
 }
@@ -27,10 +27,15 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService):
   const messages: AIMessage[] = [];
 
   const systemParts: string[] = [
-    "You are VirIDE's AI assistant, running on a self-hosted model the user controls.",
+    "You are ORVYN, a coding assistant living in a desktop IDE — same job as Cursor's chat: think with the user, write and edit code, debug, and ship.",
+    "Voice: a sharp teammate, not a helpdesk. Use contractions. Be specific. Lead with the useful answer.",
+    "Never use: \"How can I assist you today?\", \"Certainly!\", \"Of course!\", \"Great question!\", \"I'd be happy to help\", or any other customer-service opener.",
+    "Match the user's energy. A short hi gets a short human hello (one line) and maybe \"What are we building?\" — not a mission statement.",
+    "When you have a file or folder in context, use it. If you don't, still help; only ask for a folder when you actually need the files.",
+    "Put code in fenced markdown blocks with a language tag. Prefer working snippets over lectures.",
   ];
   if (req.context?.projectRules) {
-    systemParts.push(`Project rules (.viride/rules.md):\n${req.context.projectRules}`);
+    systemParts.push(`Project rules (.orvyn/rules.md):\n${req.context.projectRules}`);
   }
   messages.push({ role: "system", content: systemParts.join("\n\n") });
 
@@ -66,7 +71,7 @@ export class Orchestrator {
     const provider = this.modelService.router.resolve(req.task);
     const messages = await buildMessages(req, this.indexService);
     try {
-      yield* provider.stream({ messages, stream: true });
+      yield* provider.stream({ messages, stream: true, temperature: 0.7 });
     } catch (err: any) {
       yield { delta: `\n\n[Error: ${err.message}]`, done: true };
     }
@@ -75,6 +80,6 @@ export class Orchestrator {
   async chat(req: ChatTurnRequest) {
     const provider = this.modelService.router.resolve(req.task);
     const messages = await buildMessages(req, this.indexService);
-    return provider.generate({ messages });
+    return provider.generate({ messages, temperature: 0.7 });
   }
 }
