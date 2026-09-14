@@ -1,0 +1,16 @@
+# infrastructure/docker/Caddyfile
+# Caddy auto-provisions and renews a Let's Encrypt cert for {$DOMAIN} as
+# long as DNS points at this server and ports 80/443 are reachable.
+
+{$DOMAIN} {
+	# REST API + WebSocket both proxy to the backend container.
+	# Caddy handles the WebSocket Upgrade header automatically with reverse_proxy.
+	reverse_proxy backend:4570
+
+	encode gzip
+
+	log {
+		output stdout
+		format console
+	}
+}

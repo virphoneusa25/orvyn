@@ -1,0 +1,60 @@
+// packages/ai-core/src/router.ts
+import { ModelRegistry } from "./registry";
+import { AIModelProvider } from "./types";
+
+export type TaskType = "chat" | "code" | "completion" | "embedding" | "agent" | "vision";
+
+export interface RoutingOverrides {
+  [taskType: string]: string; // taskType -> modelId
+}
+
+// Default capability each task type needs, in priority order.
+const TASK_CAPABILITY: Record<TaskType, keyof AIModelProvider["config"]["capabilities"]> = {
+  chat: "chat",
+  code: "code",
+  completion: "completion",
+  embedding: "embeddings",
+  agent: "agent",
+  vision: "vision",
+};
+
+export class ModelRouter {
+  constructor(
+    private registry: ModelRegistry,
+    private overrides: RoutingOverrides = {},
+    private defaultModelId?: string
+  ) {}
+
+  setOverride(task: TaskType, modelId: string): void {
+    this.overrides[task] = modelId;
+  }
+
+  clearOverride(task: TaskType): void {
+    delete this.overrides[task];
+  }
+
+  getOverrides(): RoutingOverrides {
+    return { ...this.overrides };
+  }
+
+  resolve(task: TaskType): AIModelProvider {
+    const overrideId = this.overrides[task];
+    if (overrideId) {
+      const overridden = this.registry.get(overrideId);
+      if (overridden) return overridden;
+    }
+
+    const capability = TASK_CAPABILITY[task];
+    const candidates = this.registry.findByCapability(capability);
+    if (candidates.length > 0) return candidates[0];
+
+    if (this.defaultModelId) {
+      const fallback = this.registry.get(this.defaultModelId);
+      if (fallback) return fallback;
+    }
+
+    throw new Error(
+      `No model available for task "${task}" (needs capability "${capability}"). Configure one in Settings > AI Models.`
+    );
+  }
+}

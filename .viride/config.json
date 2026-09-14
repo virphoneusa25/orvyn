@@ -1,0 +1,12 @@
+{
+  "backendUrl": "http://localhost:4570",
+  "defaultModelId": "viride-mock",
+  "toolPermissions": {
+    "read_file": "allowed",
+    "list_directory": "allowed",
+    "search_files": "allowed",
+    "write_file": "ask",
+    "terminal": "ask",
+    "git_commit": "ask"
+  }
+}

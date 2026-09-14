@@ -1,0 +1,26 @@
+[
+  {
+    "id": "viride-mock",
+    "name": "VirIDE Mock (no model configured)",
+    "provider": "mock",
+    "endpoint": "",
+    "contextWindow": 8192,
+    "maxOutputTokens": 2048,
+    "defaultTemperature": 0.3,
+    "defaultTopP": 1,
+    "streaming": true,
+    "capabilities": { "chat": true, "code": true, "agent": false, "tools": false, "vision": false, "embeddings": false, "completion": true }
+  },
+  {
+    "id": "llama3",
+    "name": "Llama 3 (via Ollama)",
+    "provider": "ollama",
+    "endpoint": "http://localhost:11434",
+    "contextWindow": 8192,
+    "maxOutputTokens": 2048,
+    "defaultTemperature": 0.2,
+    "defaultTopP": 1,
+    "streaming": true,
+    "capabilities": { "chat": true, "code": true, "agent": true, "tools": true, "vision": false, "embeddings": true, "completion": true }
+  }
+]

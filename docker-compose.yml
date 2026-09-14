@@ -1,0 +1,67 @@
+# docker-compose.yml
+# Cloud deployment: backend + optional self-hosted Ollama + Caddy for
+# automatic HTTPS via Let's Encrypt. Run on any Linux VM (AWS/Azure/
+# DigitalOcean/Vultr/bare metal) with Docker + Docker Compose installed.
+#
+# Quick start:
+#   1. Point a DNS A record at the server (e.g. viride.yourdomain.com)
+#   2. cp .env.example .env  and fill in VIRIDE_API_KEY + DOMAIN
+#   3. docker compose up -d
+#
+# The desktop client then connects to https://viride.yourdomain.com
+# (see docs/DEPLOYMENT.md for the Windows client side).
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=4570
+      - VIRIDE_API_KEY=${VIRIDE_API_KEY}
+    expose:
+      - "4570"
+    # Uncomment to persist future Postgres-backed state (Phase 7):
+    # depends_on: [postgres]
+
+  # Optional: self-hosted model server. Comment this whole block out if
+  # you're pointing VirIDE at a different GPU box or a custom model API
+  # instead — the backend doesn't care where models live.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    expose:
+      - "11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    # Requires the NVIDIA container runtime on the host for GPU access:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # Terminates TLS and reverse-proxies to the backend. Caddy fetches and
+  # renews Let's Encrypt certificates automatically from DOMAIN.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./infrastructure/docker/Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+
+volumes:
+  ollama-data:
+  caddy-data:
+  caddy-config:
