@@ -15,6 +15,7 @@ import { ToolGateway } from "../gateway/ToolGateway";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore } from "./events";
 import { raceApprovalTimeout } from "./approvals";
+import { modelCallSignal } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
 import { clampToolOutput, compactConversation, estimateConversationTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
@@ -250,7 +251,9 @@ export class StreamingAgentRuntime {
   ): Promise<void> {
     const state = this.runs.get(runId);
     if (!state) return;
-    const signal = state.controller.signal;
+    // Per-call timeout composed with the run's cancel signal — a hung
+    // provider connection must surface as a failure, not freeze the run.
+    const signal = modelCallSignal(state.controller.signal);
 
     this.store.emit(runId, "run.started", { instruction, mode, maxSteps: MAX_STEPS });
 

@@ -36,6 +36,8 @@ export interface RunView {
   runId: string | null;
   approve: (callId: string, approved: boolean, scope?: "once" | "mission") => Promise<void>;
   stop: () => Promise<void>;
+  lastEventAt: number;
+  usage?: { promptTokens: number; completionTokens: number; turns: number; modelId?: string } | null;
 }
 
 export function WorkStream({
@@ -136,6 +138,17 @@ export function WorkStream({
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
   const streaming = isChatStreaming();
+  // Retry target: the run's own instruction, replayed as a NEW run.
+  const retryInstruction = (run.events.find((e) => e.type === "run.started")?.data.instruction as string | undefined)?.trim() ?? null;
+  // Stall clock: re-render every 5s while a run is active so "Still working…"
+  // appears based on real elapsed time since the last event.
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    if (!runActive) return;
+    const t = setInterval(() => setClock((c) => c + 1), 5000);
+    return () => clearInterval(t);
+  }, [runActive]);
+  const stalled = run.lastEventAt > 0 && Date.now() - run.lastEventAt > 30_000;
   // Escape stops the active run — skipped when another handler already
   // claimed the key (e.g. a palette dismissal).
   useEffect(() => {
@@ -322,6 +335,64 @@ export function WorkStream({
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
             <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"} />
+          </div>
+        )}
+
+        {/* Finished runs can be retried: a NEW run with the same instruction,
+            never an overwrite of the historical one. */}
+        {(run.status === "error" || run.status === "cancelled") && retryInstruction && (
+          <div style={{ margin: "6px 0" }}>
+            <button
+              onClick={() => {
+                onRunStarted(null);
+                void send(retryInstruction, true);
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--orvyn-border)",
+                borderRadius: 6,
+                color: "var(--orvyn-text-secondary)",
+                fontSize: 11.5,
+                padding: "4px 12px",
+                cursor: "pointer",
+              }}
+            >
+              ↻ Retry this request
+            </button>
+          </div>
+        )}
+
+        {/* Stall honesty: an active run with no events for 30s says so,
+            instead of silently looking frozen. */}
+        {runActive && stalled && (
+          <div style={{ fontSize: 11.5, color: "var(--orvyn-text-muted)", fontStyle: "italic", margin: "6px 0" }}>
+            Still working… (no new activity for {Math.round((Date.now() - run.lastEventAt) / 1000)}s)
+          </div>
+        )}
+
+        {/* Dev-only Run Inspector: ids, state, sequence, model, elapsed —
+            never shown in production builds. */}
+        {import.meta.env.DEV && run.runId && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "6px 10px",
+              borderRadius: 6,
+              border: "1px dashed var(--orvyn-border)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              color: "var(--orvyn-text-muted)",
+              lineHeight: 1.7,
+              overflowWrap: "anywhere",
+            }}
+          >
+            <div>RUN INSPECTOR (dev)</div>
+            <div>runId: {run.runId}</div>
+            <div>status: {run.status} · events: {run.events.length} · seq: {run.events.length > 0 ? run.events[run.events.length - 1].sequence : 0}</div>
+            <div>
+              model: {run.usage?.modelId ?? "(usage event pending)"} · tokens: {run.usage?.promptTokens ?? 0}↑ {run.usage?.completionTokens ?? 0}↓ · turns: {run.usage?.turns ?? 0}
+            </div>
+            <div>last event: {run.events.length > 0 ? `${run.events[run.events.length - 1].type} @ ${new Date(run.lastEventAt || run.events[run.events.length - 1].timestamp).toLocaleTimeString()}` : "—"}</div>
           </div>
         )}
         </div>

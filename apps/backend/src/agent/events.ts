@@ -5,6 +5,15 @@
 // within its run, which is what makes reconnect/resume possible: a client that
 // dropped at sequence 37 asks for everything after 37 rather than replaying the
 // whole run.
+//
+// DURABILITY: when a directory is provided, every event is appended to
+// `<dir>/<runId>.jsonl` as it is emitted and the newest logs are replayed at
+// boot — a backend restart no longer erases finished runs' replayable
+// history. In-flight runs still die with the process (reviving them needs
+// the cloud tier's durable queue).
+
+import { mkdirSync, appendFileSync, readdirSync, readFileSync, statSync } from "fs";
+import { basename, join } from "path";
 
 export type AgentEventType =
   | "run.started"
@@ -99,6 +108,105 @@ const MAX_RETAINED_RUNS = 100;
 
 export class RunStore {
   private runs = new Map<string, Run>();
+  private dir: string | null;
+
+  constructor(dir?: string) {
+    this.dir = dir ?? null;
+    if (this.dir) {
+      try {
+        mkdirSync(this.dir, { recursive: true });
+        this.loadRecentFromDisk();
+      } catch {
+        // Durability is best-effort: an unusable directory must never take
+        // down the in-memory store that live runs depend on.
+      }
+    }
+  }
+
+  /** Appends one record to the run's log; disk failures are swallowed. */
+  private log(runId: string, rec: Record<string, unknown>): void {
+    if (!this.dir) return;
+    try {
+      appendFileSync(join(this.dir, `${runId}.jsonl`), JSON.stringify(rec) + "\n");
+    } catch {
+      /* a full disk must not break a live run */
+    }
+  }
+
+  /** Boot replay: the newest MAX_RETAINED_RUNS logs return as real runs. */
+  private loadRecentFromDisk(): void {
+    const files = readdirSync(this.dir!)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => ({ path: join(this.dir!, f), mtime: statSync(join(this.dir!, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, MAX_RETAINED_RUNS);
+    for (const { path } of files) this.loadRunFile(path);
+  }
+
+  private loadRunFile(path: string): void {
+    try {
+      const runId = basename(path, ".jsonl");
+      let run: Run | null = null;
+      for (const line of readFileSync(path, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        let rec: any;
+        try {
+          rec = JSON.parse(line);
+        } catch {
+          continue; // torn tail write — skip the partial line
+        }
+        if (rec.t === "run" && !run) {
+          run = {
+            id: runId,
+            projectRoot: String(rec.projectRoot ?? ""),
+            status: (rec.status as RunStatus) ?? "running",
+            createdAt: Number(rec.createdAt ?? Date.now()),
+            events: [],
+            nextSequence: 1,
+            subscribers: new Set(),
+            usage: { promptTokens: 0, completionTokens: 0, turns: 0 },
+            ...(rec.checkpointId ? { checkpointId: String(rec.checkpointId) } : {}),
+          };
+        } else if (rec.t === "run" && run) {
+          // Later meta line = later status/checkpoint snapshot.
+          run.status = (rec.status as RunStatus) ?? run.status;
+          if (rec.checkpointId) run.checkpointId = String(rec.checkpointId);
+        } else if (rec.t === "usage" && run) {
+          run.usage = {
+            promptTokens: Number(rec.promptTokens ?? 0),
+            completionTokens: Number(rec.completionTokens ?? 0),
+            turns: Number(rec.turns ?? 0),
+          };
+        } else if (rec.t === "ev" && run) {
+          run.events.push(rec.e as AgentEvent);
+          run.nextSequence = Math.max(run.nextSequence, (rec.e.sequence as number) + 1);
+        }
+      }
+      if (run) {
+        // A run that was mid-flight when the process died can never progress
+        // again — its runtime state is gone. Mark it honestly instead of
+        // leaving a permanent "running"/"awaiting_approval" ghost.
+        if (!isTerminal(run.status)) {
+          const seq = run.nextSequence++;
+          const ghost: AgentEvent = {
+            id: `evt_${run.id.slice(0, 6)}_${seq}`,
+            runId: run.id,
+            sequence: seq,
+            type: "run.error",
+            timestamp: Date.now(),
+            data: { message: "The backend restarted while this run was in flight. Retry to continue the work." },
+          };
+          run.events.push(ghost);
+          run.status = "error";
+          this.log(run.id, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: "error" });
+          this.log(run.id, { t: "ev", e: ghost });
+        }
+        this.runs.set(run.id, run);
+      }
+    } catch {
+      /* unreadable log = skip that run */
+    }
+  }
 
   create(id: string, projectRoot: string, status: RunStatus = "running"): Run {
     const run: Run = {
@@ -112,6 +220,7 @@ export class RunStore {
       usage: { promptTokens: 0, completionTokens: 0, turns: 0 },
     };
     this.runs.set(id, run);
+    this.log(id, { t: "run", projectRoot, createdAt: run.createdAt, status });
     this.evictOldRuns();
     return run;
   }
@@ -137,6 +246,7 @@ export class RunStore {
     run.usage.promptTokens += usage.promptTokens;
     run.usage.completionTokens += usage.completionTokens;
     run.usage.turns++;
+    this.log(runId, { t: "usage", ...run.usage });
     return { ...run.usage };
   }
 
@@ -160,6 +270,7 @@ export class RunStore {
       data,
     };
     run.events.push(event);
+    this.log(runId, { t: "ev", e: event });
 
     for (const send of run.subscribers) {
       try {
@@ -187,12 +298,16 @@ export class RunStore {
 
   setStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId);
-    if (run) run.status = status;
+    if (!run) return;
+    run.status = status;
+    this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}) });
   }
 
   setCheckpoint(runId: string, checkpointId: string): void {
     const run = this.runs.get(runId);
-    if (run) run.checkpointId = checkpointId;
+    if (!run) return;
+    run.checkpointId = checkpointId;
+    this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: run.status, checkpointId });
   }
 
   list(): Run[] {

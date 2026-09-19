@@ -63,6 +63,24 @@ with per-role capability gates, diff-preview approvals, one-click Undo via
 pre-run checkpoints, usage metering with run/mission budgets, transient-only
 model retries, right context panel driven by the same event bus.
 
+## Pass 2 — remaining acceptance items (same day)
+
+| Gap from the spec | Fix |
+|---|---|
+| No provider-call timeout — a hung connection froze "Astra is analyzing…" forever (Part 22) | `agent/modelTimeout.ts`: every generate call runs under `ORVYN_MODEL_CALL_TIMEOUT_MS` (default 5 min, 0 disables), composed with the run's cancel signal so Stop still wins; a timeout surfaces as a model error, not silence |
+| Run history died with the backend process (Parts 25/47/65) | `RunStore` now appends every event to `<data>/runs-<tenant>/<runId>.jsonl` as it streams and replays the newest logs at boot — finished runs' history and `?after=` resume survive a restart (unit-tested with a store-restart test) |
+| No SSE liveness (Part 23) | The events endpoint sends a `: hb` comment every 15s while a run is live (verified in the smoke suite) |
+| Silent stalls (Part 37) | The workspace tracks time since the last event; an active run quiet for 30s shows "Still working… (no new activity for Ns)" |
+| No Retry (Parts 18/38) | Failed/stopped runs get "↻ Retry this request" — submits the SAME instruction as a NEW run; history is never overwritten |
+| No observability (Part 54) | Dev-only Run Inspector (runId, status, event count/sequence, model, tokens, turns, last event) — tree-shaken out of production builds (verified absent from app.asar) |
+
+Verified: 54/55 tests pass (1 pre-existing skip); smoke suite adds heartbeat + the
+spec's Phoenix multi-turn test — the live model recalled the codename from
+client-supplied history, same conversation, no mission.
+
+In-flight runs still die with the process (durable execution needs the cloud
+tier's queue); on boot they replay as their last persisted status.
+
 ## Known limits (unchanged, honest)
 
 Run state is in-memory: a backend restart loses live-run replay (finished-run

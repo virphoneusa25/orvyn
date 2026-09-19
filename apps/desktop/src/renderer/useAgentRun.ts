@@ -26,6 +26,7 @@ export function useAgentRun(
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [usage, setUsage] = useState<RunUsage | null>(null);
+  const [lastEventAt, setLastEventAt] = useState(0);
   const [availableTools, setAvailableTools] = useState<{ name: string; permission: string }[]>([]);
   const lastSeq = useRef(0);
   const streamRef = useRef<EventSource | null>(null);
@@ -90,6 +91,7 @@ export function useAgentRun(
 
   function applyEvent(e: AgentEvent) {
     lastSeq.current = Math.max(lastSeq.current, e.sequence);
+    setLastEventAt(Date.now());
     setEvents((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
     if (e.type === "approval.required") setStatus("awaiting_approval");
     else if (e.type === "run.queued") setStatus("queued");
@@ -236,6 +238,7 @@ export function useAgentRun(
     usage,
     availableTools,
     lastSeq: lastSeq.current,
+    lastEventAt,
     start,
     stop,
     approve,

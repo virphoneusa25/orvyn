@@ -381,12 +381,26 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
     return;
   }
 
+  // Heartbeat: an SSE comment every 15s keeps proxies from idling the
+  // connection out and lets the client distinguish "stream alive, no events
+  // yet" from "connection dead" (EventSource auto-reconnects the latter).
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(": hb\n\n");
+    } catch {
+      /* socket already gone — cleaned up below */
+    }
+  }, 15000);
+
   const unsubscribe = t.runStore.subscribe(req.params.id, (e) => {
     res.write(`data: ${JSON.stringify(e)}\n\n`);
     if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled") res.end();
   });
 
-  req.on("close", unsubscribe);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 });
 
 // Polling fallback / catch-up without holding a stream open.

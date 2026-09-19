@@ -37,7 +37,7 @@ const keyVars = [
 
 const server = spawn(process.execPath, ["dist/index.js"], {
   cwd: join(repoRoot, "apps", "backend"),
-  env: { ...process.env, ...keyVars, ORVYN_DATA_DIR: dataDir, PORT: String(PORT), ORVYN_APPROVAL_TIMEOUT_SEC: "5" },
+  env: { ...process.env, ...keyVars, ORVYN_DATA_DIR: dataDir, PORT: String(PORT), ORVYN_APPROVAL_TIMEOUT_SEC: "30" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 server.stderr.on("data", (d) => process.stderr.write(`[server] ${d}`));
@@ -182,6 +182,35 @@ async function partA() {
     const status = await runStatus(BASE, runId);
     ok(["completed", "error", "cancelled"].includes(status), `mission: terminal status '${status}' (terminal event ${terminal?.type})`);
   }
+
+  // 3b. SSE heartbeat arrives while a run is alive but quiet -----------------
+  {
+    console.log("3b. SSE heartbeat keeps a quiet live run distinguishable from a dead socket");
+    // The mock demo run blocks on a write approval (30s timeout) — a stable
+    // live-but-quiet run to observe the 15s heartbeat against.
+    const res = await fetch(`${BASE}/api/v1/agent/stream/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectRoot: projectDir, instruction: "Write a notes file.", mode: "agent" }),
+    });
+    const { runId } = await res.json();
+    const sse = await fetch(`${BASE}/api/v1/agent/stream/runs/${runId}/events`);
+    const reader = sse.body.getReader();
+    const decoder = new TextDecoder();
+    let raw = "";
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline && !raw.includes(": hb")) {
+      const { value, done } = await Promise.race([
+        reader.read(),
+        new Promise((r) => setTimeout(() => r({ value: undefined, done: true }), deadline - Date.now())),
+      ]);
+      if (done) break;
+      raw += decoder.decode(value, { stream: true });
+    }
+    reader.cancel().catch(() => {});
+    ok(raw.includes(": hb"), "heartbeat comment received within 20s on a quiet live run");
+    await fetch(`${BASE}/api/v1/agent/stream/runs/${runId}/cancel`, { method: "POST" });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +223,33 @@ async function partB() {
   } catch {
     console.log("  (live backend not reachable — skipping PART B)");
     return;
+  }
+
+  // 4a. Multi-turn context: the codename test (spec Part 57) ----------------
+  {
+    console.log("4a. multi-turn chat retains context (Phoenix)");
+    const livePort = new URL(LIVE).port || "80";
+    const chatLive = (userMessage, history) =>
+      new Promise((resolveChat, rejectChat) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${livePort}/ws/chat`);
+        const fail = setTimeout(() => { try { ws.close(); } catch {} rejectChat(new Error("chat WS timed out")); }, 60000);
+        let text = "";
+        ws.onopen = () => ws.send(JSON.stringify({ task: "chat", history, userMessage, context: { projectRoot: repoRoot.replace(/\\/g, "/"), useRag: false } }));
+        ws.onmessage = (m) => {
+          const chunk = JSON.parse(m.data);
+          if (chunk.error) { clearTimeout(fail); ws.close(); resolveChat({ error: chunk.error, text }); return; }
+          text += chunk.delta ?? "";
+          if (chunk.done) { clearTimeout(fail); ws.close(); resolveChat({ text }); }
+        };
+        ws.onerror = () => { clearTimeout(fail); rejectChat(new Error("chat WS error")); };
+      });
+    const r1 = await chatLive("My favorite test codename for this conversation is Phoenix.", []);
+    ok(!r1.error && r1.text.length > 0, "phoenix: first turn answered");
+    const r2 = await chatLive("What codename did I give you?", [
+      { role: "user", content: "My favorite test codename for this conversation is Phoenix." },
+      { role: "assistant", content: r1.text.slice(0, 2000) },
+    ]);
+    ok(/phoenix/i.test(r2.text), `phoenix: second turn recalls the codename (reply: ${r2.text.slice(0, 80).replace(/\n/g, " ")}…)`);
   }
 
   // 4. The spec's exact health-check mission reaches a terminal state -------

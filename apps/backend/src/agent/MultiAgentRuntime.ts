@@ -36,6 +36,7 @@ import { clampToolOutput, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { MissionBudgetExceededError } from "../services/UsageService";
 import { MissionQueue } from "../queue/MissionQueue";
 import { raceApprovalTimeout } from "./approvals";
+import { modelCallSignal } from "./modelTimeout";
 
 interface PendingApproval {
   resolve: (approved: boolean) => void;
@@ -307,7 +308,7 @@ export class MultiAgentRuntime {
           },
           { role: "user", content: goal, attachments },
         ],
-        signal: this.signalFor(runId),
+        signal: modelCallSignal(this.signalFor(runId)),
           })
       );
 
@@ -567,7 +568,7 @@ export class MultiAgentRuntime {
             .join("\n")}`,
         },
       ],
-        signal: this.signalFor(runId),
+        signal: modelCallSignal(this.signalFor(runId)),
         })
     );
 
@@ -644,7 +645,7 @@ export class MultiAgentRuntime {
       if (this.isCancelled(runId)) break;
       let response;
       try {
-        response = await worker.generate({ messages, tools: toolDefs, signal: this.signalFor(runId) });
+        response = await worker.generate({ messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });
       } catch (err: any) {
         // Surface it — a silent break here looks like the agent "gave up
         // after one tool call" in the UI, which is undebuggable.
@@ -801,7 +802,7 @@ export class MultiAgentRuntime {
             content: `Goal: ${goal}\nTask (${task.agent}): ${task.description}\n\nWhat the worker did:\n${task.result ?? "(nothing)"}`,
           },
         ],
-        signal: this.signalFor(runId),
+        signal: modelCallSignal(this.signalFor(runId)),
       });
       const parsed = extractJson(response.content);
       return {

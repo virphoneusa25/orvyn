@@ -10,6 +10,8 @@
 // adapter classes.
 
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
+import { join as pathJoin } from "path";
+import { defaultDataDir } from "../persistence/LocalStore";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -148,8 +150,9 @@ export class TenantManager {
     const savedProfile = localStore.getSetting("profile") as PermissionProfile | null;
     if (savedProfile && PROFILES[savedProfile]) tenant.toolGateway.profile = savedProfile;
     // Streaming runtime is per-tenant too, so runs and their event logs are
-    // never visible across customers.
-    tenant.runStore = new RunStore();
+    // never visible across customers. The store gets a per-tenant directory:
+    // events append to disk as they stream and replay after a restart.
+    tenant.runStore = new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
     tenant.eventBus = new EventBus(tenant.runStore);
     tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);

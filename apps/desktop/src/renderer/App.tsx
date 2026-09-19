@@ -133,6 +133,8 @@ export function App() {
     runId: agentRun.runId,
     approve: agentRun.approve,
     stop: agentRun.stop,
+    lastEventAt: agentRun.lastEventAt,
+    usage: agentRun.usage,
   };
 
   const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
