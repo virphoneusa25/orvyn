@@ -22,6 +22,7 @@ export interface VectorStore {
   upsert(record: VectorRecord): Promise<void>;
   search(queryVector: number[], topK: number): Promise<SearchResult[]>;
   delete(id: string): Promise<void>;
+  deleteByPrefix?(prefix: string): Promise<void>;
   clear(): Promise<void>;
   size(): Promise<number>;
 }
@@ -59,6 +60,12 @@ export class InMemoryVectorStore implements VectorStore {
 
   async delete(id: string): Promise<void> {
     this.records.delete(id);
+  }
+
+  async deleteByPrefix(prefix: string): Promise<void> {
+    for (const id of [...this.records.keys()]) {
+      if (id === prefix || id.startsWith(`${prefix}::`)) this.records.delete(id);
+    }
   }
 
   async clear(): Promise<void> {

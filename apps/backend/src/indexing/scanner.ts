@@ -52,7 +52,7 @@ export async function scanProject(
           if (stat.size > MAX_FILE_BYTES) continue;
           const content = await fs.readFile(fullPath, "utf-8");
           results.push({
-            relativePath: path.relative(projectRoot, fullPath),
+            relativePath: toPosixRelative(projectRoot, fullPath),
             absolutePath: fullPath,
             content,
           });
@@ -65,4 +65,20 @@ export async function scanProject(
 
   await walk(projectRoot);
   return results;
+}
+
+export function toPosixRelative(projectRoot: string, fullPath: string): string {
+  return path.relative(projectRoot, fullPath).split(path.sep).join("/");
+}
+
+export function shouldIgnoreRelative(
+  relativePath: string,
+  ignoreDirs: Set<string> = DEFAULT_IGNORE_DIRS
+): boolean {
+  const parts = relativePath.split(/[\\/]/).filter(Boolean);
+  if (parts.some((p) => ignoreDirs.has(p))) return true;
+  const base = parts[parts.length - 1] ?? "";
+  if (base.startsWith(".env") || base.toLowerCase().includes("secret")) return true;
+  const ext = path.extname(base).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
 }

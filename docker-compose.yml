@@ -17,9 +17,25 @@ services:
       context: .
       dockerfile: apps/backend/Dockerfile
     restart: unless-stopped
+    # Model/provider keys, quotas, etc. all come from .env — the backend reads
+    # the same variables in a container as it does on a dev machine.
+    env_file:
+      - .env
     environment:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
+      # SQLite tenant stores (accounts, missions, usage/billing records) must
+      # outlive image rebuilds — losing usage events loses money.
+      - ORVYN_DATA_DIR=/data
+    volumes:
+      - orvyn-data:/data
+      # Sandbox execution: the backend spawns per-mission containers as
+      # SIBLINGS on the host daemon (not nested inside itself). The socket
+      # mount is the minimum required for that; the sandbox containers it
+      # spawns run with --network none, --cap-drop ALL and resource ceilings.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Cloud mission workspaces (repos cloned for cloud jobs land here).
+      - orvyn-projects:/projects
     expose:
       - "4570"
     # Uncomment to persist future Postgres-backed state (Phase 7):
@@ -62,6 +78,8 @@ services:
       - backend
 
 volumes:
+  orvyn-data:
+  orvyn-projects:
   ollama-data:
   caddy-data:
   caddy-config:

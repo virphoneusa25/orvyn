@@ -58,4 +58,5 @@ export class ToolRegistry {
   }
 }
 
-export const toolRegistry = new ToolRegistry();
+// No module-level singleton: each tenant owns a ToolRegistry instance
+// (see tenancy/TenantManager.ts) so tool state is never shared across customers.

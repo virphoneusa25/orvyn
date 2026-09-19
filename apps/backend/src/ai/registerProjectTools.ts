@@ -1,23 +1,145 @@
 // apps/backend/src/ai/registerProjectTools.ts
-import { toolRegistry } from "./ToolTypes";
-import { makeReadFileTool, makeListDirectoryTool, makeSearchFilesTool, makeWriteFileTool } from "./tools/fileTools";
+import type { Tenant } from "../tenancy/TenantManager";
+import type { ToolPermission } from "./ToolTypes";
+import {
+  makeReadFileTool,
+  makeListDirectoryTool,
+  makeSearchFilesTool,
+  makeWriteFileTool,
+  makeEditFileTool,
+  makeDeleteFileTool,
+  makeMoveFileTool,
+} from "./tools/fileTools";
+import { makeSearchCodeTool } from "./tools/searchCodeTool";
+import { makeListSymbolsTool } from "./tools/symbolTools";
 import { makeTerminalTool } from "./tools/terminalTool";
-import { makeGitStatusTool, makeGitDiffTool, makeGitCommitTool } from "./tools/gitTools";
+import {
+  makeGitStatusTool,
+  makeGitDiffTool,
+  makeGitCommitTool,
+  makeGitLogTool,
+  makeGitBranchTool,
+  makeGitCheckoutTool,
+} from "./tools/gitTools";
+import { makeGenerateImageTool } from "./tools/imageTool";
+import { makeFetchUrlTool, makeWebSearchTool } from "./tools/netTools";
+import { makeSshExecTool } from "./tools/sshTools";
+import { makeMcpListTool, makeMcpCallTool } from "./tools/mcpTools";
+import {
+  makeBrowserOpenTool,
+  makeBrowserNavigateTool,
+  makeBrowserClickTool,
+  makeBrowserTypeTool,
+  makeBrowserScreenshotTool,
+  makeBrowserConsoleErrorsTool,
+} from "./tools/browserTools";
+import {
+  makeGetDiagnosticsTool,
+  makeRunTypecheckTool,
+  makeRunTestsTool,
+  makeRunLinterTool,
+} from "./tools/diagnosticsTools";
+import {
+  makeStartProcessTool,
+  makeStopProcessTool,
+  makeReadProcessLogsTool,
+  makeListProcessesTool,
+} from "./tools/processTools";
 
-let currentProjectRoot: string | null = null;
+// Registers the tool set into THIS TENANT's registry, bound to their project
+// root. Previously this wrote into a module-global registry, which meant one
+// customer's project root could be used to execute another's tool calls.
+//
+// Re-registering for the SAME root (e.g. the tools panel refreshing) keeps the
+// user's permission overrides instead of clobbering them back to defaults.
+export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): void {
+  const g = tenant.toolGateway;
+  const sameRoot = tenant.currentProjectRoot === projectRoot;
+  const saved = new Map<string, ToolPermission>();
+  if (sameRoot) {
+    for (const t of g.list()) saved.set(t.name, g.getPermission(t.name));
+  }
 
-// Re-registering is cheap and idempotent, so callers (agent start, tools
-// list, etc.) can call this defensively whenever they know the project root.
-export function registerProjectTools(projectRoot: string): void {
-  if (currentProjectRoot === projectRoot) return;
-  toolRegistry.clear();
-  toolRegistry.register(makeReadFileTool(projectRoot));
-  toolRegistry.register(makeListDirectoryTool(projectRoot));
-  toolRegistry.register(makeSearchFilesTool(projectRoot));
-  toolRegistry.register(makeWriteFileTool(projectRoot));
-  toolRegistry.register(makeTerminalTool(projectRoot));
-  toolRegistry.register(makeGitStatusTool(projectRoot));
-  toolRegistry.register(makeGitDiffTool(projectRoot));
-  toolRegistry.register(makeGitCommitTool(projectRoot));
-  currentProjectRoot = projectRoot;
+  g.registry.clear();
+
+  // Filesystem
+  g.register(makeReadFileTool(projectRoot));
+  g.register(makeListDirectoryTool(projectRoot));
+  g.register(makeSearchFilesTool(projectRoot));
+  g.register(makeSearchCodeTool(projectRoot));
+  g.register(makeListSymbolsTool(projectRoot));
+  g.register(makeWriteFileTool(projectRoot));
+  g.register(makeEditFileTool(projectRoot));
+  g.register(makeMoveFileTool(projectRoot));
+  g.register(makeDeleteFileTool(projectRoot));
+
+  // Execution
+  g.register(makeTerminalTool(projectRoot));
+  g.registerAlias("run_command", "terminal");
+  g.register(makeStartProcessTool(projectRoot));
+  g.register(makeStopProcessTool(projectRoot));
+  g.register(makeReadProcessLogsTool(projectRoot));
+  g.register(makeListProcessesTool(projectRoot));
+
+  // Verification (Testing Agent)
+  g.register(makeGetDiagnosticsTool(projectRoot));
+  g.register(makeRunTypecheckTool(projectRoot));
+  g.register(makeRunTestsTool(projectRoot));
+  g.register(makeRunLinterTool(projectRoot));
+
+  // Network
+  g.register(makeFetchUrlTool());
+  g.register(makeWebSearchTool());
+
+  // Remote administration (hosts allow-listed in .orvyn/ssh.json)
+  g.register(makeSshExecTool(projectRoot));
+
+  // Browser QA (Playwright). Registered always; each call returns a typed
+  // "Playwright is not installed" error until the optional dep is added.
+  g.register(makeBrowserOpenTool(projectRoot));
+  g.register(makeBrowserNavigateTool(projectRoot));
+  g.register(makeBrowserClickTool(projectRoot));
+  g.register(makeBrowserTypeTool(projectRoot));
+  g.register(makeBrowserScreenshotTool(projectRoot));
+  g.register(makeBrowserConsoleErrorsTool(projectRoot));
+
+  // Git
+  g.register(makeGitStatusTool(projectRoot));
+  g.register(makeGitDiffTool(projectRoot));
+  g.register(makeGitLogTool(projectRoot));
+  g.register(makeGitBranchTool(projectRoot));
+  g.register(makeGitCheckoutTool(projectRoot));
+  g.register(makeGitCommitTool(projectRoot));
+
+  // Media
+  g.register(makeGenerateImageTool(projectRoot, tenant.modelService));
+
+  // MCP (servers from .orvyn/mcp.json — the hub is the only MCP speaker)
+  g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
+  g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
+
+  // Later phases append here: diagnostics/tests (Phase 5), browser (Phase 8),
+  // checkpoints (Phase 9), MCP (Phase 10). Kept in one function so the gateway
+  // remains the single registration path.
+  for (const extend of toolRegistrars) extend(tenant, projectRoot);
+
+  if (sameRoot) {
+    for (const [name, permission] of saved) g.setPermission(name, permission);
+  } else {
+    // Fresh root (or first registration after a restart): re-apply the user's
+    // persisted per-tool overrides for this project.
+    const overrides = tenant.localStore.getToolOverrides(projectRoot);
+    for (const [name, permission] of Object.entries(overrides)) {
+      g.setPermission(name, permission as ToolPermission);
+    }
+  }
+  tenant.currentProjectRoot = projectRoot;
+}
+
+type ToolRegistrar = (tenant: Tenant, projectRoot: string) => void;
+const toolRegistrars: ToolRegistrar[] = [];
+
+/** Lets later-phase modules (diagnostics, browser, MCP…) plug into the same registration pass. */
+export function addToolRegistrar(fn: ToolRegistrar): void {
+  toolRegistrars.push(fn);
 }

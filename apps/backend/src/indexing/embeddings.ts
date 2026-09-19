@@ -3,6 +3,7 @@ import { AIModelProvider } from "@orvyn/ai-core";
 
 export interface Embedder {
   embed(text: string): Promise<number[]>;
+  embedBatch(texts: string[]): Promise<number[][]>;
   readonly dimensions: number;
 }
 
@@ -17,6 +18,12 @@ export class ModelEmbedder implements Embedder {
     if (!this.provider.embed) throw new Error(`Model "${this.provider.config.id}" does not support embeddings`);
     return this.provider.embed(text);
   }
+
+  embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return Promise.resolve([]);
+    if (this.provider.embedMany) return this.provider.embedMany(texts);
+    return Promise.all(texts.map((t) => this.embed(t)));
+  }
 }
 
 // Zero-dependency fallback: a hashing-trick bag-of-words embedding. This is
@@ -26,6 +33,10 @@ export class ModelEmbedder implements Embedder {
 // near-exact term matches with no external service required.
 export class HashingEmbedder implements Embedder {
   constructor(readonly dimensions = 256) {}
+
+  embedBatch(texts: string[]): Promise<number[][]> {
+    return Promise.all(texts.map((t) => this.embed(t)));
+  }
 
   async embed(text: string): Promise<number[]> {
     const vector = new Array(this.dimensions).fill(0);

@@ -1,0 +1,114 @@
+// apps/backend/src/gateway/PermissionEngine.ts
+//
+// Capability layer on top of the per-tool allowed/ask/denied registry.
+// Tool-name permissions answer "may this project run this tool at all";
+// capabilities answer "may this AGENT ROLE touch this class of resource".
+// Both must pass. Agents cannot bypass this — the Tool Gateway is the only
+// execution path and it consults this engine on every call.
+
+export type Capability =
+  | "READ"
+  | "WRITE"
+  | "DELETE"
+  | "EXECUTE"
+  | "NETWORK"
+  | "GIT"
+  | "DATABASE"
+  | "DEPLOYMENT"
+  | "SYSTEM";
+
+export type AgentRole =
+  | "orchestrator"
+  | "coder"
+  | "tester"
+  | "browser"
+  | "security"
+  | "research"
+  | "git";
+
+/** Which capability class each tool belongs to. Unknown tools are SYSTEM (most restricted). */
+const TOOL_CAPABILITIES: Record<string, Capability[]> = {
+  read_file: ["READ"],
+  list_directory: ["READ"],
+  search_files: ["READ"],
+  search_code: ["READ"],
+  list_symbols: ["READ"],
+  get_diagnostics: ["READ", "EXECUTE"],
+  write_file: ["WRITE"],
+  edit_file: ["WRITE"],
+  move_file: ["WRITE"],
+  delete_file: ["DELETE"],
+  terminal: ["EXECUTE"],
+  run_command: ["EXECUTE"],
+  run_tests: ["EXECUTE"],
+  run_typecheck: ["EXECUTE"],
+  run_linter: ["EXECUTE"],
+  start_process: ["EXECUTE"],
+  stop_process: ["EXECUTE"],
+  read_process_logs: ["READ"],
+  list_processes: ["READ"],
+  fetch_url: ["NETWORK"],
+  web_search: ["NETWORK"],
+  // Remote execution — strictly more dangerous than either class alone.
+  ssh_exec: ["EXECUTE", "NETWORK"],
+  browser_open: ["NETWORK", "EXECUTE"],
+  browser_navigate: ["NETWORK"],
+  browser_click: ["NETWORK"],
+  browser_type: ["NETWORK"],
+  browser_screenshot: ["NETWORK"],
+  browser_console_errors: ["NETWORK"],
+  git_status: ["GIT"],
+  git_diff: ["GIT"],
+  git_log: ["GIT"],
+  git_branch: ["GIT"],
+  git_checkout: ["GIT", "WRITE"],
+  git_commit: ["GIT", "WRITE"],
+  generate_image: ["NETWORK"],
+  mcp_list: ["NETWORK"],
+  mcp_call: ["NETWORK"],
+};
+
+/** What each agent role is allowed to touch. Orchestrator plans; it does not edit. */
+const ROLE_CAPABILITIES: Record<AgentRole, Capability[]> = {
+  orchestrator: ["READ", "GIT"],
+  coder: ["READ", "WRITE", "DELETE", "EXECUTE", "GIT", "NETWORK"],
+  tester: ["READ", "EXECUTE", "NETWORK"],
+  browser: ["READ", "NETWORK", "EXECUTE"],
+  security: ["READ", "GIT"],
+  research: ["READ", "NETWORK"],
+  // WRITE here covers commit/checkout mutations; the git agent's TOOL list is
+  // still restricted to git_* only, so it cannot edit source files.
+  git: ["READ", "GIT", "WRITE"],
+};
+
+export interface PermissionVerdict {
+  allowed: boolean;
+  reason?: string;
+}
+
+export class PermissionEngine {
+  /**
+   * When the user flips Autonomous mode on, "ask" tools may run without a
+   * per-call approval. It NEVER unlocks capabilities a role does not have,
+   * and never unlocks DATABASE / DEPLOYMENT / SYSTEM.
+   */
+  public autonomous = false;
+
+  capabilitiesOf(toolName: string): Capability[] {
+    return TOOL_CAPABILITIES[toolName] ?? ["SYSTEM"];
+  }
+
+  checkRole(toolName: string, role: AgentRole | undefined): PermissionVerdict {
+    if (!role) return { allowed: true };
+    const need = this.capabilitiesOf(toolName);
+    const have = ROLE_CAPABILITIES[role] ?? [];
+    const missing = need.filter((c) => !have.includes(c));
+    if (missing.length > 0) {
+      return {
+        allowed: false,
+        reason: `Role "${role}" lacks ${missing.join("+")} capability required by "${toolName}"`,
+      };
+    }
+    return { allowed: true };
+  }
+}

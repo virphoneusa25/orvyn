@@ -1,8 +1,7 @@
-// apps/backend/src/agent/AgentService.ts
 import { randomUUID } from "crypto";
 import { AIMessage, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
-import { toolRegistry } from "../ai/ToolTypes";
+import { ToolRegistry } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 
 export type AgentStatus = "running" | "pending_approval" | "completed" | "error";
@@ -28,15 +27,22 @@ export interface AgentSession {
   consecutiveFailures: number;
 }
 
-const sessions = new Map<string, AgentSession>();
-
-function toolDefinitions(): ToolDefinition[] {
-  return toolRegistry.list().map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
-}
-
 export class AgentService {
-  constructor(private modelService: ModelService) {}
+  constructor(
+    private modelService: ModelService,
+    private toolRegistry: ToolRegistry,
+    private sessions: Map<string, AgentSession>
+  ) {}
 
+  private toolDefinitions(): ToolDefinition[] {
+    return this.toolRegistry
+      .list()
+      .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+  }
+
+  // Records a tool outcome. When a tool FAILS we feed the real error text back
+  // to the model as a tool message so it can diagnose and change approach —
+  // this is what turns a one-shot tool caller into a self-correcting agent.
   private recordResult(
     session: AgentSession,
     call: ToolCall,
@@ -79,6 +85,8 @@ export class AgentService {
       return;
     }
 
+    // Circuit breaker: stop burning steps and tokens if the model keeps
+    // failing the same way instead of recovering.
     if (session.consecutiveFailures >= 4) {
       session.status = "error";
       session.errorMessage =
@@ -91,7 +99,10 @@ export class AgentService {
     const provider = this.modelService.router.resolve("agent");
     let response;
     try {
-      response = await provider.generate({ messages: session.messages, tools: toolDefinitions() });
+      response = await provider.generate({
+        messages: session.messages,
+        tools: provider.supportsTools() ? this.toolDefinitions() : undefined,
+      });
     } catch (err: any) {
       session.status = "error";
       session.errorMessage = `Model call failed: ${err.message}`;
@@ -100,14 +111,12 @@ export class AgentService {
 
     if (response.toolCalls && response.toolCalls.length > 0) {
       const call = response.toolCalls[0];
+
       // Record the assistant tool_calls turn before any tool result — required
       // by OpenAI-style APIs.
-      session.messages.push({
-        role: "assistant",
-        content: response.content || "",
-        toolCalls: response.toolCalls,
-      });
-      const permission = toolRegistry.getPermission(call.name);
+      session.messages.push({ role: "assistant", content: response.content ?? "", toolCalls: [call] });
+
+      const permission = this.toolRegistry.getPermission(call.name);
 
       if (permission === "denied") {
         this.recordResult(session, call, false, `Tool "${call.name}" is denied by project permissions.`);
@@ -122,7 +131,7 @@ export class AgentService {
         return;
       }
 
-      const result = await toolRegistry.execute(call.name, call.arguments);
+      const result = await this.toolRegistry.execute(call.name, call.arguments);
       this.recordResult(session, call, result.ok, result.ok ? result.output ?? "" : result.error ?? "unknown error");
       return this.step(session);
     }
@@ -140,7 +149,7 @@ export class AgentService {
         {
           role: "system",
           content: [
-            "You are ORVYN's coding Agent. You can read files, search, and — with",
+            "You are Orvyn's coding Agent. You can read files, search, and — with",
             "user approval — write files, run terminal commands, and use git.",
             "",
             "Work iteratively and verify your own work:",
@@ -151,7 +160,6 @@ export class AgentService {
             "   repeat a call that just failed; change your approach.",
             "5. Finish only when the task is done and verified, then summarise what",
             "   you changed and how you confirmed it.",
-            "If the workspace is the built-in ORVYN folder rather than a user project, still help.",
             rules ? `\nProject rules:\n${rules}` : "",
           ]
             .filter(Boolean)
@@ -164,13 +172,13 @@ export class AgentService {
       toolLog: [],
       consecutiveFailures: 0,
     };
-    sessions.set(session.id, session);
+    this.sessions.set(session.id, session);
     await this.step(session);
     return session;
   }
 
   async approve(sessionId: string, approved: boolean): Promise<AgentSession> {
-    const session = sessions.get(sessionId);
+    const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`Unknown agent session "${sessionId}"`);
     if (session.status !== "pending_approval" || !session.pendingToolCall) {
       throw new Error(`Session "${sessionId}" has no pending approval`);
@@ -178,7 +186,7 @@ export class AgentService {
 
     const call = session.pendingToolCall;
     if (approved) {
-      const result = await toolRegistry.execute(call.name, call.arguments);
+      const result = await this.toolRegistry.execute(call.name, call.arguments);
       this.recordResult(session, call, result.ok, result.ok ? result.output ?? "" : result.error ?? "unknown error", true);
     } else {
       session.toolLog.push({ tool: call.name, args: call.arguments, result: "denied by user", approved: false });
@@ -197,6 +205,6 @@ export class AgentService {
   }
 
   get(sessionId: string): AgentSession | undefined {
-    return sessions.get(sessionId);
+    return this.sessions.get(sessionId);
   }
 }
