@@ -256,7 +256,7 @@ function stripAnsi(chunk: string): string {
     .replace(/\r(?!\n)/g, "");
 }
 
-interface TerminalState {
+export interface TerminalState {
   sessionId: string | null;
   output: string;
   busy: boolean;
@@ -265,7 +265,7 @@ interface TerminalState {
   kill: () => Promise<void>;
 }
 
-function useTerminalSession(): TerminalState {
+export function useTerminalSession(): TerminalState {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -308,7 +308,7 @@ function useTerminalSession(): TerminalState {
   };
 }
 
-function TerminalView({ term }: { term: TerminalState }) {
+export function TerminalView({ term }: { term: TerminalState }) {
   const [input, setInput] = useState("");
   const outRef = useRef<HTMLDivElement | null>(null);
 

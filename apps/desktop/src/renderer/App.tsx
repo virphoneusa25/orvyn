@@ -11,6 +11,9 @@ import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { Navigation, ViewId } from "./components/Navigation";
+import { WorkStream } from "./components/WorkStream";
+import { ContextPanel } from "./components/ContextPanel";
+import { useAgentRun } from "./useAgentRun";
 import { Home } from "./components/Home";
 import { StatusBar } from "./components/StatusBar";
 import { HonestState } from "./components/HonestState";
@@ -30,7 +33,6 @@ import { ReviewPanel } from "./components/ReviewPanel";
 import { BottomPanel } from "./components/BottomPanel";
 import { GitScmPanel } from "./components/GitScmPanel";
 
-type AiTab = "chat" | "plan" | "build" | "review";
 
 interface OpenFile {
   path: string;
@@ -100,11 +102,12 @@ export function App() {
   const [tabs, setTabs] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>("home");
-  const [aiTab, setAiTab] = useState<AiTab>("chat");
+  /** Center surface: the Home dashboard, or the active work conversation. */
+  const [centerMode, setCenterMode] = useState<"home" | "work">("home");
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
-  /** The run Home (or any entry point) last started — Build follows it. */
+  /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
   const indexedRoot = useRef<string | null>(null);
@@ -112,10 +115,21 @@ export function App() {
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
   const workspaceRoot = workspace?.root ?? null;
   // Home is the landing surface; Code and Terminal share the editor chrome;
-  // the AI panel rides along wherever work happens.
+  // the context panel rides along wherever work happens.
   const showEditorChrome = view === "editor" || view === "terminal";
-  const showAiPanel = view === "home" || view === "editor" || view === "terminal";
+  const showContext = view === "home" || view === "newtask" || view === "editor" || view === "terminal";
   const inlineEdit = useInlineEdit(openFile?.path);
+  // The single run view every surface derives from.
+  const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
+
+  const runView = {
+    events: agentRun.events,
+    status: agentRun.status,
+    runId: agentRun.runId,
+    approve: agentRun.approve,
+  };
+
+  const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
 
   // Real usage for the header chip — server-side totals, never estimated.
   useEffect(() => {
@@ -275,8 +289,8 @@ export function App() {
   const paletteCommands: PaletteCommand[] = [
     { id: "open-folder", label: "Open Folder", run: () => { void handleOpenProject(); } },
     { id: "open-file", label: "Open File…", run: () => { void handleOpenFileDialog(); } },
-    { id: "new-chat", label: "New Chat", run: () => { setView("editor"); setAiTab("chat"); newChat(); } },
-    { id: "focus-chat", label: "Focus Chat", run: () => { setView("editor"); setAiTab("chat"); } },
+    { id: "new-chat", label: "New Chat", run: () => { newChat(); setView("newtask"); setCenterMode("work"); setActiveRunId(null); } },
+    { id: "focus-chat", label: "Focus ORVYN Composer", run: () => { setView("newtask"); setCenterMode("work"); setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:focus-composer")), 50); } },
     {
       id: "index",
       label: "Rebuild Codebase Index",
@@ -376,11 +390,17 @@ export function App() {
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
         <Navigation
           view={view}
-          onChange={setView}
-          chatActive={showAiPanel && aiTab === "chat"}
-          onFocusChat={() => {
-            setView("editor");
-            setAiTab("chat");
+          onChange={(v) => {
+            setView(v);
+            // New Task opens a fresh center conversation; Home returns to the
+            // dashboard without destroying the active conversation or run.
+            if (v === "newtask") {
+              newChat();
+              setCenterMode("work");
+              setActiveRunId(null);
+              setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:focus-composer")), 50);
+            }
+            if (v === "home") setCenterMode("home");
           }}
         />
 
@@ -454,17 +474,25 @@ export function App() {
 
         {(view === "home" || view === "newtask") && (
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
-            <Home
-              projectRoot={workspaceRoot}
-              onOutcome={(outcome) => {
-                if (outcome.kind === "chat") {
-                  setAiTab("chat");
-                } else {
-                  setActiveRunId(outcome.runId);
-                  setAiTab("build");
-                }
-              }}
-            />
+            {centerMode === "home" ? (
+              <Home
+                projectRoot={workspaceRoot}
+                onOutcome={(outcome) => {
+                  // Any submission moves the center into the active
+                  // conversation; chat stays conversation-only, work
+                  // attaches the run for center + right to follow.
+                  setCenterMode("work");
+                  if (outcome.kind !== "chat") setActiveRunId(outcome.runId);
+                }}
+              />
+            ) : (
+              <WorkStream
+                projectRoot={workspaceRoot}
+                projectName={projectName}
+                run={runView}
+                onRunStarted={(runId) => setActiveRunId(runId)}
+              />
+            )}
           </div>
         )}
 
@@ -550,10 +578,14 @@ export function App() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <ChatHistoryPanel
               onOpenChat={() => {
-                setView("editor");
-                setAiTab("chat");
+                // Opening a conversation makes it the center work stream.
+                setView("newtask");
+                setCenterMode("work");
               }}
-              onNewChat={newChat}
+              onNewChat={() => {
+                newChat();
+                setCenterMode("work");
+              }}
             />
           </div>
         )}
@@ -594,70 +626,19 @@ export function App() {
           </div>
         )}
 
-        {showAiPanel && (
-          <ResizablePanel side="right" defaultWidth={400} minWidth={280} maxWidth={700}>
-            <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0 }}>
-              <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-                <AiTabButton label="Chat" active={aiTab === "chat"} onClick={() => setAiTab("chat")} />
-                <AiTabButton label="Plan" active={aiTab === "plan"} onClick={() => setAiTab("plan")} />
-                <AiTabButton label="Build" active={aiTab === "build"} onClick={() => setAiTab("build")} />
-                <AiTabButton label="Review" active={aiTab === "review"} onClick={() => setAiTab("review")} />
-              </div>
-              {/* Astra identity row per the approved panel design. */}
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 12px",
-                  borderBottom: "1px solid var(--border)",
-                  flexShrink: 0,
-                }}
-              >
-                <img src={appIcon} alt="" width={18} height={18} style={{ borderRadius: 5 }} />
-                <span style={{ fontSize: 12.5, fontWeight: 600 }}>Astra AI</span>
-                <span
-                  style={{
-                    fontSize: 8.5,
-                    fontWeight: 700,
-                    letterSpacing: 1,
-                    color: "var(--orvyn-purple-hi)",
-                    border: "1px solid rgba(124,92,255,0.45)",
-                    borderRadius: 4,
-                    padding: "1px 6px",
-                  }}
-                >
-                  ORCHESTRATOR
-                </span>
-                <button
-                  onClick={newChat}
-                  style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--border-strong)", borderRadius: 5, color: "var(--text-secondary)", fontSize: 11, padding: "3px 9px", cursor: "pointer" }}
-                >
-                  New Chat
-                </button>
-              </div>
-              <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-                {aiTab === "chat" && (
-                  <AIChatPanel
-                    currentFile={openFile}
-                    workspace={workspace}
-                    projectFiles={projectFiles}
-                    onApplyCode={handleApplyCode}
-                  />
-                )}
-                {aiTab === "plan" && (
-                  <ComposerPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
-                )}
-                {aiTab === "build" && (
-                  <AgentPanel
-                    workspaceRoot={workspaceRoot}
-                    workspaceKind={workspace?.kind ?? "default"}
-                    attachRunId={activeRunId}
-                  />
-                )}
-                {aiTab === "review" && <ReviewPanel />}
-              </div>
-            </div>
+        {/* RIGHT: the dynamic context workspace. No chat lives here — the
+            center WorkStream is the single conversation. */}
+        {showContext && (
+          <ResizablePanel side="right" defaultWidth={360} minWidth={260} maxWidth={640}>
+            <ContextPanel
+              events={agentRun.events}
+              runStatus={agentRun.status}
+              projectRoot={workspaceRoot}
+              onOpenFile={(p) => {
+                setView("editor");
+                void handleOpenFile(p);
+              }}
+            />
           </ResizablePanel>
         )}
       </div>
