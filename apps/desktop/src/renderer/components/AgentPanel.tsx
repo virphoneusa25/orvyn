@@ -4,9 +4,12 @@ import { AgentEventStream } from "./AgentEventStream";
 export function AgentPanel({
   workspaceRoot,
   workspaceKind,
+  attachRunId,
 }: {
   workspaceRoot: string | null;
   workspaceKind: "folder" | "default";
+  /** A run started elsewhere (Home composer) that Build should follow. */
+  attachRunId?: string | null;
 }) {
   if (!workspaceRoot) {
     return <div style={{ padding: 16, color: "var(--text-muted)", fontSize: 13 }}>Workspace is still starting…</div>;
@@ -23,7 +26,7 @@ export function AgentPanel({
         </div>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <AgentEventStream projectRoot={workspaceRoot} />
+        <AgentEventStream projectRoot={workspaceRoot} attachRunId={attachRunId} />
       </div>
     </div>
   );

@@ -353,6 +353,56 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 
 ipcMain.handle("config:get", () => readConfig());
 
+// ── Real terminal: PowerShell through child_process pipes ────────────────
+// node-pty (full interactive TUI) remains the upgrade path; pipes give a
+// REAL shell today — real input, real streamed output, no simulation.
+// The renderer only ever talks to these three validated channels.
+const shells = new Map<string, { proc: ReturnType<typeof import("child_process").spawn>; buffer: string[] }>();
+
+function pushShellEvent(sessionId: string, data: string) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("terminal:data", { sessionId, data });
+  }
+}
+
+ipcMain.handle("terminal:start", async () => {
+  const sessionId = `term_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const { spawn } = await import("child_process");
+  // Project the user's real shell: PowerShell 7 when present, Windows
+  // PowerShell otherwise (pwsh isn't guaranteed on Windows hosts).
+  const shell = process.platform === "win32" ? "powershell.exe" : process.env.SHELL || "bash";
+  const cwd = (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot || os.homedir();
+  const proc = spawn(shell, process.platform === "win32" ? ["-NoLogo", "-NoExit", "-Command", "-"] : ["-i"], {
+    cwd,
+    env: { ...process.env, TERM: "dumb", NO_COLOR: "1" },
+    windowsHide: true,
+  });
+  shells.set(sessionId, { proc, buffer: [] });
+  pushShellEvent(sessionId, `\r\n\u001b[36mORVYN terminal — ${shell} (${cwd})\u001b[0m\r\n\r\n`);
+  proc.stdout?.on("data", (d) => pushShellEvent(sessionId, d.toString()));
+  proc.stderr?.on("data", (d) => pushShellEvent(sessionId, d.toString()));
+  proc.on("exit", (code) => {
+    pushShellEvent(sessionId, `\r\n\u001b[90mshell exited (${code})\u001b[0m\r\n`);
+    shells.delete(sessionId);
+  });
+  return sessionId;
+});
+
+ipcMain.handle("terminal:write", (_evt, sessionId: string, input: string) => {
+  const s = shells.get(sessionId);
+  if (!s) return false;
+  s.proc.stdin?.write(input);
+  return true;
+});
+
+ipcMain.handle("terminal:kill", (_evt, sessionId: string) => {
+  const s = shells.get(sessionId);
+  if (!s) return false;
+  s.proc.kill();
+  shells.delete(sessionId);
+  return true;
+});
+
 // Live machine stats for the status bar. Real samples only: CPU from a
 // two-point idle-delta across cores (loadavg is always 0 on Windows), RAM
 // from os memory, disk from statfs on the system drive.

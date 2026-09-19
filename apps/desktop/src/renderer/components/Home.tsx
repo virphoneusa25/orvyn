@@ -9,8 +9,11 @@
 // content — "Not connected" stays "Not connected".
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
-import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport } from "./Icons";
+import { submitOrvynCommand } from "../orvynCommand";
+import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport, IconPaperclip } from "./Icons";
 import { BottomWorkPanel } from "./BottomWorkPanel";
+import { Attachment, fileToAttachment } from "./AttachmentBar";
+import { IntegrationIcon, IntegrationProvider } from "./IntegrationIcon";
 import appIcon from "../assets/icon.png";
 
 type ComposerMode = "code" | "server" | "research" | "deploy" | "automate";
@@ -74,19 +77,21 @@ const STATUS_STYLE: Record<string, { color: string; label: string }> = {
 
 export function Home({
   projectRoot,
-  onMissionStarted,
+  onOutcome,
 }: {
   projectRoot: string | null;
-  onMissionStarted: () => void;
+  /** Called with the pipeline result so the shell can follow the work. */
+  onOutcome: (outcome: { kind: "chat" } | { kind: "mission" | "run"; runId: string }) => void;
 }) {
   // Default Code per the approved mockup; the user's choice persists.
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [mode, setMode] = useState<ComposerMode>(() => {
     const saved = localStorage.getItem("orvyn:composer-mode");
     return saved && MODES.some((m) => m.id === saved) ? (saved as ComposerMode) : "code";
   });
   const selectMode = (m: ComposerMode) => {
-    selectMode(m);
+    setMode(m);
     localStorage.setItem("orvyn:composer-mode", m);
   };
   const [starting, setStarting] = useState(false);
@@ -95,6 +100,7 @@ export function Home({
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const attachRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -125,21 +131,21 @@ export function Home({
     setStarting(true);
     setStartError(null);
     try {
-      const endpoint = mode === "research" || mode === "automate" ? "/agent/stream/runs" : "/agent/orchestrate";
-      const body =
-        endpoint === "/agent/orchestrate"
-          ? { projectRoot, goal: instruction }
-          : { projectRoot, instruction, mode: "plan" };
-      const res = await fetch(apiUrl(endpoint), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(body),
+      // The canonical pipeline — classification, routing and error handling
+      // live in orvynCommand, not here.
+      const outcome = await submitOrvynCommand({
+        prompt: instruction,
+        mode,
+        source: "HOME",
+        projectRoot,
+        attachments,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not start the task");
+      if (outcome.kind === "error") throw new Error(outcome.error);
       setPrompt("");
-      onMissionStarted();
+      setAttachments([]);
+      onOutcome(outcome);
     } catch (err: any) {
+      // Keep the user's command in the field on failure — never erase it.
       setStartError(err.message);
     } finally {
       setStarting(false);
@@ -244,7 +250,8 @@ export function Home({
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  // Enter runs, Shift+Enter breaks a line — the approved model.
+                  if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     void run();
                   }
@@ -264,6 +271,50 @@ export function Home({
                 }}
               />
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                <button
+                  title="Attach files or images"
+                  onClick={() => attachRef.current?.click()}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--orvyn-border)",
+                    borderRadius: 6,
+                    color: "var(--orvyn-text-secondary)",
+                    width: 26,
+                    height: 26,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  <IconPaperclip size={13} />
+                </button>
+                <input
+                  ref={attachRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    const loaded: Attachment[] = [];
+                    for (const f of files) {
+                      try {
+                        const a = await fileToAttachment(f);
+                        if (a) loaded.push(a);
+                      } catch {
+                        // Unreadable file — skip rather than block the rest.
+                      }
+                    }
+                    setAttachments((prev) => [...prev, ...loaded]);
+                    e.target.value = "";
+                  }}
+                />
+                {attachments.length > 0 && (
+                  <span style={{ fontSize: 11, color: "var(--orvyn-cyan)" }}>
+                    {attachments.length} attached
+                  </span>
+                )}
                 {MODES.map((m) => (
                   <button
                     key={m.id}
@@ -395,7 +446,12 @@ export function Home({
                 const pct = total > 0 ? Math.round((done / total) * 100) : m.status === "COMPLETED" ? 100 : 0;
                 const st = STATUS_STYLE[m.status] ?? { color: "var(--orvyn-purple-hi)", label: m.status };
                 return (
-                  <div key={m.id} style={rowStyle()}>
+                  <div
+                    key={m.id}
+                    style={{ ...rowStyle(), cursor: "pointer" }}
+                    title="Open in Missions"
+                    onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "missions" }))}
+                  >
                     <span style={{ minWidth: 0, flex: 1 }}>
                       <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {m.goal}
@@ -425,16 +481,56 @@ export function Home({
               name="ORVYN Backend"
               detail={backendOnline === null ? "checking…" : backendOnline ? "API reachable" : "offline"}
               status={backendOnline === null ? "pending" : backendOnline ? "ok" : "down"}
-              Icon={IconGlobe}
+              provider="orvyn"
+              onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "settings" }))}
             />
             {servers.map((s) => (
-              <SystemRow key={s.alias} name={s.alias} detail={`${s.user}@${s.host}`} status="configured" Icon={IconServer} />
+              <SystemRow
+                key={s.alias}
+                name={s.alias}
+                detail={`${s.user}@${s.host}`}
+                status="configured"
+                provider="server"
+                onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "servers" }))}
+              />
             ))}
             {servers.length === 0 && (
-              <SystemRow name="Servers" detail="No SSH host configured" status="none" Icon={IconServer} />
+              <SystemRow
+                name="Servers"
+                detail="No SSH host configured"
+                status="none"
+                provider="server"
+                onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "servers" }))}
+              />
             )}
-            <SystemRow name="GitHub" detail="Repository & PR integration" status="none" Icon={IconCode} />
-            <SystemRow name="Billing" detail="Commercial backend (Phase D–E)" status="none" Icon={IconReport} />
+            <SystemRow
+              name="Docker"
+              detail="No Docker host connected"
+              status="none"
+              provider="docker"
+              onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "containers" }))}
+            />
+            <SystemRow
+              name="PostgreSQL"
+              detail="No database configured"
+              status="none"
+              provider="postgresql"
+              onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "databases" }))}
+            />
+            <SystemRow
+              name="GitHub"
+              detail="Repository & PR integration"
+              status="none"
+              provider="github"
+              onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "scm" }))}
+            />
+            <SystemRow
+              name="Stripe"
+              detail="Billing & payments (Phase D–E)"
+              status="none"
+              provider="stripe"
+              onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "billing" }))}
+            />
           </Panel>
         </div>
       </div>
@@ -487,12 +583,14 @@ function SystemRow({
   name,
   detail,
   status,
-  Icon,
+  provider,
+  onClick,
 }: {
   name: string;
   detail: string;
   status: "ok" | "down" | "configured" | "none" | "pending";
-  Icon: React.FC<{ size?: number }>;
+  provider: IntegrationProvider;
+  onClick?: () => void;
 }) {
   const color =
     status === "ok" ? "var(--orvyn-green)"
@@ -503,7 +601,18 @@ function SystemRow({
   const label =
     status === "ok" ? "Online" : status === "down" ? "Offline" : status === "configured" ? "Configured" : status === "pending" ? "…" : "Not connected";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "8px 0", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+    <div
+      onClick={onClick}
+      title={onClick ? "Open" : undefined}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 11,
+        padding: "8px 0",
+        borderBottom: "1px solid var(--orvyn-border-soft)",
+        cursor: onClick ? "pointer" : "default",
+      }}
+    >
       <span
         style={{
           width: 30,
@@ -515,10 +624,9 @@ function SystemRow({
           justifyContent: "center",
           background: "var(--orvyn-surface-3)",
           border: "1px solid var(--orvyn-border-soft)",
-          color: "var(--orvyn-text-secondary)",
         }}
       >
-        <Icon size={15} />
+        <IntegrationIcon provider={provider} size={18} />
       </span>
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)" }}>{name}</span>

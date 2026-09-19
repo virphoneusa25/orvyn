@@ -96,6 +96,7 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [events, setEvents] = useState<FeedEvent[]>([]);
   const scroller = useRef<HTMLDivElement | null>(null);
+  const term = useTerminalSession();
 
   useEffect(() => {
     let stop = false;
@@ -179,7 +180,9 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
 
       {/* Content */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        {tab === "activity" ? (
+        {tab === "terminal" ? (
+          <TerminalView term={term} />
+        ) : tab === "activity" ? (
           <div
             ref={scroller}
             style={{
@@ -216,41 +219,6 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
               ))
             )}
           </div>
-        ) : tab === "terminal" ? (
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              padding: 12,
-              textAlign: "center",
-            }}
-          >
-            <div style={{ fontSize: 11.5, color: "var(--orvyn-text-secondary)", fontFamily: "var(--font-mono)" }}>
-              PowerShell — no shell session
-            </div>
-            <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", maxWidth: 420, lineHeight: 1.5 }}>
-              An interactive terminal needs a pty backend (node-pty), which is not installed. Real agent command
-              output lives in <b>Agent Activity</b> — nothing here is simulated.
-            </div>
-            <button
-              onClick={() => setTab("activity")}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--orvyn-border)",
-                borderRadius: 6,
-                color: "var(--orvyn-purple-hi)",
-                fontSize: 11,
-                padding: "4px 12px",
-                cursor: "pointer",
-              }}
-            >
-              Open Agent Activity
-            </button>
-          </div>
         ) : (
           <div
             style={{
@@ -267,6 +235,166 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
             {tab === "problems" && (problemCount > 0 ? `${problemCount} issue(s) in the latest run — see Agent Activity.` : "No problems detected in the latest run.")}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Real terminal session ────────────────────────────────────────────────
+// A real PowerShell through main-process pipes: start on demand, stream
+// output, write lines. Full interactive TUI apps need node-pty — documented
+// upgrade path, not hidden.
+
+interface TerminalState {
+  sessionId: string | null;
+  output: string;
+  busy: boolean;
+  start: () => Promise<void>;
+  sendLine: (line: string) => Promise<void>;
+  kill: () => Promise<void>;
+}
+
+function useTerminalSession(): TerminalState {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [output, setOutput] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const off = window.orvyn.terminal.onData((e) => {
+      setOutput((prev) => (prev + e.data).slice(-16000));
+    });
+    return () => {
+      off();
+    };
+  }, []);
+
+  return {
+    sessionId,
+    output,
+    busy,
+    start: async () => {
+      if (sessionId || busy) return;
+      setBusy(true);
+      try {
+        const id = await window.orvyn.terminal.start();
+        setSessionId(id);
+      } finally {
+        setBusy(false);
+      }
+    },
+    sendLine: async (line: string) => {
+      if (!sessionId) return;
+      await window.orvyn.terminal.write(sessionId, line + "\r\n");
+    },
+    kill: async () => {
+      if (!sessionId) return;
+      await window.orvyn.terminal.kill(sessionId);
+      setSessionId(null);
+      setOutput("");
+    },
+  };
+}
+
+function TerminalView({ term }: { term: TerminalState }) {
+  const [input, setInput] = useState("");
+  const outRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    outRef.current?.scrollTo({ top: outRef.current.scrollHeight });
+  }, [term.output]);
+
+  if (!term.sessionId) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          padding: 12,
+        }}
+      >
+        <button
+          onClick={() => void term.start()}
+          disabled={term.busy}
+          style={{
+            background: "var(--orvyn-purple)",
+            border: "none",
+            borderRadius: 6,
+            color: "#fff",
+            fontSize: 12,
+            padding: "6px 18px",
+            cursor: "pointer",
+          }}
+        >
+          {term.busy ? "Starting…" : "Start PowerShell"}
+        </button>
+        <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>
+          A real shell through the Electron main process — commands execute on this machine.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div
+        ref={outRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: "4px 12px",
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          lineHeight: 1.55,
+          color: "var(--text-secondary)",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+        }}
+      >
+        {term.output}
+      </div>
+      <div style={{ display: "flex", gap: 8, padding: "4px 12px 8px", flexShrink: 0 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && input.trim()) {
+              void term.sendLine(input);
+              setInput("");
+            }
+          }}
+          placeholder="type a command and press Enter…"
+          style={{
+            flex: 1,
+            background: "var(--orvyn-bg)",
+            border: "1px solid var(--orvyn-border-soft)",
+            borderRadius: 6,
+            color: "var(--orvyn-text)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            padding: "4px 8px",
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={() => void term.kill()}
+          title="Close shell"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--orvyn-border)",
+            borderRadius: 6,
+            color: "var(--orvyn-text-muted)",
+            fontSize: 10.5,
+            padding: "3px 9px",
+            cursor: "pointer",
+          }}
+        >
+          Close
+        </button>
       </div>
     </div>
   );

@@ -24,6 +24,12 @@ export interface OrvynBridge {
   system: {
     getStats(): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }>;
   };
+  terminal: {
+    start(): Promise<string>;
+    write(sessionId: string, input: string): Promise<boolean>;
+    kill(sessionId: string): Promise<boolean>;
+    onData(cb: (e: { sessionId: string; data: string }) => void): () => void;
+  };
   project: {
     getWorkspace(): Promise<WorkspaceState>;
     open(): Promise<WorkspaceState | null>;

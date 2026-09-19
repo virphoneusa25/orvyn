@@ -17,7 +17,10 @@ export function isRunFinished(status: string): boolean {
   return status === "completed" || status === "error" || status === "cancelled";
 }
 
-export function useAgentRun(projectRoot: string | null) {
+export function useAgentRun(
+  projectRoot: string | null,
+  opts?: { attachRunId?: string | null }
+) {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<string>("idle");
   const [runId, setRunId] = useState<string | null>(null);
@@ -30,6 +33,23 @@ export function useAgentRun(projectRoot: string | null) {
   // Read inside poll(), which is a stable callback and would otherwise close
   // over a stale runId from the render that created it.
   const runIdRef = useRef<string | null>(null);
+
+  // Attach to a run started elsewhere (Home composer, quick actions) so the
+  // Build tab follows active work instead of only runs it started itself.
+  useEffect(() => {
+    const id = opts?.attachRunId;
+    if (!id || id === runIdRef.current) return;
+    setEvents([]);
+    setError(null);
+    setUsage(null);
+    lastSeq.current = 0;
+    setRunId(id);
+    runIdRef.current = id;
+    modeRef.current = "multitask";
+    setStatus("running");
+    attachStream(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opts?.attachRunId]);
 
   useEffect(() => {
     if (!projectRoot) {

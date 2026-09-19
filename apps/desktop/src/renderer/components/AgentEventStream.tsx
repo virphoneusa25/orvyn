@@ -8,7 +8,7 @@ import appIcon from "../assets/icon.png";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
 import { MessageContent } from "./MessageContent";
 
-export function AgentEventStream({ projectRoot }: { projectRoot: string | null }) {
+export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: string | null; attachRunId?: string | null }) {
   const [mode, setMode] = useState<string>("agent");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [instruction, setInstruction] = useState("");
@@ -18,7 +18,7 @@ export function AgentEventStream({ projectRoot }: { projectRoot: string | null }
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
-  const run = useAgentRun(projectRoot);
+  const run = useAgentRun(projectRoot, { attachRunId });
   const live = liveActivityLabel(run.events);
   // "cancelling" counts as busy: the run is still winding down, so neither
   // sending nor a second Stop should be possible.

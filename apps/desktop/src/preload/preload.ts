@@ -7,6 +7,17 @@ contextBridge.exposeInMainWorld("orvyn", {
     getStats: (): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }> =>
       ipcRenderer.invoke("system:getStats"),
   },
+  terminal: {
+    start: (): Promise<string> => ipcRenderer.invoke("terminal:start"),
+    write: (sessionId: string, input: string): Promise<boolean> =>
+      ipcRenderer.invoke("terminal:write", sessionId, input),
+    kill: (sessionId: string): Promise<boolean> => ipcRenderer.invoke("terminal:kill", sessionId),
+    onData: (cb: (e: { sessionId: string; data: string }) => void) => {
+      const h = (_e: unknown, v: { sessionId: string; data: string }) => cb(v);
+      ipcRenderer.on("terminal:data", h);
+      return () => ipcRenderer.removeListener("terminal:data", h);
+    },
+  },
   project: {
     getWorkspace: () => ipcRenderer.invoke("project:getWorkspace"),
     open: () => ipcRenderer.invoke("project:open"),

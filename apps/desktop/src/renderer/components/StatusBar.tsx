@@ -89,6 +89,12 @@ export function StatusBar() {
         />
         {online ? `Connected · ${backendName}` : "Backend offline"}
       </span>
+      {/* Local engine readiness is independent of backend reachability:
+          files, editor, git, terminal and local config all work either way. */}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-green)" }} />
+        Local engine ready
+      </span>
       {state.health?.version && <span>v{state.health.version}</span>}
       <span>{cfg.backendUrl?.includes("localhost") ? "Local" : "Cloud"}</span>
       <span style={{ marginLeft: "auto", display: "inline-flex", gap: 16 }}>

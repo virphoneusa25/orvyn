@@ -104,6 +104,8 @@ export function App() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
+  /** The run Home (or any entry point) last started — Build follows it. */
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
   const indexedRoot = useRef<string | null>(null);
 
@@ -454,8 +456,13 @@ export function App() {
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             <Home
               projectRoot={workspaceRoot}
-              onMissionStarted={() => {
-                setAiTab("build");
+              onOutcome={(outcome) => {
+                if (outcome.kind === "chat") {
+                  setAiTab("chat");
+                } else {
+                  setActiveRunId(outcome.runId);
+                  setAiTab("build");
+                }
               }}
             />
           </div>
@@ -642,7 +649,11 @@ export function App() {
                   <ComposerPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
                 )}
                 {aiTab === "build" && (
-                  <AgentPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
+                  <AgentPanel
+                    workspaceRoot={workspaceRoot}
+                    workspaceKind={workspace?.kind ?? "default"}
+                    attachRunId={activeRunId}
+                  />
                 )}
                 {aiTab === "review" && <ReviewPanel />}
               </div>
