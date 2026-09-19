@@ -10,7 +10,7 @@
 // with a context target opens + pins the matching right-panel tab.
 
 import React, { useState } from "react";
-import { GroupItem, ToolItem, ToolOp } from "../presentationReducer";
+import { GroupItem, ToolItem, ToolOp, WorkGroupItem } from "../presentationReducer";
 import { IconFile, IconSearch, IconTerminal, IconGlobe, IconWrench, IconCode, IconZap } from "./Icons";
 
 const OP_LABEL: Record<ToolOp, string> = {
@@ -176,6 +176,100 @@ export function ToolActivityGroup({ group }: { group: GroupItem }) {
       </div>
       {open && (
         <div style={{ margin: "4px 0 4px 14px", borderLeft: "1px solid var(--border-soft, rgba(255,255,255,0.06))", paddingLeft: 8 }}>
+          {group.items.map((t) => (
+            <ToolActivityRow key={t.key} item={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const WG_STATUS: Record<WorkGroupItem["status"], { glyph: string; color: string; pulse?: boolean }> = {
+  running: { glyph: "●", color: "var(--accent)", pulse: true },
+  done: { glyph: "✓", color: "var(--success)" },
+  warning: { glyph: "!", color: "#F5B942" },
+  failed: { glyph: "✕", color: "var(--danger, #F25F75)" },
+};
+
+const WG_ICON: Record<WorkGroupItem["type"], React.ReactNode> = {
+  inspection: <IconSearch size={13} />,
+  checks: <IconTerminal size={13} />,
+  edits: <IconWrench size={13} />,
+  browser: <IconGlobe size={13} />,
+};
+
+/**
+ * The phase-level work group — the conversation's calm one-line summary of a
+ * whole phase of work ("✓ Inspected project · 18 files · 2.4s"). Expands to
+ * the individual compact rows; clicking opens + pins the matching right tab.
+ */
+export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
+  const [open, setOpen] = useState(false);
+  const st = WG_STATUS[group.status];
+  return (
+    <div style={{ margin: "3px 0" }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`${group.title}${group.summary ? `, ${group.summary}` : ""} — ${group.status}`}
+        aria-expanded={open}
+        onClick={() => document.dispatchEvent(new CustomEvent("orvyn:context-tab", { detail: { tab: group.ctx, pin: true } }))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") document.dispatchEvent(new CustomEvent("orvyn:context-tab", { detail: { tab: group.ctx, pin: true } }));
+          if (e.key === "ArrowDown" || e.key === " ") setOpen((o) => !o);
+        }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          minHeight: 34,
+          padding: "4px 12px",
+          borderRadius: 8,
+          background: "rgba(255,255,255,0.025)",
+          border: `1px solid ${group.status === "running" ? "rgba(108,92,255,0.25)" : "var(--border-soft, rgba(255,255,255,0.06))"}`,
+          cursor: "pointer",
+          fontSize: 12.5,
+          minWidth: 0,
+        }}
+      >
+        <span style={{ color: st.color, display: "inline-flex", flexShrink: 0, opacity: st.pulse ? 0.9 : 1 }}>
+          {WG_ICON[group.type]}
+        </span>
+        <span style={{ color: "var(--text)", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 1 }}>
+          {group.title}
+        </span>
+        {group.summary && (
+          <span style={{ color: "var(--text-muted)", fontSize: 11.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 2 }}>
+            {group.summary}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", flexShrink: 0, color: st.color, fontSize: 12 }}>
+          {st.glyph}
+        </span>
+        {group.items.length > 1 && (
+          <button
+            aria-label={open ? "Collapse details" : "Expand details"}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen((o) => !o);
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-muted)",
+              fontSize: 10,
+              cursor: "pointer",
+              padding: "2px 4px",
+              flexShrink: 0,
+            }}
+          >
+            {open ? "▴" : "▾"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div style={{ margin: "4px 0 4px 16px", borderLeft: "1px solid var(--border-soft, rgba(255,255,255,0.06))", paddingLeft: 8 }}>
           {group.items.map((t) => (
             <ToolActivityRow key={t.key} item={t} />
           ))}

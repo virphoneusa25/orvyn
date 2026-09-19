@@ -15,6 +15,7 @@ export interface AgentEventLike {
   id: string;
   sequence: number;
   type: string;
+  timestamp: number;
   data: Record<string, any>;
 }
 
@@ -46,6 +47,7 @@ export interface ToolItem {
   detail?: string;
   error?: string;
   seq: number;
+  ts: number;
   /** Which right-panel tab the row opens on click, if any. */
   ctx?: "files" | "diff" | "terminal" | "browser" | "review";
 }
@@ -55,6 +57,22 @@ export interface GroupItem {
   key: string;
   op: ToolOp;
   items: ToolItem[];
+}
+
+/** A phase-level WorkGroup: consecutive same-class operations summarized as
+ *  one calm line ("✓ Inspected project · 18 files · 2.4s") that expands to
+ *  the individual rows. This is the spec's layer-1 conversation primitive. */
+export interface WorkGroupItem {
+  kind: "workgroup";
+  key: string;
+  /** inspection | checks | edits | browser */
+  type: "inspection" | "checks" | "edits" | "browser";
+  title: string;
+  summary?: string;
+  status: "running" | "done" | "warning" | "failed";
+  durationMs?: number;
+  items: ToolItem[];
+  ctx?: "files" | "diff" | "terminal" | "browser" | "review";
 }
 
 export interface AssistantItem {
@@ -92,7 +110,14 @@ export interface SummaryItem {
   detail: string;
 }
 
-export type PresentationItem = ToolItem | GroupItem | AssistantItem | StatusItem | ApprovalItem | SummaryItem;
+export type PresentationItem =
+  | ToolItem
+  | GroupItem
+  | WorkGroupItem
+  | AssistantItem
+  | StatusItem
+  | ApprovalItem
+  | SummaryItem;
 
 // ---- helpers -------------------------------------------------------------
 
@@ -107,7 +132,7 @@ export function splitPath(p: string): { fileName: string; path: string; ext?: st
   return { fileName, path, ext };
 }
 
-const READ_OPS: ToolOp[] = ["read", "search"];
+const READ_OPS: ToolOp[] = ["read", "search"]; // kept for callers/tests referencing the inspection class
 
 /** Maps a tool name + its arguments to the row's operation and file target. */
 function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolItem> & { op: ToolOp } {
@@ -174,8 +199,6 @@ function detailFromPreview(op: ToolOp, preview?: string): string | undefined {
 }
 
 // ---- the reducer ---------------------------------------------------------
-
-const GROUP_THRESHOLD = 6; // >5 rapid related reads collapse into one row
 
 export function reducePresentation(events: AgentEventLike[], runStatus: string): PresentationItem[] {
   const items: PresentationItem[] = [];
@@ -284,6 +307,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           key,
           status: "running",
           seq: e.sequence,
+          ts: e.timestamp,
           ...base,
         });
         toolIndex.set(key, items.length - 1);
@@ -350,6 +374,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           status: failed > 0 ? "failed" : "done",
           detail: failed > 0 ? `${failed} failed` : `${passed} passed`,
           seq: e.sequence,
+          ts: e.timestamp,
           ctx: "terminal",
         });
         continue;
@@ -390,8 +415,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   // A run still streaming keeps its open assistant buffer as the live item.
   if (runStatus === "running" || runStatus === "awaiting_approval") flushAssistant(true);
 
-  // Group rapid read/search bursts; edits and commands always stay visible.
-  return groupReadBursts(dropStaleEphemeral(items));
+  // Phase pass: consecutive same-class operations roll into one WorkGroup —
+  // "✓ Inspected project · 18 files" — so a mission reads as a conversation,
+  // not a scroll of rows. Assistant text and other items close the group.
+  return phaseWorkGroups(dropStaleEphemeral(items));
 }
 
 /** Ephemeral statuses that were superseded by real activity disappear. */
@@ -406,27 +433,130 @@ function dropStaleEphemeral(items: PresentationItem[]): PresentationItem[] {
   return items.filter((it, i) => it.kind !== "status" || !(it as StatusItem).ephemeral || i >= lastMeaningful);
 }
 
-/** Collapses runs of >5 completed read/search rows into one expandable group. */
-function groupReadBursts(items: PresentationItem[]): PresentationItem[] {
-  const out: PresentationItem[] = [];
-  let burst: ToolItem[] = [];
-  const flushBurst = () => {
-    if (burst.length === 0) return;
-    if (burst.length <= GROUP_THRESHOLD - 1) {
-      out.push(...burst);
-    } else {
-      out.push({ kind: "group", key: `g-${burst[0].key}`, op: "read", items: burst });
+/** Which phase a tool row belongs to; null keeps the row standalone. */
+function workClass(t: ToolItem): WorkGroupItem["type"] | null {
+  if (t.op === "read" || t.op === "search") return "inspection";
+  if (t.op === "terminal" || t.op === "test" || t.op === "git") return "checks";
+  if (t.op === "edit" || t.op === "create" || t.op === "delete") return "edits";
+  if (t.op === "browser") return "browser";
+  return null;
+}
+
+/** Sums "+A −D" details across an edits group. */
+function sumEdits(items: ToolItem[]): { adds: number; dels: number } {
+  let adds = 0;
+  let dels = 0;
+  for (const it of items) {
+    const m = (it.detail ?? "").match(/\+(\d+)\s*−(\d+)/);
+    if (m) {
+      adds += Number(m[1]);
+      dels += Number(m[2]);
     }
-    burst = [];
+  }
+  return { adds, dels };
+}
+
+function fmtDuration(ms: number): string | undefined {
+  if (ms < 1000) return undefined;
+  return ms < 60_000 ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s` : `${Math.round(ms / 60_000)}m`;
+}
+
+function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGroupItem {
+  const anyRunning = items.some((i) => i.status === "running");
+  const anyFailed = items.some((i) => i.status === "failed");
+  const allFailed = anyFailed && items.every((i) => i.status === "failed");
+  const status: WorkGroupItem["status"] = anyRunning ? "running" : allFailed ? "failed" : anyFailed ? "warning" : "done";
+  const durationMs = items.length > 0 ? items[items.length - 1].ts - items[0].ts : 0;
+  const dur = fmtDuration(durationMs);
+
+  let title = "";
+  let summary: string | undefined;
+  if (type === "inspection") {
+    const files = items.filter((i) => i.op === "read").length;
+    const searches = items.filter((i) => i.op === "search").length;
+    title = anyRunning ? "Inspecting project…" : "Inspected project";
+    const parts = [files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : "", searches > 0 ? `${searches} ${searches === 1 ? "search" : "searches"}` : ""].filter(Boolean);
+    summary = parts.join(" · ") || undefined;
+  } else if (type === "checks") {
+    if (items.length === 1) {
+      const label = items[0].label ?? "command";
+      title = anyRunning ? `Running ${label}…` : label;
+      summary = items[0].detail;
+    } else {
+      title = anyRunning ? "Running checks…" : "Checks";
+      summary = items
+        .map((i) => i.detail)
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(" · ");
+    }
+  } else if (type === "edits") {
+    const { adds, dels } = sumEdits(items);
+    const delta = adds || dels ? `+${adds} −${dels}` : "";
+    if (items.length === 1 && items[0].fileName) {
+      title = anyRunning ? `Updating ${items[0].fileName}…` : `Updated ${items[0].fileName}`;
+      summary = delta || items[0].detail;
+    } else {
+      title = anyRunning ? "Updating files…" : `Updated ${items.length} files`;
+      summary = `${items.length} files changed${delta ? ` · ${delta}` : ""}`;
+    }
+  } else {
+    // browser
+    const last = items[items.length - 1];
+    title = anyRunning ? "Verifying in browser…" : "Browser verification";
+    summary = last?.label || last?.detail || undefined;
+  }
+  if (dur) summary = summary ? `${summary} · ${dur}` : dur;
+
+  const ctxByType: Record<WorkGroupItem["type"], WorkGroupItem["ctx"]> = {
+    inspection: "files",
+    checks: "terminal",
+    edits: "diff",
+    browser: "browser",
+  };
+  return {
+    kind: "workgroup",
+    key: `wg-${items[0].key}`,
+    type,
+    title,
+    summary,
+    status,
+    durationMs,
+    items,
+    ctx: items[0].ctx ?? ctxByType[type],
+  };
+}
+
+/** Rolls consecutive same-class tool rows into single WorkGroups. */
+function phaseWorkGroups(items: PresentationItem[]): PresentationItem[] {
+  const out: PresentationItem[] = [];
+  let buf: ToolItem[] = [];
+  let cls: WorkGroupItem["type"] | null = null;
+  const flush = () => {
+    if (buf.length > 0 && cls) out.push(makeWorkGroup(cls, buf));
+    buf = [];
+    cls = null;
   };
   for (const it of items) {
-    if (it.kind === "tool" && READ_OPS.includes(it.op) && it.status === "done") {
-      burst.push(it);
+    if (it.kind === "tool") {
+      const c = workClass(it);
+      if (c !== null && (cls === null || c === cls)) {
+        if (cls === null) cls = c;
+        buf.push(it);
+        continue;
+      }
+      flush();
+      if (c !== null) {
+        cls = c;
+        buf.push(it);
+        continue;
+      }
+      out.push(it); // unclassified rows stand alone
       continue;
     }
-    flushBurst();
+    flush();
     out.push(it);
   }
-  flushBurst();
+  flush();
   return out;
 }

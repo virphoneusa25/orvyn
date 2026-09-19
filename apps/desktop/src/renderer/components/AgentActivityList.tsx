@@ -5,7 +5,7 @@ import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, type ApprovalItem } from "../presentationReducer";
-import { ToolActivityRow, ToolActivityGroup } from "./ToolActivityRow";
+import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 
 export interface AgentEvent {
   id: string;
@@ -191,6 +191,8 @@ export function AgentActivityList({
             return <ToolActivityRow key={item.key} item={item} />;
           case "group":
             return <ToolActivityGroup key={item.key} group={item} />;
+          case "workgroup":
+            return <WorkGroupRow key={item.key} group={item} />;
           case "status":
             return (
               <div

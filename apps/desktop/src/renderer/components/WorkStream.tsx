@@ -259,6 +259,9 @@ export function WorkStream({
           onScroll={onStreamScroll}
           style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 22px", minWidth: 0 }}
         >
+          {/* Readable conversation measure: content never stretches edge to
+              edge — the stream reads like a document, not a log viewer. */}
+          <div style={{ maxWidth: 880, margin: "0 auto", minWidth: 0 }}>
           {messages.length === 0 && run.events.length === 0 && (
             <div style={{ padding: "48px 0", textAlign: "center" }}>
               <img src={appIcon} alt="ORVYN" width={40} height={40} style={{ borderRadius: 11, opacity: 0.9 }} />
@@ -395,6 +398,7 @@ export function WorkStream({
             <div>last event: {run.events.length > 0 ? `${run.events[run.events.length - 1].type} @ ${new Date(run.lastEventAt || run.events[run.events.length - 1].timestamp).toLocaleTimeString()}` : "—"}</div>
           </div>
         )}
+        </div>
         </div>
         {!follow && (
           <button

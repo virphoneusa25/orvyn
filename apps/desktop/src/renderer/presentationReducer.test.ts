@@ -5,11 +5,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { reducePresentation, splitPath } from "./presentationReducer.ts";
-import type { AgentEventLike, ToolItem } from "./presentationReducer.ts";
+import type { AgentEventLike, ToolItem, WorkGroupItem as WgItem } from "./presentationReducer.ts";
 
 let seq = 0;
 function ev(type: string, data: Record<string, any> = {}): AgentEventLike {
-  return { id: `e${seq}`, sequence: seq++, type, data };
+  return { id: `e${seq}`, sequence: seq++, type, timestamp: 1000 + seq * 300, data };
 }
 function reset() {
   seq = 0;
@@ -35,9 +35,11 @@ test("a tool's lifecycle collapses into ONE row that updates in place", () => {
     ],
     "completed"
   );
-  const tools = items.filter((i) => i.kind === "tool") as ToolItem[];
-  assert.equal(tools.length, 1, "one row, not three");
-  const t = tools[0];
+  // One read = one inspection workgroup holding exactly one child row.
+  const wgs = items.filter((i) => i.kind === "workgroup") as WgItem[];
+  assert.equal(wgs.length, 1, "one group, not three rows");
+  assert.equal(wgs[0].items.length, 1, "single child — lifecycle never duplicated");
+  const t = wgs[0].items[0];
   assert.equal(t.op, "read");
   assert.equal(t.fileName, "main.ts");
   assert.equal(t.ext, "TS");
@@ -89,7 +91,7 @@ test("an in-progress run keeps its assistant buffer streaming", () => {
   assert.equal((items[0] as { streaming: boolean }).streaming, true);
 });
 
-test("excessive reads group; edits and terminals never do", () => {
+test("consecutive reads roll into one inspection WorkGroup; edits and checks form their own groups", () => {
   reset();
   const events: AgentEventLike[] = [];
   for (let i = 0; i < 8; i++) {
@@ -109,26 +111,52 @@ test("excessive reads group; edits and terminals never do", () => {
   events.push(ev("tool.completed", { callId: t1, tool: "terminal", preview: "67 passed" }));
 
   const items = reducePresentation(events, "completed");
-  const groups = items.filter((i) => i.kind === "group");
-  assert.equal(groups.length, 1, "8 reads → one group");
-  assert.equal((groups[0] as { items: unknown[] }).items.length, 8);
-  const tools = items.filter((i) => i.kind === "tool") as ToolItem[];
-  assert.equal(tools.length, 2, "edit + terminal stay individual");
-  assert.ok(tools.some((t) => t.op === "edit" && t.fileName === "keep.ts" && t.detail === "+1 −1"));
-  assert.ok(tools.some((t) => t.op === "terminal" && t.label === "npm test" && t.detail === "67 passed"));
+  const wgs = items.filter((i) => i.kind === "workgroup") as WgItem[];
+  assert.equal(wgs.length, 3, "inspection + edits + checks = three phase groups, not 10 rows");
+  const [insp, edits, checks] = wgs;
+  assert.equal(insp.type, "inspection");
+  assert.equal(insp.title, "Inspected project");
+  assert.ok(String(insp.summary).startsWith("8 files"), `summary counts files (got: ${insp.summary})`);
+  assert.equal(insp.items.length, 8, "expandable to the individual reads");
+  assert.equal(edits.type, "edits");
+  assert.equal(edits.title, "Updated keep.ts");
+  assert.match(String(edits.summary), /^\+1 −1/);
+  assert.equal(edits.ctx, "diff");
+  assert.equal(checks.type, "checks");
+  assert.equal(checks.summary, "67 passed");
+  assert.equal(checks.ctx, "terminal");
+  assert.equal(items.filter((i) => i.kind === "tool").length, 0, "no loose rows outside the groups");
 });
 
-test("five or fewer reads stay individual", () => {
+test("assistant text between reads splits the phases into separate groups", () => {
   reset();
-  const events: AgentEventLike[] = [];
-  for (let i = 0; i < 5; i++) {
-    const id = `r${i}`;
-    events.push(ev("tool.started", { callId: id, tool: "read_file" }));
-    events.push(ev("tool.completed", { callId: id, tool: "read_file", preview: "x" }));
-  }
-  const items = reducePresentation(events, "completed");
-  assert.equal(items.filter((i) => i.kind === "group").length, 0);
-  assert.equal(items.filter((i) => i.kind === "tool").length, 5);
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "a", tool: "read_file" }),
+      ev("tool.completed", { callId: "a", tool: "read_file", preview: "x" }),
+      ev("message.delta", { content: "Found it. Reading the config next." }),
+      ev("message.completed", {}),
+      ev("tool.started", { callId: "b", tool: "read_file" }),
+      ev("tool.completed", { callId: "b", tool: "read_file", preview: "y" }),
+    ],
+    "completed"
+  );
+  assert.equal(items.filter((i) => i.kind === "workgroup").length, 2, "text between work closes the group");
+  assert.ok(items.some((i) => i.kind === "assistant"));
+});
+
+test("a running inspection reports running state and phase title", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "r1", tool: "read_file" }),
+      ev("tool.input", { callId: "r1", tool: "read_file", input: { path: "a.ts" } }),
+    ],
+    "running"
+  );
+  const wg = items.find((i) => i.kind === "workgroup") as WgItem;
+  assert.equal(wg.status, "running");
+  assert.equal(wg.title, "Inspecting project…");
 });
 
 test("approval required → resolved shows settled state; cancelled run ends in a subtle Stopped summary", () => {
@@ -162,7 +190,10 @@ test("failed tool keeps its error; model errors surface as a status line", () =>
     ],
     "error"
   );
-  const failed = items.find((i) => i.kind === "tool") as ToolItem;
+  const wg = items.find((i) => i.kind === "workgroup") as WgItem;
+  assert.ok(wg, "failed command still presented");
+  assert.equal(wg.status, "failed", "all-failed group reads as failed");
+  const failed = wg.items[0];
   assert.equal(failed.status, "failed");
   assert.equal(failed.error, "Exit 1");
   assert.ok(items.some((i) => i.kind === "status" && String((i as { label: string }).label).includes("connection closed")));
