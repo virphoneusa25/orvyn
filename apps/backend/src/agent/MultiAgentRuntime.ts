@@ -35,6 +35,7 @@ import { applyMode } from "./modes";
 import { clampToolOutput, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { MissionBudgetExceededError } from "../services/UsageService";
 import { MissionQueue } from "../queue/MissionQueue";
+import { raceApprovalTimeout } from "./approvals";
 
 interface PendingApproval {
   resolve: (approved: boolean) => void;
@@ -166,6 +167,14 @@ export class MultiAgentRuntime {
     }
 
     this.controllers.get(runId)?.abort();
+
+    // A mission still waiting in the queue never reaches the orchestrate()
+    // guard below — mark it terminal HERE so "stopped" is immediately true.
+    const run = this.store.get(runId);
+    if (run && !run.events.some((e) => e.type === "run.started")) {
+      this.store.emit(runId, "run.cancelled", { reason: "Stopped by user before it started" });
+      this.store.setStatus(runId, "cancelled");
+    }
     return true;
   }
 
@@ -206,8 +215,13 @@ export class MultiAgentRuntime {
     // waits its turn instead of piling more agent loops onto the box.
     const position = this.queue.enqueue(() => this.orchestrate(runId, projectRoot, goal, rules, attachments));
     if (position > 0) {
-      this.store.emit(runId, "thinking", {
-        text: `Mission queued at position ${position} (max ${this.queue.concurrency} concurrent). It starts automatically when a slot frees up.`,
+      // Truthful state: the run EXISTS but has not started — say so, or the
+      // UI shows RUNNING while nothing at all is executing.
+      this.store.setStatus(runId, "queued");
+      this.store.emit(runId, "run.queued", {
+        position,
+        maxConcurrent: this.queue.concurrency,
+        note: `Mission queued at position ${position} (max ${this.queue.concurrency} concurrent). It starts automatically when a slot frees up.`,
       });
     }
     return runId;
@@ -220,6 +234,14 @@ export class MultiAgentRuntime {
     rules?: string,
     attachments?: Attachment[]
   ): Promise<void> {
+    // Stopped while queued: cancel() already marked the run terminal; do not
+    // burn a planner call — or a slot — on work nobody asked for anymore.
+    if (this.isCancelled(runId)) {
+      if (this.store.get(runId)?.status !== "cancelled") this.finishCancelled(runId);
+      return;
+    }
+    // The queue slot is ours — flip from queued to genuinely running.
+    if (this.store.get(runId)?.status === "queued") this.store.setStatus(runId, "running");
     this.store.emit(runId, "run.started", { instruction: goal, mode: "multitask" });
     const mission = this.taskEngine.createMission(runId, projectRoot, goal);
 
@@ -697,14 +719,26 @@ export class MultiAgentRuntime {
             agent: task.agent,
           });
           this.store.setStatus(runId, "awaiting_approval");
-          const approved = await new Promise<boolean>((resolve) =>
-            this.pending.set(call.id, { resolve, runId, tool: call.name })
-          );
-          this.store.emit(runId, "approval.resolved", { callId: call.id, approved });
+          const { approved, timedOut, seconds } = await raceApprovalTimeout((settle) => {
+            this.pending.set(call.id, { resolve: settle, runId, tool: call.name });
+            return () => this.pending.delete(call.id);
+          });
+          this.store.emit(runId, "approval.resolved", {
+            callId: call.id,
+            approved,
+            ...(timedOut ? { reason: `no decision within ${seconds}s — denied automatically` } : {}),
+          });
           this.store.setStatus(runId, "running");
           if (!approved) {
-            messages.push({ role: "tool", name: call.name, toolCallId: call.id, content: "User denied this action." });
-            transcript.push(`User denied ${call.name}`);
+            messages.push({
+              role: "tool",
+              name: call.name,
+              toolCallId: call.id,
+              content: timedOut
+                ? "The approval was not answered in time and was denied automatically. Do not repeat the identical action; continue with an alternative."
+                : "User denied this action.",
+            });
+            transcript.push(`${call.name} denied${timedOut ? " (approval timeout)" : ""}`);
             continue;
           }
         }

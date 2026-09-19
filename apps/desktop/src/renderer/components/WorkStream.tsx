@@ -56,6 +56,8 @@ export function WorkStream({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Auto-follow only while the user is at the bottom; scrolling up pauses it. */
+  const [follow, setFollow] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachRef = useRef<HTMLInputElement>(null);
@@ -63,9 +65,17 @@ export function WorkStream({
   useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
   const messages = getChatMessages();
 
+  // Follow the stream while the user is at the bottom; once they scroll up to
+  // read, stop forcing scroll (a stream that yanks the view is unreadable).
+  const onStreamScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    setFollow(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  };
   useEffect(() => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length, run.events.length]);
+    const el = scroller.current;
+    if (el && follow) el.scrollTop = el.scrollHeight;
+  }, [messages.length, run.events.length, follow]);
 
   // Ctrl+L focuses the composer from anywhere.
   useEffect(() => {
@@ -108,11 +118,18 @@ export function WorkStream({
     }
   }
 
-  const runActive = run.status === "running" || run.status === "awaiting_approval" || run.status === "cancelling";
+  const runActive =
+    run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
   const streaming = isChatStreaming();
-  // The conversation's title: the first user message of this session.
-  const firstUser = messages.find((m) => m.role === "user");
-  const title = firstUser ? firstUser.content.trim().split("\n")[0]!.slice(0, 60) : "Work Stream";
+  // The conversation's title. When a run is attached, the run IS the
+  // conversation: its instruction names the work, and an unrelated chat
+  // session from before must never leak its title (the "hi" bug) or its
+  // messages into this workspace.
+  const runInstruction = run.events.find((e) => e.type === "run.started")?.data.instruction;
+  const title =
+    (runInstruction ? String(runInstruction) : "").trim().split("\n")[0]?.slice(0, 60) ||
+    (messages.find((m) => m.role === "user")?.content.trim().split("\n")[0] ?? "").slice(0, 60) ||
+    "Work Stream";
 
   return (
     <div style={{ height: "100%", minWidth: 0, display: "flex", flexDirection: "column", background: "var(--orvyn-surface-1)" }}>
@@ -142,7 +159,16 @@ export function WorkStream({
               fontSize: 10,
               fontWeight: 700,
               letterSpacing: 0.8,
-              color: runActive ? "var(--orvyn-purple-hi)" : run.status === "completed" ? "var(--orvyn-green)" : run.status === "cancelled" ? "var(--orvyn-yellow)" : "var(--orvyn-red)",
+              color:
+                runActive && run.status !== "queued"
+                  ? "var(--orvyn-purple-hi)"
+                  : run.status === "queued"
+                    ? "var(--orvyn-yellow)"
+                    : run.status === "completed"
+                      ? "var(--orvyn-green)"
+                      : run.status === "cancelled"
+                        ? "var(--orvyn-yellow)"
+                        : "var(--orvyn-red)",
               border: "1px solid currentColor",
               borderRadius: 4,
               padding: "1px 7px",
@@ -176,16 +202,21 @@ export function WorkStream({
       </div>
 
       {/* The stream: conversation + activity, top to bottom. */}
-      <div ref={scroller} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 22px", minWidth: 0 }}>
-        {messages.length === 0 && run.events.length === 0 && (
-          <div style={{ padding: "48px 0", textAlign: "center" }}>
-            <img src={appIcon} alt="ORVYN" width={40} height={40} style={{ borderRadius: 11, opacity: 0.9 }} />
-            <div style={{ fontSize: 14, fontWeight: 600, marginTop: 10 }}>What do you want ORVYN to accomplish?</div>
-            <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
-              Ask, build, fix, deploy — this stream is the conversation and the work.
+      <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          ref={scroller}
+          onScroll={onStreamScroll}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 22px", minWidth: 0 }}
+        >
+          {messages.length === 0 && run.events.length === 0 && (
+            <div style={{ padding: "48px 0", textAlign: "center" }}>
+              <img src={appIcon} alt="ORVYN" width={40} height={40} style={{ borderRadius: 11, opacity: 0.9 }} />
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 10 }}>What do you want ORVYN to accomplish?</div>
+              <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
+                Ask, build, fix, deploy, research — this stream is the conversation and the work.
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
         {messages.map((m, i) =>
           m.role === "user" ? (
@@ -254,6 +285,32 @@ export function WorkStream({
             <LiveActivity events={run.events} />
             <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"} />
           </div>
+        )}
+        </div>
+        {!follow && (
+          <button
+            onClick={() => {
+              const el = scroller.current;
+              if (el) el.scrollTop = el.scrollHeight;
+              setFollow(true);
+            }}
+            style={{
+              position: "absolute",
+              bottom: 12,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "var(--orvyn-surface-2)",
+              border: "1px solid var(--orvyn-border)",
+              borderRadius: 999,
+              color: "var(--orvyn-text-secondary)",
+              fontSize: 11,
+              padding: "4px 12px",
+              cursor: "pointer",
+              boxShadow: "0 6px 18px rgba(3,6,14,0.5)",
+            }}
+          >
+            ↓ Jump to latest
+          </button>
         )}
       </div>
 

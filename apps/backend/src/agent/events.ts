@@ -8,6 +8,7 @@
 
 export type AgentEventType =
   | "run.started"
+  | "run.queued"
   | "message.delta"
   | "message.completed"
   | "thinking"
@@ -66,7 +67,7 @@ export interface AgentEvent {
   data: Record<string, unknown>;
 }
 
-export type RunStatus = "running" | "awaiting_approval" | "completed" | "error" | "cancelled";
+export type RunStatus = "queued" | "running" | "awaiting_approval" | "completed" | "error" | "cancelled";
 
 /** A run is finished when no further events can arrive for it. */
 export function isTerminal(status: RunStatus): boolean {
@@ -99,11 +100,11 @@ const MAX_RETAINED_RUNS = 100;
 export class RunStore {
   private runs = new Map<string, Run>();
 
-  create(id: string, projectRoot: string): Run {
+  create(id: string, projectRoot: string, status: RunStatus = "running"): Run {
     const run: Run = {
       id,
       projectRoot,
-      status: "running",
+      status,
       createdAt: Date.now(),
       events: [],
       nextSequence: 1,

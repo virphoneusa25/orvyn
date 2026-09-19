@@ -160,6 +160,9 @@ export function App() {
     const onOpenRun = (e: Event) => {
       const runId = (e as CustomEvent<string>).detail;
       if (!runId) return;
+      // The run carries its own conversation (instruction + streamed reply);
+      // whatever chat thread was active must not bleed into this workspace.
+      newChat();
       setActiveRunId(runId);
       setCenterMode("work");
       setView("newtask");
@@ -501,7 +504,14 @@ export function App() {
                   // conversation; chat stays conversation-only, work
                   // attaches the run for center + right to follow.
                   setCenterMode("work");
-                  if (outcome.kind !== "chat") setActiveRunId(outcome.runId);
+                  if (outcome.kind !== "chat") {
+                    // Identity hygiene: a new request NEVER inherits the
+                    // previous chat session's title or messages. The run is
+                    // the conversation now; pure chat turns may open a fresh
+                    // thread afterwards.
+                    newChat();
+                    setActiveRunId(outcome.runId);
+                  }
                 }}
               />
             ) : (

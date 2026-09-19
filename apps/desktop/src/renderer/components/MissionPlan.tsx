@@ -232,6 +232,7 @@ function toolLabel(tool: string): string {
 function friendlyEventType(type: string): string {
   const map: Record<string, string> = {
     "run.started": "Request accepted",
+    "run.queued": "Queued — waiting for a mission slot",
     "run.completed": "Completed",
     "run.cancelled": "Stopped",
     "plan.created": "Plan ready",

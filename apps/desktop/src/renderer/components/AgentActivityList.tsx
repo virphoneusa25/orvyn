@@ -224,6 +224,16 @@ function renderEvent(
         </div>
       );
 
+    case "run.queued":
+      return (
+        <div
+          key={e.id}
+          style={{ ...card("var(--orvyn-yellow)"), color: "var(--text-muted)", fontStyle: "italic" }}
+        >
+          {String(e.data.note ?? `Queued at position ${e.data.position ?? "?"} — starts when a mission slot frees up.`)}
+        </div>
+      );
+
     case "thinking": {
       // Customer-facing: Astra's role, never the provider model alias —
       // that detail lives in the tooltip for those who want it.

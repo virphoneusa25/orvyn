@@ -92,6 +92,8 @@ export function useAgentRun(
     lastSeq.current = Math.max(lastSeq.current, e.sequence);
     setEvents((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
     if (e.type === "approval.required") setStatus("awaiting_approval");
+    else if (e.type === "run.queued") setStatus("queued");
+    else if (e.type === "run.started") setStatus("running");
     else if (e.type === "run.completed") {
       setStatus("completed");
       streamRef.current?.close();
@@ -144,7 +146,7 @@ export function useAgentRun(
         for (const e of data.events) applyEvent(e);
       }
       setStatus(data.status);
-      if (data.status === "running" || data.status === "awaiting_approval") {
+      if (data.status === "running" || data.status === "awaiting_approval" || data.status === "queued") {
         setTimeout(() => poll(id), 80);
       }
     } catch {

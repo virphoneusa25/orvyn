@@ -14,6 +14,7 @@ import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore } from "./events";
+import { raceApprovalTimeout } from "./approvals";
 import { AgentMode, applyMode } from "./modes";
 import { clampToolOutput, compactConversation, estimateConversationTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
@@ -460,17 +461,27 @@ export class StreamingAgentRuntime {
         });
         this.store.setStatus(runId, "awaiting_approval");
 
-        const approved = await new Promise<boolean>((resolve) => {
-          this.pending.set(call.id, { call, destructive, resolve, runId });
+        const { approved, timedOut, seconds } = await raceApprovalTimeout((settle) => {
+          this.pending.set(call.id, { call, destructive, resolve: settle, runId });
+          return () => this.pending.delete(call.id);
         });
 
         if (state.cancelled) return "cancelled";
 
-        this.store.emit(runId, "approval.resolved", { callId: call.id, approved });
+        this.store.emit(runId, "approval.resolved", {
+          callId: call.id,
+          approved,
+          ...(timedOut ? { reason: `no decision within ${seconds}s — denied automatically` } : {}),
+        });
         this.store.setStatus(runId, "running");
 
         if (!approved) {
-          replies.set(call.id, "The user denied this action. Do not repeat it; consider an alternative.");
+          replies.set(
+            call.id,
+            timedOut
+              ? "The approval was not answered in time and was denied automatically. Do not repeat the identical action; continue with an alternative."
+              : "The user denied this action. Do not repeat it; consider an alternative."
+          );
           continue;
         }
       }
