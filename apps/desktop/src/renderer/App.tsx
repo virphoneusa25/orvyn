@@ -117,7 +117,12 @@ export function App() {
   // Home is the landing surface; Code and Terminal share the editor chrome;
   // the context panel rides along wherever work happens.
   const showEditorChrome = view === "editor" || view === "terminal";
-  const showContext = view === "home" || view === "newtask" || view === "editor" || view === "terminal";
+  // The approved Home has NO right panel — the dashboard owns the full
+  // center. Context appears only once work begins (or in the editor).
+  const showContext =
+    view === "editor" ||
+    view === "terminal" ||
+    ((view === "home" || view === "newtask") && centerMode === "work");
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
@@ -415,6 +420,7 @@ export function App() {
             }
             if (v === "home") setCenterMode("home");
           }}
+          projectRoot={workspaceRoot}
         />
 
         {showEditorChrome && (

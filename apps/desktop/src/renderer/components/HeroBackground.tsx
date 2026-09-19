@@ -76,7 +76,60 @@ export function HeroBackground() {
       const h = rect.height || 300;
       ctx.clearRect(0, 0, w, h);
 
-      // L2 — nebula glow, slowly breathing between purple and blue.
+      // L1 — deep navy base.
+      ctx.fillStyle = "#070B14";
+      ctx.fillRect(0, 0, w, h);
+
+      // L2a — planetary horizon: a large sphere off the left edge, its lit
+      // rim curving through the hero. Atmospheric band (purple→cyan) on the
+      // terminator, dark body fading to the base — global infrastructure,
+      // not sci-fi: barely-there albedo, strong single rim.
+      const planetR = h * 1.35;
+      const pcx = -planetR * 0.52;
+      const pcy = h * 0.92;
+      const body = ctx.createRadialGradient(pcx, pcy, planetR * 0.72, pcx, pcy, planetR);
+      body.addColorStop(0, "rgba(14,20,33,0.9)");
+      body.addColorStop(0.85, "rgba(10,14,24,0.85)");
+      body.addColorStop(1, "rgba(7,11,20,0)");
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, planetR, 0, Math.PI * 2);
+      ctx.fill();
+      // Rim: stacked strokes hugging the visible arc — a wide faint cyan
+      // atmosphere, a purple band, then one strong lit edge. Parity reviews
+      // kept reading the earlier 1.6px/α0.26 arc as invisible; the mockup's
+      // horizon reads as a clear glow.
+      const rimShift = reduced ? 0.5 : (Math.sin(t * 0.003) + 1) / 2;
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, planetR + 10, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(34,211,238,${0.10 + (1 - rimShift) * 0.08})`;
+      ctx.lineWidth = 9;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, planetR + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(108,92,255,${0.18 + rimShift * 0.1})`;
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, planetR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(139,125,255,${0.5 + rimShift * 0.18})`;
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      // Faint latitude arcs on the visible cap for a "global grid" read.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      ctx.clip();
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath();
+        ctx.ellipse(pcx, pcy, planetR, planetR * (0.25 + i * 0.18), 0, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(77,163,255,${0.05 - i * 0.01})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // L2b — nebula glow, slowly breathing between purple and blue.
       const breathe = reduced ? 0.5 : (Math.sin(t * 0.004) + 1) / 2;
       const g1 = ctx.createRadialGradient(w * 0.5, h * -0.25, 0, w * 0.5, h * -0.25, h * 1.7);
       g1.addColorStop(0, `rgba(108,92,255,${0.16 + breathe * 0.07})`);

@@ -91,6 +91,12 @@ function describe(e: FeedEvent): string | null {
 }
 
 export function BottomWorkPanel({ height = 176 }: { height?: number }) {
+  // The approved Home shows the utility drawer COLLAPSED by default — a slim
+  // tab rail, never a giant empty terminal. Expanding is a click; a drag
+  // handle resizes; the choice persists for the session.
+  const [expanded, setExpanded] = useState(false);
+  const [drawerHeight, setDrawerHeight] = useState(height);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
   // Terminal is the default tab, matching the approved composition.
   const [tab, setTab] = useState<WorkTab>("terminal");
   const [run, setRun] = useState<RunSummary | null>(null);
@@ -136,7 +142,7 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
   return (
     <div
       style={{
-        height,
+        height: expanded ? drawerHeight : 30,
         flexShrink: 0,
         background: "var(--orvyn-surface-1)",
         borderTop: "1px solid var(--orvyn-border-soft)",
@@ -146,39 +152,97 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
         overflow: "hidden",
       }}
     >
+      {/* Drag handle — only meaningful while expanded. */}
+      {expanded && (
+        <div
+          onPointerDown={(e) => {
+            dragRef.current = { startY: e.clientY, startH: drawerHeight };
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (!dragRef.current) return;
+            const delta = dragRef.current.startY - e.clientY;
+            setDrawerHeight(Math.max(120, Math.min(520, dragRef.current.startH + delta)));
+          }}
+          onPointerUp={() => {
+            dragRef.current = null;
+          }}
+          title="Drag to resize"
+          style={{ height: 4, cursor: "ns-resize", flexShrink: 0, background: "transparent" }}
+        />
+      )}
+
       {/* Tab bar */}
-      <div style={{ display: "flex", alignItems: "center", height: 28, flexShrink: 0, padding: "0 6px" }}>
+      <div style={{ display: "flex", alignItems: "center", height: 26, flexShrink: 0, padding: "0 6px" }}>
         {TABS.map((t) => {
-          const active = tab === t.id;
+          const active = expanded && tab === t.id;
           return (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id);
+                setExpanded(true);
+              }}
               style={{
                 background: "transparent",
                 border: "none",
                 borderBottom: active ? "2px solid var(--orvyn-purple)" : "2px solid transparent",
                 color: active ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
-                fontSize: 11,
+                fontSize: 10.5,
                 fontWeight: 600,
-                padding: "0 12px",
+                padding: "0 11px",
                 height: "100%",
                 cursor: "pointer",
               }}
             >
               {t.label}
               {t.id === "problems" && problemCount > 0 && (
-                <span style={{ marginLeft: 6, color: "var(--orvyn-red)", fontSize: 10 }}>{problemCount}</span>
+                <span style={{ marginLeft: 6, color: "var(--orvyn-red)", fontSize: 9.5 }}>{problemCount}</span>
               )}
             </button>
           );
         })}
-        <span style={{ marginLeft: "auto", paddingRight: 10, fontSize: 10, color: "var(--orvyn-text-muted)" }}>
+        <span style={{ marginLeft: "auto", paddingRight: 8, fontSize: 10, color: "var(--orvyn-text-muted)", display: "inline-flex", gap: 12, alignItems: "center" }}>
           {run ? `latest run: ${run.status}` : ""}
+          {!expanded && (
+            <button
+              onClick={() => {
+                setTab("terminal");
+                setExpanded(true);
+              }}
+              title="Open a real PowerShell session"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--orvyn-border)",
+                borderRadius: 5,
+                color: "var(--orvyn-purple-hi)",
+                fontSize: 10,
+                padding: "2px 10px",
+                cursor: "pointer",
+              }}
+            >
+              Open Terminal
+            </button>
+          )}
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? "Collapse" : "Expand"}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--orvyn-text-muted)",
+              cursor: "pointer",
+              fontSize: 9,
+              padding: "2px 4px",
+            }}
+          >
+            {expanded ? "▾" : "▴"}
+          </button>
         </span>
       </div>
 
-      {/* Content */}
+      {/* Content — only while expanded; collapsed is the slim rail. */}
+      {expanded && (
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {tab === "terminal" ? (
           <TerminalView term={term} />
@@ -236,6 +300,7 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

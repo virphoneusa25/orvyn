@@ -29,12 +29,12 @@ const MODES: { id: ComposerMode; label: string; hint: string }[] = [
 ];
 
 const QUICK_ACTIONS: { id: ComposerMode; title: string; desc: string; Icon: React.FC<{ size?: number }>; tile: string }[] = [
-  { id: "code", title: "Build Feature", desc: "Plan, code, test, and commit", Icon: IconCode, tile: "#6C5CFF" },
-  { id: "code", title: "Fix Problem", desc: "Find and resolve issues", Icon: IconWrench, tile: "#F25F75" },
-  { id: "server", title: "Server Task", desc: "SSH, logs, diagnose, fix", Icon: IconServer, tile: "#22D3EE" },
-  { id: "deploy", title: "Deploy App", desc: "Build and deploy", Icon: IconRocket, tile: "#20D89B" },
-  { id: "research", title: "Research", desc: "Browse, analyze, report", Icon: IconReport, tile: "#4DA3FF" },
-  { id: "automate", title: "Automate", desc: "Create a recurring task", Icon: IconZap, tile: "#F5B942" },
+  { id: "code", title: "Build Feature", desc: "Plan, code & test", Icon: IconCode, tile: "#6C5CFF" },
+  { id: "code", title: "Fix Problem", desc: "Diagnose & repair", Icon: IconWrench, tile: "#F25F75" },
+  { id: "server", title: "Server Task", desc: "SSH, logs & services", Icon: IconServer, tile: "#22D3EE" },
+  { id: "deploy", title: "Deploy App", desc: "Build & deploy", Icon: IconRocket, tile: "#20D89B" },
+  { id: "research", title: "Research", desc: "Browse & analyze", Icon: IconReport, tile: "#4DA3FF" },
+  { id: "automate", title: "Automate", desc: "Create a workflow", Icon: IconZap, tile: "#F5B942" },
 ];
 
 interface MissionRow {
@@ -106,6 +106,7 @@ export function Home({
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const projectName = projectRoot ? (projectRoot.split(/[\\/]/).pop() ?? null) : null;
   const attachRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -203,7 +204,7 @@ export function Home({
 
           <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
             <img src={appIcon} alt="ORVYN" width={46} height={46} style={{ borderRadius: 12, marginBottom: 10, boxShadow: "0 8px 28px rgba(108,92,255,0.35)" }} />
-            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--orvyn-text)", letterSpacing: -0.3 }}>
+            <div style={{ fontSize: 27, fontWeight: 700, color: "var(--orvyn-text)", letterSpacing: -0.3 }}>
               {greeting()}.
             </div>
             <div style={{ fontSize: 12.5, color: "var(--orvyn-text-secondary)", marginTop: 4, marginBottom: 14 }}>
@@ -309,9 +310,7 @@ export function Home({
                     {m.label}
                   </button>
                 ))}
-                <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginLeft: 4 }}>
-                  Agent: Astra
-                </span>
+                <AstraSelector />
                 <button
                   onClick={() => void run()}
                   disabled={!prompt.trim() || starting}
@@ -402,7 +401,7 @@ export function Home({
               </span>
               <span style={{ minWidth: 0 }}>
                 <span style={{ display: "block", fontSize: 12, fontWeight: 600, letterSpacing: 0.2 }}>{a.title}</span>
-                <span style={{ display: "block", fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ display: "block", fontSize: 11, color: "var(--orvyn-text-muted)", marginTop: 2, lineHeight: 1.35, overflowWrap: "break-word" }}>
                   {a.desc}
                 </span>
               </span>
@@ -432,12 +431,29 @@ export function Home({
                         : document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "missions" }))
                     }
                   >
+                    <span
+                      style={{
+                        width: 26,
+                        height: 26,
+                        flexShrink: 0,
+                        borderRadius: 6,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(108,92,255,0.12)",
+                        border: "1px solid rgba(108,92,255,0.3)",
+                        color: "var(--orvyn-purple-hi)",
+                      }}
+                    >
+                      <IconRocket size={13} />
+                    </span>
                     <span style={{ minWidth: 0, flex: 1 }}>
                       <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {m.goal}
                       </span>
                       <span style={{ display: "block", fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
-                        {m.id.slice(0, 12)} · {total > 0 ? `${done}/${total} steps` : "no steps"}
+                        {projectName ? `${projectName} · ` : ""}mission_{m.id.slice(-4)}
+                        {total > 0 ? ` · ${done}/${total} steps` : ""}
                       </span>
                     </span>
                     <span style={{ ...badge(st.color), flexShrink: 0 }}>{st.label}</span>
@@ -516,7 +532,7 @@ export function Home({
       </div>
 
       {/* ── TERMINAL / ACTIVITY dock — target composition ────── */}
-      <BottomWorkPanel height={176} />
+      <BottomWorkPanel height={200} />
     </div>
   );
 }
@@ -646,4 +662,95 @@ function rowStyle(): React.CSSProperties {
 
 function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "12px 0" }}>{children}</div>;
+}
+
+/** The approved Astra control: icon + name + ORCHESTRATOR + dropdown.
+ *  Real roster from /agents — Astra orchestrates (selected); the workers are
+ *  listed read-only because routing to them is Astra's decision, not a
+ *  composer setting. No decorative dropdown. */
+function AstraSelector() {
+  const [open, setOpen] = useState(false);
+  const [roster, setRoster] = useState<{ label: string; role: string; modelId: string | null }[]>([]);
+
+  useEffect(() => {
+    if (!open || roster.length > 0) return;
+    fetch(apiUrl("/agents"), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => setRoster(d.agents ?? []))
+      .catch(() => setRoster([]));
+  }, [open, roster.length]);
+
+  return (
+    <span style={{ position: "relative", marginLeft: 4 }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Agent"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 7,
+          background: "transparent",
+          border: "1px solid var(--orvyn-border)",
+          borderRadius: 6,
+          color: "var(--orvyn-text-secondary)",
+          padding: "3px 9px",
+          fontSize: 11,
+          cursor: "pointer",
+        }}
+      >
+        <img src={appIcon} alt="" width={14} height={14} style={{ borderRadius: 4 }} />
+        <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
+          <span style={{ color: "var(--orvyn-text)", fontWeight: 600, fontSize: 11 }}>Astra</span>
+          <span style={{ fontSize: 7.5, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>ORCHESTRATOR</span>
+        </span>
+        <span style={{ fontSize: 8, color: "var(--orvyn-text-muted)" }}>▾</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "120%",
+            left: 0,
+            minWidth: 230,
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: 6,
+            boxShadow: "var(--orvyn-shadow)",
+            padding: 4,
+            zIndex: 600,
+          }}
+        >
+          <div style={{ fontSize: 10, letterSpacing: 1, color: "var(--orvyn-text-muted)", padding: "4px 8px" }}>
+            AGENT ROSTER
+          </div>
+          <div style={{ display: "flex", gap: 7, padding: "5px 8px", background: "rgba(108,92,255,0.12)", borderRadius: 4, marginBottom: 2 }}>
+            <span style={{ color: "var(--orvyn-purple-hi)", fontSize: 11 }}>✓</span>
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 11.5, color: "var(--orvyn-text)" }}>Astra</span>
+              <span style={{ display: "block", fontSize: 9.5, color: "var(--orvyn-text-muted)" }}>
+                orchestrates every command
+              </span>
+            </span>
+          </div>
+          {(roster.length > 0
+            ? roster.filter((a) => !["orchestrator"].includes(a.role))
+            : []
+          ).slice(0, 6).map((a) => (
+            <div key={a.role} style={{ display: "flex", gap: 7, padding: "4px 8px", opacity: 0.55 }}>
+              <span style={{ fontSize: 11, width: 11 }}>·</span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 11, color: "var(--orvyn-text-secondary)" }}>{a.label}</span>
+                <span style={{ display: "block", fontSize: 9, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
+                  {a.modelId ?? "no model routed"}
+                </span>
+              </span>
+            </div>
+          ))}
+          <div style={{ fontSize: 9.5, color: "var(--orvyn-text-muted)", padding: "4px 8px 2px", borderTop: "1px solid var(--border)", marginTop: 3 }}>
+            Astra delegates to workers automatically during missions.
+          </div>
+        </div>
+      )}
+    </span>
+  );
 }
