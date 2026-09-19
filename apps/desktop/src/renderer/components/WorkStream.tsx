@@ -10,6 +10,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat } from "../chatSession";
+import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
@@ -56,6 +57,9 @@ export function WorkStream({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Follow-ups submitted while a run is active — delivered when it ends. */
+  const [queued, setQueued] = useState<{ id: number; text: string }[]>([]);
+  const queueId = useRef(0);
   /** Auto-follow only while the user is at the bottom; scrolling up pauses it. */
   const [follow, setFollow] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
@@ -94,14 +98,24 @@ export function WorkStream({
     };
   }, []);
 
-  async function send() {
-    const text = prompt.trim();
-    if (!text || busy) return;
+  /** Submits bypassing the active-run guard — used for queued delivery. */
+  const deliver = useRef<(text: string) => void>(() => {});
+  async function send(text?: string, bypassQueue = false) {
+    const instruction = (text ?? prompt).trim();
+    if (!instruction || busy) return;
+    // While a run is active the instruction joins the queue — it is delivered
+    // when the run reaches a terminal state, never silently dropped into it.
+    if (runActive && !bypassQueue) {
+      setQueued((q) => [...q, { id: queueId.current++, text: instruction }]);
+      setPrompt("");
+      setAttachments([]);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const outcome = await submitOrvynCommand({
-        prompt: text,
+        prompt: instruction,
         mode,
         source: "CHAT",
         projectRoot,
@@ -117,6 +131,7 @@ export function WorkStream({
       setBusy(false);
     }
   }
+  deliver.current = (text: string) => void send(text);
 
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
@@ -133,6 +148,17 @@ export function WorkStream({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [runActive, run.stop]);
+
+  // Queue delivery: when the attached run settles, the next queued follow-up
+  // goes out on its own — same pipeline, same conversation.
+  useEffect(() => {
+    if (runActive || queued.length === 0) return;
+    if (busy) return;
+    const [next, ...rest] = queued;
+    setQueued(rest);
+    deliver.current(next.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runActive, queued, busy]);
   // The conversation's title. When a run is attached, the run IS the
   // conversation: its instruction names the work, and an unrelated chat
   // session from before must never leak its title (the "hi" bug) or its
@@ -328,6 +354,44 @@ export function WorkStream({
 
       {/* Sticky command composer — same pipeline as Home. */}
       <div style={{ flexShrink: 0, padding: "10px 16px 12px", borderTop: "1px solid var(--orvyn-border-soft)" }}>
+        {queued.length > 0 && (
+          <div style={{ marginBottom: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+            {queued.map((q) => (
+              <div
+                key={q.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  border: "1px dashed var(--orvyn-border)",
+                  fontSize: 11.5,
+                  color: "var(--orvyn-text-secondary)",
+                }}
+              >
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>QUEUED</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.text}</span>
+                <button
+                  title="Send now — bypasses the queue"
+                  onClick={() => {
+                    setQueued((x) => x.filter((y) => y.id !== q.id));
+                    void send(q.text, true);
+                  }}
+                  style={ghostBtn()}
+                >
+                  ▶
+                </button>
+                <button title="Edit" onClick={() => { setPrompt(q.text); setQueued((x) => x.filter((y) => y.id !== q.id)); }} style={ghostBtn()}>
+                  ✎
+                </button>
+                <button title="Remove" onClick={() => setQueued((x) => x.filter((y) => y.id !== q.id))} style={ghostBtn()}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {error && <div style={{ color: "var(--orvyn-red)", fontSize: 11.5, marginBottom: 6 }}>{error}</div>}
         <div
           style={{
@@ -412,6 +476,7 @@ export function WorkStream({
               </button>
             ))}
             <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>Astra</span>
+            <ModelPicker />
             {runActive ? (
               <button
                 onClick={() => void run.stop()}
@@ -478,5 +543,84 @@ function ghostBtn(): React.CSSProperties {
     cursor: "pointer",
     flexShrink: 0,
   };
+}
+
+/**
+ * Model for the next runs. Auto = the router decides; an explicit pick is
+ * written to the REAL routing overrides (POST /routing, capability-validated
+ * by the backend, honored by the model router and persisted) — this is the
+ * same path the Model Manager writes, so the picker genuinely controls the
+ * model that executes. Takes effect on the NEXT run; a run already in flight
+ * keeps its model.
+ */
+function ModelPicker() {
+  const [models, setModels] = useState<{ id: string; name: string }[]>([]);
+  const [current, setCurrent] = useState<string>("auto");
+  const [busy, setBusy] = useState(false);
+
+  const load = () => {
+    fetch(apiUrl("/models"))
+      .then((r) => r.json())
+      .then((d) => setModels((d.models ?? []).filter((m: any) => m.capabilities?.chat).map((m: any) => ({ id: m.id, name: m.name ?? m.id }))))
+      .catch(() => {});
+    fetch(apiUrl("/routing"))
+      .then((r) => r.json())
+      .then((d) => setCurrent(d.overrides?.executor ?? d.overrides?.chat ?? "auto"))
+      .catch(() => {});
+  };
+  useEffect(load, []);
+
+  async function pick(id: string) {
+    setBusy(true);
+    try {
+      if (id === "auto") {
+        // Clear both lanes — the router returns to its configured defaults.
+        await fetch(apiUrl("/routing/executor"), { method: "DELETE", headers: authHeaders() });
+        await fetch(apiUrl("/routing/chat"), { method: "DELETE", headers: authHeaders() });
+        setCurrent("auto");
+      } else {
+        // Executor drives mission workers; chat drives conversation turns.
+        await fetch(apiUrl("/routing"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ task: "executor", modelId: id }),
+        });
+        await fetch(apiUrl("/routing"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ task: "chat", modelId: id }),
+        });
+        setCurrent(id);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <select
+      title="Model for the next runs — Auto lets the router decide"
+      value={current}
+      disabled={busy}
+      onChange={(e) => void pick(e.target.value)}
+      style={{
+        background: "transparent",
+        border: "1px solid var(--orvyn-border)",
+        borderRadius: 6,
+        color: "var(--orvyn-text-secondary)",
+        fontSize: 10.5,
+        padding: "3px 6px",
+        maxWidth: 150,
+        cursor: "pointer",
+      }}
+    >
+      <option value="auto">Auto</option>
+      {models.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.name}
+        </option>
+      ))}
+    </select>
+  );
 }
 
