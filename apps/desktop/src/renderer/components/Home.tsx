@@ -1,13 +1,16 @@
 // apps/desktop/src/renderer/components/Home.tsx
 //
-// The approved mockup's Home workspace: ORVYN's landing surface. The task
-// composer starts REAL missions; quick actions prefill real modes; Recent
-// Missions and Connected Systems show live state. Per the no-fake rule the
-// greeting has no fabricated user name (no account system yet) and every
-// "Not connected" row is the truth.
+// The approved mockup's Home workspace. Composition at 1920×1080 (no scroll):
+// hero (logo, cosmic background, centered greeting, elevated composer)
+// → quick actions (six icon-tile cards, ONE row)
+// → recent missions (≈62%) beside connected systems (≈38%)
+// → the real activity/terminal dock filling the rest.
+// Every value is live; the mockup controls presentation, real state controls
+// content — "Not connected" stays "Not connected".
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
-import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode } from "./Icons";
+import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport } from "./Icons";
+import appIcon from "../assets/icon.png";
 
 type ComposerMode = "code" | "server" | "research" | "deploy" | "automate";
 
@@ -19,13 +22,13 @@ const MODES: { id: ComposerMode; label: string; hint: string }[] = [
   { id: "automate", label: "Automate", hint: "Recurring task (scheduler pending)" },
 ];
 
-const QUICK_ACTIONS: { id: ComposerMode; title: string; desc: string }[] = [
-  { id: "code", title: "BUILD FEATURE", desc: "Plan, code, test, and commit" },
-  { id: "code", title: "FIX PROBLEM", desc: "Find and resolve issues" },
-  { id: "server", title: "SERVER TASK", desc: "SSH, logs, diagnose, fix" },
-  { id: "deploy", title: "DEPLOY APP", desc: "Build and deploy" },
-  { id: "research", title: "RESEARCH", desc: "Browse, analyze, report" },
-  { id: "automate", title: "AUTOMATE", desc: "Create a recurring task" },
+const QUICK_ACTIONS: { id: ComposerMode; title: string; desc: string; Icon: React.FC<{ size?: number }>; tile: string }[] = [
+  { id: "code", title: "Build Feature", desc: "Plan, code, test, and commit", Icon: IconCode, tile: "#6C5CFF" },
+  { id: "code", title: "Fix Problem", desc: "Find and resolve issues", Icon: IconWrench, tile: "#F25F75" },
+  { id: "server", title: "Server Task", desc: "SSH, logs, diagnose, fix", Icon: IconServer, tile: "#22D3EE" },
+  { id: "deploy", title: "Deploy App", desc: "Build and deploy", Icon: IconRocket, tile: "#20D89B" },
+  { id: "research", title: "Research", desc: "Browse, analyze, report", Icon: IconReport, tile: "#4DA3FF" },
+  { id: "automate", title: "Automate", desc: "Create a recurring task", Icon: IconZap, tile: "#F5B942" },
 ];
 
 interface MissionRow {
@@ -51,12 +54,32 @@ function greeting(): string {
   return "Good evening";
 }
 
+function relTime(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+const STATUS_STYLE: Record<string, { color: string; label: string }> = {
+  COMPLETED: { color: "var(--orvyn-green)", label: "COMPLETED" },
+  RUNNING: { color: "var(--orvyn-purple-hi)", label: "RUNNING" },
+  PLANNING: { color: "var(--orvyn-purple-hi)", label: "PLANNING" },
+  REVIEW: { color: "var(--orvyn-yellow)", label: "REVIEW" },
+  BLOCKED: { color: "var(--orvyn-yellow)", label: "BLOCKED" },
+  FAILED: { color: "var(--orvyn-red)", label: "FAILED" },
+};
+
 export function Home({
   projectRoot,
   onMissionStarted,
+  bottomPanel,
 }: {
   projectRoot: string | null;
   onMissionStarted: () => void;
+  /** The real activity/terminal dock, docked under the dashboard. */
+  bottomPanel?: React.ReactNode;
 }) {
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<ComposerMode>("code");
@@ -76,7 +99,7 @@ export function Home({
         fetch(apiUrl(`/servers${root}`), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
         fetch(apiUrl("/../api/v1/health")).then((r) => r.ok).catch(() => false),
       ]);
-      setMissions((m.missions ?? []).slice(0, 5));
+      setMissions((m.missions ?? []).slice(0, 6));
       setServers(s.servers ?? []);
       setBackendOnline(Boolean(h));
     } catch {
@@ -96,8 +119,6 @@ export function Home({
     setStarting(true);
     setStartError(null);
     try {
-      // The composer creates real work: missions through the orchestrator,
-      // except research/automate which start as read-only agent runs.
       const endpoint = mode === "research" || mode === "automate" ? "/agent/stream/runs" : "/agent/orchestrate";
       const body =
         endpoint === "/agent/orchestrate"
@@ -119,196 +140,307 @@ export function Home({
     }
   }
 
-  function applyQuickAction(a: { id: ComposerMode; title: string }) {
+  function applyQuickAction(a: (typeof QUICK_ACTIONS)[number]) {
     setMode(a.id);
     const templates: Record<string, string> = {
-      "BUILD FEATURE": "Build this feature: ",
-      "FIX PROBLEM": "Investigate and fix this problem: ",
-      "SERVER TASK": "Connect to my server over SSH and diagnose: ",
-      "DEPLOY APP": "Deploy this application: ",
-      RESEARCH: "Research this and produce a report: ",
-      AUTOMATE: "Set up a recurring task that: ",
+      "Build Feature": "Build this feature: ",
+      "Fix Problem": "Investigate and fix this problem: ",
+      "Server Task": "Connect to my server over SSH and diagnose: ",
+      "Deploy App": "Deploy this application: ",
+      Research: "Research this and produce a report: ",
+      Automate: "Set up a recurring task that: ",
     };
     setPrompt(templates[a.title] ?? "");
     inputRef.current?.focus();
   }
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: "28px 32px", minWidth: 0 }}>
-      {/* Hero */}
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 22, fontWeight: 700, color: "var(--orvyn-text)" }}>
-          {greeting()}.
-        </div>
-        <div style={{ fontSize: 13, color: "var(--orvyn-text-secondary)", marginTop: 4 }}>
-          Your AI engineering co-worker is ready.
-        </div>
-      </div>
-
-      {/* Task composer */}
-      <div
-        style={{
-          background: "var(--orvyn-surface-2)",
-          border: "1px solid var(--orvyn-border-soft)",
-          borderRadius: "var(--orvyn-radius-lg)",
-          padding: 14,
-          marginBottom: 18,
-        }}
-      >
-        <textarea
-          ref={inputRef}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              void run();
-            }
-          }}
-          rows={3}
-          placeholder="Tell ORVYN what you want to accomplish…"
+    <div
+      style={{
+        height: "100%",
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "var(--orvyn-surface-1)",
+      }}
+    >
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 26px 16px" }}>
+        {/* ── HERO ─────────────────────────────────────────────── */}
+        <div
           style={{
-            width: "100%",
-            background: "var(--orvyn-bg)",
+            position: "relative",
+            borderRadius: "var(--orvyn-radius-lg)",
             border: "1px solid var(--orvyn-border-soft)",
-            borderRadius: "var(--orvyn-radius-md)",
-            color: "var(--orvyn-text)",
-            padding: "10px 12px",
-            fontSize: 13.5,
-            resize: "vertical",
-            fontFamily: "inherit",
+            overflow: "hidden",
+            padding: "34px 32px 26px",
+            marginBottom: 14,
+            background: "var(--orvyn-surface-2)",
           }}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              title={m.hint}
-              onClick={() => setMode(m.id)}
+        >
+          {/* Cosmic/nebula treatment — pure CSS, subtle, no remote assets. */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              pointerEvents: "none",
+              background:
+                "radial-gradient(ellipse 70% 120% at 50% -30%, rgba(108,92,255,0.22), transparent 60%)," +
+                "radial-gradient(ellipse 45% 80% at 18% 110%, rgba(34,211,238,0.07), transparent 60%)," +
+                "radial-gradient(ellipse 50% 90% at 85% 100%, rgba(77,163,255,0.08), transparent 65%)",
+            }}
+          />
+          {/* Restrained node network — one inline SVG, low opacity. */}
+          <svg
+            width="100%"
+            height="100%"
+            viewBox="0 0 800 260"
+            preserveAspectRatio="xMidYMid slice"
+            style={{ position: "absolute", inset: 0, pointerEvents: "none", opacity: 0.5 }}
+          >
+            {[
+              [60, 40], [180, 90], [300, 30], [420, 110], [540, 50], [660, 100], [740, 40],
+              [120, 180], [260, 220], [400, 190], [580, 230], [700, 190],
+            ].map(([x, y], i) => (
+              <circle key={i} cx={x} cy={y} r={i % 3 === 0 ? 2 : 1.2} fill={i % 4 === 0 ? "#22D3EE" : "#4DA3FF"} opacity={i % 3 === 0 ? 0.5 : 0.3} />
+            ))}
+            {[
+              "M60 40 L180 90 L300 30", "M180 90 L120 180 L260 220", "M300 30 L420 110 L540 50",
+              "M420 110 L400 190 L260 220", "M540 50 L660 100 L740 40", "M660 100 L700 190 L580 230",
+              "M420 110 L580 230",
+            ].map((d, i) => (
+              <path key={i} d={d} fill="none" stroke="#4DA3FF" strokeWidth="0.5" opacity="0.14" />
+            ))}
+          </svg>
+
+          <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+            <img src={appIcon} alt="ORVYN" width={52} height={52} style={{ borderRadius: 14, marginBottom: 12, boxShadow: "0 8px 28px rgba(108,92,255,0.35)" }} />
+            <div style={{ fontSize: 26, fontWeight: 700, color: "var(--orvyn-text)", letterSpacing: -0.3 }}>
+              {greeting()}.
+            </div>
+            <div style={{ fontSize: 13, color: "var(--orvyn-text-secondary)", marginTop: 5, marginBottom: 18 }}>
+              Your AI engineering co-worker is ready.
+            </div>
+
+            {/* Elevated composer */}
+            <div
               style={{
-                background: mode === m.id ? "var(--orvyn-purple)" : "transparent",
-                border: `1px solid ${mode === m.id ? "var(--orvyn-purple)" : "var(--orvyn-border)"}`,
-                borderRadius: 999,
-                color: mode === m.id ? "#fff" : "var(--orvyn-text-secondary)",
-                padding: "4px 12px",
-                fontSize: 11.5,
-                cursor: "pointer",
+                width: "min(760px, 100%)",
+                background: "var(--orvyn-bg)",
+                border: "1px solid var(--orvyn-border)",
+                borderRadius: "var(--orvyn-radius-lg)",
+                boxShadow: "0 16px 40px rgba(3,6,14,0.5)",
+                padding: 12,
               }}
             >
-              {m.label}
+              <textarea
+                ref={inputRef}
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void run();
+                  }
+                }}
+                rows={2}
+                placeholder="Tell ORVYN what you want to accomplish…"
+                style={{
+                  width: "100%",
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "var(--orvyn-text)",
+                  padding: "4px 6px",
+                  fontSize: 13.5,
+                  resize: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                {MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    title={m.hint}
+                    onClick={() => setMode(m.id)}
+                    style={{
+                      background: mode === m.id ? "var(--orvyn-purple)" : "transparent",
+                      border: `1px solid ${mode === m.id ? "var(--orvyn-purple)" : "var(--orvyn-border)"}`,
+                      borderRadius: 999,
+                      color: mode === m.id ? "#fff" : "var(--orvyn-text-secondary)",
+                      padding: "4px 12px",
+                      fontSize: 11.5,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+                <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginLeft: 4 }}>
+                  Agent: Astra
+                </span>
+                <button
+                  onClick={() => void run()}
+                  disabled={!prompt.trim() || starting}
+                  style={{
+                    marginLeft: "auto",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    background: "var(--orvyn-purple)",
+                    border: "none",
+                    borderRadius: "var(--orvyn-radius-sm)",
+                    color: "#fff",
+                    padding: "8px 26px",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: !prompt.trim() || starting ? "default" : "pointer",
+                    opacity: !prompt.trim() || starting ? 0.55 : 1,
+                    boxShadow: "0 6px 18px rgba(108,92,255,0.4)",
+                  }}
+                >
+                  <IconRocket size={14} /> {starting ? "Starting…" : "Run"}
+                </button>
+              </div>
+            </div>
+            {startError && <div style={{ color: "var(--orvyn-red)", fontSize: 12, marginTop: 8 }}>{startError}</div>}
+            {!projectRoot && (
+              <div style={{ fontSize: 11.5, color: "var(--orvyn-yellow)", marginTop: 8 }}>
+                No project open — running against the built-in workspace. Open a folder from Projects for real work.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── QUICK ACTIONS — one row of six ───────────────────── */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(6, 1fr)",
+            gap: 10,
+            marginBottom: 14,
+          }}
+        >
+          {QUICK_ACTIONS.map((a) => (
+            <button
+              key={a.title}
+              onClick={() => applyQuickAction(a)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                textAlign: "left",
+                background: "var(--orvyn-surface-2)",
+                border: "1px solid var(--orvyn-border-soft)",
+                borderRadius: "var(--orvyn-radius-md)",
+                padding: "10px 12px",
+                minHeight: 58,
+                cursor: "pointer",
+                color: "var(--orvyn-text)",
+                transition: "border-color 130ms ease, transform 130ms ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "var(--orvyn-purple)";
+                e.currentTarget.style.transform = "translateY(-1px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "var(--orvyn-border-soft)";
+                e.currentTarget.style.transform = "none";
+              }}
+            >
+              <span
+                style={{
+                  width: 32,
+                  height: 32,
+                  flexShrink: 0,
+                  borderRadius: 8,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: `${a.tile}1f`,
+                  color: a.tile,
+                  border: `1px solid ${a.tile}33`,
+                }}
+              >
+                <a.Icon size={16} />
+              </span>
+              <span style={{ minWidth: 0 }}>
+                <span style={{ display: "block", fontSize: 12, fontWeight: 600, letterSpacing: 0.2 }}>{a.title}</span>
+                <span style={{ display: "block", fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {a.desc}
+                </span>
+              </span>
             </button>
           ))}
-          <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginLeft: 4 }}>
-            Agent: Astra
-          </span>
-          <button
-            onClick={() => void run()}
-            disabled={!prompt.trim() || starting}
-            style={{
-              marginLeft: "auto",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 7,
-              background: "var(--orvyn-purple)",
-              border: "none",
-              borderRadius: "var(--orvyn-radius-sm)",
-              color: "#fff",
-              padding: "7px 22px",
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: !prompt.trim() || starting ? "default" : "pointer",
-              opacity: !prompt.trim() || starting ? 0.5 : 1,
-            }}
-          >
-            <IconRocket size={13} /> {starting ? "Starting…" : "Run"}
-          </button>
         </div>
-        {startError && <div style={{ color: "var(--orvyn-red)", fontSize: 12, marginTop: 8 }}>{startError}</div>}
-        {!projectRoot && (
-          <div style={{ fontSize: 11.5, color: "var(--orvyn-yellow)", marginTop: 8 }}>
-            No project open — running against the built-in workspace. Open a folder from Projects for real work.
-          </div>
-        )}
+
+        {/* ── MISSIONS (≈62%) + SYSTEMS (≈38%) side by side ────── */}
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,62fr) minmax(0,38fr)", gap: 12, alignItems: "start" }}>
+          <Panel title="RECENT MISSIONS" right="View All" onRight={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "missions" }))}>
+            {missions.length === 0 ? (
+              <Empty>No missions yet — tell ORVYN what you want accomplished above.</Empty>
+            ) : (
+              missions.map((m) => {
+                const total = m.tasks?.length ?? 0;
+                const done = m.tasks?.filter((t) => t.status === "COMPLETED").length ?? 0;
+                const pct = total > 0 ? Math.round((done / total) * 100) : m.status === "COMPLETED" ? 100 : 0;
+                const st = STATUS_STYLE[m.status] ?? { color: "var(--orvyn-purple-hi)", label: m.status };
+                return (
+                  <div key={m.id} style={rowStyle()}>
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {m.goal}
+                      </span>
+                      <span style={{ display: "block", fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 2, fontFamily: "var(--font-mono)" }}>
+                        {m.id.slice(0, 12)} · {total > 0 ? `${done}/${total} steps` : "no steps"}
+                      </span>
+                    </span>
+                    <span style={{ ...badge(st.color), flexShrink: 0 }}>{st.label}</span>
+                    <span style={{ width: 84, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      <span style={{ flex: 1, height: 4, borderRadius: 2, background: "var(--orvyn-border)", overflow: "hidden" }}>
+                        <span style={{ display: "block", width: `${pct}%`, height: "100%", background: "var(--orvyn-purple)" }} />
+                      </span>
+                      <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", minWidth: 28 }}>{pct}%</span>
+                    </span>
+                    <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", width: 56, textAlign: "right", flexShrink: 0 }}>
+                      {relTime(m.createdAt)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </Panel>
+
+          <Panel title="CONNECTED SYSTEMS" right="Manage" onRight={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "servers" }))}>
+            <SystemRow
+              name="ORVYN Backend"
+              detail={backendOnline === null ? "checking…" : backendOnline ? "API reachable" : "offline"}
+              status={backendOnline === null ? "pending" : backendOnline ? "ok" : "down"}
+              Icon={IconGlobe}
+            />
+            {servers.map((s) => (
+              <SystemRow key={s.alias} name={s.alias} detail={`${s.user}@${s.host}`} status="configured" Icon={IconServer} />
+            ))}
+            {servers.length === 0 && (
+              <SystemRow name="Servers" detail="No SSH host configured" status="none" Icon={IconServer} />
+            )}
+            <SystemRow name="GitHub" detail="Repository & PR integration" status="none" Icon={IconCode} />
+            <SystemRow name="Billing" detail="Commercial backend (Phase D–E)" status="none" Icon={IconReport} />
+          </Panel>
+        </div>
       </div>
 
-      {/* Quick actions */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10, marginBottom: 22 }}>
-        {QUICK_ACTIONS.map((a) => (
-          <button
-            key={a.title}
-            onClick={() => applyQuickAction(a)}
-            style={{
-              textAlign: "left",
-              background: "var(--orvyn-surface-2)",
-              border: "1px solid var(--orvyn-border-soft)",
-              borderRadius: "var(--orvyn-radius-md)",
-              padding: "12px 14px",
-              cursor: "pointer",
-              color: "var(--orvyn-text)",
-              transition: "border-color 120ms ease",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--orvyn-purple)")}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--orvyn-border-soft)")}
-          >
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>
-              {a.title}
-            </div>
-            <div style={{ fontSize: 11.5, color: "var(--orvyn-text-muted)", marginTop: 4 }}>{a.desc}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* Recent missions */}
-      <Section title="RECENT MISSIONS" right="View All" onRight={() => {/* Missions nav item */}}>
-        {missions.length === 0 ? (
-          <Empty>No missions yet — tell ORVYN what you want accomplished above.</Empty>
-        ) : (
-          missions.map((m) => {
-            const total = m.tasks?.length ?? 0;
-            const done = m.tasks?.filter((t) => t.status === "COMPLETED").length ?? 0;
-            const pct = total > 0 ? Math.round((done / total) * 100) : m.status === "COMPLETED" ? 100 : 0;
-            return (
-              <div key={m.id} style={rowStyle()}>
-                <span style={{ ...statusDot(m.status), minWidth: 86 }}>● {m.status}</span>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
-                  {m.goal}
-                </span>
-                <span style={{ width: 90, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                  <span style={{ flex: 1, height: 3, borderRadius: 2, background: "var(--orvyn-border)", overflow: "hidden" }}>
-                    <span style={{ display: "block", width: `${pct}%`, height: "100%", background: "var(--orvyn-purple)" }} />
-                  </span>
-                  <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>{pct}%</span>
-                </span>
-                <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)", width: 62, textAlign: "right", flexShrink: 0 }}>
-                  {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-            );
-          })
-        )}
-      </Section>
-
-      {/* Connected systems */}
-      <Section title="CONNECTED SYSTEMS">
-        <SystemRow
-          name="ORVYN Backend"
-          detail={backendOnline === null ? "checking…" : backendOnline ? "API reachable" : "offline"}
-          status={backendOnline === null ? "pending" : backendOnline ? "ok" : "down"}
-        />
-        {servers.map((s) => (
-          <SystemRow key={s.alias} name={s.alias} detail={`${s.host} · ${s.user}@:${s.port}`} status="configured" />
-        ))}
-        {servers.length === 0 && (
-          <SystemRow name="Servers" detail="No SSH hosts configured (.orvyn/ssh.json)" status="none" />
-        )}
-        <SystemRow name="GitHub" detail="Repository & PR integration" status="none" />
-        <SystemRow name="Billing" detail="Commercial backend (Phase D–E)" status="none" />
-      </Section>
+      {/* ── TERMINAL / ACTIVITY dock — the real feed ──────────── */}
+      {bottomPanel && (
+        <div style={{ height: 236, flexShrink: 0, borderTop: "1px solid var(--orvyn-border-soft)", minWidth: 0 }}>
+          {bottomPanel}
+        </div>
+      )}
     </div>
   );
 }
 
-function Section({
+function Panel({
   title,
   right,
   onRight,
@@ -320,28 +452,43 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 1.2, color: "var(--orvyn-text-muted)" }}>
+    <div
+      style={{
+        background: "var(--orvyn-surface-2)",
+        border: "1px solid var(--orvyn-border-soft)",
+        borderRadius: "var(--orvyn-radius-md)",
+        padding: "6px 14px 8px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", padding: "8px 0 4px" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.4, color: "var(--orvyn-text-muted)" }}>
           {title}
         </span>
         {right && (
           <button
             onClick={onRight}
-            style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--orvyn-purple-hi)", fontSize: 11.5, cursor: "pointer" }}
+            style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--orvyn-purple-hi)", fontSize: 11, cursor: "pointer" }}
           >
             {right}
           </button>
         )}
       </div>
-      <div style={{ background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: "var(--orvyn-radius-md)", padding: "4px 12px" }}>
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
 
-function SystemRow({ name, detail, status }: { name: string; detail: string; status: "ok" | "down" | "configured" | "none" | "pending" }) {
+function SystemRow({
+  name,
+  detail,
+  status,
+  Icon,
+}: {
+  name: string;
+  detail: string;
+  status: "ok" | "down" | "configured" | "none" | "pending";
+  Icon: React.FC<{ size?: number }>;
+}) {
   const color =
     status === "ok" ? "var(--orvyn-green)"
     : status === "down" ? "var(--orvyn-red)"
@@ -351,23 +498,47 @@ function SystemRow({ name, detail, status }: { name: string; detail: string; sta
   const label =
     status === "ok" ? "Online" : status === "down" ? "Offline" : status === "configured" ? "Configured" : status === "pending" ? "…" : "Not connected";
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
-      <span style={{ fontSize: 12.5, minWidth: 130, color: "var(--orvyn-text)" }}>{name}</span>
-      <span style={{ fontSize: 11.5, color: "var(--orvyn-text-muted)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {detail}
+    <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "8px 0", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+      <span
+        style={{
+          width: 30,
+          height: 30,
+          flexShrink: 0,
+          borderRadius: 7,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "var(--orvyn-surface-3)",
+          border: "1px solid var(--orvyn-border-soft)",
+          color: "var(--orvyn-text-secondary)",
+        }}
+      >
+        <Icon size={15} />
       </span>
-      <span style={{ fontSize: 11, color, flexShrink: 0 }}>{label}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)" }}>{name}</span>
+        <span style={{ display: "block", fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {detail}
+        </span>
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color, flexShrink: 0 }}>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />
+        {label}
+      </span>
     </div>
   );
 }
 
-function statusDot(status: string): React.CSSProperties {
-  const color =
-    status === "COMPLETED" ? "var(--orvyn-green)"
-    : status === "FAILED" ? "var(--orvyn-red)"
-    : status === "BLOCKED" ? "var(--orvyn-yellow)"
-    : "var(--orvyn-purple-hi)";
-  return { fontSize: 11.5, color, fontWeight: 600 };
+function badge(color: string): React.CSSProperties {
+  return {
+    fontSize: 9.5,
+    fontWeight: 700,
+    letterSpacing: 0.8,
+    color,
+    border: `1px solid ${color}55`,
+    borderRadius: 4,
+    padding: "2px 7px",
+  };
 }
 
 function rowStyle(): React.CSSProperties {
@@ -381,5 +552,5 @@ function rowStyle(): React.CSSProperties {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "10px 0" }}>{children}</div>;
+  return <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "12px 0" }}>{children}</div>;
 }

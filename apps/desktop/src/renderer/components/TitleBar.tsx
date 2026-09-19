@@ -192,7 +192,7 @@ export function TitleBar({
           onClick={() => onOpenCommand?.()}
           title="Open command palette"
           style={{
-            width: "min(560px, 100%)",
+            width: "min(480px, 38vw)",
             height: 28,
             display: "flex",
             alignItems: "center",
@@ -229,22 +229,27 @@ export function TitleBar({
         </button>
       </div>
 
-      {/* Right: real usage + mode. No fabricated credit balance or avatar —
-          those arrive with the commercial account backend. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 8 }} className="no-drag">
+      {/* Right: approved account presentation with truthful local state.
+          No fabricated credit balance or user identity — the capsules keep
+          the approved shape and carry what is real: metered usage and mode. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 6 }} className="no-drag">
         {usageLabel && (
           <span
             title={usageTitle ?? usageLabel}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
               fontSize: 11,
               color: "var(--orvyn-text-secondary)",
               background: "var(--orvyn-surface-2)",
               border: "1px solid var(--orvyn-border-soft)",
               borderRadius: 999,
-              padding: "3px 10px",
+              padding: "3px 11px",
               whiteSpace: "nowrap",
             }}
           >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-cyan)" }} />
             {usageLabel}
           </span>
         )}
@@ -256,13 +261,55 @@ export function TitleBar({
               color: "#fff",
               background: "var(--orvyn-purple)",
               borderRadius: 999,
-              padding: "3px 10px",
+              padding: "3px 11px",
               whiteSpace: "nowrap",
             }}
           >
             {planLabel}
           </span>
         )}
+        <button
+          title="Notifications — none"
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--orvyn-text-muted)",
+            cursor: "default",
+            display: "inline-flex",
+            padding: 4,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6" strokeLinecap="round" />
+            <path d="M10.3 19a2 2 0 0 0 3.4 0" strokeLinecap="round" />
+          </svg>
+        </button>
+        <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
+        {/* Local account truthfully rendered in the approved avatar shape. */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #6C5CFF, #22D3EE)",
+              color: "#fff",
+              fontSize: 10.5,
+              fontWeight: 700,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            title="No cloud account connected"
+          >
+            O
+          </span>
+          <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.15, marginRight: 4 }}>
+            <span style={{ fontSize: 11, color: "var(--orvyn-text)" }}>Local Mode</span>
+            <span style={{ fontSize: 9.5, color: "var(--orvyn-text-muted)" }}>connect account →</span>
+          </span>
+        </span>
+        <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
       </div>
 
       <div style={{ display: "flex", height: "100%" }} className="no-drag">

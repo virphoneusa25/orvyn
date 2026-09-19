@@ -122,42 +122,42 @@ export function Navigation({
   return (
     <div
       style={{
-        width: "var(--orvyn-nav-width)",
+        width: 222,
         flexShrink: 0,
         background: "var(--orvyn-surface-1)",
         borderRight: "1px solid var(--orvyn-border-soft)",
         display: "flex",
         flexDirection: "column",
         overflowY: "auto",
-        paddingBottom: 8,
+        paddingBottom: 10,
       }}
     >
-      <NavItemButton
-        label="Chats"
-        active={!!chatActive}
-        onClick={() => onFocusChat?.()}
-        Icon={IconChat}
-      />
-      {SECTIONS.map((section, si) => (
-        <div key={si} style={{ marginTop: section.title ? 10 : 6 }}>
-          {section.title && (
-            <div
-              style={{
-                fontSize: 9.5,
-                fontWeight: 700,
-                letterSpacing: 1.2,
-                color: "var(--orvyn-text-muted)",
-                padding: "4px 16px 4px",
-              }}
-            >
-              {section.title}
+      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+        <NavItemButton label="Chats" active={!!chatActive} onClick={() => onFocusChat?.()} Icon={IconChat} />
+        {SECTIONS.map((section, si) => {
+          const isAccount = section.title === "ACCOUNT";
+          return (
+            <div key={si} style={{ marginTop: section.title ? 12 : 6, ...(isAccount ? { marginTop: "auto", paddingTop: 12 } : {}) }}>
+              {section.title && (
+                <div
+                  style={{
+                    fontSize: 9.5,
+                    fontWeight: 700,
+                    letterSpacing: 1.4,
+                    color: "var(--orvyn-text-muted)",
+                    padding: "4px 18px",
+                  }}
+                >
+                  {section.title}
+                </div>
+              )}
+              {section.items.map(({ id, label, Icon }) => (
+                <NavItemButton key={id} label={label} active={view === id} onClick={() => onChange(id)} Icon={Icon} />
+              ))}
             </div>
-          )}
-          {section.items.map(({ id, label, Icon }) => (
-            <NavItemButton key={id} label={label} active={view === id} onClick={() => onChange(id)} Icon={Icon} />
-          ))}
-        </div>
-      ))}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -180,17 +180,17 @@ function NavItemButton({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: 11,
         width: "100%",
-        padding: "6px 14px",
-        background: active ? "var(--orvyn-surface-3)" : "transparent",
+        padding: "6.5px 16px",
+        background: active ? "rgba(108,92,255,0.12)" : "transparent",
         border: "none",
-        borderLeft: active ? "2px solid var(--orvyn-purple)" : "2px solid transparent",
+        borderLeft: active ? "2.5px solid var(--orvyn-purple)" : "2.5px solid transparent",
         color: active ? "var(--orvyn-text)" : "var(--orvyn-text-secondary)",
         fontSize: 12.5,
         textAlign: "left",
         cursor: "pointer",
-        transition: "background 120ms ease, color 120ms ease",
+        transition: "background 130ms ease, color 130ms ease",
       }}
       onMouseEnter={(e) => {
         if (!active) e.currentTarget.style.background = "var(--orvyn-surface-2)";
@@ -199,7 +199,9 @@ function NavItemButton({
         if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
-      <Icon size={15} />
+      <span style={{ color: active ? "var(--orvyn-purple-hi)" : undefined, display: "inline-flex" }}>
+        <Icon size={15} />
+      </span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
     </button>
   );

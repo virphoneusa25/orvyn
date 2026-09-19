@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
+import appIcon from "./assets/icon.png";
 import { FileExplorer } from "./components/FileExplorer";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ModelManager } from "./components/ModelManager";
@@ -124,6 +125,16 @@ export function App() {
     void load();
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
+  }, []);
+
+  // Home's "View All"/"Manage" links navigate via custom events.
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const target = (e as CustomEvent<string>).detail as ViewId | undefined;
+      if (target) setView(target);
+    };
+    document.addEventListener("orvyn:nav", onNav);
+    return () => document.removeEventListener("orvyn:nav", onNav);
   }, []);
 
   useEffect(() => {
@@ -446,6 +457,7 @@ export function App() {
               onMissionStarted={() => {
                 setAiTab("build");
               }}
+              bottomPanel={<BottomPanel />}
             />
           </div>
         )}
@@ -585,6 +597,39 @@ export function App() {
                 <AiTabButton label="Build" active={aiTab === "build"} onClick={() => setAiTab("build")} />
                 <AiTabButton label="Review" active={aiTab === "review"} onClick={() => setAiTab("review")} />
               </div>
+              {/* Astra identity row per the approved panel design. */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "7px 12px",
+                  borderBottom: "1px solid var(--border)",
+                  flexShrink: 0,
+                }}
+              >
+                <img src={appIcon} alt="" width={18} height={18} style={{ borderRadius: 5 }} />
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>Astra AI</span>
+                <span
+                  style={{
+                    fontSize: 8.5,
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    color: "var(--orvyn-purple-hi)",
+                    border: "1px solid rgba(124,92,255,0.45)",
+                    borderRadius: 4,
+                    padding: "1px 6px",
+                  }}
+                >
+                  ORCHESTRATOR
+                </span>
+                <button
+                  onClick={newChat}
+                  style={{ marginLeft: "auto", background: "transparent", border: "1px solid var(--border-strong)", borderRadius: 5, color: "var(--text-secondary)", fontSize: 11, padding: "3px 9px", cursor: "pointer" }}
+                >
+                  New Chat
+                </button>
+              </div>
               <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
                 {aiTab === "chat" && (
                   <AIChatPanel
@@ -607,7 +652,7 @@ export function App() {
         )}
       </div>
 
-      {showEditorChrome && <BottomPanel />}
+      {(view === "editor" || view === "terminal") && <BottomPanel />}
 
       <StatusBar />
       {palette && (
