@@ -11,7 +11,9 @@
     "postinstall": "npm run build -w @orvyn/ai-core",
     "backend:dev": "npm run dev -w apps/backend",
     "desktop:dev": "npm run dev -w apps/desktop",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run build -w @orvyn/backend && node --test apps/backend/dist/agent/*.test.js apps/backend/dist/ai/tools/*.test.js apps/backend/dist/services/*.test.js apps/backend/dist/sandbox/*.test.js",
+    "smoke:agent": "npm run build -w @orvyn/backend && node scripts/smoke-agent.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -1,208 +1,113 @@
 # ORVYN
 
-**Your Code. Your Models. Your AI.**
+**Your autonomous software engineering team.**
 
-An AI-native coding IDE, architected so the AI layer is a pluggable gateway
-to models you host and control — Ollama, vLLM, llama.cpp, or any custom
-HTTP model server. No vendor SDK is required anywhere in the stack.
-
-This is a real, runnable **Phase 1 + early Phase 2/3** scaffold, not a mockup.
-Backend and renderer both build and boot successfully (verified below).
-
-## Architecture
+ORVYN is an AI software-engineering operating system with an IDE attached.
+Give it a goal; Astra (the orchestrator) plans it into a task graph,
+specialized agents implement and test it through a permission-checked Tool
+Gateway, and a mandatory review gates completion. Models are pluggable —
+DeepSeek, OpenAI, any OpenAI-compatible host, or fully local Ollama.
 
 ```
-ORVYN Desktop (Electron + React + Monaco)
-        │  IPC (secure preload bridge — no Node in renderer)
-        ▼
-Electron Main Process (file system, project root sandboxing)
-
-Desktop Renderer  ──HTTP/WS──▶  Backend (Express + TS)
-                                    │
-                                AI Orchestrator
-                                (context → prompt → route → model → response)
-                                    │
-                                Model Gateway (packages/ai-core)
-                                    │
-                        ┌───────────┼───────────────┐
-                        ▼           ▼               ▼
-                    OllamaAdapter  OpenAICompatible  MockAdapter
-                                    Adapter (vLLM,     (zero-config
-                                    llama.cpp, custom  fallback)
-                                    HTTP servers)
+USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
+     → AGENTS (coder / tester / research / git / browser / security)
+     → TOOL GATEWAY (permissions, sandbox, approvals)
+     → TESTS → ASTRA REVIEW → approved | rework (max 3 cycles) → USER
 ```
 
-## What's implemented right now
+## What works today (verified, not mocked)
 
-- **`packages/ai-core`** — provider-agnostic `AIModelProvider` interface,
-  `ModelRegistry`, `ModelRouter` (task → model, with user overrides), and
-  three adapters: Ollama, a generic OpenAI-compatible wire-format adapter
-  (covers vLLM / llama.cpp server / most custom model APIs), and a Mock
-  adapter so the IDE runs with zero external dependencies.
-- **`apps/backend`** — Express server, versioned REST API (`/api/v1/models`,
-  `/api/v1/tools`, `/api/v1/chat/completions`), WebSocket streaming chat
-  (`/ws/chat`), an AI Orchestrator that builds context-aware prompts
-  (current file, selection, `.orvyn/rules.md`), and a Tool framework with
-  a permission model (`allowed` / `ask` / `denied`) plus three real,
-  project-sandboxed tools: `read_file`, `list_directory`, `search_files`,
-  `write_file` (defaults to `ask`).
-- **`apps/desktop`** — Electron shell with a locked-down `BrowserWindow`
-  (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`),
-  a preload bridge exposing only `project.open/listDirectory/readFile/writeFile`,
-  and a React renderer: activity-bar layout, file explorer, Monaco editor,
-  and a streaming AI chat panel wired to the backend over WebSocket.
-- **`.orvyn/`** — project config convention: `rules.md` (instructions
-  auto-included in every AI request), `models.json`, `config.json`
-  (tool permission defaults).
-
-## Verified working (this session)
-
-```
-✓ packages/ai-core   — tsc build clean
-✓ apps/backend        — tsc build clean, boots, responds to:
-                         GET  /api/v1/health
-                         GET  /api/v1/models
-                         POST /api/v1/chat/completions
-                         WS   /ws/chat  (streamed chunks, confirmed end-to-end)
-✓ apps/desktop/main    — tsc build clean (main + preload)
-✓ apps/desktop/renderer— vite build clean (React + Monaco bundle, 162kB)
-```
-
-Electron's GUI window itself can't be launched headlessly in this
-environment — that's an environment limitation, not a code gap. Run
-`npm run desktop:dev` from a normal desktop OS to see the window.
+- **Missions end-to-end.** `POST /api/v1/agent/orchestrate` runs a real
+  plan → code → test → review pipeline. Verified live: a hello-world
+  mission where Astra planned 2 tasks, the coder wrote real files (with
+  user approvals), the task review *rejected* the first attempt, the coder
+  reworked it, the tester verified `npm start` output, and the mission
+  review approved with score 100. See `scripts/acceptance-mission.mjs` to
+  reproduce.
+- **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
+  background processes, diagnostics/typecheck/tests/lint, git (status →
+  commit), fetch/web-search, image generation, MCP, Playwright browser QA
+  (bundled Chromium with system Chrome/Edge fallback, screenshots, console
+  error collection). All permission-checked per agent role.
+- **Usage metering** — every model request produces a server-side usage
+  event (provider-reported tokens only, never estimates), attributed to
+  mission/task/agent. `GET /api/v1/usage`.
+- **Autonomy profiles** — SAFE / BALANCED / AUTONOMOUS (Settings), composed
+  with per-mode permissions and per-tool overrides; destructive commands
+  always require approval.
+- **Model Gateway** — role → task → model routing. `ASTRA_MODEL_ID` picks
+  the orchestrator model; `DEEPSEEK_API_KEY` enables the DeepSeek coding
+  worker; Ollama for local; Mock fallback so the IDE always boots.
+  Anthropic/Google are typed Pending adapters, never faked.
+- **IDE** — Electron (hardened: contextIsolation, sandbox, no Node in
+  renderer), Monaco editor, tabs, explorer, Ctrl+P/Ctrl+K, inline edit,
+  streaming chat with natural-language image generation, RAG index.
+- **Intelligence UI** — right pane Chat / Plan / Build / Review; Mission
+  Control (agent roster + live task graphs); Agent Activity bottom panel;
+  Source Control panel with git + checkpoint restore/compare.
+- **Checkpoints** — automatic snapshot before autonomous write batches;
+  create/restore/compare/delete via API and SCM panel. Never auto-push.
+- **Deployable** — `docker compose up -d` gives backend + automatic HTTPS
+  (Caddy) on any Linux VM. See `docs/OVH_DEPLOYMENT.md`.
 
 ## Running it
 
 ```bash
 npm install
-
-# Terminal 1 — backend
-npm run backend:dev
-# → http://localhost:4570
-
-# Terminal 2 — desktop app
-npm run desktop:dev
+npm run backend:dev    # Express API on :4570
+npm run desktop:dev    # Electron + Vite
 ```
 
-Click **Open Folder**, pick a project, click a file to open it in Monaco,
-and use the AI Assistant panel on the right — it streams from the backend,
-which currently routes to the zero-config Mock adapter. To point it at a
-real model, add one via `POST /api/v1/models` (or edit `.orvyn/models.json`
-and wire it into `ModelService`), e.g. for a local Ollama install:
+Copy `.env.example` → `.env` to configure model providers. With no
+provider configured, a clearly-labeled Mock adapter answers so the UI is
+explorable offline.
 
-```json
-{
-  "id": "llama3", "name": "Llama 3", "provider": "ollama",
-  "endpoint": "http://localhost:11434", "contextWindow": 8192,
-  "maxOutputTokens": 2048, "defaultTemperature": 0.2, "defaultTopP": 1,
-  "streaming": true,
-  "capabilities": { "chat": true, "code": true, "agent": true, "tools": true,
-                     "vision": false, "embeddings": true, "completion": true }
-}
+## Acceptance harness
+
+```bash
+node scripts/acceptance-mission.mjs <projectRoot> "<goal>"
 ```
 
-## Model Manager (new)
+Starts a real mission, streams every event, and auto-approves tool calls
+(add `--deny <tool>` to exercise the denial path). Exit code 0 only when
+the mission completes with an approved review.
 
-Click the 🧠 icon in the Activity Bar. It's a full model CRUD UI backed by
-real endpoints, not a mock:
+## Documentation
 
-- **List** — every registered model with a live status dot (from
-  `GET /api/v1/models/health`, polled every 15s) and its capabilities.
-- **Add / Edit** — full form for id, name, provider, endpoint, API key,
-  context window, max output tokens, temperature, top-p, streaming, and
-  every capability flag (chat/code/agent/tools/vision/embeddings/completion).
-  `POST /api/v1/models` to add, `PUT /api/v1/models/:id` to edit.
-- **Test Model** — round-trips a real short prompt through the model
-  (`POST /api/v1/models/:id/test`) and shows latency + response snippet,
-  or the actual error if the endpoint is unreachable — verified above with
-  both a real unreachable-Ollama failure and a successful mock response.
-- **Delete** — `DELETE /api/v1/models/:id`.
-- **Routing** — per-task (chat/code/completion/embedding/agent/vision)
-  default-model dropdowns, backed by `GET/POST /api/v1/routing`. Falls back
-  automatically to the first model with the matching capability if a task
-  has no override.
+| Doc | Contents |
+|---|---|
+| `docs/ORVYN_ARCHITECTURE_AUDIT.md` | Current-state audit: what exists, problems, migration path |
+| `docs/ARCHITECTURE.md` | System layers and invariants |
+| `docs/AGENTS.md` | Agent roster, capabilities, mission flow |
+| `docs/MODEL_GATEWAY.md` | Provider-independent model routing |
+| `docs/TOOL_GATEWAY.md` | Tool inventory, permissions, sandbox |
+| `docs/MISSIONS.md` | Mission/task lifecycle and review gates |
+| `docs/SECURITY.md` | Electron hardening, agent containment, known gaps |
+| `docs/LOCAL_MODE.md` / `docs/CLOUD_MODE.md` | Local product today; cloud design |
+| `docs/CLOUD_ARCHITECTURE.md` / `docs/BILLING.md` | SaaS tier design (not yet implemented) |
+| `docs/OVH_DEPLOYMENT.md` | Production deployment on OVH |
 
-## Composer, Agent, and RAG (new)
+## Explicitly NOT implemented yet
 
-- **Composer** (`ComposerPanel.tsx`, `/api/v1/composer/plan|apply`) — describe
-  a multi-file change, get a real diff per file (LCS-based), select which
-  files to apply, apply selectively or all at once. Verified end-to-end
-  against a real sample project: plan → diff → apply → files confirmed on
-  disk with correct content.
-- **Agent** (`AgentPanel.tsx`, `/api/v1/agent/runs`, `.../approve`) — a real
-  tool-calling loop: the model can call `read_file`/`list_directory`/
-  `search_files` (auto-executed, `allowed`), or `write_file`/`terminal`/
-  `git_commit` (pauses for approval, `ask`), with destructive-command
-  detection on `terminal`. Verified end-to-end both ways: approved → tool
-  executes, file written to disk; denied → model is told, run completes
-  gracefully, nothing written.
-- **RAG / Codebase Indexing** (`SearchPanel.tsx`, `/api/v1/index/build`,
-  `/api/v1/search/semantic`) — scanner → chunker → embedder → vector store
-  pipeline. Ships with a zero-dependency `HashingEmbedder` (bag-of-words,
-  L2-normalized cosine similarity) and `InMemoryVectorStore` so it works
-  with no external services; `ModelEmbedder` and the `VectorStore`
-  interface are there for swapping in a real embedding model / Qdrant /
-  pgvector / Chroma later without touching calling code. Verified: indexed
-  a sample project, exact-term queries correctly ranked the right file
-  top. Documented limitation: this is *lexical* similarity, not learned
-  semantic similarity — verbose natural-language queries can misrank
-  short, term-dense files over longer, more relevant ones. A real
-  embedding model fixes this; the interface is ready for it.
-- Chat panel has a **RAG toggle** — when on and the index is `ready`, the
-  Orchestrator injects the top-ranked chunks as context automatically.
+- Run event logs are in-memory (missions, usage, profile, tool overrides,
+  and user-added models persist to `~/.orvyn/data/<tenant>.db` via
+  node:sqlite; requires Node ≥ 22.5)
+- Organizations/RBAC, email verification, OAuth, billing (per-user
+  accounts with isolated tenants ARE implemented — Settings → Account)
+- Cloud tier: job queue, isolated Docker workers, WebSocket fanout
+- Tree-sitter/LSP code intelligence (`list_symbols` is regex v1;
+  `find_references` pending)
 
-## Deploying to a cloud server + Windows client (new)
+Pending features are visible as **Pending** in the UI with the reason —
+nothing is faked.
 
-See **`docs/DEPLOYMENT.md`** for the full walkthrough. Summary:
-
-- `apps/backend/Dockerfile` + `docker-compose.yml` + `infrastructure/docker/Caddyfile`
-  give you a one-command (`docker compose up -d`) deployment on any Linux
-  cloud VM, with automatic HTTPS (Caddy/Let's Encrypt) and an optional
-  self-hosted Ollama container.
-- Real API-key auth (`ORVYN_API_KEY`) now gates every route except
-  `/health`, and the WebSocket chat stream — verified working (401 on
-  missing/wrong key, 200/stream on correct key).
-- The desktop app's backend URL + API key are configurable via a new
-  **Connection** settings panel (⚙️ in the Activity Bar), persisted to
-  disk — point the same Windows `.exe` at `localhost` or your cloud
-  domain with no rebuild.
-- `apps/desktop/package.json` has an `electron-builder` NSIS config
-  (`npm run dist:win`) for producing a real Windows installer.
-- **Honestly scoped**: this is one shared API key (not per-user accounts),
-  no rate limiting, and in-memory backend state — fine for you or a small
-  trusted team on one server, not yet a multi-tenant production service.
-  See `docs/DEPLOYMENT.md` for exactly what that means and what Phase 7
-  would add.
-
-## Explicitly NOT implemented yet (do not assume these work)
+## Workspace layout
 
 ```
-TODO — Postgres persistence (models/projects/conversations/agent sessions/index currently in-memory)
-TODO — Full auth (per-user accounts/RBAC), multi-tenancy, rate limiting (currently: one shared API key)
-TODO — Real embedding model wired in by default (currently: hashing bag-of-words fallback)
-TODO — Inline Ctrl+K editing (select code, ask for an edit, get an inline diff)
-TODO — Terminal panel, Git panel (the Agent has terminal/git *tools*; there's no standalone UI panel for them yet)
-TODO — Background/worker-queued indexing for large repos (currently runs synchronously per request)
-MOCK — the seeded "orvyn-mock" model is not a real model; its Composer/Agent behavior is scripted for demo/testing, not real reasoning
+apps/backend      Express API, agent runtimes, gateways, engines
+apps/desktop      Electron main + React renderer (Monaco)
+packages/ai-core  Model providers, registry, router
+scripts/          acceptance-mission.mjs harness
+docs/             architecture + deployment docs
+infrastructure/   Caddy config, OVH deployment assets
 ```
-
-## Phase plan (per the build spec)
-
-1. **Foundation** ← you are here (this scaffold)
-2. AI Model Gateway ← ai-core + adapters done; health-check UI still TODO
-3. AI Chat ← chat panel + streaming done; conversation persistence TODO
-4. AI Code Editing — inline Ctrl+K, diff viewer, apply/reject
-5. Codebase Intelligence — indexing, embeddings, vector DB, RAG
-6. Agent — tool-calling loop, terminal, git, permission UI
-7. Production — auth, RBAC, audit logs, Docker, CI/CD
-
-## Next concrete steps
-
-Tell me which of these to build next and I'll continue in the same way
-(real code, run it, verify it, then move on):
-
-- Wire the Model Manager into a real settings UI + `POST /api/v1/models` form
-- Build the Composer (multi-file diff/apply) panel
-- Build the Agent tool-calling loop + permission-approval UI
-- Start the codebase indexer + pgvector-backed RAG
