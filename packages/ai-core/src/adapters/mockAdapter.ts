@@ -22,14 +22,14 @@ export class MockAdapter implements AIModelProvider {
 
       if (toolMessages.length === 0 && hasTool("list_directory")) {
         return {
-          content: "",
+          content: "I'll list the project files first…",
           toolCalls: [{ id: "call_1", name: "list_directory", arguments: { path: "." } }],
           finishReason: "tool_call",
         };
       }
       if (toolMessages.length === 1 && hasTool("write_file")) {
         return {
-          content: "",
+          content: "Next I'll write a short notes file so you can see an edit land.",
           toolCalls: [
             {
               id: "call_2",
@@ -92,10 +92,15 @@ export class MockAdapter implements AIModelProvider {
   }
 
   async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-    const { content } = await this.generate(request);
-    for (const word of content.split(" ")) {
-      yield { delta: word + " ", done: false };
-      await new Promise((r) => setTimeout(r, 15));
+    const response = await this.generate(request);
+    if (response.content) {
+      for (const word of response.content.split(" ")) {
+        yield { delta: word + " ", done: false };
+        await new Promise((r) => setTimeout(r, 15));
+      }
+    }
+    for (const tc of response.toolCalls ?? []) {
+      yield { delta: "", toolCall: tc, done: false };
     }
     yield { delta: "", done: true };
   }
@@ -105,7 +110,7 @@ export class MockAdapter implements AIModelProvider {
   }
 
   supportsTools(): boolean {
-    return false;
+    return this.config.capabilities.tools;
   }
 
   supportsVision(): boolean {

@@ -8,6 +8,7 @@ export class OllamaAdapter implements AIModelProvider {
     const res = await fetch(`${this.config.endpoint}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: request.signal,
       body: JSON.stringify({
         model: this.config.id,
         messages: request.messages,
@@ -30,6 +31,7 @@ export class OllamaAdapter implements AIModelProvider {
     const res = await fetch(`${this.config.endpoint}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: request.signal,
       body: JSON.stringify({
         model: this.config.id,
         messages: request.messages,
@@ -57,7 +59,15 @@ export class OllamaAdapter implements AIModelProvider {
           const json = JSON.parse(line);
           if (json.message?.content) yield { delta: json.message.content, done: false };
           if (json.done) {
-            yield { delta: "", done: true };
+            // Ollama names its counters differently from the OpenAI wire.
+            const usage =
+              json.prompt_eval_count != null || json.eval_count != null
+                ? {
+                    promptTokens: json.prompt_eval_count ?? 0,
+                    completionTokens: json.eval_count ?? 0,
+                  }
+                : undefined;
+            yield { delta: "", usage, done: true };
             return;
           }
         } catch {
@@ -91,7 +101,7 @@ export class OllamaAdapter implements AIModelProvider {
   }
 
   supportsTools(): boolean {
-    return this.config.capabilities.agent;
+    return this.config.capabilities.tools;
   }
 
   supportsVision(): boolean {

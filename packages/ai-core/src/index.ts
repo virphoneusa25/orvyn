@@ -5,3 +5,4 @@ export * from "./router";
 export * from "./adapters/openaiCompatibleAdapter";
 export * from "./adapters/ollamaAdapter";
 export * from "./adapters/mockAdapter";
+export * from "./adapters/pendingAdapter";

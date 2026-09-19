@@ -2,7 +2,17 @@
 import { ModelRegistry } from "./registry";
 import { AIModelProvider } from "./types";
 
-export type TaskType = "chat" | "code" | "completion" | "embedding" | "agent" | "vision";
+export type TaskType =
+  | "chat"
+  | "code"
+  | "completion"
+  | "embedding"
+  | "agent"
+  | "vision"
+  | "image"
+  | "planner"
+  | "executor"
+  | "reviewer";
 
 export interface RoutingOverrides {
   [taskType: string]: string; // taskType -> modelId
@@ -16,7 +26,16 @@ const TASK_CAPABILITY: Record<TaskType, keyof AIModelProvider["config"]["capabil
   embedding: "embeddings",
   agent: "agent",
   vision: "vision",
+  image: "image",
+  planner: "agent",
+  executor: "agent",
+  reviewer: "chat",
 };
+
+/** The capability a model must have to serve a given task. */
+export function requiredCapability(task: TaskType): keyof AIModelProvider["config"]["capabilities"] {
+  return TASK_CAPABILITY[task] ?? "chat";
+}
 
 export class ModelRouter {
   constructor(
@@ -38,13 +57,21 @@ export class ModelRouter {
   }
 
   resolve(task: TaskType): AIModelProvider {
+    const capability = TASK_CAPABILITY[task];
     const overrideId = this.overrides[task];
     if (overrideId) {
       const overridden = this.registry.get(overrideId);
-      if (overridden) return overridden;
+      // An override that lacks the task's capability is ignored, not obeyed.
+      // Without this, routing "chat" at an image-only model serves every
+      // chat request a guaranteed 4xx from the provider.
+      if (overridden?.config.capabilities[capability]) return overridden;
+      if (overridden) {
+        console.warn(
+          `Routing override "${task}" → "${overrideId}" ignored: model lacks the "${capability}" capability.`
+        );
+      }
     }
 
-    const capability = TASK_CAPABILITY[task];
     const candidates = this.registry.findByCapability(capability);
     if (candidates.length > 0) return candidates[0];
 
