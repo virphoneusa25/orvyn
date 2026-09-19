@@ -245,6 +245,17 @@ export function BottomWorkPanel({ height = 176 }: { height?: number }) {
 // output, write lines. Full interactive TUI apps need node-pty — documented
 // upgrade path, not hidden.
 
+/** Removes ANSI control sequences (colors, cursor movement) for text display. */
+function stripAnsi(chunk: string): string {
+  // eslint-disable-next-line no-control-regex
+  const ANSI = /\u001B\[[0-9;?]*[A-Za-z]/g;
+  return chunk
+    .replace(ANSI, "")
+    .replace(/\u001B\][^\u0007]*\u0007/g, "") // OSC (window title etc.)
+    .replace(/\u001B[()][0-9A-B]/g, "") // charset selects
+    .replace(/\r(?!\n)/g, "");
+}
+
 interface TerminalState {
   sessionId: string | null;
   output: string;
@@ -261,7 +272,9 @@ function useTerminalSession(): TerminalState {
 
   useEffect(() => {
     const off = window.orvyn.terminal.onData((e) => {
-      setOutput((prev) => (prev + e.data).slice(-16000));
+      // Shells emit ANSI control sequences; a text view must not show them
+      // as garbage — translate colors/cursor codes away, keep clean lines.
+      setOutput((prev) => (prev + stripAnsi(e.data)).slice(-16000));
     });
     return () => {
       off();

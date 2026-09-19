@@ -13,9 +13,10 @@
 import { apiUrl, authHeaders } from "./connection";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
+import { classifyIntent, CommandMode } from "./orvynIntent";
 import type { Attachment } from "./components/AttachmentBar";
 
-export type CommandMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
+export type { CommandMode } from "./orvynIntent";
 export type CommandSource = "HOME" | "CHAT" | "NEW_TASK" | "QUICK_ACTION" | "MISSION";
 
 export interface OrvynCommand {
@@ -31,20 +32,6 @@ export type CommandOutcome =
   | { kind: "mission"; runId: string }
   | { kind: "run"; runId: string }
   | { kind: "error"; error: string };
-
-const CONVERSATIONAL = /^(hi|hello|hey|thanks|explain|what|why|how|who|when|where|can you|could you|tell me|summar)/i;
-
-/** Conversational when the user left it to AUTO and it reads like a question. */
-function classify(cmd: OrvynCommand): "chat" | "code" | "research" | "automate" {
-  if (cmd.mode === "research") return "research";
-  if (cmd.mode === "automate") return "automate";
-  if (cmd.mode === "auto") {
-    const trimmed = cmd.prompt.trim();
-    const questionish = trimmed.endsWith("?") || CONVERSATIONAL.test(trimmed);
-    return questionish && trimmed.length < 220 ? "chat" : "code";
-  }
-  return "code"; // code | server | deploy all execute work
-}
 
 /** Streams a chat reply into the shared chat session (renders in the Chat tab). */
 async function runChat(cmd: OrvynCommand): Promise<CommandOutcome> {
@@ -127,7 +114,7 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
   const prompt = cmd.prompt.trim();
   if (!prompt) return { kind: "error", error: "Empty command" };
 
-  switch (classify(cmd)) {
+  switch (classifyIntent(cmd.prompt, cmd.mode)) {
     case "chat":
       return runChat(cmd);
     case "research":

@@ -307,9 +307,21 @@ export class MultiAgentRuntime {
       }
 
       if (mission.tasks.length === 0) {
-        this.store.emit(runId, "run.error", { message: "Astra produced no tasks." });
-        this.taskEngine.setMissionStatus(mission.id, "FAILED");
-        this.store.setStatus(runId, "error");
+        // NO_TASK_NEEDED vs PLANNING_FAILED: an empty task list usually means
+        // the request was conversational and slipped past the client-side
+        // intent router. That is not an engineering failure — complete the
+        // mission with an honest explanation instead of an error, so no
+        // surface ever shows "ERROR" for "hi".
+        const note =
+          "This request didn't need engineering steps — it looks conversational. " +
+          "Ask it in the Chat tab for a direct answer, or describe the change you want made and run it as Code.";
+        for (const chunk of note.match(/.{1,24}/gs) ?? []) {
+          this.store.emit(runId, "message.delta", { content: chunk });
+        }
+        this.store.emit(runId, "message.completed", {});
+        this.store.emit(runId, "run.completed", { tasksTotal: 0, tasksCompleted: 0, tasksFailed: 0, missionStatus: "COMPLETED" });
+        this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
+        this.store.setStatus(runId, "completed");
         return;
       }
 

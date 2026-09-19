@@ -12,13 +12,15 @@ import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport, IconPaperclip } from "./Icons";
 import { BottomWorkPanel } from "./BottomWorkPanel";
+import { HeroBackground } from "./HeroBackground";
 import { Attachment, fileToAttachment } from "./AttachmentBar";
 import { IntegrationIcon, IntegrationProvider } from "./IntegrationIcon";
 import appIcon from "../assets/icon.png";
 
-type ComposerMode = "code" | "server" | "research" | "deploy" | "automate";
+type ComposerMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
 
 const MODES: { id: ComposerMode; label: string; hint: string }[] = [
+  { id: "auto", label: "Auto", hint: "ORVYN decides: chat, task, or mission" },
   { id: "code", label: "Code", hint: "Plan, code, test in the workspace" },
   { id: "server", label: "Server", hint: "SSH into an allow-listed server" },
   { id: "research", label: "Research", hint: "Investigate and report, no edits" },
@@ -87,8 +89,10 @@ export function Home({
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [mode, setMode] = useState<ComposerMode>(() => {
+    // AUTO is the fresh default (intent-first); a saved explicit choice is
+    // the user's override and is honored.
     const saved = localStorage.getItem("orvyn:composer-mode");
-    return saved && MODES.some((m) => m.id === saved) ? (saved as ComposerMode) : "code";
+    return saved && MODES.some((m) => m.id === saved) ? (saved as ComposerMode) : "auto";
   });
   const selectMode = (m: ComposerMode) => {
     setMode(m);
@@ -190,40 +194,10 @@ export function Home({
             background: "var(--orvyn-surface-2)",
           }}
         >
-          {/* Cosmic/nebula treatment — pure CSS, subtle, no remote assets. */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              pointerEvents: "none",
-              background:
-                "radial-gradient(ellipse 70% 120% at 50% -30%, rgba(108,92,255,0.22), transparent 60%)," +
-                "radial-gradient(ellipse 45% 80% at 18% 110%, rgba(34,211,238,0.07), transparent 60%)," +
-                "radial-gradient(ellipse 50% 90% at 85% 100%, rgba(77,163,255,0.08), transparent 65%)",
-            }}
-          />
-          {/* Restrained node network — one inline SVG, low opacity. */}
-          <svg
-            width="100%"
-            height="100%"
-            viewBox="0 0 800 260"
-            preserveAspectRatio="xMidYMid slice"
-            style={{ position: "absolute", inset: 0, pointerEvents: "none", opacity: 0.5 }}
-          >
-            {[
-              [60, 40], [180, 90], [300, 30], [420, 110], [540, 50], [660, 100], [740, 40],
-              [120, 180], [260, 220], [400, 190], [580, 230], [700, 190],
-            ].map(([x, y], i) => (
-              <circle key={i} cx={x} cy={y} r={i % 3 === 0 ? 2 : 1.2} fill={i % 4 === 0 ? "#22D3EE" : "#4DA3FF"} opacity={i % 3 === 0 ? 0.5 : 0.3} />
-            ))}
-            {[
-              "M60 40 L180 90 L300 30", "M180 90 L120 180 L260 220", "M300 30 L420 110 L540 50",
-              "M420 110 L400 190 L260 220", "M540 50 L660 100 L740 40", "M660 100 L700 190 L580 230",
-              "M420 110 L580 230",
-            ].map((d, i) => (
-              <path key={i} d={d} fill="none" stroke="#4DA3FF" strokeWidth="0.5" opacity="0.14" />
-            ))}
-          </svg>
+          {/* Animated space/network treatment — canvas layers (nebula glow,
+              drifting stars, pulsing network). Frozen under
+              prefers-reduced-motion; clipped inside the hero. */}
+          <HeroBackground />
 
           <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
             <img src={appIcon} alt="ORVYN" width={46} height={46} style={{ borderRadius: 12, marginBottom: 10, boxShadow: "0 8px 28px rgba(108,92,255,0.35)" }} />
@@ -257,7 +231,7 @@ export function Home({
                   }
                 }}
                 rows={2}
-                placeholder="Tell ORVYN what you want to accomplish…"
+                placeholder="What do you want ORVYN to accomplish?"
                 style={{
                   width: "100%",
                   background: "transparent",

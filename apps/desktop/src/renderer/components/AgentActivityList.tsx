@@ -220,19 +220,24 @@ function renderEvent(
     case "run.started":
       return (
         <div key={e.id} style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-          Run started{e.data.mode ? ` · ${String(e.data.mode)}` : ""} · {String(e.data.instruction)}
+          {String(e.data.instruction ?? "").slice(0, 140)}
         </div>
       );
 
     case "thinking": {
+      // Customer-facing: Astra's role, never the provider model alias —
+      // that detail lives in the tooltip for those who want it.
       const role = e.data.role ? String(e.data.role) : "";
-      const step = e.data.step != null ? `step ${String(e.data.step)}` : "";
       const model = e.data.model ? String(e.data.model) : "";
-      const label = role || step;
+      const isAstra = !role || role === "astra" || role === "orchestrator";
+      const label = isAstra ? "Astra is analyzing your request…" : `${role} is working…`;
       return (
-        <div key={e.id} style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0" }}>
-          Thinking…{label ? ` (${label})` : ""}
-          {model ? ` · ${model}` : ""}
+        <div
+          key={e.id}
+          title={model ? `model: ${model}` : undefined}
+          style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0" }}
+        >
+          {label}
         </div>
       );
     }

@@ -17,12 +17,24 @@ export function MissionPlan({ events, status }: { events: AgentEvent[]; status: 
   const tasks = (plan?.data.tasks ?? []) as PlanTask[];
 
   if (tasks.length === 0) {
+    // No Astra plan. For a live run that's normal pre-planning; for a
+    // terminal run it means the request never became a mission — saying
+    // "Working" then would contradict the status badge.
+    if (status === "completed" || status === "error" || status === "cancelled") {
+      return (
+        <Card title="MISSION PLAN" badge={statusBadge(status)}>
+          <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "2px 0" }}>
+            No mission steps — this request did not become a mission.
+          </div>
+        </Card>
+      );
+    }
     const steps = events.filter((e) => e.type === "thinking").length;
     if (steps === 0) return null;
     return (
       <Card title="MISSION PLAN" badge={statusBadge(status)}>
         <div style={{ fontSize: 12, color: "var(--orvyn-text-secondary)", padding: "2px 0" }}>
-          <StepMarker state="active" /> Working — step {steps}
+          <StepMarker state="active" /> Astra is analyzing your request…
         </div>
       </Card>
     );
@@ -147,43 +159,90 @@ function describe(e: AgentEvent): string {
   const d = e.data as Record<string, unknown>;
   switch (e.type) {
     case "tool.started":
-      return `${String(d.tool)}(${shortInput(d)})`;
+      return `${toolLabel(String(d.tool))}…`;
     case "tool.completed":
-      return `${String(d.tool)} done`;
+      return `${toolLabel(String(d.tool))} done`;
     case "tool.failed":
-      return `${String(d.tool)} failed — ${String(d.error ?? "").slice(0, 80)}`;
+      return `${toolLabel(String(d.tool))} failed — ${String(d.error ?? "").slice(0, 80)}`;
     case "file.read":
-      return `Read ${String(d.path)}`;
+      return `Reading ${String(d.path)}`;
     case "file.edit":
-      return `Edited ${String(d.path)}`;
+      return `Editing ${String(d.path)}`;
     case "terminal.started":
-      return String(d.command ?? "").slice(0, 90);
+      return `Running ${String(d.command ?? "").slice(0, 90)}`;
     case "sandbox.started":
-      return "Sandbox container started";
+      return "Isolated sandbox started";
     case "sandbox.stopped":
-      return `Sandbox stopped (${Number(d.mergedFiles ?? 0)} files merged back)`;
+      return `Sandbox finished — ${Number(d.mergedFiles ?? 0)} file(s) merged back`;
     case "checkpoint.created":
-      return "Checkpoint created (Undo available)";
+      return "Checkpoint saved (Undo available)";
     case "checkpoint.restored":
-      return "Checkpoint restored";
+      return "Restored to checkpoint";
     case "review.started":
-      return "Astra review started";
+      return "Astra is reviewing the result…";
     case "review.passed":
       return "Review passed";
     case "review.rejected":
-      return `Review rejected — ${String(d.notes ?? "").slice(0, 80)}`;
+      return `Review requested changes — ${String(d.notes ?? "").slice(0, 80)}`;
     case "context.compacted":
-      return `Context compacted to ${Number(d.tokensAfter ?? 0).toLocaleString()} tokens`;
+      return "Context optimized to stay within the model window";
     case "task.started":
-      return `▶ ${String(d.description ?? "").slice(0, 80)}`;
+      return `Step started: ${String(d.description ?? "").slice(0, 80)}`;
+    case "mission.created":
+      return "Mission created";
+    case "mission.started":
+      return "Mission underway";
     default:
-      return e.type;
+      return friendlyEventType(e.type);
   }
 }
 
-function shortInput(d: Record<string, unknown>): string {
-  const first = Object.values(d.input ?? {})[0];
-  return first ? String(first).slice(0, 40) : "";
+/** Internal tool names → customer-facing verbs. */
+function toolLabel(tool: string): string {
+  const labels: Record<string, string> = {
+    read_file: "Reading a file",
+    write_file: "Writing a file",
+    edit_file: "Editing a file",
+    delete_file: "Deleting a file",
+    move_file: "Moving a file",
+    list_directory: "Listing files",
+    search_files: "Searching files",
+    search_code: "Searching code",
+    list_symbols: "Inspecting symbols",
+    terminal: "Running a command",
+    run_command: "Running a command",
+    run_tests: "Running tests",
+    run_typecheck: "Running type checks",
+    run_linter: "Running lint",
+    git_status: "Checking Git status",
+    git_diff: "Reading changes",
+    git_commit: "Committing",
+    ssh_exec: "Running a command over SSH",
+    fetch_url: "Fetching a page",
+    web_search: "Searching the web",
+    browser_open: "Opening the browser",
+    browser_navigate: "Navigating",
+    browser_click: "Clicking",
+    browser_screenshot: "Capturing a screenshot",
+    get_diagnostics: "Checking diagnostics",
+  };
+  return labels[tool] ?? tool.replace(/_/g, " ");
+}
+
+function friendlyEventType(type: string): string {
+  const map: Record<string, string> = {
+    "run.started": "Request accepted",
+    "run.completed": "Completed",
+    "run.cancelled": "Stopped",
+    "plan.created": "Plan ready",
+    "mission.completed": "Mission completed",
+    "mission.blocked": "Mission blocked — needs your decision",
+    "approval.required": "Waiting for your approval",
+    "approval.resolved": "Approval resolved",
+    "test.started": "Testing changes",
+    "test.completed": "Tests finished",
+  };
+  return map[type] ?? type.replace(/[._]/g, " ");
 }
 
 function Card({ title, badge, children }: { title: string; badge?: React.ReactNode; children: React.ReactNode }) {

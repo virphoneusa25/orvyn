@@ -378,7 +378,7 @@ ipcMain.handle("terminal:start", async () => {
     windowsHide: true,
   });
   shells.set(sessionId, { proc, buffer: [] });
-  pushShellEvent(sessionId, `\r\n\u001b[36mORVYN terminal — ${shell} (${cwd})\u001b[0m\r\n\r\n`);
+  pushShellEvent(sessionId, `\r\nORVYN terminal — ${shell} (${cwd})\r\n\r\n`);
   proc.stdout?.on("data", (d) => pushShellEvent(sessionId, d.toString()));
   proc.stderr?.on("data", (d) => pushShellEvent(sessionId, d.toString()));
   proc.on("exit", (code) => {

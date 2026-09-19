@@ -83,17 +83,16 @@ export function StatusBar() {
             width: 7,
             height: 7,
             borderRadius: "50%",
-            background: online ? "var(--orvyn-green)" : "var(--orvyn-red)",
-            boxShadow: online ? "0 0 6px var(--orvyn-green)" : "none",
+            background: online ? "var(--orvyn-green)" : "var(--orvyn-text-muted)",
           }}
         />
-        {online ? `Connected · ${backendName}` : "Backend offline"}
+        ORVYN Cloud {online ? `Online · ${backendName}` : "Offline"}
       </span>
-      {/* Local engine readiness is independent of backend reachability:
+      {/* Local engine readiness is independent of cloud reachability:
           files, editor, git, terminal and local config all work either way. */}
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-green)" }} />
-        Local engine ready
+        Local Engine Ready
       </span>
       {state.health?.version && <span>v{state.health.version}</span>}
       <span>{cfg.backendUrl?.includes("localhost") ? "Local" : "Cloud"}</span>

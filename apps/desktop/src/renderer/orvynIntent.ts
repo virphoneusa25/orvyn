@@ -1,0 +1,41 @@
+// apps/desktop/src/renderer/orvynIntent.ts
+//
+// Pure intent classification — no DOM, no network — so the routing rules are
+// unit-testable and the canonical command pipeline stays thin. Intent FIRST,
+// mission creation second: nothing here talks to any backend.
+
+export type CommandMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
+export type CommandIntent = "chat" | "code" | "research" | "automate";
+
+const CONVERSATIONAL =
+  /^(hi|hello|hey|thanks|thank you|yo|sup|good (morning|afternoon|evening)|explain|what|why|how|who|when|where|can you|could you|tell me|summar|describe)\b/i;
+
+/**
+ * Strong conversational signals — greetings and tiny-talk that must NEVER
+ * become a mission, regardless of the selected mode. A user who leaves CODE
+ * selected and types "hi" has not asked for engineering work.
+ */
+const GREETING_ONLY =
+  /^(hi+|hello+|hey+|yo|sup|hiya|howdy|good (morning|afternoon|evening)|thanks|thank you|thx|ok|okay|cool|nice)[!. ]*$/i;
+
+/** Intent-first classification for every command. */
+export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent {
+  const trimmed = prompt.trim();
+
+  // Absolute guard first: pure greetings/tiny-talk are chat, always.
+  if (GREETING_ONLY.test(trimmed)) return "chat";
+
+  if (mode === "research") return "research";
+  if (mode === "automate") return "automate";
+  if (mode === "auto") {
+    const questionish = trimmed.endsWith("?") || CONVERSATIONAL.test(trimmed);
+    return questionish && trimmed.length < 220 ? "chat" : "code";
+  }
+
+  // Explicit executable modes (code/server/deploy): still rescue obviously
+  // conversational messages — "how are you?" is not a deploy instruction.
+  const questionish = trimmed.endsWith("?") || CONVERSATIONAL.test(trimmed);
+  if (questionish && trimmed.length < 120) return "chat";
+
+  return "code";
+}
