@@ -13,3 +13,9 @@ Thumbs.db
 *.tsbuildinfo
 apps/desktop/release/
 apps/desktop/dist-electron/
+
+# local secrets & scratch
+.ovh-api-key.txt
+.orvyn/
+_zip_*/
+_vp_*.py
