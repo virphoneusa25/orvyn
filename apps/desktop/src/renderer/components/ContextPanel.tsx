@@ -58,6 +58,21 @@ export function ContextPanel({
   const [collapsed, setCollapsed] = useState(false);
   const term = useTerminalSession();
 
+  // Center tool rows route the detail view: clicking "Edit session.ts" pins
+  // Diff, a Terminal row pins Terminal… — manual selection always wins over
+  // auto-follow until "Follow Activity" is pressed.
+  useEffect(() => {
+    const onCtxTab = (e: Event) => {
+      const detail = (e as CustomEvent<{ tab?: CtxTab }>).detail;
+      if (detail?.tab) {
+        setPinned(detail.tab);
+        setCollapsed(false);
+      }
+    };
+    document.addEventListener("orvyn:context-tab", onCtxTab);
+    return () => document.removeEventListener("orvyn:context-tab", onCtxTab);
+  }, []);
+
   // Auto-expand when work starts (a tab becomes relevant); a user-pinned
   // collapse choice is honored until work starts again.
   const hasContext = active !== null;

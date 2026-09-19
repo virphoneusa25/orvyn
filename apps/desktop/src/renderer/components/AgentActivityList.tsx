@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
+import { reducePresentation, type ApprovalItem } from "../presentationReducer";
+import { ToolActivityRow, ToolActivityGroup } from "./ToolActivityRow";
 
 export interface AgentEvent {
   id: string;
@@ -170,314 +172,114 @@ export function AgentActivityList({
   status: string;
   onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void;
 }) {
-  const resolvedApprovals = new Set(
-    events.filter((e) => e.type === "approval.resolved").map((e) => e.data.callId)
+  // RAW EVENTS → presentation items → rows. Raw event names, timestamps,
+  // task/mission/agent internals and reviewer text never render directly;
+  // tool lifecycles collapse into single rows that update in place.
+  const items = React.useMemo(() => reducePresentation(events, status), [events, status]);
+
+  return (
+    <>
+      {items.map((item) => {
+        switch (item.kind) {
+          case "assistant":
+            return (
+              <div key={item.key} style={{ margin: "8px 0 12px", fontSize: 13, minWidth: 0, color: "var(--text)" }}>
+                <MessageContent content={item.content} streaming={item.streaming} />
+              </div>
+            );
+          case "tool":
+            return <ToolActivityRow key={item.key} item={item} />;
+          case "group":
+            return <ToolActivityGroup key={item.key} group={item} />;
+          case "status":
+            return (
+              <div
+                key={item.key}
+                style={{
+                  fontSize: 11.5,
+                  margin: "6px 0",
+                  color:
+                    item.tone === "stopped"
+                      ? "var(--text-muted)"
+                      : item.tone === "rework"
+                        ? "var(--warning, #F5B942)"
+                        : "var(--text-muted)",
+                  fontStyle: "italic",
+                }}
+              >
+                {item.tone === "rework" ? "↻ " : ""}
+                {item.label}
+              </div>
+            );
+          case "summary":
+            return (
+              <div
+                key={item.key}
+                style={{
+                  fontSize: 11.5,
+                  margin: "8px 0 4px",
+                  color: item.cancelled ? "var(--text-muted)" : item.ok ? "var(--success)" : "var(--danger, #F25F75)",
+                }}
+              >
+                {item.cancelled ? "■ " : item.ok ? "✓ " : "✕ "}
+                {item.detail}
+              </div>
+            );
+          case "approval":
+            return <ApprovalCard key={item.key} item={item} onApprove={onApprove} />;
+          default:
+            return null;
+        }
+      })}
+    </>
   );
+}
 
-  const nodes: React.ReactNode[] = [];
-  let textBuf = "";
-  let textKey = 0;
-
-  const flushText = (streaming: boolean) => {
-    if (!textBuf) return;
-    const body = textBuf;
-    textBuf = "";
-    nodes.push(
-      <div key={`narration-${textKey++}`} style={{ margin: "8px 0 12px", fontSize: 13, minWidth: 0, color: "var(--text)" }}>
-        <MessageContent content={body} streaming={streaming} />
+function ApprovalCard({
+  item,
+  onApprove,
+}: {
+  item: ApprovalItem;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void;
+}) {
+  const preview = item.preview as EditPreview | undefined;
+  return (
+    <div style={card(item.destructive ? "var(--danger)" : "var(--accent)")}>
+      <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
+        {item.destructive ? "Destructive action requested" : "Agent wants to run"}
       </div>
-    );
-  };
-
-  for (const e of events) {
-    if (e.type === "message.delta") {
-      textBuf += String(e.data.content ?? "");
-      continue;
-    }
-    if (e.type === "message.completed") {
-      flushText(false);
-      continue;
-    }
-
-    const cardNode = renderEvent(e, events, resolvedApprovals, onApprove);
-    if (cardNode) {
-      flushText(false);
-      nodes.push(cardNode);
-    }
-  }
-  flushText(status === "running" || status === "awaiting_approval");
-
-  return <>{nodes}</>;
+      {preview ? (
+        <div style={{ marginBottom: 8 }}>
+          <DiffPreview preview={preview} collapsible={false} />
+        </div>
+      ) : (
+        <code style={{ ...mono(), display: "block", marginBottom: 8, whiteSpace: "pre-wrap" }}>
+          {item.tool}({JSON.stringify(item.input).slice(0, 400)})
+        </code>
+      )}
+      {item.settled ? (
+        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          {item.approved ? "Approved" : "Denied"}
+        </span>
+      ) : (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => onApprove(item.key, true)} style={btn("var(--accent)")}>
+            <IconCheck size={12} /> Allow Once
+          </button>
+          {!item.destructive && (
+            <button onClick={() => onApprove(item.key, true, "mission")} style={btn("var(--border)")}>
+              Allow for Mission
+            </button>
+          )}
+          <button onClick={() => onApprove(item.key, false)} style={btn("var(--border)")}>
+            Deny
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
-function renderEvent(
-  e: AgentEvent,
-  events: AgentEvent[],
-  resolvedApprovals: Set<unknown>,
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void
-): React.ReactNode {
-  switch (e.type) {
-    case "run.started":
-      return (
-        <div key={e.id} style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
-          {String(e.data.instruction ?? "").slice(0, 140)}
-        </div>
-      );
-
-    case "run.queued":
-      return (
-        <div
-          key={e.id}
-          style={{ ...card("var(--orvyn-yellow)"), color: "var(--text-muted)", fontStyle: "italic" }}
-        >
-          {String(e.data.note ?? `Queued at position ${e.data.position ?? "?"} — starts when a mission slot frees up.`)}
-        </div>
-      );
-
-    case "thinking": {
-      // Customer-facing: Astra's role, never the provider model alias —
-      // that detail lives in the tooltip for those who want it.
-      const role = e.data.role ? String(e.data.role) : "";
-      const model = e.data.model ? String(e.data.model) : "";
-      const isAstra = !role || role === "astra" || role === "orchestrator";
-      const label = isAstra ? "Astra is analyzing your request…" : `${role} is working…`;
-      return (
-        <div
-          key={e.id}
-          title={model ? `model: ${model}` : undefined}
-          style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 0" }}
-        >
-          {label}
-        </div>
-      );
-    }
-
-    case "file.read":
-      return (
-        <div key={e.id} style={card("var(--border)")}>
-          <span style={{ color: "var(--accent)", display: "inline-flex", marginRight: 8 }}>
-            <IconFile size={14} />
-          </span>
-          Reading <code style={mono()}>{String(e.data.path)}</code>
-        </div>
-      );
-
-    case "file.edit": {
-      const preview = e.data.preview as EditPreview | undefined;
-      return (
-        <div key={e.id} style={card("var(--accent)")}>
-          <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
-            <span style={{ color: "var(--accent)", display: "inline-flex", marginRight: 8 }}>
-              <IconFile size={14} />
-            </span>
-            Editing <code style={{ ...mono(), marginLeft: 4 }}>{String(e.data.path)}</code>
-          </div>
-          {preview && <DiffPreview preview={preview} />}
-        </div>
-      );
-    }
-
-    case "terminal.started":
-      return (
-        <div key={e.id} style={card("var(--border)")}>
-          <span style={{ color: "var(--accent)", display: "inline-flex", marginRight: 8 }}>
-            <IconTerminal size={14} />
-          </span>
-          Running <code style={mono()}>{String(e.data.command)}</code>
-        </div>
-      );
-
-    case "tool.started": {
-      const tool = String(e.data.tool);
-      const label = TOOL_LABEL[tool] ?? tool;
-      const input = events.find((x) => x.type === "tool.input" && x.data.callId === e.data.callId);
-      const detail: string | undefined = input ? String(Object.values(input.data.input ?? {})[0] ?? "") : undefined;
-      const done = events.find(
-        (x) => (x.type === "tool.completed" || x.type === "tool.failed") && x.data.callId === e.data.callId
-      );
-      const failed = done?.type === "tool.failed";
-      return (
-        <div key={e.id} style={card(failed ? "var(--danger)" : "var(--border)")}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-            <span style={{ color: failed ? "var(--danger)" : "var(--accent)", display: "flex", flexShrink: 0 }}>
-              {tool === "terminal" ? <IconTerminal size={14} /> : tool.includes("search") ? <IconSearch size={14} /> : <IconFile size={14} />}
-            </span>
-            <span style={{ fontSize: 12.5, flexShrink: 0 }}>{label}</span>
-            {detail && (
-              <code style={{ ...mono(), overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {String(detail).slice(0, 80)}
-              </code>
-            )}
-            <span style={{ marginLeft: "auto", fontSize: 11, color: failed ? "var(--danger)" : "var(--success)", flexShrink: 0 }}>
-              {done ? (failed ? "failed" : "done") : "…"}
-            </span>
-          </div>
-          {failed && (
-            <div style={{ fontSize: 11.5, color: "var(--danger)", marginTop: 6 }}>
-              {String(done?.data.error).slice(0, 200)}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    case "terminal.output":
-      return (
-        <pre key={e.id} style={termBox()}>
-          {String(e.data.data).slice(0, 1200)}
-        </pre>
-      );
-
-    case "approval.required": {
-      const callId = String(e.data.callId);
-      const settled = resolvedApprovals.has(callId);
-      const destructive = Boolean(e.data.destructive);
-      const preview = e.data.preview as EditPreview | undefined;
-      return (
-        <div key={e.id} style={card(destructive ? "var(--danger)" : "var(--accent)")}>
-          <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
-            {destructive ? "Destructive action requested" : "Agent wants to run"}
-          </div>
-          {/* A file change is shown as a diff; anything else falls back to its
-              arguments, which is all there is to show for a shell command. */}
-          {preview ? (
-            <div style={{ marginBottom: 8 }}>
-              <DiffPreview preview={preview} collapsible={false} />
-            </div>
-          ) : (
-            <code style={{ ...mono(), display: "block", marginBottom: 8, whiteSpace: "pre-wrap" }}>
-              {String(e.data.tool)}({JSON.stringify(e.data.input).slice(0, 400)})
-            </code>
-          )}
-          {settled ? (
-            <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Resolved</span>
-          ) : (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => onApprove(callId, true)} style={btn("var(--accent)")}>
-                <IconCheck size={12} /> Allow Once
-              </button>
-              {/* Destructive commands are never mission-approvable — the
-                  backend would re-prompt anyway, so don't offer the button. */}
-              {!destructive && (
-                <button onClick={() => onApprove(callId, true, "mission")} style={btn("transparent")}>
-                  <IconCheck size={12} /> Allow for Mission
-                </button>
-              )}
-              <button onClick={() => onApprove(callId, false)} style={btn("transparent")}>
-                <IconClose size={12} /> Deny
-              </button>
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    case "plan.created": {
-      const tasks = (e.data.tasks ?? []) as { id: string; description: string }[];
-      return (
-        <div key={e.id} style={card("var(--accent)")}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
-            Plan · {tasks.length} tasks
-            <span style={{ fontWeight: 400, color: "var(--text-muted)", marginLeft: 6 }}>
-              {String(e.data.plannerModel ?? "")}
-            </span>
-          </div>
-          {tasks.map((t, i) => (
-            <div key={t.id} style={{ fontSize: 12, color: "var(--text-secondary)", padding: "2px 0" }}>
-              {i + 1}. {t.description}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    case "task.started":
-      return (
-        <div key={e.id} style={{ fontSize: 12, color: "var(--text)", margin: "10px 0 4px", fontWeight: 500 }}>
-          ▶ {String(e.data.description)}
-          {Number(e.data.attempt) > 1 && (
-            <span style={{ color: "var(--warning)", marginLeft: 6 }}>retry {String(e.data.attempt)}</span>
-          )}
-        </div>
-      );
-
-    case "review.started":
-      return (
-        <div key={e.id} style={{ fontSize: 12, color: "var(--text-muted)", margin: "4px 0" }}>
-          Reviewing…{e.data.reviewerModel ? ` · ${String(e.data.reviewerModel)}` : ""}
-        </div>
-      );
-
-    case "review.passed":
-      return (
-        <div key={e.id} style={{ fontSize: 12, color: "var(--success)", margin: "4px 0" }}>
-          ✓ Review passed{e.data.notes ? ` — ${String(e.data.notes).slice(0, 100)}` : ""}
-        </div>
-      );
-
-    case "review.rejected":
-      return (
-        <div key={e.id} style={card("var(--warning)")}>
-          <div style={{ fontSize: 12, color: "var(--warning)", fontWeight: 500 }}>Review rejected</div>
-          <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 4 }}>
-            {String(e.data.notes)}
-          </div>
-        </div>
-      );
-
-    case "image.generated":
-      return (
-        <div key={e.id} style={card("var(--accent)")}>
-          Generating image: {String(e.data.prompt ?? "").slice(0, 160)}
-        </div>
-      );
-
-    case "run.error":
-      return (
-        <div key={e.id} style={errBox()}>
-          {String(e.data.message)}
-        </div>
-      );
-
-    case "run.cancelled":
-      return (
-        <div
-          key={e.id}
-          style={{
-            background: "rgba(210,153,34,0.10)",
-            border: "1px solid var(--warning)",
-            borderRadius: "var(--radius)",
-            padding: 10,
-            fontSize: 12,
-            marginBottom: 10,
-            color: "var(--warning)",
-          }}
-        >
-          Run stopped{e.data.reason ? ` — ${String(e.data.reason)}` : ""}. Any edits already applied were kept.
-        </div>
-      );
-
-    // Told explicitly, because an agent that silently forgot half its history
-    // looks like an agent that lost the plot.
-    case "context.compacted":
-      return (
-        <div key={e.id} style={{ fontSize: 11.5, color: "var(--text-muted)", margin: "6px 0" }}>
-          Compacted context to stay within the window ·{" "}
-          {Number(e.data.tokensBefore).toLocaleString()} → {Number(e.data.tokensAfter).toLocaleString()} tokens
-          {Number(e.data.droppedTurns) > 0 ? ` · ${String(e.data.droppedTurns)} older exchange(s) dropped` : ""}
-        </div>
-      );
-
-    default:
-      return null;
-  }
-}
-
-/**
- * The action row under a finished run — the "4 files changed +77 −15 · Undo ·
- * copy · 👍/👎 · time" strip. Changes are aggregated from the run's file.edit
- * previews; Undo restores the pre-run snapshot taken when the run started.
- */
 export function RunFooter({
   events,
   runId,

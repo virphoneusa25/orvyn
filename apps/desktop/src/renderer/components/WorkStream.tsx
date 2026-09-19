@@ -13,7 +13,6 @@ import { getChatMessages, isChatStreaming, subscribeChat, newChat } from "../cha
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
-import { LiveActivity } from "./MissionPlan";
 import { Attachment, fileToAttachment } from "./AttachmentBar";
 import { IconPaperclip, IconRocket } from "./Icons";
 import appIcon from "../assets/icon.png";
@@ -35,6 +34,7 @@ export interface RunView {
   status: string;
   runId: string | null;
   approve: (callId: string, approved: boolean, scope?: "once" | "mission") => Promise<void>;
+  stop: () => Promise<void>;
 }
 
 export function WorkStream({
@@ -121,6 +121,18 @@ export function WorkStream({
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
   const streaming = isChatStreaming();
+  // Escape stops the active run — skipped when another handler already
+  // claimed the key (e.g. a palette dismissal).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && runActive && !e.defaultPrevented) {
+        e.preventDefault();
+        void run.stop();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [runActive, run.stop]);
   // The conversation's title. When a run is attached, the run IS the
   // conversation: its instruction names the work, and an unrelated chat
   // session from before must never leak its title (the "hi" bug) or its
@@ -278,11 +290,11 @@ export function WorkStream({
           )
         )}
 
-        {/* Activity from the attached run — compact cards, no reasoning. */}
+        {/* Activity from the attached run — the presentation reducer's
+            conversation: assistant text, compact tool rows, approvals. */}
         {run.events.length > 0 && (
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
-            <LiveActivity events={run.events} />
             <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"} />
           </div>
         )}
@@ -400,27 +412,51 @@ export function WorkStream({
               </button>
             ))}
             <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>Astra</span>
-            <button
-              onClick={() => void send()}
-              disabled={!prompt.trim() || busy}
-              style={{
-                marginLeft: "auto",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                background: "var(--orvyn-purple)",
-                border: "none",
-                borderRadius: "var(--orvyn-radius-sm)",
-                color: "#fff",
-                padding: "6px 18px",
-                fontSize: 12.5,
-                fontWeight: 600,
-                cursor: !prompt.trim() || busy ? "default" : "pointer",
-                opacity: !prompt.trim() || busy ? 0.55 : 1,
-              }}
-            >
-              <IconRocket size={13} /> Send
-            </button>
+            {runActive ? (
+              <button
+                onClick={() => void run.stop()}
+                title="Stop current run (Esc)"
+                style={{
+                  marginLeft: "auto",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  background: "transparent",
+                  border: "1px solid var(--orvyn-red)",
+                  borderRadius: "var(--orvyn-radius-sm)",
+                  color: "var(--orvyn-red)",
+                  padding: "6px 18px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                <span style={{ width: 9, height: 9, background: "var(--orvyn-red)", borderRadius: 2, display: "inline-block" }} />
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={() => void send()}
+                disabled={!prompt.trim() || busy}
+                style={{
+                  marginLeft: "auto",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: "var(--orvyn-purple)",
+                  border: "none",
+                  borderRadius: "var(--orvyn-radius-sm)",
+                  color: "#fff",
+                  padding: "6px 18px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: !prompt.trim() || busy ? "default" : "pointer",
+                  opacity: !prompt.trim() || busy ? 0.55 : 1,
+                }}
+              >
+                <IconRocket size={13} /> Send
+              </button>
+            )}
           </div>
         </div>
       </div>

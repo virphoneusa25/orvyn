@@ -11,5 +11,5 @@
     "noEmit": true
   },
   "include": ["src/renderer"],
-  "exclude": ["src/renderer/orvynIntent.test.ts"]
+  "exclude": ["src/renderer/orvynIntent.test.ts", "src/renderer/presentationReducer.test.ts"]
 }
