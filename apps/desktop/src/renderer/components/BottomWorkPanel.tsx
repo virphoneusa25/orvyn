@@ -1,0 +1,273 @@
+// apps/desktop/src/renderer/components/BottomWorkPanel.tsx
+//
+// The approved mockup's bottom work panel: the tab bar Terminal / Logs /
+// Build Output / Agent Activity / Problems with Terminal as the default tab.
+//
+// Honesty contract: only Agent Activity has a live backend today. The other
+// tabs open to a truthful "not implemented" pane that names the missing
+// dependency — they exist because the target composition shows them, and a
+// truthful empty pane is not a fake terminal.
+
+import React, { useEffect, useRef, useState } from "react";
+import { apiUrl, authHeaders } from "../connection";
+
+type WorkTab = "terminal" | "logs" | "build" | "activity" | "problems";
+
+const TABS: { id: WorkTab; label: string }[] = [
+  { id: "terminal", label: "Terminal" },
+  { id: "logs", label: "Logs" },
+  { id: "build", label: "Build Output" },
+  { id: "activity", label: "Agent Activity" },
+  { id: "problems", label: "Problems" },
+];
+
+interface RunSummary {
+  id: string;
+  status: string;
+}
+
+interface FeedEvent {
+  id: string;
+  sequence: number;
+  type: string;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+function describe(e: FeedEvent): string | null {
+  const d = e.data as any;
+  switch (e.type) {
+    case "run.started":
+      return `run started (${d.mode ?? "agent"}): ${String(d.instruction ?? "").slice(0, 120)}`;
+    case "mission.created":
+      return `mission ${d.missionId}: ${String(d.goal ?? "").slice(0, 120)}`;
+    case "task.created":
+      return `task ${d.taskId} → ${d.agent}: ${String(d.description ?? "").slice(0, 120)}`;
+    case "agent.started":
+      return `${d.agent} started ${d.taskId} on ${d.model}`;
+    case "agent.completed":
+      return `${d.agent} ${d.ok ? "completed" : "failed"} ${d.taskId}`;
+    case "tool.started":
+      return `tool ${d.tool}${d.taskId ? ` (${d.taskId})` : ""}`;
+    case "tool.completed":
+      return `tool ${d.tool} ok${d.preview ? ` — ${String(d.preview).split("\n")[0].slice(0, 90)}` : ""}`;
+    case "tool.failed":
+      return `tool ${d.tool} FAILED — ${String(d.error ?? "").slice(0, 120)}`;
+    case "approval.required":
+      return `approval required: ${d.tool}`;
+    case "approval.resolved":
+      return `approval ${d.approved ? "granted" : "denied"}`;
+    case "review.started":
+      return d.scope === "mission" ? "final mission review started" : `review started (${d.taskId ?? "task"})`;
+    case "review.passed":
+      return `review passed${d.taskId ? ` (${d.taskId})` : ""}`;
+    case "review.rejected":
+      return `review rejected${d.cycle ? ` (cycle ${d.cycle})` : ""}${d.notes ? ` — ${String(d.notes).slice(0, 100)}` : ""}`;
+    case "review.approved":
+      return `mission approved — score ${d.score}`;
+    case "mission.blocked":
+      return "mission BLOCKED — human decision required";
+    case "test.started":
+      return `verification started: ${d.kind}`;
+    case "test.completed":
+      return `verification ${d.ok ? "passed" : "failed"}: ${d.kind}`;
+    case "sandbox.started":
+      return `sandbox container started (${d.container ?? ""})`;
+    case "sandbox.stopped":
+      return `sandbox stopped — ${d.mergedFiles} file(s) merged back`;
+    case "checkpoint.created":
+      return `checkpoint ${d.checkpointId ?? d.id} created`;
+    case "checkpoint.restored":
+      return "checkpoint restored";
+    case "run.completed":
+      return "run completed";
+    case "run.cancelled":
+      return "run stopped by user";
+    case "run.error":
+      return `run error: ${String(d.message ?? "").slice(0, 140)}`;
+    default:
+      return null;
+  }
+}
+
+export function BottomWorkPanel({ height = 176 }: { height?: number }) {
+  // Terminal is the default tab, matching the approved composition.
+  const [tab, setTab] = useState<WorkTab>("terminal");
+  const [run, setRun] = useState<RunSummary | null>(null);
+  const [events, setEvents] = useState<FeedEvent[]>([]);
+  const scroller = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let stop = false;
+    async function refresh() {
+      try {
+        const list = await fetch(apiUrl("/agent/stream/runs"), { headers: authHeaders() }).then((r) => r.json());
+        if (stop) return;
+        const latest: RunSummary | undefined = (list.runs ?? [])[0];
+        setRun(latest ?? null);
+        if (latest) {
+          const ev = await fetch(apiUrl(`/agent/stream/runs/${latest.id}/events.json?after=0`), {
+            headers: authHeaders(),
+          }).then((r) => r.json());
+          if (!stop) setEvents(ev.events ?? []);
+        } else {
+          setEvents([]);
+        }
+      } catch {
+        // Backend down — keep the previous view.
+      }
+    }
+    void refresh();
+    const t = setInterval(refresh, 2000);
+    return () => {
+      stop = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  const lines = events.map((e) => ({ e, text: describe(e) })).filter((x) => x.text);
+  const problemCount = lines.filter((l) => /FAILED|error|blocked/i.test(l.text ?? "")).length;
+
+  useEffect(() => {
+    if (tab === "activity") scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
+  }, [events.length, tab]);
+
+  return (
+    <div
+      style={{
+        height,
+        flexShrink: 0,
+        background: "var(--orvyn-surface-1)",
+        borderTop: "1px solid var(--orvyn-border-soft)",
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        overflow: "hidden",
+      }}
+    >
+      {/* Tab bar */}
+      <div style={{ display: "flex", alignItems: "center", height: 28, flexShrink: 0, padding: "0 6px" }}>
+        {TABS.map((t) => {
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                background: "transparent",
+                border: "none",
+                borderBottom: active ? "2px solid var(--orvyn-purple)" : "2px solid transparent",
+                color: active ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "0 12px",
+                height: "100%",
+                cursor: "pointer",
+              }}
+            >
+              {t.label}
+              {t.id === "problems" && problemCount > 0 && (
+                <span style={{ marginLeft: 6, color: "var(--orvyn-red)", fontSize: 10 }}>{problemCount}</span>
+              )}
+            </button>
+          );
+        })}
+        <span style={{ marginLeft: "auto", paddingRight: 10, fontSize: 10, color: "var(--orvyn-text-muted)" }}>
+          {run ? `latest run: ${run.status}` : ""}
+        </span>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {tab === "activity" ? (
+          <div
+            ref={scroller}
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "4px 12px 8px",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              lineHeight: 1.65,
+              color: "var(--text-secondary)",
+            }}
+          >
+            {lines.length === 0 ? (
+              <div style={{ color: "var(--orvyn-text-muted)" }}>
+                No agent activity yet — runs, tool calls, reviews and mission events stream here in real time.
+              </div>
+            ) : (
+              lines.map(({ e, text }) => (
+                <div key={e.id} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <span style={{ color: "var(--orvyn-text-muted)" }}>
+                    {new Date(e.timestamp).toLocaleTimeString([], { hour12: false })}{" "}
+                  </span>
+                  <span
+                    style={{
+                      color:
+                        e.type.includes("failed") || e.type.includes("error") || e.type === "mission.blocked"
+                          ? "var(--orvyn-red)"
+                          : undefined,
+                    }}
+                  >
+                    {text}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        ) : tab === "terminal" ? (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: 12,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 11.5, color: "var(--orvyn-text-secondary)", fontFamily: "var(--font-mono)" }}>
+              PowerShell — no shell session
+            </div>
+            <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", maxWidth: 420, lineHeight: 1.5 }}>
+              An interactive terminal needs a pty backend (node-pty), which is not installed. Real agent command
+              output lives in <b>Agent Activity</b> — nothing here is simulated.
+            </div>
+            <button
+              onClick={() => setTab("activity")}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--orvyn-border)",
+                borderRadius: 6,
+                color: "var(--orvyn-purple-hi)",
+                fontSize: 11,
+                padding: "4px 12px",
+                cursor: "pointer",
+              }}
+            >
+              Open Agent Activity
+            </button>
+          </div>
+        ) : (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              color: "var(--orvyn-text-muted)",
+            }}
+          >
+            {tab === "logs" && "Service logs arrive with the observability pipeline (structured logging phase)."}
+            {tab === "build" && "Build output appears here when the agent runs build commands — see Agent Activity."}
+            {tab === "problems" && (problemCount > 0 ? `${problemCount} issue(s) in the latest run — see Agent Activity.` : "No problems detected in the latest run.")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

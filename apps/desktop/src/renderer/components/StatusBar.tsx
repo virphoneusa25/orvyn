@@ -15,20 +15,27 @@ interface StatusBarState {
   health: Health | null;
   runningRuns: number;
   activeMissions: number;
+  stats: { cpuPercent: number; ramPercent: number; diskPercent: number } | null;
 }
 
 export function StatusBar() {
-  const [state, setState] = useState<StatusBarState>({ health: null, runningRuns: 0, activeMissions: 0 });
+  const [state, setState] = useState<StatusBarState>({
+    health: null,
+    runningRuns: 0,
+    activeMissions: 0,
+    stats: null,
+  });
 
   useEffect(() => {
     let alive = true;
     async function load() {
       try {
         const headers = authHeaders();
-        const [h, runs, missions] = await Promise.all([
+        const [h, runs, missions, stats] = await Promise.all([
           fetch(apiUrl("/../api/v1/health")).then((r) => r.json()).catch(() => null),
           fetch(apiUrl("/agent/stream/runs"), { headers }).then((r) => r.json()).catch(() => ({ runs: [] })),
           fetch(apiUrl("/missions"), { headers }).then((r) => r.json()).catch(() => ({ missions: [] })),
+          window.orvyn.system?.getStats?.().catch(() => null) ?? null,
         ]);
         if (!alive) return;
         const running = (runs.runs ?? []).filter(
@@ -37,7 +44,7 @@ export function StatusBar() {
         const active = (missions.missions ?? []).filter((m: { status: string }) =>
           ["RUNNING", "PLANNING", "REVIEW", "QUEUED"].includes(m.status)
         ).length;
-        setState({ health: h, runningRuns: running, activeMissions: active });
+        setState({ health: h, runningRuns: running, activeMissions: active, stats });
       } catch {
         if (alive) setState((s) => ({ ...s, health: null }));
       }
@@ -63,7 +70,7 @@ export function StatusBar() {
         borderTop: "1px solid var(--orvyn-border-soft)",
         display: "flex",
         alignItems: "center",
-        gap: 14,
+        gap: 16,
         padding: "0 12px",
         fontSize: 11,
         color: "var(--orvyn-text-muted)",
@@ -83,12 +90,20 @@ export function StatusBar() {
         {online ? `Connected · ${backendName}` : "Backend offline"}
       </span>
       {state.health?.version && <span>v{state.health.version}</span>}
-      <span style={{ marginLeft: "auto", display: "inline-flex", gap: 14 }}>
+      <span>{cfg.backendUrl?.includes("localhost") ? "Local" : "Cloud"}</span>
+      <span style={{ marginLeft: "auto", display: "inline-flex", gap: 16 }}>
+        {state.stats && (
+          <>
+            <span>CPU {state.stats.cpuPercent}%</span>
+            <span>RAM {state.stats.ramPercent}%</span>
+            {state.stats.diskPercent > 0 && <span>Disk {state.stats.diskPercent}%</span>}
+          </>
+        )}
         <span>
-          {state.runningRuns} agent{state.runningRuns === 1 ? "" : "s"} running
+          {state.runningRuns} agent{state.runningRuns === 1 ? "" : "s"}
         </span>
         <span>
-          {state.activeMissions} active mission{state.activeMissions === 1 ? "" : "s"}
+          {state.activeMissions} mission{state.activeMissions === 1 ? "" : "s"}
         </span>
       </span>
     </div>

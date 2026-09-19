@@ -4,6 +4,7 @@ import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivity
 import { LiveActivity, MissionPlan } from "./MissionPlan";
 import { isRunFinished, RunUsage, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
+import appIcon from "../assets/icon.png";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
 import { MessageContent } from "./MessageContent";
 
@@ -76,6 +77,26 @@ export function AgentEventStream({ projectRoot }: { projectRoot: string | null }
         {imageNote && (
           <div style={{ marginBottom: 12 }}>
             <MessageContent content={imageNote} />
+          </div>
+        )}
+        {run.events.length === 0 && run.status === "idle" && !imageNote && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "36px 16px",
+              textAlign: "center",
+            }}
+          >
+            <img src={appIcon} alt="" width={34} height={34} style={{ borderRadius: 9, opacity: 0.9 }} />
+            <div style={{ fontSize: 13, fontWeight: 600 }}>Astra is ready to work</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-muted)", maxWidth: 300, lineHeight: 1.6 }}>
+              Describe a task below — Astra plans it, specialized agents execute through the permission-checked tool
+              gateway, and every step streams here live.
+            </div>
           </div>
         )}
         <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />

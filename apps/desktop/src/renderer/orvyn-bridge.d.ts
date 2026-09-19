@@ -21,6 +21,9 @@ export interface ChatAttachment {
 }
 
 export interface OrvynBridge {
+  system: {
+    getStats(): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }>;
+  };
   project: {
     getWorkspace(): Promise<WorkspaceState>;
     open(): Promise<WorkspaceState | null>;

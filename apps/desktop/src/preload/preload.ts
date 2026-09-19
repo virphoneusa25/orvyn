@@ -2,6 +2,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("orvyn", {
+  system: {
+    /** Live machine stats for the status bar — sampled in main, never guessed. */
+    getStats: (): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }> =>
+      ipcRenderer.invoke("system:getStats"),
+  },
   project: {
     getWorkspace: () => ipcRenderer.invoke("project:getWorkspace"),
     open: () => ipcRenderer.invoke("project:open"),

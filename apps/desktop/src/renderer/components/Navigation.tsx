@@ -9,7 +9,7 @@ import {
   IconAgents,
   IconBox,
   IconCard,
-  IconChat,
+
   IconCloud,
   IconCode,
   IconDatabase,
@@ -133,7 +133,6 @@ export function Navigation({
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-        <NavItemButton label="Chats" active={!!chatActive} onClick={() => onFocusChat?.()} Icon={IconChat} />
         {SECTIONS.map((section, si) => {
           const isAccount = section.title === "ACCOUNT";
           return (

@@ -60,9 +60,17 @@
   --orvyn-radius-md: 8px;
   --orvyn-radius-lg: 12px;
   --orvyn-shadow: 0 12px 32px rgba(3, 6, 14, 0.55);
-  --orvyn-nav-width: 192px;
-  --orvyn-topbar-height: 46px;
-  --orvyn-status-height: 24px;
+  --orvyn-nav-width: 222px;
+  --orvyn-topbar-height: 52px;
+  --orvyn-status-height: 28px;
+  /* Home composition metrics (parity pass, derived from the approved mockup) */
+  --orvyn-home-pad-x: 22px;
+  --orvyn-home-pad-y: 16px;
+  --orvyn-section-gap: 12px;
+  --orvyn-hero-height: 292px;
+  --orvyn-quick-height: 64px;
+  --orvyn-dashboard-height: 208px;
+  --orvyn-bottompanel-height: 176px;
 }
 
 * {

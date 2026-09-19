@@ -457,7 +457,6 @@ export function App() {
               onMissionStarted={() => {
                 setAiTab("build");
               }}
-              bottomPanel={<BottomPanel />}
             />
           </div>
         )}

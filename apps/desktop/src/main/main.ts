@@ -1,6 +1,7 @@
 // apps/desktop/src/main/main.ts
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
+import * as os from "os";
 import { promises as fs } from "fs";
 
 let mainWindow: BrowserWindow | null = null;
@@ -351,6 +352,48 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("config:get", () => readConfig());
+
+// Live machine stats for the status bar. Real samples only: CPU from a
+// two-point idle-delta across cores (loadavg is always 0 on Windows), RAM
+// from os memory, disk from statfs on the system drive.
+ipcMain.handle("system:getStats", async () => {
+  try {
+    const sample = () => {
+      let idle = 0;
+      let total = 0;
+      for (const c of os.cpus()) {
+        idle += c.times.idle;
+        total += c.times.idle + c.times.user + c.times.nice + c.times.sys + c.times.irq;
+      }
+      return { idle, total };
+    };
+    const a = sample();
+    await new Promise((r) => setTimeout(r, 250));
+    const b = sample();
+    const cpuPercent = b.total > a.total ? Math.round((1 - (b.idle - a.idle) / (b.total - a.total)) * 100) : 0;
+    const ramPercent = Math.round((1 - os.freemem() / os.totalmem()) * 100);
+
+    let diskPercent = 0;
+    try {
+      const statfs = (fs as unknown as {
+        statfs?: (p: string) => Promise<{ bavail: number; blocks: number }>;
+      }).statfs;
+      if (statfs) {
+        const st = await statfs(os.platform() === "win32" ? "C:\\" : "/");
+        diskPercent = Math.round((1 - st.bavail / st.blocks) * 100);
+      }
+    } catch {
+      // statfs unavailable — RAM only.
+    }
+    return {
+      cpuPercent: Math.min(100, Math.max(0, cpuPercent)),
+      ramPercent,
+      diskPercent,
+    };
+  } catch {
+    return { cpuPercent: 0, ramPercent: 0, diskPercent: 0 };
+  }
+});
 
 ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: string }) => {
   await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");

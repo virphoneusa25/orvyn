@@ -10,6 +10,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
 import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport } from "./Icons";
+import { BottomWorkPanel } from "./BottomWorkPanel";
 import appIcon from "../assets/icon.png";
 
 type ComposerMode = "code" | "server" | "research" | "deploy" | "automate";
@@ -74,15 +75,20 @@ const STATUS_STYLE: Record<string, { color: string; label: string }> = {
 export function Home({
   projectRoot,
   onMissionStarted,
-  bottomPanel,
 }: {
   projectRoot: string | null;
   onMissionStarted: () => void;
-  /** The real activity/terminal dock, docked under the dashboard. */
-  bottomPanel?: React.ReactNode;
 }) {
+  // Default Code per the approved mockup; the user's choice persists.
   const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<ComposerMode>("code");
+  const [mode, setMode] = useState<ComposerMode>(() => {
+    const saved = localStorage.getItem("orvyn:composer-mode");
+    return saved && MODES.some((m) => m.id === saved) ? (saved as ComposerMode) : "code";
+  });
+  const selectMode = (m: ComposerMode) => {
+    selectMode(m);
+    localStorage.setItem("orvyn:composer-mode", m);
+  };
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [missions, setMissions] = useState<MissionRow[]>([]);
@@ -141,7 +147,7 @@ export function Home({
   }
 
   function applyQuickAction(a: (typeof QUICK_ACTIONS)[number]) {
-    setMode(a.id);
+    selectMode(a.id);
     const templates: Record<string, string> = {
       "Build Feature": "Build this feature: ",
       "Fix Problem": "Investigate and fix this problem: ",
@@ -173,8 +179,8 @@ export function Home({
             borderRadius: "var(--orvyn-radius-lg)",
             border: "1px solid var(--orvyn-border-soft)",
             overflow: "hidden",
-            padding: "34px 32px 26px",
-            marginBottom: 14,
+            padding: "26px 32px 20px",
+            marginBottom: 12,
             background: "var(--orvyn-surface-2)",
           }}
         >
@@ -214,11 +220,11 @@ export function Home({
           </svg>
 
           <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
-            <img src={appIcon} alt="ORVYN" width={52} height={52} style={{ borderRadius: 14, marginBottom: 12, boxShadow: "0 8px 28px rgba(108,92,255,0.35)" }} />
-            <div style={{ fontSize: 26, fontWeight: 700, color: "var(--orvyn-text)", letterSpacing: -0.3 }}>
+            <img src={appIcon} alt="ORVYN" width={46} height={46} style={{ borderRadius: 12, marginBottom: 10, boxShadow: "0 8px 28px rgba(108,92,255,0.35)" }} />
+            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--orvyn-text)", letterSpacing: -0.3 }}>
               {greeting()}.
             </div>
-            <div style={{ fontSize: 13, color: "var(--orvyn-text-secondary)", marginTop: 5, marginBottom: 18 }}>
+            <div style={{ fontSize: 12.5, color: "var(--orvyn-text-secondary)", marginTop: 4, marginBottom: 14 }}>
               Your AI engineering co-worker is ready.
             </div>
 
@@ -262,7 +268,7 @@ export function Home({
                   <button
                     key={m.id}
                     title={m.hint}
-                    onClick={() => setMode(m.id)}
+                    onClick={() => selectMode(m.id)}
                     style={{
                       background: mode === m.id ? "var(--orvyn-purple)" : "transparent",
                       border: `1px solid ${mode === m.id ? "var(--orvyn-purple)" : "var(--orvyn-border)"}`,
@@ -312,11 +318,14 @@ export function Home({
           </div>
         </div>
 
-        {/* ── QUICK ACTIONS — one row of six ───────────────────── */}
+        {/* ── QUICK ACTIONS — one row of six, never clipped ──── */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(6, 1fr)",
+            // minmax(0,1fr) is the fix for cards rendering under the AI
+            // panel: plain 1fr means minmax(auto,1fr), so card content could
+            // force the track wider than the center workspace.
+            gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
             gap: 10,
             marginBottom: 14,
           }}
@@ -430,12 +439,8 @@ export function Home({
         </div>
       </div>
 
-      {/* ── TERMINAL / ACTIVITY dock — the real feed ──────────── */}
-      {bottomPanel && (
-        <div style={{ height: 236, flexShrink: 0, borderTop: "1px solid var(--orvyn-border-soft)", minWidth: 0 }}>
-          {bottomPanel}
-        </div>
-      )}
+      {/* ── TERMINAL / ACTIVITY dock — target composition ────── */}
+      <BottomWorkPanel height={176} />
     </div>
   );
 }
