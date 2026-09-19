@@ -8,6 +8,7 @@
 // Every value is live; the mockup controls presentation, real state controls
 // content — "Not connected" stays "Not connected".
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { IconRocket, IconZap, IconWrench, IconGlobe, IconServer, IconCode, IconReport, IconPaperclip } from "./Icons";
@@ -667,10 +668,18 @@ function Empty({ children }: { children: React.ReactNode }) {
 /** The approved Astra control: icon + name + ORCHESTRATOR + dropdown.
  *  Real roster from /agents — Astra orchestrates (selected); the workers are
  *  listed read-only because routing to them is Astra's decision, not a
- *  composer setting. No decorative dropdown. */
+ *  composer setting. No decorative dropdown.
+ *
+ *  The panel renders through a portal and opens BELOW the button: the hero
+ *  clips its children (overflow:hidden for the canvas), and an in-flow panel
+ *  either got cut off or — as an upward float — covered the greeting and the
+ *  composer's own controls (attach, pills). */
 function AstraSelector() {
   const [open, setOpen] = useState(false);
   const [roster, setRoster] = useState<{ label: string; role: string; modelId: string | null }[]>([]);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open || roster.length > 0) return;
@@ -680,9 +689,47 @@ function AstraSelector() {
       .catch(() => setRoster([]));
   }, [open, roster.length]);
 
+  // Anchor the portal panel under the button, right edges aligned, clamped
+  // to the window; recompute on resize while open.
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const btn = btnRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const width = 250;
+      setPos({
+        top: Math.min(r.bottom + 8, window.innerHeight - 60),
+        left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open]);
+
+  // Outside click and Escape close the roster.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!panelRef.current?.contains(t) && !btnRef.current?.contains(t)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
     <span style={{ position: "relative", marginLeft: 4 }}>
       <button
+        ref={btnRef}
         onClick={() => setOpen((o) => !o)}
         title="Agent"
         style={{
@@ -705,19 +752,20 @@ function AstraSelector() {
         </span>
         <span style={{ fontSize: 8, color: "var(--orvyn-text-muted)" }}>▾</span>
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
+          ref={panelRef}
           style={{
-            position: "absolute",
-            bottom: "120%",
-            left: 0,
-            minWidth: 230,
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: 250,
             background: "var(--bg-elevated)",
             border: "1px solid var(--border-strong)",
             borderRadius: 6,
             boxShadow: "var(--orvyn-shadow)",
             padding: 4,
-            zIndex: 600,
+            zIndex: 1200,
           }}
         >
           <div style={{ fontSize: 10, letterSpacing: 1, color: "var(--orvyn-text-muted)", padding: "4px 8px" }}>
@@ -738,9 +786,12 @@ function AstraSelector() {
           ).slice(0, 6).map((a) => (
             <div key={a.role} style={{ display: "flex", gap: 7, padding: "4px 8px", opacity: 0.55 }}>
               <span style={{ fontSize: 11, width: 11 }}>·</span>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 11, color: "var(--orvyn-text-secondary)" }}>{a.label}</span>
-                <span style={{ display: "block", fontSize: 9, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <span style={{ display: "block", fontSize: 11, color: "var(--orvyn-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.label}</span>
+                <span
+                  title={a.modelId ?? "no model routed"}
+                  style={{ display: "block", fontSize: 9, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
                   {a.modelId ?? "no model routed"}
                 </span>
               </span>
@@ -749,7 +800,8 @@ function AstraSelector() {
           <div style={{ fontSize: 9.5, color: "var(--orvyn-text-muted)", padding: "4px 8px 2px", borderTop: "1px solid var(--border)", marginTop: 3 }}>
             Astra delegates to workers automatically during missions.
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );
