@@ -315,6 +315,7 @@ v1Router.post("/chat/completions", async (req, res) => {
 // --- Streaming agent runs (typed event protocol) ---
 import { registerProjectToolsFor as _regTools } from "../ai/registerProjectTools";
 import { isTerminal } from "../agent/events";
+import { loadSshHosts } from "../ai/tools/sshTools";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
@@ -575,6 +576,25 @@ v1Router.get("/missions/:id", (req, res) => {
   const m = t.taskEngine.getMission(req.params.id);
   if (!m) return res.status(404).json({ error: "Unknown mission" });
   res.json({ mission: t.taskEngine.serialize(m) });
+});
+
+// --- Servers (SSH connections from the project's .orvyn/ssh.json) ---
+// Lists aliases only — never key material. The renderer uses this for the
+// Servers workspace and Home's Connected Systems; live status is checked
+// on demand through the approval-gated tool execution route.
+v1Router.get("/servers", async (req, res) => {
+  const t = requireTenant(req);
+  const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
+  if (!root) return res.json({ servers: [] });
+  try {
+    const hosts = await loadSshHosts(root);
+    res.json({
+      servers: hosts.map((h) => ({ alias: h.alias, host: h.host, user: h.user, port: h.port ?? 22 })),
+    });
+  } catch {
+    // No ssh.json or malformed — an empty list, not an error.
+    res.json({ servers: [] });
+  }
 });
 
 // --- MCP servers (status for the Agents view) ---

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
+import { LiveActivity, MissionPlan } from "./MissionPlan";
 import { isRunFinished, RunUsage, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
@@ -80,6 +81,13 @@ export function AgentEventStream({ projectRoot }: { projectRoot: string | null }
         <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
         <RunFooter events={run.events} runId={run.runId} finished={isRunFinished(run.status)} />
         <div ref={bottomRef} />
+      </div>
+
+      {/* The mockup's right-rail cards, fed by the same real event stream:
+          mission steps from the Task Engine, activity from every tool call. */}
+      <div style={{ flexShrink: 0, borderBottom: "1px solid var(--border)", maxHeight: "45%", overflowY: "auto", padding: "0 12px 8px" }}>
+        <MissionPlan events={run.events} status={run.status} />
+        <LiveActivity events={run.events} />
       </div>
 
       {!atBottom && (

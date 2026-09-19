@@ -22,7 +22,23 @@ export interface Menu {
   items: MenuItem[];
 }
 
-export function TitleBar({ menus, title }: { menus: Menu[]; title?: string }) {
+export function TitleBar({
+  menus,
+  title,
+  usageLabel,
+  usageTitle,
+  planLabel,
+  onOpenCommand,
+}: {
+  menus: Menu[];
+  title?: string;
+  /** Real usage summary for the header chip (e.g. tokens this month). */
+  usageLabel?: string | null;
+  usageTitle?: string;
+  /** Real plan/mode label; omit when there is no account backend. */
+  planLabel?: string | null;
+  onOpenCommand?: () => void;
+}) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -54,14 +70,15 @@ export function TitleBar({ menus, title }: { menus: Menu[]; title?: string }) {
       ref={barRef}
       className="drag-region"
       style={{
-        height: 34,
+        height: "var(--orvyn-topbar-height)",
         display: "flex",
         alignItems: "center",
-        background: "var(--bg-app)",
-        borderBottom: "1px solid var(--border)",
+        background: "var(--orvyn-surface-1)",
+        borderBottom: "1px solid var(--orvyn-border-soft)",
         userSelect: "none",
         position: "relative",
         flexShrink: 0,
+        gap: 8,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", paddingLeft: 8, gap: 2 }} className="no-drag">
@@ -73,14 +90,19 @@ export function TitleBar({ menus, title }: { menus: Menu[]; title?: string }) {
           className="no-drag"
           style={{
             borderRadius: 5,
-            marginRight: 6,
+            marginRight: 7,
             display: "block",
             background: "#161B2C",
             WebkitAppRegion: "no-drag",
           } as React.CSSProperties}
         />
-        <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.5, color: "var(--text)", marginRight: 8 }}>
-          ORVYN
+        <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.1, marginRight: 10 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: 0.8, color: "var(--orvyn-text)" }}>
+            ORVYN
+          </span>
+          <span style={{ fontSize: 8.5, letterSpacing: 0.4, color: "var(--orvyn-text-muted)" }}>
+            Your AI Co-Worker
+          </span>
         </span>
 
         {menus.map((menu) => (
@@ -106,13 +128,13 @@ export function TitleBar({ menus, title }: { menus: Menu[]; title?: string }) {
               <div
                 style={{
                   position: "absolute",
-                  top: 26,
+                  top: 28,
                   left: 0,
                   minWidth: 220,
                   background: "var(--bg-elevated)",
                   border: "1px solid var(--border-strong)",
                   borderRadius: 6,
-                  boxShadow: "0 12px 32px rgba(0,0,0,0.55)",
+                  boxShadow: "var(--orvyn-shadow)",
                   padding: 4,
                   zIndex: 500,
                 }}
@@ -160,21 +182,90 @@ export function TitleBar({ menus, title }: { menus: Menu[]; title?: string }) {
         ))}
       </div>
 
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          textAlign: "center",
-          fontSize: 11.5,
-          color: "var(--text-muted)",
-          pointerEvents: "none",
-        }}
-      >
-        {title}
+      {/* Center: the mockup's command/search bar. It opens the real command
+          palette — search is a navigation surface, not a fake input. The
+          shortcut chip shows the binding that actually opens it (Ctrl+K is
+          the editor's inline edit and stays untouched). */}
+      <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}>
+        <button
+          className="no-drag"
+          onClick={() => onOpenCommand?.()}
+          title="Open command palette"
+          style={{
+            width: "min(560px, 100%)",
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "var(--orvyn-surface-2)",
+            border: "1px solid var(--orvyn-border-soft)",
+            borderRadius: "var(--orvyn-radius-md)",
+            color: "var(--orvyn-text-muted)",
+            fontSize: 12,
+            padding: "0 10px",
+            cursor: "pointer",
+          }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m16 16 4.5 4.5" strokeLinecap="round" />
+          </svg>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            Ask ORVYN to build, fix, deploy, research, or run a task…
+          </span>
+          <span
+            style={{
+              marginLeft: "auto",
+              fontSize: 10,
+              border: "1px solid var(--orvyn-border)",
+              borderRadius: 4,
+              padding: "1px 6px",
+              color: "var(--orvyn-text-muted)",
+              flexShrink: 0,
+            }}
+          >
+            Ctrl+Shift+P
+          </span>
+        </button>
       </div>
 
-      <div style={{ marginLeft: "auto", display: "flex", height: "100%" }} className="no-drag">
+      {/* Right: real usage + mode. No fabricated credit balance or avatar —
+          those arrive with the commercial account backend. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 8 }} className="no-drag">
+        {usageLabel && (
+          <span
+            title={usageTitle ?? usageLabel}
+            style={{
+              fontSize: 11,
+              color: "var(--orvyn-text-secondary)",
+              background: "var(--orvyn-surface-2)",
+              border: "1px solid var(--orvyn-border-soft)",
+              borderRadius: 999,
+              padding: "3px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {usageLabel}
+          </span>
+        )}
+        {planLabel && (
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: "#fff",
+              background: "var(--orvyn-purple)",
+              borderRadius: 999,
+              padding: "3px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {planLabel}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "flex", height: "100%" }} className="no-drag">
         <WinButton onClick={() => window.orvyn.window.minimize()} label="Minimize">
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
         </WinButton>

@@ -4,38 +4,65 @@
    single-file change instead of a hunt through inline styles. */
 
 :root {
-  /* Surfaces — layered, so panels read as distinct planes */
-  --bg-app: #080A0F;
-  --bg-panel: #0B0E14;
-  --bg-elevated: #11151F;
-  --bg-hover: #171C28;
-  --bg-active: #1E2536;
+  /* Surfaces — layered, so panels read as distinct planes.
+     Values retuned to the approved mockup palette (2026-09-19). */
+  --bg-app: #070B14;
+  --bg-panel: #0B101B;
+  --bg-elevated: #0E1421;
+  --bg-hover: #111827;
+  --bg-active: #151E31;
 
   /* Borders */
-  --border: #1A2030;
-  --border-strong: #262E42;
+  --border: #182234;
+  --border-strong: #202A3C;
 
   /* Text */
-  --text: #D8DEE9;
-  --text-secondary: #8B93A7;
-  --text-muted: #5A6478;
+  --text: #F5F7FF;
+  --text-secondary: #A7B0C5;
+  --text-muted: #69758D;
 
   /* Brand — matches the Orvyn mark */
-  --accent: #5B6CFF;
-  --accent-hover: #6E7DFF;
-  --accent-dim: #2E3AA0;
+  --accent: #6C5CFF;
+  --accent-hover: #7C5CFF;
+  --accent-dim: #3A33A8;
   --accent-fg: #FFFFFF;
 
   /* Status */
-  --success: #3FD68A;
-  --warning: #E8B93F;
-  --danger: #F0546A;
+  --success: #20D89B;
+  --warning: #F5B942;
+  --danger: #F25F75;
 
   --radius: 6px;
   --radius-lg: 10px;
 
   --font-ui: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  /* Approved-design tokens (spec naming) — aliases over the core set so new
+     components can use either name while the whole app stays in one palette. */
+  --orvyn-bg: var(--bg-app);
+  --orvyn-surface-1: var(--bg-panel);
+  --orvyn-surface-2: var(--bg-elevated);
+  --orvyn-surface-3: var(--bg-hover);
+  --orvyn-border: var(--border-strong);
+  --orvyn-border-soft: var(--border);
+  --orvyn-text: var(--text);
+  --orvyn-text-secondary: var(--text-secondary);
+  --orvyn-text-muted: var(--text-muted);
+  --orvyn-purple: #6C5CFF;
+  --orvyn-purple-hi: #7C5CFF;
+  --orvyn-blue: #4DA3FF;
+  --orvyn-cyan: #22D3EE;
+  --orvyn-green: var(--success);
+  --orvyn-yellow: var(--warning);
+  --orvyn-red: var(--danger);
+  --orvyn-radius-sm: 6px;
+  --orvyn-radius-md: 8px;
+  --orvyn-radius-lg: 12px;
+  --orvyn-shadow: 0 12px 32px rgba(3, 6, 14, 0.55);
+  --orvyn-nav-width: 192px;
+  --orvyn-topbar-height: 46px;
+  --orvyn-status-height: 24px;
 }
 
 * {

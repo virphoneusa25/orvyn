@@ -9,7 +9,11 @@ import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
-import { ActivityBar, ViewId } from "./components/ActivityBar";
+import { Navigation, ViewId } from "./components/Navigation";
+import { Home } from "./components/Home";
+import { StatusBar } from "./components/StatusBar";
+import { HonestState } from "./components/HonestState";
+import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace, ToolsWorkspace } from "./components/Workspaces";
 import { EditorTabs } from "./components/EditorTabs";
 import { loadConnectionConfig, apiUrl, authHeaders } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
@@ -94,17 +98,33 @@ export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [tabs, setTabs] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>("editor");
+  const [view, setView] = useState<ViewId>("home");
   const [aiTab, setAiTab] = useState<AiTab>("chat");
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
+  const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
   const indexedRoot = useRef<string | null>(null);
 
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
   const workspaceRoot = workspace?.root ?? null;
-  const showEditorChrome = view === "editor";
+  // Home is the landing surface; Code and Terminal share the editor chrome;
+  // the AI panel rides along wherever work happens.
+  const showEditorChrome = view === "editor" || view === "terminal";
+  const showAiPanel = view === "home" || view === "editor" || view === "terminal";
   const inlineEdit = useInlineEdit(openFile?.path);
+
+  // Real usage for the header chip — server-side totals, never estimated.
+  useEffect(() => {
+    const load = () =>
+      fetch(apiUrl("/usage?limit=1"), { headers: authHeaders() })
+        .then((r) => r.json())
+        .then((d) => setUsageTotals(d.totals ?? null))
+        .catch(() => {});
+    void load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const dispose = registerTabAutocomplete();
@@ -323,18 +343,32 @@ export function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
-      <TitleBar menus={appMenus} title={openFile ? openFile.path : workspace?.root ?? "ORVYN"} />
+      <TitleBar
+        menus={appMenus}
+        title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}
+        usageLabel={
+          usageTotals
+            ? `${((usageTotals.promptTokens + usageTotals.completionTokens) / 1000).toFixed(1)}k tokens`
+            : null
+        }
+        usageTitle={
+          usageTotals
+            ? `Server-metered usage: ${usageTotals.promptTokens.toLocaleString()} prompt + ${usageTotals.completionTokens.toLocaleString()} completion tokens`
+            : undefined
+        }
+        planLabel="LOCAL"
+        onOpenCommand={() => setPalette("commands")}
+      />
 
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-        <ActivityBar
+        <Navigation
           view={view}
           onChange={setView}
-          chatActive={view === "editor" && aiTab === "chat"}
+          chatActive={showAiPanel && aiTab === "chat"}
           onFocusChat={() => {
             setView("editor");
             setAiTab("chat");
           }}
-          onNewChat={newChat}
         />
 
         {showEditorChrome && (
@@ -402,9 +436,149 @@ export function App() {
                 />
               )}
             </div>
+          </>
+        )}
 
-            <ResizablePanel side="right" defaultWidth={400} minWidth={280} maxWidth={700}>
-              <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0 }}>
+        {(view === "home" || view === "newtask") && (
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+            <Home
+              projectRoot={workspaceRoot}
+              onMissionStarted={() => {
+                setAiTab("build");
+              }}
+            />
+          </div>
+        )}
+
+        {view === "servers" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ServersWorkspace projectRoot={workspaceRoot} />
+          </div>
+        )}
+
+        {view === "tools" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ToolsWorkspace projectRoot={workspaceRoot} />
+          </div>
+        )}
+
+        {view === "agents" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <AgentsWorkspace />
+          </div>
+        )}
+
+        {view === "projects" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ProjectsWorkspace onOpenFolder={() => void handleOpenProject()} />
+          </div>
+        )}
+
+        {view === "automations" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="AUTOMATIONS — NOT AVAILABLE YET"
+              message="Scheduled and recurring work needs a scheduler service (cron-style triggers with per-run permissions and history). The mission engine it will drive is already live; the scheduler is the missing piece and is on the roadmap."
+            />
+          </div>
+        )}
+
+        {view === "containers" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="CONTAINERS — NOT AVAILABLE YET"
+              message="Container management requires a Docker connection per server. Cloud missions already execute in isolated containers on the backend; a live container browser (inspect/logs/restart) is the next step."
+            />
+          </div>
+        )}
+
+        {view === "databases" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="DATABASES — NOT AVAILABLE YET"
+              message="Database connections and query tooling arrive with the commercial data layer (PostgreSQL). Credentials will live server-side and never reach the models."
+            />
+          </div>
+        )}
+
+        {view === "cloud" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="CLOUD — OVH CONNECTED"
+              message="Your ORVYN backend runs on OVH (40.160.11.123) and executes cloud missions in Docker sandboxes. A cloud resource browser (per-provider inventory) is future work; provider support beyond OVH has not been implemented."
+            />
+          </div>
+        )}
+
+        {view === "browser" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="BROWSER — NEEDS PLAYWRIGHT"
+              message="The browser agent tools exist and are permission-gated; they become live when Playwright is installed as the backend's optional dependency. Until then the agent reports 'Playwright is not installed' rather than pretending."
+            />
+          </div>
+        )}
+
+        {view === "billing" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <HonestState
+              title="BILLING — NEEDS THE COMMERCIAL BACKEND"
+              message="Plans, credit wallets, and Stripe checkout are designed (docs/COMMERCIAL_PLATFORM_AUDIT.md, Phases C–E) but not implemented yet. Usage metering — the data billing will be built on — is live and visible under Usage & Credits."
+            />
+          </div>
+        )}
+
+        {view === "chats" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ChatHistoryPanel
+              onOpenChat={() => {
+                setView("editor");
+                setAiTab("chat");
+              }}
+              onNewChat={newChat}
+            />
+          </div>
+        )}
+
+        {view === "usage" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ReportsPanel />
+          </div>
+        )}
+
+        {view === "search" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <SearchPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
+          </div>
+        )}
+
+        {view === "missions" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <MissionControl projectRoot={workspaceRoot} />
+          </div>
+        )}
+
+        {view === "scm" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <GitScmPanel projectRoot={workspaceRoot} />
+          </div>
+        )}
+
+        {view === "models" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ModelManager />
+          </div>
+        )}
+
+        {view === "settings" && (
+          <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
+            <ConnectionSettings />
+          </div>
+        )}
+
+        {showAiPanel && (
+          <ResizablePanel side="right" defaultWidth={400} minWidth={280} maxWidth={700}>
+            <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0 }}>
               <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
                 <AiTabButton label="Chat" active={aiTab === "chat"} onClick={() => setAiTab("chat")} />
                 <AiTabButton label="Plan" active={aiTab === "plan"} onClick={() => setAiTab("plan")} />
@@ -428,76 +602,14 @@ export function App() {
                 )}
                 {aiTab === "review" && <ReviewPanel />}
               </div>
-              </div>
-            </ResizablePanel>
-          </>
-        )}
-
-        {view === "chats" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <ChatHistoryPanel
-              onOpenChat={() => {
-                setView("editor");
-                setAiTab("chat");
-              }}
-              onNewChat={newChat}
-            />
-          </div>
-        )}
-
-        {view === "reports" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <ReportsPanel />
-          </div>
-        )}
-
-        {view === "search" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <SearchPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
-          </div>
-        )}
-
-        {view === "agents" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <MissionControl projectRoot={workspaceRoot} />
-          </div>
-        )}
-
-        {view === "scm" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <GitScmPanel projectRoot={workspaceRoot} />
-          </div>
-        )}
-
-        {view === "models" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <ModelManager />
-          </div>
-        )}
-
-        {view === "settings" && (
-          <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-            <ConnectionSettings />
-          </div>
+            </div>
+          </ResizablePanel>
         )}
       </div>
 
       {showEditorChrome && <BottomPanel />}
 
-      <div
-        style={{
-          height: 28,
-          background: "var(--bg-panel)",
-          borderTop: "1px solid var(--border)",
-          display: "flex",
-          alignItems: "center",
-          padding: "0 12px",
-          fontSize: 12,
-          color: "var(--text-secondary)",
-        }}
-      >
-        {workspace?.kind === "folder" ? "Folder workspace" : "Built-in workspace"} · Ctrl+P files · Ctrl+Shift+P commands · Ctrl+K edit · Tab complete
-      </div>
+      <StatusBar />
       {palette && (
         <CommandPalette
           mode={palette}
