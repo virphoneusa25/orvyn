@@ -9,7 +9,7 @@
 // chain-of-thought. Detail lives in the right ContextPanel.
 
 import React, { useEffect, useRef, useState } from "react";
-import { getChatMessages, subscribeChat } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat } from "../chatSession";
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
@@ -46,7 +46,7 @@ export function WorkStream({
   projectRoot: string | null;
   projectName: string | null;
   run: RunView;
-  onRunStarted: (runId: string) => void;
+  onRunStarted: (runId: string | null) => void;
 }) {
   const [, setTick] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -109,6 +109,10 @@ export function WorkStream({
   }
 
   const runActive = run.status === "running" || run.status === "awaiting_approval" || run.status === "cancelling";
+  const streaming = isChatStreaming();
+  // The conversation's title: the first user message of this session.
+  const firstUser = messages.find((m) => m.role === "user");
+  const title = firstUser ? firstUser.content.trim().split("\n")[0]!.slice(0, 60) : "Work Stream";
 
   return (
     <div style={{ height: "100%", minWidth: 0, display: "flex", flexDirection: "column", background: "var(--orvyn-surface-1)" }}>
@@ -124,9 +128,14 @@ export function WorkStream({
         }}
       >
         <img src={appIcon} alt="" width={18} height={18} style={{ borderRadius: 5 }} />
-        <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-          {projectName ? `${projectName} / ` : ""}Work Stream
+        <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "46%" }}>
+          {title}
         </span>
+        {projectName && (
+          <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
+            {projectName}
+          </span>
+        )}
         {run.status !== "idle" && (
           <span
             style={{
@@ -142,7 +151,28 @@ export function WorkStream({
             {run.status.replace("_", " ").toUpperCase()}
           </span>
         )}
-        <span style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L to focus</span>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L</span>
+          <button
+            title="New task — fresh conversation"
+            onClick={() => {
+              newChat();
+              onRunStarted(null);
+              setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:focus-composer")), 50);
+            }}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--orvyn-border)",
+              borderRadius: 5,
+              color: "var(--orvyn-text-secondary)",
+              fontSize: 11,
+              padding: "3px 10px",
+              cursor: "pointer",
+            }}
+          >
+            New
+          </button>
+        </span>
       </div>
 
       {/* The stream: conversation + activity, top to bottom. */}
@@ -202,7 +232,15 @@ export function WorkStream({
                   </span>
                 </div>
                 <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
-                  <MessageContent content={m.content} streaming={i === messages.length - 1 && !m.content ? false : undefined} />
+                  {/* The immediate working state — never an empty screen while
+                      the model is on the wire. */}
+                  {!m.content && i === messages.length - 1 && streaming ? (
+                    <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
+                      Astra is analyzing your request…
+                    </span>
+                  ) : (
+                    <MessageContent content={m.content} />
+                  )}
                 </div>
               </div>
             </div>

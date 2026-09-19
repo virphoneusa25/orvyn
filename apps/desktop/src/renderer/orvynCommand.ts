@@ -33,59 +33,53 @@ export type CommandOutcome =
   | { kind: "run"; runId: string }
   | { kind: "error"; error: string };
 
-/** Streams a chat reply into the shared chat session (renders in the Chat tab). */
-async function runChat(cmd: OrvynCommand): Promise<CommandOutcome> {
-  const history = startUserTurn(cmd.prompt, { mode: "chat" });
-  return await new Promise<CommandOutcome>((resolve) => {
-    let settled = false;
-    const done = (outcome: CommandOutcome) => {
-      if (!settled) {
-        settled = true;
-        resolve(outcome);
+/** Starts a chat turn into the shared session — returns IMMEDIATELY. The
+ *  user bubble renders the moment this is called; Astra's reply streams in
+ *  from the WebSocket afterwards. Never make the caller wait on the model. */
+function runChat(cmd: OrvynCommand): CommandOutcome {
+  startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
+  try {
+    const ws = new WebSocket(wsUrl("/ws/chat"));
+    const giveUp = setTimeout(() => {
+      appendAssistantDelta("\n\nCould not reach the ORVYN backend. Check Connection settings.");
+      finishAssistantTurn();
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
       }
+    }, 15000);
+    ws.onopen = () => {
+      clearTimeout(giveUp);
+      ws.send(
+        JSON.stringify({
+          task: "chat",
+          history: [],
+          userMessage: cmd.prompt,
+          attachments: cmd.attachments ?? [],
+          context: cmd.projectRoot ? { projectRoot: cmd.projectRoot, useRag: true } : { useRag: false },
+        })
+      );
     };
-    try {
-      const ws = new WebSocket(wsUrl("/ws/chat"));
-      const failTimer = setTimeout(() => {
-        appendAssistantDelta("\n\nCould not reach the ORVYN backend. Check Connection settings.");
+    ws.onmessage = (event) => {
+      const chunk = JSON.parse(event.data);
+      if (chunk.error) appendAssistantDelta(chunk.error);
+      else appendAssistantDelta(chunk.delta ?? "");
+      if (chunk.done) {
         finishAssistantTurn();
         ws.close();
-        done({ kind: "chat" });
-      }, 15000);
-      ws.onopen = () => {
-        clearTimeout(failTimer);
-        ws.send(
-          JSON.stringify({
-            task: "chat",
-            history,
-            userMessage: cmd.prompt,
-            attachments: cmd.attachments ?? [],
-            context: cmd.projectRoot ? { projectRoot: cmd.projectRoot, useRag: true } : { useRag: false },
-          })
-        );
-      };
-      ws.onmessage = (event) => {
-        const chunk = JSON.parse(event.data);
-        if (chunk.error) appendAssistantDelta(chunk.error);
-        else appendAssistantDelta(chunk.delta ?? "");
-        if (chunk.done) {
-          finishAssistantTurn();
-          ws.close();
-          done({ kind: "chat" });
-        }
-      };
-      ws.onerror = () => {
-        clearTimeout(failTimer);
-        appendAssistantDelta("\n\nCould not reach the ORVYN backend. Check Connection settings.");
-        finishAssistantTurn();
-        done({ kind: "chat" });
-      };
-    } catch (err: any) {
-      appendAssistantDelta(`\n\n${err.message}`);
+      }
+    };
+    ws.onerror = () => {
+      clearTimeout(giveUp);
+      appendAssistantDelta("\n\nCould not reach the ORVYN backend. Check Connection settings.");
       finishAssistantTurn();
-      done({ kind: "chat" });
-    }
-  });
+    };
+  } catch (err: any) {
+    appendAssistantDelta(`\n\n${err.message}`);
+    finishAssistantTurn();
+  }
+  return { kind: "chat" };
 }
 
 async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {

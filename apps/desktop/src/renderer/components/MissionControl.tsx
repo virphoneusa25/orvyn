@@ -178,7 +178,9 @@ export function MissionControl({ projectRoot }: { projectRoot: string | null }) 
         missions.map((m) => (
           <div
             key={m.id}
-            style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-panel)", marginBottom: 10 }}
+            title="Open this mission's workspace"
+            onClick={() => document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: m.runId }))}
+            style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", background: "var(--bg-panel)", marginBottom: 10, cursor: "pointer" }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: STATUS_COLORS[m.status] ?? "var(--text)" }}>{m.status}</span>

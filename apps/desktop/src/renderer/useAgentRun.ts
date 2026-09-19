@@ -37,8 +37,21 @@ export function useAgentRun(
   // Attach to a run started elsewhere (Home composer, quick actions) so the
   // Build tab follows active work instead of only runs it started itself.
   useEffect(() => {
-    const id = opts?.attachRunId;
-    if (!id || id === runIdRef.current) return;
+    const id = opts?.attachRunId ?? null;
+    if (id === runIdRef.current) return;
+    if (!id) {
+      // Cleared (New Task / fresh conversation): drop the previous run's
+      // events so a fresh workspace doesn't show stale activity.
+      setEvents([]);
+      setError(null);
+      setUsage(null);
+      lastSeq.current = 0;
+      setRunId(null);
+      runIdRef.current = null;
+      setStatus("idle");
+      streamRef.current?.close();
+      return;
+    }
     setEvents([]);
     setError(null);
     setUsage(null);

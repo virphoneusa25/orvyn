@@ -39,6 +39,8 @@ const QUICK_ACTIONS: { id: ComposerMode; title: string; desc: string; Icon: Reac
 
 interface MissionRow {
   id: string;
+  /** The RunStore run whose events back this mission's Active Workspace. */
+  runId?: string;
   goal: string;
   status: string;
   createdAt: string;
@@ -423,8 +425,12 @@ export function Home({
                   <div
                     key={m.id}
                     style={{ ...rowStyle(), cursor: "pointer" }}
-                    title="Open in Missions"
-                    onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "missions" }))}
+                    title="Open this mission's workspace"
+                    onClick={() =>
+                      m.runId
+                        ? document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: m.runId }))
+                        : document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "missions" }))
+                    }
                   >
                     <span style={{ minWidth: 0, flex: 1 }}>
                       <span style={{ display: "block", fontSize: 12.5, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

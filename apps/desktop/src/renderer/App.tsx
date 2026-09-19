@@ -150,7 +150,20 @@ export function App() {
       if (target) setView(target);
     };
     document.addEventListener("orvyn:nav", onNav);
-    return () => document.removeEventListener("orvyn:nav", onNav);
+    // Recent Missions / Mission Control re-entry: reopen a mission's Active
+    // Workspace with its run attached (conversation + activity restored).
+    const onOpenRun = (e: Event) => {
+      const runId = (e as CustomEvent<string>).detail;
+      if (!runId) return;
+      setActiveRunId(runId);
+      setCenterMode("work");
+      setView("newtask");
+    };
+    document.addEventListener("orvyn:open-run", onOpenRun);
+    return () => {
+      document.removeEventListener("orvyn:nav", onNav);
+      document.removeEventListener("orvyn:open-run", onOpenRun);
+    };
   }, []);
 
   useEffect(() => {
