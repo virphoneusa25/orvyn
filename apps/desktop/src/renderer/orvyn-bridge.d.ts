@@ -10,6 +10,16 @@ export interface WorkspaceState {
   fileRelative?: string;
 }
 
+export interface ChatAttachment {
+  path: string;
+  kind: "text" | "image";
+  purpose?: "reference" | "review" | "edit";
+  content?: string;
+  mime?: string;
+  dataUrl?: string;
+  sourcePath?: string;
+}
+
 export interface OrvynBridge {
   project: {
     getWorkspace(): Promise<WorkspaceState>;
@@ -18,8 +28,26 @@ export interface OrvynBridge {
     openFile(): Promise<WorkspaceState | null>;
     close(): Promise<WorkspaceState>;
     listDirectory(relativePath: string): Promise<DirEntry[]>;
+    listFiles(): Promise<string[]>;
     readFile(relativePath: string): Promise<string>;
     writeFile(relativePath: string, content: string): Promise<boolean>;
+    readBinary(relativePath: string): Promise<ChatAttachment | null>;
+  };
+  attachments: {
+    pick(): Promise<ChatAttachment[]>;
+  };
+  window: {
+    minimize(): Promise<void>;
+    toggleMaximize(): Promise<boolean>;
+    close(): Promise<void>;
+    isMaximized(): Promise<boolean>;
+    toggleDevTools(): Promise<void>;
+    reload(): Promise<void>;
+    onMaximizedChange(cb: (v: boolean) => void): () => void;
+  };
+  chats: {
+    load(): Promise<{ sessions: unknown[] }>;
+    save(data: unknown): Promise<boolean>;
   };
   config: {
     get(): Promise<{ backendUrl: string; apiKey: string }>;

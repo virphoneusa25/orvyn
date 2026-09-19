@@ -14,6 +14,7 @@
 
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
+import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
 
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
@@ -53,20 +54,50 @@ monaco.editor.defineTheme("orvyn-dark", {
   inherit: true,
   rules: [
     { token: "comment", foreground: "5A6478", fontStyle: "italic" },
-    { token: "keyword", foreground: "A9B4FF" },
+    { token: "comment.php", foreground: "5A6478", fontStyle: "italic" },
+    { token: "comment.js", foreground: "5A6478", fontStyle: "italic" },
+    { token: "comment.ts", foreground: "5A6478", fontStyle: "italic" },
+    { token: "keyword", foreground: "C792EA" },
+    { token: "keyword.php", foreground: "C792EA" },
+    { token: "keyword.js", foreground: "C792EA" },
+    { token: "keyword.ts", foreground: "C792EA" },
+    { token: "keyword.flow", foreground: "C792EA" },
+    { token: "metatag", foreground: "5B6CFF" },
+    { token: "metatag.php", foreground: "5B6CFF" },
+    { token: "tag", foreground: "F07178" },
+    { token: "tag.php", foreground: "F07178" },
+    { token: "tag.html", foreground: "F07178" },
+    { token: "tag.xml", foreground: "F07178" },
     { token: "string", foreground: "7FD1B9" },
+    { token: "string.php", foreground: "7FD1B9" },
+    { token: "string.html", foreground: "7FD1B9" },
+    { token: "string.js", foreground: "7FD1B9" },
+    { token: "string.ts", foreground: "7FD1B9" },
     { token: "number", foreground: "E8B93F" },
+    { token: "number.php", foreground: "E8B93F" },
     { token: "type", foreground: "8BB9FF" },
-    { token: "function", foreground: "C3CAFF" },
+    { token: "type.php", foreground: "8BB9FF" },
+    { token: "type.js", foreground: "8BB9FF" },
+    { token: "identifier", foreground: "D8DEE9" },
+    { token: "variable", foreground: "EECB8B" },
+    { token: "variable.php", foreground: "EECB8B" },
+    { token: "function", foreground: "82AAFF" },
+    { token: "delimiter", foreground: "8B93A7" },
+    { token: "delimiter.php", foreground: "8B93A7" },
+    { token: "attribute.name", foreground: "A9B4FF" },
+    { token: "attribute.name.html", foreground: "A9B4FF" },
+    { token: "attribute.value", foreground: "7FD1B9" },
+    { token: "attribute.value.html", foreground: "7FD1B9" },
   ],
   colors: {
     "editor.background": "#0B0E14",
-    "editor.foreground": "#C9D1E0",
+    "editor.foreground": "#D8DEE9",
     "editorLineNumber.foreground": "#3A4459",
     "editor.selectionBackground": "#26355F",
     "editor.lineHighlightBackground": "#11151F",
     "editorCursor.foreground": "#5B6CFF",
     "editorIndentGuide.background1": "#1C2330",
+    "editor.inactiveSelectionBackground": "#1E2536",
   },
 });
 

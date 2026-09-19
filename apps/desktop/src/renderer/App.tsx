@@ -3,20 +3,29 @@ import Editor from "@monaco-editor/react";
 import { FileExplorer } from "./components/FileExplorer";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ModelManager } from "./components/ModelManager";
+import { ChatHistoryPanel } from "./components/ChatHistoryPanel";
+import { ReportsPanel } from "./components/ReportsPanel";
 import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { ActivityBar, ViewId } from "./components/ActivityBar";
 import { EditorTabs } from "./components/EditorTabs";
-import { loadConnectionConfig } from "./connection";
+import { loadConnectionConfig, apiUrl, authHeaders } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat } from "./chatSession";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
-import appIcon from "./assets/icon.png";
+import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
+import { registerTabAutocomplete } from "./tabComplete";
+import { TitleBar, Menu } from "./components/TitleBar";
+import { ResizablePanel } from "./components/ResizablePanel";
+import { MissionControl } from "./components/MissionControl";
+import { ReviewPanel } from "./components/ReviewPanel";
+import { BottomPanel } from "./components/BottomPanel";
+import { GitScmPanel } from "./components/GitScmPanel";
 
-type AiTab = "chat" | "composer" | "agent";
+type AiTab = "chat" | "plan" | "build" | "review";
 
 interface OpenFile {
   path: string;
@@ -25,17 +34,58 @@ interface OpenFile {
 }
 
 function guessLanguage(path: string): string {
-  const ext = path.split(".").pop() ?? "";
+  const base = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
+  if (base === "dockerfile") return "dockerfile";
+  if (base === ".htaccess" || base === "htaccess" || base.startsWith(".htaccess")) return "ini";
+  if (base === "makefile" || base === "gnumakefile") return "plaintext";
+  const ext = base.includes(".") ? (base.split(".").pop() ?? "") : "";
   const map: Record<string, string> = {
     ts: "typescript",
     tsx: "typescript",
     js: "javascript",
     jsx: "javascript",
+    mjs: "javascript",
+    cjs: "javascript",
     json: "json",
     md: "markdown",
+    markdown: "markdown",
     py: "python",
     html: "html",
+    htm: "html",
     css: "css",
+    scss: "scss",
+    less: "less",
+    php: "php",
+    phtml: "php",
+    xml: "xml",
+    svg: "xml",
+    ini: "ini",
+    conf: "ini",
+    sql: "sql",
+    yml: "yaml",
+    yaml: "yaml",
+    sh: "shell",
+    bash: "shell",
+    zsh: "shell",
+    ps1: "powershell",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    rb: "ruby",
+    c: "c",
+    h: "c",
+    cpp: "cpp",
+    cc: "cpp",
+    hpp: "cpp",
+    cs: "csharp",
+    kt: "kotlin",
+    swift: "swift",
+    lua: "lua",
+    r: "r",
+    dockerfile: "dockerfile",
+    twig: "html",
+    vue: "html",
+    txt: "plaintext",
   };
   return map[ext] ?? "plaintext";
 }
@@ -46,7 +96,10 @@ export function App() {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>("editor");
   const [aiTab, setAiTab] = useState<AiTab>("chat");
+  const [palette, setPalette] = useState<PaletteMode | null>(null);
+  const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const autoOpenedRoot = useRef<string | null>(null);
+  const indexedRoot = useRef<string | null>(null);
 
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
   const workspaceRoot = workspace?.root ?? null;
@@ -54,9 +107,38 @@ export function App() {
   const inlineEdit = useInlineEdit(openFile?.path);
 
   useEffect(() => {
-    loadConnectionConfig();
-    window.orvyn.project.getWorkspace().then(setWorkspace);
+    const dispose = registerTabAutocomplete();
+    loadConnectionConfig().then(() => window.orvyn.project.getWorkspace().then(setWorkspace));
+    return () => dispose.dispose();
   }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key.toLowerCase() !== "p") return;
+      e.preventDefault();
+      setPalette(e.shiftKey ? "commands" : "files");
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!workspace?.root) return;
+    window.orvyn.project.listFiles().then(setProjectFiles).catch(() => setProjectFiles([]));
+  }, [workspace?.root]);
+
+  useEffect(() => {
+    if (!workspace?.root) return;
+    if (indexedRoot.current === workspace.root) return;
+    indexedRoot.current = workspace.root;
+    fetch(apiUrl("/index/build"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ projectRoot: workspace.root }),
+    }).catch(() => undefined);
+  }, [workspace?.root]);
 
   useEffect(() => {
     if (!workspace?.root) return;
@@ -121,6 +203,7 @@ export function App() {
   async function handleCloseFolder() {
     const next = await window.orvyn.project.close();
     autoOpenedRoot.current = null;
+    indexedRoot.current = null;
     setWorkspace(next);
     setTabs([]);
     setActivePath(null);
@@ -156,40 +239,93 @@ export function App() {
     upsertTab("untitled.txt", code, true);
   }
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--bg-app)", color: "var(--text)" }}>
-      <div
-        style={{
-          height: 40,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 12px",
-          background: "var(--bg-panel)",
-          borderBottom: "1px solid var(--border)",
-          fontSize: 13,
-          gap: 12,
-        }}
-      >
-        <img src={appIcon} alt="" width={22} height={22} style={{ borderRadius: 6, display: "block" }} />
-        <strong style={{ letterSpacing: 0.8 }}>ORVYN</strong>
-        <button onClick={handleOpenProject} style={headerBtn()}>
-          Open Folder
-        </button>
-        <button onClick={handleOpenFileDialog} style={headerBtn()}>
-          Open File
-        </button>
-        {workspace?.kind === "folder" && (
-          <button onClick={handleCloseFolder} style={headerBtn()}>
-            Close Folder
-          </button>
-        )}
-        <span style={{ opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {workspace?.kind === "folder" ? workspace.root : "Built-in workspace · folder optional"}
-        </span>
-        <span style={{ marginLeft: "auto", color: "var(--text-muted)" }}>Chat on the right · files in the center</span>
-      </div>
+  const paletteCommands: PaletteCommand[] = [
+    { id: "open-folder", label: "Open Folder", run: () => { void handleOpenProject(); } },
+    { id: "open-file", label: "Open File…", run: () => { void handleOpenFileDialog(); } },
+    { id: "new-chat", label: "New Chat", run: () => { setView("editor"); setAiTab("chat"); newChat(); } },
+    { id: "focus-chat", label: "Focus Chat", run: () => { setView("editor"); setAiTab("chat"); } },
+    {
+      id: "index",
+      label: "Rebuild Codebase Index",
+      run: () => {
+        if (!workspace?.root) return;
+        fetch(apiUrl("/index/build"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ projectRoot: workspace.root }),
+        }).catch(() => undefined);
+      },
+    },
+    { id: "models", label: "Open Model Manager", run: () => setView("models") },
+    { id: "search", label: "Open Codebase Search", run: () => setView("search") },
+  ];
 
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+  const appMenus: Menu[] = [
+    {
+      label: "File",
+      items: [
+        { label: "Open Folder…", accelerator: "Ctrl+K Ctrl+O", onClick: () => void handleOpenProject() },
+        { label: "Open File…", accelerator: "Ctrl+O", onClick: () => void handleOpenFileDialog() },
+        { separator: true },
+        { label: "Quick Open…", accelerator: "Ctrl+P", onClick: () => setPalette("files") },
+        ...(workspace?.kind === "folder"
+          ? [{ separator: true as const }, { label: "Close Folder", onClick: () => void handleCloseFolder() }]
+          : []),
+        { separator: true },
+        { label: "Exit", onClick: () => void window.orvyn.window.close() },
+      ],
+    },
+    {
+      label: "Edit",
+      items: [
+        { label: "Undo", accelerator: "Ctrl+Z", onClick: () => document.execCommand("undo") },
+        { label: "Redo", accelerator: "Ctrl+Y", onClick: () => document.execCommand("redo") },
+        { separator: true },
+        { label: "Cut", accelerator: "Ctrl+X", onClick: () => document.execCommand("cut") },
+        { label: "Copy", accelerator: "Ctrl+C", onClick: () => document.execCommand("copy") },
+        { label: "Paste", accelerator: "Ctrl+V", onClick: () => document.execCommand("paste") },
+        { separator: true },
+        { label: "Inline Edit (AI)", accelerator: "Ctrl+K", disabled: !openFile },
+      ],
+    },
+    {
+      label: "View",
+      items: [
+        { label: "Command Palette…", accelerator: "Ctrl+Shift+P", onClick: () => setPalette("commands") },
+        { separator: true },
+        { label: "Explorer", onClick: () => setView("editor") },
+        { label: "Search & RAG", onClick: () => setView("search") },
+        { label: "AI Models", onClick: () => setView("models") },
+        { separator: true },
+        { label: "Toggle Developer Tools", accelerator: "Ctrl+Shift+I", onClick: () => void window.orvyn.window.toggleDevTools() },
+        { label: "Reload", accelerator: "Ctrl+R", onClick: () => void window.orvyn.window.reload() },
+      ],
+    },
+    {
+      label: "Window",
+      items: [
+        { label: "Minimize", onClick: () => void window.orvyn.window.minimize() },
+        { label: "Maximize / Restore", onClick: () => void window.orvyn.window.toggleMaximize() },
+        { separator: true },
+        { label: "Close Window", onClick: () => void window.orvyn.window.close() },
+      ],
+    },
+    {
+      label: "Help",
+      items: [
+        { label: "Connection Settings", onClick: () => setView("settings") },
+        { label: "Keyboard Shortcuts", onClick: () => setPalette("commands") },
+        { separator: true },
+        { label: "About ORVYN", onClick: () => window.alert("ORVYN — Your Code. Your Models. Your AI.") },
+      ],
+    },
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
+      <TitleBar menus={appMenus} title={openFile ? openFile.path : workspace?.root ?? "ORVYN"} />
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
         <ActivityBar
           view={view}
           onChange={setView}
@@ -203,17 +339,19 @@ export function App() {
 
         {showEditorChrome && (
           <>
-            <div style={{ width: 220, background: "var(--bg-panel)", borderRight: "1px solid var(--border)", overflowY: "auto" }}>
-              <FileExplorer
-                workspace={workspace}
-                onOpenFile={handleOpenFile}
-                onOpenFolder={handleOpenProject}
-                onOpenRecent={handleOpenRecent}
-                onCloseFolder={handleCloseFolder}
-              />
-            </div>
+            <ResizablePanel side="left" defaultWidth={220} minWidth={160}>
+              <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+                <FileExplorer
+                  workspace={workspace}
+                  onOpenFile={handleOpenFile}
+                  onOpenFolder={handleOpenProject}
+                  onOpenRecent={handleOpenRecent}
+                  onCloseFolder={handleCloseFolder}
+                />
+              </div>
+            </ResizablePanel>
 
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--bg-panel)", position: "relative" }}>
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg-panel)", position: "relative" }}>
               <EditorTabs
                 tabs={tabs}
                 activePath={activePath}
@@ -225,8 +363,22 @@ export function App() {
                   height="100%"
                   theme="orvyn-dark"
                   path={openFile.path}
+                  language={guessLanguage(openFile.path)}
                   defaultLanguage={guessLanguage(openFile.path)}
                   value={openFile.content}
+                  options={{
+                    fontSize: 13,
+                    fontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
+                    minimap: { enabled: false },
+                    padding: { top: 8 },
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    wordWrap: "off",
+                    renderLineHighlight: "line",
+                    bracketPairColorization: { enabled: true },
+                    inlineSuggest: { enabled: true },
+                    quickSuggestions: { other: false, comments: false, strings: false },
+                  }}
                   onMount={(editor) => inlineEdit.attach(editor)}
                   onChange={(value) =>
                     setTabs((prev) =>
@@ -251,30 +403,69 @@ export function App() {
               )}
             </div>
 
-            <div style={{ width: 400, background: "var(--bg-panel)", borderLeft: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
-              <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
+            <ResizablePanel side="right" defaultWidth={400} minWidth={280} maxWidth={700}>
+              <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, minWidth: 0 }}>
+              <div style={{ display: "flex", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
                 <AiTabButton label="Chat" active={aiTab === "chat"} onClick={() => setAiTab("chat")} />
-                <AiTabButton label="Composer" active={aiTab === "composer"} onClick={() => setAiTab("composer")} />
-                <AiTabButton label="Agent" active={aiTab === "agent"} onClick={() => setAiTab("agent")} />
+                <AiTabButton label="Plan" active={aiTab === "plan"} onClick={() => setAiTab("plan")} />
+                <AiTabButton label="Build" active={aiTab === "build"} onClick={() => setAiTab("build")} />
+                <AiTabButton label="Review" active={aiTab === "review"} onClick={() => setAiTab("review")} />
               </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
+              <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
                 {aiTab === "chat" && (
-                  <AIChatPanel currentFile={openFile} workspace={workspace} onApplyCode={handleApplyCode} />
+                  <AIChatPanel
+                    currentFile={openFile}
+                    workspace={workspace}
+                    projectFiles={projectFiles}
+                    onApplyCode={handleApplyCode}
+                  />
                 )}
-                {aiTab === "composer" && (
+                {aiTab === "plan" && (
                   <ComposerPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
                 )}
-                {aiTab === "agent" && (
+                {aiTab === "build" && (
                   <AgentPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
                 )}
+                {aiTab === "review" && <ReviewPanel />}
               </div>
-            </div>
+              </div>
+            </ResizablePanel>
           </>
+        )}
+
+        {view === "chats" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ChatHistoryPanel
+              onOpenChat={() => {
+                setView("editor");
+                setAiTab("chat");
+              }}
+              onNewChat={newChat}
+            />
+          </div>
+        )}
+
+        {view === "reports" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ReportsPanel />
+          </div>
         )}
 
         {view === "search" && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <SearchPanel workspaceRoot={workspaceRoot} workspaceKind={workspace?.kind ?? "default"} />
+          </div>
+        )}
+
+        {view === "agents" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <MissionControl projectRoot={workspaceRoot} />
+          </div>
+        )}
+
+        {view === "scm" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <GitScmPanel projectRoot={workspaceRoot} />
           </div>
         )}
 
@@ -291,6 +482,8 @@ export function App() {
         )}
       </div>
 
+      {showEditorChrome && <BottomPanel />}
+
       <div
         style={{
           height: 28,
@@ -303,8 +496,19 @@ export function App() {
           color: "var(--text-secondary)",
         }}
       >
-        {workspace?.kind === "folder" ? "Folder workspace" : "Built-in workspace"} · Chat · Composer · Agent · Ctrl+K
+        {workspace?.kind === "folder" ? "Folder workspace" : "Built-in workspace"} · Ctrl+P files · Ctrl+Shift+P commands · Ctrl+K edit · Tab complete
       </div>
+      {palette && (
+        <CommandPalette
+          mode={palette}
+          files={projectFiles}
+          commands={paletteCommands}
+          onOpenFile={(path) => {
+            void handleOpenFile(path);
+          }}
+          onClose={() => setPalette(null)}
+        />
+      )}
     </div>
   );
 }
@@ -325,7 +529,7 @@ function EmptyEditor({ onOpenFile }: { onOpenFile: () => void }) {
     >
       <div style={{ fontSize: 14, color: "var(--text-secondary)" }}>No file open</div>
       <div style={{ fontSize: 12, maxWidth: 340, textAlign: "center", lineHeight: 1.55 }}>
-        The center pane is the file viewer. Pick a file in the explorer, or open one from the header. Chat stays on the right. Select code and press Ctrl+K to rewrite it.
+        The center pane is the file viewer. Pick a file in the explorer, or open one from File → Open File. Chat stays on the right. Select code and press Ctrl+K to rewrite it.
       </div>
       <button onClick={onOpenFile} style={headerBtn()}>
         Open File

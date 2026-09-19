@@ -40,6 +40,14 @@ export const IconSearch = (p: IconProps) => (
   </Svg>
 );
 
+export const IconImage = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <circle cx="8.5" cy="10" r="1.5" />
+    <path d="m21 16-4.5-4.5L9 19" />
+  </Svg>
+);
+
 export const IconSparkles = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7L4.5 10.8 10.2 9Z" />
@@ -114,8 +122,37 @@ export const IconChat = (p: IconProps) => (
   </Svg>
 );
 
+export const IconPaperclip = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M21.4 11.6 12 21a5 5 0 0 1-7-7l9.5-9.5a3.5 3.5 0 0 1 5 5L10 19" />
+  </Svg>
+);
+
 export const IconPlus = (p: IconProps) => (
   <Svg {...p}>
     <path d="M12 5v14M5 12h14" />
+  </Svg>
+);
+
+export const IconCode = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4.5 10.5 19.5" />
+  </Svg>
+);
+
+export const IconReport = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 3h9l4 4v14H6z" />
+    <path d="M15 3v4h4" />
+    <path d="M9.5 12h6M9.5 15.5h6M9.5 8.5h3" />
+  </Svg>
+);
+
+export const IconAgents = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="6" r="2.5" />
+    <circle cx="5.5" cy="17" r="2.5" />
+    <circle cx="18.5" cy="17" r="2.5" />
+    <path d="M10.5 7.8 7 14.7M13.5 7.8l3.5 6.9M8 17h8" />
   </Svg>
 );

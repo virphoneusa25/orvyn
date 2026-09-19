@@ -1,12 +1,29 @@
 // apps/desktop/src/renderer/components/ActivityBar.tsx
 import React from "react";
-import { IconChat, IconFiles, IconPlus, IconSearch, IconSparkles, IconSettings } from "./Icons";
+import {
+  IconAgents,
+  IconChat,
+  IconCode,
+  IconGit,
+  IconPlus,
+  IconReport,
+  IconSearch,
+  IconSparkles,
+  IconSettings,
+} from "./Icons";
+import appIcon from "../assets/icon.png";
 
-export type ViewId = "editor" | "search" | "models" | "settings";
+export type ViewId = "editor" | "chats" | "search" | "scm" | "agents" | "reports" | "models" | "settings";
 
+// Ordering mirrors the reference nav — Chats, Agents, Programming (the coding
+// workspace), Reports — with ORVYN's extras kept after them.
 const ITEMS: { id: ViewId; label: string; Icon: React.FC<{ size?: number }> }[] = [
-  { id: "editor", label: "Explorer", Icon: IconFiles },
+  { id: "chats", label: "Chats", Icon: IconChat },
+  { id: "agents", label: "Agents & Missions", Icon: IconAgents },
+  { id: "editor", label: "Programming", Icon: IconCode },
+  { id: "reports", label: "Reports", Icon: IconReport },
   { id: "search", label: "Search & RAG", Icon: IconSearch },
+  { id: "scm", label: "Source Control", Icon: IconGit },
   { id: "models", label: "AI Models", Icon: IconSparkles },
 ];
 
@@ -32,10 +49,18 @@ export function ActivityBar({
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        paddingTop: 6,
+        paddingTop: 8,
         flexShrink: 0,
       }}
     >
+      <img
+        src={appIcon}
+        alt="ORVYN"
+        width={22}
+        height={22}
+        title="ORVYN"
+        style={{ borderRadius: 6, marginBottom: 8, display: "block", background: "#161B2C" }}
+      />
       <Item label="Chat" active={!!chatActive} onClick={() => onFocusChat?.()}>
         <IconChat size={19} />
       </Item>

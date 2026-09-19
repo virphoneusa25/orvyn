@@ -8,6 +8,8 @@ interface IndexStats {
   tookMs?: number;
   lastIndexedAt?: string;
   error?: string;
+  watching?: boolean;
+  embedder?: string;
 }
 
 interface SearchHit {
@@ -84,13 +86,15 @@ export function SearchPanel({
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 12 }}>
         {workspaceKind === "default"
           ? "Indexes the built-in ORVYN workspace. Open a folder to search a real project."
-          : "Lexical/bag-of-words similarity by default — works with zero external services. Swap in a real embedding model in Settings > AI Models for true semantic ranking."}
+          : stats?.embedder && stats.embedder !== "hash"
+            ? `Semantic search via ${stats.embedder}. File watcher keeps the index current as you edit.`
+            : "Lexical fallback until a real embedding model is configured."}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 12 }}>
         <span>
           Index: <strong>{stats?.status ?? "idle"}</strong>
-          {stats?.status === "ready" && ` · ${stats.filesIndexed} files · ${stats.chunksIndexed} chunks · ${stats.tookMs}ms`}
+          {stats?.status === "ready" && ` · ${stats.filesIndexed} files · ${stats.chunksIndexed} chunks · ${stats.tookMs}ms${stats.watching ? " · watching" : ""}`}
           {stats?.status === "error" && ` · ${stats.error}`}
         </span>
         <button onClick={handleBuild} disabled={building} style={btnGhost()}>

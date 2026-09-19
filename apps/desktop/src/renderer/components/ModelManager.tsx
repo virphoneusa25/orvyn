@@ -10,7 +10,47 @@ const PROVIDERS: ModelConfig["provider"][] = [
   "mock",
 ];
 
-const TASKS = ["chat", "code", "completion", "embedding", "agent", "vision"] as const;
+const TASKS = [
+  "chat",
+  "code",
+  "completion",
+  "embedding",
+  "agent",
+  "vision",
+  "image",
+  "planner",
+  "executor",
+  "reviewer",
+] as const;
+
+const TASK_LABEL: Record<string, string> = {
+  chat: "Chat",
+  code: "Code",
+  completion: "Completion",
+  embedding: "Embedding",
+  agent: "Agent",
+  vision: "Vision",
+  image: "Image",
+  planner: "Planner — decomposes goals (use a strong model)",
+  executor: "Executor — does the work (use a cheap fast model)",
+  reviewer: "Reviewer — accepts or rejects (use a strong model)",
+};
+
+// Mirrors the backend's requiredCapability(): a model may only be routed to a
+// task it actually has the capability for. Without this filter the dropdown
+// offered image models for "Chat", and picking one broke every chat request.
+const TASK_CAPABILITY: Record<string, keyof ModelCapabilities> = {
+  chat: "chat",
+  code: "code",
+  completion: "completion",
+  embedding: "embeddings",
+  agent: "agent",
+  vision: "vision",
+  image: "image",
+  planner: "agent",
+  executor: "agent",
+  reviewer: "chat",
+};
 
 const EMPTY_CAPS: ModelCapabilities = {
   chat: true,
@@ -20,6 +60,7 @@ const EMPTY_CAPS: ModelCapabilities = {
   vision: false,
   embeddings: false,
   completion: false,
+  image: false,
 };
 
 function emptyModel(): ModelConfig {
@@ -380,10 +421,10 @@ export function ModelManager() {
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 10 }}>
         Which model handles each kind of request. Falls back automatically to any model with the right capability if unset.
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", rowGap: 8, columnGap: 12, fontSize: 13, maxWidth: 420 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.6fr", rowGap: 8, columnGap: 12, fontSize: 13, maxWidth: 640 }}>
         {TASKS.map((task) => (
           <React.Fragment key={task}>
-            <div style={{ alignSelf: "center", textTransform: "capitalize" }}>{task}</div>
+            <div style={{ alignSelf: "center" }}>{TASK_LABEL[task] ?? task}</div>
             <select
               style={inputStyle()}
               value={routing[task] ?? ""}
@@ -392,11 +433,13 @@ export function ModelManager() {
               <option value="" disabled>
                 (auto — first capable model)
               </option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
+              {models
+                .filter((m) => m.capabilities[TASK_CAPABILITY[task] ?? "chat"])
+                .map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
             </select>
           </React.Fragment>
         ))}

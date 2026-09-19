@@ -47,6 +47,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
   background: var(--bg-app);
   color: var(--text);
   font-family: var(--font-ui);

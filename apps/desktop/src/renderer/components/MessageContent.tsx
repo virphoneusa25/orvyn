@@ -109,6 +109,18 @@ function renderText(text: string, key: number) {
       {lines.map((line, i) => {
         if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
 
+        const mdImg = line.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+        if (mdImg) {
+          return (
+            <img
+              key={i}
+              src={mdImg[2]}
+              alt={mdImg[1]}
+              style={{ maxWidth: "100%", borderRadius: 8, margin: "8px 0", display: "block" }}
+            />
+          );
+        }
+
         const heading = line.match(/^(#{1,4})\s+(.*)$/);
         const bullet = line.match(/^[-*]\s+(.*)$/);
         const body = heading ? heading[2] : bullet ? bullet[1] : line;

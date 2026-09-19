@@ -9,6 +9,7 @@ export interface ModelCapabilities {
   vision: boolean;
   embeddings: boolean;
   completion: boolean;
+  image: boolean;
 }
 
 export interface ModelConfig {
@@ -17,6 +18,7 @@ export interface ModelConfig {
   provider: "ollama" | "vllm" | "llamacpp" | "openai-compatible" | "custom-http" | "mock";
   endpoint: string;
   apiKey?: string;
+  apiModelId?: string;
   contextWindow: number;
   maxOutputTokens: number;
   defaultTemperature: number;
