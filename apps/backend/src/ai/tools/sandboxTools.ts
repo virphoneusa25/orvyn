@@ -29,14 +29,14 @@ export function makeSandboxTerminalTool(sandbox: DockerSandbox): AITool {
     },
     // Matches the host terminal tool: every call asks.
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       const command = String(args.command ?? "").trim();
       if (!command) return { ok: false, error: "command is required" };
 
       const cwd = String(args.cwd ?? "").trim();
       const full = cwd ? `cd /workspace/${cwd.replace(/^\/+/, "")} && (${command})` : `cd /workspace && (${command})`;
 
-      const result = await sandbox.exec(full);
+      const result = await sandbox.exec(full, { signal: context?.signal, onOutput: context?.onOutput });
       if (result.timedOut) {
         return { ok: false, error: `Command timed out and was killed inside the sandbox. Output so far:\n${result.output.slice(0, 4000)}` };
       }
