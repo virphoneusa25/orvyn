@@ -1,9 +1,9 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
 // apps/backend/src/agent/MultiAgentRuntime.ts
 //
-// The Astra mission loop:
+// The ORION mission loop:
 //
-//   ASTRA (orchestrator role, planner/reviewer model)
+//   ORION (orchestrator role, planner/reviewer model)
 //     → decomposes the goal into tasks, each ASSIGNED TO A SPECIALIST
 //     → monitors execution, judges every result, sends rework
 //     → never writes code itself
@@ -53,7 +53,7 @@ const MAX_TASKS = 12;
 const MAX_REVISIONS = 2;        // per task, before giving up and moving on
 const MAX_EXECUTOR_STEPS = 10;  // tool calls per task attempt
 
-/** Which specialists Astra may delegate to today (browser needs Playwright). */
+/** Which specialists ORION may delegate to today (browser needs Playwright). */
 function delegatable(): AgentRole[] {
   const base: AgentRole[] = ["coder", "tester", "research", "git", "security"];
   return playwrightAvailable() ? [...base, "browser"] : base;
@@ -274,10 +274,10 @@ export class MultiAgentRuntime {
     }
 
     try {
-      // ---------- ASTRA: PLAN ----------
+      // ---------- ORION: PLAN ----------
       this.taskEngine.setMissionStatus(mission.id, "PLANNING");
       const astra = this.models.resolveRole("orchestrator");
-      this.store.emit(runId, "thinking", { role: "astra", model: astra.config.id });
+      this.store.emit(runId, "thinking", { role: "orion", model: astra.config.id });
 
       const planResponse = await this.modelService.usage.with(
         { missionId: mission.id, agent: "orchestrator" },
@@ -287,7 +287,7 @@ export class MultiAgentRuntime {
           {
             role: "system",
             content: [
-              "You are ASTRA, the orchestrator of ORVYN's engineering agents.",
+              "You are ORION, the orchestrator of ORVYN's engineering agents.",
               "You NEVER write code yourself. You decompose the user's goal into a short",
               "ordered list of concrete, independently-verifiable tasks and assign each",
               "to exactly one specialist:",
@@ -325,7 +325,7 @@ export class MultiAgentRuntime {
         }
       } catch (err: any) {
         this.store.emit(runId, "run.error", {
-          message: `Astra did not return valid JSON: ${err.message}. Raw: ${planResponse.content.slice(0, 200)}`,
+          message: `ORION did not return valid JSON: ${err.message}. Raw: ${planResponse.content.slice(0, 200)}`,
         });
         this.taskEngine.setMissionStatus(mission.id, "FAILED");
         this.store.setStatus(runId, "error");
@@ -372,7 +372,7 @@ export class MultiAgentRuntime {
         }
       }
 
-      // ---------- WORKERS: EXECUTE, ASTRA: REVIEW EACH ----------
+      // ---------- WORKERS: EXECUTE, ORION: REVIEW EACH ----------
       const reviewer = this.models.resolveTask("reviewer");
 
       for (const task of mission.tasks.slice()) {
@@ -794,7 +794,7 @@ export class MultiAgentRuntime {
     return transcript.join("\n").slice(0, 8000);
   }
 
-  // Astra (reviewer model) judges each task result strictly. A malformed
+  // ORION (reviewer model) judges each task result strictly. A malformed
   // verdict counts as a rejection — silently approving would disable review.
   private async reviewTask(
     runId: string,
@@ -808,7 +808,7 @@ export class MultiAgentRuntime {
           {
             role: "system",
             content: [
-              "You are ASTRA acting as reviewer. Judge whether the task was genuinely completed.",
+              "You are ORION acting as reviewer. Judge whether the task was genuinely completed.",
               "Be strict: reject vague claims, unverified work, or partial completion.",
               "The worker log lists each tool call with its REAL output — successful tool",
               "outputs (file contents, command output, page titles, click results, console",
