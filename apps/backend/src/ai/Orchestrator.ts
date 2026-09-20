@@ -35,6 +35,8 @@ export interface ChatTurnRequest {
   userMessage: string;
   context?: ChatContext;
   attachments?: Attachment[];
+  /** "auto" or a concrete configured model id selected for this chat turn. */
+  requestedModelId?: string;
 }
 
 function modeInstructions(mode: ChatMode | undefined): string {
@@ -192,6 +194,14 @@ export class Orchestrator {
   constructor(private modelService: ModelService, private indexService?: IndexService) {}
 
   private resolveProvider(req: ChatTurnRequest) {
+    const requested = req.requestedModelId?.trim();
+    if (requested && requested !== "auto") {
+      const provider = this.modelService.registry.get(requested);
+      if (!provider) throw new Error(`Requested model "${requested}" is not configured.`);
+      const capability = req.task === "chat" ? "chat" : req.task;
+      if (!(provider.config.capabilities as any)[capability]) throw new Error(`Requested model "${requested}" cannot handle "${req.task}".`);
+      return provider;
+    }
     const hasImages =
       (req.attachments ?? []).some((a) => a.kind === "image") ||
       (req.context?.attachments ?? []).some((a) => a.kind === "image");
