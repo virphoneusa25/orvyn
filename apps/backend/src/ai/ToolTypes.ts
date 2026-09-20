@@ -8,12 +8,17 @@ export interface ToolResult {
   error?: string;
 }
 
+export interface ToolExecutionContext {
+  signal?: AbortSignal;
+  onOutput?: (chunk: string) => void;
+}
+
 export interface AITool {
   name: string;
   description: string;
   parameters: Record<string, unknown>; // JSON Schema
   defaultPermission: ToolPermission;
-  execute(args: Record<string, unknown>): Promise<ToolResult>;
+  execute(args: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult>;
 }
 
 export class ToolRegistry {
@@ -43,7 +48,7 @@ export class ToolRegistry {
     return this.permissions.get(toolName) ?? "ask";
   }
 
-  async execute(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(toolName: string, args: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
     const tool = this.tools.get(toolName);
     if (!tool) return { ok: false, error: `Unknown tool "${toolName}"` };
 
@@ -54,7 +59,7 @@ export class ToolRegistry {
     // "ask" is enforced by the caller (route handler) which must have already
     // obtained explicit user approval before invoking execute() — the tool
     // layer itself never blocks on UI, it only refuses when flatly denied.
-    return tool.execute(args);
+    return tool.execute(args, context);
   }
 }
 
