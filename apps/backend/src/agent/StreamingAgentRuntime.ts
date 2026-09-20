@@ -54,6 +54,8 @@ interface RunState {
   /** Run-scoped model selection; never mutates global routing. */
   requestedModelId?: string;
   actualModelId: string;
+  /** Failed call fingerprints prevent the model from looping on the exact same broken action. */
+  failedFingerprints: Map<string, number>;
 }
 
 /**
@@ -189,6 +191,7 @@ export class StreamingAgentRuntime {
       modelCalls: 0,
       requestedModelId: requestedModelId && requestedModelId !== "auto" ? requestedModelId : undefined,
       actualModelId: provider.config.id,
+      failedFingerprints: new Map(),
     });
 
     // Snapshot the dirty tree before the agent touches anything, so a
@@ -527,6 +530,15 @@ export class StreamingAgentRuntime {
     for (const call of calls) {
       if (state.cancelled) return "cancelled";
 
+      const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
+      const priorFailures = state.failedFingerprints.get(fingerprint) ?? 0;
+      if (priorFailures > 0) {
+        const message = `Blocked identical retry after ${priorFailures} prior failure${priorFailures === 1 ? "" : "s"}. Change the arguments or use a different approach.`;
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, repeated: true });
+        replies.set(call.id, message);
+        continue;
+      }
+
       const permission = this.tools.getPermission(call.name);
       if (permission === "denied") {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: "Denied by project permissions" });
@@ -605,7 +617,9 @@ export class StreamingAgentRuntime {
         onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
       });
 
+      const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       if (result.ok) {
+        state.failedFingerprints.delete(fingerprint);
         anySucceeded = true;
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
         const raw = result.output ?? "";
@@ -622,6 +636,7 @@ export class StreamingAgentRuntime {
         if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
         replies.set(call.id, text);
       } else {
+        state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
         const error = result.error ?? "unknown error";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error });
         if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
