@@ -46,6 +46,8 @@ function docker(args: string[], opts: { timeoutMs?: number; maxBuffer?: number }
   });
 }
 
+export interface ExecOptions { timeoutS?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void; }
+
 export interface ExecResult {
   ok: boolean;
   output: string;
@@ -140,17 +142,25 @@ export class DockerSandbox {
   }
 
   /** Runs a command inside the sandbox with a per-command timeout. */
-  async exec(command: string, timeoutS = COMMAND_TIMEOUT_S): Promise<ExecResult> {
-    if (this.stopped) {
-      return { ok: false, output: "Sandbox has already been stopped.", exitCode: -1, timedOut: false };
-    }
-    const res = await docker(
-      ["exec", this.containerId, "timeout", "--signal=KILL", String(timeoutS), "sh", "-c", command],
-      { timeoutMs: (timeoutS + 15) * 1000 }
-    );
-    const timedOut = res.code === 137;
-    const output = [res.stdout, res.stderr].filter(Boolean).join("\n").trim();
-    return { ok: res.code === 0, output: output || "(no output)", exitCode: res.code, timedOut };
+  async exec(command: string, timeoutOrOptions: number | ExecOptions = COMMAND_TIMEOUT_S): Promise<ExecResult> {
+    if (this.stopped) return { ok:false, output:"Sandbox has already been stopped.", exitCode:-1, timedOut:false };
+    const opts: ExecOptions = typeof timeoutOrOptions === "number" ? { timeoutS: timeoutOrOptions } : timeoutOrOptions;
+    const timeoutS = opts.timeoutS ?? COMMAND_TIMEOUT_S;
+    return await new Promise((resolve) => {
+      const child = spawn("docker", ["exec", this.containerId, "timeout", "--signal=KILL", String(timeoutS), "sh", "-c", command], { windowsHide:true });
+      let output = ""; let settled = false;
+      const timer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, (timeoutS + 10) * 1000);
+      const push = (d: any) => { const s=String(d); output += s; opts.onOutput?.(s); };
+      child.stdout.on("data", push); child.stderr.on("data", push);
+      const abort = () => child.kill("SIGKILL");
+      opts.signal?.addEventListener("abort", abort, { once:true });
+      child.on("close", (code, sig) => {
+        settled=true; clearTimeout(timer); opts.signal?.removeEventListener("abort", abort);
+        const exitCode=code ?? (sig ? 137 : 1); const timedOut=exitCode===137 && !opts.signal?.aborted;
+        resolve({ ok:exitCode===0, output:output.trim()||"(no output)", exitCode, timedOut });
+      });
+      child.on("error", (err) => { if(settled)return; settled=true; clearTimeout(timer); resolve({ok:false,output:String(err.message),exitCode:1,timedOut:false}); });
+    });
   }
 
   /** Copies /workspace out of the container into a host temp dir. */
