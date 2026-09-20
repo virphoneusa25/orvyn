@@ -575,6 +575,40 @@ v1Router.post("/agent/stream/runs/:id/feedback", (req, res) => {
   res.json({ ok: true });
 });
 
+// --- ORION Memory + durable artifact library ---
+v1Router.get("/memory", (req, res) => {
+  const t = requireTenant(req);
+  const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim() || null;
+  res.json({ memories: t.localStore.listMemories(root) });
+});
+
+v1Router.post("/memory", (req, res) => {
+  const t = requireTenant(req);
+  const content = String(req.body.content ?? "").trim();
+  if (!content) return res.status(400).json({ error: "content is required" });
+  const scope = req.body.scope === "global" ? "global" : "project";
+  const projectRoot = scope === "project" ? String(req.body.projectRoot ?? t.currentProjectRoot ?? "").trim() : null;
+  if (scope === "project" && !projectRoot) return res.status(400).json({ error: "projectRoot is required for project memory" });
+  const id = String(req.body.id ?? `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+  t.localStore.saveMemory({
+    id, scope, projectRoot, kind: String(req.body.kind ?? "knowledge"),
+    title: String(req.body.title ?? content.slice(0, 80)), content,
+    source: req.body.source ? String(req.body.source) : "user", pinned: req.body.pinned === true,
+  });
+  res.status(201).json({ id });
+});
+
+v1Router.delete("/memory/:id", (req, res) => {
+  requireTenant(req).localStore.deleteMemory(req.params.id);
+  res.status(204).end();
+});
+
+v1Router.get("/artifacts", (req, res) => {
+  const t = requireTenant(req);
+  const root = String(req.query.projectRoot ?? "").trim() || null;
+  res.json({ artifacts: t.localStore.listArtifacts(root) });
+});
+
 // --- Checkpoints (snapshot/restore/compare of dirty files) ---
 function requireProjectRoot(req: { query: Record<string, unknown>; body?: Record<string, unknown> }): string {
   const root = String((req.body as any)?.projectRoot ?? req.query.projectRoot ?? "").trim();
