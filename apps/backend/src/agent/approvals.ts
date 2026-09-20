@@ -49,6 +49,5 @@ export function raceApprovalTimeout(
       cleanup();
       resolve({ approved: false, timedOut: true, seconds });
     }, seconds * 1000);
-    timer.unref?.();
   });
 }
