@@ -162,6 +162,7 @@ export function useAgentRun(
     instruction: string;
     mode?: string;
     attachments?: Attachment[];
+    requestedModelId?: string;
   }): Promise<boolean> {
     if (!projectRoot || !opts.instruction.trim()) return false;
     const mode = opts.mode ?? "agent";
@@ -174,8 +175,8 @@ export function useAgentRun(
       const endpoint = mode === "multitask" ? "/agent/orchestrate" : "/agent/stream/runs";
       const payload =
         mode === "multitask"
-          ? { projectRoot, goal: opts.instruction, attachments: opts.attachments }
-          : { projectRoot, instruction: opts.instruction, mode, attachments: opts.attachments };
+          ? { projectRoot, goal: opts.instruction, attachments: opts.attachments, requestedModelId: opts.requestedModelId }
+          : { projectRoot, instruction: opts.instruction, mode, attachments: opts.attachments, requestedModelId: opts.requestedModelId };
       const res = await fetch(apiUrl(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
