@@ -29,6 +29,8 @@ const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:22-slim";
 const MISSION_TIMEOUT_MIN = Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30;
 /** Per-command ceiling, seconds (enforced with coreutils `timeout` inside). */
 const COMMAND_TIMEOUT_S = Number(process.env.ORVYN_SANDBOX_COMMAND_TIMEOUT_S) || 180;
+/** Retained command output cap; live chunks still stream to the UI. */
+const MAX_RETAINED_OUTPUT = Number(process.env.ORVYN_SANDBOX_MAX_OUTPUT_BYTES) || 2 * 1024 * 1024;
 
 /** Directories never copied into (or back out of) the sandbox. */
 const SYNC_EXCLUDE = new Set(["node_modules", ".git", ".orvyn", "dist", "release", ".cache"]);
@@ -147,17 +149,23 @@ export class DockerSandbox {
     const opts: ExecOptions = typeof timeoutOrOptions === "number" ? { timeoutS: timeoutOrOptions } : timeoutOrOptions;
     const timeoutS = opts.timeoutS ?? COMMAND_TIMEOUT_S;
     return await new Promise((resolve) => {
-      const child = spawn("docker", ["exec", this.containerId, "timeout", "--signal=KILL", String(timeoutS), "sh", "-c", command], { windowsHide:true });
-      let output = ""; let settled = false;
+      const commandId = `orvyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const pidFile = `/tmp/${commandId}.pid`;
+      // Record the in-container shell PID. On cancellation we kill that PID as
+      // well as the local docker client, so Stop does not leave a build/test
+      // process running invisibly inside the mission container.
+      const wrapped = `echo $ > ${pidFile}; exec timeout --signal=KILL ${Math.max(1, Math.floor(timeoutS))} sh -c "$1"`;
+      const child = spawn("docker", ["exec", this.containerId, "sh", "-c", wrapped, "orvyn-command", command], { windowsHide:true });
+      let output = ""; let outputBytes = 0; let truncated = false; let settled = false;
       const timer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, (timeoutS + 10) * 1000);
-      const push = (d: any) => { const s=String(d); output += s; opts.onOutput?.(s); };
+      const push = (d: any) => { const s=String(d); opts.onOutput?.(s); const bytes=Buffer.byteLength(s); if(outputBytes < MAX_RETAINED_OUTPUT){ const room=MAX_RETAINED_OUTPUT-outputBytes; const kept=Buffer.from(s).subarray(0,room).toString(); output+=kept; outputBytes+=Buffer.byteLength(kept); if(bytes>room) truncated=true; } else truncated=true; };
       child.stdout.on("data", push); child.stderr.on("data", push);
-      const abort = () => child.kill("SIGKILL");
+      const abort = () => { void docker(["exec", this.containerId, "sh", "-c", `test -f ${pidFile} && kill -KILL $(cat ${pidFile}) 2>/dev/null || true`], { timeoutMs: 5000 }); child.kill("SIGKILL"); };
       opts.signal?.addEventListener("abort", abort, { once:true });
       child.on("close", (code, sig) => {
         settled=true; clearTimeout(timer); opts.signal?.removeEventListener("abort", abort);
         const exitCode=code ?? (sig ? 137 : 1); const timedOut=exitCode===137 && !opts.signal?.aborted;
-        resolve({ ok:exitCode===0, output:output.trim()||"(no output)", exitCode, timedOut });
+        const suffix=truncated ? `\n[output truncated after ${MAX_RETAINED_OUTPUT} bytes]` : ""; resolve({ ok:exitCode===0, output:(output.trim()||"(no output)")+suffix, exitCode, timedOut });
       });
       child.on("error", (err) => { if(settled)return; settled=true; clearTimeout(timer); resolve({ok:false,output:String(err.message),exitCode:1,timedOut:false}); });
     });
