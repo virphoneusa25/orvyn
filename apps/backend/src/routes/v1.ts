@@ -517,6 +517,21 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   }
   _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
+  // Multi-agent runtime still owns task decomposition. Until each worker has
+  // its own run-scoped provider parameter, honor an explicit selection by
+  // routing this request through the single-agent ORION tool loop instead of
+  // silently ignoring the user's chosen model.
+  if (typeof req.body.requestedModelId === "string" && req.body.requestedModelId !== "auto") {
+    const runId = t.agentRuntime.start(
+      req.body.projectRoot,
+      req.body.goal,
+      "agent",
+      req.body.attachments,
+      [],
+      req.body.requestedModelId
+    );
+    return res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
+  }
   const runId = t.multiAgentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
