@@ -130,7 +130,7 @@ export class DockerSandbox {
     await new Promise<void>((resolve, reject) => {
       const excludes = [...SYNC_EXCLUDE].flatMap((d) => ["--exclude", d]);
       const tar = spawn("tar", ["cf", "-", ...excludes, "-C", projectRoot, "."], { windowsHide: true });
-      const dock = spawn("docker", ["exec", "-i", this.containerId, "tar", "xf", "-", "-C", "/workspace"], { windowsHide: true });
+      const dock = spawn("docker", ["exec", "-i", this.containerId, "tar", "--no-same-owner", "--no-same-permissions", "-xf", "-", "-C", "/workspace"], { windowsHide: true });
       let err = "";
       dock.stderr.on("data", (d) => (err += d));
       tar.stderr.on("data", (d) => (err += d));
