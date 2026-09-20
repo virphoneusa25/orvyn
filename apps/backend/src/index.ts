@@ -33,8 +33,6 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
 wss.on("connection", (socket, req) => {
-  let alive = true;
-  socket.on("pong", () => { alive = true; });
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
   let tenant = resolveTenantFromToken(token);
