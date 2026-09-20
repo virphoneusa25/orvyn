@@ -701,6 +701,27 @@ v1Router.get("/servers", async (req, res) => {
   }
 });
 
+// --- Runtime capabilities (truthful Home connection state) ---
+v1Router.get("/runtime/capabilities", async (req, res) => {
+  const t = requireTenant(req);
+  const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
+  let sshHostCount = 0;
+  if (root) {
+    try { sshHostCount = (await loadSshHosts(root)).length; } catch { sshHostCount = 0; }
+  }
+  let dockerAvailable = false;
+  try { dockerAvailable = await (await import("../sandbox/DockerSandbox")).DockerSandbox.available(); } catch {}
+  res.json({
+    engineReady: true,
+    dockerAvailable,
+    sshHostCount,
+    // These integrations do not yet expose authoritative connection probes.
+    githubConnected: false,
+    postgresConnected: false,
+    cloudSignedIn: false,
+  });
+});
+
 // --- MCP servers (status for the Agents view) ---
 v1Router.get("/mcp/servers", async (req, res) => {
   try {
