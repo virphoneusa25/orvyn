@@ -16,6 +16,8 @@ import { WorkStream } from "./components/WorkStream";
 import { ContextPanel } from "./components/ContextPanel";
 import { useAgentRun } from "./useAgentRun";
 import { HomeScreen } from "./components/redesign/HomeScreen";
+import { MissionDetail } from "./components/redesign/MissionDetail";
+import { missionDetailFromRuntime, type ApiMissionDetail } from "./components/redesign/runtimeAdapter";
 import { toMissionSummary, toSystems, ApiMissionRow } from "./components/redesign/adapters";
 import type { MissionSummary } from "./components/redesign/types";
 import { StatusBar } from "./components/StatusBar";
@@ -111,6 +113,7 @@ export function App() {
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
   const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
+  const [missionDetail, setMissionDetail] = useState<ApiMissionDetail | null>(null);
 
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -506,13 +509,10 @@ export function App() {
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             {centerMode === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>\n                <HomeScreen userName="Royce" workspaceName={projectName} status={{ engineReady: true, cloudOnline: false }} missions={homeMissions} systems={toSystems({ engineReady: true, githubConnected: true, sshHostCount: 0, postgresConnected: false, dockerConnected: false, cloudSignedIn: false })} onRun={(prompt) => { newChat(); setCenterMode("work"); setActiveRunId(null); setTimeout(() => { document.dispatchEvent(new CustomEvent("orvyn:prefill-composer", { detail: prompt })); document.dispatchEvent(new CustomEvent("orvyn:focus-composer")); }, 50); }} onOpenMission={(id) => { newChat(); setActiveRunId(id); setCenterMode("work"); setView("newtask"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onOpenCommand={() => setPalette("commands")} />\n              </div>
+            ) : missionDetail && activeRunId ? (
+              <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
             ) : (
-              <WorkStream
-                projectRoot={workspaceRoot}
-                projectName={projectName}
-                run={runView}
-                onRunStarted={(runId) => setActiveRunId(runId)}
-              />
+              <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} />
             )}
           </div>
         )}
