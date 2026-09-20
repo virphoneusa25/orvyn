@@ -12,6 +12,9 @@ export interface SearchResult {
   metadata: Record<string, unknown>;
 }
 
+import { promises as fs } from "fs";
+import * as path from "path";
+
 // Matches the master spec's VectorStore abstraction. InMemoryVectorStore is
 // the dev/default implementation (brute-force cosine similarity — fine up
 // to a few tens of thousands of chunks). Production deployments should
@@ -75,4 +78,59 @@ export class InMemoryVectorStore implements VectorStore {
   async size(): Promise<number> {
     return this.records.size;
   }
+}
+
+
+/**
+ * Durable local vector store for single-host OVH deployments.
+ * Uses an atomic JSON snapshot so indexes survive backend restarts without
+ * requiring an external database. Qdrant can replace this behind VectorStore
+ * later when horizontal scale warrants it.
+ */
+export class PersistentVectorStore implements VectorStore {
+  private records = new Map<string, VectorRecord>();
+  private loaded = false;
+  private writing: Promise<void> = Promise.resolve();
+
+  constructor(private filePath: string) {}
+
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    this.loaded = true;
+    try {
+      const raw = JSON.parse(await fs.readFile(this.filePath, "utf8"));
+      for (const r of Array.isArray(raw) ? raw : []) {
+        if (r?.id && Array.isArray(r.vector)) this.records.set(String(r.id), r as VectorRecord);
+      }
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") console.warn(`Vector index load failed: ${err.message}`);
+    }
+  }
+
+  private persist(): Promise<void> {
+    this.writing = this.writing.then(async () => {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+      const tmp = `${this.filePath}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify([...this.records.values()]), "utf8");
+      await fs.rename(tmp, this.filePath);
+    });
+    return this.writing;
+  }
+
+  async upsert(record: VectorRecord): Promise<void> {
+    await this.ensureLoaded(); this.records.set(record.id, record); await this.persist();
+  }
+  async search(queryVector: number[], topK: number): Promise<SearchResult[]> {
+    await this.ensureLoaded();
+    return [...this.records.values()].map((r) => ({ id:r.id, score:cosineSimilarity(queryVector,r.vector), metadata:r.metadata }))
+      .sort((a,b)=>b.score-a.score).slice(0,topK);
+  }
+  async delete(id: string): Promise<void> { await this.ensureLoaded(); this.records.delete(id); await this.persist(); }
+  async deleteByPrefix(prefix: string): Promise<void> {
+    await this.ensureLoaded();
+    for (const id of [...this.records.keys()]) if (id===prefix || id.startsWith(`${prefix}::`)) this.records.delete(id);
+    await this.persist();
+  }
+  async clear(): Promise<void> { await this.ensureLoaded(); this.records.clear(); await this.persist(); }
+  async size(): Promise<number> { await this.ensureLoaded(); return this.records.size; }
 }
