@@ -621,7 +621,12 @@ export class StreamingAgentRuntime {
       if (result.ok) {
         state.failedFingerprints.delete(fingerprint);
         anySucceeded = true;
-        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
+        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
+          this.emitDomainEvent(runId, call, previews.get(call.id));
+          const args = call.arguments as Record<string, unknown>;
+          const artifactPath = String(args.path ?? args.to ?? args.from ?? "").trim();
+          if (artifactPath && call.name !== "delete_file") this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
+        }
         const raw = result.output ?? "";
         // The model gets the clamped text, not the raw output: one oversized
         // result would otherwise consume the whole window.
