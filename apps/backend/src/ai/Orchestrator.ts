@@ -1,3 +1,5 @@
+import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
 import { AIMessage, AIChunk, Attachment, TaskType } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
@@ -100,6 +102,7 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService):
   const mode = req.context?.mode ?? "ask";
 
   const systemParts: string[] = [
+    CONVERSATION_STYLE,
     "You are ORVYN, a coding assistant living in a desktop IDE — same job as Cursor's chat: think with the user, write and edit code, debug, and ship.",
     "Voice: a sharp teammate, not a helpdesk. Use contractions. Be specific. Lead with the useful answer.",
     "Never use: \"How can I assist you today?\", \"Certainly!\", \"Of course!\", \"Great question!\", \"I'd be happy to help\", or any other customer-service opener.",
@@ -210,8 +213,41 @@ export class Orchestrator {
     }
     const provider = this.resolveProvider(req);
     const messages = await buildMessages(req, this.indexService);
+    const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
+    // Output-language guard: the routed providers include Chinese-first
+    // models that mirror the user's language even when told not to. Detect
+    // Chinese in the first bytes and regenerate in English BEFORE the
+    // conversation shows it — streaming continues normally afterwards.
+    let buffered = "";
+    let decided = false;
     try {
-      yield* provider.stream({ messages, stream: true, temperature: req.context?.mode === "ask" ? 0.7 : 0.3 });
+      for await (const chunk of provider.stream({ messages, stream: true, temperature })) {
+        if (!decided) {
+          if (chunk.delta) buffered += chunk.delta;
+          if (buffered.trim().length < 8 && !chunk.done) continue; // not enough signal yet
+          decided = true;
+          if (isMostlyChinese(buffered)) {
+            const retry = await generateEnglish(provider, {
+              messages: [...messages, { role: "system", content: RETRY_RULE }],
+              temperature,
+            });
+            const text = String(retry?.content ?? "");
+            for (const piece of text.match(/[\s\S]{1,24}/g) ?? []) {
+              yield { delta: piece, done: false };
+              await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            yield { delta: "", done: true };
+            return;
+          }
+          if (buffered) yield { delta: buffered, done: false };
+          if (chunk.done) {
+            yield { delta: "", done: true };
+            return;
+          }
+          continue;
+        }
+        yield chunk;
+      }
     } catch (err: any) {
       yield { delta: `\n\n[Error: ${err.message}]`, done: true };
     }

@@ -1,3 +1,4 @@
+import { CONVERSATION_STYLE } from "./conversationStyle";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
 //
 // The agent loop, re-expressed as an event producer. Instead of returning a
@@ -15,6 +16,7 @@ import { ToolGateway } from "../gateway/ToolGateway";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore } from "./events";
 import { raceApprovalTimeout } from "./approvals";
+import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
 import { clampToolOutput, compactConversation, estimateConversationTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
@@ -116,7 +118,7 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview });
         break;
       case "terminal":
-        this.store.emit(runId, "terminal.started", { command: args.command });
+        this.store.emit(runId, "terminal.started", { callId: call.id, command: args.command });
         break;
       case "generate_image":
         this.store.emit(runId, "image.generated", { prompt: args.prompt });
@@ -151,7 +153,8 @@ export class StreamingAgentRuntime {
     instruction: string,
     rules?: string,
     mode: AgentMode = "agent",
-    attachments?: Attachment[]
+    attachments?: Attachment[],
+    history: AIMessage[] = []
   ): string {
     const runId = randomUUID();
     this.store.create(runId, projectRoot);
@@ -197,16 +200,19 @@ export class StreamingAgentRuntime {
         role: "system",
         content: [
           def.systemPrompt,
+          CONVERSATION_STYLE,
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
           `Project root (absolute): ${projectRoot}`,
           "File tools take paths relative to the project root. Start vague tasks with list_directory on \".\".",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
+            LANGUAGE_RULE,
           rules ? `\nProject rules:\n${rules}` : "",
         ]
           .filter(Boolean)
           .join("\n"),
       },
+      ...history,
       { role: "user", content: instruction, attachments },
     ];
 
@@ -316,6 +322,8 @@ export class StreamingAgentRuntime {
         let streamedText = false;
         const streamedCalls: ToolCall[] = [];
 
+        let langChecked = false;
+        let langBuffer = "";
         for await (const chunk of provider.stream({
           messages,
           tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : undefined,
@@ -323,6 +331,33 @@ export class StreamingAgentRuntime {
           signal,
         })) {
           if (chunk.delta) {
+            // Language guard: decide on the first bytes. A Chinese reply is
+            // abandoned (nothing emitted yet) and regenerated in English —
+            // the center stream never shows Chinese prose.
+            if (!langChecked) {
+              langBuffer += chunk.delta;
+              if (langBuffer.trim().length < 8 && !chunk.done) continue;
+              langChecked = true;
+              if (isMostlyChinese(langBuffer)) {
+                const retry = await generateEnglish(provider, {
+                  messages,
+                  tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : undefined,
+                });
+                const text = String(retry?.content ?? "");
+                for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
+                  this.store.emit(runId, "message.delta", { content: piece });
+                }
+                content = text;
+                streamedText = text.length > 0;
+                for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
+                break;
+              }
+              if (langBuffer) this.store.emit(runId, "message.delta", { content: langBuffer });
+              content += langBuffer;
+              streamedText = true;
+              if (chunk.done) break;
+              continue;
+            }
             content += chunk.delta;
             streamedText = true;
             this.store.emit(runId, "message.delta", { content: chunk.delta });
@@ -501,13 +536,14 @@ export class StreamingAgentRuntime {
     const runOne = async (call: ToolCall): Promise<void> => {
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-      this.emitDomainEvent(runId, call, previews.get(call.id));
+      if (!["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
       const result = await this.tools.execute(call.name, call.arguments, "coder");
 
       if (result.ok) {
         anySucceeded = true;
+        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
         const raw = result.output ?? "";
         // The model gets the clamped text, not the raw output: one oversized
         // result would otherwise consume the whole window.
@@ -520,15 +556,15 @@ export class StreamingAgentRuntime {
           bytes: raw.length,
         });
         if (call.name === "terminal" || call.name === "run_command") {
-          this.store.emit(runId, "terminal.output", { data: raw.slice(0, 2000) });
-          this.store.emit(runId, "terminal.completed", { exitOk: true });
+          this.store.emit(runId, "terminal.output", { callId: call.id, data: raw.slice(-16000), truncated: raw.length > 16000 });
+          this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
         }
         replies.set(call.id, text);
       } else {
         const error = result.error ?? "unknown error";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error });
         if (call.name === "terminal" || call.name === "run_command") {
-          this.store.emit(runId, "terminal.completed", { exitOk: false });
+          this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
         }
         replies.set(
           call.id,

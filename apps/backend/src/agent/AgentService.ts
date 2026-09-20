@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { AIMessage, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
+import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { ToolRegistry } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 
@@ -158,6 +159,7 @@ export class AgentService {
             "3. VERIFY it — run the build or tests via the terminal tool where possible.",
             "4. If verification fails, read the error, diagnose it, and fix it. Do not",
             "   repeat a call that just failed; change your approach.",
+            LANGUAGE_RULE,
             "5. Finish only when the task is done and verified, then summarise what",
             "   you changed and how you confirmed it.",
             rules ? `\nProject rules:\n${rules}` : "",

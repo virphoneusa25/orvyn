@@ -37,6 +37,7 @@ import { clampToolOutput, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { MissionBudgetExceededError } from "../services/UsageService";
 import { MissionQueue } from "../queue/MissionQueue";
 import { raceApprovalTimeout } from "./approvals";
+import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
 
 interface PendingApproval {
@@ -281,7 +282,7 @@ export class MultiAgentRuntime {
       const planResponse = await this.modelService.usage.with(
         { missionId: mission.id, agent: "orchestrator" },
         () =>
-          astra.generate({
+          generateEnglish(astra, {
         messages: [
           {
             role: "system",
@@ -295,6 +296,7 @@ export class MultiAgentRuntime {
               '- "research": reads/searches code and docs to answer a question (no edits)',
               '- "git": branch/commit operations only',
               '- "security": reviews code/diffs for vulnerabilities and reports findings (no edits)',
+            LANGUAGE_RULE,
               ...(playwrightAvailable()
                 ? ['- "browser": browser QA — open pages, click, type, screenshot (Playwright)']
                 : []),
@@ -554,13 +556,16 @@ export class MultiAgentRuntime {
     const summary = await this.modelService.usage.with(
       { missionId: mission.id, agent: "orchestrator" },
       () =>
-        astra.generate({
+        generateEnglish(astra, {
       messages: [
         {
           role: "system",
-          content: blocked
-            ? "You are ASTRA. The mission failed final review after the maximum rework cycles. In 1-3 short sentences, tell the user what was attempted, what the blocking issues are, and that their decision is needed to proceed."
-            : "You are ASTRA. Summarise what was accomplished in 1-3 short sentences, including anything that failed.",
+          content:
+            (blocked
+              ? "You are ASTRA. The mission failed final review after the maximum rework cycles. In 1-3 short sentences, tell the user what was attempted, what the blocking issues are, and that their decision is needed to proceed."
+              : "You are ASTRA. Summarise what was accomplished in 1-3 short sentences, including anything that failed.") +
+            "\n" +
+            LANGUAGE_RULE,
         },
         {
           role: "user",
@@ -619,6 +624,7 @@ export class MultiAgentRuntime {
         content: [
           WORKER_PROMPTS[task.agent] ?? WORKER_PROMPTS.coder,
           CONVERSATION_STYLE,
+          LANGUAGE_RULE,
           rules ? `\nProject rules:\n${rules}` : "",
         ]
           .filter(Boolean)
@@ -647,7 +653,7 @@ export class MultiAgentRuntime {
       if (this.isCancelled(runId)) break;
       let response;
       try {
-        response = await worker.generate({ messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });
+        response = await generateEnglish(worker, { messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });
       } catch (err: any) {
         if (this.isCancelled(runId)) break;
         // Surface it — a silent break here looks like the agent "gave up
@@ -661,7 +667,7 @@ export class MultiAgentRuntime {
         break;
       }
 
-      const calls = (response.toolCalls ?? []).filter((c) => c?.name && c.id);
+      const calls = (response.toolCalls ?? []).filter((c: any) => c?.name && c.id);
       if (calls.length === 0) {
         const said = (response.content ?? "").trimEnd();
         if (said) {
@@ -793,7 +799,7 @@ export class MultiAgentRuntime {
     task: Task
   ): Promise<{ approved: boolean; notes: string }> {
     try {
-      const response = await reviewer.generate({
+      const response = await generateEnglish(reviewer, {
         messages: [
           {
             role: "system",
@@ -805,6 +811,7 @@ export class MultiAgentRuntime {
               "reports) ARE evidence; do not demand re-proof of what the log already shows.",
               "Judge only the assigned task, not the rest of the goal.",
               'Respond with ONLY JSON: {"approved": true|false, "notes": "specific, actionable"}',
+              LANGUAGE_RULE,
             ].join("\n"),
           },
           {
