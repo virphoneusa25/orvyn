@@ -5,7 +5,7 @@
 // goes through openArtifactInContext(); the ContextPanel is the only
 // listener. No component resolves files its own way.
 
-export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review";
+export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review" | "documents";
 
 export interface ArtifactTarget {
   tab: ContextTab;

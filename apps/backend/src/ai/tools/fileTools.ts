@@ -76,9 +76,12 @@ export function makeWriteFileTool(projectRoot: string): AITool {
     async execute(args): Promise<ToolResult> {
       try {
         const target = resolveSafe(projectRoot, String(args.path));
+        let existed = false;
+        try { await fs.access(target); existed = true; } catch { /* new file */ }
         await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.writeFile(target, String(args.content), "utf-8");
-        return { ok: true, output: `Wrote ${args.path}` };
+        const lines = String(args.content).split("\n").length;
+        return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines)` };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }
@@ -175,7 +178,12 @@ export function makeEditFileTool(projectRoot: string): AITool {
         }
         const next = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
         await fs.writeFile(target, next, "utf-8");
-        return { ok: true, output: `Updated ${args.path} (${replaceAll ? count : 1} replacement${count === 1 ? "" : "s"})` };
+        const applied = replaceAll ? count : 1;
+        const added = next.split("\n").length - original.split("\n").length;
+        return {
+          ok: true,
+          output: `EDITED ${args.path} — ${applied} replacement${applied === 1 ? "" : "s"} (${added >= 0 ? "+" : "−"}${Math.abs(added)} lines)`,
+        };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }

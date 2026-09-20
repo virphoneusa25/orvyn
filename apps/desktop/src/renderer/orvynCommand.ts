@@ -107,6 +107,16 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"):
   return { kind: "run", runId: data.runId };
 }
 
+/** The hidden built-in workspace the desktop falls back to when no folder is
+ *  open. It is NOT a project — running missions against it produced the
+ *  "health check can't find the project" confusion. Execution-class requests
+ *  against it are refused with guidance instead of silently working there. */
+export function isBuiltInWorkspace(root: string | null): boolean {
+  if (!root) return false;
+  const norm = root.replace(/\\/g, "/").toLowerCase();
+  return norm.includes("appdata") && norm.includes("@orvyn") && norm.endsWith("workspace");
+}
+
 export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutcome> {
   const prompt = cmd.prompt.trim();
   const host = new URL(getConnectionConfig().backendUrl).hostname;
@@ -122,7 +132,16 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
       // No scheduler yet — run as a plan so the user gets a real, truthful
       // result instead of a dead button.
       return startPlanRun(cmd);
-    default:
+    default: {
+      // No fake workspace (Phase 0 Part B): execution needs a real project.
+      if (isBuiltInWorkspace(cmd.projectRoot)) {
+        return {
+          kind: "error",
+          error:
+            "I need a project workspace before I can inspect or modify code — the current workspace is ORVYN's built-in scratch area, not your project. Open a project folder (Projects → Open Project) and send the request again.",
+        };
+      }
       return cmd.source === "MISSION" ? startMission(cmd) : startPlanRun(cmd, "agent");
+    }
   }
 }

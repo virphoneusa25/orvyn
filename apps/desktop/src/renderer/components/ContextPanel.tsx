@@ -11,6 +11,7 @@ import { DocumentsPanel } from "./DocumentsPanel";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import { matchesFile } from "../contextOpen";
 import { AgentEvent } from "./AgentActivityList";
 import { MissionPlan } from "./MissionPlan";
 import { ReviewPanel } from "./ReviewPanel";
@@ -57,6 +58,8 @@ export function ContextPanel({
   onOpenFile: (path: string) => void;
 }) {
   const [pinned, setPinned] = useState<CtxTab | null>(null);
+  /** The file a row click asked to open (exact file → exact view). */
+  const [focus, setFocus] = useState<{ path?: string; fileName?: string } | null>(null);
   const suggested = useMemo(() => suggestTab(events), [events]);
   const active: CtxTab | null = pinned ?? suggested;
   const [collapsed, setCollapsed] = useState(false);
@@ -74,7 +77,20 @@ export function ContextPanel({
       }
     };
     document.addEventListener("orvyn:context-tab", onCtxTab);
-    return () => document.removeEventListener("orvyn:context-tab", onCtxTab);
+    // The ONE artifact-open path (spec Part H/I): rows carry the exact file;
+    // the panel pins the tab AND focuses that file's contents/diff.
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ tab?: CtxTab; path?: string; fileName?: string }>).detail;
+      if (!d?.tab) return;
+      setPinned(d.tab);
+      setCollapsed(false);
+      setFocus(d.path || d.fileName ? { path: d.path, fileName: d.fileName } : null);
+    };
+    document.addEventListener("orvyn:context-open", onOpen);
+    return () => {
+      document.removeEventListener("orvyn:context-tab", onCtxTab);
+      document.removeEventListener("orvyn:context-open", onOpen);
+    };
   }, []);
 
   // Auto-expand when work starts (a tab becomes relevant); a user-pinned
@@ -169,8 +185,8 @@ export function ContextPanel({
             <MissionPlan events={events} status={runStatus} />
           </div>
         )}
-        {active === "files" && <FilesView events={events} projectRoot={projectRoot} onOpenFile={onOpenFile} />}
-        {active === "diff" && <DiffView events={events} />}
+        {active === "files" && <FilesView events={events} projectRoot={projectRoot} onOpenFile={onOpenFile} focus={focus} />}
+        {active === "diff" && <DiffView events={events} focus={focus} />}
         {active === "terminal" && <TerminalView term={term} />}
         {active === "browser" && (
           <div style={{ padding: 24, fontSize: 11.5, color: "var(--orvyn-text-muted)", textAlign: "center", lineHeight: 1.7 }}>
@@ -186,7 +202,7 @@ export function ContextPanel({
 }
 
 /** Touched files from run events, with a real content quick-view. */
-function FilesView({ events, projectRoot, onOpenFile }: { events: AgentEvent[]; projectRoot: string | null; onOpenFile: (path: string) => void }) {
+function FilesView({ events, projectRoot, onOpenFile, focus }: { events: AgentEvent[]; projectRoot: string | null; onOpenFile: (path: string) => void; focus: { path?: string; fileName?: string } | null }) {
   const touched = useMemo(() => {
     const paths = new Set<string>();
     for (const e of events) {
@@ -204,6 +220,14 @@ function FilesView({ events, projectRoot, onOpenFile }: { events: AgentEvent[]; 
   useEffect(() => {
     setSelected((s) => (s && touched.includes(s) ? s : (touched[0] ?? null)));
   }, [touched]);
+
+  // A row click names the exact file — select it (tolerant to separator and
+  // path-rooting differences between event paths and row paths).
+  useEffect(() => {
+    if (!focus) return;
+    const hit = touched.find((t) => matchesFile(t, focus));
+    if (hit) setSelected(hit);
+  }, [focus, touched]);
 
   useEffect(() => {
     if (!selected || !projectRoot) return;
@@ -277,15 +301,21 @@ function FilesView({ events, projectRoot, onOpenFile }: { events: AgentEvent[]; 
 }
 
 /** Real diffs — the previews the backend attaches to file.edit events. */
-function DiffView({ events }: { events: AgentEvent[] }) {
-  const edits = useMemo(
-    () =>
-      events
-        .filter((e) => e.type === "file.edit" && e.data.preview)
-        .slice(-6)
-        .reverse(),
-    [events]
-  );
+function DiffView({ events, focus }: { events: AgentEvent[]; focus: { path?: string; fileName?: string } | null }) {
+  const edits = useMemo(() => {
+    const list = events
+      .filter((e) => e.type === "file.edit" && e.data.preview)
+      .slice(-6)
+      .reverse();
+    // The clicked file's diff floats to the top so the right view answers
+    // the click immediately.
+    if (focus) {
+      const hit = list.filter((e) => matchesFile(String((e.data.preview as { path?: string })?.path ?? ""), focus));
+      const rest = list.filter((e) => !hit.includes(e));
+      return [...hit, ...rest];
+    }
+    return list;
+  }, [events, focus]);
 
   if (edits.length === 0) {
     return <div style={{ padding: 24, fontSize: 11.5, color: "var(--orvyn-text-muted)", textAlign: "center" }}>No changes yet.</div>;

@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import type { GroupItem, ToolItem, ToolOp, WorkGroupItem } from "../presentationReducer";
+import { openArtifactInContext } from "../contextOpen";
+import { fileTypeOf } from "../fileTypeRegistry";
 import { IconFile, IconSearch, IconTerminal, IconGlobe, IconWrench } from "./Icons";
 import "./ConversationActivity.css";
 
@@ -9,23 +11,17 @@ const LABELS: Record<ToolOp, [string, string]> = {
   browser: ["Using browser", "Used browser"], git: ["Checking Git", "Checked Git"],
   test: ["Running tests", "Ran tests"], other: ["Using tool", "Used tool"],
 };
-const FILE_TYPES: Record<string, [string, string, string]> = {
-  DOCX: ["Word document", "W", "#70a9ff"], PDF: ["PDF document", "PDF", "#f98b88"], XLSX: ["Excel spreadsheet", "X", "#78d4a3"], PPTX: ["PowerPoint presentation", "P", "#f3ad82"],
-  PY: ["Python", "Py", "#72b7e8"], JS: ["JavaScript", "JS", "#f1d65c"], JSX: ["React JavaScript", "JSX", "#61dafb"],
-  TS: ["TypeScript", "TS", "#66b4ff"], TSX: ["React TypeScript", "TSX", "#61dafb"],
-  JSON: ["JSON", "{}", "#e6c76c"], CSS: ["CSS", "#", "#b29aff"], SCSS: ["Sass", "S", "#e29abe"],
-  HTML: ["HTML", "<>", "#f49b76"], MD: ["Markdown", "M↓", "#aab9d0"],
-  GO: ["Go", "Go", "#61d4e5"], RS: ["Rust", "Rs", "#e9ad8d"], JAVA: ["Java", "J", "#efad79"],
-  CS: ["C sharp", "C#", "#b29aff"], CPP: ["C++", "C++", "#66b4ff"], C: ["C", "C", "#66b4ff"],
-  YAML: ["YAML", "Y", "#df97b2"], YML: ["YAML", "Y", "#df97b2"], SQL: ["SQL", "DB", "#e6c76c"],
-  SH: ["Shell", "$", "#8bd5a6"], PS1: ["PowerShell", ">_", "#66b4ff"],
-};
+
+/** One icon authority: color and language come from fileTypeRegistry; the
+ *  glyph is a local SVG sheet with the extension label, generic fallback —
+ *  no remote URLs, no emoji, nothing that can render broken. */
 export function FileTypeIcon({ name, ext }: { name: string; ext?: string }) {
-  const type = FILE_TYPES[ext ?? ""] ?? (name.startsWith(".env") ? ["Environment", "•", "#e6c76c"] : [ext ? `${ext} file` : "File", ext?.slice(0, 3) ?? "•", "#aab9d0"]);
-  return <svg className="activity-file-icon" viewBox="0 0 28 32" role="img" aria-label={type[0]}>
-    <title>{type[0]}</title><path d="M4 1h13l7 7v22H4z" fill={type[2]} fillOpacity=".12" stroke={type[2]} />
-    <path d="M17 1v8h7" fill="none" stroke={type[2]} />
-    <text x="14" y="23" textAnchor="middle" fill={type[2]} fontSize="9" fontWeight="700">{type[1]}</text>
+  const type = fileTypeOf(name);
+  const label = (ext ?? "").slice(0, 3) || "•";
+  return <svg className="activity-file-icon" viewBox="0 0 28 32" role="img" aria-label={type.languageId}>
+    <title>{type.languageId}</title><path d="M4 1h13l7 7v22H4z" fill={type.color} fillOpacity=".12" stroke={type.color} />
+    <path d="M17 1v8h7" fill="none" stroke={type.color} />
+    <text x="14" y="23" textAnchor="middle" fill={type.color} fontSize="9" fontWeight="700">{label.toUpperCase()}</text>
   </svg>;
 }
 function ActivityIcon({ op }: { op: ToolOp }) {
@@ -44,7 +40,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
         {item.fileName ? <><strong>{item.fileName}</strong><span className="activity-path">{item.path}</span></> : !command && <span>{item.label}</span>}
       </div>
       <span className="activity-state">{item.status === "running" && <span className="activity-pulse" />}{state}</span>
-      {item.ctx && <button className="activity-link" aria-label={`Open ${item.fileName ?? item.label ?? verb} in ${item.ctx}`} onClick={() => document.dispatchEvent(new CustomEvent("orvyn:context-tab", { detail: { tab: item.ctx, pin: true } }))}>Open ↗</button>}
+      {item.ctx && <button className="activity-link" aria-label={`Open ${item.fileName ?? item.label ?? verb} in ${item.ctx}`} onClick={() => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op })}>Open ↗</button>}
     </div>
     {command && <pre className="activity-command"><span aria-hidden="true">$ </span>{item.label || "Preparing command…"}</pre>}
     {item.detail && <div className="activity-detail">{item.detail}</div>}
