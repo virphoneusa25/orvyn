@@ -96,6 +96,45 @@ function guard<T extends Record<string, unknown>>(
   };
 }
 
+const ENTRY_FILES = ["index.html", "index.htm", "index.php", "index.aspx", "index.jsp", "default.html", "default.aspx"];
+
+/**
+ * file:// navigation that fails USEFULLY. A wrong guess like
+ * `.../index.html` on a PHP site used to die with a bare ERR_FILE_NOT_FOUND
+ * the model had no way to recover from. Now the directory is inspected and
+ * the error names the real entry point — and states that server-side entries
+ * (PHP/ASP) need the site's HTTP URL, because file:// cannot execute them.
+ */
+async function gotoWithRecovery(page: any, rawUrl: string): Promise<string> {
+  try {
+    await page.goto(rawUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    return page.url();
+  } catch (err: any) {
+    const msg = String(err?.message ?? err);
+    if (!/ERR_FILE_NOT_FOUND/.test(msg) || !rawUrl.startsWith("file:///")) throw err;
+    const winPath = decodeURIComponent(rawUrl.replace(/^file:\/\/\//, "").replace(/\//g, "\\"));
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(path.dirname(winPath));
+    } catch {
+      /* unreadable directory — report the raw navigation error below */
+    }
+    const parts = [`page.goto failed: ${msg.split("\n")[0]}`];
+    const entry = ENTRY_FILES.find((f) => entries.includes(f));
+    if (entry && /\.(php|asp|aspx|jsp)$/i.test(entry)) {
+      parts.push(
+        `This directory's entry point is ${entry} — a server-side file that file:// CANNOT execute.`,
+        `Serve the site over HTTP (e.g. http://localhost/<site-path> or its local domain) and navigate to that URL instead.`
+      );
+    } else if (entry) {
+      parts.push(`This directory's entry point is ${entry} — navigate to that file instead.`);
+    } else if (entries.length > 0) {
+      parts.push(`The directory exists but has no standard entry file (contains: ${entries.slice(0, 8).join(", ")}…).`);
+    }
+    throw new Error(parts.join(" "));
+  }
+}
+
 export function makeBrowserOpenTool(projectRoot: string): AITool {
   return {
     name: "browser_open",
@@ -109,7 +148,7 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
     execute: guard(async (args) => {
       const s = await openSession(projectRoot);
       const url = args.url ? String(args.url) : "";
-      if (url) await s.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      if (url) await gotoWithRecovery(s.page, url);
       return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.` };
     }),
   };
@@ -127,8 +166,8 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
     defaultPermission: "ask",
     execute: guard(async (args) => {
       const page = await getPage(projectRoot);
-      await page.goto(String(args.url), { waitUntil: "domcontentloaded", timeout: 30_000 });
-      return { ok: true, output: `Now at ${page.url()} — title: ${await page.title()}` };
+      const finalUrl = await gotoWithRecovery(page, String(args.url));
+      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}` };
     }),
   };
 }

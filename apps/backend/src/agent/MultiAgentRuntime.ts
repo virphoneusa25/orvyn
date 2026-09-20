@@ -1,3 +1,4 @@
+import { CONVERSATION_STYLE } from "./conversationStyle";
 // apps/backend/src/agent/MultiAgentRuntime.ts
 //
 // The Astra mission loop:
@@ -63,7 +64,7 @@ const ROLE_TOOLS: Record<AgentRole, (name: string) => boolean> = {
   coder: () => true,
   tester: (n) =>
     ["read_file", "list_directory", "search_files", "search_code", "list_symbols", "get_diagnostics", "run_tests", "run_typecheck", "run_linter", "terminal", "run_command", "read_process_logs", "list_processes"].includes(n),
-  research: (n) => ["read_file", "list_directory", "search_files", "search_code", "list_symbols", "fetch_url", "web_search"].includes(n),
+  research: (n) => ["read_document", "read_file", "list_directory", "search_files", "search_code", "list_symbols", "fetch_url", "web_search"].includes(n),
   git: (n) => n.startsWith("git_"),
   browser: (n) => n.startsWith("browser_"),
   security: (n) => ["read_file", "list_directory", "search_files", "search_code", "list_symbols", "git_diff", "git_log"].includes(n),
@@ -558,8 +559,8 @@ export class MultiAgentRuntime {
         {
           role: "system",
           content: blocked
-            ? "You are ASTRA. The mission failed final review after the maximum rework cycles. In 3-6 sentences, tell the user what was attempted, what the blocking issues are, and that their decision is needed to proceed."
-            : "You are ASTRA. Summarise what was accomplished in 3-6 sentences, including anything that failed.",
+            ? "You are ASTRA. The mission failed final review after the maximum rework cycles. In 1-3 short sentences, tell the user what was attempted, what the blocking issues are, and that their decision is needed to proceed."
+            : "You are ASTRA. Summarise what was accomplished in 1-3 short sentences, including anything that failed.",
         },
         {
           role: "user",
@@ -617,6 +618,7 @@ export class MultiAgentRuntime {
         role: "system",
         content: [
           WORKER_PROMPTS[task.agent] ?? WORKER_PROMPTS.coder,
+          CONVERSATION_STYLE,
           rules ? `\nProject rules:\n${rules}` : "",
         ]
           .filter(Boolean)
@@ -628,7 +630,7 @@ export class MultiAgentRuntime {
           `Overall goal (for context only): ${goal}`,
           `YOUR TASK: ${task.description}`,
           `Project root (absolute): ${projectRoot}`,
-          `File tools take paths relative to the project root. For browser tools, build absolute file:// URLs from it, e.g. ${fileUrlRoot}/index.html`,
+          `File tools take paths relative to the project root. For browser verification: check the entry file first (list_directory). Static HTML opens as ${fileUrlRoot}/<entry>.html; server-side projects (index.php/asp) MUST be verified over their HTTP URL (e.g. http://localhost/<site>) — file:// cannot execute them.`,
           task.reviewNotes ? `\nA previous attempt was REJECTED by review:\n${task.reviewNotes}\nAddress these specifically.` : "",
           context ? `\n${context}` : "",
         ]
@@ -647,6 +649,7 @@ export class MultiAgentRuntime {
       try {
         response = await worker.generate({ messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });
       } catch (err: any) {
+        if (this.isCancelled(runId)) break;
         // Surface it — a silent break here looks like the agent "gave up
         // after one tool call" in the UI, which is undebuggable.
         this.store.emit(runId, "tool.failed", {
@@ -752,7 +755,14 @@ export class MultiAgentRuntime {
 
         const result = await this.tools.execute(call.name, call.arguments, task.agent);
         if (result.ok) {
-          this.store.emit(runId, "tool.completed", { callId: call.id, tool: call.name, preview: (result.output ?? "").slice(0, 300) });
+          const output = result.output ?? "";
+          const isTerminal = ["terminal", "run_command", "ssh_exec"].includes(call.name);
+          this.store.emit(runId, "tool.completed", {
+            callId: call.id,
+            tool: call.name,
+            preview: output.slice(0, 300),
+            ...(isTerminal ? { output: output.slice(-16000), outputTruncated: output.length > 16000 } : {}),
+          });
           // The transcript is the reviewer's evidence: include real output, not
           // just "-> ok", or the reviewer will reject verified work as unproven.
           const evidence = (result.output ?? "").replace(/\s+/g, " ").slice(0, 400);
