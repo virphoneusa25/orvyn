@@ -1,6 +1,6 @@
 // apps/desktop/src/renderer/components/WorkStream.tsx
 //
-// The CENTER primary work stream: one continuous conversation with Astra —
+// The CENTER primary work stream: one continuous conversation with ORION —
 // user messages, streaming replies, compact activity cards from the active
 // run, and the sticky command composer. Same canonical pipeline as Home
 // (submitOrvynCommand); no duplicate chat exists anywhere else.
@@ -57,6 +57,7 @@ export function WorkStream({
     () => (localStorage.getItem("orvyn:composer-mode") as CommandMode) || "auto"
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [requestedModelId, setRequestedModelId] = useState(() => localStorage.getItem("orvyn:run-model") || "auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Follow-ups submitted while a run is active — delivered when it ends. */
@@ -132,6 +133,7 @@ export function WorkStream({
         projectRoot,
         previousRunId: run.runId,
         attachments,
+        requestedModelId,
       });
       if (outcome.kind === "error") throw new Error(outcome.error);
       setPrompt("");
@@ -311,10 +313,10 @@ export function WorkStream({
             </div>
           ) : (
             <div key={i} style={{ display: "flex", gap: 10, margin: "12px 0", minWidth: 0 }}>
-              <img src={appIcon} alt="Astra" width={26} height={26} style={{ borderRadius: 7, flexShrink: 0, marginTop: 2 }} />
+              <img src={appIcon} alt="ORION" width={26} height={26} style={{ borderRadius: 7, flexShrink: 0, marginTop: 2 }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700 }}>Astra</span>
+                  <span style={{ fontSize: 12, fontWeight: 700 }}>ORION</span>
                   <span
                     style={{
                       fontSize: 8,
@@ -587,7 +589,7 @@ export function WorkStream({
                 {m.label}
               </button>
             ))}
-            <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>Astra</span>
+            <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>ORION</span>
             <ModelPicker />
             {runActive ? (
               <button
