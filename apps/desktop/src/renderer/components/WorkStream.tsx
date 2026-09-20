@@ -590,7 +590,7 @@ export function WorkStream({
               </button>
             ))}
             <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>ORION</span>
-            <ModelPicker />
+            <ModelPicker value={requestedModelId} onChange={(id) => { setRequestedModelId(id); localStorage.setItem("orvyn:run-model", id); }} />
             {runActive ? (
               <button
                 onClick={() => void run.stop()}
@@ -667,59 +667,22 @@ function ghostBtn(): React.CSSProperties {
  * model that executes. Takes effect on the NEXT run; a run already in flight
  * keeps its model.
  */
-function ModelPicker() {
+function ModelPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
   const [models, setModels] = useState<{ id: string; name: string }[]>([]);
-  const [current, setCurrent] = useState<string>("auto");
-  const [busy, setBusy] = useState(false);
-
-  const load = () => {
-    fetch(apiUrl("/models"))
-      .then((r) => r.json())
-      .then((d) => setModels((d.models ?? []).filter((m: any) => m.capabilities?.chat).map((m: any) => ({ id: m.id, name: m.name ?? m.id }))))
-      .catch(() => {});
-    fetch(apiUrl("/routing"))
-      .then((r) => r.json())
-      .then((d) => setCurrent(d.overrides?.agent ?? d.overrides?.executor ?? d.overrides?.chat ?? "auto"))
-      .catch(() => {});
-  };
-  useEffect(load, []);
-
-  async function pick(id: string) {
-    setBusy(true);
-    try {
-      if (id === "auto") {
-        // Clear both lanes — the router returns to its configured defaults.
-        await fetch(apiUrl("/routing/executor"), { method: "DELETE", headers: authHeaders() });
-        await fetch(apiUrl("/routing/chat"), { method: "DELETE", headers: authHeaders() });
-        await fetch(apiUrl("/routing/agent"), {method:"DELETE",headers:authHeaders()});
-        setCurrent("auto");
-      } else {
-        // Executor drives mission workers; chat drives conversation turns.
-        await fetch(apiUrl("/routing"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ task: "executor", modelId: id }),
-        });
-        await fetch(apiUrl("/routing"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ task: "chat", modelId: id }),
-        });
-        const agentResult = await fetch(apiUrl("/routing"), {method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({task:"agent",modelId:id})});
-        if (!agentResult.ok) throw new Error("This model cannot run agent tools.");
-        setCurrent(id);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
+  useEffect(() => {
+    fetch(apiUrl("/models"), { headers: authHeaders() })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error("models unavailable")))
+      .then((d) => setModels((d.models ?? [])
+        .filter((m: any) => m.capabilities?.agent && m.capabilities?.tools)
+        .map((m: any) => ({ id: m.id, name: m.name ?? m.id }))))
+      .catch(() => setModels([]));
+  }, []);
 
   return (
     <select
-      title="Model for the next runs — Auto lets the router decide"
-      value={current}
-      disabled={busy}
-      onChange={(e) => void pick(e.target.value)}
+      title="Model for this run — Auto lets ORION choose"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
       style={{
         background: "transparent",
         border: "1px solid var(--orvyn-border)",
@@ -727,16 +690,12 @@ function ModelPicker() {
         color: "var(--orvyn-text-secondary)",
         fontSize: 10.5,
         padding: "3px 6px",
-        maxWidth: 150,
+        maxWidth: 170,
         cursor: "pointer",
       }}
     >
-      <option value="auto">Auto</option>
-      {models.map((m) => (
-        <option key={m.id} value={m.id}>
-          {m.name}
-        </option>
-      ))}
+      <option value="auto">Auto · ORION</option>
+      {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
     </select>
   );
 }
