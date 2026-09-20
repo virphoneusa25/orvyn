@@ -311,7 +311,7 @@ export function Home({
                     {m.label}
                   </button>
                 ))}
-                <AstraSelector />
+                <OrionSelector />
                 <button
                   onClick={() => void run()}
                   disabled={!prompt.trim() || starting}
@@ -665,16 +665,16 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "12px 0" }}>{children}</div>;
 }
 
-/** The approved Astra control: icon + name + ORCHESTRATOR + dropdown.
- *  Real roster from /agents — Astra orchestrates (selected); the workers are
- *  listed read-only because routing to them is Astra's decision, not a
+/** The approved ORION control: icon + name + ORCHESTRATOR + dropdown.
+ *  Real roster from /agents — ORION orchestrates (selected); the workers are
+ *  listed read-only because routing to them is ORION's decision, not a
  *  composer setting. No decorative dropdown.
  *
  *  The panel renders through a portal and opens BELOW the button: the hero
  *  clips its children (overflow:hidden for the canvas), and an in-flow panel
  *  either got cut off or — as an upward float — covered the greeting and the
  *  composer's own controls (attach, pills). */
-function AstraSelector() {
+function OrionSelector() {
   const [open, setOpen] = useState(false);
   const [roster, setRoster] = useState<{ label: string; role: string; modelId: string | null }[]>([]);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -747,7 +747,7 @@ function AstraSelector() {
       >
         <img src={appIcon} alt="" width={14} height={14} style={{ borderRadius: 4 }} />
         <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
-          <span style={{ color: "var(--orvyn-text)", fontWeight: 600, fontSize: 11 }}>Astra</span>
+          <span style={{ color: "var(--orvyn-text)", fontWeight: 600, fontSize: 11 }}>ORION</span>
           <span style={{ fontSize: 7.5, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>ORCHESTRATOR</span>
         </span>
         <span style={{ fontSize: 8, color: "var(--orvyn-text-muted)" }}>▾</span>
@@ -774,7 +774,7 @@ function AstraSelector() {
           <div style={{ display: "flex", gap: 7, padding: "5px 8px", background: "rgba(108,92,255,0.12)", borderRadius: 4, marginBottom: 2 }}>
             <span style={{ color: "var(--orvyn-purple-hi)", fontSize: 11 }}>✓</span>
             <span style={{ minWidth: 0 }}>
-              <span style={{ display: "block", fontSize: 11.5, color: "var(--orvyn-text)" }}>Astra</span>
+              <span style={{ display: "block", fontSize: 11.5, color: "var(--orvyn-text)" }}>ORION</span>
               <span style={{ display: "block", fontSize: 9.5, color: "var(--orvyn-text-muted)" }}>
                 orchestrates every command
               </span>
@@ -798,7 +798,7 @@ function AstraSelector() {
             </div>
           ))}
           <div style={{ fontSize: 9.5, color: "var(--orvyn-text-muted)", padding: "4px 8px 2px", borderTop: "1px solid var(--border)", marginTop: 3 }}>
-            Astra delegates to workers automatically during missions.
+            ORION delegates to workers automatically during missions.
           </div>
         </div>,
         document.body
