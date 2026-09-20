@@ -295,6 +295,10 @@ export class LocalStore {
     }))) ?? [];
   }
 
+  getMemory(id: string): any | null {
+    return this.guard("getMemory", () => { const r:any=this.db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id); return r ? { id:String(r.id), scope:r.scope, projectRoot:r.project_root, kind:r.kind, title:r.title, content:r.content, source:r.source, pinned:r.pinned===1, createdAt:Number(r.created_at), updatedAt:Number(r.updated_at) } : null; }) ?? null;
+  }
+
   deleteMemory(id: string): void {
     this.guard("deleteMemory", () => this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id));
   }
