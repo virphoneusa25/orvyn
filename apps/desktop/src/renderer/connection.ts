@@ -44,3 +44,48 @@ export function wsUrl(path: string): string {
 export function authHeaders(): Record<string, string> {
   return current.apiKey ? { Authorization: `Bearer ${current.apiKey}` } : {};
 }
+
+
+export type OrchestratorConnectionState = "connecting" | "online" | "offline";
+const statusListeners = new Set<(s: OrchestratorConnectionState) => void>();
+let orchestratorStatus: OrchestratorConnectionState = "offline";
+let heartbeatSocket: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function publishStatus(s: OrchestratorConnectionState) {
+  if (orchestratorStatus === s) return;
+  orchestratorStatus = s;
+  statusListeners.forEach((l) => l(s));
+}
+export function getOrchestratorStatus() { return orchestratorStatus; }
+export function onOrchestratorStatus(listener: (s: OrchestratorConnectionState) => void) {
+  statusListeners.add(listener); listener(orchestratorStatus);
+  return () => statusListeners.delete(listener);
+}
+export function connectOrchestratorHeartbeat(): () => void {
+  let stopped = false;
+  const connect = () => {
+    if (stopped) return;
+    publishStatus("connecting");
+    heartbeatSocket?.close();
+    const ws = new WebSocket(wsUrl("/ws/chat"));
+    heartbeatSocket = ws;
+    let ready = false;
+    const readyTimer = setTimeout(() => { if (!ready) ws.close(); }, 8000);
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(String(ev.data));
+        if (msg.type === "connection.ready") { ready = true; clearTimeout(readyTimer); publishStatus("online"); }
+      } catch {}
+    };
+    ws.onerror = () => publishStatus("offline");
+    ws.onclose = () => {
+      clearTimeout(readyTimer);
+      if (heartbeatSocket === ws) heartbeatSocket = null;
+      publishStatus("offline");
+      if (!stopped) reconnectTimer = setTimeout(connect, 3000);
+    };
+  };
+  connect();
+  return () => { stopped=true; if(reconnectTimer) clearTimeout(reconnectTimer); heartbeatSocket?.close(); heartbeatSocket=null; publishStatus("offline"); };
+}
