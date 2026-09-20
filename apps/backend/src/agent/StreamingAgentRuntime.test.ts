@@ -324,7 +324,7 @@ test("terminal events carry their call id and bounded real output", async () => 
   const h = harness([[{ delta: "", toolCall: { id: "cmd", name: "terminal", arguments: { command: "echo hello" } }, done: false }, { delta: "", done: true }]]);
   h.registry.register({
     name: "terminal", description: "test terminal", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
-    async execute() { return { ok: true, output: "x".repeat(17000) }; },
+    async execute(_args: Record<string, unknown>, context?: { onOutput?: (chunk: string) => void }) { context?.onOutput?.("live "); return { ok: true, output: "x".repeat(17000) }; },
   });
   const id = h.runtime.start("/tmp/project", "run a command");
   h.gateway.setPermission("terminal", "allowed");
@@ -332,8 +332,8 @@ test("terminal events carry their call id and bounded real output", async () => 
   const events = h.store.get(id)!.events.filter(e => e.type.startsWith("terminal."));
   assert.deepEqual(events.map(e => e.type), ["terminal.started", "terminal.output", "terminal.completed"]);
   assert.ok(events.every(e => e.data.callId === "cmd"));
-  assert.equal(String(events[1].data.data).length, 16000);
-  assert.equal(events[1].data.truncated, true);
+  assert.equal(events[1].data.data, "live ");
+  assert.equal(events[1].data.live, true);
 });
 
 test("failed writes never emit a successful file change", async () => {
