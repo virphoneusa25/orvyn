@@ -26,6 +26,8 @@ export interface OrvynCommand {
   projectRoot: string | null;
   attachments?: Attachment[];
   previousRunId?: string | null;
+  /** "auto" or a concrete registry model id; honored per run. */
+  requestedModelId?: string;
 }
 
 export type CommandOutcome =
@@ -35,7 +37,7 @@ export type CommandOutcome =
   | { kind: "error"; error: string };
 
 /** Starts a chat turn into the shared session — returns IMMEDIATELY. The
- *  user bubble renders the moment this is called; Astra's reply streams in
+ *  user bubble renders the moment this is called; ORION's reply streams in
  *  from the WebSocket afterwards. Never make the caller wait on the model. */
 function runChat(cmd: OrvynCommand): CommandOutcome {
   const history = startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
@@ -89,7 +91,7 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   const res = await fetch(apiUrl("/agent/orchestrate"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments }),
+    body: JSON.stringify({ projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
@@ -100,7 +102,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"):
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, instruction: cmd.prompt, mode, attachments: cmd.attachments, previousRunId: cmd.previousRunId }),
+    body: JSON.stringify({ projectRoot: cmd.projectRoot, instruction: cmd.prompt, mode, attachments: cmd.attachments, previousRunId: cmd.previousRunId, requestedModelId: cmd.requestedModelId }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
