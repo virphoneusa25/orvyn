@@ -113,6 +113,8 @@ export function App() {
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
   const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
+  const [cloudOnline, setCloudOnline] = useState(() => getOrchestratorStatus() === "online");
+  const [runtimeCaps, setRuntimeCaps] = useState({ engineReady: false, dockerAvailable: false, sshHostCount: 0, githubConnected: false, postgresConnected: false, cloudSignedIn: false });
   const [missionDetail, setMissionDetail] = useState<ApiMissionDetail | null>(null);
 
   /** The run any entry point last started — ONE state, shared by center + right. */
@@ -159,7 +161,21 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
-  useEffect(() => {\n    if (!workspaceRoot) { setHomeMissions([]); return; }\n    const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));\n    void load(); const t = setInterval(load, 5000); return () => clearInterval(t);\n  }, [workspaceRoot]);\n\n  // Home's "View All"/"Manage" links navigate via custom events.
+  useEffect(() => { const off = onOrchestratorStatus(s => setCloudOnline(s === "online")); const stop = connectOrchestratorHeartbeat(); return () => { off(); stop(); }; }, []);
+
+  useEffect(() => {
+    const suffix = workspaceRoot ? `?projectRoot=${encodeURIComponent(workspaceRoot)}` : "";
+    const load = () => fetch(apiUrl(`/runtime/capabilities${suffix}`), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(setRuntimeCaps).catch(() => setRuntimeCaps(v => ({ ...v, engineReady: false, dockerAvailable: false })));
+    void load(); const t = setInterval(load, 10000); return () => clearInterval(t);
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    if (!workspaceRoot) { setHomeMissions([]); return; }
+    const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));
+    void load(); const t = setInterval(load, 5000); return () => clearInterval(t);
+  }, [workspaceRoot]);
+
+  // Home's "View All"/"Manage" links navigate via custom events.
   useEffect(() => {
     const onNav = (e: Event) => {
       const target = (e as CustomEvent<string>).detail as ViewId | undefined;
@@ -508,7 +524,9 @@ export function App() {
         {(view === "home" || view === "newtask") && (
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             {centerMode === "home" ? (
-              <div className="ov-app" style={{ height: "100%" }}>\n                <HomeScreen userName="Royce" workspaceName={projectName} status={{ engineReady: true, cloudOnline: false }} missions={homeMissions} systems={toSystems({ engineReady: true, githubConnected: true, sshHostCount: 0, postgresConnected: false, dockerConnected: false, cloudSignedIn: false })} onRun={(prompt) => { newChat(); setCenterMode("work"); setActiveRunId(null); setTimeout(() => { document.dispatchEvent(new CustomEvent("orvyn:prefill-composer", { detail: prompt })); document.dispatchEvent(new CustomEvent("orvyn:focus-composer")); }, 50); }} onOpenMission={(id) => { newChat(); setActiveRunId(id); setCenterMode("work"); setView("newtask"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onOpenCommand={() => setPalette("commands")} />\n              </div>
+              <div className="ov-app" style={{ height: "100%" }}>
+                <HomeScreen userName="Royce" workspaceName={projectName} status={{ engineReady: runtimeCaps.engineReady, cloudOnline }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: runtimeCaps.cloudSignedIn })} onRun={(prompt) => { newChat(); setCenterMode("work"); setActiveRunId(null); setTimeout(() => { document.dispatchEvent(new CustomEvent("orvyn:prefill-composer", { detail: prompt })); document.dispatchEvent(new CustomEvent("orvyn:focus-composer")); }, 50); }} onOpenMission={(id) => { newChat(); setActiveRunId(id); setCenterMode("work"); setView("newtask"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onOpenCommand={() => setPalette("commands")} />
+              </div>
             ) : missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
             ) : (
