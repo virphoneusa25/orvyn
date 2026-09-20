@@ -5,6 +5,7 @@ import { FileExplorer } from "./components/FileExplorer";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ModelManager } from "./components/ModelManager";
 import { ChatHistoryPanel } from "./components/ChatHistoryPanel";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { ReportsPanel } from "./components/ReportsPanel";
 import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
@@ -602,6 +603,18 @@ export function App() {
             <HonestState
               title="BILLING — NEEDS THE COMMERCIAL BACKEND"
               message="Plans, credit wallets, and Stripe checkout are designed (docs/COMMERCIAL_PLATFORM_AUDIT.md, Phases C–E) but not implemented yet. Usage metering — the data billing will be built on — is live and visible under Usage & Credits."
+            />
+          </div>
+        )}
+
+        {view === "memory" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <MemoryPanel
+              projectRoot={workspaceRoot}
+              onOpenChat={() => {
+                setView("newtask");
+                setCenterMode("work");
+              }}
             />
           </div>
         )}
