@@ -160,7 +160,9 @@ export class TenantManager {
       tenant.modelService,
       tenant.toolGateway,
       tenant.runStore,
-      tenant.checkpointEngine
+      tenant.checkpointEngine,
+      tenant.localStore,
+      tenant.indexService
     );
     tenant.multiAgentRuntime = new MultiAgentRuntime(
       tenant.modelService,
