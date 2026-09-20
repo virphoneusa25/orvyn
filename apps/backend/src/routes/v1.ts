@@ -525,6 +525,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     const runId = t.agentRuntime.start(
       req.body.projectRoot,
       req.body.goal,
+      req.body.rules,
       "agent",
       req.body.attachments,
       [],
