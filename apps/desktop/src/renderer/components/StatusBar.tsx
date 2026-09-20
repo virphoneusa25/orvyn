@@ -4,7 +4,7 @@
 // version, running agent runs, active missions. CPU/RAM/Disk have no IPC
 // source yet and are omitted rather than faked (audit note).
 import React, { useEffect, useState } from "react";
-import { apiUrl, authHeaders, getConnectionConfig } from "../connection";
+import { apiUrl, authHeaders, getConnectionConfig, connectOrchestratorHeartbeat, getOrchestratorStatus, onOrchestratorStatus } from "../connection";
 
 interface Health {
   status: string;
@@ -19,6 +19,7 @@ interface StatusBarState {
 }
 
 export function StatusBar() {
+  const [orchestratorStatus, setOrchestratorStatus] = useState(getOrchestratorStatus());
   const [state, setState] = useState<StatusBarState>({
     health: null,
     runningRuns: 0,
@@ -27,6 +28,8 @@ export function StatusBar() {
   });
 
   useEffect(() => {
+    const offStatus = onOrchestratorStatus(setOrchestratorStatus);
+    const stopHeartbeat = connectOrchestratorHeartbeat();
     let alive = true;
     async function load() {
       try {
@@ -54,11 +57,13 @@ export function StatusBar() {
     return () => {
       alive = false;
       clearInterval(timer);
+      offStatus();
+      stopHeartbeat();
     };
   }, []);
 
   const cfg = getConnectionConfig();
-  const online = state.health?.status === "ok";
+  const online = state.health?.status === "ok" && orchestratorStatus === "online";
   const backendName = cfg.backendUrl?.replace(/^https?:\/\//, "").split("/")[0] || "backend";
 
   return (
@@ -86,7 +91,7 @@ export function StatusBar() {
             background: online ? "var(--orvyn-green)" : "var(--orvyn-text-muted)",
           }}
         />
-        ORVYN Cloud {online ? `Online · ${backendName}` : "Offline"}
+        ORVYN Cloud {online ? `Online · ${backendName}` : orchestratorStatus === "connecting" ? "Connecting…" : "Offline"}
       </span>
       {/* Local engine readiness is independent of cloud reachability:
           files, editor, git, terminal and local config all work either way. */}
