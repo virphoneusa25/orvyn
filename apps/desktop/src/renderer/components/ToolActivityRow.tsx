@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { GroupItem, ToolItem, ToolOp, WorkGroupItem } from "../presentationReducer";
 import { openArtifactInContext } from "../contextOpen";
-import { fileTypeOf } from "../fileTypeRegistry";
+import { FileTypeIcon as BrandFileTypeIcon } from "./FileTypeIcon";
 import { IconFile, IconSearch, IconTerminal, IconGlobe, IconWrench } from "./Icons";
 import "./ConversationActivity.css";
 
@@ -12,17 +12,10 @@ const LABELS: Record<ToolOp, [string, string]> = {
   test: ["Running tests", "Ran tests"], other: ["Using tool", "Used tool"],
 };
 
-/** One icon authority: color and language come from fileTypeRegistry; the
- *  glyph is a local SVG sheet with the extension label, generic fallback —
- *  no remote URLs, no emoji, nothing that can render broken. */
-export function FileTypeIcon({ name, ext }: { name: string; ext?: string }) {
-  const type = fileTypeOf(name);
-  const label = (ext ?? "").slice(0, 3) || "•";
-  return <svg className="activity-file-icon" viewBox="0 0 28 32" role="img" aria-label={type.languageId}>
-    <title>{type.languageId}</title><path d="M4 1h13l7 7v22H4z" fill={type.color} fillOpacity=".12" stroke={type.color} />
-    <path d="M17 1v8h7" fill="none" stroke={type.color} />
-    <text x="14" y="23" textAnchor="middle" fill={type.color} fontSize="9" fontWeight="700">{label.toUpperCase()}</text>
-  </svg>;
+/** One icon authority: the brand glyph set (official-style language marks,
+ *  local SVGs) with a generic fallback. */
+export function FileTypeIcon({ name }: { name: string; ext?: string }) {
+  return <BrandFileTypeIcon path={name} />;
 }
 function ActivityIcon({ op }: { op: ToolOp }) {
   return op === "terminal" || op === "test" ? <IconTerminal size={16} /> : op === "search" ? <IconSearch size={16} /> : op === "browser" ? <IconGlobe size={16} /> : op === "edit" || op === "create" ? <IconWrench size={16} /> : <IconFile size={16} />;
