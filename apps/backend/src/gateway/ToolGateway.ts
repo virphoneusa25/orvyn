@@ -5,7 +5,7 @@
 // allowed/ask/denied registry. Agents never hold a ToolRegistry directly —
 // they hold this gateway, so nothing can skip the permission stack.
 
-import { AITool, ToolPermission, ToolRegistry, ToolResult } from "../ai/ToolTypes";
+import { AITool, ToolExecutionContext, ToolPermission, ToolRegistry, ToolResult } from "../ai/ToolTypes";
 import { AgentRole, PermissionEngine } from "./PermissionEngine";
 import { applyProfile, PermissionProfile } from "./PermissionProfiles";
 
@@ -63,12 +63,13 @@ export class ToolGateway {
   async execute(
     toolName: string,
     args: Record<string, unknown>,
-    role?: AgentRole
+    role?: AgentRole,
+    context?: ToolExecutionContext
   ): Promise<ToolResult> {
     const verdict = this.permissions.checkRole(toolName, role);
     if (!verdict.allowed) {
       return { ok: false, error: verdict.reason ?? "Denied by capability policy" };
     }
-    return this.registry.execute(toolName, args);
+    return this.registry.execute(toolName, args, context);
   }
 }
