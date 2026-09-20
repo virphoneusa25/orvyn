@@ -15,7 +15,9 @@ import { Navigation, ViewId } from "./components/Navigation";
 import { WorkStream } from "./components/WorkStream";
 import { ContextPanel } from "./components/ContextPanel";
 import { useAgentRun } from "./useAgentRun";
-import { Home } from "./components/Home";
+import { HomeScreen } from "./components/redesign/HomeScreen";
+import { toMissionSummary, toSystems, ApiMissionRow } from "./components/redesign/adapters";
+import type { MissionSummary } from "./components/redesign/types";
 import { StatusBar } from "./components/StatusBar";
 import { HonestState } from "./components/HonestState";
 import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace, ToolsWorkspace } from "./components/Workspaces";
@@ -108,6 +110,7 @@ export function App() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
+  const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
@@ -152,7 +155,7 @@ export function App() {
     return () => clearInterval(t);
   }, []);
 
-  // Home's "View All"/"Manage" links navigate via custom events.
+  useEffect(() => {\n    if (!workspaceRoot) { setHomeMissions([]); return; }\n    const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));\n    void load(); const t = setInterval(load, 5000); return () => clearInterval(t);\n  }, [workspaceRoot]);\n\n  // Home's "View All"/"Manage" links navigate via custom events.
   useEffect(() => {
     const onNav = (e: Event) => {
       const target = (e as CustomEvent<string>).detail as ViewId | undefined;
@@ -501,24 +504,7 @@ export function App() {
         {(view === "home" || view === "newtask") && (
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             {centerMode === "home" ? (
-              <Home
-                projectRoot={workspaceRoot}
-                onOutcome={(outcome) => {
-                  // Any submission moves the center into the active
-                  // conversation; chat stays conversation-only, work
-                  // attaches the run for center + right to follow.
-                  setCenterMode("work");
-                  if (outcome.kind !== "chat") {
-                    // Identity hygiene: a new request NEVER inherits the
-                    // previous chat session's title or messages. The run is
-                    // the conversation now; pure chat turns may open a fresh
-                    // thread afterwards.
-                    newChat();
-                    setActiveRunId(outcome.runId);
-                  }
-                }}
-              />
-            ) : (
+              <div className="ov-app" style={{ height: "100%" }}>\n                <HomeScreen userName="Royce" workspaceName={projectName} status={{ engineReady: true, cloudOnline: false }} missions={homeMissions} systems={toSystems({ engineReady: true, githubConnected: true, sshHostCount: 0, postgresConnected: false, dockerConnected: false, cloudSignedIn: false })} onRun={(prompt) => { newChat(); setCenterMode("work"); setActiveRunId(null); setTimeout(() => { document.dispatchEvent(new CustomEvent("orvyn:prefill-composer", { detail: prompt })); document.dispatchEvent(new CustomEvent("orvyn:focus-composer")); }, 50); }} onOpenMission={(id) => { newChat(); setActiveRunId(id); setCenterMode("work"); setView("newtask"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onOpenCommand={() => setPalette("commands")} />\n              </div>            ) : (
               <WorkStream
                 projectRoot={workspaceRoot}
                 projectName={projectName}
