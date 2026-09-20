@@ -40,7 +40,7 @@ export function MemoryPanel({ projectRoot, onOpenChat }: { projectRoot:string|nu
       {tab==="memory"&&<>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search memory…" style={searchStyle}/>
         {filtered.length===0?<Empty text="No saved memory yet. Add project decisions, instructions, or reusable knowledge."/>:filtered.map(m=><div key={m.id} style={card}>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}><b>{m.title}</b><span style={tag}>{m.scope}</span><span style={tag}>{m.kind}</span>{m.pinned&&<span style={tag}>pinned</span>}<button onClick={async()=>{await fetch(apiUrl("/memory/"+encodeURIComponent(m.id)),{method:"DELETE",headers:authHeaders()});load();}} style={{marginLeft:"auto",...linkBtn}}>Delete</button></div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}><b>{m.title}</b><span style={tag}>{m.scope}</span><span style={tag}>{m.kind}</span>{m.pinned&&<span style={tag}>pinned</span>}<button onClick={async()=>{await fetch(apiUrl("/memory/"+encodeURIComponent(m.id)),{method:"PATCH",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({pinned:!m.pinned})});load();}} style={{marginLeft:"auto",...linkBtn}}>{m.pinned?"Unpin":"Pin"}</button><button onClick={async()=>{await fetch(apiUrl("/memory/"+encodeURIComponent(m.id)),{method:"DELETE",headers:authHeaders()});load();}} style={linkBtn}>Delete</button></div>
           <div style={{fontSize:12.5,lineHeight:1.55,marginTop:7,whiteSpace:"pre-wrap"}}>{m.content}</div>
           <div style={{fontSize:10.5,color:"var(--orvyn-text-muted)",marginTop:7}}>Source: {m.source||"unknown"} · {new Date(m.updatedAt).toLocaleString()}</div>
         </div>)}
