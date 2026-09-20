@@ -49,6 +49,9 @@ interface RunState {
   /** Model calls this run — counted directly, since not every provider
    * reports token usage and the cap must fire regardless. */
   modelCalls: number;
+  /** Run-scoped model selection; never mutates global routing. */
+  requestedModelId?: string;
+  actualModelId: string;
 }
 
 /**
@@ -132,8 +135,7 @@ export class StreamingAgentRuntime {
    * Usable history budget for a model: its window, less the space its own
    * reply needs, less headroom for the tool schemas and estimator error.
    */
-  private contextBudget(): number {
-    const provider = this.modelService.router.resolve("agent");
+  private contextBudget(provider = this.modelService.router.resolve("agent")): number {
     const window = provider.config.contextWindow || 32_000;
     const reserved = (provider.config.maxOutputTokens || 4_000) + 4_000;
     return Math.max(8_000, Math.floor(window * 0.9) - reserved);
@@ -154,9 +156,18 @@ export class StreamingAgentRuntime {
     rules?: string,
     mode: AgentMode = "agent",
     attachments?: Attachment[],
-    history: AIMessage[] = []
+    history: AIMessage[] = [],
+    requestedModelId?: string
   ): string {
     const runId = randomUUID();
+    const provider = requestedModelId && requestedModelId !== "auto"
+      ? (() => {
+          const p = this.modelService.registry.get(requestedModelId);
+          if (!p) throw new Error(`Requested model "${requestedModelId}" is not configured.`);
+          if (!p.config.capabilities.agent) throw new Error(`Requested model "${requestedModelId}" does not support agent runs.`);
+          return p;
+        })()
+      : this.modelService.router.resolve("agent");
     this.store.create(runId, projectRoot);
 
     // Mode controls tool permissions as well as prompting, so a read-only
@@ -172,6 +183,8 @@ export class StreamingAgentRuntime {
       cancelled: false,
       toolCalls: 0,
       modelCalls: 0,
+      requestedModelId: requestedModelId && requestedModelId !== "auto" ? requestedModelId : undefined,
+      actualModelId: provider.config.id,
     });
 
     // Snapshot the dirty tree before the agent touches anything, so a
@@ -218,7 +231,7 @@ export class StreamingAgentRuntime {
 
     // Deliberately not awaited: the caller gets a runId synchronously and
     // subscribes to events. Errors are surfaced as run.error events.
-    void this.loop(runId, messages, instruction, mode);
+    void this.loop(runId, messages, instruction, mode, provider);
     return runId;
   }
 
@@ -253,7 +266,8 @@ export class StreamingAgentRuntime {
     runId: string,
     messages: AIMessage[],
     instruction: string,
-    mode: AgentMode = "agent"
+    mode: AgentMode = "agent",
+    provider = this.modelService.router.resolve("agent")
   ): Promise<void> {
     const state = this.runs.get(runId);
     if (!state) return;
@@ -261,7 +275,7 @@ export class StreamingAgentRuntime {
     // provider connection must surface as a failure, not freeze the run.
     const signal = modelCallSignal(state.controller.signal);
 
-    this.store.emit(runId, "run.started", { instruction, mode, maxSteps: MAX_STEPS });
+    this.store.emit(runId, "run.started", { instruction, mode, maxSteps: MAX_STEPS, requestedModelId: state.requestedModelId ?? "auto", actualModelId: provider.config.id, provider: provider.config.provider });
 
     let steps = 0;
     let consecutiveFailures = 0;
@@ -305,7 +319,7 @@ export class StreamingAgentRuntime {
 
         // Keep the conversation inside the window before asking, not after
         // the server rejects it.
-        const compaction = compactConversation(messages, this.contextBudget());
+        const compaction = compactConversation(messages, this.contextBudget(provider));
         if (compaction.compacted) {
           messages.splice(0, messages.length, ...compaction.messages);
           this.store.emit(runId, "context.compacted", {
@@ -316,7 +330,6 @@ export class StreamingAgentRuntime {
           });
         }
 
-        const provider = this.modelService.router.resolve("agent");
         let content = "";
         let reasoning = "";
         let streamedText = false;
@@ -375,7 +388,7 @@ export class StreamingAgentRuntime {
               this.store.emit(runId, "usage.updated", {
                 ...total,
                 contextTokens: estimateConversationTokens(messages),
-                contextBudget: this.contextBudget(),
+                contextBudget: this.contextBudget(provider),
                 modelId: provider.config.id,
               });
             }
