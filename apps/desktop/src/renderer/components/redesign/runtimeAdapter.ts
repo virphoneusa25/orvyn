@@ -16,6 +16,8 @@ export function missionDetailFromRuntime(m:ApiMissionDetail, events:AgentEvent[]
   const activity:{id:string;kind:string;title:string;body?:string}[]=[];
   let approval:MissionDetailData["approval"];
   let deliverable:string|undefined;
+  let usage:MissionDetailData["usage"];
+  let messageBuffer="";
   for(const e of events){
     if(e.type==="file.read"||e.type==="file.edit"){
       const p=String(e.data.path??e.data.preview?.path??""); if(p) files.set(p,e.type==="file.read"?"read":"edit");
@@ -27,11 +29,13 @@ export function missionDetailFromRuntime(m:ApiMissionDetail, events:AgentEvent[]
     if(e.type==="approval.resolved" && approval && String(e.data.callId??"")===approval.id) approval=undefined;
     if(e.type==="terminal.started") activity.push({id:e.id,kind:"terminal",title:`Running ${String(e.data.command??"command")}`});
     if(e.type==="terminal.completed") activity.push({id:e.id,kind:"terminal",title:e.data.exitOk===false?"Command failed":"Command completed"});
-    if(e.type==="assistant.message"||e.type==="assistant.completed"){
-      const body=String(e.data.content??e.data.text??"").trim(); if(body) activity.push({id:e.id,kind:"assistant",title:"ORION",body});
-    }
+    if(e.type==="message.delta") messageBuffer+=String(e.data.content??"");
+    if(e.type==="message.completed") { const body=messageBuffer.trim(); if(body) activity.push({id:e.id,kind:"assistant",title:"ORION",body}); messageBuffer=""; }
+    if(e.type==="usage.updated") usage={promptTokens:Number(e.data.promptTokens??0),completionTokens:Number(e.data.completionTokens??0),turns:Number(e.data.turns??0),modelId:e.data.modelId?String(e.data.modelId):undefined};
     if(e.type==="run.completed") deliverable=String(e.data.summary??e.data.result??"Mission completed.");
     if(e.type==="run.error") activity.push({id:e.id,kind:"error",title:"Run failed",body:String(e.data.message??"Unknown error")});
   }
-  return {id:m.id,title:m.goal,status:m.status,createdAt:new Date(typeof m.createdAt==="number"&&m.createdAt<1e12?m.createdAt*1000:m.createdAt).toISOString(),agent:"ORION",plan:m.tasks.map(t=>({id:t.id,title:t.description,detail:t.reviewNotes??(t.attempts?`${t.attempts} attempt${t.attempts===1?"":"s"}`:undefined),state:planState(t.status)})),events:activity.slice(-40),approval,permissions:[{label:"Read files",value:"Allowed"},{label:"Run commands",value:"Ask"},{label:"Network",value:"Ask"},{label:"Deploy",value:"Off"}],files:Array.from(files,([path,action])=>({path,action})),deliverable};
+  if(messageBuffer.trim()) activity.push({id:"live-message",kind:"assistant",title:"ORION",body:messageBuffer.trim()});
+  const runLog=events.slice(-12).map(e=>({sequence:e.sequence,type:e.type,at:e.timestamp}));
+  return {id:m.id,title:m.goal,status:m.status,createdAt:new Date(typeof m.createdAt==="number"&&m.createdAt<1e12?m.createdAt*1000:m.createdAt).toISOString(),agent:"ORION",plan:m.tasks.map(t=>({id:t.id,title:t.description,detail:t.reviewNotes??(t.attempts?`${t.attempts} attempt${t.attempts===1?"":"s"}`:undefined),state:planState(t.status)})),events:activity.slice(-40),approval,permissions:[{label:"Read files",value:"Allowed"},{label:"Run commands",value:"Ask"},{label:"Network",value:"Ask"},{label:"Deploy",value:"Off"}],usage,runLog,files:Array.from(files,([path,action])=>({path,action})),deliverable};
 }
