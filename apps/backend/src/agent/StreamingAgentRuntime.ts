@@ -238,9 +238,20 @@ export class StreamingAgentRuntime {
     // Deliberately not awaited: the caller gets a runId synchronously and
     // subscribes to events. Errors are surfaced as run.error events.
     void (async () => {
-      const codeContext = await this.relevantCode(instruction);
-      if (codeContext) messages[0].content += `\n\nRelevant indexed code (verify with file tools before editing):\n${codeContext}`;
-      await this.loop(runId, messages, instruction, mode, provider);
+      try {
+        const codeContext = await this.relevantCode(instruction);
+        if (codeContext) messages[0].content += `\n\nRelevant indexed code (verify with file tools before editing):\n${codeContext}`;
+        await this.loop(runId, messages, instruction, mode, provider);
+      } catch (err: any) {
+        const state = this.runs.get(runId);
+        if (state?.cancelled || err?.name === "AbortError") {
+          this.finishCancelled(runId, 0);
+        } else {
+          this.store.emit(runId, "run.error", { message: err?.message ?? String(err) });
+          this.store.setStatus(runId, "error");
+        }
+        this.runs.delete(runId);
+      }
     })();
     return runId;
   }
