@@ -218,16 +218,31 @@ export function useAgentRun(
   }
 
   async function approve(callId: string, approved: boolean, scope: "once" | "mission" = "once") {
-    const approvalPath =
-      modeRef.current === "multitask"
-        ? `/agent/orchestrate/approvals/${callId}`
-        : `/agent/stream/approvals/${callId}`;
-    await fetch(apiUrl(approvalPath), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ approved, scope }),
-    });
-    if (runId) attachStream(runId);
+    // The owning runtime is not always knowable client-side (attached runs
+    // look identical). Try the expected endpoint, then the other — and never
+    // fail silently: a dead Approve button is undebuggable from the UI.
+    const paths = [
+      `/agent/${modeRef.current === "multitask" ? "orchestrate" : "stream"}/approvals/${callId}`,
+      `/agent/${modeRef.current === "multitask" ? "stream" : "orchestrate"}/approvals/${callId}`,
+    ];
+    let lastError = "";
+    for (const p of paths) {
+      try {
+        const res = await fetch(apiUrl(p), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ approved, scope }),
+        });
+        if (res.ok) {
+          if (runId) attachStream(runId);
+          return;
+        }
+        lastError = `${res.status}: ${(await res.json().catch(() => ({}))).error ?? "failed"}`;
+      } catch (err: any) {
+        lastError = err.message;
+      }
+    }
+    setError(`Could not ${approved ? "approve" : "deny"}: ${lastError}`);
   }
 
   return {

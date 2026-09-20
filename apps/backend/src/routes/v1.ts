@@ -480,7 +480,11 @@ v1Router.post("/agent/stream/runs/:id/undo", async (req, res) => {
 v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
   const scope = req.body.scope === "mission" ? "mission" : "once";
-  const ok = t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
+  // The pending call may live in either runtime (clients cannot always know
+  // which one owns the run). Resolve across both — approving is idempotent.
+  const ok =
+    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
+    t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
   if (!ok) return res.status(404).json({ error: "No pending approval with that callId" });
   res.json({ ok: true });
 });
@@ -514,7 +518,10 @@ v1Router.post("/agent/orchestrate", (req, res) => {
 v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
   const scope = req.body.scope === "mission" ? "mission" : "once";
-  const ok = t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
+  // Same cross-runtime resolution as the stream endpoint.
+  const ok =
+    t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
+    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
   if (!ok) return res.status(404).json({ error: "No pending approval with that callId" });
   res.json({ ok: true });
 });
