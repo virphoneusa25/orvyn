@@ -10,7 +10,7 @@
 // wrong keyword guess that silently opens a mission is worse than a question
 // landing in chat.
 
-import { apiUrl, authHeaders } from "./connection";
+import { apiUrl, authHeaders, getConnectionConfig } from "./connection";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
 import { classifyIntent, CommandMode } from "./orvynIntent";
@@ -25,6 +25,7 @@ export interface OrvynCommand {
   source: CommandSource;
   projectRoot: string | null;
   attachments?: Attachment[];
+  previousRunId?: string | null;
 }
 
 export type CommandOutcome =
@@ -37,7 +38,7 @@ export type CommandOutcome =
  *  user bubble renders the moment this is called; Astra's reply streams in
  *  from the WebSocket afterwards. Never make the caller wait on the model. */
 function runChat(cmd: OrvynCommand): CommandOutcome {
-  startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
+  const history = startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
   try {
     const ws = new WebSocket(wsUrl("/ws/chat"));
     const giveUp = setTimeout(() => {
@@ -54,7 +55,7 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
       ws.send(
         JSON.stringify({
           task: "chat",
-          history: [],
+          history,
           userMessage: cmd.prompt,
           attachments: cmd.attachments ?? [],
           context: cmd.projectRoot ? { projectRoot: cmd.projectRoot, useRag: true } : { useRag: false },
@@ -62,7 +63,8 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
       );
     };
     ws.onmessage = (event) => {
-      const chunk = JSON.parse(event.data);
+      let chunk;
+      try { chunk = JSON.parse(event.data); } catch { appendAssistantDelta("Could not read the server response. Please retry."); finishAssistantTurn(); ws.close(); return; }
       if (chunk.error) appendAssistantDelta(chunk.error);
       else appendAssistantDelta(chunk.delta ?? "");
       if (chunk.done) {
@@ -70,6 +72,7 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
         ws.close();
       }
     };
+    ws.onclose = () => { clearTimeout(giveUp); finishAssistantTurn(); };
     ws.onerror = () => {
       clearTimeout(giveUp);
       appendAssistantDelta("\n\nCould not reach the ORVYN backend. Check Connection settings.");
@@ -93,11 +96,11 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   return { kind: "mission", runId: data.runId };
 }
 
-async function startPlanRun(cmd: OrvynCommand): Promise<CommandOutcome> {
+async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"): Promise<CommandOutcome> {
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, instruction: cmd.prompt, mode: "plan", attachments: cmd.attachments }),
+    body: JSON.stringify({ projectRoot: cmd.projectRoot, instruction: cmd.prompt, mode, attachments: cmd.attachments, previousRunId: cmd.previousRunId }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
@@ -106,6 +109,8 @@ async function startPlanRun(cmd: OrvynCommand): Promise<CommandOutcome> {
 
 export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutcome> {
   const prompt = cmd.prompt.trim();
+  const host = new URL(getConnectionConfig().backendUrl).hostname;
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(prompt)) cmd = {...cmd, projectRoot: null};
   if (!prompt) return { kind: "error", error: "Empty command" };
 
   switch (classifyIntent(cmd.prompt, cmd.mode)) {
@@ -118,6 +123,6 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
       // result instead of a dead button.
       return startPlanRun(cmd);
     default:
-      return startMission(cmd);
+      return cmd.source === "MISSION" ? startMission(cmd) : startPlanRun(cmd, "agent");
   }
 }

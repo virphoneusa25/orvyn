@@ -1,3 +1,4 @@
+import { DocumentsPanel } from "./DocumentsPanel";
 // apps/desktop/src/renderer/components/ContextPanel.tsx
 //
 // The RIGHT dynamic context workspace. No chat lives here — the center
@@ -16,9 +17,10 @@ import { ReviewPanel } from "./ReviewPanel";
 import { TerminalView, useTerminalSession } from "./BottomWorkPanel";
 import { IconChevronRight } from "./Icons";
 
-type CtxTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review";
+type CtxTab = "documents" | "plan" | "files" | "diff" | "terminal" | "browser" | "review";
 
 const TAB_LABELS: Record<CtxTab, string> = {
+  documents: "Docs",
   plan: "Plan",
   files: "Files",
   diff: "Diff",
@@ -31,6 +33,8 @@ const TAB_LABELS: Record<CtxTab, string> = {
 function suggestTab(events: AgentEvent[]): CtxTab | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const t = events[i]!.type;
+    if (t === "tool.completed" && events[i].data.tool === "create_document") return "documents";
+    if (t === "run.completed" && events.some(e=>e.type === "tool.completed" && e.data.tool === "create_document")) return "documents";
     if (t === "review.started" || t === "review.passed" || t === "review.rejected" || t === "mission.completed" || t === "run.completed") return "review";
     if (t === "browser.started" || t === "image.generated") return "browser";
     if (t === "terminal.started" || t === "terminal.output") return "terminal";
@@ -174,7 +178,8 @@ export function ContextPanel({
             agent tools already report this honestly — this tab goes live when it is installed.
           </div>
         )}
-        {active === "review" && <ReviewPanel />}
+        {active === "documents" && <DocumentsPanel projectRoot={projectRoot} revision={events.filter(e=>e.type === "tool.completed" && e.data.tool === "create_document").length} />}
+        {active === "review" && <ReviewPanel runId={events[0]?.runId} />}
       </div>
     </div>
   );

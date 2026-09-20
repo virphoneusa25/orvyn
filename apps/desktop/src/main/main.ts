@@ -3,9 +3,45 @@ import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import * as path from "path";
 import * as os from "os";
 import { promises as fs } from "fs";
+import { spawn, ChildProcess } from "child_process";
+import { createWriteStream } from "fs";
 
 let mainWindow: BrowserWindow | null = null;
 let currentProjectRoot: string | null = null;
+let localEngine: ChildProcess | null = null;
+let engineStarting = false;
+let quitting = false;
+let engineTimer: ReturnType<typeof setInterval> | undefined;
+
+async function ensureLocalEngine(): Promise<void> {
+  if (quitting || engineStarting || localEngine) return;
+  const config = await readConfig();
+  if (!/^http:\/\/(localhost|127\.0\.0\.1):4570\/?$/.test(config.backendUrl)) return;
+  engineStarting = true;
+  try {
+    try {
+      const response = await fetch("http://127.0.0.1:4570/api/v1/health", {signal: AbortSignal.timeout(1800)});
+      if (response.ok) return;
+    } catch { /* Start the managed engine when the local service is absent. */ }
+    const backend = app.isPackaged ? path.join(process.resourcesPath, "backend") : path.resolve(__dirname, "../../../backend");
+    const entry = path.join(backend, "dist/index.js");
+    await fs.access(entry);
+    const executable = app.isPackaged ? path.join(backend, "node.exe") : "node";
+    const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
+    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: {...process.env, PORT: "4570"}});
+    localEngine.stdout?.pipe(log, {end: false});
+    localEngine.stderr?.pipe(log, {end: false});
+    localEngine.once("error", () => {localEngine = null; log.end();});
+    localEngine.once("exit", () => {localEngine = null; log.end();});
+  } catch (error) { console.error("Local engine could not start:", error); }
+  finally { engineStarting = false; }
+}
+
+app.on("before-quit", () => {
+  quitting = true;
+  if (engineTimer) clearInterval(engineTimer);
+  localEngine?.kill();
+});
 
 const MAX_RECENTS = 8;
 
@@ -113,6 +149,10 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     await ensureDefaultWorkspace();
+    const recent = (await loadRecents())[0];
+    if (recent) { try { if ((await fs.stat(recent)).isDirectory()) currentProjectRoot = recent; } catch { /* missing folder falls back to workspace */ } }
+    await ensureLocalEngine();
+    engineTimer = setInterval(() => void ensureLocalEngine(), 15000);
     createWindow();
   });
 }

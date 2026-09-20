@@ -34,6 +34,7 @@ export const PROFILES: Record<PermissionProfile, { label: string; description: s
 
 // Tools each profile pre-approves. SAFE pre-approves nothing.
 const BALANCED_ALLOW = new Set([
+  "create_document",
   "write_file",
   "edit_file",
   "move_file",

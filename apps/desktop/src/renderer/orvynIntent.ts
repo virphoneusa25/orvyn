@@ -25,6 +25,9 @@ export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent
   // Absolute guard first: pure greetings/tiny-talk are chat, always.
   if (GREETING_ONLY.test(trimmed)) return "chat";
 
+  // Polite action requests still need tools, even when phrased as a question.
+  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
+
   if (mode === "research") return "research";
   if (mode === "automate") return "automate";
   if (mode === "auto") {

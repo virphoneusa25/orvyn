@@ -35,6 +35,10 @@ export interface ToolItem {
   kind: "tool";
   key: string;
   op: ToolOp;
+  toolName?: string;
+  output?: string;
+  outputTruncated?: boolean;
+  endedAt?: number;
   /** File extension badge (TS, JSON, MD…) when the target is a file. */
   ext?: string;
   fileName?: string;
@@ -42,14 +46,14 @@ export interface ToolItem {
   path?: string;
   /** Primary label for non-file operations (command, query, URL). */
   label?: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "done" | "failed" | "stopped";
   /** Right-aligned result (e.g. "+14 −6", "12 results", "v24.18.0"). */
   detail?: string;
   error?: string;
   seq: number;
   ts: number;
   /** Which right-panel tab the row opens on click, if any. */
-  ctx?: "files" | "diff" | "terminal" | "browser" | "review";
+  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents";
 }
 
 export interface GroupItem {
@@ -72,7 +76,7 @@ export interface WorkGroupItem {
   status: "running" | "done" | "warning" | "failed";
   durationMs?: number;
   items: ToolItem[];
-  ctx?: "files" | "diff" | "terminal" | "browser" | "review";
+  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents";
 }
 
 export interface AssistantItem {
@@ -138,6 +142,10 @@ const READ_OPS: ToolOp[] = ["read", "search"]; // kept for callers/tests referen
 function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolItem> & { op: ToolOp } {
   const fileArg = (k = "path") => (typeof args?.[k] === "string" ? splitPath(String(args[k])) : undefined);
   switch (name) {
+    case "read_document":
+      return { op: "read", ...fileArg(), ctx: "documents" };
+    case "create_document":
+      return { op: "create", ...fileArg("name"), ctx: "documents" };
     case "read_file":
       return { op: "read", ...fileArg(), ctx: "files" };
     case "write_file":
@@ -147,6 +155,8 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       return { op: "edit", ...fileArg(), ctx: "diff" };
     case "delete_file":
       return { op: "delete", ...fileArg(), ctx: "files" };
+    case "move_file":
+      return { op: "edit", ...fileArg("from"), ctx: "files" };
     case "rename_file":
       return { op: "edit", ...fileArg(), ctx: "files" };
     case "search_files":
@@ -162,7 +172,7 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "ssh_exec":
       return { op: "terminal", label: String(args?.command ?? ""), ctx: "terminal" };
     case "run_tests":
-      return { op: "terminal", label: "npm test", ctx: "terminal" };
+      return { op: "terminal", label: String(args?.command ?? "Run tests"), ctx: "terminal" };
     case "run_typecheck":
       return { op: "terminal", label: "typecheck", ctx: "terminal" };
     case "run_linter":
@@ -180,7 +190,7 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     default:
       return name.startsWith("browser_")
         ? { op: "browser", label: String(args?.url ?? name.replace(/^browser_/, "")), ctx: "browser" }
-        : { op: "other", label: name };
+        : { op: "other", label: name.replace(/_/g, " ") };
   }
 }
 
@@ -231,8 +241,9 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const label = e.data.text
           ? String(e.data.text)
           : !role || role === "astra" || role === "orchestrator"
-            ? "Analyzing…"
+            ? "Thinking…"
             : `${role} working…`;
+        flushAssistant(false);
         items.push({ kind: "status", key: e.id, label, ephemeral: true, tone: "working" });
         continue;
       }
@@ -248,7 +259,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
 
       case "review.rejected":
-        items.push({ kind: "status", key: e.id, label: "Astra requested another pass", ephemeral: false, tone: "rework" });
+        items.push({ kind: "status", key: e.id, label: "Checking the result and making corrections…", ephemeral: false, tone: "rework" });
         continue;
 
       case "checkpoint.created":
@@ -266,7 +277,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             : undefined;
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
-          if (it.kind === "tool" && (it.op === "edit" || it.op === "create") && it.fileName && path.endsWith(it.fileName)) {
+          if (it.kind === "tool" && (it.op === "edit" || it.op === "create") && it.fileName && path.replace(/\\/g, "/") === `${it.path ?? ""}${it.fileName}`) {
             if (detail) it.detail = detail;
             break;
           }
@@ -306,6 +317,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           kind: "tool",
           key,
           status: "running",
+          toolName: String(e.data.tool ?? ""),
           seq: e.sequence,
           ts: e.timestamp,
           ...base,
@@ -318,7 +330,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const item = at !== undefined ? (items[at] as ToolItem | undefined) : undefined;
         if (item?.kind === "tool") {
           // The arguments carry the real file path / command — refine in place.
-          Object.assign(item, toolIdentity(String(e.data.tool ?? item.op), e.data.input));
+          Object.assign(item, toolIdentity(String(e.data.tool ?? item.toolName ?? item.op), e.data.input));
         }
         continue;
       }
@@ -326,7 +338,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const at = toolIndex.get(String(e.data.callId ?? ""));
         const item = at !== undefined ? (items[at] as ToolItem | undefined) : undefined;
         if (item?.kind === "tool") {
-          item.status = "done";
+          if (item.status !== "failed") item.status = "done";
+          item.endedAt = e.timestamp;
+          item.output = typeof e.data.output === "string" ? e.data.output.slice(-16000) : item.output;
+          item.outputTruncated = item.outputTruncated || Boolean(e.data.outputTruncated) || (typeof e.data.output === "string" && e.data.output.length > 16000);
           const preview = typeof e.data.preview === "string" ? e.data.preview : undefined;
           const det = detailFromPreview(item.op, preview);
           if (det) item.detail = det;
@@ -338,6 +353,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const item = at !== undefined ? (items[at] as ToolItem | undefined) : undefined;
         if (item?.kind === "tool") {
           item.status = "failed";
+          item.endedAt = e.timestamp;
           item.error = String(e.data.error ?? "").slice(0, 200);
         } else if (String(e.data.tool) === "model") {
           // A worker model error surfaces as an actionable line, not silence.
@@ -351,13 +367,24 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       }
 
+      case "terminal.output":
       case "terminal.completed": {
-        // exit status for streaming runs' command rows
         const at = toolIndex.get(String(e.data.callId ?? ""));
-        const item = at !== undefined ? (items[at] as ToolItem | undefined) : undefined;
-        if (item?.kind === "tool" && item.op === "terminal" && !e.data.exitOk) {
-          item.status = "failed";
-          item.detail = "failed";
+        // Older runs lacked call ids; only associate an unambiguous command.
+        const candidates = items.filter((it): it is ToolItem => it.kind === "tool" && it.op === "terminal");
+        const item = at !== undefined ? items[at] : candidates.length === 1 ? candidates[0] : undefined;
+        if (item?.kind === "tool" && item.op === "terminal") {
+          if (e.type === "terminal.output") {
+            const output = (item.output ?? "") + String(e.data.data ?? "");
+            item.output = output.slice(-16000);
+            item.outputTruncated = item.outputTruncated || output.length > 16000 || Boolean(e.data.truncated);
+          } else {
+            item.endedAt = e.timestamp;
+            if (e.data.exitOk === false) {
+              item.status = "failed";
+              item.detail = "Command failed";
+            }
+          }
         }
         continue;
       }
@@ -385,9 +412,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({
           kind: "summary",
           key: e.id,
-          ok: true,
+          ok: e.data.missionStatus !== "BLOCKED" && !(Number(e.data.tasksFailed) > 0),
           cancelled: false,
-          detail: `Completed — ${Number(e.data.tasksCompleted ?? 0)}/${Number(e.data.tasksTotal ?? 0)} tasks`,
+          detail: e.data.missionStatus === "BLOCKED" ? "Needs your attention — work is blocked"
+            : Number(e.data.tasksFailed) > 0 ? "Finished with incomplete tasks"
+            : Number(e.data.tasksTotal) > 0 ? `Completed — ${Number(e.data.tasksCompleted ?? 0)}/${Number(e.data.tasksTotal)} tasks`
+            : "Completed",
         });
         continue;
       case "run.error":
@@ -413,12 +443,24 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   }
 
   // A run still streaming keeps its open assistant buffer as the live item.
-  if (runStatus === "running" || runStatus === "awaiting_approval") flushAssistant(true);
+  const active = ["running", "awaiting_approval", "queued", "cancelling"].includes(runStatus);
+  flushAssistant(active);
+  if (!active) {
+    for (const item of items) {
+      if (item.kind === "tool" && item.status === "running") item.status = "stopped";
+    }
+  }
+  const last = items[items.length - 1];
+  if (active && (!last || (last.kind !== "status" && !(last.kind === "assistant" && last.streaming))) &&
+      !items.some(it => it.kind === "tool" && it.status === "running")) {
+    items.push({ kind: "status", key: "live-status", ephemeral: true, tone: "working",
+      label: runStatus === "awaiting_approval" ? "Waiting for your approval" : runStatus === "queued" ? "Waiting to start…" : runStatus === "cancelling" ? "Stopping…" : "Thinking…" });
+  }
 
   // Phase pass: consecutive same-class operations roll into one WorkGroup —
   // "✓ Inspected project · 18 files" — so a mission reads as a conversation,
   // not a scroll of rows. Assistant text and other items close the group.
-  return phaseWorkGroups(dropStaleEphemeral(items));
+  return phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral));
 }
 
 /** Ephemeral statuses that were superseded by real activity disappear. */
@@ -430,7 +472,8 @@ function dropStaleEphemeral(items: PresentationItem[]): PresentationItem[] {
     }
     return -1;
   })();
-  return items.filter((it, i) => it.kind !== "status" || !(it as StatusItem).ephemeral || i >= lastMeaningful);
+  const lastEphemeral = items.reduce((last, it, i) => it.kind === "status" && it.ephemeral ? i : last, -1);
+  return items.filter((it, i) => it.kind !== "status" || !(it as StatusItem).ephemeral || (i >= lastMeaningful && i === lastEphemeral));
 }
 
 /** Which phase a tool row belongs to; null keeps the row standalone. */
@@ -463,10 +506,10 @@ function fmtDuration(ms: number): string | undefined {
 
 function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGroupItem {
   const anyRunning = items.some((i) => i.status === "running");
-  const anyFailed = items.some((i) => i.status === "failed");
+  const anyFailed = items.some((i) => i.status === "failed" || i.status === "stopped");
   const allFailed = anyFailed && items.every((i) => i.status === "failed");
   const status: WorkGroupItem["status"] = anyRunning ? "running" : allFailed ? "failed" : anyFailed ? "warning" : "done";
-  const durationMs = items.length > 0 ? items[items.length - 1].ts - items[0].ts : 0;
+  const durationMs = items.length > 0 ? Math.max(...items.map(i => i.endedAt ?? i.ts)) - items[0].ts : 0;
   const dur = fmtDuration(durationMs);
 
   let title = "";
@@ -507,6 +550,8 @@ function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGrou
     summary = last?.label || last?.detail || undefined;
   }
   if (dur) summary = summary ? `${summary} · ${dur}` : dur;
+
+  if (anyFailed && !anyRunning) title = type === "edits" ? "File changes need attention" : type === "inspection" ? "Inspection needs attention" : "Activity needs attention";
 
   const ctxByType: Record<WorkGroupItem["type"], WorkGroupItem["ctx"]> = {
     inspection: "files",

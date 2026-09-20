@@ -2,7 +2,7 @@
   "name": "orvyn",
   "version": "0.1.0",
   "private": true,
-  "description": "ORVYN — Your Code. Your Models. Your AI.",
+  "description": "ORVYN \u2014 Your Code. Your Models. Your AI.",
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -21,5 +21,14 @@
   "allowScripts": {
     "electron@31.7.7": true,
     "esbuild@0.21.5": true
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    },
+    "pptxgenjs": {
+      "image-size": "2.0.4"
+    },
+    "qs": "6.16.0"
   }
 }

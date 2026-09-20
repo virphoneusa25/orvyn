@@ -198,3 +198,65 @@ test("failed tool keeps its error; model errors surface as a status line", () =>
   assert.equal(failed.error, "Exit 1");
   assert.ok(items.some((i) => i.kind === "status" && String((i as { label: string }).label).includes("connection closed")));
 });
+
+
+test("real runtime input without tool name preserves file and command identity", () => {
+  for (const [tool, input, op, name] of [
+    ["read_file", { path: "src/main.py" }, "read", "main.py"],
+    ["terminal", { command: "python main.py" }, "terminal", undefined],
+  ] as const) {
+    const items = reducePresentation([ev("tool.started", { callId: "c", tool }), ev("tool.input", { callId: "c", input })], "running");
+    const item = (items[0] as WgItem).items[0];
+    assert.equal(item.op, op);
+    assert.equal(item.fileName, name);
+    if (op === "terminal") assert.equal(item.label, "python main.py");
+  }
+});
+
+test("terminal output is correlated, bounded, and failure survives lifecycle completion", () => {
+  const items = reducePresentation([
+    ev("tool.started", { callId: "a", tool: "terminal" }),
+    ev("tool.started", { callId: "b", tool: "terminal" }),
+    ev("terminal.output", { callId: "a", data: "a".repeat(17000) }),
+    ev("terminal.output", { callId: "b", data: "second command" }),
+    ev("terminal.completed", { callId: "a", exitOk: false }),
+    ev("tool.completed", { callId: "a" }),
+  ], "running");
+  const [a, b] = (items[0] as WgItem).items;
+  assert.equal(a.output?.length, 16000);
+  assert.equal(a.outputTruncated, true);
+  assert.equal(a.status, "failed");
+  assert.equal(b.output, "second command");
+});
+
+test("finished and cancelled runs preserve unfinished text without stale thinking", () => {
+  const items = reducePresentation([ev("thinking"), ev("tool.started", { callId: "a", tool: "read_file" }), ev("message.delta", { content: "Partial reply" })], "cancelled");
+  assert.equal((items[0] as WgItem).items[0].status, "stopped");
+  assert.ok(items.some(i => i.kind === "assistant" && i.content === "Partial reply" && !i.streaming));
+  assert.ok(!items.some(i => i.kind === "status" && i.ephemeral));
+});
+
+test("thinking is a single live status and text remains chronological", () => {
+  const items = reducePresentation([ev("message.delta", { content: "I found the entry point." }), ev("thinking"), ev("thinking")], "running");
+  assert.equal(items[0].kind, "assistant");
+  assert.equal(items.filter(i => i.kind === "status").length, 1);
+  assert.equal(reducePresentation([], "running")[0].kind, "status");
+});
+
+test("blocked and partial missions never present successful completion", () => {
+  for (const data of [{ missionStatus: "BLOCKED", tasksTotal: 5, tasksCompleted: 1 }, { tasksFailed: 1 }]) {
+    const item = reducePresentation([ev("run.completed", data)], "completed")[0];
+    assert.equal(item.kind, "summary");
+    if (item.kind === "summary") assert.equal(item.ok, false);
+  }
+  const item = reducePresentation([ev("run.completed", { steps: 3 })], "completed")[0];
+  if (item.kind === "summary") assert.equal(item.detail, "Completed");
+});
+
+test("diff counts attach to exact paths when basenames collide", () => {
+  const events = ["src/app.ts", "tests/app.ts"].flatMap((path, i) => [ev("tool.started", { callId: String(i), tool: "edit_file" }), ev("tool.input", { callId: String(i), input: { path } })]);
+  events.push(ev("file.edit", { path: "src/app.ts", preview: { additions: 4, deletions: 2 } }));
+  const [a, b] = (reducePresentation(events, "running")[0] as WgItem).items;
+  assert.equal(a.detail, "+4 −2");
+  assert.equal(b.detail, undefined);
+});

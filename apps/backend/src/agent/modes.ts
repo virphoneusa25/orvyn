@@ -21,6 +21,7 @@ export interface ModeDefinition {
 }
 
 const READ_ONLY: Record<string, ToolPermission> = {
+  read_document: "allowed",
   read_file: "allowed",
   list_directory: "allowed",
   search_files: "allowed",
@@ -36,6 +37,7 @@ const READ_ONLY: Record<string, ToolPermission> = {
   fetch_url: "allowed",
   web_search: "allowed",
   mcp_list: "allowed",
+  create_document: "denied",
   write_file: "denied",
   edit_file: "denied",
   move_file: "denied",
@@ -63,6 +65,7 @@ const READ_ONLY: Record<string, ToolPermission> = {
 // Full-access profile shared by Agent and Multitask: reads are free, anything
 // that mutates state or leaves the sandbox needs a per-call approval.
 const FULL_WITH_APPROVAL: Record<string, ToolPermission> = {
+  read_document: "allowed",
   read_file: "allowed",
   list_directory: "allowed",
   search_files: "allowed",
@@ -76,6 +79,7 @@ const FULL_WITH_APPROVAL: Record<string, ToolPermission> = {
   git_log: "allowed",
   git_branch: "allowed",
   mcp_list: "allowed",
+  create_document: "ask",
   write_file: "ask",
   edit_file: "ask",
   move_file: "ask",

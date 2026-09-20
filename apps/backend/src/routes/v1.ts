@@ -1,3 +1,5 @@
+import { documentRouter } from "./documents";
+import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { requireTenant } from "../middleware/tenant";
@@ -8,6 +10,21 @@ import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
 
 export const v1Router = Router();
+v1Router.use("/documents", documentRouter);
+
+// Validate every explicit project root before an endpoint uses it.
+v1Router.use(async (req, res, next) => {
+  try {
+    if (req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
+    if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
+    if (req.method === "POST" && ["/agent/stream/runs", "/agent/orchestrate"].includes(req.path)) {
+      const tenant = requireTenant(req);
+      if (tenant.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) return res.status(409).json({error:"A task is already active. Stop it or wait before starting another."});
+      req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
+    }
+    next();
+  } catch (e: any) { res.status(400).json({error:e.message}); }
+});
 
 // Note: GET /api/v1/health is registered unauthenticated directly on the
 // Express app in index.ts (before apiKeyAuth), not here.
@@ -226,13 +243,14 @@ v1Router.post("/agent/runs/:id/approve", async (req, res) => {
 });
 
 // --- Tools ---
-v1Router.get("/tools", (req, res) => {
+v1Router.get("/tools", async (req, res) => {
+  try {
   const tt = requireTenant(req);
-  const root = req.query.projectRoot ? String(req.query.projectRoot) : tt.currentProjectRoot;
+  const root = await resolveWorkspace(tt, req.query.projectRoot ?? tt.currentProjectRoot);
   // Ensure-without-clobber: re-registering for the same root keeps the user's
   // permission overrides (handled inside registerProjectToolsFor), so listing
   // tools never resets what the user configured.
-  if (root) {
+  if (root && !tt.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) {
     registerProjectToolsFor(tt, root);
   }
   res.json({
@@ -244,6 +262,7 @@ v1Router.get("/tools", (req, res) => {
     })),
     available: tt.toolGateway.list().length > 0,
   });
+  } catch(e:any) { res.status(400).json({error:e.message}); }
 });
 
 v1Router.post("/tools/:name/permission", (req, res) => {
@@ -324,12 +343,15 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
   _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
+  const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
+  const history: {role: "user" | "assistant";content:string}[] = previous ? [{role:"user",content:String(previous.events.find(e=>e.type === "run.started")?.data.instruction ?? "").slice(0,4000)}, {role:"assistant",content:previous.events.filter(e=>e.type === "message.delta").map(e=>String(e.data.content ?? "")).join("").slice(-16000)}] : [];
   const runId = t.agentRuntime.start(
     req.body.projectRoot,
     req.body.instruction,
     req.body.rules,
     req.body.mode ?? "agent",
-    req.body.attachments
+    req.body.attachments,
+    history
   );
   res.status(201).json({ runId });
 });

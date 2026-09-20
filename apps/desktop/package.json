@@ -7,19 +7,21 @@
     "dev": "npm run build && electron .",
     "build": "tsc -p tsconfig.main.json && vite build",
     "build:renderer:dev": "vite build --mode development",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist:win": "npm run build && cd ../.. && npm run build -w @orvyn/backend && node scripts/stage-desktop-backend.mjs && cd apps/desktop && electron-builder --win"
   },
-  "dependencies": {},
+  "dependencies": {
+    "pdfjs-dist": "^6.3.289"
+  },
   "devDependencies": {
     "@monaco-editor/react": "^4.6.0",
-    "monaco-editor": "^0.49.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^31.0.2",
     "electron-builder": "^24.13.3",
+    "monaco-editor": "^0.49.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^5.4.5",
     "vite": "^5.3.1"
   },
@@ -30,13 +32,30 @@
     "productName": "ORVYN",
     "electronVersion": "31.7.7",
     "npmRebuild": false,
-    "directories": { "output": "release", "buildResources": "resources" },
-    "files": ["dist/**/*"],
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*"
+    ],
     "extraResources": [
-      { "from": "resources/icon.ico", "to": "icon.ico" }
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "resources/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "resources/icon.ico",
       "signAndEditExecutable": false
     },

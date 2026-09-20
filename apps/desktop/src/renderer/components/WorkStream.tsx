@@ -51,7 +51,7 @@ export function WorkStream({
   run: RunView;
   onRunStarted: (runId: string | null) => void;
 }) {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<CommandMode>(
     () => (localStorage.getItem("orvyn:composer-mode") as CommandMode) || "auto"
@@ -81,7 +81,16 @@ export function WorkStream({
   useEffect(() => {
     const el = scroller.current;
     if (el && follow) el.scrollTop = el.scrollHeight;
-  }, [messages.length, run.events.length, follow]);
+  }, [tick, messages.length, run.events, follow]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    const content = el?.firstElementChild;
+    if (!el || !content) return;
+    const observer = new ResizeObserver(() => { if (follow) el.scrollTop = el.scrollHeight; });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [follow]);
 
   // Ctrl+L focuses the composer from anywhere.
   useEffect(() => {
@@ -121,6 +130,7 @@ export function WorkStream({
         mode,
         source: "CHAT",
         projectRoot,
+        previousRunId: run.runId,
         attachments,
       });
       if (outcome.kind === "error") throw new Error(outcome.error);
@@ -138,6 +148,8 @@ export function WorkStream({
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
   const streaming = isChatStreaming();
+  const completion = [...run.events].reverse().find(e => e.type === "run.completed");
+  const displayStatus = completion?.data.missionStatus === "BLOCKED" ? "needs attention" : Number(completion?.data.tasksFailed) > 0 ? "incomplete" : run.status;
   // Retry target: the run's own instruction, replayed as a NEW run.
   const retryInstruction = (run.events.find((e) => e.type === "run.started")?.data.instruction as string | undefined)?.trim() ?? null;
   // Stall clock: re-render every 5s while a run is active so "Still working…"
@@ -215,7 +227,7 @@ export function WorkStream({
                   ? "var(--orvyn-purple-hi)"
                   : run.status === "queued"
                     ? "var(--orvyn-yellow)"
-                    : run.status === "completed"
+                    : displayStatus === "completed"
                       ? "var(--orvyn-green)"
                       : run.status === "cancelled"
                         ? "var(--orvyn-yellow)"
@@ -225,7 +237,7 @@ export function WorkStream({
               padding: "1px 7px",
             }}
           >
-            {run.status.replace("_", " ").toUpperCase()}
+            {displayStatus.replace("_", " ").toUpperCase()}
           </span>
         )}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
@@ -313,7 +325,7 @@ export function WorkStream({
                       padding: "1px 5px",
                     }}
                   >
-                    ORCHESTRATOR
+                    ASSISTANT
                   </span>
                 </div>
                 <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
@@ -321,10 +333,10 @@ export function WorkStream({
                       the model is on the wire. */}
                   {!m.content && i === messages.length - 1 && streaming ? (
                     <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
-                      Astra is analyzing your request…
+                      Thinking…
                     </span>
                   ) : (
-                    <MessageContent content={m.content} />
+                    <MessageContent content={m.content} streaming={streaming && i === messages.length - 1} />
                   )}
                 </div>
               </div>
@@ -332,9 +344,12 @@ export function WorkStream({
           )
         )}
 
+        {runInstruction && <div style={{display:"flex",justifyContent:"flex-end",margin:"18px 0 24px"}}><div style={{maxWidth:"80%",borderRadius:20,padding:"14px 18px",background:"#1b4075",color:"#f5f7ff",fontSize:14,lineHeight:1.6,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{String(runInstruction)}</div></div>}
+        {runActive && <div role="status" style={{fontSize:12,color:"var(--text-secondary)",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>Working{run.events[0] ? ` for ${Math.max(0,Math.floor((Date.now()-run.events[0].timestamp)/1000))}s` : "…"}</div>}
+
         {/* Activity from the attached run — the presentation reducer's
             conversation: assistant text, compact tool rows, approvals. */}
-        {run.events.length > 0 && (
+        {(run.events.length > 0 || runActive) && (
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
             <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"} />
@@ -519,8 +534,8 @@ export function WorkStream({
                   try {
                     const a = await fileToAttachment(f);
                     if (a) loaded.push(a);
-                  } catch {
-                    /* skip unreadable */
+                  } catch (error: any) {
+                    setError(error.message ?? "Could not read attachment.");
                   }
                 }
                 setAttachments((prev) => [...prev, ...loaded]);
@@ -640,7 +655,7 @@ function ModelPicker() {
       .catch(() => {});
     fetch(apiUrl("/routing"))
       .then((r) => r.json())
-      .then((d) => setCurrent(d.overrides?.executor ?? d.overrides?.chat ?? "auto"))
+      .then((d) => setCurrent(d.overrides?.agent ?? d.overrides?.executor ?? d.overrides?.chat ?? "auto"))
       .catch(() => {});
   };
   useEffect(load, []);
@@ -652,6 +667,7 @@ function ModelPicker() {
         // Clear both lanes — the router returns to its configured defaults.
         await fetch(apiUrl("/routing/executor"), { method: "DELETE", headers: authHeaders() });
         await fetch(apiUrl("/routing/chat"), { method: "DELETE", headers: authHeaders() });
+        await fetch(apiUrl("/routing/agent"), {method:"DELETE",headers:authHeaders()});
         setCurrent("auto");
       } else {
         // Executor drives mission workers; chat drives conversation turns.
@@ -665,6 +681,8 @@ function ModelPicker() {
           headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify({ task: "chat", modelId: id }),
         });
+        const agentResult = await fetch(apiUrl("/routing"), {method:"POST",headers:{"Content-Type":"application/json",...authHeaders()},body:JSON.stringify({task:"agent",modelId:id})});
+        if (!agentResult.ok) throw new Error("This model cannot run agent tools.");
         setCurrent(id);
       }
     } finally {

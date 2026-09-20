@@ -319,3 +319,33 @@ test("stops with a clear error when the run's tool-call budget is spent", async 
     else process.env.ORVYN_RUN_MAX_TOOL_CALLS = previous;
   }
 });
+
+test("terminal events carry their call id and bounded real output", async () => {
+  const h = harness([[{ delta: "", toolCall: { id: "cmd", name: "terminal", arguments: { command: "echo hello" } }, done: false }, { delta: "", done: true }]]);
+  h.registry.register({
+    name: "terminal", description: "test terminal", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
+    async execute() { return { ok: true, output: "x".repeat(17000) }; },
+  });
+  const id = h.runtime.start("/tmp/project", "run a command");
+  h.gateway.setPermission("terminal", "allowed");
+  assert.equal(await waitForStatus(h.store, id), "completed");
+  const events = h.store.get(id)!.events.filter(e => e.type.startsWith("terminal."));
+  assert.deepEqual(events.map(e => e.type), ["terminal.started", "terminal.output", "terminal.completed"]);
+  assert.ok(events.every(e => e.data.callId === "cmd"));
+  assert.equal(String(events[1].data.data).length, 16000);
+  assert.equal(events[1].data.truncated, true);
+});
+
+test("failed writes never emit a successful file change", async () => {
+  const h = harness([[toolCallChunk("write", "edit_file"), { delta: "", done: true }]]);
+  h.registry.register({
+    name: "edit_file", description: "test edit", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
+    async execute() { return { ok: false, error: "Read-only file" }; },
+  });
+  const id = h.runtime.start("/tmp/project", "edit a file");
+  h.gateway.setPermission("edit_file", "allowed");
+  await waitForStatus(h.store, id);
+  const events = h.store.get(id)!.events;
+  assert.ok(events.some(e => e.type === "tool.failed"));
+  assert.ok(!events.some(e => e.type === "file.edit"));
+});

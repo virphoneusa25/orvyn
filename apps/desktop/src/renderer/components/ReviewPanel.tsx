@@ -31,7 +31,7 @@ interface ReviewEvent {
   data: Record<string, unknown>;
 }
 
-export function ReviewPanel() {
+export function ReviewPanel({runId}: {runId?: string} = {}) {
   const [mission, setMission] = useState<MissionView | null>(null);
   const [reviews, setReviews] = useState<ReviewEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +42,7 @@ export function ReviewPanel() {
       try {
         const m = await fetch(apiUrl("/missions"), { headers: authHeaders() }).then((r) => r.json());
         if (stop) return;
-        const latest: MissionView | undefined = (m.missions ?? [])[0];
+        const latest: MissionView | undefined = runId ? (m.missions ?? []).find((item: MissionView) => item.runId === runId) : (m.missions ?? [])[0];
         setMission(latest ?? null);
         setError(null);
         if (latest) {
@@ -68,18 +68,17 @@ export function ReviewPanel() {
       stop = true;
       clearInterval(t);
     };
-  }, []);
+  }, [runId]);
 
   if (error) {
-    return <div style={{ padding: 16, fontSize: 12, color: "#e06c75" }}>Backend unreachable: {error}</div>;
+    return <div style={{ padding: 16, fontSize: 12, color: "#e06c75" }}>Connection interrupted. Retrying… {error}</div>;
   }
 
   if (!mission) {
     return (
       <div style={{ padding: 16, color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
         <div style={{ fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>No mission reviews yet</div>
-        Every Build (Multitask) mission ends with a mandatory review by Astra: a structured verdict with blocking
-        issues and required changes. Run a mission from the Build tab and its reviews will appear here.
+        The current task has no separate review. Its results and checks appear in the conversation.
       </div>
     );
   }

@@ -183,7 +183,7 @@ export function AgentActivityList({
         switch (item.kind) {
           case "assistant":
             return (
-              <div key={item.key} style={{ margin: "8px 0 12px", fontSize: 13, minWidth: 0, color: "var(--text)" }}>
+              <div key={item.key} className="conversation-reply">
                 <MessageContent content={item.content} streaming={item.streaming} />
               </div>
             );
@@ -194,6 +194,7 @@ export function AgentActivityList({
           case "workgroup":
             return <WorkGroupRow key={item.key} group={item} />;
           case "status":
+            if (item.ephemeral) return <div key={item.key} className="activity-thinking" role="status"><span className="activity-pulse" />{item.label}</div>;
             return (
               <div
                 key={item.key}

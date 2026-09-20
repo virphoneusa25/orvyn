@@ -145,7 +145,7 @@ export function ToolsWorkspace({ projectRoot }: { projectRoot: string | null }) 
   }, [projectRoot]);
 
   return (
-    <Shell title="Tools & MCP" subtitle="The live Tool Gateway registry — every tool the agents can call, with its enforced permission.">
+    <Shell title="Tools & MCP" subtitle="Built-in document, file, terminal, web and browser tools. MCP connects additional services configured for this project.">
       {tools.length === 0 ? (
         <HonestState title="NO TOOLS REGISTERED" message="Open a project folder — tools register per project." />
       ) : (
@@ -161,7 +161,7 @@ export function ToolsWorkspace({ projectRoot }: { projectRoot: string | null }) 
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <code style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{t.name}</code>
+                <code style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{t.name.replace(/_/g," ")}</code>
                 <span
                   style={{
                     marginLeft: "auto",

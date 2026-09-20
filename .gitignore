@@ -19,3 +19,5 @@ apps/desktop/dist-electron/
 .orvyn/
 _zip_*/
 _vp_*.py
+
+apps/desktop/resources/backend/

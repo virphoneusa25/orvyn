@@ -42,3 +42,10 @@ test("research and automate modes route to their lanes", () => {
   assert.equal(classifyIntent("Research the architecture used by this project.", "research"), "research");
   assert.equal(classifyIntent("Check the server every morning.", "automate"), "automate");
 });
+
+
+test("polite requests to create or inspect artifacts use tools", () => {
+  for (const prompt of ["Can you create a Word document?", "Please write a report", "Could you review this PDF?", "Make a spreadsheet"]) {
+    assert.equal(classifyIntent(prompt,"auto"),"code");
+  }
+});

@@ -28,6 +28,8 @@ export type AgentRole =
 
 /** Which capability class each tool belongs to. Unknown tools are SYSTEM (most restricted). */
 const TOOL_CAPABILITIES: Record<string, Capability[]> = {
+  read_document: ["READ"],
+  create_document: ["WRITE"],
   read_file: ["READ"],
   list_directory: ["READ"],
   search_files: ["READ"],

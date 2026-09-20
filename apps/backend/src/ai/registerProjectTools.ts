@@ -1,3 +1,4 @@
+import { makeReadDocumentTool, makeCreateDocumentTool } from "./tools/documentTools";
 // apps/backend/src/ai/registerProjectTools.ts
 import type { Tenant } from "../tenancy/TenantManager";
 import type { ToolPermission } from "./ToolTypes";
@@ -61,6 +62,9 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   }
 
   g.registry.clear();
+
+  g.register(makeReadDocumentTool(projectRoot));
+  g.register(makeCreateDocumentTool(projectRoot));
 
   // Filesystem
   g.register(makeReadFileTool(projectRoot));
