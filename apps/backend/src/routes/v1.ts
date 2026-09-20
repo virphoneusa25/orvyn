@@ -599,6 +599,24 @@ v1Router.post("/memory", (req, res) => {
   res.status(201).json({ id });
 });
 
+v1Router.patch("/memory/:id", (req, res) => {
+  const t = requireTenant(req);
+  const current = t.localStore.getMemory(req.params.id);
+  if (!current) return res.status(404).json({ error: "memory not found" });
+  const scope = req.body.scope === "global" ? "global" : (req.body.scope === "project" ? "project" : current.scope);
+  const projectRoot = scope === "project" ? String(req.body.projectRoot ?? current.projectRoot ?? t.currentProjectRoot ?? "").trim() : null;
+  if (scope === "project" && !projectRoot) return res.status(400).json({ error: "projectRoot is required for project memory" });
+  t.localStore.saveMemory({
+    id: current.id, scope, projectRoot,
+    kind: String(req.body.kind ?? current.kind),
+    title: String(req.body.title ?? current.title),
+    content: String(req.body.content ?? current.content),
+    source: String(req.body.source ?? current.source ?? "user"),
+    pinned: typeof req.body.pinned === "boolean" ? req.body.pinned : current.pinned,
+  });
+  res.json({ memory: t.localStore.getMemory(current.id) });
+});
+
 v1Router.delete("/memory/:id", (req, res) => {
   requireTenant(req).localStore.deleteMemory(req.params.id);
   res.status(204).end();
