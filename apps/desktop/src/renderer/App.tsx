@@ -24,7 +24,7 @@ import { StatusBar } from "./components/StatusBar";
 import { HonestState } from "./components/HonestState";
 import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace, ToolsWorkspace } from "./components/Workspaces";
 import { EditorTabs } from "./components/EditorTabs";
-import { loadConnectionConfig, apiUrl, authHeaders } from "./connection";
+import { loadConnectionConfig, apiUrl, authHeaders, connectOrchestratorHeartbeat, getOrchestratorStatus, onOrchestratorStatus } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat } from "./chatSession";
 import { useInlineEdit } from "./useInlineEdit";
