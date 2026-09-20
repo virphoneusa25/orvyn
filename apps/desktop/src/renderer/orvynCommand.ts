@@ -60,6 +60,7 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
           history,
           userMessage: cmd.prompt,
           attachments: cmd.attachments ?? [],
+          requestedModelId: cmd.requestedModelId,
           context: cmd.projectRoot ? { projectRoot: cmd.projectRoot, useRag: true } : { useRag: false },
         })
       );
