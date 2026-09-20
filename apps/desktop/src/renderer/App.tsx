@@ -11,7 +11,9 @@ import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
-import { Navigation, ViewId } from "./components/Navigation";
+import { ViewId } from "./components/Navigation";
+import { Sidebar } from "./components/redesign/Shell";
+import { submitOrvynCommand } from "./orvynCommand";
 import { WorkStream } from "./components/WorkStream";
 import { ContextPanel } from "./components/ContextPanel";
 import { useAgentRun } from "./useAgentRun";
@@ -420,12 +422,10 @@ export function App() {
       />
 
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-        <Navigation
+        <Sidebar
           view={view}
           onChange={(v) => {
             setView(v);
-            // New Task opens a fresh center conversation; Home returns to the
-            // dashboard without destroying the active conversation or run.
             if (v === "newtask") {
               newChat();
               setCenterMode("work");
@@ -434,7 +434,13 @@ export function App() {
             }
             if (v === "home") setCenterMode("home");
           }}
-          projectRoot={workspaceRoot}
+          workspace={{ name: projectName ?? "No project", subtitle: "Local workspace" }}
+          user={{ name: "Royce", subtitle: cloudOnline ? "Synced" : "Local mode · not synced" }}
+          usage={{ valueLabel: usageTotals ? `${((usageTotals.promptTokens + usageTotals.completionTokens) / 1000).toFixed(1)}k` : "—", limitLabel: "metered", percent: usageTotals ? Math.min(100, ((usageTotals.promptTokens + usageTotals.completionTokens) / 2_000_000) * 100) : 0 }}
+          missionsNeedingYou={homeMissions.filter(m => ["approval","blocked","paused"].includes(m.tone)).length}
+          onNewMission={() => { newChat(); setView("newtask"); setCenterMode("work"); setActiveRunId(null); }}
+          onOpenSettings={() => setView("settings")}
+          onOpenUsage={() => setView("usage")}
         />
 
         {showEditorChrome && (
@@ -509,7 +515,7 @@ export function App() {
           <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             {centerMode === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>
-                <HomeScreen userName="Royce" workspaceName={projectName} status={{ engineReady: runtimeCaps.engineReady, cloudOnline }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: runtimeCaps.cloudSignedIn })} onRun={(prompt) => { newChat(); setCenterMode("work"); setActiveRunId(null); setTimeout(() => { document.dispatchEvent(new CustomEvent("orvyn:prefill-composer", { detail: prompt })); document.dispatchEvent(new CustomEvent("orvyn:focus-composer")); }, 50); }} onOpenMission={(id) => { newChat(); setActiveRunId(id); setCenterMode("work"); setView("newtask"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onOpenCommand={() => setPalette("commands")} />
+                <HomeScreen userName="Royce" workspaceName={projectName ?? "No project"} status={{ engineReady: runtimeCaps.engineReady, cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: runtimeCaps.cloudSignedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); setView("newtask"); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             ) : missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
