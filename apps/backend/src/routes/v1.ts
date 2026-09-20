@@ -351,7 +351,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     req.body.rules,
     req.body.mode ?? "agent",
     req.body.attachments,
-    history
+    history,
+    typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined
   );
   res.status(201).json({ runId });
 });
