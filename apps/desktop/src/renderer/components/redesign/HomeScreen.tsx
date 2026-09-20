@@ -2,7 +2,7 @@
 // Home / mission control: top bar, animated hero (greeting + composer),
 // missions list with plain-language reasons, and the "Connect your stack"
 // checklist. Presentational — all data and actions come in through props.
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { HeroBackdrop } from "./HeroBackdrop";
 import { Icon } from "./icons";
 import { TopBar } from "./Shell";
@@ -83,36 +83,15 @@ export function HomeScreen(props: HomeScreenProps) {
     missions,
     systems,
     starters = ["Diagnose a failing service", "Tail logs on a server", "Review a pull request", "Plan a deploy"],
-    agentName = "Astra",
+    agentName = "ORION",
     agentRole = "orchestrator",
     animateHero = true,
   } = props;
 
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<ComposerMode>("auto");
-  const [filter, setFilter] = useState<MissionFilter>("all");
-
   const now = props.now ?? new Date();
   const dateLine = `${now.toLocaleDateString("en-US", { weekday: "long" })} · ${now.getDate()} ${now.toLocaleDateString("en-US", { month: "long" })}`.toUpperCase();
-
-  const counts = useMemo(
-    () => ({
-      all: missions.length,
-      needs: missions.filter((m) => NEEDS_YOU.has(m.tone)).length,
-      failed: missions.filter((m) => m.tone === "failed").length,
-      running: missions.filter((m) => m.tone === "running").length,
-    }),
-    [missions]
-  );
-
-  const visible = missions.filter((m) => {
-    if (filter === "needs-you") return NEEDS_YOU.has(m.tone);
-    if (filter === "failed") return m.tone === "failed";
-    if (filter === "running") return m.tone === "running";
-    return true;
-  });
-
-  const connected = systems.filter((s) => s.connected).length;
 
   const submit = () => {
     const text = prompt.trim();
@@ -136,27 +115,14 @@ export function HomeScreen(props: HomeScreenProps) {
         <section className="ov-hero" aria-label="Start a mission">
           <HeroBackdrop animate={animateHero} />
           <div className="ov-hero__content">
-            <div className="ov-greeting-row">
-              <div className="ov-greeting">
+            <div className="ov-greeting-row ov-greeting-row--center">
+              <div className="ov-greeting ov-greeting--center">
                 <div className="ov-eyebrow">{dateLine}</div>
                 <h1>
                   {greetingFor(now)}, {userName}.
                 </h1>
                 <p>{summaryLine(missions)}</p>
               </div>
-              {counts.needs > 0 && (
-                <a
-                  href="#missions"
-                  className="ov-glass-link"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setFilter("needs-you");
-                    document.getElementById("ov-missions")?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                >
-                  Review blocked work →
-                </a>
-              )}
             </div>
 
             <div className="ov-composer">
@@ -220,122 +186,6 @@ export function HomeScreen(props: HomeScreenProps) {
           </div>
         </section>
 
-        {/* ── Missions + setup ── */}
-        <div className="ov-home-grid">
-          <section id="ov-missions" className="ov-card" aria-labelledby="ov-missions-h">
-            <div className="ov-card__head">
-              <h2 id="ov-missions-h">Missions</h2>
-              <div className="ov-tabs">
-                <button type="button" aria-pressed={filter === "all"} onClick={() => setFilter("all")}>
-                  All <span className="ov-tabs__count">{counts.all}</span>
-                </button>
-                <button type="button" aria-pressed={filter === "needs-you"} onClick={() => setFilter("needs-you")}>
-                  Needs you <span className="ov-tabs__count ov-tabs__count--amber">{counts.needs}</span>
-                </button>
-                <button type="button" aria-pressed={filter === "failed"} onClick={() => setFilter("failed")}>
-                  Failed <span className="ov-tabs__count ov-tabs__count--red">{counts.failed}</span>
-                </button>
-                <button type="button" aria-pressed={filter === "running"} onClick={() => setFilter("running")}>
-                  Running <span>{counts.running}</span>
-                </button>
-              </div>
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  props.onViewAllMissions?.();
-                }}
-              >
-                View all
-              </a>
-            </div>
-
-            {visible.length === 0 ? (
-              <div className="ov-empty">No missions here.</div>
-            ) : (
-              visible.map((m) => {
-                const pct = m.stepsTotal ? Math.round((m.stepsDone / m.stepsTotal) * 100) : 0;
-                return (
-                  <div className="ov-mission-row" key={m.id}>
-                    <span className={`ov-badge ov-badge--${m.tone}`}>
-                      <span className="ov-dot ov-dot--sm" />
-                      {m.label}
-                    </span>
-                    <div className="ov-mission-row__main">
-                      <button type="button" className="ov-mission-row__title" onClick={() => props.onOpenMission(m.id)}>
-                        {m.title}
-                      </button>
-                      <div className="ov-mission-row__reason">{m.reason}</div>
-                      <div className="ov-mission-row__meta">{m.meta}</div>
-                    </div>
-                    <div className="ov-mission-row__progress">
-                      <div className="ov-meter">
-                        <div className={`ov-fill--${m.tone}`} style={{ width: `${Math.max(pct, 3)}%` }} />
-                      </div>
-                      <span className="ov-mission-row__steps">
-                        {m.stepsDone}/{m.stepsTotal} steps
-                      </span>
-                    </div>
-                    <span className="ov-mission-row__time">{m.timeAgo}</span>
-                    {m.action ? (
-                      <button
-                        type="button"
-                        className="ov-btn ov-btn--sm ov-btn--filled"
-                        onClick={() => (props.onMissionAction ?? props.onOpenMission)(m.id)}
-                      >
-                        {m.action}
-                      </button>
-                    ) : (
-                      <span />
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </section>
-
-          <section className="ov-card" aria-labelledby="ov-setup-h">
-            <div className="ov-setup__head">
-              <div className="ov-setup__title">
-                <h2 id="ov-setup-h">Connect your stack</h2>
-                <span className="ov-setup__count">
-                  {connected} / {systems.length}
-                </span>
-              </div>
-              <div
-                className="ov-setup__segments"
-                style={{ gridTemplateColumns: `repeat(${Math.max(systems.length, 1)}, minmax(0, 1fr))` }}
-              >
-                {systems.map((s, i) => (
-                  <span key={s.id} className={i < connected ? "is-done" : undefined} />
-                ))}
-              </div>
-              <p>Agents can only act on systems you connect. Each one unlocks more of what ORVYN can do on its own.</p>
-            </div>
-
-            {systems.map((s) => (
-              <div className="ov-system" key={s.id}>
-                <span className="ov-system__icon">
-                  <Icon name={s.icon} size={16} />
-                </span>
-                <div className="ov-system__text">
-                  <span className="ov-system__name">{s.name}</span>
-                  <span className="ov-system__sub">{s.description}</span>
-                </div>
-                {s.connected ? (
-                  <span className="ov-ready">
-                    <Icon name="check" size={14} strokeWidth={2.2} />
-                    Ready
-                  </span>
-                ) : (
-                  <button type="button" className="ov-btn ov-btn--sm" onClick={() => props.onConnectSystem?.(s.id)}>
-                    {s.cta ?? "Connect"}
-                  </button>
-                )}
-              </div>
-            ))}
-          </section>
-        </div>
       </main>
     </div>
   );
