@@ -60,6 +60,30 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  project_root TEXT,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source TEXT,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories (scope, project_root, updated_at);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  project_root TEXT,
+  run_id TEXT,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  media_type TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts (project_root, created_at);
 CREATE TABLE IF NOT EXISTS models (
   id TEXT PRIMARY KEY,
   config_json TEXT NOT NULL
@@ -248,6 +272,45 @@ export class LocalStore {
     const all = this.getToolOverrides(projectRoot);
     all[tool] = permission;
     this.setSetting(`toolOverrides:${projectRoot}`, JSON.stringify(all));
+  }
+
+  // ---------- ORION memory + artifact library ----------
+
+  saveMemory(input: { id: string; scope: "global" | "project"; projectRoot?: string | null; kind: string; title: string; content: string; source?: string | null; pinned?: boolean }): void {
+    const now = Date.now();
+    this.guard("saveMemory", () => this.db.prepare(
+      `INSERT INTO memories (id, scope, project_root, kind, title, content, source, pinned, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, project_root=excluded.project_root, kind=excluded.kind,
+       title=excluded.title, content=excluded.content, source=excluded.source, pinned=excluded.pinned, updated_at=excluded.updated_at`
+    ).run(input.id, input.scope, input.projectRoot ?? null, input.kind, input.title, input.content, input.source ?? null, input.pinned ? 1 : 0, now, now));
+  }
+
+  listMemories(projectRoot?: string | null, limit = 200): any[] {
+    return this.guard("listMemories", () => this.db.prepare(
+      `SELECT * FROM memories WHERE scope='global' OR (scope='project' AND project_root = ?) ORDER BY pinned DESC, updated_at DESC LIMIT ?`
+    ).all(projectRoot ?? "", limit).map((r: any) => ({
+      id: String(r.id), scope: r.scope, projectRoot: r.project_root, kind: r.kind, title: r.title,
+      content: r.content, source: r.source, pinned: r.pinned === 1, createdAt: Number(r.created_at), updatedAt: Number(r.updated_at)
+    }))) ?? [];
+  }
+
+  deleteMemory(id: string): void {
+    this.guard("deleteMemory", () => this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id));
+  }
+
+  saveArtifact(input: { id: string; projectRoot?: string | null; runId?: string | null; kind: string; name: string; path: string; mediaType?: string | null }): void {
+    this.guard("saveArtifact", () => this.db.prepare(
+      `INSERT INTO artifacts (id, project_root, run_id, kind, name, path, media_type, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET path=excluded.path, name=excluded.name, media_type=excluded.media_type`
+    ).run(input.id, input.projectRoot ?? null, input.runId ?? null, input.kind, input.name, input.path, input.mediaType ?? null, Date.now()));
+  }
+
+  listArtifacts(projectRoot?: string | null, limit = 200): any[] {
+    return this.guard("listArtifacts", () => projectRoot
+      ? this.db.prepare(`SELECT * FROM artifacts WHERE project_root = ? ORDER BY created_at DESC LIMIT ?`).all(projectRoot, limit)
+      : this.db.prepare(`SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?`).all(limit)
+    ) ?? [];
   }
 
   // ---------- models ----------
