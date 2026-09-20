@@ -78,6 +78,26 @@ function cheaperInferenceModels(): string[] {
 // DeepSeek speaks the OpenAI wire protocol, so the existing adapter carries it.
 // The coding worker defaults to the flash tier; pro is registered alongside for
 // the user to route manually in Settings.
+function fireworksConfig(id: string, apiKey: string, temperature: number): ModelConfig {
+  return {
+    id: `fw:${id}`, apiModelId: id, name: `Fireworks ${id}`, provider: "openai-compatible",
+    endpoint: (process.env.FIREWORKS_BASE_URL?.trim() || "https://api.fireworks.ai/inference").replace(/\/v1\/?$/, ""),
+    apiKey, contextWindow: 128000, maxOutputTokens: 8192, defaultTemperature: temperature, defaultTopP: 1, streaming: true,
+    capabilities: { chat: true, code: true, agent: true, tools: true, vision: false, embeddings: false, completion: true, image: false },
+  };
+}
+
+function geminiConfig(id: string, apiKey: string, temperature: number): ModelConfig {
+  // Gemini exposes an OpenAI-compatible endpoint, allowing ORVYN to use the
+  // same proven streaming/tool-call path instead of a nonfunctional placeholder.
+  return {
+    id: `gemini:${id}`, apiModelId: id, name: `Google ${id}`, provider: "openai-compatible",
+    endpoint: (process.env.GEMINI_OPENAI_BASE_URL?.trim() || "https://generativelanguage.googleapis.com/v1beta/openai").replace(/\/v1\/?$/, ""),
+    apiKey, contextWindow: 1000000, maxOutputTokens: 8192, defaultTemperature: temperature, defaultTopP: 1, streaming: true,
+    capabilities: { chat: true, code: true, agent: true, tools: true, vision: true, embeddings: false, completion: true, image: false },
+  };
+}
+
 function deepseekConfig(id: string, apiKey: string, endpoint: string, temperature: number): ModelConfig {
   return {
     id,
@@ -208,6 +228,20 @@ export class ModelService {
       void this.refreshCheaperInferenceCatalog();
     }
 
+    const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
+    if (fireworksKey) {
+      const ids = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      for (const id of [...new Set(ids)]) this.addModel(fireworksConfig(id, fireworksKey, 0.2));
+    }
+
+    const geminiKey = (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)?.trim();
+    if (geminiKey) {
+      const ids = (process.env.GEMINI_MODELS ?? process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      for (const id of [...new Set(ids)]) this.addModel(geminiConfig(id, geminiKey, 0.3));
+    }
+
     const ollamaId = process.env.OLLAMA_MODEL?.trim();
     if (ollamaId) {
       this.addModel({
@@ -294,18 +328,18 @@ export class ModelService {
       this.router.setOverride("executor", flash);
     }
 
-    // Astra is a role, not a model. ASTRA_MODEL_ID (alias: ORCHESTRATOR_MODEL),
+    // ORION is an agent identity, not a model. ORION_MODEL_ID (with legacy ASTRA_MODEL_ID alias),
     // a registered model id, decides which model plans and reviews; without it,
     // the chains above stand.
     const orchestratorModel =
-      process.env.ASTRA_MODEL_ID?.trim() || process.env.ORCHESTRATOR_MODEL?.trim();
+      process.env.ORION_MODEL_ID?.trim() || process.env.ASTRA_MODEL_ID?.trim() || process.env.ORCHESTRATOR_MODEL?.trim();
     if (orchestratorModel) {
       if (this.registry.get(orchestratorModel)) {
         this.router.setOverride("planner", orchestratorModel);
         this.router.setOverride("reviewer", orchestratorModel);
       } else {
         console.warn(
-          `ASTRA_MODEL_ID/ORCHESTRATOR_MODEL="${orchestratorModel}" does not match any registered model id; keeping default planner/reviewer routing.`
+          `ORION_MODEL_ID/ORCHESTRATOR_MODEL="${orchestratorModel}" does not match any registered model id; keeping default planner/reviewer routing.`
         );
       }
     }
