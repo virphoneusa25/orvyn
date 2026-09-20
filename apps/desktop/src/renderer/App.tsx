@@ -436,7 +436,7 @@ export function App() {
           }}
           workspace={{ name: projectName ?? "No project", subtitle: "Local workspace" }}
           user={{ name: "Royce", subtitle: cloudOnline ? "Synced" : "Local mode · not synced" }}
-          usage={{ valueLabel: usageTotals ? `${((usageTotals.promptTokens + usageTotals.completionTokens) / 1000).toFixed(1)}k` : "—", limitLabel: "metered", percent: usageTotals ? Math.min(100, ((usageTotals.promptTokens + usageTotals.completionTokens) / 2_000_000) * 100) : 0 }}
+          usage={{ valueLabel: agentRun.usage ? `${((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / 1000).toFixed(1)}k` : "—", limitLabel: "current run", percent: agentRun.usage ? Math.min(100, ((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / Math.max(agentRun.usage.contextBudget || 2_000_000, 1)) * 100) : 0 }}
           missionsNeedingYou={homeMissions.filter(m => ["approval","blocked","paused"].includes(m.tone)).length}
           onNewMission={() => { newChat(); setView("newtask"); setCenterMode("work"); setActiveRunId(null); }}
           onOpenSettings={() => setView("settings")}
