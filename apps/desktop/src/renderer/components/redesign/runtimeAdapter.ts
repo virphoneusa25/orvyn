@@ -2,7 +2,7 @@ import type { AgentEvent } from "../AgentActivityList";
 import type { MissionDetailData, MissionPlanItem } from "./types";
 
 export interface ApiMissionDetail {
-  id:string; runId:string; goal:string; status:string; createdAt:number; updatedAt:number;
+  id:string; runId:string; goal:string; status:string; createdAt:number|string; updatedAt:number|string;
   tasks:{id:string;description:string;agent:string;status:string;attempts:number;reviewNotes?:string}[];
 }
 function planState(status:string):MissionPlanItem["state"] {
@@ -33,5 +33,5 @@ export function missionDetailFromRuntime(m:ApiMissionDetail, events:AgentEvent[]
     if(e.type==="run.completed") deliverable=String(e.data.summary??e.data.result??"Mission completed.");
     if(e.type==="run.error") activity.push({id:e.id,kind:"error",title:"Run failed",body:String(e.data.message??"Unknown error")});
   }
-  return {id:m.id,title:m.goal,status:m.status,createdAt:new Date(m.createdAt).toISOString(),agent:"ORION",plan:m.tasks.map(t=>({id:t.id,title:t.description,detail:t.reviewNotes??(t.attempts?`${t.attempts} attempt${t.attempts===1?"":"s"}`:undefined),state:planState(t.status)})),events:activity.slice(-40),approval,permissions:[{label:"Read files",value:"Allowed"},{label:"Run commands",value:"Ask"},{label:"Network",value:"Ask"},{label:"Deploy",value:"Off"}],files:Array.from(files,([path,action])=>({path,action})),deliverable};
+  return {id:m.id,title:m.goal,status:m.status,createdAt:new Date(typeof m.createdAt==="number"&&m.createdAt<1e12?m.createdAt*1000:m.createdAt).toISOString(),agent:"ORION",plan:m.tasks.map(t=>({id:t.id,title:t.description,detail:t.reviewNotes??(t.attempts?`${t.attempts} attempt${t.attempts===1?"":"s"}`:undefined),state:planState(t.status)})),events:activity.slice(-40),approval,permissions:[{label:"Read files",value:"Allowed"},{label:"Run commands",value:"Ask"},{label:"Network",value:"Ask"},{label:"Deploy",value:"Off"}],files:Array.from(files,([path,action])=>({path,action})),deliverable};
 }
