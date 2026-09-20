@@ -111,7 +111,7 @@ export function App() {
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
   const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
-  const [selectedMissionId, setSelectedMissionId] = useState<string | null>(null);
+
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
