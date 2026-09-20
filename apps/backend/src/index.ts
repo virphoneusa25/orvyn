@@ -33,6 +33,8 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
 wss.on("connection", (socket, req) => {
+  let alive = true;
+  socket.on("pong", () => { alive = true; });
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
   let tenant = resolveTenantFromToken(token);
@@ -45,6 +47,8 @@ wss.on("connection", (socket, req) => {
     return;
   }
   if (!tenant) tenant = tenantManager.ensureLocalDefault();
+
+  socket.send(JSON.stringify({ type: "connection.ready", service: "orvyn-backend", at: Date.now() }));
 
   socket.on("message", async (raw) => {
     let body;
@@ -76,6 +80,21 @@ wss.on("connection", (socket, req) => {
     }
   });
 });
+
+// Liveness heartbeat for desktop/cloud clients. A half-open socket must not
+// leave the UI claiming the OVH execution host is Online.
+const heartbeat = setInterval(() => {
+  for (const client of wss.clients) {
+    const ws = client as any;
+    if (ws.readyState !== 1) continue;
+    if (ws.__orvynAlive === false) { ws.terminate(); continue; }
+    ws.__orvynAlive = false;
+    ws.ping();
+    ws.once("pong", () => { ws.__orvynAlive = true; });
+  }
+}, 15_000);
+heartbeat.unref?.();
+server.on("close", () => clearInterval(heartbeat));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
 bootstrapDefaultTenant();
