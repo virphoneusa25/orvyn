@@ -6,23 +6,23 @@
 :root {
   /* Surfaces — layered, so panels read as distinct planes.
      Values retuned to the approved mockup palette (2026-09-19). */
-  --bg-app: #070B14;
-  --bg-panel: #0B101B;
-  --bg-elevated: #0E1421;
+  --bg-app: #0B0E14;
+  --bg-panel: #0E121A;
+  --bg-elevated: #121724;
   --bg-hover: #111827;
   --bg-active: #151E31;
 
   /* Borders */
-  --border: #182234;
+  --border: #1E2433;
   --border-strong: #202A3C;
 
   /* Text */
-  --text: #F5F7FF;
+  --text: #E8EAF3;
   --text-secondary: #A7B0C5;
   --text-muted: #69758D;
 
   /* Brand — matches the Orvyn mark */
-  --accent: #6C5CFF;
+  --accent: #5563F5;
   --accent-hover: #7C5CFF;
   --accent-dim: #3A33A8;
   --accent-fg: #FFFFFF;
@@ -35,8 +35,8 @@
   --radius: 6px;
   --radius-lg: 10px;
 
-  --font-ui: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
+  --font-ui: "Geist Sans", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Cascadia Code", Consolas, monospace;
 
   /* Approved-design tokens (spec naming) — aliases over the core set so new
      components can use either name while the whole app stays in one palette. */

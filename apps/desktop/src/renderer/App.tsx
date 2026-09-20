@@ -11,6 +11,11 @@ import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { Navigation, ViewId } from "./components/Navigation";
+import { Sidebar, StatusFooter } from "./components/redesign/Shell";
+import { MissionDetail } from "./components/redesign/MissionDetail";
+import { toMissionDetail } from "./components/redesign/realMissionDetail";
+import { submitOrvynCommand } from "./orvynCommand";
+import { useEngineStatus, useMissionsNeedingYou } from "./engineStatus";
 import { WorkStream } from "./components/WorkStream";
 import { ContextPanel } from "./components/ContextPanel";
 import { useAgentRun } from "./useAgentRun";
@@ -138,6 +143,8 @@ export function App() {
   };
 
   const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
+  const engine = useEngineStatus();
+  const needsYou = useMissionsNeedingYou();
 
   // Real usage for the header chip — server-side totals, never estimated.
   useEffect(() => {
@@ -393,7 +400,7 @@ export function App() {
   ];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
+    <div className="ov-app" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
       <TitleBar
         menus={appMenus}
         title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}
@@ -412,7 +419,7 @@ export function App() {
       />
 
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-        <Navigation
+        <Sidebar
           view={view}
           onChange={(v) => {
             setView(v);
@@ -426,7 +433,22 @@ export function App() {
             }
             if (v === "home") setCenterMode("home");
           }}
-          projectRoot={workspaceRoot}
+          workspace={{ name: projectName ?? "No project", subtitle: "Local workspace" }}
+          user={{ name: "Royce", subtitle: engine.cloudOnline ? "Synced" : "Local mode · not synced" }}
+          usage={{
+            valueLabel: usageTotals ? `${((usageTotals.promptTokens + usageTotals.completionTokens) / 1000).toFixed(1)}k` : "—",
+            limitLabel: "metered",
+            percent: usageTotals ? Math.min(100, ((usageTotals.promptTokens + usageTotals.completionTokens) / 2_000_000) * 100) : 0,
+          }}
+          missionsNeedingYou={needsYou}
+          onNewMission={() => {
+            newChat();
+            setView("newtask");
+            setCenterMode("work");
+            setActiveRunId(null);
+          }}
+          onOpenSettings={() => setView("settings")}
+          onOpenUsage={() => setView("usage")}
         />
 
         {showEditorChrome && (
@@ -502,6 +524,7 @@ export function App() {
             {centerMode === "home" ? (
               <Home
                 projectRoot={workspaceRoot}
+                onOpenCommand={() => setPalette("commands")}
                 onOutcome={(outcome) => {
                   // Any submission moves the center into the active
                   // conversation; chat stays conversation-only, work
@@ -515,6 +538,39 @@ export function App() {
                     newChat();
                     setActiveRunId(outcome.runId);
                   }
+                }}
+              />
+            ) : agentRun.runId ? (
+              <MissionDetail
+                mission={toMissionDetail({
+                  runId: agentRun.runId,
+                  status: agentRun.status,
+                  events: agentRun.events,
+                  usage: agentRun.usage,
+                  projectName,
+                  projectRoot: workspaceRoot,
+                  availableTools: agentRun.availableTools,
+                })}
+                onBack={() => {
+                  setActiveRunId(null);
+                  setCenterMode("home");
+                  setView("home");
+                }}
+                onCancel={() => void agentRun.stop()}
+                onApprove={(requestId, remember) => void agentRun.approve(requestId, true, remember ? "mission" : "once")}
+                onDeny={(requestId) => void agentRun.approve(requestId, false)}
+                onReply={(text) => {
+                  void submitOrvynCommand({
+                    prompt: text,
+                    mode: "auto",
+                    source: "CHAT",
+                    projectRoot: workspaceRoot,
+                  }).then((outcome) => {
+                    if (outcome.kind === "mission" || outcome.kind === "run") {
+                      newChat();
+                      setActiveRunId(outcome.runId);
+                    }
+                  });
                 }}
               />
             ) : (
@@ -677,7 +733,7 @@ export function App() {
 
       {(view === "editor" || view === "terminal") && <BottomPanel />}
 
-      <StatusBar />
+      <StatusFooter status={engine} onOpenTerminal={() => setView("terminal")} />
       {palette && (
         <CommandPalette
           mode={palette}

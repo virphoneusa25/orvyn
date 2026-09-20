@@ -10,6 +10,9 @@
     "dist:win": "npm run build && cd ../.. && npm run build -w @orvyn/backend && node scripts/stage-desktop-backend.mjs && cd apps/desktop && electron-builder --win"
   },
   "dependencies": {
+    "@fontsource/geist-mono": "^5.3.0",
+    "@fontsource/geist-sans": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
     "pdfjs-dist": "^6.3.289"
   },
   "devDependencies": {
