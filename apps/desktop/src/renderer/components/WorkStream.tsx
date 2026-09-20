@@ -345,7 +345,9 @@ export function WorkStream({
           )
         )}
 
-        {runInstruction && <div style={{display:"flex",justifyContent:"flex-end",margin:"18px 0 24px"}}><div style={{maxWidth:"80%",borderRadius:20,padding:"14px 18px",background:"#1b4075",color:"#f5f7ff",fontSize:14,lineHeight:1.6,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{String(runInstruction)}</div></div>}
+        {/* The run instruction is already represented by the canonical chat
+            message. Never render it again here: duplicate user bubbles make
+            the stream look like two conversations and break chronology. */}
         {runActive && <div role="status" style={{fontSize:12,color:"var(--text-secondary)",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>Working{run.events[0] ? ` for ${Math.max(0,Math.floor((Date.now()-run.events[0].timestamp)/1000))}s` : "…"}</div>}
 
         {/* Activity from the attached run — the presentation reducer's
