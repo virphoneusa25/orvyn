@@ -218,6 +218,16 @@ export function useAgentRun(
     }
   }
 
+  async function steer(text: string): Promise<boolean> {
+    const id = runIdRef.current;
+    if (!id || !text.trim()) return false;
+    try {
+      const res = await fetch(apiUrl(`/agent/stream/runs/${id}/steer`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ text: text.trim() }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to steer run");
+      return true;
+    } catch (err: any) { setError(err.message); return false; }
+  }
+
   async function approve(callId: string, approved: boolean, scope: "once" | "mission" = "once") {
     // The owning runtime is not always knowable client-side (attached runs
     // look identical). Try the expected endpoint, then the other — and never
@@ -257,6 +267,7 @@ export function useAgentRun(
     lastEventAt,
     start,
     stop,
+    steer,
     approve,
   };
 }
