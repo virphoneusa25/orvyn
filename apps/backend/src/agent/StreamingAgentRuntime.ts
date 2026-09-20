@@ -584,7 +584,7 @@ export class StreamingAgentRuntime {
     const runOne = async (call: ToolCall): Promise<void> => {
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-      if (!["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
+      if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
       const terminalLike = call.name === "terminal" || call.name === "run_command";
