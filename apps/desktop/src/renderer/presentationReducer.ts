@@ -92,7 +92,10 @@ export interface StatusItem {
   label: string;
   /** Ephemeral statuses (Analyzing…) render only while they are the newest thing. */
   ephemeral: boolean;
-  tone?: "working" | "stopped" | "rework";
+  tone?: "working" | "stopped" | "rework" | "thought";
+  /** Thought rows: a safe high-level summary with a duration — NEVER private
+   *  chain-of-thought. Consecutive thinking events merge into one row. */
+  thought?: { ts: number; endTs?: number; summary?: string };
 }
 
 export interface ApprovalItem {
@@ -214,10 +217,18 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   const items: PresentationItem[] = [];
   /** callId → index into `items` so lifecycle events update ONE row in place. */
   const toolIndex = new Map<string, number>();
+  const startTs = events.length > 0 ? events[0].timestamp : Date.now();
   let assistantSeq = 0;
   let textBuf = "";
 
+  /** Any real activity closes an open Thought row (fixes its duration). */
+  const closeThought = (ts: number) => {
+    const last = items[items.length - 1];
+    if (last?.kind === "status" && last.thought && !last.thought.endTs) last.thought.endTs = ts;
+  };
+
   const flushAssistant = (streaming: boolean) => {
+    closeThought(0);
     if (!textBuf.trim()) {
       textBuf = "";
       return;
@@ -229,6 +240,8 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   for (const e of events) {
     switch (e.type) {
       case "message.delta":
+        // The first spoken word after a Thought closes it (its duration).
+        if (!textBuf) closeThought(e.timestamp);
         textBuf += String(e.data.content ?? "");
         continue;
       case "message.completed":
@@ -236,17 +249,37 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
 
       case "thinking": {
-        // High-level status only — never reasoning content.
-        const role = String(e.data.role ?? "");
-        const label = e.data.text
-          ? String(e.data.text)
-          : !role || role === "astra" || role === "orchestrator"
-            ? "Thinking…"
-            : `${role} working…`;
+        // High-level status only — never reasoning content. Consecutive
+        // thinking events merge into ONE "Thought" row whose duration closes
+        // when the next real activity arrives (spec Part 6).
         flushAssistant(false);
-        items.push({ kind: "status", key: e.id, label, ephemeral: true, tone: "working" });
+        const last = items[items.length - 1];
+        if (last?.kind === "status" && last.thought) {
+          last.thought.endTs = e.timestamp;
+          const text = e.data.text ? String(e.data.text).slice(0, 90) : "";
+          if (text) last.thought.summary = text;
+          continue;
+        }
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: "Thought",
+          ephemeral: false,
+          tone: "thought",
+          thought: {
+            ts: e.timestamp,
+            summary: e.data.text ? String(e.data.text).slice(0, 90) : undefined,
+          },
+        });
         continue;
       }
+
+      case "steer.queued":
+        items.push({ kind: "status", key: e.id, label: `Steer queued: ${String(e.data.text ?? "").slice(0, 80)}`, ephemeral: false, tone: "working" });
+        continue;
+      case "steer.delivered":
+        items.push({ kind: "status", key: e.id, label: `Steer applied: ${String(e.data.text ?? "").slice(0, 80)}`, ephemeral: false, tone: "working" });
+        continue;
 
       case "run.queued":
         items.push({
@@ -286,7 +319,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
 
       case "approval.required": {
-        flushAssistant(false);
+        closeThought(e.timestamp);
         items.push({
           kind: "approval",
           key: String(e.data.callId ?? e.id),
@@ -310,7 +343,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
 
       case "tool.started": {
-        flushAssistant(false);
+        closeThought(e.timestamp);
         const key = String(e.data.callId ?? e.id);
         const base = toolIdentity(String(e.data.tool ?? ""));
         items.push({
@@ -408,7 +441,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
 
       case "run.completed":
-        flushAssistant(false);
+        closeThought(e.timestamp);
         items.push({
           kind: "summary",
           key: e.id,
@@ -421,7 +454,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         });
         continue;
       case "run.error":
-        flushAssistant(false);
+        closeThought(e.timestamp);
         items.push({
           kind: "summary",
           key: e.id,
@@ -431,7 +464,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         });
         continue;
       case "run.cancelled":
-        flushAssistant(false);
+        closeThought(e.timestamp);
         items.push({ kind: "summary", key: e.id, ok: false, cancelled: true, detail: "Stopped" });
         continue;
 
@@ -499,7 +532,7 @@ function sumEdits(items: ToolItem[]): { adds: number; dels: number } {
   return { adds, dels };
 }
 
-function fmtDuration(ms: number): string | undefined {
+export function fmtDuration(ms: number): string | undefined {
   if (ms < 1000) return undefined;
   return ms < 60_000 ? `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s` : `${Math.round(ms / 60_000)}m`;
 }

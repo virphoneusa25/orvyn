@@ -14,7 +14,7 @@ import { AIMessage, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core"
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
-import { RunStore } from "./events";
+import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
@@ -322,6 +322,11 @@ export class StreamingAgentRuntime {
         let streamedText = false;
         const streamedCalls: ToolCall[] = [];
 
+        // Safe boundary: steering instructions ride the next model turn.
+        const steerList = this.store.takeSteer(runId);
+        if (steerList.length > 0) {
+          messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${steerList.join(" | ")}` });
+        }
         let langChecked = false;
         let langBuffer = "";
         for await (const chunk of provider.stream({

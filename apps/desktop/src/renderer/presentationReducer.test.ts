@@ -67,7 +67,7 @@ test("raw internal events never render", () => {
   assert.equal(items.length, 0);
 });
 
-test("assistant deltas accumulate into one streaming message; raw statuses drop when superseded", () => {
+test("assistant deltas accumulate into one message; a preceding thought persists as a timed row", () => {
   reset();
   const items = reducePresentation(
     [
@@ -78,9 +78,24 @@ test("assistant deltas accumulate into one streaming message; raw statuses drop 
     ],
     "completed"
   );
-  assert.equal(items.length, 1);
-  assert.equal(items[0].kind, "assistant");
-  assert.equal((items[0] as { content: string }).content, "I'll inspect the project.");
+  assert.equal(items.length, 2);
+  const thought = items[0] as { kind: string; label: string; thought?: { endTs?: number } };
+  assert.equal(thought.kind, "status");
+  assert.equal(thought.label, "Thought");
+  assert.ok(thought.thought?.endTs, "thought duration closed by the following activity");
+  const msg = items[1] as { kind: string; content: string };
+  assert.equal(msg.kind, "assistant");
+  assert.equal(msg.content, "I'll inspect the project.");
+});
+
+test("consecutive thinking events merge into ONE thought row", () => {
+  reset();
+  const items = reducePresentation(
+    [ev("thinking", { role: "astra" }), ev("thinking", { role: "astra" }), ev("thinking", { role: "astra" })],
+    "running"
+  );
+  const thoughts = items.filter((i) => i.kind === "status");
+  assert.equal(thoughts.length, 1, "one merged row, not three");
 });
 
 test("an in-progress run keeps its assistant buffer streaming", () => {
@@ -231,16 +246,16 @@ test("terminal output is correlated, bounded, and failure survives lifecycle com
 
 test("finished and cancelled runs preserve unfinished text without stale thinking", () => {
   const items = reducePresentation([ev("thinking"), ev("tool.started", { callId: "a", tool: "read_file" }), ev("message.delta", { content: "Partial reply" })], "cancelled");
-  assert.equal((items[0] as WgItem).items[0].status, "stopped");
+  const wg = items.find(i => i.kind === "workgroup") as WgItem;
+  assert.equal(wg.items[0].status, "stopped");
   assert.ok(items.some(i => i.kind === "assistant" && i.content === "Partial reply" && !i.streaming));
   assert.ok(!items.some(i => i.kind === "status" && i.ephemeral));
 });
 
-test("thinking is a single live status and text remains chronological", () => {
+test("thinking merges to one thought row and text remains chronological", () => {
   const items = reducePresentation([ev("message.delta", { content: "I found the entry point." }), ev("thinking"), ev("thinking")], "running");
   assert.equal(items[0].kind, "assistant");
   assert.equal(items.filter(i => i.kind === "status").length, 1);
-  assert.equal(reducePresentation([], "running")[0].kind, "status");
 });
 
 test("blocked and partial missions never present successful completion", () => {

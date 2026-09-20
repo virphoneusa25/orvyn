@@ -240,6 +240,7 @@ export function WorkStream({
             {displayStatus.replace("_", " ").toUpperCase()}
           </span>
         )}
+        {runActive && <WorkTimer startedAt={run.events.length > 0 ? run.events[0].timestamp : Date.now()} />}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L</span>
           <button
@@ -462,6 +463,25 @@ export function WorkStream({
               >
                 <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>QUEUED</span>
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.text}</span>
+                <button
+                  title="Steer — deliver to the agent at its next step"
+                  onClick={() => {
+                    if (!run.runId) return;
+                    fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", ...authHeaders() },
+                      body: JSON.stringify({ text: q.text }),
+                    })
+                      .then((r) => {
+                        if (r.ok) setQueued((x) => x.filter((y) => y.id !== q.id));
+                        else setError("Steer failed — the run may have finished; it will be queued instead.");
+                      })
+                      .catch(() => setError("Steer failed — the run may have finished; it will be queued instead."));
+                  }}
+                  style={ghostBtn()}
+                >
+                  ⤳
+                </button>
                 <button
                   title="Send now — bypasses the queue"
                   onClick={() => {
@@ -717,3 +737,21 @@ function ModelPicker() {
   );
 }
 
+
+/** "Working for 4s" — self-contained 1s ticker so only this chip re-renders,
+ *  never the whole conversation (spec Part 9). */
+function WorkTimer({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const label = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return (
+    <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", fontStyle: "italic", display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span className="activity-pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-purple)", display: "inline-block" }} />
+      Working for {label}
+    </span>
+  );
+}

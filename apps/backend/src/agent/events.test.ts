@@ -86,3 +86,16 @@ test("a run that was in-flight at shutdown replays as an honest error, not a gho
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("steer: queued on a live run, drained once at the boundary, rejected when terminal", () => {
+  const store = new RunStore();
+  store.create("run-st", "C:/proj");
+  assert.equal(store.steer("run-st", "Keep it short."), true);
+  assert.equal(store.steer("run-st", ""), false, "empty text rejected");
+  assert.equal(store.steer("run-missing", "x"), false);
+  const drained = store.takeSteer("run-st");
+  assert.deepEqual(drained, ["Keep it short."]);
+  assert.deepEqual(store.takeSteer("run-st"), [], "drained exactly once");
+  store.setStatus("run-st", "completed");
+  assert.equal(store.steer("run-st", "late"), false, "terminal runs cannot be steered");
+});

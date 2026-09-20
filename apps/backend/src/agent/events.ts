@@ -65,7 +65,10 @@ export type AgentEventType =
   | "checkpoint.restored"
   // --- Sandbox execution (cloud missions run commands in Docker) ---
   | "sandbox.started"
-  | "sandbox.stopped";
+  | "sandbox.stopped"
+  // --- Steering: user instructions delivered at the next safe boundary ---
+  | "steer.queued"
+  | "steer.delivered";
 
 export interface AgentEvent {
   id: string;
@@ -223,6 +226,33 @@ export class RunStore {
     this.log(id, { t: "run", projectRoot, createdAt: run.createdAt, status });
     this.evictOldRuns();
     return run;
+  }
+
+  /**
+   * Steering instructions queued for a live run. The store is shared by both
+   * agent runtimes, so the queue lives HERE: whichever runtime makes the
+   * run's next model call drains it — ownership never matters.
+   */
+  private steered = new Map<string, string[]>();
+
+  steer(runId: string, text: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run || isTerminal(run.status)) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const list = this.steered.get(runId) ?? [];
+    list.push(trimmed);
+    this.steered.set(runId, list);
+    this.emit(runId, "steer.queued", { text: trimmed });
+    return true;
+  }
+
+  takeSteer(runId: string): string[] {
+    const list = this.steered.get(runId) ?? [];
+    if (list.length === 0) return [];
+    this.steered.delete(runId);
+    for (const t of list) this.emit(runId, "steer.delivered", { text: t });
+    return list;
   }
 
   /** Drops the oldest finished runs once retention is exceeded. */

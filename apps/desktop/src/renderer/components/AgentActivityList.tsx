@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
-import { reducePresentation, type ApprovalItem } from "../presentationReducer";
+import { reducePresentation, fmtDuration, type ApprovalItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 
 export interface AgentEvent {
@@ -195,6 +195,20 @@ export function AgentActivityList({
             return <WorkGroupRow key={item.key} group={item} />;
           case "status":
             if (item.ephemeral) return <div key={item.key} className="activity-thinking" role="status"><span className="activity-pulse" />{item.label}</div>;
+            // Thought row: safe high-level summary + duration, hover shows the
+            // one-line status label — never private reasoning.
+            if (item.thought) {
+              const dur = item.thought.endTs ? fmtDuration(item.thought.endTs - item.thought.ts) : "…";
+              return (
+                <div
+                  key={item.key}
+                  title={item.thought.summary ?? "Working"}
+                  style={{ fontSize: 11, margin: "4px 0", color: "var(--text-muted)", fontStyle: "italic" }}
+                >
+                  Thought · {dur ?? "a few seconds"}
+                </div>
+              );
+            }
             return (
               <div
                 key={item.key}
@@ -243,9 +257,16 @@ function ApprovalCard({
   onApprove,
 }: {
   item: ApprovalItem;
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void | Promise<void>;
 }) {
   const preview = item.preview as EditPreview | undefined;
+  // PENDING → APPROVING → APPROVED/DENIED; a failed request re-enables the
+  // buttons (the run-level error surfaces separately) — never a silent click.
+  const [busy, setBusy] = useState(false);
+  const act = (approved: boolean, scope?: "once" | "mission") => {
+    setBusy(true);
+    Promise.resolve(onApprove(item.key, approved, scope)).finally(() => setBusy(false));
+  };
   return (
     <div style={card(item.destructive ? "var(--danger)" : "var(--accent)")}>
       <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
@@ -265,16 +286,16 @@ function ApprovalCard({
           {item.approved ? "Approved" : "Denied"}
         </span>
       ) : (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => onApprove(item.key, true)} style={btn("var(--accent)")}>
-            <IconCheck size={12} /> Allow Once
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button disabled={busy} onClick={() => act(true)} style={btn("var(--accent)")}>
+            {busy ? "Approving…" : (<><IconCheck size={12} /> Allow Once</>)}
           </button>
           {!item.destructive && (
-            <button onClick={() => onApprove(item.key, true, "mission")} style={btn("var(--border)")}>
+            <button disabled={busy} onClick={() => act(true, "mission")} style={btn("var(--border)")}>
               Allow for Mission
             </button>
           )}
-          <button onClick={() => onApprove(item.key, false)} style={btn("var(--border)")}>
+          <button disabled={busy} onClick={() => act(false)} style={btn("var(--border)")}>
             Deny
           </button>
         </div>

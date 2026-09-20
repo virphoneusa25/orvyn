@@ -26,7 +26,7 @@ import { ModelGateway } from "../gateway/ModelGateway";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { playwrightAvailable } from "../ai/tools/browserTools";
-import { RunStore } from "./events";
+import { RunStore, isTerminal } from "./events";
 import { EventBus } from "./EventBus";
 import { TaskEngine, Mission, Task } from "./TaskEngine";
 import { ReviewEngine } from "../review/ReviewEngine";
@@ -651,6 +651,10 @@ export class MultiAgentRuntime {
     for (let step = 0; step < MAX_EXECUTOR_STEPS; step++) {
       // Unwind promptly rather than burning the worker's remaining steps.
       if (this.isCancelled(runId)) break;
+      // Safe boundary: deliver any steered user instructions to the model.
+      for (const t of this.store.takeSteer(runId)) {
+        messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${t}` });
+      }
       let response;
       try {
         response = await generateEnglish(worker, { messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });

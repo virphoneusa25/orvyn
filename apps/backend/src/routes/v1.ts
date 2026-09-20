@@ -434,6 +434,16 @@ v1Router.get("/agent/stream/runs/:id/events.json", (req, res) => {
   res.json({ status: run.status, events: t.runStore.eventsAfter(req.params.id, after) });
 });
 
+// Steer a live run: the instruction reaches the agent at the next safe model
+// boundary. Both runtimes are tried — ownership is not always client-knowable.
+v1Router.post("/agent/stream/runs/:id/steer", (req, res) => {
+  const t = requireTenant(req);
+  const text = String(req.body.text ?? "");
+  const ok = t.runStore.steer(req.params.id, text);
+  if (!ok) return res.status(409).json({ error: "Run is not active — queue the instruction instead." });
+  res.json({ ok: true });
+});
+
 // Stop a run. Both runtimes are tried because the client does not always know
 // which one owns the id, and cancelling is idempotent either way.
 v1Router.post("/agent/stream/runs/:id/cancel", (req, res) => {
