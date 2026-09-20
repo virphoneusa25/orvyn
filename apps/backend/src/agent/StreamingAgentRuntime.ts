@@ -587,7 +587,12 @@ export class StreamingAgentRuntime {
       if (!["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
-      const result = await this.tools.execute(call.name, call.arguments, "coder");
+      const terminalLike = call.name === "terminal" || call.name === "run_command";
+      if (terminalLike) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
+      const result = await this.tools.execute(call.name, call.arguments, "coder", {
+        signal: state.controller.signal,
+        onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
+      });
 
       if (result.ok) {
         anySucceeded = true;
@@ -603,17 +608,12 @@ export class StreamingAgentRuntime {
           truncated,
           bytes: raw.length,
         });
-        if (call.name === "terminal" || call.name === "run_command") {
-          this.store.emit(runId, "terminal.output", { callId: call.id, data: raw.slice(-16000), truncated: raw.length > 16000 });
-          this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
-        }
+        if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
         replies.set(call.id, text);
       } else {
         const error = result.error ?? "unknown error";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error });
-        if (call.name === "terminal" || call.name === "run_command") {
-          this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
-        }
+        if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
         replies.set(
           call.id,
           `The tool "${call.name}" FAILED:\n${error}\n\nDiagnose and try a different approach. Do not repeat the identical call.`
