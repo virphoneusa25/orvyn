@@ -111,7 +111,6 @@ export function App() {
   const [centerMode, setCenterMode] = useState<"home" | "work">("home");
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
-  const [usageTotals, setUsageTotals] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
   const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
   const [cloudOnline, setCloudOnline] = useState(() => getOrchestratorStatus() === "online");
   const [runtimeCaps, setRuntimeCaps] = useState({ engineReady: false, dockerAvailable: false, sshHostCount: 0, githubConnected: false, postgresConnected: false, cloudSignedIn: false });
@@ -149,19 +148,12 @@ export function App() {
 
   const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
 
-  // Real usage for the header chip — server-side totals, never estimated.
   useEffect(() => {
-    const load = () =>
-      fetch(apiUrl("/usage?limit=1"), { headers: authHeaders() })
-        .then((r) => r.json())
-        .then((d) => setUsageTotals(d.totals ?? null))
-        .catch(() => {});
-    void load();
-    const t = setInterval(load, 10000);
-    return () => clearInterval(t);
+    const off = onOrchestratorStatus((s) => setCloudOnline(s === "online"));
+    return () => {
+      off();
+    };
   }, []);
-
-  useEffect(() => onOrchestratorStatus(s => setCloudOnline(s === "online")), []);
 
   useEffect(() => {
     const suffix = workspaceRoot ? `?projectRoot=${encodeURIComponent(workspaceRoot)}` : "";
@@ -421,17 +413,9 @@ export function App() {
       <TitleBar
         menus={appMenus}
         title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}
-        usageLabel={
-          usageTotals
-            ? `${((usageTotals.promptTokens + usageTotals.completionTokens) / 1000).toFixed(1)}k tokens`
-            : null
-        }
-        usageTitle={
-          usageTotals
-            ? `Server-metered usage: ${usageTotals.promptTokens.toLocaleString()} prompt + ${usageTotals.completionTokens.toLocaleString()} completion tokens`
-            : undefined
-        }
-        planLabel="LOCAL"
+        // Usage/plan chips removed from the title bar: the redesigned screens
+        // and the status bar already present this — showing it twice was the
+        // reported duplicate-header issue.
         onOpenCommand={() => setPalette("commands")}
       />
 
