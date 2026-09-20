@@ -763,7 +763,7 @@ export class MultiAgentRuntime {
           this.store.emit(runId, "image.generated", { prompt: (call.arguments as { prompt?: unknown }).prompt });
         }
 
-        const result = await this.tools.execute(call.name, call.arguments, task.agent);
+        const terminalLike = ["terminal", "run_command"].includes(call.name);\n        if (terminalLike) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command, taskId: task.id });\n        const result = await this.tools.execute(call.name, call.arguments, task.agent, {\n          signal: this.signalFor(runId),\n          onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, content: chunk, taskId: task.id }) : undefined,\n        });\n        if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitCode: result.ok ? 0 : 1, taskId: task.id });
         if (result.ok) {
           const output = result.output ?? "";
           const isTerminal = ["terminal", "run_command", "ssh_exec"].includes(call.name);
