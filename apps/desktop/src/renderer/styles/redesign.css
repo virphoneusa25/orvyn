@@ -85,6 +85,11 @@
 .ov-app a { color: var(--ov-text); text-decoration: none; }
 .ov-app a:hover { color: #fff; }
 .ov-app :focus-visible { outline: 2px solid var(--ov-brand-100); outline-offset: 2px; }
+/* Text entry fields never show the focus ring: the caret already shows
+   focus, and Chromium treats a clicked textarea as :focus-visible, which
+   drew a blue border around the composer on click. Keyboard accessibility
+   for buttons/links keeps its ring. */
+.ov-app textarea:focus, .ov-app input:focus { outline: none; }
 .ov-body { display: flex; flex: 1; min-height: 0; }
 .ov-column { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ov-mono { font-family: var(--ov-mono); }
