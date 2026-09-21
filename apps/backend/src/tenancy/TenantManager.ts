@@ -17,6 +17,8 @@ import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { HashingEmbedder, ModelEmbedder } from "../indexing/embeddings";
 import { NamespacedVectorStore } from "../indexing/NamespacedVectorStore";
+import { QdrantVectorStore } from "../indexing/QdrantVectorStore";
+import { ResilientVectorStore } from "../indexing/ResilientVectorStore";
 import { ToolRegistry } from "../ai/ToolTypes";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { PermissionEngine } from "../gateway/PermissionEngine";
@@ -131,7 +133,13 @@ export class TenantManager {
       name,
       createdAt: new Date().toISOString(),
       modelService,
-      indexService: new IndexService(embedder, new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)), label),
+      indexService: new IndexService(embedder, new ResilientVectorStore(
+        // Qdrant-first (remote, scalable), local fallback when unreachable
+        process.env.ORVYN_QDRANT_URL
+          ? new QdrantVectorStore({ url: process.env.ORVYN_QDRANT_URL, collection: "orvyn_code" }, id, "default")
+          : new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
+        new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
+      ), label),
       toolRegistry,
       permissionEngine,
       toolGateway: new ToolGateway(toolRegistry, permissionEngine),

@@ -24,6 +24,8 @@ services:
       # Control-plane service connections (internal network only)
       - ORVYN_PG_URL=postgres://orvyn:${ORVYN_PG_PASSWORD:-orvyn_dev}@postgres:5432/orvyn
       - ORVYN_REDIS_URL=redis://redis:6379/0
+      # Qdrant (Phase 5: scalable project intelligence) — internal only
+      - ORVYN_QDRANT_URL=http://qdrant:6333
 
   postgres:
     image: postgres:16-alpine
@@ -69,5 +71,29 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: always
+    # INTERNAL ONLY — no public ports
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      # Bounded memory for the vector index
+      - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   postgres-data:
+  qdrant-data:
