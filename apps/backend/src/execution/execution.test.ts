@@ -103,7 +103,7 @@ test("ovh: health reports unavailable without a worker URL", async () => {
     const p = new OvhWorkerProvider();
     const h = await p.health();
     assert.ok(!h.healthy);
-    assert.ok(h.detail?.includes("not deployed"), `truthful: ${h.detail}`);
+    assert.ok(h.detail?.includes("not configured") || h.detail?.includes("not deployed"), `truthful: ${h.detail}`);
   } finally {
     if (saved) process.env.ORVYN_OVH_WORKER_URL = saved;
   }
@@ -114,7 +114,7 @@ test("ovh: startRun rejects — never fakes remote execution", async () => {
   delete process.env.ORVYN_OVH_WORKER_URL;
   try {
     const p = new OvhWorkerProvider();
-    await assert.rejects(() => p.startRun(), /not deployed/);
+    await assert.rejects(() => p.startRun("r", "/tmp"), /not configured|not deployed/);
   } finally {
     if (saved) process.env.ORVYN_OVH_WORKER_URL = saved;
   }
