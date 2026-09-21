@@ -52,6 +52,28 @@ export type ApprovalScope = "once" | "mission";
 const MAX_TASKS = 12;
 
 /**
+ * Structured result contract for delegated workers. ORION receives the
+ * SUMMARY, never the worker's full context — the parent's own context
+ * stays small and independent.
+ */
+export interface WorkerResult {
+  workerId: string;
+  role: string;
+  task: string;
+  status: "completed" | "failed" | "rejected" | "cancelled";
+  /** One-paragraph summary of what the worker did and found. */
+  summary: string;
+  /** Evidence URLs/screenshots/console output (for browser workers). */
+  evidence: string[];
+  /** Files the worker changed. */
+  artifacts: string[];
+  /** Errors encountered (empty when successful). */
+  errors: string[];
+  tokensUsed: number;
+  durationMs: number;
+}
+
+/**
  * Delegation policy: ORION delegates only when work genuinely benefits.
  * Simple tasks run in the parent; complex/parallel work spawns workers.
  */
@@ -648,6 +670,15 @@ export class MultiAgentRuntime {
     // file:// URLs must be absolute; agents can't discover the root themselves.
     const fileUrlRoot = `file:///${projectRoot.replace(/\\/g, "/")}`;
 
+    // WORKER CONTEXT ISOLATION: each worker receives ONLY the scoped inputs
+    // for its task — role prompt, the specific task, project root, targeted
+    // context (from ContextEngine), and review notes if reworking. The
+    // parent conversation, full tool history, and other workers' outputs
+    // are NEVER included. This keeps worker context small and independent.
+    const scopedContext = task.agent === "browser"
+      ? `Browser verification task. Target the URL described in YOUR TASK. Do NOT receive or use the parent conversation.`
+      : `Code task. Scope: ${task.description.slice(0, 120)}`;
+
     const messages: AIMessage[] = [
       {
         role: "system",
@@ -655,6 +686,7 @@ export class MultiAgentRuntime {
           WORKER_PROMPTS[task.agent] ?? WORKER_PROMPTS.coder,
           CONVERSATION_STYLE,
           LANGUAGE_RULE,
+          scopedContext,
           rules ? `\nProject rules:\n${rules}` : "",
         ]
           .filter(Boolean)
