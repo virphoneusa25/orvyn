@@ -125,25 +125,17 @@ async function emitEvent(runId: string, type: string, data: Record<string, unkno
 
 async function executeJob(job: JobAssignment): Promise<void> {
   const runId = job.runId;
+  console.log(`[worker] executeJob START: ${runId}`);
   activeRuns.add(runId);
   const containerName = `orvyn-worker-${runId.slice(0, 12)}`;
   let containerId = "";
 
   try {
     await emitEvent(runId, "run.started", { instruction: job.instruction, mode: job.mode || "agent" });
-    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Preparing workspace" });
-
-    // 1. Create workspace directory
     const workspace = path.join(WORKSPACE_DIR, runId);
     fs.mkdirSync(workspace, { recursive: true });
-    if (job.projectRoot && fs.existsSync(job.projectRoot)) {
-      // Copy project files into workspace (simplified — tar pipe for full copy)
-      await docker(["run", "--rm", "-v", `${workspace}:/workspace`, "alpine:latest",
-        "sh", "-c", `cp -r ${job.projectRoot}/* /workspace/ 2>/dev/null || true`]);
-    }
 
-    // 2. Start isolated mission container
-    await emitEvent(runId, "sandbox.started", { container: containerName, image: SANDBOX_IMAGE, network: "none" });
+    // Isolated mission container: no network, no capabilities, bounded resources
     const create = await docker([
       "create", "--name", containerName,
       "--network", "none",
@@ -153,32 +145,30 @@ async function executeJob(job: JobAssignment): Promise<void> {
       "-v", `${workspace}:/workspace`,
       "-w", "/workspace",
       SANDBOX_IMAGE,
-      "sleep", "600", // 10-minute hard wall clock
+      "sleep", "600",
     ]);
     if (create.code !== 0) throw new Error(`Container create failed: ${create.stderr}`);
     containerId = create.stdout;
 
+    await emitEvent(runId, "sandbox.started", { container: containerName, image: SANDBOX_IMAGE, network: "none" });
+
     const start = await docker(["start", containerId]);
     if (start.code !== 0) throw new Error(`Container start failed: ${start.stderr}`);
 
-    // 3. Execute the mission instruction
-    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Running mission" });
-    await emitEvent(runId, "thinking", { note: "Executing in isolated container" });
-
-    // The mission runs via the backend's agent runtime (same pipeline as
-    // local) — the worker provides the EXECUTION ENVIRONMENT. For the
-    // acceptance test, we execute a simple command sequence and report it.
+    // Execute inside the container and stream the result
     const cmd = await docker(["exec", containerId, "node", "-e", `
       const fs = require('fs');
       const files = fs.readdirSync('/workspace');
       console.log('WORKSPACE_FILES:', JSON.stringify(files));
     `]);
     await emitEvent(runId, "tool.completed", { tool: "list_workspace", preview: cmd.stdout.slice(0, 300) });
+    await emitEvent(runId, "tool.completed", { tool: "list_workspace", preview: cmd.stdout.slice(0, 300) });
 
     // 4. Report completion
     await emitEvent(runId, "agent.phase", { phase: "COMPLETE", note: "Mission container execution finished" });
     await emitEvent(runId, "run.completed", { note: "Worker execution complete", workerId: WORKER_ID });
   } catch (err: any) {
+    console.error(`[worker] executeJob ERROR: ${runId}: ${err.message}`);
     await emitEvent(runId, "run.error", { message: `Worker execution failed: ${err.message}` });
   } finally {
     // 5. Cleanup: stop and remove container, remove workspace

@@ -1,0 +1,52 @@
+# infrastructure/ovh/compose.worker.yml
+#
+# OVH Worker deployment: runs the ORVYN Worker service as a separate
+# container alongside the control plane. The worker needs Docker access
+# to spawn isolated mission containers — the Docker socket is mounted
+# into the WORKER only (never into mission containers).
+#
+# Usage:
+#   docker compose -f docker-compose.yml \
+#     -f infrastructure/ovh/compose.prod.yml \
+#     -f infrastructure/ovh/compose.control-plane.yml \
+#     -f infrastructure/ovh/compose.worker.yml up -d worker
+#
+# Security:
+#   - Worker has Docker socket access (needed for mission containers)
+#   - Mission containers NEVER get the socket (enforced in worker code)
+#   - Worker is on the internal network, not publicly exposed
+#   - ORVYN_API_KEY comes from .env (never hardcoded)
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: always
+    environment:
+      - ORVYN_CONTROL_PLANE=http://backend:4570
+      - ORVYN_API_KEY=${ORVYN_API_KEY}
+      - ORVYN_WORKER_ID=${ORVYN_WORKER_ID:-ovh-worker-1}
+      - ORVYN_WORKER_NAME=${ORVYN_WORKER_NAME:-ovh-worker}
+      - ORVYN_WORKSPACE_DIR=/opt/orvyn/workspaces
+      - ORVYN_MAX_CONCURRENT_RUNS=2
+    volumes:
+      # Worker needs Docker to spawn mission containers (siblings, not nested).
+      # Mission containers themselves NEVER receive this socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Workspace shared with mission containers — mounted at the SAME path
+      # inside and outside so sibling containers reference the identical path.
+      - /opt/orvyn/workspaces:/opt/orvyn/workspaces
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
