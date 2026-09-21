@@ -195,14 +195,26 @@ export function AgentActivityList({
             return <WorkGroupRow key={item.key} group={item} />;
           case "status":
             if (item.ephemeral) return <div key={item.key} className="activity-thinking" role="status"><span className="activity-pulse" />{item.label}</div>;
-            // Thought row: safe high-level summary + duration, hover shows the
+            // Thought rows: while one is the live activity (no endTs, run
+            // still streaming) it reads as an active state — "Working…" with
+            // the pulse. Once real activity follows, it becomes the quiet
+            // historical marker "Thought · 3s". The hover summary is a safe
             // one-line status label — never private reasoning.
             if (item.thought) {
-              const dur = item.thought.endTs ? fmtDuration(item.thought.endTs - item.thought.ts) : "…";
+              const live = !item.thought.endTs && (status === "running" || status === "awaiting_approval");
+              const dur = item.thought.endTs ? fmtDuration(item.thought.endTs - item.thought.ts) : undefined;
+              if (live) {
+                return (
+                  <div key={item.key} className="activity-thinking" role="status" title={item.thought.summary ?? "Working"}>
+                    <span className="activity-pulse" />
+                    {item.thought.summary ? `${item.thought.summary}…` : "Working…"}
+                  </div>
+                );
+              }
               return (
                 <div
                   key={item.key}
-                  title={item.thought.summary ?? "Working"}
+                  title={item.thought.summary ?? "Worked"}
                   style={{ fontSize: 11, margin: "4px 0", color: "var(--text-muted)", fontStyle: "italic" }}
                 >
                   Thought · {dur ?? "a few seconds"}
