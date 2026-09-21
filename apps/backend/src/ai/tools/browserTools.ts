@@ -34,8 +34,26 @@ interface BrowserSession {
   actions: { action: string; url?: string; timestamp: number; result?: string }[];
 }
 
-// One session per project root; closed when browser_open is called again.
+// One session per project root; closed when browser_open is called again
+// or when the owning run completes (closeBrowserSession).
 const sessions = new Map<string, BrowserSession>();
+
+/** Closes the browser session for a project — called on run completion. */
+export function closeBrowserSession(projectRoot: string): void {
+  const s = sessions.get(projectRoot);
+  if (s) {
+    void s.browser.close().catch(() => {});
+    sessions.delete(projectRoot);
+  }
+}
+
+/** Closes all browser sessions (shutdown). */
+export function closeAllBrowserSessions(): void {
+  for (const [key, s] of sessions) {
+    void s.browser.close().catch(() => {});
+    sessions.delete(key);
+  }
+}
 
 async function getPage(projectRoot: string): Promise<any> {
   const s = sessions.get(projectRoot);

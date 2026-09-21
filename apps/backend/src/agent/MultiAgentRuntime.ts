@@ -25,7 +25,7 @@ import { makeSandboxTerminalTool, SANDBOX_DENIED_TOOLS, sandboxDenialMessage } f
 import { ModelGateway } from "../gateway/ModelGateway";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
-import { playwrightAvailable } from "../ai/tools/browserTools";
+import { playwrightAvailable, closeBrowserSession } from "../ai/tools/browserTools";
 import { RunStore, isTerminal } from "./events";
 import { EventBus } from "./EventBus";
 import { TaskEngine, Mission, Task } from "./TaskEngine";
@@ -661,6 +661,9 @@ export class MultiAgentRuntime {
     projectRoot: string,
     rules?: string
   ): Promise<string> {
+    const workerStart = Date.now();
+    const workerId = `w_${task.agent}_${task.id.slice(-6)}`;
+    this.store.emit(runId, "worker.started", { workerId, role: task.agent, task: task.description.slice(0, 120) });
     // Targeted context, not the whole repo (Context Engine v1: ripgrep + diff).
     const context = await this.contextEngine.buildTaskContext(
       task.description,
