@@ -15,9 +15,65 @@ app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
 // Unauthenticated: needed for container/load-balancer health probes.
+// The simple form stays fast for Docker healthchecks; /api/v1/health/detailed
+// probes the control-plane services (PostgreSQL, Redis) when configured.
 app.get("/api/v1/health", (_req, res) =>
   res.json({ status: "ok", service: "orvyn-backend", version: "0.2.0" })
 );
+
+app.get("/api/v1/health/detailed", async (_req, res) => {
+  const checks: Record<string, { healthy: boolean; detail?: string }> = {
+    api: { healthy: true },
+  };
+
+  // PostgreSQL (when ORVYN_PG_URL is set — control-plane deployments)
+  if (process.env.ORVYN_PG_URL) {
+    try {
+      const { Client } = await import("pg");
+      const client = new Client({ connectionString: process.env.ORVYN_PG_URL, connectionTimeoutMillis: 3000 });
+      await client.connect();
+      const r = await client.query("SELECT version()");
+      await client.end();
+      checks.postgres = { healthy: true, detail: r.rows[0]?.version?.split(" ").slice(0, 2).join(" ") };
+    } catch (err: any) {
+      checks.postgres = { healthy: false, detail: err.message };
+    }
+  } else {
+    checks.postgres = { healthy: true, detail: "not configured (local mode)" };
+  }
+
+  // Redis (when ORVYN_REDIS_URL is set)
+  if (process.env.ORVYN_REDIS_URL) {
+    try {
+      const net = await import("net");
+      const url = new URL(process.env.ORVYN_REDIS_URL);
+      const ok = await new Promise<boolean>((resolve) => {
+        const sock = net.connect(Number(url.port || 6379), url.hostname);
+        sock.setTimeout(2000);
+        sock.on("connect", () => { sock.destroy(); resolve(true); });
+        sock.on("error", () => resolve(false));
+        sock.on("timeout", () => { sock.destroy(); resolve(false); });
+      });
+      checks.redis = { healthy: ok, detail: ok ? undefined : "connection refused" };
+    } catch (err: any) {
+      checks.redis = { healthy: false, detail: err.message };
+    }
+  } else {
+    checks.redis = { healthy: true, detail: "not configured (local mode)" };
+  }
+
+  // Worker count (0 is valid — workers are Phase 4)
+  checks.workers = { healthy: true, detail: "0 workers (Phase 4)" };
+
+  const allHealthy = Object.values(checks).every((c) => c.healthy);
+  res.status(allHealthy ? 200 : 503).json({
+    status: allHealthy ? "ok" : "degraded",
+    service: "orvyn-backend",
+    version: "0.2.0",
+    checks,
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // Accounts: register/login are reachable without credentials by design;
 // me/logout validate their own bearer token against the session store.

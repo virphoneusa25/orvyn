@@ -1,0 +1,73 @@
+# infrastructure/ovh/compose.control-plane.yml
+#
+# Phase 3 control-plane overlay: adds PostgreSQL, Redis, and health monitoring
+# to the existing deployment. Used with the base + prod compose files:
+#
+#   docker compose -f docker-compose.yml \
+#     -f infrastructure/ovh/compose.prod.yml \
+#     -f infrastructure/ovh/compose.control-plane.yml up -d
+#
+# Security: PostgreSQL and Redis are INTERNAL ONLY (expose, not ports).
+# They are never reachable from outside the Docker network.
+
+services:
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - PORT=4570
+      - ORVYN_API_KEY=${ORVYN_API_KEY}
+      - ORVYN_DATA_DIR=/data
+      # Control-plane service connections (internal network only)
+      - ORVYN_PG_URL=postgres://orvyn:${ORVYN_PG_PASSWORD:-orvyn_dev}@postgres:5432/orvyn
+      - ORVYN_REDIS_URL=redis://redis:6379/0
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    # INTERNAL ONLY — no ports: mapping, just expose for the Docker network
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=orvyn
+      - POSTGRES_PASSWORD=${ORVYN_PG_PASSWORD:-orvyn_dev}
+      - POSTGRES_DB=orvyn
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orvyn -d orvyn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # INTERNAL ONLY
+    expose:
+      - "6379"
+    # Redis: no password needed on the internal network (Docker isolation);
+    # set ORVYN_REDIS_PASSWORD in .env for defense-in-depth when warranted.
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres-data:
