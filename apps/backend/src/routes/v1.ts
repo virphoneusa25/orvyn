@@ -431,6 +431,74 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
   });
 });
 
+// ---- Durable ordered queue: follow-up instructions during a run ----------
+
+// Queue a follow-up instruction
+v1Router.post("/agent/stream/runs/:id/queue", (req, res) => {
+  const t = requireTenant(req);
+  const run = t.runStore.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  if (run.status === "completed" || run.status === "error" || run.status === "cancelled") {
+    return res.status(409).json({ error: "Run is finished — queue a new run instead." });
+  }
+  const item = t.runStore.queueAdd(req.params.id, String(req.body.text ?? ""));
+  if (!item) return res.status(400).json({ error: "text required" });
+  res.status(201).json({ item });
+});
+
+// List queued items (ordered by position)
+v1Router.get("/agent/stream/runs/:id/queue", (req, res) => {
+  const t = requireTenant(req);
+  const run = t.runStore.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json({ items: t.runStore.queueList(req.params.id) });
+});
+
+// Reorder queue items (atomic position update)
+v1Router.patch("/agent/stream/runs/:id/queue/reorder", (req, res) => {
+  const t = requireTenant(req);
+  const ok = t.runStore.queueReorder(req.params.id, Array.isArray(req.body.order) ? req.body.order.map(String) : []);
+  if (!ok) return res.status(400).json({ error: "Invalid order array" });
+  res.json({ ok: true });
+});
+
+// Edit a queued item's text
+v1Router.patch("/agent/stream/runs/:id/queue/:itemId", (req, res) => {
+  const t = requireTenant(req);
+  const ok = t.runStore.queueUpdate(req.params.id, req.params.itemId, String(req.body.text ?? ""));
+  if (!ok) return res.status(404).json({ error: "Queue item not found or not editable" });
+  res.json({ ok: true });
+});
+
+// Delete (cancel) a queued item
+v1Router.delete("/agent/stream/runs/:id/queue/:itemId", (req, res) => {
+  const t = requireTenant(req);
+  const ok = t.runStore.queueDelete(req.params.id, req.params.itemId);
+  if (!ok) return res.status(404).json({ error: "Queue item not found" });
+  res.json({ ok: true });
+});
+
+// Steer a queued item immediately
+v1Router.post("/agent/stream/runs/:id/queue/:itemId/steer", (req, res) => {
+  const t = requireTenant(req);
+  const run = t.runStore.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  if (run.status === "completed" || run.status === "error" || run.status === "cancelled") {
+    return res.status(409).json({ error: "Run is finished — the item stays queued for delivery as a follow-up." });
+  }
+  const ok = t.runStore.queueSteer(req.params.id, req.params.itemId);
+  if (!ok) return res.status(404).json({ error: "Queue item not found" });
+  res.json({ ok: true });
+});
+
+// Mark a queued item delivered — the client is sending it as a follow-up run
+v1Router.post("/agent/stream/runs/:id/queue/:itemId/delivered", (req, res) => {
+  const t = requireTenant(req);
+  const ok = t.runStore.queueMarkDelivered(req.params.id, req.params.itemId);
+  if (!ok) return res.status(404).json({ error: "Queue item not found" });
+  res.json({ ok: true });
+});
+
 // Polling fallback / catch-up without holding a stream open.
 v1Router.get("/agent/stream/runs/:id/events.json", (req, res) => {
   const t = requireTenant(req);

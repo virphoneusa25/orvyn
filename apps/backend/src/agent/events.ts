@@ -69,6 +69,12 @@ export type AgentEventType =
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"
   | "steer.delivered"
+  // --- Durable ordered queue: follow-up instructions queued during a run ---
+  | "queue.item.created"
+  | "queue.item.updated"
+  | "queue.item.reordered"
+  | "queue.item.cancelled"
+  | "queue.item.delivered"
   // --- MCP host lifecycle (server connect/disconnect; tool activity rides
   //     the standard tool.* events through the shared gateway) ---
   | "agent.phase"
@@ -92,6 +98,17 @@ export interface AgentEvent {
 }
 
 export type RunStatus = "queued" | "running" | "awaiting_approval" | "completed" | "error" | "cancelled";
+
+/** A durable, ordered follow-up instruction queued during a run. */
+export interface QueueItem {
+  id: string;
+  runId: string;
+  text: string;
+  position: number;
+  status: "queued" | "steered" | "delivered" | "cancelled";
+  createdAt: number;
+  updatedAt: number;
+}
 
 /** A run is finished when no further events can arrive for it. */
 export function isTerminal(status: RunStatus): boolean {
@@ -203,6 +220,7 @@ export class RunStore {
         } else if (rec.t === "ev" && run) {
           run.events.push(rec.e as AgentEvent);
           run.nextSequence = Math.max(run.nextSequence, (rec.e.sequence as number) + 1);
+          this.replayQueueEvent(run.id, rec.e as AgentEvent);
         }
       }
       if (run) {
@@ -256,6 +274,13 @@ export class RunStore {
    */
   private steered = new Map<string, string[]>();
 
+  /**
+   * Durable ordered queue: structured follow-up instructions with identity,
+   * position, and status. Survives restart (persisted via the JSONL log
+   * meta). This replaces the old local-only React queue.
+   */
+  private queue = new Map<string, QueueItem[]>();
+
   steer(runId: string, text: string): boolean {
     const run = this.runs.get(runId);
     if (!run || isTerminal(run.status)) return false;
@@ -274,6 +299,182 @@ export class RunStore {
     this.steered.delete(runId);
     for (const t of list) this.emit(runId, "steer.delivered", { text: t });
     return list;
+  }
+
+  // ---- Durable queue operations ---------------------------------------------
+
+  /**
+   * Boot replay for the durable queue: persisted queue.item.* events fold back
+   * into the in-memory map, so a backend restart never loses follow-ups that
+   * were queued during a live run. Event order in the log IS the queue's
+   * history — replaying it reproduces the same items, text, and order.
+   */
+  private replayQueueEvent(runId: string, e: AgentEvent): void {
+    if (!e.type.startsWith("queue.item.")) return;
+    const items = this.queue.get(runId) ?? [];
+    const id = String(e.data.id ?? "");
+    if (e.type === "queue.item.created") {
+      if (id && !items.some((i) => i.id === id)) {
+        items.push({
+          id,
+          runId,
+          text: String(e.data.text ?? ""),
+          position: Number(e.data.position ?? items.length),
+          status: "queued",
+          createdAt: e.timestamp,
+          updatedAt: e.timestamp,
+        });
+      }
+    } else if (e.type === "queue.item.updated") {
+      const item = items.find((i) => i.id === id);
+      if (item) {
+        item.text = String(e.data.text ?? item.text);
+        item.updatedAt = e.timestamp;
+      }
+    } else if (e.type === "queue.item.reordered") {
+      const order = Array.isArray(e.data.order) ? e.data.order.map(String) : [];
+      const remaining = new Map(items.map((i) => [i.id, i]));
+      const next: QueueItem[] = [];
+      for (const orderedId of order) {
+        const item = remaining.get(orderedId);
+        if (item) {
+          next.push({ ...item, position: next.length });
+          remaining.delete(orderedId);
+        }
+      }
+      for (const item of remaining.values()) next.push(item);
+      this.queue.set(runId, next);
+      return;
+    } else if (e.type === "queue.item.cancelled" || e.type === "queue.item.delivered") {
+      const idx = items.findIndex((i) => i.id === id);
+      if (idx >= 0) items.splice(idx, 1);
+    }
+    this.queue.set(runId, items);
+  }
+
+  queueAdd(runId: string, text: string): QueueItem | null {
+    const run = this.runs.get(runId);
+    if (!run || isTerminal(run.status)) return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const items = this.queue.get(runId) ?? [];
+    const item: QueueItem = {
+      id: `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      runId,
+      text: trimmed,
+      position: items.length,
+      status: "queued",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    items.push(item);
+    this.queue.set(runId, items);
+    this.emit(runId, "queue.item.created", { id: item.id, text: trimmed, position: item.position });
+    return item;
+  }
+
+  queueList(runId: string): QueueItem[] {
+    return [...(this.queue.get(runId) ?? [])]
+      .filter((i) => i.status === "queued")
+      .sort((a, b) => a.position - b.position);
+  }
+
+  queueReorder(runId: string, orderedIds: string[]): boolean {
+    const items = this.queue.get(runId);
+    if (!items) return false;
+    const queued = items.filter((i) => i.status === "queued");
+    if (orderedIds.length !== queued.length) return false;
+    // Validate all IDs exist and are queued
+    const queuedIds = new Set(queued.map((i) => i.id));
+    for (const id of orderedIds) {
+      if (!queuedIds.has(id)) return false;
+    }
+    // Atomically update positions
+    orderedIds.forEach((id, idx) => {
+      const item = items.find((i) => i.id === id);
+      if (item) {
+        item.position = idx;
+        item.updatedAt = Date.now();
+      }
+    });
+    this.emit(runId, "queue.item.reordered", { order: orderedIds });
+    return true;
+  }
+
+  queueUpdate(runId: string, itemId: string, text: string): boolean {
+    const items = this.queue.get(runId);
+    if (!items) return false;
+    const item = items.find((i) => i.id === itemId && i.status === "queued");
+    if (!item) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    item.text = trimmed;
+    item.updatedAt = Date.now();
+    this.emit(runId, "queue.item.updated", { id: itemId, text: trimmed });
+    return true;
+  }
+
+  queueDelete(runId: string, itemId: string): boolean {
+    const items = this.queue.get(runId);
+    if (!items) return false;
+    const item = items.find((i) => i.id === itemId && i.status === "queued");
+    if (!item) return false;
+    item.status = "cancelled";
+    item.updatedAt = Date.now();
+    this.emit(runId, "queue.item.cancelled", { id: itemId });
+    return true;
+  }
+
+  /** Steers a queued item immediately: removes from queue, injects into the run. */
+  queueSteer(runId: string, itemId: string): boolean {
+    const run = this.runs.get(runId);
+    if (!run || isTerminal(run.status)) return false;
+    const items = this.queue.get(runId);
+    if (!items) return false;
+    const item = items.find((i) => i.id === itemId && i.status === "queued");
+    if (!item) return false;
+    item.status = "steered";
+    item.updatedAt = Date.now();
+    // Inject into the steer mechanism for delivery at the next model boundary
+    const steerList = this.steered.get(runId) ?? [];
+    steerList.push(item.text);
+    this.steered.set(runId, steerList);
+    this.emit(runId, "queue.item.delivered", { id: itemId, text: item.text, method: "steered" });
+    return true;
+  }
+
+  /**
+   * Marks an item delivered — consumed outside the queue. The desktop sends
+   * the follow-up as a NEW run once the current one settles; recording the
+   * delivery keeps the event log honest (delivered, not cancelled).
+   */
+  queueMarkDelivered(runId: string, itemId: string): boolean {
+    const items = this.queue.get(runId);
+    if (!items) return false;
+    const item = items.find((i) => i.id === itemId && i.status === "queued");
+    if (!item) return false;
+    item.status = "delivered";
+    item.updatedAt = Date.now();
+    this.emit(runId, "queue.item.delivered", { id: itemId, text: item.text, method: "followup" });
+    return true;
+  }
+
+  /** Takes the next queued item by position (for auto-delivery). Returns null if empty. */
+  queueTakeNext(runId: string): QueueItem | null {
+    const next = this.queueList(runId)[0];
+    if (!next) return null;
+    next.status = "delivered";
+    next.updatedAt = Date.now();
+    // Also push into steer so the runtime picks it up
+    const steerList = this.steered.get(runId) ?? [];
+    steerList.push(next.text);
+    this.steered.set(runId, steerList);
+    this.emit(runId, "queue.item.delivered", { id: next.id, text: next.text, method: "auto" });
+    return next;
+  }
+
+  queueCleanup(runId: string): void {
+    this.queue.delete(runId);
   }
 
   /** Drops the oldest finished runs once retention is exceeded. */

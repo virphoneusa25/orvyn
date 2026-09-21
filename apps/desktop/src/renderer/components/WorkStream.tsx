@@ -8,7 +8,7 @@
 // Rich items stay concise per the co-worker model: actions and results, no
 // chain-of-thought. Detail lives in the right ContextPanel.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat } from "../chatSession";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
@@ -40,6 +40,14 @@ export interface RunView {
   usage?: { promptTokens: number; completionTokens: number; turns: number; modelId?: string } | null;
 }
 
+/** One durable queued follow-up, as the backend RunStore holds it. */
+interface QueueItemView {
+  id: string;
+  runId: string;
+  text: string;
+  position: number;
+}
+
 export function WorkStream({
   projectRoot,
   projectName,
@@ -60,9 +68,16 @@ export function WorkStream({
   const [requestedModelId, setRequestedModelId] = useState(() => localStorage.getItem("orvyn:run-model") || "auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Follow-ups submitted while a run is active — delivered when it ends. */
-  const [queued, setQueued] = useState<{ id: number; text: string }[]>([]);
-  const queueId = useRef(0);
+  /**
+   * Durable follow-up queue — owned by the backend RunStore, scoped per run,
+   * so it survives SSE reconnects and app restarts. `queueScopeRef` holds the
+   * run whose items are still awaiting delivery; the active run's queue is
+   * unioned into the same list so nothing hides during the handoff.
+   */
+  const [queue, setQueue] = useState<QueueItemView[]>([]);
+  const queueScopeRef = useRef<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; runId: string; text: string } | null>(null);
+  const draggedId = useRef<string | null>(null);
   /** Auto-follow only while the user is at the bottom; scrolling up pauses it. */
   const [follow, setFollow] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
@@ -110,17 +125,83 @@ export function WorkStream({
     };
   }, []);
 
+  /**
+   * Pulls authoritative queue state from the backend: the pending-delivery
+   * scope first, then the attached run's queue. One GET per scope; the merged
+   * list is display order (FIFO across scopes).
+   */
+  const runActive =
+    run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
+  const refreshQueue = useCallback(async () => {
+    const ids: string[] = [];
+    if (queueScopeRef.current) ids.push(queueScopeRef.current);
+    if (run.runId && !ids.includes(run.runId)) ids.push(run.runId);
+    if (ids.length === 0) {
+      setQueue([]);
+      return;
+    }
+    let merged: QueueItemView[] = [];
+    try {
+      const lists = await Promise.all(
+        ids.map(async (id) => {
+          const r = await fetch(apiUrl(`/agent/stream/runs/${id}/queue`), { headers: authHeaders() });
+          if (!r.ok) return [] as QueueItemView[];
+          const d = await r.json();
+          return (d.items ?? []) as QueueItemView[];
+        })
+      );
+      for (const items of lists) for (const item of items) if (!merged.some((m) => m.id === item.id)) merged.push(item);
+    } catch {
+      return; // offline — the next mutation or queue event refetches
+    }
+    merged.sort((a, b) => a.position - b.position);
+    setQueue(merged);
+    if (merged.length === 0) queueScopeRef.current = null;
+  }, [run.runId]);
+
+  // Queue state refreshes on attach/transition, and whenever a queue event
+  // lands in the run stream (covers mutations made from another window).
+  useEffect(() => {
+    void refreshQueue();
+  }, [refreshQueue, runActive]);
+  let lastQueueSeq = 0;
+  for (let i = run.events.length - 1; i >= 0; i--) {
+    if (run.events[i].type.startsWith("queue.")) {
+      lastQueueSeq = run.events[i].sequence;
+      break;
+    }
+  }
+  useEffect(() => {
+    if (lastQueueSeq > 0) void refreshQueue();
+  }, [lastQueueSeq, refreshQueue]);
+
   /** Submits bypassing the active-run guard — used for queued delivery. */
   const deliver = useRef<(text: string) => void>(() => {});
   async function send(text?: string, bypassQueue = false) {
     const instruction = (text ?? prompt).trim();
     if (!instruction || busy) return;
-    // While a run is active the instruction joins the queue — it is delivered
-    // when the run reaches a terminal state, never silently dropped into it.
-    if (runActive && !bypassQueue) {
-      setQueued((q) => [...q, { id: queueId.current++, text: instruction }]);
+    // While a run is active the instruction joins the DURABLE queue — the
+    // backend RunStore holds it, so reconnects and restarts never lose it.
+    if (runActive && !bypassQueue && run.runId) {
       setPrompt("");
       setAttachments([]);
+      try {
+        const r = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/queue`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ text: instruction }),
+        });
+        if (r.status === 409) {
+          // The run settled between render and click — send it directly.
+          await send(instruction, true);
+          return;
+        }
+        if (!r.ok) throw new Error("Could not queue the follow-up.");
+        queueScopeRef.current = run.runId;
+        await refreshQueue();
+      } catch (err: any) {
+        setError(err.message);
+      }
       return;
     }
     setBusy(true);
@@ -147,8 +228,87 @@ export function WorkStream({
   }
   deliver.current = (text: string) => void send(text);
 
-  const runActive =
-    run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
+  /**
+   * Persists a drag reorder: the list applies instantly (optimistic), then
+   * each scope's run gets its new relative order. Positions are per-run in
+   * the store, so a cross-scope drop becomes one PATCH per affected run.
+   */
+  function commitReorder(next: QueueItemView[]) {
+    setQueue(next);
+    const byRun = new Map<string, string[]>();
+    for (const item of next) {
+      const order = byRun.get(item.runId) ?? [];
+      order.push(item.id);
+      byRun.set(item.runId, order);
+    }
+    void Promise.all(
+      [...byRun].map(([runId, order]) =>
+        fetch(apiUrl(`/agent/stream/runs/${runId}/queue/reorder`), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ order }),
+        }).then((r) => {
+          if (!r.ok) throw new Error("reorder rejected");
+        })
+      )
+    )
+      .then(() => void refreshQueue())
+      .catch(() => {
+        setError("Reorder failed — positions restored.");
+        void refreshQueue();
+      });
+  }
+
+  /** Steers one queued item into the live run at its next step. */
+  async function steerQueuedItem(q: QueueItemView) {
+    try {
+      const r = await fetch(apiUrl(`/agent/stream/runs/${q.runId}/queue/${q.id}/steer`), {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (r.status === 409) throw new Error("The run already finished — the item stays queued for delivery.");
+      if (!r.ok) throw new Error("Steer failed.");
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  /** Removes one queued item (cancel — recorded in the run's event log). */
+  async function deleteQueuedItem(q: QueueItemView) {
+    try {
+      const r = await fetch(apiUrl(`/agent/stream/runs/${q.runId}/queue/${q.id}`), {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (!r.ok) throw new Error("Could not remove the queued instruction.");
+      if (editing?.id === q.id) setEditing(null);
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  /** Saves the inline edit of a queued item (Enter or blur; Esc reverts). */
+  async function saveEditedItem() {
+    const cur = editing;
+    if (!cur) return;
+    const text = cur.text.trim();
+    setEditing(null);
+    if (!text || text === queue.find((q) => q.id === cur.id)?.text) return;
+    try {
+      const r = await fetch(apiUrl(`/agent/stream/runs/${cur.runId}/queue/${cur.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) throw new Error("Could not update the queued instruction.");
+      await refreshQueue();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
   const streaming = isChatStreaming();
   const completion = [...run.events].reverse().find(e => e.type === "run.completed");
   const displayStatus = completion?.data.missionStatus === "BLOCKED" ? "needs attention" : Number(completion?.data.tasksFailed) > 0 ? "incomplete" : run.status;
@@ -177,15 +337,20 @@ export function WorkStream({
   }, [runActive, run.stop]);
 
   // Queue delivery: when the attached run settles, the next queued follow-up
-  // goes out on its own — same pipeline, same conversation.
+  // goes out on its own — same pipeline, same conversation. The item is
+  // marked delivered server-side; the rest stay queued for their turn.
   useEffect(() => {
-    if (runActive || queued.length === 0) return;
-    if (busy) return;
-    const [next, ...rest] = queued;
-    setQueued(rest);
+    if (runActive || queue.length === 0 || busy) return;
+    const next = queue[0];
+    void fetch(apiUrl(`/agent/stream/runs/${next.runId}/queue/${next.id}/delivered`), {
+      method: "POST",
+      headers: authHeaders(),
+    })
+      .catch(() => {})
+      .finally(() => void refreshQueue());
     deliver.current(next.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runActive, queued, busy]);
+  }, [runActive, queue, busy]);
   // The conversation's title. When a run is attached, the run IS the
   // conversation: its instruction names the work, and an unrelated chat
   // session from before must never leak its title (the "hi" bug) or its
@@ -449,11 +614,38 @@ export function WorkStream({
 
       {/* Sticky command composer — same pipeline as Home. */}
       <div style={{ flexShrink: 0, padding: "10px 16px 12px", borderTop: "1px solid var(--orvyn-border-soft)" }}>
-        {queued.length > 0 && (
+        {queue.length > 0 && (
           <div style={{ marginBottom: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-            {queued.map((q) => (
+            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-text-muted)", padding: "0 2px" }}>
+              UP NEXT · {queue.length} QUEUED — DELIVERED IN ORDER WHEN THIS RUN SETTLES
+            </div>
+            {queue.map((q, i) => (
               <div
                 key={q.id}
+                draggable={editing?.id !== q.id}
+                onDragStart={(e) => {
+                  draggedId.current = q.id;
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  draggedId.current = null;
+                }}
+                onDragOver={(e) => {
+                  if (draggedId.current && draggedId.current !== q.id) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const dragId = draggedId.current;
+                  draggedId.current = null;
+                  if (!dragId || dragId === q.id) return;
+                  const from = queue.findIndex((x) => x.id === dragId);
+                  const to = queue.findIndex((x) => x.id === q.id);
+                  if (from < 0 || to < 0) return;
+                  const next = [...queue];
+                  const [moved] = next.splice(from, 1);
+                  next.splice(to, 0, moved);
+                  commitReorder(next);
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -463,43 +655,64 @@ export function WorkStream({
                   border: "1px dashed var(--orvyn-border)",
                   fontSize: 11.5,
                   color: "var(--orvyn-text-secondary)",
+                  background: "var(--orvyn-surface-1)",
                 }}
               >
-                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-purple-hi)" }}>QUEUED</span>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.text}</span>
+                <span title="Drag to reorder" style={{ cursor: "grab", color: "var(--orvyn-text-muted)", fontSize: 11, lineHeight: 1, userSelect: "none", flexShrink: 0 }}>⠿</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, color: "var(--orvyn-purple-hi)", width: 14, textAlign: "center", flexShrink: 0 }}>{i + 1}</span>
+                {editing?.id === q.id ? (
+                  <input
+                    autoFocus
+                    value={editing.text}
+                    onChange={(e) => setEditing({ id: q.id, runId: q.runId, text: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void saveEditedItem();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        setEditing(null);
+                      }
+                    }}
+                    onBlur={() => void saveEditedItem()}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      background: "var(--orvyn-bg)",
+                      border: "1px solid var(--orvyn-purple)",
+                      borderRadius: 4,
+                      color: "var(--orvyn-text)",
+                      fontSize: 11.5,
+                      padding: "2px 6px",
+                      outline: "none",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                ) : (
+                  <span
+                    title={q.text}
+                    onDoubleClick={() => setEditing({ id: q.id, runId: q.runId, text: q.text })}
+                    style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  >
+                    {q.text}
+                  </span>
+                )}
                 <button
                   title="Steer — deliver to the agent at its next step"
-                  onClick={() => {
-                    if (!run.runId) return;
-                    fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", ...authHeaders() },
-                      body: JSON.stringify({ text: q.text }),
-                    })
-                      .then((r) => {
-                        if (r.ok) setQueued((x) => x.filter((y) => y.id !== q.id));
-                        else setError("Steer failed — the run may have finished; it will be queued instead.");
-                      })
-                      .catch(() => setError("Steer failed — the run may have finished; it will be queued instead."));
-                  }}
-                  style={ghostBtn()}
+                  onClick={() => void steerQueuedItem(q)}
+                  disabled={!runActive}
+                  style={{ ...ghostBtn(), opacity: runActive ? 1 : 0.4, cursor: runActive ? "pointer" : "default" }}
                 >
                   ⤳
                 </button>
                 <button
-                  title="Send now — bypasses the queue"
-                  onClick={() => {
-                    setQueued((x) => x.filter((y) => y.id !== q.id));
-                    void send(q.text, true);
-                  }}
+                  title="Edit"
+                  onClick={() => setEditing({ id: q.id, runId: q.runId, text: q.text })}
                   style={ghostBtn()}
                 >
-                  ▶
-                </button>
-                <button title="Edit" onClick={() => { setPrompt(q.text); setQueued((x) => x.filter((y) => y.id !== q.id)); }} style={ghostBtn()}>
                   ✎
                 </button>
-                <button title="Remove" onClick={() => setQueued((x) => x.filter((y) => y.id !== q.id))} style={ghostBtn()}>
+                <button title="Remove" onClick={() => void deleteQueuedItem(q)} style={ghostBtn()}>
                   ✕
                 </button>
               </div>

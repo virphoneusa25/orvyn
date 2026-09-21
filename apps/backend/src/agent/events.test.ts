@@ -99,3 +99,115 @@ test("steer: queued on a live run, drained once at the boundary, rejected when t
   store.setStatus("run-st", "completed");
   assert.equal(store.steer("run-st", "late"), false, "terminal runs cannot be steered");
 });
+
+// ---- Durable ordered queue --------------------------------------------------
+
+test("queue: add/list keeps FIFO order; empty text and terminal runs rejected", () => {
+  const store = new RunStore();
+  store.create("run-q1", "C:/proj");
+  const a = store.queueAdd("run-q1", "Add tests");
+  const b = store.queueAdd("run-q1", "  Fix the README  ");
+  assert.ok(a && b, "both items accepted on a live run");
+  assert.deepEqual(
+    store.queueList("run-q1").map((i) => i.text),
+    ["Add tests", "Fix the README"],
+    "listed in add order; text trimmed"
+  );
+  assert.equal(store.queueAdd("run-q1", "   "), null, "whitespace-only text rejected");
+  assert.equal(store.queueAdd("run-missing", "x"), null, "unknown run rejected");
+
+  store.setStatus("run-q1", "completed");
+  assert.equal(store.queueAdd("run-q1", "late"), null, "terminal runs cannot take new queue items");
+});
+
+test("queue: reorder is atomic — a wrong id or count rejects the whole change", () => {
+  const store = new RunStore();
+  store.create("run-q2", "C:/proj");
+  const a = store.queueAdd("run-q2", "A")!;
+  const b = store.queueAdd("run-q2", "B")!;
+  const c = store.queueAdd("run-q2", "C")!;
+  assert.equal(store.queueReorder("run-q2", [c.id, b.id, "q_bogus"]), false, "unknown id rejects");
+  assert.equal(store.queueReorder("run-q2", [c.id, b.id]), false, "wrong count rejects");
+  assert.equal(store.queueReorder("run-q2", [c.id, a.id, b.id]), true);
+  assert.deepEqual(
+    store.queueList("run-q2").map((i) => i.id),
+    [c.id, a.id, b.id],
+    "new order holds"
+  );
+});
+
+test("queue: update, delete, steer, mark-delivered — each removes the item from the live list", () => {
+  const store = new RunStore();
+  store.create("run-q3", "C:/proj");
+  const a = store.queueAdd("run-q3", "Original")!;
+  const b = store.queueAdd("run-q3", "Keep me")!;
+
+  assert.equal(store.queueUpdate("run-q3", a.id, "Edited"), true);
+  assert.equal(store.queueUpdate("run-q3", a.id, "  "), false, "empty edit rejected");
+  assert.equal(store.queueList("run-q3")[0].text, "Edited");
+
+  assert.equal(store.queueDelete("run-q3", b.id), true);
+  assert.deepEqual(store.queueList("run-q3").map((i) => i.id), [a.id], "deleted item gone");
+  assert.equal(store.queueDelete("run-q3", b.id), false, "double delete rejected");
+
+  // Steer moves the item into the run's steer buffer and out of the queue.
+  assert.equal(store.queueSteer("run-q3", a.id), true);
+  assert.deepEqual(store.takeSteer("run-q3"), ["Edited"], "steered text reaches the run");
+  assert.deepEqual(store.queueList("run-q3"), [], "steered item no longer queued");
+
+  // Delivered marker (client sends the follow-up as a new run).
+  const d = store.queueAdd("run-q3", "Follow-up")!;
+  assert.equal(store.queueMarkDelivered("run-q3", d.id), true);
+  assert.deepEqual(store.queueList("run-q3"), [], "delivered item no longer queued");
+
+  // Steer is refused once the run is terminal — a dead buffer must not eat items.
+  store.setStatus("run-q3", "completed");
+  const e = store.queueAdd("run-q3", "should fail")!;
+  assert.equal(e, null, "add also refused on terminal run");
+});
+
+test("queue: survives a backend restart — replay rebuilds items, edits, order, and consumption", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-runs-"));
+  try {
+    const live = new RunStore(dir);
+    live.create("run-qq", "C:/proj");
+    const a = live.queueAdd("run-qq", "First")!;
+    const b = live.queueAdd("run-qq", "Second")!;
+    live.queueAdd("run-qq", "Typo wrods");
+    const typo = live.queueList("run-qq").find((i) => i.text === "Typo wrods")!;
+    live.queueUpdate("run-qq", typo.id, "Typo words");
+    const c = live.queueList("run-qq").find((i) => i.text === "Typo words")!;
+    live.queueReorder("run-qq", [a.id, c.id, b.id]);
+    live.queueDelete("run-qq", a.id);
+    live.queueSteer("run-qq", c.id);
+    const d = live.queueAdd("run-qq", "Stays queued")!;
+    live.queueMarkDelivered("run-qq", d.id);
+    live.emit("run-qq", "run.completed", { tasksTotal: 1, tasksCompleted: 1 });
+    live.setStatus("run-qq", "completed");
+
+    // "Restart": only b ("Second") is still queued, in the right shape.
+    const revived = new RunStore(dir);
+    const items = revived.queueList("run-qq");
+    assert.deepEqual(
+      items.map((i) => i.text),
+      ["Second"],
+      "created+edited survive; deleted/steered/delivered stay consumed"
+    );
+    assert.equal(items[0].status, "queued");
+    assert.equal(items[0].position >= 0, true, "position replayed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("queue: reconnect fetch (queueList) never resurrects consumed items", () => {
+  const store = new RunStore();
+  store.create("run-qr", "C:/proj");
+  store.queueAdd("run-qr", "one");
+  const two = store.queueAdd("run-qr", "two")!;
+  store.queueDelete("run-qr", two.id);
+  assert.deepEqual(
+    store.queueList("run-qr").map((i) => i.text),
+    ["one"]
+  );
+});
