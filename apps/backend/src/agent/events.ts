@@ -106,6 +106,14 @@ export interface Run {
   usage: { promptTokens: number; completionTokens: number; turns: number };
   /** Pre-run snapshot backing the run's Undo button, when one could be made. */
   checkpointId?: string;
+  /** WHERE the run executes — LOCAL, DOCKER_LOCAL, or OVH_WORKER. */
+  execution?: {
+    executionLocation: string;
+    reason?: string;
+    containerId?: string;
+    workerId?: string;
+    startedAt?: number;
+  };
 }
 
 /**
@@ -217,7 +225,7 @@ export class RunStore {
     }
   }
 
-  create(id: string, projectRoot: string, status: RunStatus = "running"): Run {
+  create(id: string, projectRoot: string, status: RunStatus = "running", execution?: Run["execution"]): Run {
     const run: Run = {
       id,
       projectRoot,
@@ -227,6 +235,7 @@ export class RunStore {
       nextSequence: 1,
       subscribers: new Set(),
       usage: { promptTokens: 0, completionTokens: 0, turns: 0 },
+      execution,
     };
     this.runs.set(id, run);
     this.log(id, { t: "run", projectRoot, createdAt: run.createdAt, status });

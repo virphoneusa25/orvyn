@@ -47,6 +47,8 @@ export class LocalExecutionProvider implements ExecutionProvider {
     if (s) s.aborted = true;
   }
 
+  async uploadWorkspace(): Promise<void> {} // already local — no-op
+
   async downloadArtifacts(): Promise<{ files: string[] }> {
     return { files: [] }; // local: files are already on the host
   }
@@ -57,5 +59,9 @@ export class LocalExecutionProvider implements ExecutionProvider {
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
     return { healthy: true };
+  }
+
+  async dispose(): Promise<void> {
+    this.active.clear();
   }
 }

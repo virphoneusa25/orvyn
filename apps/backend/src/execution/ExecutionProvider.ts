@@ -30,6 +30,9 @@ export interface ExecutionProvider {
   /** Cancel the active command (Stop button / run cancellation). */
   cancel(runId: string): Promise<void>;
 
+  /** Push workspace content to the execution environment (host → remote). */
+  uploadWorkspace(runId: string): Promise<void>;
+
   /** Sync produced artifacts back to the workspace (container → host). */
   downloadArtifacts(runId: string): Promise<{ files: string[] }>;
 
@@ -38,6 +41,9 @@ export interface ExecutionProvider {
 
   /** Liveness for the executor itself. */
   health(): Promise<{ healthy: boolean; detail?: string }>;
+
+  /** Clean shutdown — kill all environments. */
+  dispose?(): Promise<void>;
 }
 
 /** Run metadata for remote-capable execution (spec PART 14). */
