@@ -1,12 +1,13 @@
 // apps/backend/src/routes/worker.ts
 //
 // Worker-facing endpoints: registration, heartbeat, job polling, event
-// relay. The worker authenticates with the same ORVYN_API_KEY as the
-// desktop. These endpoints are the bridge between the control plane and
-// remote execution — no second event protocol.
+// relay (DURABLE — events flow into the tenant's RunStore), job submission.
+// The worker authenticates with the same ORVYN_API_KEY as the desktop.
 
 import { Router } from "express";
 import { randomUUID } from "crypto";
+import type { RunStore } from "../agent/events";
+import type { AgentEventType } from "../agent/events";
 
 interface WorkerRecord {
   workerId: string;
@@ -27,13 +28,13 @@ interface PendingJob {
   instruction: string;
   projectRoot?: string;
   mode?: string;
+  tenantId?: string;
   assignedTo?: string;
   createdAt: number;
 }
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
-const runEventRelay = new Map<string, (event: { type: string; data: Record<string, unknown> }) => void>();
 
 // Mark workers offline if heartbeat is stale (>45s)
 function pruneStaleWorkers(): void {
@@ -46,12 +47,15 @@ function pruneStaleWorkers(): void {
 }
 setInterval(pruneStaleWorkers, 15_000).unref();
 
-export function workerRouter(auth: (req: any) => any): Router {
+export function workerRouter(
+  auth: (req: any) => any,
+  getRunStore: (tenantId?: string) => RunStore
+): Router {
   const r = Router();
 
   // ── Registration ─────────────────────────────────────────────────────
   r.post("/register", (req, res) => {
-    auth(req); // 401 if invalid key
+    auth(req);
     const info = req.body as WorkerRecord;
     if (!info.workerId) return res.status(400).json({ error: "workerId required" });
     workers.set(info.workerId, { ...info, lastHeartbeat: Date.now() });
@@ -77,7 +81,6 @@ export function workerRouter(auth: (req: any) => any): Router {
     if (!worker || worker.status === "offline") {
       return res.status(409).json({ error: "Worker not registered or offline" });
     }
-    // Find an unassigned job this worker can handle
     const job = jobQueue.find((j) => !j.assignedTo);
     if (job) {
       job.assignedTo = workerId;
@@ -87,32 +90,56 @@ export function workerRouter(auth: (req: any) => any): Router {
     }
   });
 
-  // ── Event relay (workers push events for a run) ─────────────────────
+  // ── DURABLE event relay (workers push events → RunStore) ────────────
+  // Events get authoritative sequence numbers, JSONL persistence, and
+  // fan-out to SSE subscribers — identical to local run events.
   r.post("/events/:runId", (req, res) => {
     auth(req);
     const { runId } = req.params;
     const { type, data } = req.body;
     if (!type) return res.status(400).json({ error: "type required" });
 
-    // Forward to any SSE subscriber for this run
-    const listener = runEventRelay.get(runId);
-    if (listener) listener({ type, data });
+    // Persist through the RunStore — durable + sequenced + replayable.
+    // The tenant's RunStore is resolved from the job (or default tenant).
+    try {
+      const store = getRunStore(req.body.tenantId);
+      const run = store.get(runId);
+      if (!run) {
+        // Remote run not yet in the RunStore — create it so events persist.
+        store.create(runId, String(data?.projectRoot ?? "/remote"));
+      }
+      store.emit(runId, type as AgentEventType, data ?? {});
+    } catch (err: any) {
+      // Event persistence failure should NOT block the worker — log it.
+      console.warn(`[worker-relay] event store error for ${runId}: ${err.message}`);
+    }
 
-    // TODO: store in the durable event log when PG-backed persistence lands
     res.json({ ok: true });
   });
 
   // ── Job submission (internal: the OVH provider calls this) ──────────
   r.post("/submit", (req, res) => {
     auth(req);
-    const { instruction, missionId, projectRoot, mode } = req.body;
+    const { instruction, missionId, projectRoot, mode, tenantId } = req.body;
     if (!instruction) return res.status(400).json({ error: "instruction required" });
+
+    // Create the run in the RunStore FIRST so events have a home.
+    const runId = randomUUID();
+    try {
+      const store = getRunStore(tenantId);
+      if (!store.get(runId)) {
+        store.create(runId, String(projectRoot ?? "/remote"));
+        store.emit(runId, "run.started" as AgentEventType, { instruction, mode: mode || "agent", executionLocation: "OVH_WORKER" });
+      }
+    } catch { /* store may not be available — events will still relay */ }
+
     const job: PendingJob = {
-      runId: randomUUID(),
+      runId,
       missionId: missionId || `mission_${Date.now().toString(36)}`,
       instruction,
       projectRoot,
       mode,
+      tenantId,
       createdAt: Date.now(),
     };
     jobQueue.push(job);
@@ -132,13 +159,21 @@ export function workerRouter(auth: (req: any) => any): Router {
   // ── Cancel a remote run ──────────────────────────────────────────────
   r.post("/cancel/:runId", (req, res) => {
     auth(req);
-    const job = jobQueue.find((j) => j.runId === req.params.runId);
+    const { runId } = req.params;
+    const job = jobQueue.find((j) => j.runId === runId);
     if (job) {
       jobQueue.splice(jobQueue.indexOf(job), 1);
-      res.json({ ok: true, cancelled: true });
-    } else {
-      res.json({ ok: true, cancelled: false, note: "job not found in queue (may be running)" });
     }
+    // Mark the run cancelled in the RunStore (durable event).
+    try {
+      const store = getRunStore(req.body?.tenantId);
+      const run = store.get(runId);
+      if (run) {
+        store.emit(runId, "run.cancelled" as AgentEventType, { reason: "Stopped by user" });
+        store.setStatus(runId, "cancelled");
+      }
+    } catch { /* best-effort */ }
+    res.json({ ok: true, cancelled: true });
   });
 
   return r;

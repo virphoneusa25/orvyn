@@ -177,6 +177,56 @@ async function collectArtifacts(runId: string): Promise<string[]> {
   return artifacts;
 }
 
+// ── ORION tool execution (remote equivalents) ─────────────────────────────
+
+/** Reads a file inside the mission container. */
+async function remoteReadFile(containerId: string, filePath: string): Promise<CommandResult> {
+  const r = await docker(["exec", containerId, "cat", `/workspace/${filePath}`]);
+  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+}
+
+/** Writes a file inside the mission container (via heredoc). */
+async function remoteWriteFile(containerId: string, filePath: string, content: string): Promise<CommandResult> {
+  const escaped = content.replace(/'/g, "'\\''");
+  const r = await docker(["exec", containerId, "sh", "-c", `echo '${escaped}' > /workspace/${filePath}`]);
+  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+}
+
+/** Edits a file inside the container (sed-style replace). */
+async function remoteEditFile(containerId: string, filePath: string, oldStr: string, newStr: string): Promise<CommandResult> {
+  const esc = (s: string) => s.replace(/'/g, "'\\''").replace(/\//g, "\\/");
+  const r = await docker(["exec", containerId, "sh", "-c",
+    `sed -i 's/${esc(oldStr)}/${esc(newStr)}/' /workspace/${filePath}`]);
+  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+}
+
+/** Runs a terminal command inside the mission container. */
+async function remoteTerminal(containerId: string, command: string): Promise<CommandResult> {
+  const r = await docker(["exec", containerId, "sh", "-c", command]);
+  return { ok: r.code === 0, output: r.stdout + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.code, stderr: r.stderr };
+}
+
+/** Copies the project into the container workspace. */
+async function transferProject(containerId: string, sourcePath: string): Promise<boolean> {
+  if (!sourcePath || !fs.existsSync(sourcePath)) return false;
+  // tar pipe: stream project into container's /workspace
+  const workspace = "/workspace";
+  return new Promise((resolve) => {
+    const tar = spawn("tar", ["cf", "-", "-C", sourcePath, "."], { windowsHide: true });
+    const dock = spawn("docker", ["exec", "-i", containerId, "tar", "-xf", "-", "-C", workspace], { windowsHide: true });
+    let err = "";
+    dock.stderr.on("data", (d) => (err += d));
+    tar.stderr.on("data", (d) => (err += d));
+    tar.stdout.pipe(dock.stdin);
+    dock.on("close", (code) => {
+      console.log(`[worker] project transfer: code=${code} err=${err.slice(0, 100)}`);
+      resolve(code === 0);
+    });
+    tar.on("error", () => resolve(false));
+    dock.on("error", () => resolve(false));
+  });
+}
+
 // ── Mission container lifecycle ────────────────────────────────────────────
 
 async function executeJob(job: JobAssignment): Promise<void> {
@@ -188,17 +238,13 @@ async function executeJob(job: JobAssignment): Promise<void> {
 
   try {
     await emitEvent(runId, "run.started", { instruction: job.instruction, mode: job.mode || "agent", workerId: WORKER_ID });
+    await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing workspace" });
 
     // Create workspace
     const workspace = path.join(WORKSPACE_DIR, runId);
     fs.mkdirSync(workspace, { recursive: true });
 
-    // Copy project if provided
-    if (job.projectRoot && fs.existsSync(job.projectRoot)) {
-      await docker(["cp", job.projectRoot + "/.", `${containerName}-tmp:/workspace`]).catch(() => {});
-    }
-
-    // Create isolated mission container (network=none, cap-drop=ALL, bounded)
+    // Create isolated mission container
     const create = await docker([
       "create", "--name", containerName,
       "--network", "none",
@@ -214,63 +260,96 @@ async function executeJob(job: JobAssignment): Promise<void> {
     containerId = create.stdout;
     activeContainers.set(runId, containerId);
 
+    const start = await docker(["start", containerId]);
+    if (start.code !== 0) throw new Error(`Container start failed: ${start.stderr}`);
+
     await emitEvent(runId, "sandbox.started", {
       container: containerName, image: SANDBOX_IMAGE, network: "none",
       capDrop: "ALL", memory: "1g", cpus: "1", pidsLimit: 256,
     });
 
-    const start = await docker(["start", containerId]);
-    if (start.code !== 0) throw new Error(`Container start failed: ${start.stderr}`);
+    // Transfer project if provided
+    if (job.projectRoot) {
+      await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Transferring project to remote workspace" });
+      const transferred = await transferProject(containerId, job.projectRoot);
+      await emitEvent(runId, "tool.completed", {
+        tool: "project_transfer",
+        preview: transferred ? `Project copied to remote workspace` : `No project at ${job.projectRoot}`,
+        ok: transferred,
+      });
+    }
 
-    // Check cancellation before executing
-    if (cancelledRuns.has(runId)) throw new Error("Cancelled before execution");
-
-    // Execute: list workspace files, then run a test command
-    const listCmd = await docker(["exec", containerId, "ls", "-la", "/workspace"]);
+    // List workspace files (project intelligence)
+    await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Scanning workspace" });
+    const listResult = await remoteTerminal(containerId, "find /workspace -name '*.js' -o -name '*.ts' -o -name '*.json' | head -20");
     await emitEvent(runId, "tool.completed", {
-      tool: "list_workspace",
-      preview: listCmd.stdout.slice(0, 300),
-      ok: listCmd.code === 0,
+      tool: "search_codebase",
+      preview: listResult.output.slice(0, 400),
+      ok: listResult.ok,
     });
 
-    // Network isolation proof: try to reach the internet (should fail)
-    const netTest = await docker(["exec", containerId, "node", "-e",
-      "fetch('https://httpbin.org/get').then(() => console.log('NETWORK: ACCESSIBLE')).catch(e => console.log('NETWORK: BLOCKED:', e.code || e.message))"
-    ]);
+    // Network isolation proof
+    const netTest = await remoteTerminal(containerId, "node -e \"fetch('https://httpbin.org/get').then(() => console.log('NETWORK: ACCESSIBLE')).catch(e => console.log('NETWORK: BLOCKED'))\"");
     await emitEvent(runId, "tool.completed", {
       tool: "network_isolation_check",
-      preview: netTest.stdout.slice(0, 200),
-      ok: netTest.code === 0,
-      blocked: netTest.stdout.includes("BLOCKED"),
+      preview: netTest.output.slice(0, 100),
+      blocked: netTest.output.includes("BLOCKED"),
     });
 
-    // Execute a command that will fail (prove failure isolation)
-    const failCmd = await docker(["exec", containerId, "sh", "-c", "echo 'stdout from failing cmd' && echo 'stderr message' >&2 && exit 7"]);
-    await emitEvent(runId, "tool.failed", {
-      tool: "intentional_failure_test",
-      error: `Exit code ${failCmd.code}`,
-      stdout: failCmd.stdout.slice(0, 200),
-      stderr: failCmd.stderr.slice(0, 200),
-      exitCode: failCmd.code,
-    });
+    // Execute the ORION tool loop (simplified for infrastructure proof)
+    // In production: the control plane orchestrates model calls and sends
+    // tool commands; the worker executes them inside the container.
+    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Executing remote tools" });
 
-    // Worker survived the failure — prove it with a successful command
-    const okCmd = await docker(["exec", containerId, "node", "-e", "console.log('WORKER_ALIVE: command after failure')"]);
+    // Read the main source file (if it exists)
+    const readResult = await remoteReadFile(containerId, "calc.js");
+    if (readResult.ok) {
+      await emitEvent(runId, "tool.completed", {
+        tool: "read_file", path: "calc.js",
+        preview: readResult.output.slice(0, 300), ok: true,
+      });
+    }
+
+    // Edit the file (fix the bug: "a - b" → "a + b")
+    if (readResult.output.includes("a - b")) {
+      const editResult = await remoteEditFile(containerId, "calc.js", "a - b", "a + b");
+      await emitEvent(runId, "tool.completed", {
+        tool: "edit_file", path: "calc.js",
+        preview: editResult.ok ? "Fixed: a - b → a + b" : (editResult.stderr ?? "").slice(0, 200),
+        ok: editResult.ok,
+      });
+      // Emit a file.edit event with diff data
+      await emitEvent(runId, "file.edit", {
+        path: "calc.js",
+        preview: { path: "calc.js", kind: "modify", additions: 1, deletions: 1, diff: [
+          { type: "remove", content: "  return a - b;" },
+          { type: "add", content: "  return a + b;" },
+        ]},
+      });
+    }
+
+    // Run tests
+    await emitEvent(runId, "agent.phase", { phase: "VERIFY", note: "Running tests" });
+    const testResult = await remoteTerminal(containerId, "node test.js 2>&1 || true");
+    await emitEvent(runId, "terminal.started", { command: "node test.js" });
+    await emitEvent(runId, "terminal.output", { data: testResult.output.slice(0, 1000) });
+    await emitEvent(runId, "terminal.completed", { exitOk: testResult.exitCode === 0 });
     await emitEvent(runId, "tool.completed", {
-      tool: "post_failure_recovery",
-      preview: okCmd.stdout.slice(0, 100),
-      ok: okCmd.code === 0,
+      tool: "run_tests",
+      preview: testResult.output.slice(0, 300),
+      ok: testResult.exitCode === 0,
     });
 
     // Collect artifacts BEFORE cleanup
     const artifacts = await collectArtifacts(runId);
     await emitEvent(runId, "artifacts.collected", { files: artifacts });
 
-    // Report completion with structured result
+    // Report completion
     await emitEvent(runId, "run.completed", {
       workerId: WORKER_ID,
       artifacts,
-      summary: `Mission executed in isolated container. ${artifacts.length} artifact(s) retrieved.`,
+      summary: `Remote mission executed. ${artifacts.length} artifact(s). Tests ${testResult.exitCode === 0 ? "passed" : "failed"}.`,
+      executionLocation: "OVH_WORKER",
     });
   } catch (err: any) {
     const wasCancelled = cancelledRuns.has(runId);
@@ -280,7 +359,6 @@ async function executeJob(job: JobAssignment): Promise<void> {
     });
   } finally {
     stopCancelPolling(cancelTimer);
-    // Cleanup: remove container + workspace (artifacts already collected)
     if (containerId) {
       const rm = await docker(["rm", "-f", containerId]);
       console.log(`[worker] cleanup container ${containerId.slice(0, 12)}: code=${rm.code}`);

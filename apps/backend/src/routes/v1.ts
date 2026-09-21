@@ -5,6 +5,7 @@ import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { requireTenant } from "../middleware/tenant";
+import { tenantManager } from "../tenancy/TenantManager";
 import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
@@ -14,7 +15,7 @@ import { MODES } from "../agent/modes";
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
-v1Router.use("/worker", workerRouter(requireTenant));
+v1Router.use("/worker", workerRouter(requireTenant, () => tenantManager.ensureLocalDefault().runStore));
 
 // Validate every explicit project root before an endpoint uses it.
 v1Router.use(async (req, res, next) => {
