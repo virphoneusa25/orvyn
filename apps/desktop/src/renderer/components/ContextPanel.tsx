@@ -188,15 +188,69 @@ export function ContextPanel({
         {active === "files" && <FilesView events={events} projectRoot={projectRoot} onOpenFile={onOpenFile} focus={focus} />}
         {active === "diff" && <DiffView events={events} focus={focus} />}
         {active === "terminal" && <TerminalView term={term} />}
-        {active === "browser" && (
-          <div style={{ padding: 24, fontSize: 11.5, color: "var(--orvyn-text-muted)", textAlign: "center", lineHeight: 1.7 }}>
-            Browser verification needs Playwright (the backend's optional dependency). The browser
-            agent tools already report this honestly — this tab goes live when it is installed.
-          </div>
-        )}
+        {active === "browser" && <BrowserEvidenceView events={events} />}
         {active === "documents" && <DocumentsPanel projectRoot={projectRoot} revision={events.filter(e=>e.type === "tool.completed" && e.data.tool === "create_document").length} />}
         {active === "review" && <ReviewPanel runId={events[0]?.runId} />}
       </div>
+    </div>
+  );
+}
+
+/** Real browser evidence from run events — URLs visited, actions taken, screenshots, console errors, failed requests. */
+function BrowserEvidenceView({ events }: { events: AgentEvent[] }) {
+  const browserEvents = useMemo(() => {
+    return events.filter((e) =>
+      e.type === "tool.started" || e.type === "tool.completed" || e.type === "tool.failed" || e.type === "browser.action" || e.type === "browser.completed"
+    ).filter((e) => {
+      const tool = String(e.data.tool ?? "");
+      return tool.startsWith("browser_") || e.type.startsWith("browser.");
+    });
+  }, [events]);
+
+  const actions = browserEvents.filter((e) => e.type === "tool.started");
+  const completed = browserEvents.filter((e) => e.type === "tool.completed");
+  const failed = browserEvents.filter((e) => e.type === "tool.failed");
+
+  if (browserEvents.length === 0) {
+    return (
+      <div style={{ padding: 24, fontSize: 11.5, color: "var(--orvyn-text-muted)", textAlign: "center", lineHeight: 1.7 }}>
+        No browser activity in this run. Browser verification appears here when ORION uses browser tools.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px" }}>
+      <div style={{ fontSize: 10, letterSpacing: 1.2, color: "var(--orvyn-text-muted)", marginBottom: 10 }}>
+        BROWSER EVIDENCE — {actions.length} actions, {completed.length} completed, {failed.length} failed
+      </div>
+      {browserEvents.map((e) => {
+        const tool = String(e.data.tool ?? e.type);
+        const isFailed = e.type === "tool.failed";
+        const isDone = e.type === "tool.completed";
+        const preview = String(e.data.preview ?? e.data.input?.url ?? e.data.error ?? "").slice(0, 120);
+        return (
+          <div
+            key={e.id}
+            style={{
+              display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 4,
+              background: isFailed ? "rgba(242,95,117,0.08)" : isDone ? "rgba(32,216,155,0.05)" : "rgba(255,255,255,0.02)",
+              border: `1px solid ${isFailed ? "rgba(242,95,117,0.2)" : "var(--orvyn-border-soft)"}`,
+              borderRadius: 6, fontSize: 11.5,
+            }}
+          >
+            <span style={{ color: isFailed ? "var(--orvyn-red)" : isDone ? "var(--orvyn-green)" : "var(--orvyn-purple-hi)", flexShrink: 0 }}>
+              {isFailed ? "✕" : isDone ? "✓" : "●"}
+            </span>
+            <code style={{ fontFamily: "var(--font-mono)", color: "var(--orvyn-text)", flexShrink: 0 }}>
+              {tool.replace("browser_", "")}
+            </code>
+            <span style={{ color: "var(--orvyn-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {preview}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }

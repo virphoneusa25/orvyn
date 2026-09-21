@@ -33,6 +33,7 @@ import {
   makeBrowserTypeTool,
   makeBrowserScreenshotTool,
   makeBrowserConsoleErrorsTool,
+  makeBrowserEvidenceTool,
 } from "./tools/browserTools";
 import {
   makeGetDiagnosticsTool,
@@ -106,6 +107,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeBrowserTypeTool(projectRoot));
   g.register(makeBrowserScreenshotTool(projectRoot));
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
+  g.register(makeBrowserEvidenceTool(projectRoot));
 
   // Git
   g.register(makeGitStatusTool(projectRoot));

@@ -26,6 +26,12 @@ interface BrowserSession {
   page: any;
   /** Console errors + uncaught page errors collected since browser_open. */
   consoleErrors: string[];
+  /** Failed network requests (non-2xx responses + network errors). */
+  failedRequests: { url: string; status: number; method: string }[];
+  /** Screenshots taken during this session (file paths). */
+  screenshots: string[];
+  /** Action log for evidence — what happened, when. */
+  actions: { action: string; url?: string; timestamp: number; result?: string }[];
 }
 
 // One session per project root; closed when browser_open is called again.
@@ -72,15 +78,57 @@ async function openSession(projectRoot: string): Promise<BrowserSession> {
   }
   const browser = await launchBrowser(pw);
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-  const session: BrowserSession = { browser, page, consoleErrors: [] };
+  const session: BrowserSession = {
+    browser,
+    page,
+    consoleErrors: [],
+    failedRequests: [],
+    screenshots: [],
+    actions: [],
+  };
   page.on("console", (msg: any) => {
     if (msg.type() === "error") session.consoleErrors.push(`[console.error] ${msg.text()}`.slice(0, 500));
   });
   page.on("pageerror", (err: any) => {
     session.consoleErrors.push(`[pageerror] ${String(err?.message ?? err)}`.slice(0, 500));
   });
+  // Track failed network requests (non-2xx + network errors) for evidence.
+  page.on("response", (res: any) => {
+    const status = res.status();
+    if (status >= 400) {
+      session.failedRequests.push({
+        url: res.url().slice(0, 300),
+        status,
+        method: res.request()?.method() ?? "GET",
+      });
+    }
+  });
+  page.on("requestfailed", (req: any) => {
+    session.failedRequests.push({
+      url: req.url().slice(0, 300),
+      status: 0,
+      method: req.method(),
+    });
+  });
   sessions.set(projectRoot, session);
   return session;
+}
+
+/** Full evidence snapshot from the active session — for browser_verify. */
+export function browserEvidence(projectRoot: string): {
+  consoleErrors: string[];
+  failedRequests: { url: string; status: number; method: string }[];
+  screenshots: string[];
+  actions: { action: string; url?: string; timestamp: number; result?: string }[];
+} {
+  const s = sessions.get(projectRoot);
+  if (!s) return { consoleErrors: [], failedRequests: [], screenshots: [], actions: [] };
+  return {
+    consoleErrors: [...s.consoleErrors],
+    failedRequests: [...s.failedRequests],
+    screenshots: [...s.screenshots],
+    actions: [...s.actions],
+  };
 }
 
 function guard<T extends Record<string, unknown>>(
@@ -149,6 +197,7 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
       const s = await openSession(projectRoot);
       const url = args.url ? String(args.url) : "";
       if (url) await gotoWithRecovery(s.page, url);
+      s.actions.push({ action: "open", url, timestamp: Date.now() });
       return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.` };
     }),
   };
@@ -247,7 +296,35 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
       await fs.mkdir(dir, { recursive: true });
       const file = path.join(dir, `shot_${Date.now()}.png`);
       await page.screenshot({ path: file, fullPage: args.fullPage === true });
+      const s = sessions.get(projectRoot);
+      if (s) {
+        s.screenshots.push(file);
+        s.actions.push({ action: "screenshot", url: page.url(), timestamp: Date.now(), result: file });
+      }
       return { ok: true, output: `Screenshot saved: ${file}` };
+    }),
+  };
+}
+
+export function makeBrowserEvidenceTool(projectRoot: string): AITool {
+  return {
+    name: "browser_evidence",
+    description:
+      "Get the full browser session evidence: actions taken, console errors, failed network requests, screenshots, and current URL. Use for verification reports.",
+    parameters: { type: "object", properties: {} },
+    defaultPermission: "allowed",
+    execute: guard(async () => {
+      const evidence = browserEvidence(projectRoot);
+      const s = sessions.get(projectRoot);
+      const currentUrl = s ? String(s.page.url()) : "(no session)";
+      const lines = [
+        `URL: ${currentUrl}`,
+        `Actions (${evidence.actions.length}): ${evidence.actions.map((a) => `${a.action}@${a.url ?? ""}`).join(", ") || "(none)"}`,
+        `Console errors (${evidence.consoleErrors.length}): ${evidence.consoleErrors.slice(0, 5).join(" | ") || "(none)"}`,
+        `Failed requests (${evidence.failedRequests.length}): ${evidence.failedRequests.slice(0, 5).map((r) => `${r.method} ${r.url} [${r.status}]`).join(" | ") || "(none)"}`,
+        `Screenshots (${evidence.screenshots.length}): ${evidence.screenshots.join(", ") || "(none)"}`,
+      ];
+      return { ok: true, output: lines.join("\n") };
     }),
   };
 }

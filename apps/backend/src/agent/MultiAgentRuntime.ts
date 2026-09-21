@@ -50,6 +50,36 @@ interface PendingApproval {
 export type ApprovalScope = "once" | "mission";
 
 const MAX_TASKS = 12;
+
+/**
+ * Delegation policy: ORION delegates only when work genuinely benefits.
+ * Simple tasks run in the parent; complex/parallel work spawns workers.
+ */
+const DELEGATION_POLICY = {
+  /** Always delegate: browser verification needs an isolated session. */
+  browser: true,
+  /** Delegate tests when >3 test files or the suite takes >60s. */
+  tests: { minFiles: 3 },
+  /** Delegate research when >5 files to read. */
+  research: { minFiles: 5 },
+  /** Never delegate single-file edits or quick fixes. */
+  code: { minFiles: 2 },
+  /** Max concurrent workers per mission. */
+  maxWorkers: Number(process.env.ORVYN_MAX_WORKERS) || 3,
+  /** Worker time limit (ms). */
+  workerTimeoutMs: Number(process.env.ORVYN_WORKER_TIMEOUT_MS) || 300_000,
+  /** Worker token budget per task. */
+  workerTokenBudget: Number(process.env.ORVYN_WORKER_TOKEN_BUDGET) || 50_000,
+};
+
+/** Decides whether a task type should be delegated to a worker. */
+function shouldDelegate(agent: string, scope: { files?: number; estDurationMs?: number }): boolean {
+  if (agent === "browser") return DELEGATION_POLICY.browser;
+  if (agent === "tester") return (scope.files ?? 0) >= (DELEGATION_POLICY.tests as { minFiles: number }).minFiles;
+  if (agent === "research") return (scope.files ?? 0) >= (DELEGATION_POLICY.research as { minFiles: number }).minFiles;
+  if (agent === "coder") return (scope.files ?? 0) >= (DELEGATION_POLICY.code as { minFiles: number }).minFiles;
+  return false;
+}
 const MAX_REVISIONS = 2;        // per task, before giving up and moving on
 const MAX_EXECUTOR_STEPS = 10;  // tool calls per task attempt
 
