@@ -28,7 +28,7 @@ function relTime(ts: number): string {
 type Filter = "recent" | "pinned" | "archived" | "all";
 
 export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => void }) {
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   const [filter, setFilter] = useState<Filter>("recent");
   const [query, setQuery] = useState("");
   const [menuFor, setMenuFor] = useState<string | null>(null);
@@ -38,7 +38,11 @@ export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => voi
 
   React.useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
 
-  const all = useMemo(() => listChatSummaries(), [listChatSummaries()]);
+  // Recompute on every tick (the subscription's rerender signal) — NOT on
+  // listChatSummaries() (which would create a new dep-array value every
+  // render). tick changes when: history loads, a message completes, a chat
+  // is created/renamed/pinned/archived/deleted.
+  const all = useMemo(() => listChatSummaries(), [tick]);
   const filtered = useMemo(() => {
     let list = query.trim() ? searchChats(query) : all;
     switch (filter) {

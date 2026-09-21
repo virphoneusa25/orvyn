@@ -132,7 +132,7 @@ export function listChatSummaries(): ConversationSummary[] {
         messageCount: s.messages.length,
         pinned: s.pinned === true,
         archived: s.archived === true,
-        status: (s.archived ? "archived" : "idle") as ConversationSummary["status"],
+        status: (s.archived ? "archived" : s.id === activeId ? "active" : "idle") as ConversationSummary["status"],
         preview,
         projectName: s.projectName,
         modelId: s.modelId,
@@ -244,7 +244,7 @@ export function searchChats(query: string): ConversationSummary[] {
         messageCount: s.messages.length,
         pinned: s.pinned === true,
         archived: s.archived === true,
-        status: (s.archived ? "archived" : "idle") as ConversationSummary["status"],
+        status: (s.archived ? "archived" : s.id === activeId ? "active" : "idle") as ConversationSummary["status"],
         preview: lastMsg?.content?.slice(0, 120) ?? "",
         projectName: s.projectName,
         modelId: s.modelId,
@@ -275,8 +275,10 @@ export function startUserTurn(
   const history = session.messages.map((m) => ({ role: m.role, content: toWireContent(m.content) }));
   session.messages = [...session.messages, { role: "user", content, createdAt: Date.now(), ...extra }, { role: "assistant", content: "", createdAt: Date.now() }];
   session.updatedAt = Date.now();
+  session.status = "active";
   streaming = true;
   emit();
+  persist(); // crash-safe: the user's message is on disk before the model call
   return history;
 }
 

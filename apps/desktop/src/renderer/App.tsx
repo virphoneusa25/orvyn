@@ -29,7 +29,7 @@ import { ToolsMcpWorkspace } from "./components/ToolsMcpWorkspace";
 import { EditorTabs } from "./components/EditorTabs";
 import { loadConnectionConfig, apiUrl, authHeaders, getOrchestratorStatus, onOrchestratorStatus } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat, openChatSession } from "./chatSession";
+import { newChat, openChatSession, initChatHistory } from "./chatSession";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
 import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
@@ -199,6 +199,10 @@ export function App() {
   useEffect(() => {
     const dispose = registerTabAutocomplete();
     loadConnectionConfig().then(() => window.orvyn.project.getWorkspace().then(setWorkspace));
+    // Load persisted chat history — the Chats workspace and WorkStream share
+    // these sessions. Non-blocking: the app renders immediately, chats
+    // populate when the IPC load completes (initChatHistory emits).
+    void initChatHistory();
     return () => dispose.dispose();
   }, []);
 
