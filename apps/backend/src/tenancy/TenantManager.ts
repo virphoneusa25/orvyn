@@ -16,7 +16,7 @@ import { requiredCapability, TaskType } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { HashingEmbedder, ModelEmbedder } from "../indexing/embeddings";
-import { PersistentVectorStore } from "../indexing/vectorStore";
+import { NamespacedVectorStore } from "../indexing/NamespacedVectorStore";
 import { ToolRegistry } from "../ai/ToolTypes";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { PermissionEngine } from "../gateway/PermissionEngine";
@@ -131,7 +131,7 @@ export class TenantManager {
       name,
       createdAt: new Date().toISOString(),
       modelService,
-      indexService: new IndexService(embedder, new PersistentVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)), label),
+      indexService: new IndexService(embedder, new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)), label),
       toolRegistry,
       permissionEngine,
       toolGateway: new ToolGateway(toolRegistry, permissionEngine),
