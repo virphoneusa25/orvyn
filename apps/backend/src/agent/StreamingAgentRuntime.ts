@@ -335,6 +335,7 @@ export class StreamingAgentRuntime {
     let consecutiveFailures = 0;
 
     try {
+      this.store.emit(runId, "agent.phase", { phase: steps === 0 ? "EXECUTE" : "VERIFY", note: steps === 0 ? "Working on the task" : "Verifying results" });
       while (steps < MAX_STEPS) {
         if (state.cancelled) return this.finishCancelled(runId, steps);
 
@@ -389,7 +390,8 @@ export class StreamingAgentRuntime {
         let streamedText = false;
         const streamedCalls: ToolCall[] = [];
 
-        // Safe boundary: steering instructions ride the next model turn.
+        this.store.emit(runId, "agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" });
+    // Safe boundary: steering instructions ride the next model turn.
         const steerList = this.store.takeSteer(runId);
         if (steerList.length > 0) {
           messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${steerList.join(" | ")}` });

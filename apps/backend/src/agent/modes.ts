@@ -7,7 +7,7 @@
 
 import { ToolPermission, ToolRegistry } from "../ai/ToolTypes";
 
-export type AgentMode = "agent" | "plan" | "debug" | "multitask" | "ask";
+export type AgentMode = "agent" | "plan" | "debug" | "research" | "multitask" | "ask";
 
 export interface ModeDefinition {
   id: AgentMode;
@@ -181,6 +181,19 @@ export const MODES: Record<AgentMode, ModeDefinition> = {
     ].join("\n"),
   },
 
+  research: {
+    id: "research",
+    label: "Research",
+    description: "Investigate and report, no edits",
+    toolsEnabled: true,
+    permissions: READ_ONLY,
+    systemPrompt: [
+      "You are in RESEARCH mode. Investigate thoroughly and report findings.",
+      "You may read files, search code, and fetch URLs — but you cannot edit anything.",
+      "Report findings with concrete file paths, line references, and evidence.",
+    ].join("\n"),
+  },
+
   multitask: {
     id: "multitask",
     label: "Multitask",
@@ -204,6 +217,25 @@ export const MODES: Record<AgentMode, ModeDefinition> = {
     ].join("\n"),
   },
 };
+
+/**
+ * Maps the user-facing composer modes (Auto/Code/Server/Research/Deploy/
+ * Automate) onto the backend agent modes that control actual tool policy.
+ * This is the "real run modes" contract: each chip changes routing.
+ */
+export const MODE_CHIP_TO_AGENT: Record<string, AgentMode> = {
+  auto: "agent",       // ORION chooses the workflow
+  code: "agent",       // repository/files/tests focus (default agent mode)
+  server: "debug",     // prefer SSH/server/log/service tools; read+terminal
+  research: "research", // read/search focused, minimal mutations
+  deploy: "multitask", // deployment tools enabled but approval-gated
+  automate: "multitask", // workflow preparation
+};
+
+/** Applies a user-facing mode chip's tool policy. */
+export function applyUserMode(registry: ToolRegistry, chip: string): ModeDefinition {
+  return applyMode(registry, MODE_CHIP_TO_AGENT[chip] ?? "agent");
+}
 
 /** Applies a mode's permission profile to a tenant's tool registry. */
 export function applyMode(registry: ToolRegistry, mode: AgentMode): ModeDefinition {
