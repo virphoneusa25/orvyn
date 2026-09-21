@@ -29,6 +29,7 @@ import { StreamingAgentRuntime } from "../agent/StreamingAgentRuntime";
 import { MultiAgentRuntime } from "../agent/MultiAgentRuntime";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import { McpHub } from "../mcp/McpHub";
+import { McpManager } from "../mcp/McpManager";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
@@ -50,6 +51,8 @@ export interface Tenant {
   taskEngine: TaskEngine;
   checkpointEngine: CheckpointEngine;
   mcpHub: McpHub;
+  /** Full MCP host: persistent servers, gateway-registered tools, search. */
+  mcpManager: McpManager;
   contextEngine: ContextEngine;
   agentRuntime: StreamingAgentRuntime;
   multiAgentRuntime: MultiAgentRuntime;
@@ -139,6 +142,7 @@ export class TenantManager {
       taskEngine: undefined as unknown as TaskEngine,
       checkpointEngine: new CheckpointEngine(),
       mcpHub: new McpHub(),
+      mcpManager: undefined as unknown as McpManager,
       contextEngine: undefined as unknown as ContextEngine,
       agentRuntime: undefined as unknown as StreamingAgentRuntime,
       multiAgentRuntime: undefined as unknown as MultiAgentRuntime,
@@ -146,6 +150,12 @@ export class TenantManager {
       usage: { requests: 0, agentRuns: 0, indexBuilds: 0 },
       localStore,
     };
+    // MCP host gets the now-constructed tenant's gateway.
+    tenant.mcpManager = new McpManager({
+      gateway: tenant.toolGateway,
+      engine: tenant.permissionEngine as unknown as { declareCapabilities(name: string, caps: string[]): void; forgetCapabilities(name: string): void },
+      store: localStore as unknown as { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
+    });
     // Restore the autonomy profile the user last selected.
     const savedProfile = localStore.getSetting("profile") as PermissionProfile | null;
     if (savedProfile && PROFILES[savedProfile]) tenant.toolGateway.profile = savedProfile;
@@ -162,7 +172,8 @@ export class TenantManager {
       tenant.runStore,
       tenant.checkpointEngine,
       tenant.localStore,
-      tenant.indexService
+      tenant.indexService,
+      () => tenant.mcpManager.capabilitySummary()
     );
     tenant.multiAgentRuntime = new MultiAgentRuntime(
       tenant.modelService,

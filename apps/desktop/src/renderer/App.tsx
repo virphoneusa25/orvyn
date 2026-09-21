@@ -24,7 +24,8 @@ import { toMissionSummary, toSystems, ApiMissionRow } from "./components/redesig
 import type { MissionSummary } from "./components/redesign/types";
 import { StatusBar } from "./components/StatusBar";
 import { HonestState } from "./components/HonestState";
-import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace, ToolsWorkspace } from "./components/Workspaces";
+import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace } from "./components/Workspaces";
+import { ToolsMcpWorkspace } from "./components/ToolsMcpWorkspace";
 import { EditorTabs } from "./components/EditorTabs";
 import { loadConnectionConfig, apiUrl, authHeaders, getOrchestratorStatus, onOrchestratorStatus } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
@@ -541,7 +542,7 @@ export function App() {
 
         {view === "tools" && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <ToolsWorkspace projectRoot={workspaceRoot} />
+            <ToolsMcpWorkspace projectRoot={workspaceRoot} />
           </div>
         )}
 

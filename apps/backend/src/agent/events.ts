@@ -68,7 +68,12 @@ export type AgentEventType =
   | "sandbox.stopped"
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"
-  | "steer.delivered";
+  | "steer.delivered"
+  // --- MCP host lifecycle (server connect/disconnect; tool activity rides
+  //     the standard tool.* events through the shared gateway) ---
+  | "mcp.connected"
+  | "mcp.disconnected"
+  | "mcp.error";
 
 export interface AgentEvent {
   id: string;

@@ -96,6 +96,10 @@ server.on("close", () => clearInterval(heartbeat));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
 bootstrapDefaultTenant();
+// Reconnect enabled MCP servers (best-effort; failures stay per-server).
+setTimeout(() => {
+  void (async () => { try { const t = tenantManager.ensureLocalDefault(); await t.mcpManager.startEnabled(); } catch {} })();
+}, 3000);
 
 server.listen(PORT, () => {
   console.log(`ORVYN backend listening on http://localhost:${PORT}`);

@@ -96,8 +96,20 @@ export class PermissionEngine {
    */
   public autonomous = false;
 
+  /** Runtime-declared capabilities (MCP host registers its tools here). */
+  private declared = new Map<string, Capability[]>();
+
+  /** Declares capabilities for a dynamically-registered tool (MCP). */
+  declareCapabilities(toolName: string, caps: Capability[]): void {
+    this.declared.set(toolName, caps);
+  }
+
+  forgetCapabilities(toolName: string): void {
+    this.declared.delete(toolName);
+  }
+
   capabilitiesOf(toolName: string): Capability[] {
-    return TOOL_CAPABILITIES[toolName] ?? ["SYSTEM"];
+    return TOOL_CAPABILITIES[toolName] ?? this.declared.get(toolName) ?? ["SYSTEM"];
   }
 
   checkRole(toolName: string, role: AgentRole | undefined): PermissionVerdict {

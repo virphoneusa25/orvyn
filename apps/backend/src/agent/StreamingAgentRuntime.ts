@@ -90,6 +90,13 @@ const SERIAL_ONLY_TOOLS = new Set([
   "browser_screenshot",
 ]);
 
+/** Compact MCP capability summary — one line per connected server, so
+ *  ORION knows what exists without dumping every tool schema each turn. */
+function mcpCapabilities(summary: () => string[]): string {
+  const lines = summary();
+  return lines.length ? `MCP servers connected: ${lines.join("; ")}` : "";
+}
+
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
   private runs = new Map<string, RunState>();
@@ -101,7 +108,9 @@ export class StreamingAgentRuntime {
     /** When supplied, every run gets a pre-run snapshot that powers Undo. */
     private checkpoints?: CheckpointEngine,
     private memoryStore?: LocalStore,
-    private indexService?: IndexService
+    private indexService?: IndexService,
+    /** Compact MCP capability summary provider (one line per connected server). */
+    private mcpSummary: () => string[] = () => []
   ) {}
 
   private toolDefinitions(): ToolDefinition[] {
@@ -222,6 +231,7 @@ export class StreamingAgentRuntime {
         content: [
           def.systemPrompt,
           CONVERSATION_STYLE,
+          mcpCapabilities(this.mcpSummary),
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
           `Project root (absolute): ${projectRoot}`,

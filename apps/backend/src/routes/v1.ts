@@ -1,4 +1,5 @@
 import { documentRouter } from "./documents";
+import { mcpRouter } from "./mcp";
 import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
@@ -11,6 +12,7 @@ import { MODES } from "../agent/modes";
 
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
+v1Router.use("/mcp", mcpRouter(requireTenant));
 
 // Validate every explicit project root before an endpoint uses it.
 v1Router.use(async (req, res, next) => {
