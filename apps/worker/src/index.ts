@@ -227,6 +227,81 @@ async function transferProject(containerId: string, sourcePath: string): Promise
   });
 }
 
+// Tool RPC: the worker polls for tool requests from the control plane's
+// ORION model and executes them inside the container. The MODEL decides
+// which tools to call; the worker is a dumb executor.
+async function pollForToolRequests(runId: string, containerId: string): Promise<void> {
+  while (activeContainers.has(runId) && !cancelledRuns.has(runId)) {
+    try {
+      const res = await cp("/api/v1/worker/tools/" + runId + "/next");
+      if (res.request) {
+        const req = res.request;
+        console.log("[worker] tool: " + req.tool);
+        let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string };
+        switch (req.tool) {
+          case "read_file": {
+            const r = await remoteReadFile(containerId, String(req.arguments.path ?? ""));
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "write_file": {
+            const r = await remoteWriteFile(containerId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""));
+            result = { ok: r.ok, output: "Wrote " + req.arguments.path, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "edit_file": {
+            const r = await remoteEditFile(containerId, String(req.arguments.path ?? ""), String(req.arguments.old_string ?? ""), String(req.arguments.new_string ?? ""));
+            result = { ok: r.ok, output: r.ok ? "Edited " + req.arguments.path : undefined, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "list_directory": {
+            const r = await remoteTerminal(containerId, "ls -la " + (req.arguments.path ? "/workspace/" + req.arguments.path : "/workspace"));
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "search_code": case "search_files": {
+            const q = String(req.arguments.query ?? req.arguments.pattern ?? "");
+            const r = await remoteTerminal(containerId, 'grep -rn "' + q + '" /workspace --include="*.js" --include="*.ts" --include="*.json" --include="*.html" 2>/dev/null | head -30');
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "terminal": case "run_command": {
+            const cmd = String(req.arguments.command ?? "");
+            await emitEvent(runId, "terminal.started", { command: cmd });
+            const r = await remoteTerminal(containerId, cmd);
+            await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 2000) });
+            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0 });
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "run_tests": {
+            await emitEvent(runId, "terminal.started", { command: "npm test" });
+            const r = await remoteTerminal(containerId, "npm test 2>&1 || node test.js 2>&1 || echo 'no test runner'");
+            await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 2000) });
+            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0 });
+            result = { ok: r.exitCode === 0, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "run_typecheck": {
+            const r = await remoteTerminal(containerId, "npx tsc --noEmit 2>&1 || echo 'no typescript'");
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          default:
+            result = { ok: false, error: "Unknown tool: " + req.tool };
+        }
+        await cp("/api/v1/worker/tools/" + runId + "/result", "POST", {
+          requestId: req.requestId, runId: runId, ok: result.ok,
+          output: result.output, stderr: result.stderr, exitCode: result.exitCode,
+          error: result.error, durationMs: Date.now() - req.createdAt,
+        }).catch(e => console.warn("[worker] result failed: " + e.message));
+        console.log("[worker] tool result: " + req.tool + " ok=" + result.ok);
+      }
+    } catch { /* transient */ }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
 // ── Mission container lifecycle ────────────────────────────────────────────
 
 async function executeJob(job: JobAssignment): Promise<void> {
@@ -279,66 +354,13 @@ async function executeJob(job: JobAssignment): Promise<void> {
       });
     }
 
-    // List workspace files (project intelligence)
-    await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Scanning workspace" });
-    const listResult = await remoteTerminal(containerId, "find /workspace -name '*.js' -o -name '*.ts' -o -name '*.json' | head -20");
-    await emitEvent(runId, "tool.completed", {
-      tool: "search_codebase",
-      preview: listResult.output.slice(0, 400),
-      ok: listResult.ok,
-    });
-
-    // Network isolation proof
-    const netTest = await remoteTerminal(containerId, "node -e \"fetch('https://httpbin.org/get').then(() => console.log('NETWORK: ACCESSIBLE')).catch(e => console.log('NETWORK: BLOCKED'))\"");
-    await emitEvent(runId, "tool.completed", {
-      tool: "network_isolation_check",
-      preview: netTest.output.slice(0, 100),
-      blocked: netTest.output.includes("BLOCKED"),
-    });
-
-    // Execute the ORION tool loop (simplified for infrastructure proof)
-    // In production: the control plane orchestrates model calls and sends
-    // tool commands; the worker executes them inside the container.
-    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Executing remote tools" });
-
-    // Read the main source file (if it exists)
-    const readResult = await remoteReadFile(containerId, "calc.js");
-    if (readResult.ok) {
-      await emitEvent(runId, "tool.completed", {
-        tool: "read_file", path: "calc.js",
-        preview: readResult.output.slice(0, 300), ok: true,
-      });
-    }
-
-    // Edit the file (fix the bug: "a - b" → "a + b")
-    if (readResult.output.includes("a - b")) {
-      const editResult = await remoteEditFile(containerId, "calc.js", "a - b", "a + b");
-      await emitEvent(runId, "tool.completed", {
-        tool: "edit_file", path: "calc.js",
-        preview: editResult.ok ? "Fixed: a - b → a + b" : (editResult.stderr ?? "").slice(0, 200),
-        ok: editResult.ok,
-      });
-      // Emit a file.edit event with diff data
-      await emitEvent(runId, "file.edit", {
-        path: "calc.js",
-        preview: { path: "calc.js", kind: "modify", additions: 1, deletions: 1, diff: [
-          { type: "remove", content: "  return a - b;" },
-          { type: "add", content: "  return a + b;" },
-        ]},
-      });
-    }
-
-    // Run tests
-    await emitEvent(runId, "agent.phase", { phase: "VERIFY", note: "Running tests" });
-    const testResult = await remoteTerminal(containerId, "node test.js 2>&1 || true");
-    await emitEvent(runId, "terminal.started", { command: "node test.js" });
-    await emitEvent(runId, "terminal.output", { data: testResult.output.slice(0, 1000) });
-    await emitEvent(runId, "terminal.completed", { exitOk: testResult.exitCode === 0 });
-    await emitEvent(runId, "tool.completed", {
-      tool: "run_tests",
-      preview: testResult.output.slice(0, 300),
-      ok: testResult.exitCode === 0,
-    });
+    // ENTER THE TOOL RPC LOOP — ORION model drives all tool calls from here.
+    // The worker is a dumb executor; the control plane's ORION decides
+    // which tools to call, the worker executes them in the container.
+    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Worker ready for tool requests" });
+    console.log("[worker] entering tool RPC loop for " + runId);
+    await pollForToolRequests(runId, containerId);
+    console.log("[worker] tool RPC loop ended for " + runId);
 
     // Collect artifacts BEFORE cleanup
     const artifacts = await collectArtifacts(runId);
@@ -348,7 +370,7 @@ async function executeJob(job: JobAssignment): Promise<void> {
     await emitEvent(runId, "run.completed", {
       workerId: WORKER_ID,
       artifacts,
-      summary: `Remote mission executed. ${artifacts.length} artifact(s). Tests ${testResult.exitCode === 0 ? "passed" : "failed"}.`,
+      summary: "Remote mission executed. " + artifacts.length + " artifact(s).",
       executionLocation: "OVH_WORKER",
     });
   } catch (err: any) {

@@ -8,6 +8,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import type { RunStore } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
+import { toolRpc } from "../execution/ToolRpc";
 
 interface WorkerRecord {
   workerId: string;
@@ -88,6 +89,29 @@ export function workerRouter(
     } else {
       res.json({ job: null });
     }
+  });
+
+  // ── Tool RPC: worker polls for the next tool request ─────────────────
+  r.get("/tools/:runId/next", (req, res) => {
+    auth(req);
+    const request = toolRpc.poll(req.params.runId);
+    res.json({ request });
+  });
+
+  // ── Tool RPC: worker submits the tool result ──────────────────────────
+  r.post("/tools/:runId/result", (req, res) => {
+    auth(req);
+    const resolved = toolRpc.resolve({
+      requestId: String(req.body.requestId ?? ""),
+      runId: req.params.runId,
+      ok: Boolean(req.body.ok),
+      output: String(req.body.output ?? ""),
+      stderr: req.body.stderr ? String(req.body.stderr) : undefined,
+      exitCode: Number(req.body.exitCode ?? 0),
+      error: req.body.error ? String(req.body.error) : undefined,
+      durationMs: Number(req.body.durationMs ?? 0),
+    });
+    res.json({ ok: resolved });
   });
 
   // ── DURABLE event relay (workers push events → RunStore) ────────────
