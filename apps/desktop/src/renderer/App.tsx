@@ -4,7 +4,7 @@ import appIcon from "./assets/icon.png";
 import { FileExplorer } from "./components/FileExplorer";
 import { AIChatPanel } from "./components/AIChatPanel";
 import { ModelManager } from "./components/ModelManager";
-import { ChatHistoryPanel } from "./components/ChatHistoryPanel";
+import { ChatsWorkspace } from "./components/ChatsWorkspace";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { ReportsPanel } from "./components/ReportsPanel";
 import { ComposerPanel } from "./components/ComposerPanel";
@@ -29,7 +29,7 @@ import { ToolsMcpWorkspace } from "./components/ToolsMcpWorkspace";
 import { EditorTabs } from "./components/EditorTabs";
 import { loadConnectionConfig, apiUrl, authHeaders, getOrchestratorStatus, onOrchestratorStatus } from "./connection";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat } from "./chatSession";
+import { newChat, openChatSession } from "./chatSession";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
 import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
@@ -626,15 +626,12 @@ export function App() {
 
         {view === "chats" && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <ChatHistoryPanel
-              onOpenChat={() => {
-                // Opening a conversation makes it the center work stream.
+            <ChatsWorkspace
+              onOpenChat={(id) => {
+                // Resume: load the conversation, enter the work stream.
+                openChatSession(id);
+                setCenterMode("work");
                 setView("newtask");
-                setCenterMode("work");
-              }}
-              onNewChat={() => {
-                newChat();
-                setCenterMode("work");
               }}
             />
           </div>

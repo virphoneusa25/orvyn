@@ -19,6 +19,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
     label: "",
     items: [
       { id: "home", label: "Home", icon: "home" },
+      { id: "chats", label: "Chats", icon: "globe" },
       { id: "missions", label: "Missions", icon: "missions" },
       { id: "automations", label: "Automations", icon: "bolt" },
     ],
