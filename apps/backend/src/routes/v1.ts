@@ -1,6 +1,6 @@
 import { documentRouter } from "./documents";
 import { mcpRouter } from "./mcp";
-import { workerRouter } from "./worker";
+import { workerRouter, hasOnlineWorker } from "./worker";
 import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
@@ -346,6 +346,21 @@ import { loadSshHosts } from "../ai/tools/sshTools";
 // aborts the run itself.
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
+
+  // Remote execution is EXPLICIT and has NO local fallback: if no worker is
+  // online, the run is refused rather than silently executed locally.
+  const requestedLocation = req.body.executionLocation === "OVH_WORKER" ? "OVH_WORKER" : "LOCAL";
+  let remoteProjectRoot: string | undefined;
+  if (requestedLocation === "OVH_WORKER") {
+    remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+    if (!remoteProjectRoot) {
+      return res.status(400).json({ error: "executionLocation=OVH_WORKER requires remoteProjectRoot (the worker-side project path)." });
+    }
+    if (!hasOnlineWorker()) {
+      return res.status(409).json({ error: "No OVH worker is online — remote run refused. There is no local fallback for forced remote execution." });
+    }
+  }
+
   _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
   const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
@@ -357,9 +372,10 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     req.body.mode ?? "agent",
     req.body.attachments,
     history,
-    typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined
+    typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
+    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot } : undefined
   );
-  res.status(201).json({ runId });
+  res.status(201).json({ runId, executionLocation: requestedLocation });
 });
 
 // List runs (newest first) so panels like Agent Activity and Review can find

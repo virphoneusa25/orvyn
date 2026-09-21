@@ -32,10 +32,42 @@ interface PendingJob {
   tenantId?: string;
   assignedTo?: string;
   createdAt: number;
+  /**
+   * "executor": the control-plane ORION runtime owns the model loop and
+   * completion; the worker only prepares the mission container and serves
+   * tool RPC requests. This is the ONLY role new code may use — the legacy
+   * worker-driven path must not come back.
+   */
+  role?: "executor";
 }
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
+
+/** True when at least one worker has heartbeated within the stale window. */
+export function hasOnlineWorker(): boolean {
+  const cutoff = Date.now() - 45_000;
+  for (const w of workers.values()) {
+    if (w.status !== "offline" && w.lastHeartbeat >= cutoff) return true;
+  }
+  return false;
+}
+
+/**
+ * Queues an executor job: the worker prepares an isolated mission container
+ * for `runId` (transferring the project from its local `projectRoot`) and
+ * then serves tool RPC requests until the control-plane run finishes.
+ */
+export function queueExecutorJob(runId: string, projectRoot: string, tenantId?: string): void {
+  jobQueue.push({ runId, missionId: `mission_${runId.slice(0, 8)}`, instruction: "", projectRoot, tenantId, role: "executor", createdAt: Date.now() });
+}
+
+/** Removes any queued job for the run and drops pending tool RPCs. */
+export function cancelWorkerRun(runId: string): void {
+  const job = jobQueue.find((j) => j.runId === runId);
+  if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
+  toolRpc.cancelRun(runId);
+}
 
 // Mark workers offline if heartbeat is stale (>45s)
 function pruneStaleWorkers(): void {
@@ -92,10 +124,21 @@ export function workerRouter(
   });
 
   // ── Tool RPC: worker polls for the next tool request ─────────────────
+  // The response also tells the worker when the control-plane run has
+  // finished, so it can collect artifacts and clean the container up. The
+  // WORKER never decides completion — it only observes it here.
   r.get("/tools/:runId/next", (req, res) => {
     auth(req);
     const request = toolRpc.poll(req.params.runId);
-    res.json({ request });
+    let finished = false;
+    try {
+      const run = getRunStore().get(req.params.runId);
+      finished = run
+        ? run.status === "completed" || run.status === "error" || run.status === "cancelled"
+        : false;
+    } catch { /* store unavailable — keep serving */ }
+    if (finished) toolRpc.cleanup(req.params.runId);
+    res.json({ request, finished });
   });
 
   // ── Tool RPC: worker submits the tool result ──────────────────────────
@@ -133,6 +176,11 @@ export function workerRouter(
         store.create(runId, String(data?.projectRoot ?? "/remote"));
       }
       store.emit(runId, type as AgentEventType, data ?? {});
+      // The worker stopping the container fails any tool RPC still waiting
+      // on it — fast and truthful, instead of burning the full timeout.
+      if (type === "sandbox.stopped") {
+        toolRpc.failRun(runId, `The worker stopped the mission container (${String(data?.reason ?? "unknown reason")}) before this tool completed.`);
+      }
     } catch (err: any) {
       // Event persistence failure should NOT block the worker — log it.
       console.warn(`[worker-relay] event store error for ${runId}: ${err.message}`);
@@ -181,6 +229,19 @@ export function workerRouter(
   });
 
   // ── Cancel a remote run ──────────────────────────────────────────────
+  // The worker POLLS this with GET while a mission runs: it must observe the
+  // run's authoritative status (set by the control-plane runtime) so it can
+  // kill the container the moment the user stops the run. The POST form is
+  // the desktop-initiated cancel.
+  r.get("/cancel/:runId", (req, res) => {
+    auth(req);
+    let cancelled = false;
+    try {
+      cancelled = getRunStore().get(req.params.runId)?.status === "cancelled";
+    } catch { /* store unavailable */ }
+    res.json({ cancelled, stopRequested: cancelled });
+  });
+
   r.post("/cancel/:runId", (req, res) => {
     auth(req);
     const { runId } = req.params;
@@ -188,11 +249,13 @@ export function workerRouter(
     if (job) {
       jobQueue.splice(jobQueue.indexOf(job), 1);
     }
-    // Mark the run cancelled in the RunStore (durable event).
+    toolRpc.cancelRun(runId);
+    // Mark the run cancelled in the RunStore (durable event) — unless the
+    // control-plane runtime already reached a terminal state of its own.
     try {
       const store = getRunStore(req.body?.tenantId);
       const run = store.get(runId);
-      if (run) {
+      if (run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled") {
         store.emit(runId, "run.cancelled" as AgentEventType, { reason: "Stopped by user" });
         store.setStatus(runId, "cancelled");
       }

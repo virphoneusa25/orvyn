@@ -13,6 +13,7 @@ import { randomUUID } from "crypto";
 import { AIMessage, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
+import { AITool } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
@@ -24,6 +25,22 @@ import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview"
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import type { LocalStore } from "../persistence/LocalStore";
 import type { IndexService } from "../indexing/IndexService";
+import { toolRpc } from "../execution/ToolRpc";
+import { registerRemoteTools } from "../execution/RemoteToolAdapter";
+import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
+
+/** Where a run's tools execute. LOCAL is the default; OVH_WORKER forces
+ *  remote execution with NO local fallback — if the worker cannot serve the
+ *  run, the run fails truthfully. */
+export interface ExecutionSpec {
+  location: "LOCAL" | "OVH_WORKER";
+  /** Worker-side path of the project to stage into the mission container. */
+  remoteProjectRoot?: string;
+}
+
+/** How long the runtime waits for the worker to prepare the mission
+ *  container (sandbox.started event) before failing the run. */
+const REMOTE_READY_TIMEOUT_MS = Number(process.env.ORVYN_REMOTE_READY_TIMEOUT_MS) || 90_000;
 
 interface PendingApproval {
   call: ToolCall;
@@ -56,6 +73,13 @@ interface RunState {
   actualModelId: string;
   /** Failed call fingerprints prevent the model from looping on the exact same broken action. */
   failedFingerprints: Map<string, number>;
+  /** Remote execution spec; when OVH_WORKER the coding tools route over Tool RPC. */
+  execution?: ExecutionSpec;
+  /** Local tools replaced by remote variants for this run (restored on settle). */
+  replacedTools?: AITool[];
+  /** The run's mode — needed to restore the permission profile after a
+   *  remote run puts its tool variants back. */
+  mode: AgentMode;
 }
 
 /**
@@ -172,7 +196,8 @@ export class StreamingAgentRuntime {
     mode: AgentMode = "agent",
     attachments?: Attachment[],
     history: AIMessage[] = [],
-    requestedModelId?: string
+    requestedModelId?: string,
+    execution?: ExecutionSpec
   ): string {
     const runId = randomUUID();
     const provider = requestedModelId && requestedModelId !== "auto"
@@ -201,7 +226,22 @@ export class StreamingAgentRuntime {
       requestedModelId: requestedModelId && requestedModelId !== "auto" ? requestedModelId : undefined,
       actualModelId: provider.config.id,
       failedFingerprints: new Map(),
+      execution,
+      mode,
     });
+
+    // Remote runs: the worker prepares an isolated mission container and
+    // serves tool RPCs; the model loop stays HERE (credentials never leave
+    // the control plane). No local fallback — if the worker never reports
+    // readiness, the run fails truthfully in awaitRemoteReady below.
+    if (execution?.location === "OVH_WORKER") {
+      this.store.emit(runId, "run.execution", {
+        location: "OVH_WORKER",
+        remoteProjectRoot: execution.remoteProjectRoot ?? "",
+        note: "Tools execute on a remote worker inside an isolated mission container. No local fallback.",
+      });
+      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", undefined);
+    }
 
     // Snapshot the dirty tree before the agent touches anything, so a
     // one-click Undo can put it back. Best-effort: a non-git folder simply
@@ -251,22 +291,81 @@ export class StreamingAgentRuntime {
     // Deliberately not awaited: the caller gets a runId synchronously and
     // subscribes to events. Errors are surfaced as run.error events.
     void (async () => {
+      const state = this.runs.get(runId);
       try {
+        if (state?.execution?.location === "OVH_WORKER") {
+          await this.awaitRemoteReady(runId);
+          this.mountRemoteTools(runId);
+        }
         const codeContext = await this.relevantCode(instruction);
         if (codeContext) messages[0].content += `\n\nRelevant indexed code (verify with file tools before editing):\n${codeContext}`;
         await this.loop(runId, messages, instruction, mode, provider);
       } catch (err: any) {
-        const state = this.runs.get(runId);
-        if (state?.cancelled || err?.name === "AbortError") {
+        const st = this.runs.get(runId);
+        if (st?.cancelled || err?.name === "AbortError") {
           this.finishCancelled(runId, 0);
         } else {
           this.store.emit(runId, "run.error", { message: err?.message ?? String(err) });
           this.store.setStatus(runId, "error");
         }
+      } finally {
+        this.teardownRemote(runId);
         this.runs.delete(runId);
       }
     })();
     return runId;
+  }
+
+  /**
+   * Waits until the worker reports the mission container ready
+   * (sandbox.started event relayed into the RunStore). No local fallback:
+   * on timeout the run fails with a clear reason.
+   */
+  private async awaitRemoteReady(runId: string): Promise<void> {
+    const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
+    this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: "Waiting for the OVH worker to prepare the mission container" });
+    while (Date.now() < deadline) {
+      const run = this.store.get(runId);
+      if (run?.events.some((e) => e.type === "sandbox.started")) return;
+      const state = this.runs.get(runId);
+      if (state?.cancelled) throw new Error("run cancelled before the worker was ready");
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    throw new Error(
+      `The OVH worker did not prepare the mission container within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. There is no local fallback for remote runs.`
+    );
+  }
+
+  /**
+   * Swaps the gateway's coding tools for remote variants bound to this run's
+   * Tool RPC channel. The originals are saved and restored by teardownRemote.
+   * Safe because the API enforces one active run per tenant.
+   */
+  private mountRemoteTools(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state?.execution) return;
+    const remoteNames = new Set([
+      "read_file", "write_file", "edit_file", "list_directory", "search_code", "search_files",
+      "terminal", "run_command", "run_tests", "run_typecheck",
+    ]);
+    state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
+    registerRemoteTools(this.tools, toolRpc, runId);
+    // Re-apply the mode profile so permission policy still comes from the
+    // mode, not from whatever defaults registration just set.
+    applyMode(this.tools.registry, state.mode);
+    this.tools.applyProfile();
+  }
+
+  /** Restores local tools and drops the run's Tool RPC state. */
+  private teardownRemote(runId: string): void {
+    const state = this.runs.get(runId);
+    toolRpc.cleanup(runId);
+    if (state?.replacedTools) {
+      for (const tool of state.replacedTools) this.tools.register(tool);
+      state.replacedTools = undefined;
+      applyMode(this.tools.registry, state.mode);
+      this.tools.applyProfile();
+    }
   }
 
   private relevantMemory(projectRoot: string, instruction: string): string {
@@ -297,6 +396,11 @@ export class StreamingAgentRuntime {
     const state = this.runs.get(runId);
     if (!state || state.cancelled) return false;
     state.cancelled = true;
+
+    // Remote runs: reject in-flight tool RPCs and drop the worker job /
+    // container immediately — the worker observes the cancelled status on
+    // its next poll and kills the mission container.
+    if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
 
     // Release the loop if it is parked on an approval, otherwise it would hang
     // forever holding the abort it can no longer observe.
@@ -559,7 +663,10 @@ export class StreamingAgentRuntime {
       }
 
       // Computed before execution because the "before" state is gone after.
-      const preview = isFileMutatingTool(call.name)
+      // Remote runs read their files in the mission container, so the local
+      // previewer has nothing to show — the remote tool returns the real
+      // before/after diff with its result instead.
+      const preview = isFileMutatingTool(call.name) && state.execution?.location !== "OVH_WORKER"
         ? await previewToolEdit(state.projectRoot, call.name, call.arguments as Record<string, unknown>)
         : undefined;
       previews.set(call.id, preview);
@@ -634,7 +741,9 @@ export class StreamingAgentRuntime {
         state.failedFingerprints.delete(fingerprint);
         anySucceeded = true;
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
-          this.emitDomainEvent(runId, call, previews.get(call.id));
+          // Remote tools carry the REAL before/after diff back with the
+          // result; local runs use the pre-execution preview.
+          this.emitDomainEvent(runId, call, (result.edit as EditPreview | undefined) ?? previews.get(call.id));
           const args = call.arguments as Record<string, unknown>;
           const artifactPath = String(args.path ?? args.to ?? args.from ?? "").trim();
           if (artifactPath && call.name !== "delete_file") this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });

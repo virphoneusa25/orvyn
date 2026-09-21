@@ -133,3 +133,74 @@ test("router dispose is safe with no active runs", async () => {
   const router = new ExecutionRouter();
   await router.dispose(); // must not throw
 });
+
+// ---- Tool RPC request lifecycle ---------------------------------------------
+// Pins the spec's safety properties: one resolve per requestId, duplicates
+// and unknown ids rejected, timeouts remove the pending entry so late
+// results can never resolve anything, and cancel/fail resolve truthfully.
+
+import { ToolRpcChannel, ToolResponse } from "./ToolRpc";
+
+function resultOf(requestId: string, ok = true, output = "done"): ToolResponse {
+  return { requestId, runId: "run-x", ok, output, durationMs: 5 };
+}
+
+test("toolRpc: normal request resolves exactly once; duplicate result is ignored", async () => {
+  const rpc = new ToolRpcChannel();
+  const pending = rpc.execute("run-x", "read_file", { path: "a.js" }, 5_000);
+  const req = rpc.poll("run-x");
+  assert.ok(req, "request handed to the polling worker");
+  assert.equal(rpc.resolve(resultOf(req.requestId)), true, "first result resolves");
+  const first = await pending;
+  assert.equal(first.ok, true);
+  assert.equal(rpc.resolve(resultOf(req.requestId)), false, "duplicate result ignored");
+});
+
+test("toolRpc: unknown requestId is rejected", () => {
+  const rpc = new ToolRpcChannel();
+  assert.equal(rpc.resolve(resultOf("nope")), false);
+});
+
+test("toolRpc: timeout rejects the promise, removes the pending entry, and a late result cannot resolve it", async () => {
+  const rpc = new ToolRpcChannel();
+  const pending = rpc.execute("run-x", "terminal", { command: "sleep 999" }, 40);
+  const req = rpc.poll("run-x");
+  assert.ok(req);
+  await assert.rejects(pending, /timed out/);
+  // The worker finally answers after the timeout — it must be ignored.
+  assert.equal(rpc.resolve(resultOf(req!.requestId)), false);
+});
+
+test("toolRpc: cancelRun resolves pending requests as cancelled; queue is dropped", async () => {
+  const rpc = new ToolRpcChannel();
+  const a = rpc.execute("run-x", "read_file", { path: "a" }, 5_000);
+  rpc.execute("run-x", "read_file", { path: "b" }, 5_000); // still queued
+  const first = rpc.poll("run-x");
+  assert.ok(first);
+  rpc.cancelRun("run-x");
+  const r = await a;
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /Cancelled by user/);
+  assert.equal(rpc.poll("run-x"), null, "queued request dropped by cancel");
+});
+
+test("toolRpc: failRun resolves pending requests with the truthful reason", async () => {
+  const rpc = new ToolRpcChannel();
+  const a = rpc.execute("run-x", "run_tests", {}, 5_000);
+  rpc.poll("run-x");
+  rpc.failRun("run-x", "worker stopped the mission container");
+  const r = await a;
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /worker stopped/);
+});
+
+test("toolRpc: cleanup resolves pending as ended; a late result cannot resolve anything", async () => {
+  const rpc = new ToolRpcChannel();
+  const a = rpc.execute("run-x", "read_file", { path: "a" }, 5_000);
+  const req = rpc.poll("run-x");
+  rpc.cleanup("run-x");
+  const r = await a;
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /run has ended/);
+  assert.equal(rpc.resolve(resultOf(req!.requestId)), false, "late result after cleanup ignored");
+});

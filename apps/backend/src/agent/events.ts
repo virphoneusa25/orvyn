@@ -69,6 +69,8 @@ export type AgentEventType =
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"
   | "steer.delivered"
+  // --- Remote execution: where a run's tools execute (no local fallback) ---
+  | "run.execution"
   // --- Durable ordered queue: follow-up instructions queued during a run ---
   | "queue.item.created"
   | "queue.item.updated"

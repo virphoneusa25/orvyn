@@ -99,31 +99,51 @@ export class ToolRpcChannel {
     return true;
   }
 
-  /** Cancel all pending requests for a run (Stop button). */
+  /** Cancel all pending requests for a run (Stop button) — including ones
+   *  already polled by the worker (in flight) and ones still queued. */
   cancelRun(runId: string): void {
-    const queue = this.queues.get(runId);
-    if (queue) {
-      for (const req of queue) {
-        const pending = this.pending.get(req.requestId);
-        if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve({
-            requestId: req.requestId,
-            runId,
-            ok: false,
-            error: "Cancelled by user",
-            durationMs: 0,
-          });
-          this.pending.delete(req.requestId);
-        }
-      }
-      this.queues.delete(runId);
+    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
+    for (const [requestId, pending] of [...this.pending]) {
+      if (pending.request.runId !== runId && !queued.has(requestId)) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(requestId);
+      pending.resolve({
+        requestId,
+        runId,
+        ok: false,
+        error: "Cancelled by user",
+        durationMs: 0,
+      });
     }
+    this.queues.delete(runId);
   }
 
-  /** Clean up a completed run. */
+  /**
+   * Fails every pending request for a run with a truthful reason (the worker
+   * stopped the container, the run ended). The awaiting tool call surfaces
+   * the error to the model immediately instead of burning its full timeout.
+   */
+  failRun(runId: string, reason: string): void {
+    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
+    for (const [requestId, pending] of [...this.pending]) {
+      if (pending.request.runId !== runId && !queued.has(requestId)) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(requestId);
+      pending.resolve({
+        requestId,
+        runId,
+        ok: false,
+        error: reason,
+        durationMs: Date.now() - pending.request.createdAt,
+      });
+    }
+    this.queues.delete(runId);
+  }
+
+  /** Clean up a completed run: pending requests resolve as finished (they
+   *  can never be served) and the queue is dropped. */
   cleanup(runId: string): void {
-    this.cancelRun(runId);
+    this.failRun(runId, "The run has ended; this tool request was never executed.");
     this.queues.delete(runId);
   }
 }

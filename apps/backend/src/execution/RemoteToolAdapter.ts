@@ -10,7 +10,32 @@
 // tool names + arguments + results.
 
 import { AITool, ToolResult } from "../ai/ToolTypes";
+import { diffLines } from "../composer/diff";
 import type { ToolRpcChannel } from "./ToolRpc";
+
+/**
+ * Per-request ceiling for a remote tool call. File ops are fast; commands
+ * may legitimately take minutes (npm install, slow suites), so this is
+ * tunable per deployment via ORVYN_REMOTE_TOOL_TIMEOUT_MS.
+ */
+function remoteToolTimeoutMs(): number {
+  const v = Number(process.env.ORVYN_REMOTE_TOOL_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 120_000;
+}
+
+/** Caps the diff sent back for huge files — same spirit as editPreview. */
+const MAX_DIFF_LINES = 400;
+
+function toToolResultEdit(path: string, kind: "create" | "modify", before: string, after: string): ToolResult["edit"] {
+  const lines = diffLines(before, after).slice(0, MAX_DIFF_LINES);
+  let additions = 0;
+  let deletions = 0;
+  for (const l of lines) {
+    if (l.type === "add") additions++;
+    else if (l.type === "remove") deletions++;
+  }
+  return { path, kind, additions, deletions, diff: lines.map((l) => ({ type: l.type, content: l.content })) };
+}
 
 function makeRemoteTool(
   name: string,
@@ -18,7 +43,8 @@ function makeRemoteTool(
   parameters: Record<string, unknown>,
   defaultPermission: "allowed" | "ask" | "denied",
   rpc: ToolRpcChannel,
-  runId: string
+  runId: string,
+  execute?: (args: Record<string, unknown>, raw: () => Promise<ToolResult>) => Promise<ToolResult>
 ): AITool {
   return {
     name,
@@ -28,26 +54,44 @@ function makeRemoteTool(
     async execute(args): Promise<ToolResult> {
       const start = Date.now();
       try {
-        const response = await rpc.execute(runId, name, args, 120_000);
-        if (response.ok) {
-          return { ok: true, output: response.output ?? "" };
-        }
-        return {
-          ok: false,
-          error: response.error ?? `Remote tool failed (exit ${response.exitCode ?? "?"})${response.stderr ? `: ${response.stderr.slice(0, 200)}` : ""}`,
-        };
+        if (execute) return await execute(args, async () => {
+          const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
+          return rpcResponseToResult(name, response);
+        });
+        const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
+        return rpcResponseToResult(name, response);
       } catch (err: any) {
         return { ok: false, error: `Remote execution error: ${err.message}` };
+      } finally {
+        void start;
       }
-      void start;
     },
   };
+}
+
+function rpcResponseToResult(name: string, response: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string }): ToolResult {
+  if (response.ok) return { ok: true, output: response.output ?? "" };
+  return {
+    ok: false,
+    error: response.error ?? `Remote tool failed (exit ${response.exitCode ?? "?"})${response.stderr ? `: ${response.stderr.slice(0, 200)}` : ""}`,
+  };
+}
+
+/** Reads a remote file as text; returns null when the read fails. */
+async function readRemote(rpc: ToolRpcChannel, runId: string, path: string): Promise<string | null> {
+  try {
+    const r = await rpc.execute(runId, "read_file", { path }, remoteToolTimeoutMs());
+    return r.ok ? String(r.output ?? "") : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Registers remote versions of ORION's core coding tools into the
  * ToolGateway. Called when executionLocation is OVH_WORKER.
- * These REPLACE the local tools for the duration of the run.
+ * These REPLACE the local tools for the duration of the run; the runtime
+ * restores the originals when the run settles.
  */
 export function registerRemoteTools(
   gateway: { register(tool: AITool): void },
@@ -71,12 +115,20 @@ export function registerRemoteTools(
       required: ["path", "content"],
     },
     "ask",
-    rpc, runId
+    rpc, runId,
+    // Create diffs ride back with the result so file.edit events show real
+    // content, not just a path.
+    async (args, raw) => {
+      const result = await raw();
+      if (!result.ok) return result;
+      const after = await readRemote(rpc, runId, String(args.path ?? ""));
+      return { ...result, edit: after !== null ? toToolResultEdit(String(args.path ?? ""), "create", "", after) : undefined };
+    }
   ));
 
   gateway.register(makeRemoteTool(
     "edit_file",
-    "Edit a file in the remote workspace (find and replace)",
+    "Edit a file in the remote workspace (find and replace). old_string must match uniquely unless replace_all is true.",
     {
       type: "object",
       properties: {
@@ -88,7 +140,19 @@ export function registerRemoteTools(
       required: ["path", "old_string", "new_string"],
     },
     "ask",
-    rpc, runId
+    rpc, runId,
+    // The diff is computed from the remote file on both sides of the edit —
+    // the control plane never assumes the file's local state.
+    async (args, raw) => {
+      const path = String(args.path ?? "");
+      const before = await readRemote(rpc, runId, path);
+      const result = await raw();
+      if (!result.ok) return result;
+      if (before === null) return result;
+      const after = await readRemote(rpc, runId, path);
+      if (after === null) return result;
+      return { ...result, edit: toToolResultEdit(path, "modify", before, after) };
+    }
   ));
 
   gateway.register(makeRemoteTool(
@@ -99,28 +163,20 @@ export function registerRemoteTools(
     rpc, runId
   ));
 
-  gateway.register(makeRemoteTool(
-    "search_code",
-    "Search for a pattern in remote workspace files",
-    {
-      type: "object",
-      properties: { query: { type: "string" }, pattern: { type: "string" } },
-    },
-    "allowed",
-    rpc, runId
-  ));
+  const searchParams = {
+    type: "object",
+    properties: { query: { type: "string" }, pattern: { type: "string" } },
+  };
+  gateway.register(makeRemoteTool("search_code", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("search_files", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId));
 
-  gateway.register(makeRemoteTool(
-    "terminal",
-    "Run a terminal command in the remote mission container",
-    { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
-    "ask",
-    rpc, runId
-  ));
+  const terminalParams = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
+  gateway.register(makeRemoteTool("terminal", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("run_command", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId));
 
   gateway.register(makeRemoteTool(
     "run_tests",
-    "Run the project's test suite in the remote container",
+    "Run the project's test suite (npm test) in the remote mission container",
     { type: "object", properties: {} },
     "ask",
     rpc, runId

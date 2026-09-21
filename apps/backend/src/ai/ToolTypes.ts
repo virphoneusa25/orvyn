@@ -6,6 +6,23 @@ export interface ToolResult {
   ok: boolean;
   output?: string;
   error?: string;
+  /**
+   * Diff metadata from a file-mutating tool (local or remote). Populated by
+   * tools that can compute before/after (e.g. the remote edit adapter, which
+   * reads the file on both sides of the mutation); consumed by the runtime to
+   * emit file.edit events with a REAL diff. Structurally compatible with
+   * agent/editPreview's EditPreview — duplicated here because ToolTypes is
+   * the low-level layer and must not import from it.
+   */
+  edit?: {
+    path: string;
+    kind: "create" | "modify" | "delete" | "move";
+    additions: number;
+    deletions: number;
+    diff?: Array<{ type: string; content: string }>;
+    truncated?: boolean;
+    note?: string;
+  };
 }
 
 export interface ToolExecutionContext {

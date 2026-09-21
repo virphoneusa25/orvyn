@@ -27,8 +27,10 @@ const WORKSPACE_DIR = process.env.ORVYN_WORKSPACE_DIR || "/opt/orvyn/workspaces"
 const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:20-slim";
 const MAX_CONCURRENT = Number(process.env.ORVYN_MAX_CONCURRENT_RUNS) || 2;
 const HEARTBEAT_INTERVAL = 15_000;
-const POLL_INTERVAL = 5_000;
+const POLL_INTERVAL = 2_000;
 const CANCEL_POLL_INTERVAL = 3_000;
+/** Mission container lifetime ceiling — long enough for approval waits. */
+const CONTAINER_LIFETIME_S = Number(process.env.ORVYN_CONTAINER_LIFETIME_S) || 3600;
 
 const WORKER_ID = `worker_${os.hostname().split(".")[0]}_${randomUUID().slice(0, 6)}`;
 
@@ -40,6 +42,12 @@ interface JobAssignment {
   instruction: string;
   projectRoot?: string;
   mode?: string;
+  /**
+   * "executor": prepare the mission container and serve tool RPC requests.
+   * The control-plane ORION model drives ALL tool decisions; this worker
+   * never decides what to run and NEVER emits run.completed.
+   */
+  role?: "executor";
 }
 
 interface WorkerInfo {
@@ -178,32 +186,107 @@ async function collectArtifacts(runId: string): Promise<string[]> {
 }
 
 // ── ORION tool execution (remote equivalents) ─────────────────────────────
+//
+// File tools operate on the mission workspace directory — the SAME directory
+// bind-mounted into the container at /workspace, so every mutation is visible
+// to the container immediately (it IS the container's filesystem). Exact
+// string semantics match the control-plane's local edit_file so the model
+// sees identical behavior local or remote. Commands (terminal, tests,
+// search) execute INSIDE the container via docker exec.
 
-/** Reads a file inside the mission container. */
-async function remoteReadFile(containerId: string, filePath: string): Promise<CommandResult> {
-  const r = await docker(["exec", containerId, "cat", `/workspace/${filePath}`]);
-  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+/** Resolves a workspace-relative path, refusing escapes. */
+function workspacePath(runId: string, relative: string): string | null {
+  const clean = String(relative ?? "").replace(/^[/\\]+/, "");
+  const base = path.join(WORKSPACE_DIR, runId);
+  const resolved = path.resolve(base, clean);
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
+  return resolved;
 }
 
-/** Writes a file inside the mission container (via heredoc). */
-async function remoteWriteFile(containerId: string, filePath: string, content: string): Promise<CommandResult> {
-  const escaped = content.replace(/'/g, "'\\''");
-  const r = await docker(["exec", containerId, "sh", "-c", `echo '${escaped}' > /workspace/${filePath}`]);
-  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+/** Reads a file from the mission workspace (the container's /workspace). */
+async function remoteReadFile(runId: string, filePath: string): Promise<CommandResult> {
+  const target = workspacePath(runId, filePath);
+  if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
+  try {
+    const content = fs.readFileSync(target, "utf8");
+    return { ok: true, output: content, exitCode: 0 };
+  } catch (e: any) {
+    return { ok: false, output: "", exitCode: 1, stderr: e.code === "ENOENT" ? `File not found: ${filePath}` : e.message };
+  }
 }
 
-/** Edits a file inside the container (sed-style replace). */
-async function remoteEditFile(containerId: string, filePath: string, oldStr: string, newStr: string): Promise<CommandResult> {
-  const esc = (s: string) => s.replace(/'/g, "'\\''").replace(/\//g, "\\/");
-  const r = await docker(["exec", containerId, "sh", "-c",
-    `sed -i 's/${esc(oldStr)}/${esc(newStr)}/' /workspace/${filePath}`]);
-  return { ok: r.code === 0, output: r.stdout, exitCode: r.code, stderr: r.stderr };
+/** Writes a file into the mission workspace (binary-safe, no shell quoting). */
+async function remoteWriteFile(runId: string, filePath: string, content: string): Promise<CommandResult> {
+  const target = workspacePath(runId, filePath);
+  if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, "utf8");
+    return { ok: true, output: "Wrote " + filePath + " (" + content.length + " bytes)", exitCode: 0 };
+  } catch (e: any) {
+    return { ok: false, output: "", exitCode: 1, stderr: e.message };
+  }
 }
 
-/** Runs a terminal command inside the mission container. */
+/**
+ * Exact find/replace edit — same semantics as the control-plane edit_file:
+ * old_string must match exactly once unless replace_all is true.
+ */
+async function remoteEditFile(runId: string, filePath: string, oldStr: string, newStr: string, replaceAll: boolean): Promise<CommandResult> {
+  const target = workspacePath(runId, filePath);
+  if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
+  if (!oldStr) return { ok: false, output: "", exitCode: 1, stderr: "old_string must not be empty" };
+  try {
+    const content = fs.readFileSync(target, "utf8");
+    const count = content.split(oldStr).length - 1;
+    if (count === 0) return { ok: false, output: "", exitCode: 1, stderr: "old_string not found in " + filePath };
+    if (count > 1 && !replaceAll) {
+      return { ok: false, output: "", exitCode: 1, stderr: "old_string matched " + count + " times in " + filePath + ". Pass replace_all=true or include more surrounding context to make it unique." };
+    }
+    const updated = replaceAll
+      ? content.split(oldStr).join(newStr)
+      : content.replace(oldStr, newStr);
+    fs.writeFileSync(target, updated, "utf8");
+    return { ok: true, output: "Edited " + filePath, exitCode: 0 };
+  } catch (e: any) {
+    return { ok: false, output: "", exitCode: 1, stderr: e.code === "ENOENT" ? `File not found: ${filePath}` : e.message };
+  }
+}
+
+/** Runs a terminal command INSIDE the mission container. */
 async function remoteTerminal(containerId: string, command: string): Promise<CommandResult> {
   const r = await docker(["exec", containerId, "sh", "-c", command]);
   return { ok: r.code === 0, output: r.stdout + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.code, stderr: r.stderr };
+}
+
+/** Shell-safely quotes one argument for sh -c interpolation. */
+function shq(s: string): string {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Runs the project's test suite INSIDE the container. The only decision the
+ * worker makes is WHICH generic runner applies: npm test when package.json
+ * declares a test script. Otherwise it reports honestly and the MODEL picks
+ * the command with the terminal tool — the worker never hardcodes a project's
+ * test file.
+ */
+async function remoteRunTests(runId: string, containerId: string): Promise<CommandResult> {
+  const pkgPath = workspacePath(runId, "package.json");
+  let npmScript = false;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath!, "utf8"));
+    npmScript = typeof pkg?.scripts?.test === "string" && pkg.scripts.test.length > 0;
+  } catch { /* no/invalid package.json */ }
+  if (!npmScript) {
+    return {
+      ok: false,
+      output: "",
+      exitCode: 1,
+      stderr: "No \"test\" script found in package.json. Run the project's test command with the terminal tool instead.",
+    };
+  }
+  return remoteTerminal(containerId, "npm test 2>&1");
 }
 
 /** Copies the project into the container workspace. */
@@ -228,40 +311,56 @@ async function transferProject(containerId: string, sourcePath: string): Promise
 }
 
 // Tool RPC: the worker polls for tool requests from the control plane's
-// ORION model and executes them inside the container. The MODEL decides
-// which tools to call; the worker is a dumb executor.
+// ORION model and executes them against the mission container/workspace. The
+// MODEL decides which tools to call; the worker is a dumb executor. The loop
+// ends when the control-plane run finishes (observed via the `finished` flag
+// — the worker NEVER decides completion itself) or the run is cancelled.
 async function pollForToolRequests(runId: string, containerId: string): Promise<void> {
   while (activeContainers.has(runId) && !cancelledRuns.has(runId)) {
     try {
       const res = await cp("/api/v1/worker/tools/" + runId + "/next");
+      if (res.finished) {
+        console.log("[worker] control plane reports run finished: " + runId);
+        return;
+      }
       if (res.request) {
         const req = res.request;
-        console.log("[worker] tool: " + req.tool);
+        console.log("[worker] tool RPC: " + req.tool + " requestId=" + req.requestId);
         let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string };
         switch (req.tool) {
           case "read_file": {
-            const r = await remoteReadFile(containerId, String(req.arguments.path ?? ""));
+            const r = await remoteReadFile(runId, String(req.arguments.path ?? ""));
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "write_file": {
-            const r = await remoteWriteFile(containerId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""));
-            result = { ok: r.ok, output: "Wrote " + req.arguments.path, stderr: r.stderr, exitCode: r.exitCode };
+            const r = await remoteWriteFile(runId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""));
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "edit_file": {
-            const r = await remoteEditFile(containerId, String(req.arguments.path ?? ""), String(req.arguments.old_string ?? ""), String(req.arguments.new_string ?? ""));
-            result = { ok: r.ok, output: r.ok ? "Edited " + req.arguments.path : undefined, stderr: r.stderr, exitCode: r.exitCode };
+            const r = await remoteEditFile(
+              runId,
+              String(req.arguments.path ?? ""),
+              String(req.arguments.old_string ?? ""),
+              String(req.arguments.new_string ?? ""),
+              req.arguments.replace_all === true
+            );
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "list_directory": {
-            const r = await remoteTerminal(containerId, "ls -la " + (req.arguments.path ? "/workspace/" + req.arguments.path : "/workspace"));
+            const rel = req.arguments.path ? String(req.arguments.path) : "";
+            const target = rel ? "/workspace/" + rel.replace(/^[/\\]+/, "") : "/workspace";
+            const r = await remoteTerminal(containerId, "ls -la " + shq(target));
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "search_code": case "search_files": {
             const q = String(req.arguments.query ?? req.arguments.pattern ?? "");
-            const r = await remoteTerminal(containerId, 'grep -rn "' + q + '" /workspace --include="*.js" --include="*.ts" --include="*.json" --include="*.html" 2>/dev/null | head -30');
+            const cmd = "grep -rn --binary-files=without-match " + shq(q) +
+              " /workspace --include=*.js --include=*.ts --include=*.jsx --include=*.tsx --include=*.json --include=*.py --include=*.go --include=*.rs --include=*.md 2>/dev/null | head -50";
+            const r = await remoteTerminal(containerId, cmd);
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
@@ -269,21 +368,21 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
             const cmd = String(req.arguments.command ?? "");
             await emitEvent(runId, "terminal.started", { command: cmd });
             const r = await remoteTerminal(containerId, cmd);
-            await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 2000) });
-            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0 });
+            await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 4000) });
+            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0, exitCode: r.exitCode });
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "run_tests": {
             await emitEvent(runId, "terminal.started", { command: "npm test" });
-            const r = await remoteTerminal(containerId, "npm test 2>&1 || node test.js 2>&1 || echo 'no test runner'");
-            await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 2000) });
-            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0 });
+            const r = await remoteRunTests(runId, containerId);
+            await emitEvent(runId, "terminal.output", { data: (r.output || r.stderr || "").slice(0, 4000) });
+            await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0, exitCode: r.exitCode });
             result = { ok: r.exitCode === 0, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "run_typecheck": {
-            const r = await remoteTerminal(containerId, "npx tsc --noEmit 2>&1 || echo 'no typescript'");
+            const r = await remoteTerminal(containerId, "npx --no-install tsc --noEmit 2>&1 || echo 'typescript not installed'");
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
@@ -306,14 +405,15 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
 
 async function executeJob(job: JobAssignment): Promise<void> {
   const runId = job.runId;
-  console.log(`[worker] executeJob START: ${runId} (${job.instruction.slice(0, 60)})`);
+  console.log(`[worker] executeJob START: ${runId} (role=${job.role ?? "executor"})`);
   const containerName = `orvyn-worker-${runId.slice(0, 12)}`;
   let containerId = "";
   const cancelTimer = startCancelPolling(runId);
 
   try {
-    await emitEvent(runId, "run.started", { instruction: job.instruction, mode: job.mode || "agent", workerId: WORKER_ID });
-    await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing workspace" });
+    // The control-plane runtime owns run.started and run.completed — the
+    // worker never claims either. It only reports its own lifecycle.
+    await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing remote mission container" });
 
     // Create workspace
     const workspace = path.join(WORKSPACE_DIR, runId);
@@ -329,7 +429,7 @@ async function executeJob(job: JobAssignment): Promise<void> {
       "-v", `${workspace}:/workspace`,
       "-w", "/workspace",
       SANDBOX_IMAGE,
-      "sleep", "600",
+      "sleep", String(CONTAINER_LIFETIME_S),
     ]);
     if (create.code !== 0) throw new Error(`Container create failed: ${create.stderr}`);
     containerId = create.stdout;
@@ -349,36 +449,34 @@ async function executeJob(job: JobAssignment): Promise<void> {
       const transferred = await transferProject(containerId, job.projectRoot);
       await emitEvent(runId, "tool.completed", {
         tool: "project_transfer",
-        preview: transferred ? `Project copied to remote workspace` : `No project at ${job.projectRoot}`,
+        preview: transferred ? `Project copied to remote workspace from ${job.projectRoot}` : `No project at ${job.projectRoot}`,
         ok: transferred,
       });
+      if (!transferred) throw new Error(`Project transfer failed — no project found at ${job.projectRoot}`);
     }
 
-    // ENTER THE TOOL RPC LOOP — ORION model drives all tool calls from here.
-    // The worker is a dumb executor; the control plane's ORION decides
-    // which tools to call, the worker executes them in the container.
-    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Worker ready for tool requests" });
+    // ENTER THE TOOL RPC LOOP — the control-plane ORION model drives all
+    // tool calls from here. The worker executes generic requests only.
+    await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Mission container ready for tool requests" });
     console.log("[worker] entering tool RPC loop for " + runId);
     await pollForToolRequests(runId, containerId);
     console.log("[worker] tool RPC loop ended for " + runId);
 
-    // Collect artifacts BEFORE cleanup
+    // Collect artifacts BEFORE cleanup — real files from the run.
     const artifacts = await collectArtifacts(runId);
     await emitEvent(runId, "artifacts.collected", { files: artifacts });
-
-    // Report completion
-    await emitEvent(runId, "run.completed", {
-      workerId: WORKER_ID,
-      artifacts,
-      summary: "Remote mission executed. " + artifacts.length + " artifact(s).",
-      executionLocation: "OVH_WORKER",
-    });
+    await emitEvent(runId, "sandbox.stopped", { container: containerName, reason: "run finished" });
   } catch (err: any) {
+    // Never a worker-side run.completed / run.error for the model's outcome:
+    // the control plane owns the verdict. A worker infrastructure failure is
+    // reported as a sandbox event; the control-plane tool call that was
+    // waiting on the RPC fails truthfully on its own timeout.
     const wasCancelled = cancelledRuns.has(runId);
-    await emitEvent(runId, wasCancelled ? "run.cancelled" : "run.error", {
-      message: wasCancelled ? "Cancelled by user — container killed." : `Worker execution failed: ${err.message}`,
-      workerId: WORKER_ID,
-    });
+    await emitEvent(runId, "sandbox.stopped", {
+      container: containerName,
+      reason: wasCancelled ? "run cancelled" : `worker infrastructure failure: ${err.message}`,
+    }).catch(() => {});
+    console.error(`[worker] executeJob FAILED: ${runId}: ${err.message}`);
   } finally {
     stopCancelPolling(cancelTimer);
     if (containerId) {
@@ -446,6 +544,22 @@ async function detectDocker(): Promise<void> {
   else console.warn(`[worker] Docker not available: ${res.stderr}`);
 }
 
+/**
+ * A worker restart loses the in-memory container registry, which would leak
+ * any mission containers from its previous life. They are all dead weight —
+ * their runs can no longer be served — so remove them by name prefix.
+ */
+async function cleanupStaleMissionContainers(): Promise<void> {
+  const res = await docker(["ps", "-a", "--filter", "name=orvyn-worker-", "--format", "{{.ID}} {{.Names}}"]);
+  if (res.code !== 0) return;
+  const lines = res.stdout.split("\n").filter(Boolean);
+  for (const line of lines) {
+    const [id, name] = line.split(/\s+/);
+    const rm = await docker(["rm", "-f", id]);
+    console.log(`[worker] boot cleanup: removed stale mission container ${name} (code=${rm.code})`);
+  }
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -456,6 +570,7 @@ async function main(): Promise<void> {
   console.log(`[worker]   Max concurrent: ${MAX_CONCURRENT}`);
 
   await detectDocker();
+  await cleanupStaleMissionContainers();
   await register();
 
   setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL);
