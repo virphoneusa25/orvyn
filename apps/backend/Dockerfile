@@ -24,6 +24,8 @@ RUN npm run build -w apps/backend
 
 # Playwright: install the npm package + Chromium in the build stage so the
 # runtime image carries them (browserTools.ts does a runtime require).
+# PLAYWRIGHT_BROWSERS_PATH forces a known location we can copy from.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN cd apps/backend && npm install playwright --no-save && cd /repo
 RUN npx playwright install chromium --with-deps
 
