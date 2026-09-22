@@ -309,14 +309,14 @@ export function DesktopView({
         <canvas
           ref={canvasRef}
           style={{
-            display: frame ? "block" : "none",
+            display: "block",
             width: "100%",
             height: "100%",
             objectFit: "contain",
             pointerEvents: "none",
           }}
         />
-        {!frame && (
+        {canvasRef.current?.width === 0 && (
           <div style={{ ...emptyBody(), padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, position: "absolute", inset: 0 }}>
             <div>Connecting to Desktop…</div>
             <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>Streaming the live virtual desktop</div>
