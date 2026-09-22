@@ -74,25 +74,37 @@ export function DesktopView({
     setSession(data.session ?? null);
   }
 
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
   async function pullFrame() {
     if (!projectRoot || !session?.live) return;
-    const q = new URLSearchParams({ projectRoot, ...(runId ? { runId } : {}) });
-    const res = await fetch(apiUrl(`/desktop/frame?${q}`), { headers: authHeaders() });
-    if (!res.ok) {
+    try {
+      const q = new URLSearchParams({ projectRoot, ...(runId ? { runId } : {}) });
+      const res = await fetch(apiUrl(`/desktop/frame?${q}`), { headers: authHeaders() });
+      if (!res.ok) {
+        setInterrupted(true);
+        return;
+      }
+      setInterrupted(false);
+      const blob = await res.blob();
+      if (!blob.type.startsWith("image/")) return; // auth error body
+      // Canvas rendering: decode blob → draw to canvas. More reliable than
+      // <img> for streaming — no data URL churn, no broken-image states.
+      const bitmap = await createImageBitmap(blob);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0);
+          setFrame("canvas"); // signal: frame drawn to canvas
+        }
+      }
+      bitmap.close();
+    } catch {
       setInterrupted(true);
-      return;
     }
-    setInterrupted(false);
-    const blob = await res.blob();
-    if (blob.type && !blob.type.startsWith("image/")) return; // auth error body, not a frame
-    // Data URLs work universally in <img> tags — blob:file:// URLs can
-    // fail to load in Electron's file:// origin depending on webSecurity.
-    const reader = new FileReader();
-    const dataUrl = await new Promise<string>((resolve) => {
-      reader.onloadend = () => resolve(String(reader.result));
-      reader.readAsDataURL(blob);
-    });
-    setFrame(dataUrl);
   }
 
   useEffect(() => {
@@ -294,15 +306,18 @@ export function DesktopView({
             <button style={ghostBtn()} onClick={() => { setInterrupted(false); void refreshSession().then(() => void pullFrame()); }}>Reconnect</button>
           </div>
         )}
-        {frame ? (
-          <img
-            src={frame}
-            alt="ORVYN Desktop"
-            onError={() => setFrame(null)}
-            style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }}
-          />
-        ) : (
-          <div style={{ ...emptyBody(), padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+        <canvas
+          ref={canvasRef}
+          style={{
+            display: frame ? "block" : "none",
+            width: "100%",
+            height: "100%",
+            objectFit: "contain",
+            pointerEvents: "none",
+          }}
+        />
+        {!frame && (
+          <div style={{ ...emptyBody(), padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, position: "absolute", inset: 0 }}>
             <div>Connecting to Desktop…</div>
             <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>Streaming the live virtual desktop</div>
           </div>
