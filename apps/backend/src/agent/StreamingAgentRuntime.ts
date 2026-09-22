@@ -195,6 +195,22 @@ export class StreamingAgentRuntime {
       case "generate_image":
         this.store.emit(runId, "image.generated", { prompt: args.prompt });
         break;
+      case "browser_open":
+      case "browser_navigate":
+      case "browser_click":
+      case "browser_type":
+      case "browser_scroll":
+      case "browser_screenshot":
+        this.store.emit(runId, "browser.action", {
+          tool: call.name,
+          url: args.url,
+          selector: args.selector,
+          target: args.selector ?? args.target,
+          x: args.x,
+          y: args.y,
+          text: args.text,
+        });
+        break;
       default:
         break;
     }

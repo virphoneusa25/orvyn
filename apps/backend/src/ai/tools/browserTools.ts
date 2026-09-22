@@ -8,6 +8,18 @@
 import * as path from "path";
 import { promises as fs } from "fs";
 import { AITool, ToolResult } from "../ToolTypes";
+import { callElectronBrowser } from "../../desktop/electronBrowserTarget";
+
+let browserTenantId = "";
+
+export function setBrowserToolTenant(tenantId: string): void {
+  browserTenantId = tenantId;
+}
+
+async function electron(path: string, body: Record<string, unknown> = {}): Promise<Record<string, unknown> | null> {
+  if (!browserTenantId) return null;
+  return callElectronBrowser(browserTenantId, path, body);
+}
 
 export function playwrightAvailable(): boolean {
   try {
@@ -165,16 +177,24 @@ export function browserEvidence(projectRoot: string): {
 }
 
 function guard<T extends Record<string, unknown>>(
-  fn: (args: T) => Promise<ToolResult>
+  fn: (args: T) => Promise<ToolResult>,
+  opts?: { playwright?: boolean }
 ): (args: Record<string, unknown>) => Promise<ToolResult> {
   return async (args) => {
-    if (!playwrightAvailable()) return { ok: false, error: PLAYWRIGHT_MISSING };
     try {
       return await fn(args as T);
     } catch (err: any) {
+      if (opts?.playwright !== false && !playwrightAvailable() && /No browser session|playwright|chromium/i.test(String(err?.message))) {
+        return { ok: false, error: PLAYWRIGHT_MISSING };
+      }
       return { ok: false, error: err.message };
     }
   };
+}
+
+function needPlaywright(): ToolResult | null {
+  if (playwrightAvailable()) return null;
+  return { ok: false, error: PLAYWRIGHT_MISSING };
 }
 
 const ENTRY_FILES = ["index.html", "index.htm", "index.php", "index.aspx", "index.jsp", "default.html", "default.aspx"];
@@ -220,15 +240,22 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
   return {
     name: "browser_open",
     description:
-      "Launch a headless browser session (Chromium via Playwright), optionally navigating to a URL. Replaces any prior session for this project.",
+      "Open a URL in the visible ORVYN Workbench browser when available, otherwise a Playwright session. Replaces any prior hidden session for this project.",
     parameters: {
       type: "object",
       properties: { url: { type: "string", description: "URL to open (optional)" } },
     },
     defaultPermission: "ask",
     execute: guard(async (args) => {
-      const s = await openSession(projectRoot);
       const url = args.url ? String(args.url) : "";
+      const visible = await electron("/v1/browser/open", { url });
+      if (visible?.ok) {
+        const tab = visible.tab as { id?: string; url?: string } | undefined;
+        return { ok: true, output: `Workbench browser ${tab?.id ?? ""} opened${tab?.url ? ` at ${tab.url}` : url ? ` at ${url}` : ""}.` };
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const s = await openSession(projectRoot);
       if (url) await gotoWithRecovery(s.page, url);
       s.actions.push({ action: "open", url, timestamp: Date.now() });
       return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.` };
@@ -247,8 +274,17 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args) => {
+      const url = String(args.url);
+      const visible = await electron("/v1/browser/navigate", { url });
+      if (visible && visible.tabs) {
+        const tabs = visible.tabs as { url?: string; title?: string }[];
+        const tab = tabs[tabs.length - 1];
+        return { ok: true, output: `Now at ${tab?.url ?? url} — title: ${tab?.title ?? ""}` };
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
       const page = await getPage(projectRoot);
-      const finalUrl = await gotoWithRecovery(page, String(args.url));
+      const finalUrl = await gotoWithRecovery(page, url);
       return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}` };
     }),
   };
@@ -265,9 +301,14 @@ export function makeBrowserClickTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args) => {
+      const selector = String(args.selector);
+      const visible = await electron("/v1/browser/click", { selector });
+      if (visible?.ok) return { ok: true, output: `Clicked ${selector} in the Workbench browser.` };
+      const missing = needPlaywright();
+      if (missing) return missing;
       const page = await getPage(projectRoot);
-      await page.click(String(args.selector), { timeout: 10_000 });
-      return { ok: true, output: `Clicked ${args.selector}. URL now ${page.url()}` };
+      await page.click(selector, { timeout: 10_000 });
+      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}` };
     }),
   };
 }
@@ -287,10 +328,16 @@ export function makeBrowserTypeTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args) => {
+      const selector = String(args.selector);
+      const text = String(args.text);
+      const visible = await electron("/v1/browser/type", { selector, text });
+      if (visible?.ok) return { ok: true, output: `Typed into ${selector} in the Workbench browser.` };
+      const missing = needPlaywright();
+      if (missing) return missing;
       const page = await getPage(projectRoot);
-      await page.fill(String(args.selector), String(args.text), { timeout: 10_000 });
-      if (args.submit === true) await page.press(String(args.selector), "Enter");
-      return { ok: true, output: `Typed into ${args.selector}${args.submit ? " and submitted" : ""}.` };
+      await page.fill(selector, text, { timeout: 10_000 });
+      if (args.submit === true) await page.press(selector, "Enter");
+      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.` };
     }),
   };
 }
@@ -303,6 +350,14 @@ export function makeBrowserConsoleErrorsTool(projectRoot: string): AITool {
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed",
     execute: guard(async () => {
+      const visible = await electron("/v1/browser/state");
+      const tabs = (visible?.tabs as { console?: string[] }[] | undefined) ?? [];
+      const lines = tabs.flatMap((t) => t.console ?? []);
+      if (visible) {
+        return { ok: true, output: lines.length === 0 ? "No console or page errors observed." : lines.join("\n") };
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
       const s = sessions.get(projectRoot);
       if (!s) return { ok: false, error: "No browser session. Call browser_open first." };
       return {
@@ -324,10 +379,17 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args) => {
-      const page = await getPage(projectRoot);
       const dir = path.join(projectRoot, ".orvyn", "screenshots");
       await fs.mkdir(dir, { recursive: true });
       const file = path.join(dir, `shot_${Date.now()}.png`);
+      const visible = await electron("/v1/browser/screenshot");
+      if (visible?.ok && typeof visible.png === "string") {
+        await fs.writeFile(file, Buffer.from(visible.png, "base64"));
+        return { ok: true, output: `Screenshot saved: ${file}` };
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const page = await getPage(projectRoot);
       await page.screenshot({ path: file, fullPage: args.fullPage === true });
       const s = sessions.get(projectRoot);
       if (s) {
@@ -335,6 +397,28 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
         s.actions.push({ action: "screenshot", url: page.url(), timestamp: Date.now(), result: file });
       }
       return { ok: true, output: `Screenshot saved: ${file}` };
+    }),
+  };
+}
+
+export function makeBrowserScrollTool(projectRoot: string): AITool {
+  return {
+    name: "browser_scroll",
+    description: "Scroll the visible Workbench browser (or Playwright fallback) by a pixel delta.",
+    parameters: {
+      type: "object",
+      properties: { deltaY: { type: "number", description: "Positive scrolls down" } },
+    },
+    defaultPermission: "ask",
+    execute: guard(async (args) => {
+      const deltaY = Number(args.deltaY ?? 400);
+      const visible = await electron("/v1/browser/scroll", { deltaY });
+      if (visible?.ok) return { ok: true, output: `Scrolled the Workbench browser by ${deltaY}px.` };
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const page = await getPage(projectRoot);
+      await page.mouse.wheel(0, deltaY);
+      return { ok: true, output: `Scrolled by ${deltaY}px.` };
     }),
   };
 }
@@ -347,6 +431,23 @@ export function makeBrowserEvidenceTool(projectRoot: string): AITool {
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed",
     execute: guard(async () => {
+      const visible = await electron("/v1/browser/state");
+      if (visible?.tabs) {
+        const tabs = visible.tabs as { url?: string; title?: string; console?: string[]; network?: { method: string; url: string; status?: number }[] }[];
+        const tab = tabs.find((t) => t.url) ?? tabs[0];
+        return {
+          ok: true,
+          output: [
+            `URL: ${tab?.url ?? "(none)"}`,
+            `Title: ${tab?.title ?? ""}`,
+            `Console errors (${tab?.console?.length ?? 0}): ${(tab?.console ?? []).slice(0, 5).join(" | ") || "(none)"}`,
+            `Failed requests (${tab?.network?.length ?? 0}): ${(tab?.network ?? []).slice(0, 5).map((n) => `${n.method} ${n.url} [${n.status ?? ""}]`).join(" | ") || "(none)"}`,
+            "Source: ORVYN Workbench WebContentsView",
+          ].join("\n"),
+        };
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
       const evidence = browserEvidence(projectRoot);
       const s = sessions.get(projectRoot);
       const currentUrl = s ? String(s.page.url()) : "(no session)";

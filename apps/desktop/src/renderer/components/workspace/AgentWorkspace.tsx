@@ -28,7 +28,8 @@ import {
   followWorkbenchTab,
   parseWorkbenchTab,
   previewTabId,
-  rememberUrl,
+  previewTitle,
+  truncateTabTitle,
   upsertTab,
   WORKBENCH_TABBAR_TEST_ID,
   WORKBENCH_TEST_ID,
@@ -36,16 +37,16 @@ import {
 } from "../../workbenchModel";
 import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
-import { IconClose, IconCrosshair, IconMore, IconPlus } from "../Icons";
+import { IconClose, IconCrosshair, IconGlobe, IconMore, IconPlus } from "../Icons";
+import type { WorkbenchBrowserState } from "../../orvyn-bridge";
 import { AgentActivityHeader } from "./AgentActivityHeader";
 import { ArtifactView } from "./ArtifactView";
-import { BrowserView } from "./BrowserView";
+import { BrowserWorkbench } from "./BrowserWorkbench";
 import { ChangesView } from "./ChangesView";
 import { DesktopView } from "./DesktopView";
 import { DiffInspector } from "./DiffInspector";
 import { FileEditorView } from "./FileEditorView";
 import { FilesInspector } from "./FilesInspector";
-import { PreviewView } from "./PreviewView";
 import { ReviewInspector } from "./ReviewInspector";
 import { TerminalInspector } from "./TerminalInspector";
 import { iconBtn, splitHandle, tabBtn } from "./workspaceChrome";
@@ -78,24 +79,54 @@ export function AgentWorkspace({
   const running = runStatus === "running" || runStatus === "streaming" || runStatus === "working";
   const [follow, setFollow] = useState<FollowController>(() => initialFollowState(running && layout.followOrion !== false));
   const [plusOpen, setPlusOpen] = useState(false);
+  const [browserState, setBrowserState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
+  const [addressFocus, setAddressFocus] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
   const [dragging, setDragging] = useState(false);
   const start = useRef({ x: 0, width: layout.agentPanelWidth });
+  const previewSeeded = useRef(new Set<string>());
   const desktopLive = events.some((e) => String(e.type).startsWith("desktop.") && e.type !== "desktop.completed" && e.type !== "desktop.failed");
 
   const tabs = useMemo(() => {
     const ids = layout.openTabIds.length ? layout.openTabIds : ["changes", "browser"];
     let list = ids.map(parseWorkbenchTab);
     if (desktopLive && !list.some((t) => t.id === "desktop")) list = upsertTab(list, parseWorkbenchTab("desktop"));
+
+    const nativeBrowser = browserState.tabs.filter((t) => t.kind === "browser");
+    if (nativeBrowser.length) {
+      list = list.filter((t) => t.id !== "browser");
+      for (const t of nativeBrowser) {
+        list = upsertTab(list, {
+          id: `browser:${t.id}`,
+          kind: "browser",
+          title: t.url ? truncateTabTitle(t.title || t.url) : "Browser",
+          closable: true,
+          url: t.url,
+        });
+      }
+    }
+
+    for (const t of browserState.tabs.filter((x) => x.kind === "preview")) {
+      const url = t.url;
+      list = upsertTab(list, {
+        id: url ? previewTabId(url) : `browser:${t.id}`,
+        kind: "preview",
+        title: truncateTabTitle(t.title || (url ? previewTitle(url, projectName) : "Preview")),
+        closable: true,
+        url,
+      });
+    }
     for (const p of derived.previews) {
       list = upsertTab(list, parseWorkbenchTab(previewTabId(p.url)));
     }
     return list;
-  }, [layout.openTabIds, derived.previews, desktopLive]);
+  }, [layout.openTabIds, derived.previews, desktopLive, browserState.tabs, projectName]);
 
   const activeId = tabs.some((t) => t.id === layout.activeTabId) ? layout.activeTabId : tabs[0]?.id ?? "changes";
   const active = tabs.find((t) => t.id === activeId) ?? tabs[0]!;
   const overlay = shouldOverlayAgentPanel(viewportWidth);
+  const browserish = active.kind === "browser" || active.kind === "preview";
+  const activeNative = matchingNativeTab(browserState, active);
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -104,8 +135,42 @@ export function AgentWorkspace({
   }, []);
 
   useEffect(() => {
+    const api = window.orvyn.browser;
+    if (!api) return;
+    void api.list().then(setBrowserState);
+    return api.onChange(setBrowserState);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void window.orvyn.browser?.setVisible(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    document.body.dataset.orvynWorkbench = browserish ? "browser" : "";
+    return () => {
+      delete document.body.dataset.orvynWorkbench;
+    };
+  }, [browserish]);
+
+  useEffect(() => {
     if (running && layout.followOrion && !follow.followOrion) setFollow(initialFollowState(true));
   }, [running, layout.followOrion, follow.followOrion]);
+
+  useEffect(() => {
+    const api = window.orvyn.browser;
+    if (!api) return;
+    for (const p of derived.previews) {
+      if (previewSeeded.current.has(p.url)) continue;
+      if (browserState.tabs.some((t) => urlsMatch(t.url, p.url))) {
+        previewSeeded.current.add(p.url);
+        continue;
+      }
+      previewSeeded.current.add(p.url);
+      void api.create("preview", p.url).then(setBrowserState);
+    }
+  }, [derived.previews, browserState.tabs]);
 
   useEffect(() => {
     if (!followApplies(follow)) return;
@@ -114,10 +179,16 @@ export function AgentWorkspace({
     const currentKind: AgentWorkspaceTab =
       active.kind === "file" || active.kind === "artifact" ? "files" : (active.kind as AgentWorkspaceTab);
     const nextKind = followActiveTab(activity, currentKind);
+    const native = activity.previewUrl
+      ? browserState.tabs.find((t) => urlsMatch(t.url, activity.previewUrl!))
+      : browserState.activeId
+        ? browserState.tabs.find((t) => t.id === browserState.activeId)
+        : undefined;
     const next = followWorkbenchTab(nextKind === "diff" ? "diff" : nextKind, {
       url: activity.previewUrl ?? derived.previews[0]?.url,
       path: activity.file,
       name: activity.file,
+      browserId: native && native.kind === "browser" ? native.id : undefined,
     });
     if (next.id === activeId) return;
     onLayout({
@@ -126,15 +197,19 @@ export function AgentWorkspace({
       openTabIds: upsertTab(tabs, next).map((t) => t.id),
       previewUrl: next.url ?? layout.previewUrl,
     });
-  }, [derived.activity, follow, activeId]);
+  }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId]);
 
   useEffect(() => {
     const open = (e: Event) => {
-      const d = (e as CustomEvent<{ tab?: string; path?: string }>).detail;
+      const d = (e as CustomEvent<{ tab?: string; path?: string; url?: string }>).detail;
       const mapped = mapContextTab(d?.tab);
       setFollow((s) => applyManualTab(s));
       if (d?.path && (mapped === "diff" || mapped === "files")) {
         activate(parseWorkbenchTab(mapped === "diff" ? diffTabId(d.path) : fileTabId(d.path)), true);
+        return;
+      }
+      if (mapped === "browser" || mapped === "preview") {
+        void openBrowserSurface(mapped, d?.url ?? derived.activity?.previewUrl);
         return;
       }
       if (mapped) activate(parseWorkbenchTab(mapped), true);
@@ -145,7 +220,7 @@ export function AgentWorkspace({
       document.removeEventListener("orvyn:context-open", open);
       document.removeEventListener("orvyn:context-tab", open);
     };
-  }, [tabs]);
+  }, [tabs, derived.activity?.previewUrl]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -153,10 +228,25 @@ export function AgentWorkspace({
         e.preventDefault();
         activate(parseWorkbenchTab("desktop"), true);
       }
+      if (browserish && e.ctrlKey && e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        e.stopPropagation();
+        setAddressFocus((n) => n + 1);
+      }
+      if (browserish && e.ctrlKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        e.stopPropagation();
+        const id = activeNative?.id ?? browserState.activeId;
+        if (id) void window.orvyn.browser?.reload(id);
+      }
+      if (e.ctrlKey && e.key.toLowerCase() === "w" && active.closable) {
+        e.preventDefault();
+        close(active.id);
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [tabs]);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [tabs, activeId, browserState.activeId, browserish, activeNative?.id]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -175,6 +265,10 @@ export function AgentWorkspace({
   function activate(tab: WorkbenchTab, manual = false) {
     if (manual) setFollow((s) => applyManualTab(s));
     setPlusOpen(false);
+    if (tab.id === "browser" && !browserState.tabs.some((t) => t.kind === "browser")) {
+      void openBrowserSurface("browser");
+      return;
+    }
     onLayout({
       rightPanelOpen: true,
       activeTabId: tab.id,
@@ -185,7 +279,30 @@ export function AgentWorkspace({
     });
   }
 
+  async function openBrowserSurface(kind: "browser" | "preview", url?: string) {
+    const api = window.orvyn.browser;
+    const existing = url
+      ? browserState.tabs.find((t) => urlsMatch(t.url, url))
+      : browserState.tabs.find((t) => t.kind === kind && !t.url) ?? browserState.tabs.find((t) => t.kind === kind);
+    let state = browserState;
+    if (api) {
+      state = existing
+        ? await api.activate(existing.id)
+        : await api.create(kind, url);
+      setBrowserState(state);
+    }
+    const native = state.tabs.find((t) => t.id === state.activeId) ?? existing ?? state.tabs[0];
+    const tab: WorkbenchTab = native?.kind === "preview" && native.url
+      ? { id: previewTabId(native.url), kind: "preview", title: native.title || previewTitle(native.url, projectName), closable: true, url: native.url }
+      : native
+        ? { id: `browser:${native.id}`, kind: "browser", title: native.title || "Browser", closable: true, url: native.url }
+        : parseWorkbenchTab(kind);
+    activate(tab, true);
+  }
+
   function close(id: string) {
+    const native = matchingNativeTab(browserState, tabs.find((t) => t.id === id) ?? parseWorkbenchTab(id));
+    if (native) void window.orvyn.browser?.close(native.id).then(setBrowserState);
     const next = closeTab(tabs, id, activeId);
     onLayout({ openTabIds: next.tabs.map((t) => t.id), activeTabId: next.activeId });
   }
@@ -227,33 +344,44 @@ export function AgentWorkspace({
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div data-testid={WORKBENCH_TABBAR_TEST_ID} style={{ display: "flex", alignItems: "center", height: 36, borderBottom: "1px solid var(--orvyn-border-soft)", padding: "0 4px", minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", overflowX: "auto", flex: 1, minWidth: 0 }}>
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                data-tab={t.id}
-                onClick={() => activate(t, true)}
-                onAuxClick={(e) => {
-                  if (e.button === 1 && t.closable) close(t.id);
-                }}
-                style={{ ...tabBtn(t.id === activeId), height: 36, padding: "0 12px" }}
-              >
-                {t.kind === "desktop" && desktopLive && (
-                  <span title="Desktop live" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--orvyn-cyan)", marginRight: 6, display: "inline-block" }} />
-                )}
-                {t.title}
-                {t.closable && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      close(t.id);
-                    }}
-                    style={{ marginLeft: 6, opacity: 0.65 }}
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-            ))}
+            {tabs.map((t) => {
+              const native = matchingNativeTab(browserState, t);
+              return (
+                <button
+                  key={t.id}
+                  data-tab={t.id}
+                  onClick={() => activate(t, true)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1 && t.closable) close(t.id);
+                  }}
+                  style={{ ...tabBtn(t.id === activeId), height: 36, padding: "0 12px" }}
+                >
+                  {t.kind === "desktop" && desktopLive && (
+                    <span title="Desktop live" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--orvyn-cyan)", marginRight: 6, display: "inline-block" }} />
+                  )}
+                  {(t.kind === "browser" || t.kind === "preview") && (
+                    <span style={{ marginRight: 6, display: "inline-flex", alignItems: "center" }}>
+                      {native?.favicon ? <img src={native.favicon} alt="" width={12} height={12} /> : <IconGlobe size={12} />}
+                      {native?.loading && (
+                        <span title="Loading" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--orvyn-cyan)", marginLeft: 4, display: "inline-block" }} />
+                      )}
+                    </span>
+                  )}
+                  {t.title}
+                  {t.closable && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        close(t.id);
+                      }}
+                      style={{ marginLeft: 6, opacity: 0.65 }}
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
             <div style={{ position: "relative" }}>
               <button title="Open in Workbench" style={iconBtn(plusOpen)} onClick={() => setPlusOpen((v) => !v)}>
                 <IconPlus size={13} />
@@ -262,15 +390,14 @@ export function AgentWorkspace({
                 <div style={{ position: "absolute", left: 0, top: 32, zIndex: 20, minWidth: 160, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
                   <PlusItem label="Open file" onClick={() => activate(parseWorkbenchTab("files"), true)} />
                   <PlusItem label="Open terminal" onClick={() => activate(parseWorkbenchTab("terminal"), true)} />
-                  <PlusItem label="Open browser" onClick={() => activate(parseWorkbenchTab("browser"), true)} />
+                  <PlusItem label="New Browser" onClick={() => void openBrowserSurface("browser")} />
+                  <PlusItem label="Open browser" onClick={() => void openBrowserSurface("browser")} />
                   <PlusItem
                     label="Open URL"
                     onClick={() => {
                       const raw = window.prompt("Open URL");
                       if (!raw) return;
-                      const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-                      onLayout({ browserUrl: href, recentUrls: rememberUrl(layout.recentUrls, href) });
-                      activate(parseWorkbenchTab("browser"), true);
+                      void openBrowserSurface("browser", raw);
                     }}
                   />
                   <PlusItem label="Open Desktop" onClick={() => activate(parseWorkbenchTab("desktop"), true)} />
@@ -291,34 +418,26 @@ export function AgentWorkspace({
             <button title={layout.expandedPreview ? "Restore chat + Workbench" : "Expand Workbench"} style={iconBtn(layout.expandedPreview)} onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}>
               <IconMore size={14} />
             </button>
-            <button title="Close Workbench" style={iconBtn()} onClick={() => onLayout({ rightPanelOpen: false })}>
+            <button title="Close Workbench" style={iconBtn()} onClick={() => {
+              void window.orvyn.browser?.setVisible(false);
+              onLayout({ rightPanelOpen: false });
+            }}>
               <IconClose size={13} />
             </button>
           </span>
         </div>
         <AgentActivityHeader line={derived.activity?.line} running={running} waitingApproval={derived.waitingApproval} />
         <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
-          {derived.previews.map((p) => (
-            <div key={p.url} style={{ display: active.kind === "preview" && (active.url ?? layout.previewUrl) === p.url ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
-              <PreviewView
-                target={p}
-                cursor={derived.browser.cursor}
-                status={derived.activity?.tab === "preview" ? derived.activity.line : null}
-                live={p.local}
-                onExpand={() => onLayout({ expandedPreview: !layout.expandedPreview })}
-                onClose={() => close(previewTabId(p.url))}
-              />
-            </div>
-          ))}
-          <div style={{ display: active.kind === "browser" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
-            <BrowserView
-              browser={derived.browser}
-              status={derived.activity?.tab === "browser" ? derived.activity.line : null}
-              recents={layout.recentUrls}
-              url={layout.browserUrl || derived.browser.url}
-              onNavigate={(url) => {
-                onLayout({ browserUrl: url, recentUrls: rememberUrl(layout.recentUrls, url) });
-              }}
+          <div style={{ display: browserish ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
+            <BrowserWorkbench
+              kind={active.kind === "preview" ? "preview" : "browser"}
+              projectName={projectName}
+              orionStatus={derived.activity?.tab === "browser" || derived.activity?.tab === "preview" ? derived.activity.line : null}
+              requestedUrl={active.url}
+              sessionId={activeNative?.id}
+              surfaceActive={browserish}
+              onTabs={setBrowserState}
+              addressFocusToken={addressFocus}
             />
           </div>
           {tabs.some((t) => t.kind === "desktop") && (
@@ -331,7 +450,7 @@ export function AgentWorkspace({
               />
             </div>
           )}
-          {active.kind !== "preview" && active.kind !== "browser" && active.kind !== "desktop" && (
+          {!browserish && active.kind !== "desktop" && (
             <WorkbenchBody
               tab={active}
               derived={derived}
@@ -340,8 +459,6 @@ export function AgentWorkspace({
               runStatus={runStatus}
               runId={runId}
               projectRoot={projectRoot}
-              recents={layout.recentUrls}
-              browserUrl={layout.browserUrl}
               onOpenDiff={(path) => activate(parseWorkbenchTab(diffTabId(path)), true)}
               onOpenFile={(path) => {
                 onOpenFile(path);
@@ -349,16 +466,25 @@ export function AgentWorkspace({
               }}
               onOpenArtifact={(name) => activate(parseWorkbenchTab(artifactTabId(name)), true)}
               onOpenTab={(id) => activate(parseWorkbenchTab(id), true)}
-              onNavigate={(url) => {
-                onLayout({ browserUrl: url, recentUrls: rememberUrl(layout.recentUrls, url) });
-                activate(parseWorkbenchTab("browser"), true);
-              }}
             />
           )}
         </div>
       </div>
     </div>
   );
+}
+
+function matchingNativeTab(state: WorkbenchBrowserState, tab: WorkbenchTab) {
+  if (tab.id.startsWith("browser:")) return state.tabs.find((t) => t.id === tab.id.slice("browser:".length));
+  if (tab.kind === "preview" && tab.url) return state.tabs.find((t) => t.kind === "preview" && urlsMatch(t.url, tab.url!));
+  if (tab.id === "browser") return state.tabs.find((t) => t.kind === "browser" && !t.url) ?? state.tabs.find((t) => t.kind === "browser");
+  return undefined;
+}
+
+function urlsMatch(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  const norm = (u: string) => u.replace(/\/$/, "");
+  return norm(a) === norm(b);
 }
 
 function WorkbenchBody({
@@ -369,13 +495,10 @@ function WorkbenchBody({
   runStatus,
   runId,
   projectRoot,
-  recents,
-  browserUrl,
   onOpenDiff,
   onOpenFile,
   onOpenArtifact,
   onOpenTab,
-  onNavigate,
 }: {
   tab: WorkbenchTab;
   derived: ReturnType<typeof deriveAgentWorkspace>;
@@ -384,13 +507,10 @@ function WorkbenchBody({
   runStatus: string;
   runId?: string | null;
   projectRoot: string | null;
-  recents: string[];
-  browserUrl: string;
   onOpenDiff: (path: string) => void;
   onOpenFile: (path: string) => void;
   onOpenArtifact: (name: string) => void;
   onOpenTab: (id: string) => void;
-  onNavigate: (url: string) => void;
 }) {
   if (tab.kind === "changes") {
     return (
@@ -400,27 +520,6 @@ function WorkbenchBody({
         summary={derived.changeSummary}
         selected={tab.path ?? derived.activity?.file}
         onSelect={onOpenDiff}
-      />
-    );
-  }
-  if (tab.kind === "desktop") {
-    return (
-      <DesktopView
-        projectRoot={projectRoot}
-        runId={runId}
-        cursor={derived.browser.cursor}
-        status={derived.activity?.tab === "desktop" ? derived.activity.line : null}
-      />
-    );
-  }
-  if (tab.kind === "browser") {
-    return (
-      <BrowserView
-        browser={derived.browser}
-        status={derived.activity?.tab === "browser" ? derived.activity.line : null}
-        recents={recents}
-        url={browserUrl || derived.browser.url}
-        onNavigate={onNavigate}
       />
     );
   }

@@ -42,6 +42,12 @@ export function artifactTabId(name: string): string {
   return `artifact:${name}`;
 }
 
+export function truncateTabTitle(title: string, max = 28): string {
+  const t = title.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
+}
+
 export function previewTitle(url: string, projectName?: string | null): string {
   try {
     const u = new URL(url);
@@ -73,6 +79,9 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
   if (id.startsWith("artifact:")) {
     const path = id.slice("artifact:".length);
     return { id, kind: "artifact", title: fileTitle(path), closable: true, path };
+  }
+  if (id.startsWith("browser:")) {
+    return { id, kind: "browser", title: "Browser", closable: true };
   }
   const pinned: Record<string, WorkbenchTab> = {
     changes: { id: "changes", kind: "changes", title: "Changes", closable: false },
@@ -107,8 +116,9 @@ export function rememberUrl(recents: string[], url: string, limit = 8): string[]
   return next.slice(0, limit);
 }
 
-export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: string; path?: string; name?: string }): WorkbenchTab {
+export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: string; path?: string; name?: string; browserId?: string }): WorkbenchTab {
   if (kind === "preview" && extras?.url) return parseWorkbenchTab(previewTabId(extras.url));
+  if (kind === "browser" && extras?.browserId) return parseWorkbenchTab(`browser:${extras.browserId}`);
   if (kind === "diff" && extras?.path) return parseWorkbenchTab(diffTabId(extras.path));
   if (kind === "file" && extras?.path) return parseWorkbenchTab(fileTabId(extras.path));
   if (kind === "artifact" && extras?.name) return parseWorkbenchTab(artifactTabId(extras.name));

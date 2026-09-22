@@ -506,7 +506,10 @@ export function App() {
         { label: "Toggle Terminal", accelerator: "Ctrl+`", onClick: () => chrome.toggleBottomTerminal() },
         { separator: true },
         { label: "Toggle Developer Tools", accelerator: "Ctrl+Shift+I", onClick: () => void window.orvyn.window.toggleDevTools() },
-        { label: "Reload", accelerator: "Ctrl+R", onClick: () => void window.orvyn.window.reload() },
+        { label: "Reload", accelerator: "Ctrl+R", onClick: () => {
+          if (document.body.dataset.orvynWorkbench === "browser") return;
+          void window.orvyn.window.reload();
+        } },
       ],
     },
     {

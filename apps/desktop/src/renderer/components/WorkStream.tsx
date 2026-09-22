@@ -170,6 +170,7 @@ export function WorkStream({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key.toLowerCase() === "l") {
+        if (document.body.dataset.orvynWorkbench === "browser") return;
         e.preventDefault();
         inputRef.current?.focus();
       }

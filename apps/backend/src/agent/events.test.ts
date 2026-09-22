@@ -200,6 +200,16 @@ test("queue: survives a backend restart — replay rebuilds items, edits, order,
   }
 });
 
+test("terminal output emits a normalized preview.available event once", () => {
+  const store = new RunStore();
+  store.create("run-prev", "C:/proj");
+  store.emit("run-prev", "terminal.output", { data: "VITE ready\n  Local: http://127.0.0.1:43191/\n" });
+  store.emit("run-prev", "terminal.output", { data: "Local: http://127.0.0.1:43191/\n" });
+  const previews = store.get("run-prev")!.events.filter((e) => e.type === "preview.available");
+  assert.equal(previews.length, 1);
+  assert.equal(previews[0]!.data.url, "http://127.0.0.1:43191/");
+});
+
 test("queue: reconnect fetch (queueList) never resurrects consumed items", () => {
   const store = new RunStore();
   store.create("run-qr", "C:/proj");

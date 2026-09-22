@@ -14,6 +14,7 @@
 
 import { mkdirSync, appendFileSync, readdirSync, readFileSync, statSync } from "fs";
 import { basename, join } from "path";
+import { detectDevServerUrls } from "../desktop/previewDetect";
 
 export type AgentEventType =
   | "run.started"
@@ -162,6 +163,7 @@ const MAX_RETAINED_RUNS = 100;
 export class RunStore {
   private runs = new Map<string, Run>();
   private dir: string | null;
+  private previewSeen = new Map<string, Set<string>>();
 
   constructor(dir?: string) {
     this.dir = dir ?? null;
@@ -544,7 +546,25 @@ export class RunStore {
         // A broken subscriber must not break the run or other subscribers.
       }
     }
+    if (type !== "preview.available") this.emitPreviewFromText(runId, type, data);
     return event;
+  }
+
+  private emitPreviewFromText(runId: string, type: AgentEventType, data: Record<string, unknown>): void {
+    if (type !== "terminal.output" && type !== "terminal.started" && type !== "tool.completed") return;
+    const text = String(data.data ?? data.chunk ?? data.output ?? data.preview ?? data.command ?? data.content ?? "");
+    const seen = this.previewSeen.get(runId) ?? new Set<string>();
+    this.previewSeen.set(runId, seen);
+    for (const preview of detectDevServerUrls(text)) {
+      if (seen.has(preview.url)) continue;
+      seen.add(preview.url);
+      this.emit(runId, "preview.available", {
+        url: preview.url,
+        label: preview.label,
+        port: preview.port,
+        source: "dev-server",
+      });
+    }
   }
 
   /** Replay for reconnecting clients: everything strictly after `afterSequence`. */

@@ -7,6 +7,9 @@ import { promises as fs } from "fs";
 import { spawn, ChildProcess } from "child_process";
 import { createWriteStream } from "fs";
 import { connectionFileRecord } from "./connectionRecord";
+import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowserManager } from "./workbenchBrowser";
+
+let browserManager: WorkbenchBrowserManager | null = null;
 
 let mainWindow: BrowserWindow | null = null;
 let currentProjectRoot: string | null = null;
@@ -43,6 +46,7 @@ app.on("before-quit", () => {
   quitting = true;
   if (engineTimer) clearInterval(engineTimer);
   localEngine?.kill();
+  browserManager?.dispose();
 });
 
 const MAX_RECENTS = 8;
@@ -156,6 +160,11 @@ if (!app.requestSingleInstanceLock()) {
     await ensureLocalEngine();
     engineTimer = setInterval(() => void ensureLocalEngine(), 15000);
     createWindow();
+    browserManager = createWorkbenchBrowserManager(() => mainWindow);
+    await browserManager.start();
+    if (mainWindow) browserManager.bindWindow(mainWindow);
+    await registerBrowserIpc(browserManager);
+    void registerElectronBrowserTarget(browserManager);
   });
 }
 
@@ -571,6 +580,19 @@ ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: 
     apiKey: String(config?.apiKey ?? ""),
   });
 });
+
+async function registerElectronBrowserTarget(manager: WorkbenchBrowserManager): Promise<void> {
+  const info = manager.loopbackInfo();
+  const config = await readConfig();
+  if (!info || !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(config.backendUrl)) return;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  await fetch(`${config.backendUrl.replace(/\/$/, "")}/api/v1/desktop/browser-target`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ url: info.url, token: info.token }),
+  }).catch(() => {});
+}
 
 ipcMain.handle("system:getIdentity", () => {
   const username = os.userInfo().username?.trim() ?? "";

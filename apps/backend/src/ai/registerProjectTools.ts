@@ -41,6 +41,8 @@ import {
   makeBrowserTypeTool,
   makeBrowserScreenshotTool,
   makeBrowserConsoleErrorsTool,
+  makeBrowserScrollTool,
+  setBrowserToolTenant,
   makeBrowserEvidenceTool,
 } from "./tools/browserTools";
 import { registerDesktopTools } from "./tools/desktopTools";
@@ -117,10 +119,12 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
 
   // Browser QA (Playwright). Registered always; each call returns a typed
   // "Playwright is not installed" error until the optional dep is added.
+  setBrowserToolTenant(tenant.id);
   g.register(makeBrowserOpenTool(projectRoot));
   g.register(makeBrowserNavigateTool(projectRoot));
   g.register(makeBrowserClickTool(projectRoot));
   g.register(makeBrowserTypeTool(projectRoot));
+  g.register(makeBrowserScrollTool(projectRoot));
   g.register(makeBrowserScreenshotTool(projectRoot));
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
   g.register(makeBrowserEvidenceTool(projectRoot));

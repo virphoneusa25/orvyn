@@ -200,9 +200,12 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       if (name.startsWith("desktop_")) {
         return { op: "browser", label: String(args?.url ?? name.replace(/^desktop_/, "desktop ")), ctx: "desktop" };
       }
-      return name.startsWith("browser_")
-        ? { op: "browser", label: String(args?.url ?? name.replace(/^browser_/, "")), ctx: "browser" }
-        : { op: "other", label: name.replace(/_/g, " ") };
+      if (name.startsWith("browser_")) {
+        const url = String(args?.url ?? "");
+        const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(url);
+        return { op: "browser", label: url || name.replace(/^browser_/, ""), ctx: local ? "preview" : "browser" };
+      }
+      return { op: "other", label: name.replace(/_/g, " ") };
   }
 }
 

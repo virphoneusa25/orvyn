@@ -68,6 +68,55 @@ export interface OrvynBridge {
     get(): Promise<{ backendUrl: string; apiKey: string }>;
     set(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }>;
   };
+  browser?: {
+    list(): Promise<WorkbenchBrowserState>;
+    create(kind?: "browser" | "preview", url?: string): Promise<WorkbenchBrowserState>;
+    navigate(id: string, url: string): Promise<WorkbenchBrowserState>;
+    back(id: string): Promise<WorkbenchBrowserState>;
+    forward(id: string): Promise<WorkbenchBrowserState>;
+    reload(id: string): Promise<WorkbenchBrowserState>;
+    activate(id: string | null): Promise<WorkbenchBrowserState>;
+    close(id: string): Promise<WorkbenchBrowserState>;
+    setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<WorkbenchBrowserState>;
+    setVisible(visible: boolean): Promise<WorkbenchBrowserState>;
+    takeControl(id: string): Promise<WorkbenchBrowserState>;
+    returnControl(id: string): Promise<WorkbenchBrowserState>;
+    openExternal(id: string): Promise<boolean>;
+    clearData(): Promise<WorkbenchBrowserState>;
+    openDevTools(id: string): Promise<boolean>;
+    inspect(id: string): Promise<{ ok: boolean; url?: string; title?: string; outline?: string; error?: string }>;
+    onChange(cb: (state: WorkbenchBrowserState) => void): () => void;
+  };
+}
+
+export interface WorkbenchBrowserTab {
+  id: string;
+  kind: "browser" | "preview";
+  url: string;
+  title: string;
+  favicon?: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  secure: boolean;
+  controlOwner: "orion" | "user";
+  error?: { code: string; description: string };
+  console: string[];
+  network: { method: string; url: string; status?: number }[];
+  download?: { filename: string; received: number; total: number; state: string };
+}
+
+export interface WorkbenchBrowserRecent {
+  url: string;
+  title: string;
+  favicon?: string;
+  lastVisitedAt: number;
+}
+
+export interface WorkbenchBrowserState {
+  tabs: WorkbenchBrowserTab[];
+  recents: WorkbenchBrowserRecent[];
+  activeId: string | null;
 }
 
 declare global {

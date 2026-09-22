@@ -8,6 +8,7 @@ import {
   parseWorkbenchTab,
   previewTabId,
   rememberUrl,
+  truncateTabTitle,
   upsertTab,
   workbenchMarkupContract,
 } from "./workbenchModel.ts";
@@ -38,9 +39,18 @@ test("closing the active tab selects a neighbor, never a second pane", () => {
 test("Follow ORION maps events onto one workbench tab", () => {
   assert.equal(followWorkbenchTab("diff", { path: "App.tsx" }).id, "diff:App.tsx");
   assert.equal(followWorkbenchTab("preview", { url: "http://127.0.0.1:5173" }).kind, "preview");
+  assert.equal(followWorkbenchTab("browser", { browserId: "b1" }).id, "browser:b1");
   assert.equal(followWorkbenchTab("desktop").id, "desktop");
   assert.equal(followWorkbenchTab("terminal").id, "terminal");
   assert.equal(followWorkbenchTab("review").id, "review");
+});
+
+test("browser session tabs are closable and titled from the page", () => {
+  const tab = parseWorkbenchTab("browser:abc");
+  assert.equal(tab.kind, "browser");
+  assert.equal(tab.closable, true);
+  assert.equal(tab.id, "browser:abc");
+  assert.equal(truncateTabTitle("Global Voice & Telecom Infrastructure | VirPhone USA"), "Global Voice & Telecom Inf…");
 });
 
 test("recent URLs are real, newest first, no duplicates", () => {

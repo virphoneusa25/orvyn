@@ -61,8 +61,8 @@ export const HELP_TOPICS: HelpTopic[] = [
   {
     id: "browser",
     title: "Use the browser",
-    tags: ["browser", "playwright"],
-    body: "Browser is for external docs and research. Local apps ORION starts open as Preview tabs (ORVYN :port) with a live iframe. Desktop is a real Chromium session ORION can control — Take Control hands the mouse to you without cancelling the run. Follow ORION switches Workbench tabs; a manual click pauses it.",
+    tags: ["browser", "preview", "workbench"],
+    body: "Browser lives in the Workbench. Click Browser, type a domain such as virphoneusa.com, and press Enter — ORVYN opens the real site in a sandboxed embedded view. The tab updates to the page title and favicon. Back, Forward, Reload, and Open externally use that same session. Local servers become Preview tabs (ORVYN :port). ORION drives the visible page; Take Control pauses the agent so you can interact, then Return to ORION continues from the current URL. Clear browsing data is in the Browser menu.",
   },
   {
     id: "approve",
@@ -98,7 +98,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "shortcuts",
     title: "Keyboard shortcuts",
     tags: ["shortcuts", "keyboard"],
-    body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer · Ctrl+` toggle terminal · Ctrl+Shift+B toggle Workbench · Ctrl+Shift+D focus Desktop · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
+    body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer (or the Browser address bar when a browser tab is active) · Ctrl+R reload the page in Browser, not ORVYN · Ctrl+W close the current Workbench tab · Ctrl+` toggle terminal · Ctrl+Shift+B toggle Workbench · Ctrl+Shift+D focus Desktop · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
   },
   {
     id: "update",

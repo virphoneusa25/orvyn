@@ -26,7 +26,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
   const state = item.status === "running" ? "In progress" : item.status === "done" ? "Done" : item.status === "stopped" ? "Stopped" : "Failed";
   const verb = item.status === "failed" || item.status === "stopped" ? LABELS[item.op][0] : LABELS[item.op][item.status === "running" ? 0 : 1];
   return <div className={`activity-item activity-${item.status}`}>
-    <div className="activity-row">
+    <div className="activity-row" onClick={() => { if (item.op === "browser" && item.ctx) openArtifactInContext({ tab: item.ctx, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op }); }}>
       {item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}
       <div className="activity-target">
         <span className="activity-verb">{verb}</span>

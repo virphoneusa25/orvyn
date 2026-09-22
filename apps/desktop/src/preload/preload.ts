@@ -62,4 +62,28 @@ contextBridge.exposeInMainWorld("orvyn", {
     set: (config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> =>
       ipcRenderer.invoke("config:set", config),
   },
+  browser: {
+    list: () => ipcRenderer.invoke("browser:list"),
+    create: (kind?: "browser" | "preview", url?: string) => ipcRenderer.invoke("browser:create", kind, url),
+    navigate: (id: string, url: string) => ipcRenderer.invoke("browser:navigate", id, url),
+    back: (id: string) => ipcRenderer.invoke("browser:back", id),
+    forward: (id: string) => ipcRenderer.invoke("browser:forward", id),
+    reload: (id: string) => ipcRenderer.invoke("browser:reload", id),
+    activate: (id: string | null) => ipcRenderer.invoke("browser:activate", id),
+    close: (id: string) => ipcRenderer.invoke("browser:close", id),
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.invoke("browser:setBounds", bounds),
+    setVisible: (visible: boolean) => ipcRenderer.invoke("browser:setVisible", visible),
+    takeControl: (id: string) => ipcRenderer.invoke("browser:takeControl", id),
+    returnControl: (id: string) => ipcRenderer.invoke("browser:returnControl", id),
+    openExternal: (id: string) => ipcRenderer.invoke("browser:openExternal", id),
+    clearData: () => ipcRenderer.invoke("browser:clearData"),
+    openDevTools: (id: string) => ipcRenderer.invoke("browser:openDevTools", id),
+    inspect: (id: string) => ipcRenderer.invoke("browser:inspect", id),
+    onChange: (cb: (state: unknown) => void) => {
+      const h = (_e: unknown, v: unknown) => cb(v);
+      ipcRenderer.on("browser:changed", h);
+      return () => ipcRenderer.removeListener("browser:changed", h);
+    },
+  },
 });

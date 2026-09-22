@@ -13,6 +13,7 @@ import {
   toPublic,
 } from "../desktop/desktopSession";
 import { getBrowserSession, ensureBrowserSession } from "../ai/tools/browserTools";
+import { setElectronBrowserTarget } from "../desktop/electronBrowserTarget";
 
 export function desktopRouter(): Router {
   const router = Router();
@@ -127,6 +128,16 @@ export function desktopRouter(): Router {
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
     endDesktopSession(session);
     res.json({ session: toPublic(session) });
+  });
+
+  router.post("/browser-target", (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const target = setElectronBrowserTarget(t.id, String(req.body?.url ?? ""), String(req.body?.token ?? ""));
+      res.json({ ok: true, url: target.url });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   return router;
