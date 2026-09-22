@@ -12,6 +12,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../../connection";
+import { onConnectionFacts } from "../../connectionRuntime";
+import { deriveCloudConnectionState } from "../../connectionState";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
@@ -47,7 +49,20 @@ export function DesktopView({
   const [starting, setStarting] = useState(false);
   const [quality, setQuality] = useState<"auto" | "low" | "high">("auto");
   const [interrupted, setInterrupted] = useState(false);
+  const [cloudState, setCloudState] = useState<string>("local");
   const viewRef = useRef<HTMLDivElement | null>(null);
+
+  // React to cloud connection changes — Desktop re-evaluates immediately
+  // after sign-in/sign-out, no app restart needed.
+  useEffect(() => {
+    const off = onConnectionFacts((facts) => {
+      setCloudState(deriveCloudConnectionState(facts));
+      // Re-probe desktop availability when the backend changes
+      setSandboxAvailable(null);
+      void refreshSession();
+    });
+    return off;
+  }, []);
 
   async function refreshSession() {
     if (!projectRoot) return;
@@ -145,15 +160,28 @@ export function DesktopView({
     );
   }
 
-  // No Docker on the backend (local Windows) → Desktop truthfully needs Cloud
+  // No Docker on the backend (local Windows) → Desktop truthfully needs Cloud.
+  // This gate appears ONLY when the user is actually signed out/local —
+  // never for worker-offline, sync errors, or stream errors (those get
+  // their own specific states below).
   if (sandboxAvailable === false) {
+    const signedOut = cloudState === "local" || cloudState === "signed-out" || cloudState === "session-expired";
+    const label = signedOut ? "Desktop requires ORVYN Cloud" : "Desktop unavailable on this backend";
+    const detail = signedOut
+      ? "Desktop sessions run as isolated Linux computers (wallpaper, taskbar, Chromium, terminal) on ORVYN infrastructure — not as browser viewports."
+      : "You are connected, but this backend does not have the Docker sandbox runtime. Use ORVYN Cloud for Desktop sessions.";
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 10, textAlign: "center" }}>
-        <div style={emptyTitle()}>Desktop requires ORVYN Cloud</div>
-        <div style={emptyBody()}>
-          Desktop sessions run as isolated Linux containers (Xvfb + window manager + Chromium + terminal) on ORVYN infrastructure.
-          Connect to ORVYN Cloud to start a Desktop session. Browser is available locally for web pages.
-        </div>
+        <div style={emptyTitle()}>{label}</div>
+        <div style={emptyBody()}>{detail}</div>
+        {signedOut && (
+          <button
+            style={{ ...ghostBtn(), padding: "8px 20px", fontSize: 12.5 }}
+            onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "settings" }))}
+          >
+            Connect to ORVYN Cloud
+          </button>
+        )}
       </div>
     );
   }

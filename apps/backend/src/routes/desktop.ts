@@ -50,6 +50,17 @@ function sandboxSessionFor(tenantId: string, projectRoot: string) {
 export function desktopRouter(): Router {
   const router = Router();
 
+  // Desktop capability check — the UI uses this to distinguish
+  // "signed out" (needs Cloud) from "connected but no worker" (specific error).
+  router.get("/capabilities", async (req, res) => {
+    const docker = await hasDocker();
+    res.json({
+      desktopAvailable: docker,
+      transport: docker ? "sandbox-x11" : "none",
+      reason: docker ? undefined : "Docker sandbox runtime not available on this backend.",
+    });
+  });
+
   router.get("/session", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.query.projectRoot ?? t.currentProjectRoot ?? "");
