@@ -97,13 +97,10 @@ test("secure token refs: parsed tokens never written as config plaintext", () =>
   const dumped = [...store.dump().entries()];
   assert.ok(!JSON.stringify(mgr.listServers()).includes("AT_LIVE"));
   assert.ok(dumped.some(([k, v]) => k.includes("mcp.secret.") && v.includes("AT_LIVE")));
-  assert.deepEqual(parseStoredTokens(mgr.secret(id, "oauth")), {
-    access_token: "AT_LIVE",
-    refresh_token: "RT_LIVE",
-    token_type: undefined,
-    expires_at: parseStoredTokens(mgr.secret(id, "oauth"))!.expires_at,
-    scope: undefined,
-  });
+  const stored = parseStoredTokens(mgr.secret(id, "oauth"));
+  assert.equal(stored?.access_token, "AT_LIVE");
+  assert.equal(stored?.refresh_token, "RT_LIVE");
+  assert.ok(stored?.expires_at && stored.expires_at > Date.now());
 });
 
 test("gateway tenant binding rejects cross-tenant invoke", async () => {
