@@ -5,6 +5,9 @@ import React from "react";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { installPreviewBridge } from "./previewBridge";
+
+installPreviewBridge();
 
 class RootErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null as Error | null };
