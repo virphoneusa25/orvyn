@@ -119,9 +119,12 @@ export function desktopRouter(): Router {
       // server-side workspace path the sandbox can actually mount.
       const pathMod = await import("path");
       const fsMod = await import("fs");
+      // basename() on Linux doesn't split Windows \ separators — split on
+      // BOTH / and \ and take the last non-empty segment, so
+      // "C:\Users\rmckn\myproject" yields "myproject", not the full path.
       const serverRoot = fsMod.existsSync(projectRoot)
         ? projectRoot
-        : "/opt/orvyn/workspaces/" + (pathMod.basename(projectRoot) || "default");
+        : "/opt/orvyn/workspaces/" + (projectRoot.split(/[\\/]/).filter(Boolean).pop() || "default");
       try {
         const sandbox = await startSandboxDesktop({
           tenantId: t.id,
@@ -145,8 +148,8 @@ export function desktopRouter(): Router {
           });
         }
         // Sandbox errored — fall through to Playwright with a note.
-      } catch {
-        // Sandbox unavailable (image not built?) — fall through to Playwright.
+      } catch (sandboxErr) {
+        console.error("[desktop] sandbox creation failed:", sandboxErr);
       }
     }
 
