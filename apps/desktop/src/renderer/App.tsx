@@ -588,6 +588,7 @@ export function App() {
             overlay: overlayAgentPanel,
             workbenchWidth: agentPanelWidth,
           }),
+          gridTemplateRows: "minmax(0, 1fr)",
           flex: 1,
           minHeight: 0,
           minWidth: 0,
