@@ -14,6 +14,7 @@ import {
   getOrchestratorStatus,
   isCloudBackend,
   isSessionToken,
+  secureBackendUrl,
   loadConnectionConfig,
   noteProtectedStatus,
   onConnectionChange,
@@ -120,7 +121,12 @@ export interface CloudSignInInput {
 export async function signInWithCredentials(
   input: CloudSignInInput
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const base = (input.backendUrl?.trim() || ORVYN_CLOUD_URL).replace(/\/$/, "");
+  let base: string;
+  try {
+    base = secureBackendUrl(input.backendUrl?.trim() || ORVYN_CLOUD_URL);
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Cloud Mode requires https" };
+  }
   const path = input.mode === "register" ? "/api/v1/auth/register" : "/api/v1/auth/login";
   const body: Record<string, string> = { email: input.email.trim(), password: input.password };
   if (input.mode === "register" && input.name?.trim()) body.name = input.name.trim();

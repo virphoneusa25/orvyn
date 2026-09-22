@@ -89,7 +89,13 @@ export function ConnectionSettings() {
   async function handleSave() {
     const existing = getConnectionConfig();
     const nextKey = apiKey.trim() || (isSessionToken(existing.apiKey) ? existing.apiKey : "");
-    await saveConnectionConfig({ backendUrl: backendUrl.trim(), apiKey: nextKey });
+    try {
+      await saveConnectionConfig({ backendUrl: backendUrl.trim(), apiKey: nextKey });
+    } catch (err: any) {
+      setStatus("error");
+      setStatusDetail(err.message || "Could not save the connection");
+      return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }

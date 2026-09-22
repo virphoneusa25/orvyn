@@ -67,6 +67,8 @@ export type AgentEventType =
   | "sandbox.started"
   | "sandbox.ready"
   | "sandbox.stopped"
+  // --- Remote execution: where a run's tools execute (no local fallback) ---
+  | "run.execution"
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"
   | "steer.delivered"

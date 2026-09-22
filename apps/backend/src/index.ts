@@ -1,6 +1,6 @@
 import "./loadEnv";
 import express from "express";
-import cors from "cors";
+import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
@@ -12,7 +12,7 @@ import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
 
 const app = express();
-app.use(cors());
+app.use(cloudCors());
 app.use(express.json({ limit: "10mb" }));
 
 // Unauthenticated: needed for container/load-balancer health probes.

@@ -104,6 +104,9 @@ export function StatusBar() {
         </span>
       ))}
       {state.health?.version && <span>v{state.health.version}</span>}
+      <span>Backend: {connection.statusFacts.backend}</span>
+      <span>Account: {connection.statusFacts.account}</span>
+      <span>Worker: {connection.statusFacts.worker}</span>
       <span>{connection.modeLabel}</span>
       <span style={{ marginLeft: "auto", display: "inline-flex", gap: 16 }}>
         {state.stats && (

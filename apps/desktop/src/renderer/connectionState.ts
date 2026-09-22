@@ -184,6 +184,8 @@ export interface ConnectionPresentation {
   workspaceLabel: string;
   signedIn: boolean;
   accountEmail: string | null;
+  /** Backend health, account session, and worker availability stay separate. */
+  statusFacts: { backend: string; account: string; worker: string };
 }
 
 function personName(facts: ConnectionFacts): string {
@@ -208,6 +210,22 @@ function engineIndicator(facts: ConnectionFacts): StatusIndicator {
     : { label: "Local Engine Offline", tone: "off" };
 }
 
+function statusFacts(facts: ConnectionFacts): ConnectionPresentation["statusFacts"] {
+  const state = deriveCloudConnectionState(facts);
+  const backend =
+    state === "cloud-synced" || state === "cloud-online"
+      ? "Online"
+      : state === "connecting"
+        ? "Connecting"
+        : facts.localEngineState === "ready" && (state === "local" || state === "signed-out")
+          ? "Local"
+          : "Offline";
+  const account =
+    facts.accountState === "signed-in" ? "Signed in" : facts.accountState === "expired" ? "Session expired" : "Signed out";
+  const worker = facts.workerOnlineCount >= 1 ? `${facts.workerOnlineCount} online` : "none";
+  return { backend, account, worker };
+}
+
 function workerIndicator(facts: ConnectionFacts): StatusIndicator | null {
   if (facts.workerOnlineCount < 1) return null;
   const n = facts.workerOnlineCount;
@@ -225,6 +243,7 @@ export function describeConnection(facts: ConnectionFacts): ConnectionPresentati
     workspaceLabel: workspace,
     signedIn,
     accountEmail: facts.accountEmail,
+    statusFacts: statusFacts(facts),
   };
 
   switch (state) {

@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import type { RunStore } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
+import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
 
 interface WorkerRecord {
   workerId: string;
@@ -43,6 +44,16 @@ interface PendingJob {
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
+/** Tenant bound when a job was queued. Survives removal from the queue so late events still land in the right store. */
+const runTenants = new Map<string, string>();
+
+function rememberTenant(runId: string, tenantId?: string): void {
+  if (tenantId) runTenants.set(runId, tenantId);
+}
+
+function tenantForRun(runId: string): string | undefined {
+  return jobQueue.find((j) => j.runId === runId)?.tenantId ?? runTenants.get(runId);
+}
 
 /** True when at least one worker has heartbeated within the stale window. */
 export function hasOnlineWorker(): boolean {
@@ -65,6 +76,7 @@ export function workerStats(): { online: number; total: number } {
  * then serves tool RPC requests until the control-plane run finishes.
  */
 export function queueExecutorJob(runId: string, projectRoot: string, tenantId?: string): void {
+  rememberTenant(runId, tenantId);
   jobQueue.push({ runId, missionId: `mission_${runId.slice(0, 8)}`, instruction: "", projectRoot, tenantId, role: "executor", createdAt: Date.now() });
 }
 
@@ -86,21 +98,44 @@ function pruneStaleWorkers(): void {
 }
 setInterval(pruneStaleWorkers, 15_000).unref();
 
-/** Live registry snapshot. Status is online | busy | offline — not inferred from the API process. */
-export function listKnownWorkers(): { workerId: string; status: WorkerRecord["status"]; hostname: string }[] {
-  pruneStaleWorkers();
-  return [...workers.values()].map((w) => ({ workerId: w.workerId, status: w.status, hostname: w.hostname }));
-}
-
 export function workerRouter(
   auth: (req: any) => any,
   getRunStore: (tenantId?: string) => RunStore
 ): Router {
   const r = Router();
 
+  const tenantExists = (id: string) => {
+    try {
+      getRunStore(id);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const decide = (req: any, runId?: string, requested?: string): TenantResult => {
+    const caller = auth(req) as { id?: string };
+    return resolveEventTenant({
+      callerId: String(caller?.id ?? ""),
+      jobTenantId: runId ? tenantForRun(runId) : undefined,
+      requestedTenantId: requested,
+      tenantExists,
+    });
+  };
+
+  const denyUnlessWorker = (req: any, res: any): boolean => {
+    const caller = auth(req) as { id?: string };
+    const gate = assertWorkerCredential(String(caller?.id ?? ""));
+    if (!gate.ok) {
+      res.status(gate.status).json({ error: gate.error });
+      return true;
+    }
+    return false;
+  };
+
   // ── Registration ─────────────────────────────────────────────────────
   r.post("/register", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     const info = req.body as WorkerRecord;
     if (!info.workerId) return res.status(400).json({ error: "workerId required" });
     workers.set(info.workerId, { ...info, lastHeartbeat: Date.now() });
@@ -110,7 +145,7 @@ export function workerRouter(
 
   // ── Heartbeat ────────────────────────────────────────────────────────
   r.post("/heartbeat", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     const info = req.body as WorkerRecord;
     const existing = workers.get(info.workerId);
     if (!existing) return res.status(404).json({ error: "Not registered — re-register" });
@@ -120,7 +155,7 @@ export function workerRouter(
 
   // ── Job poll (workers pull) ──────────────────────────────────────────
   r.get("/poll", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     const workerId = String(req.query.workerId ?? "");
     const worker = workers.get(workerId);
     if (!worker || worker.status === "offline") {
@@ -140,11 +175,12 @@ export function workerRouter(
   // finished, so it can collect artifacts and clean the container up. The
   // WORKER never decides completion — it only observes it here.
   r.get("/tools/:runId/next", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     const request = toolRpc.poll(req.params.runId);
     let finished = false;
     try {
-      const run = getRunStore().get(req.params.runId);
+      const bound = tenantForRun(req.params.runId);
+      const run = getRunStore(bound).get(req.params.runId);
       finished = run
         ? run.status === "completed" || run.status === "error" || run.status === "cancelled"
         : false;
@@ -155,7 +191,7 @@ export function workerRouter(
 
   // ── Tool RPC: worker submits the tool result ──────────────────────────
   r.post("/tools/:runId/result", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     const resolved = toolRpc.resolve({
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
@@ -173,15 +209,16 @@ export function workerRouter(
   // Events get authoritative sequence numbers, JSONL persistence, and
   // fan-out to SSE subscribers — identical to local run events.
   r.post("/events/:runId", (req, res) => {
-    auth(req);
     const { runId } = req.params;
     const { type, data } = req.body;
     if (!type) return res.status(400).json({ error: "type required" });
+    const decision = decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined);
+    if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
 
     // Persist through the RunStore — durable + sequenced + replayable.
-    // The tenant's RunStore is resolved from the job (or default tenant).
+    // The tenant is the one recorded on the job, never a forged body field.
     try {
-      const store = getRunStore(req.body.tenantId);
+      const store = getRunStore(decision.tenantId);
       const run = store.get(runId);
       if (!run) {
         // Remote run not yet in the RunStore — create it so events persist.
@@ -203,12 +240,20 @@ export function workerRouter(
 
   // ── Job submission (internal: the OVH provider calls this) ──────────
   r.post("/submit", (req, res) => {
-    auth(req);
-    const { instruction, missionId, projectRoot, mode, tenantId } = req.body;
+    const { instruction, missionId, projectRoot, mode } = req.body;
     if (!instruction) return res.status(400).json({ error: "instruction required" });
+    const caller = auth(req) as { id?: string };
+    const decision = resolveWorkerTenant({
+      callerId: String(caller?.id ?? ""),
+      requestedTenantId: typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined,
+      tenantExists,
+    });
+    if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
+    const tenantId = decision.tenantId;
 
     // Create the run in the RunStore FIRST so events have a home.
     const runId = randomUUID();
+    rememberTenant(runId, tenantId);
     try {
       const store = getRunStore(tenantId);
       if (!store.get(runId)) {
@@ -246,17 +291,18 @@ export function workerRouter(
   // kill the container the moment the user stops the run. The POST form is
   // the desktop-initiated cancel.
   r.get("/cancel/:runId", (req, res) => {
-    auth(req);
+    if (denyUnlessWorker(req, res)) return;
     let cancelled = false;
     try {
-      cancelled = getRunStore().get(req.params.runId)?.status === "cancelled";
+      cancelled = getRunStore(tenantForRun(req.params.runId)).get(req.params.runId)?.status === "cancelled";
     } catch { /* store unavailable */ }
     res.json({ cancelled, stopRequested: cancelled });
   });
 
   r.post("/cancel/:runId", (req, res) => {
-    auth(req);
     const { runId } = req.params;
+    const decision = decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined);
+    if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
     const job = jobQueue.find((j) => j.runId === runId);
     if (job) {
       jobQueue.splice(jobQueue.indexOf(job), 1);
@@ -265,7 +311,7 @@ export function workerRouter(
     // Mark the run cancelled in the RunStore (durable event) — unless the
     // control-plane runtime already reached a terminal state of its own.
     try {
-      const store = getRunStore(req.body?.tenantId);
+      const store = getRunStore(decision.tenantId);
       const run = store.get(runId);
       if (run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled") {
         store.emit(runId, "run.cancelled" as AgentEventType, { reason: "Stopped by user" });

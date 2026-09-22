@@ -183,6 +183,17 @@ test("logout returns to local mode without inventing Synced", () => {
   assert.equal(facts.accountEmail, null);
 });
 
+test("backend, account, and worker stay separate facts", () => {
+  const synced = describeConnection(signedIn({ backendState: "online", syncState: "synced", workerOnlineCount: 1 }));
+  assert.equal(synced.statusFacts.backend, "Online");
+  assert.equal(synced.statusFacts.account, "Signed in");
+  assert.equal(synced.statusFacts.worker, "1 online");
+  const local = describeConnection(reduceConnection(INITIAL_FACTS, { type: "identity", name: "Ada" }));
+  assert.equal(local.statusFacts.backend, "Local");
+  assert.equal(local.statusFacts.account, "Signed out");
+  assert.equal(local.statusFacts.worker, "none");
+});
+
 test("workspace label is not fabricated", () => {
   const view = describeConnection(signedIn({ workspaceName: null }));
   assert.equal(view.workspaceLabel, "Local workspace");

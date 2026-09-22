@@ -10,7 +10,7 @@
 // wrong keyword guess that silently opens a mission is worse than a question
 // landing in chat.
 
-import { apiUrl, authHeaders, getConnectionConfig } from "./connection";
+import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
 import { classifyIntent, CommandMode } from "./orvynIntent";
@@ -100,10 +100,21 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
 }
 
 async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"): Promise<CommandOutcome> {
+  const cloudWorker = cmd.mode === "server" && isCloudBackend(getConnectionConfig().backendUrl);
+  const remoteRoot = cmd.projectRoot || "/opt/orvyn/workspaces";
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, instruction: cmd.prompt, mode, attachments: cmd.attachments, previousRunId: cmd.previousRunId, requestedModelId: cmd.requestedModelId }),
+    body: JSON.stringify({
+      projectRoot: cloudWorker ? remoteRoot : cmd.projectRoot,
+      remoteProjectRoot: cloudWorker ? remoteRoot : undefined,
+      executionLocation: cloudWorker ? "OVH_WORKER" : undefined,
+      instruction: cmd.prompt,
+      mode,
+      attachments: cmd.attachments,
+      previousRunId: cmd.previousRunId,
+      requestedModelId: cmd.requestedModelId,
+    }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };

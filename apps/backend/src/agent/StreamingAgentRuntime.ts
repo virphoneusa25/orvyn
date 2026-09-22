@@ -36,6 +36,8 @@ export interface ExecutionSpec {
   location: "LOCAL" | "OVH_WORKER";
   /** Worker-side path of the project to stage into the mission container. */
   remoteProjectRoot?: string;
+  /** Tenant that owns the run. Worker events must land here, never the default tenant. */
+  tenantId?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -243,7 +245,7 @@ export class StreamingAgentRuntime {
         remoteProjectRoot: execution.remoteProjectRoot ?? "",
         note: "Tools execute on a remote worker inside an isolated mission container. No local fallback.",
       });
-      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", undefined);
+      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", execution.tenantId);
     }
 
     // Snapshot the dirty tree before the agent touches anything, so a

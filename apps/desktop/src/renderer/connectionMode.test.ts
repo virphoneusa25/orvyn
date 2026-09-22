@@ -1,0 +1,55 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  LOCAL_BACKEND_URL,
+  ORVYN_CLOUD_URL,
+  connectionMode,
+  getConnectionConfig,
+  saveConnectionConfig,
+  secureBackendUrl,
+  toWebSocketUrl,
+  authHeaders,
+} from "./connection.ts";
+
+test("cloud URL defaults to the OVH host and local stays localhost", () => {
+  assert.equal(ORVYN_CLOUD_URL, "https://orvyn.virphoneusa.com");
+  assert.equal(connectionMode(LOCAL_BACKEND_URL), "local");
+  assert.equal(connectionMode(ORVYN_CLOUD_URL), "cloud");
+});
+
+test("https cloud URLs become wss and localhost stays ws", () => {
+  assert.equal(
+    toWebSocketUrl("https://orvyn.virphoneusa.com", "/ws/chat", "orvsess_abc"),
+    "wss://orvyn.virphoneusa.com/ws/chat?token=orvsess_abc"
+  );
+  assert.equal(toWebSocketUrl("http://localhost:4570", "/ws/chat"), "ws://localhost:4570/ws/chat");
+});
+
+test("plaintext cloud URLs are upgraded to https before a credential is stored", () => {
+  assert.equal(secureBackendUrl("http://orvyn.virphoneusa.com"), "https://orvyn.virphoneusa.com");
+  assert.equal(secureBackendUrl("http://localhost:4570"), "http://localhost:4570");
+  assert.throws(() => secureBackendUrl("ftp://orvyn.virphoneusa.com"), /https/);
+});
+
+test("Bearer header is the session token and is omitted when signed out", async () => {
+  const previous = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = {
+    orvyn: {
+      config: {
+        async set(config: { backendUrl: string; apiKey: string }) {
+          return config;
+        },
+      },
+    },
+  };
+  try {
+    await saveConnectionConfig({ backendUrl: "http://orvyn.virphoneusa.com", apiKey: "orvsess_test" });
+    assert.deepEqual(authHeaders(), { Authorization: "Bearer orvsess_test" });
+    assert.equal(getConnectionConfig().backendUrl, "https://orvyn.virphoneusa.com");
+    await saveConnectionConfig({ backendUrl: "http://localhost:4570", apiKey: "" });
+    assert.deepEqual(authHeaders(), {});
+    assert.equal(connectionMode(getConnectionConfig().backendUrl), "local");
+  } finally {
+    (globalThis as { window?: unknown }).window = previous;
+  }
+});

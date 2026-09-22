@@ -15,7 +15,15 @@ import { MODES } from "../agent/modes";
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
-v1Router.use("/worker", workerRouter(requireTenant, () => tenantManager.ensureLocalDefault().runStore));
+v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
+  if (!tenantId) {
+    if (process.env.ORVYN_CLOUD_MODE === "true") throw new Error("tenant required");
+    return tenantManager.ensureLocalDefault().runStore;
+  }
+  const tenant = tenantManager.get(tenantId);
+  if (!tenant) throw new Error(`Unknown tenant ${tenantId}`);
+  return tenant.runStore;
+}));
 
 // Validate every explicit project root before an endpoint uses it. A forced
 // remote run (executionLocation=OVH_WORKER) is exempt: its projectRoot names
@@ -377,7 +385,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     req.body.attachments,
     history,
     typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
-    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot } : undefined
+    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot, tenantId: t.id } : undefined
   );
   res.status(201).json({ runId, executionLocation: requestedLocation });
 });
@@ -829,9 +837,7 @@ v1Router.get("/runtime/capabilities", async (req, res) => {
     // These integrations do not yet expose authoritative connection probes.
     githubConnected: false,
     postgresConnected: false,
-    // True only for a per-user session tenant. API-key and local-default
-    // tenants are not a signed-in account.
-    cloudSignedIn: t.id.startsWith("user_"),
+    cloudSignedIn: false,
   });
 });
 

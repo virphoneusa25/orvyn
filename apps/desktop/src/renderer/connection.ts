@@ -32,7 +32,8 @@ export async function loadConnectionConfig(): Promise<ConnectionConfig> {
 }
 
 export async function saveConnectionConfig(config: ConnectionConfig): Promise<void> {
-  current = await window.orvyn.config.set(config);
+  const backendUrl = secureBackendUrl(config.backendUrl);
+  current = await window.orvyn.config.set({ ...config, backendUrl });
   listeners.forEach((l) => l(current));
 }
 
@@ -54,6 +55,43 @@ export function isCloudBackend(url: string): boolean {
   }
 }
 
+export type ConnectionMode = "local" | "cloud";
+
+export function connectionMode(url: string): ConnectionMode {
+  return isCloudBackend(url) ? "cloud" : "local";
+}
+
+/**
+ * Cloud credentials travel only over HTTPS. Localhost may stay on HTTP.
+ * An http cloud URL is upgraded; anything that is not http(s) is rejected.
+ */
+export function secureBackendUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error("Backend URL is not valid");
+  }
+  if (!isCloudBackend(trimmed)) {
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Local Mode requires http or https");
+    }
+    return trimmed;
+  }
+  if (parsed.protocol === "http:") parsed.protocol = "https:";
+  if (parsed.protocol !== "https:") throw new Error("Cloud Mode requires https");
+  return parsed.toString().replace(/\/$/, "");
+}
+
+/** http(s) base → ws(s) URL. https always becomes wss. */
+export function toWebSocketUrl(backendUrl: string, path: string, token?: string): string {
+  const base = secureBackendUrl(backendUrl);
+  const wsBase = base.replace(/^http/, "ws").replace(/\/$/, "");
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  return `${wsBase}${path}${query}`;
+}
+
 export function isSessionToken(key: string | undefined | null): boolean {
   return !!key && key.startsWith("orvsess_");
 }
@@ -67,10 +105,7 @@ export function healthUrl(): string {
 }
 
 export function wsUrl(path: string): string {
-  // http:// → ws:// and https:// → wss://. Cloud mode is always wss.
-  const wsBase = current.backendUrl.replace(/^http/, "ws").replace(/\/$/, "");
-  const token = current.apiKey ? `?token=${encodeURIComponent(current.apiKey)}` : "";
-  return `${wsBase}${path}${token}`;
+  return toWebSocketUrl(current.backendUrl, path, current.apiKey || undefined);
 }
 
 export function authHeaders(): Record<string, string> {
