@@ -1,6 +1,7 @@
 // Live account + cloud controller. Panels subscribe; they do not poll their own truth.
 import {
   INITIAL_FACTS,
+  deriveCloudConnectionState,
   reduceConnection,
   type ConnectionFacts,
 } from "./connectionState";
@@ -10,6 +11,7 @@ import {
   apiUrl,
   authHeaders,
   ensureOrchestratorHeartbeat,
+  describeTransport,
   getConnectionConfig,
   getOrchestratorStatus,
   isCloudBackend,
@@ -33,9 +35,44 @@ const listeners = new Set<Listener>();
 let validating = false;
 let observerInstalled = false;
 
+let activeRunId: string | null = null;
+
+function debugEnabled(): boolean {
+  try {
+    return localStorage.getItem("orvyn:debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** DevTools-only. Hosts and state. Never a token, password, or API key. */
+export function logConnectionDiagnostics(): void {
+  if (!debugEnabled()) return;
+  let transport: ReturnType<typeof describeTransport>;
+  try {
+    transport = describeTransport(getConnectionConfig().backendUrl);
+  } catch {
+    return;
+  }
+  console.info("[orvyn]", {
+    ...transport,
+    cloudState: deriveCloudConnectionState(facts),
+    accountState: facts.accountState,
+    workerOnline: facts.workerOnlineCount,
+    activeRunId,
+    sessionPresent: isSessionToken(getConnectionConfig().apiKey),
+  });
+}
+
+export function noteActiveRunId(id: string | null): void {
+  activeRunId = id;
+  logConnectionDiagnostics();
+}
+
 function publish(next: ConnectionFacts) {
   facts = next;
   listeners.forEach((l) => l(facts));
+  logConnectionDiagnostics();
 }
 
 function apply(event: Parameters<typeof reduceConnection>[1]) {

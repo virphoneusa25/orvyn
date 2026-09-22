@@ -5,6 +5,7 @@ import * as os from "os";
 import { promises as fs } from "fs";
 import { spawn, ChildProcess } from "child_process";
 import { createWriteStream } from "fs";
+import { connectionFileRecord } from "./connectionRecord";
 
 let mainWindow: BrowserWindow | null = null;
 let currentProjectRoot: string | null = null;
@@ -365,15 +366,13 @@ function decryptSession(enc: string): string {
 }
 
 async function writeConfig(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> {
-  const stored: PersistedConfig = { backendUrl: config.backendUrl };
   // Session tokens go through the OS credential store (Electron safeStorage).
-  // Developer API keys stay in the config file at mode 0600 — they are not
-  // account sessions. The token itself is never written to a log.
-  if (config.apiKey.startsWith("orvsess_") && encryptionAvailable()) {
-    stored.sessionTokenEnc = safeStorage.encryptString(config.apiKey).toString("base64");
-  } else if (config.apiKey) {
-    stored.apiKey = config.apiKey;
-  }
+  // If the keychain is unavailable the token is kept in memory only.
+  // Developer API keys stay in the config file at mode 0600.
+  const stored = connectionFileRecord(config, (token) => {
+    if (!encryptionAvailable()) return null;
+    return safeStorage.encryptString(token).toString("base64");
+  });
   await fs.writeFile(CONFIG_PATH, JSON.stringify(stored, null, 2), { mode: 0o600 });
   return { backendUrl: config.backendUrl, apiKey: config.apiKey };
 }

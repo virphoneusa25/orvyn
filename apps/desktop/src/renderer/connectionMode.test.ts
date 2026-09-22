@@ -4,6 +4,7 @@ import {
   LOCAL_BACKEND_URL,
   ORVYN_CLOUD_URL,
   connectionMode,
+  describeTransport,
   getConnectionConfig,
   saveConnectionConfig,
   secureBackendUrl,
@@ -29,6 +30,19 @@ test("plaintext cloud URLs are upgraded to https before a credential is stored",
   assert.equal(secureBackendUrl("http://orvyn.virphoneusa.com"), "https://orvyn.virphoneusa.com");
   assert.equal(secureBackendUrl("http://localhost:4570"), "http://localhost:4570");
   assert.throws(() => secureBackendUrl("ftp://orvyn.virphoneusa.com"), /https/);
+});
+
+test("cloud transport stays on the OVH host and never rewrites to localhost", () => {
+  const cloud = describeTransport("http://orvyn.virphoneusa.com");
+  assert.equal(cloud.mode, "cloud");
+  assert.equal(cloud.backendHost, "orvyn.virphoneusa.com");
+  assert.equal(cloud.wsHost, "orvyn.virphoneusa.com");
+  assert.equal(cloud.wsScheme, "wss");
+  assert.equal(JSON.stringify(cloud).includes("localhost"), false);
+  const local = describeTransport("http://localhost:4570");
+  assert.equal(local.mode, "local");
+  assert.equal(local.wsScheme, "ws");
+  assert.equal(local.backendHost, "localhost:4570");
 });
 
 test("Bearer header is the session token and is omitted when signed out", async () => {

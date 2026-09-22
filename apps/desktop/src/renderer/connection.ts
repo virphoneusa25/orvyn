@@ -112,6 +112,19 @@ export function authHeaders(): Record<string, string> {
   return current.apiKey ? { Authorization: `Bearer ${current.apiKey}` } : {};
 }
 
+/** Host and scheme only. Never includes a token, password, or API key. */
+export function describeTransport(backendUrl: string): {
+  mode: ConnectionMode;
+  backendHost: string;
+  wsHost: string;
+  wsScheme: "ws" | "wss";
+} {
+  const base = secureBackendUrl(backendUrl);
+  const url = new URL(base);
+  const wsScheme = url.protocol === "https:" ? "wss" : "ws";
+  return { mode: connectionMode(base), backendHost: url.host, wsHost: url.host, wsScheme };
+}
+
 let protectedStatusHandler: ((status: number, url: string) => void) | null = null;
 let authFailureLatched = false;
 

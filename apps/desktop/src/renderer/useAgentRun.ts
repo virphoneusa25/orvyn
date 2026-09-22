@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders, getConnectionConfig } from "./connection";
+import { noteActiveRunId } from "./connectionRuntime";
 import { AgentEvent } from "./components/AgentActivityList";
 import { Attachment } from "./components/AttachmentBar";
 
@@ -98,12 +99,15 @@ export function useAgentRun(
     else if (e.type === "run.started") setStatus("running");
     else if (e.type === "run.completed") {
       setStatus("completed");
+      noteActiveRunId(null);
       streamRef.current?.close();
     } else if (e.type === "run.error") {
       setStatus("error");
+      noteActiveRunId(null);
       streamRef.current?.close();
     } else if (e.type === "run.cancelled") {
       setStatus("cancelled");
+      noteActiveRunId(null);
       streamRef.current?.close();
     } else if (e.type === "approval.resolved") setStatus("running");
     else if (e.type === "usage.updated") {
@@ -186,6 +190,7 @@ export function useAgentRun(
       if (!res.ok) throw new Error(data.error || "Failed to start run");
       setRunId(data.runId);
       runIdRef.current = data.runId;
+      noteActiveRunId(String(data.runId));
       setStatus("running");
       attachStream(data.runId);
       return true;

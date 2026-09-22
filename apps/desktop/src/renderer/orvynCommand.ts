@@ -11,6 +11,7 @@
 // landing in chat.
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
+import { noteActiveRunId } from "./connectionRuntime";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
 import { classifyIntent, CommandMode } from "./orvynIntent";
@@ -96,6 +97,7 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
+  if (data.runId) noteActiveRunId(String(data.runId));
   return { kind: "mission", runId: data.runId };
 }
 
@@ -118,6 +120,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"):
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
+  if (data.runId) noteActiveRunId(String(data.runId));
   return { kind: "run", runId: data.runId };
 }
 
