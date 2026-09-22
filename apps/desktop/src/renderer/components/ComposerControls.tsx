@@ -18,12 +18,13 @@ import {
   writeComposerDefault,
   toRunPayloadSettings,
   COMPOSER_MODES,
+  compactModelLabel,
   type ComposerDefaults,
   type ReasoningEffort,
   type AccessMode,
 } from "../composerSettings";
 
-export { readComposerDefaults, writeComposerDefault, toRunPayloadSettings, COMPOSER_MODES };
+export { readComposerDefaults, writeComposerDefault, toRunPayloadSettings, COMPOSER_MODES, compactModelLabel };
 export type { ComposerDefaults, ReasoningEffort, AccessMode };
 
 
@@ -113,7 +114,8 @@ export function Dropdown({
           padding: "3px 9px",
           fontSize: 11,
           cursor: "pointer",
-          maxWidth: 190,
+          maxWidth: 148,
+          minWidth: 0,
           whiteSpace: "nowrap",
         }}
       >
@@ -332,14 +334,20 @@ export function ModelMenu({
     groups.set(key, [...(groups.get(key) ?? []), m]);
   }
   const selected = models.find((m) => m.id === value);
+  const trigger = value === "auto" ? "Auto" : compactModelLabel(selected?.name, value);
+  const fullName = selected?.name ?? value;
   return (
     <Dropdown
-      title="Model for this conversation — Auto lets ORION's routing choose"
+      title={
+        value === "auto"
+          ? "Model for this conversation — Auto lets ORION's routing choose"
+          : `${fullName}${selected?.provider ? ` · ${selected.provider}` : ""}`
+      }
       width={300}
       label={
         <>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: value === "auto" ? "var(--orvyn-text-muted)" : "var(--orvyn-green)", display: "inline-block" }} />
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{value === "auto" ? "Auto" : selected?.name ?? value}</span>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: value === "auto" ? "var(--orvyn-text-muted)" : "var(--orvyn-green)", display: "inline-block", flexShrink: 0 }} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{trigger}</span>
         </>
       }
     >

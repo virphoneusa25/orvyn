@@ -19,7 +19,8 @@ import {
 } from "../ComposerControls";
 import type { ReasoningEffort, AccessMode } from "../ComposerControls";
 import { IconRocket } from "../Icons";
-import { ContextUsageMenu } from "../ContextUsageMenu";import type {
+import { ContextUsageMenu } from "../ContextUsageMenu";
+import type {
   ComposerMode,
   EngineStatus,
   MissionFilter,
@@ -62,7 +63,8 @@ export interface HomeScreenProps {
       reasoningEffort?: ReasoningEffort;
       permissionMode?: AccessMode;
     }
-  ) => void;  onAttach?: () => void;
+  ) => void;
+  onAttach?: () => void;
   projectRoot?: string | null;
   onOpenTerminal?: () => void;
   onNavigate?: (view: string) => void;
@@ -134,7 +136,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const composerModels = useComposerModels();
   const [addOpen, setAddOpen] = useState(false);
   const [chips, setChips] = useState<ComposerChip[]>([]);
-  const plusRef = useRef<HTMLButtonElement>(null);  const now = props.now ?? new Date();
+  const plusRef = useRef<HTMLButtonElement>(null);
+  const now = props.now ?? new Date();
   const dateLine = `${now.toLocaleDateString("en-US", { weekday: "long" })} · ${now.getDate()} ${now.toLocaleDateString("en-US", { month: "long" })}`.toUpperCase();
 
   const submit = () => {
@@ -160,7 +163,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onOpenNotifications={props.onOpenNotifications}
       />
 
-      <main className="ov-home">
+      <main className="ov-home" data-home-layout="centered">
         {/* ── Hero ── */}
         <section className="ov-hero" aria-label="Start a mission">
           <HeroBackdrop animate={animateHero} />
@@ -175,7 +178,7 @@ export function HomeScreen(props: HomeScreenProps) {
               </div>
             </div>
 
-            <div className="ov-composer">
+            <div className="ov-composer" data-testid="home-composer">
               <label htmlFor="ov-mission-input">New mission</label>
               <textarea
                 id="ov-mission-input"
@@ -210,63 +213,65 @@ export function HomeScreen(props: HomeScreenProps) {
                   ORION is the implied agent (the model selector names the
                   actual model). */}
               <div className="ov-composer__bar">
-                <AddPlusButton open={addOpen} onClick={() => setAddOpen((v) => !v)} buttonRef={plusRef} />
-                <AddMenu
-                  open={addOpen}
-                  onOpenChange={setAddOpen}
-                  selected={chips}
-                  onSelectedChange={setChips}
-                  onOpenTerminal={props.onOpenTerminal}
-                  onNavigate={props.onNavigate}
-                  projectRoot={props.projectRoot ?? null}
-                  anchorRef={plusRef}
-                />
-                <ComposerModePills
-                  mode={mode}
-                  onChange={(m) => {
-                    setMode(m as ComposerMode);
-                    writeComposerDefault("mode", m);
-                  }}
-                />
-
-                <AccessMenu
-                  value={accessMode}
-                  onChange={(v) => {
-                    setAccessMode(v);
-                    writeComposerDefault("permissionMode", v);
-                  }}
-                />
-                <ModelMenu
-                  models={composerModels}
-                  value={modelId}
-                  onChange={(id) => {
-                    setModelId(id);
-                    writeComposerDefault("modelId", id);
-                  }}
-                />
-                <ReasoningMenu
-                  value={reasoningEffort}
-                  models={composerModels}
-                  modelId={modelId}
-                  onChange={(v) => {
-                    setReasoningEffort(v);
-                    writeComposerDefault("reasoningEffort", v);
-                  }}
-                />
-                <ContextUsageMenu
-                  state={{
-                    usage: props.contextUsage,
-                    modelContextWindow: composerModels.find((m) => m.id === modelId)?.contextWindow,
-                  }}
-                />
-
-                <ComposerSubmitButton
-                  label="Run mission"
-                  icon={<IconRocket size={13} />}
-                  onClick={submit}
-                  disabled={!prompt.trim()}
-                  title="Run mission (Ctrl+Enter)"
-                />
+                <div className="ov-composer__modes">
+                  <AddPlusButton open={addOpen} onClick={() => setAddOpen((v) => !v)} buttonRef={plusRef} />
+                  <AddMenu
+                    open={addOpen}
+                    onOpenChange={setAddOpen}
+                    selected={chips}
+                    onSelectedChange={setChips}
+                    onOpenTerminal={props.onOpenTerminal}
+                    onNavigate={props.onNavigate}
+                    projectRoot={props.projectRoot ?? null}
+                    anchorRef={plusRef}
+                  />
+                  <ComposerModePills
+                    mode={mode}
+                    onChange={(m) => {
+                      setMode(m as ComposerMode);
+                      writeComposerDefault("mode", m);
+                    }}
+                  />
+                </div>
+                <div className="ov-composer__tools">
+                  <AccessMenu
+                    value={accessMode}
+                    onChange={(v) => {
+                      setAccessMode(v);
+                      writeComposerDefault("permissionMode", v);
+                    }}
+                  />
+                  <ModelMenu
+                    models={composerModels}
+                    value={modelId}
+                    onChange={(id) => {
+                      setModelId(id);
+                      writeComposerDefault("modelId", id);
+                    }}
+                  />
+                  <ReasoningMenu
+                    value={reasoningEffort}
+                    models={composerModels}
+                    modelId={modelId}
+                    onChange={(v) => {
+                      setReasoningEffort(v);
+                      writeComposerDefault("reasoningEffort", v);
+                    }}
+                  />
+                  <ContextUsageMenu
+                    state={{
+                      usage: props.contextUsage,
+                      modelContextWindow: composerModels.find((m) => m.id === modelId)?.contextWindow,
+                    }}
+                  />
+                  <ComposerSubmitButton
+                    label="Run mission"
+                    icon={<IconRocket size={13} />}
+                    onClick={submit}
+                    disabled={!prompt.trim()}
+                    title="Run mission (Ctrl+Enter)"
+                  />
+                </div>
               </div>
             </div>
 

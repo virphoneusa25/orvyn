@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   AGENT_PANEL_DEFAULT,
   AGENT_PANEL_MIN,
+  appGridTemplateColumns,
   clampAgentPanelWidth,
   clampTerminalHeight,
   parseDesktopLayout,
   persistableLayout,
   shouldOverlayAgentPanel,
+  SIDEBAR_WIDTH,
   TERMINAL_DEFAULT_HEIGHT,
   TERMINAL_MIN_HEIGHT,
 } from "./desktopLayout.ts";
@@ -121,6 +123,17 @@ test("workbench tabs, selected tab, width, and recent URLs survive restart", () 
   const stored = persistableLayout(parsed);
   assert.equal(stored.activeTabId, parsed.activeTabId);
   assert.deepEqual(stored.recentUrls, parsed.recentUrls);
+});
+
+test("app grid is two tracks when Workbench is closed", () => {
+  assert.equal(
+    appGridTemplateColumns({ workbenchOpen: false, overlay: false, workbenchWidth: 650 }),
+    `${SIDEBAR_WIDTH}px minmax(0, 1fr)`
+  );
+  assert.equal(
+    appGridTemplateColumns({ workbenchOpen: true, overlay: false, workbenchWidth: 650 }),
+    `${SIDEBAR_WIDTH}px minmax(500px, 1fr) 650px`
+  );
 });
 
 test("stored activeTab and agentPanelWidth win over legacy keys", () => {

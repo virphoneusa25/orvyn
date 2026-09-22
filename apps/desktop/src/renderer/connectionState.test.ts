@@ -200,3 +200,29 @@ test("workspace label is not fabricated", () => {
   const named = describeConnection(signedIn({ workspaceName: "VirPhone" }));
   assert.equal(named.workspaceLabel, "VirPhone");
 });
+
+test("greeting prefers account/profile name over the OS login", () => {
+  const localOnly = describeConnection({
+    ...INITIAL_FACTS,
+    localDisplayName: "Rmckn",
+    profileDisplayName: "Royce",
+  });
+  assert.equal(localOnly.userName, "Royce");
+
+  let facts = reduceConnection(
+    { ...INITIAL_FACTS, localDisplayName: "Rmckn" },
+    { type: "session-valid", name: "Royce", email: "royce@virphoneusa.com" }
+  );
+  assert.equal(facts.profileDisplayName, "Royce");
+  assert.equal(describeConnection(facts).userName, "Royce");
+
+  facts = reduceConnection(facts, { type: "signed-out" });
+  assert.equal(facts.accountName, null);
+  assert.equal(facts.localDisplayName, "Rmckn");
+  assert.equal(describeConnection(facts).userName, "Royce");
+});
+
+test("OS username is only the last greeting fallback", () => {
+  const view = describeConnection({ ...INITIAL_FACTS, localDisplayName: "Rmckn" });
+  assert.equal(view.userName, "Rmckn");
+});

@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readComposerDefaults, toRunPayloadSettings, COMPOSER_MODES } from "./composerSettings.ts";
+import { readComposerDefaults, toRunPayloadSettings, COMPOSER_MODES, compactModelLabel } from "./composerSettings.ts";
 
 function storeOf(entries: Record<string, string>): Pick<Storage, "getItem"> {
   return { getItem: (k: string) => (k in entries ? entries[k] : null) };
@@ -56,4 +56,11 @@ test("payload: empty settings carry nothing (backend defaults apply)", () => {
 test("shared mode pills cover the six command modes with tooltips", () => {
   assert.deepEqual(COMPOSER_MODES.map((m) => m.id), ["auto", "code", "server", "research", "deploy", "automate"]);
   for (const m of COMPOSER_MODES) assert.ok(m.title.length > 3, `${m.id} has a tooltip`);
+});
+
+test("compact model label shortens verbose registry names without changing identity", () => {
+  assert.equal(compactModelLabel("Cheaper Inference glm-5.3", "ci:glm-5.3"), "GLM-5.3");
+  assert.equal(compactModelLabel("GPT-5.6", "openai:gpt-5.6"), "GPT-5.6");
+  assert.equal(compactModelLabel(undefined, "auto"), "Auto");
+  assert.equal(compactModelLabel("", "auto"), "Auto");
 });

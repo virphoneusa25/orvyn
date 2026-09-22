@@ -75,3 +75,24 @@ export const COMPOSER_MODES: ComposerModeId[] = [
   { id: "deploy", label: "Deploy", title: "Deploy — ship changes" },
   { id: "automate", label: "Automate", title: "Automate — multi-step automation" },
 ];
+
+/** Toolbar label: "Cheaper Inference glm-5.3" → "GLM-5.3". Identity (id) is unchanged. */
+export function compactModelLabel(name?: string | null, id?: string | null): string {
+  const modelId = (id ?? "").trim();
+  if (!modelId || modelId === "auto") return "Auto";
+  const display = (name ?? "").trim();
+  const haystack = `${display} ${modelId}`;
+  const token = haystack.match(
+    /(?:^|[\s/:._-])((?:glm|gpt|o\d|claude|gemini|llama|mistral|qwen|deepseek|grok|phi|nemotron)[-.\w]*)/i
+  );
+  if (token?.[1]) return formatModelToken(token[1]);
+  const tail = modelId.split(/[/:]/).pop() ?? modelId;
+  if (tail && tail.length <= 18) return formatModelToken(tail);
+  const stripped = display.replace(/^(cheaper|fast|premium|best|default|budget|pro)\s+inference\s+/i, "").trim();
+  if (stripped) return stripped.length <= 18 ? formatModelToken(stripped) : stripped.slice(0, 16);
+  return (display || modelId).slice(0, 16);
+}
+
+function formatModelToken(raw: string): string {
+  return raw.replace(/\s+/g, "-").replace(/[a-z]+/gi, (part) => part.toUpperCase());
+}

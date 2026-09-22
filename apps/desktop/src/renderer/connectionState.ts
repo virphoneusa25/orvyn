@@ -32,6 +32,8 @@ export interface ConnectionFacts {
   workspaceName: string | null;
   /** OS / local profile name. Empty until the shell reports one. */
   localDisplayName: string;
+  /** Last known cloud/account display name. Survives local-mode sign-out. */
+  profileDisplayName: string;
 }
 
 export const INITIAL_FACTS: ConnectionFacts = {
@@ -46,7 +48,30 @@ export const INITIAL_FACTS: ConnectionFacts = {
   accountEmail: null,
   workspaceName: null,
   localDisplayName: "",
+  profileDisplayName: "",
 };
+
+export const PROFILE_DISPLAY_NAME_KEY = "orvyn:profile-display-name";
+
+export function readPersistedProfileName(storage?: Pick<Storage, "getItem"> | null): string {
+  try {
+    const store = storage ?? (typeof globalThis !== "undefined" ? globalThis.localStorage : undefined);
+    return String(store?.getItem(PROFILE_DISPLAY_NAME_KEY) ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+export function persistProfileName(name: string, storage?: Pick<Storage, "setItem"> | null): void {
+  const n = name.trim();
+  if (!n) return;
+  try {
+    const store = storage ?? (typeof globalThis !== "undefined" ? globalThis.localStorage : undefined);
+    store?.setItem(PROFILE_DISPLAY_NAME_KEY, n);
+  } catch {
+    /* private mode / node tests */
+  }
+}
 
 export type RuntimeEvent =
   | { type: "config"; cloudTarget: boolean; hasSession: boolean }
@@ -71,6 +96,7 @@ export function reduceConnection(facts: ConnectionFacts, event: RuntimeEvent): C
       return {
         ...INITIAL_FACTS,
         localDisplayName: facts.localDisplayName,
+        profileDisplayName: facts.profileDisplayName || readPersistedProfileName(),
         localEngineState: facts.localEngineState === "offline" ? "ready" : facts.localEngineState,
         workspaceName: facts.workspaceName,
       };
@@ -97,15 +123,20 @@ export function reduceConnection(facts: ConnectionFacts, event: RuntimeEvent): C
         workerOnlineCount: facts.accountState === "signed-in" ? facts.workerOnlineCount : 0,
       };
     }
-    case "session-valid":
+    case "session-valid": {
+      const named = event.name?.trim() || "";
+      if (named) persistProfileName(named);
+      else if (event.email?.trim()) persistProfileName(event.email.trim().split("@")[0] ?? "");
       return {
         ...facts,
         accountState: "signed-in",
         accountName: event.name,
         accountEmail: event.email,
+        profileDisplayName: named || facts.profileDisplayName || readPersistedProfileName(),
         localMode: false,
         syncState: facts.backendState === "online" && facts.syncState === "synced" ? "synced" : "syncing",
       };
+    }
     case "session-invalid":
       return {
         ...facts,
@@ -195,6 +226,8 @@ function personName(facts: ConnectionFacts): string {
     const email = facts.accountEmail?.trim();
     if (email) return email.split("@")[0] || email;
   }
+  const profile = (facts.profileDisplayName || readPersistedProfileName()).trim();
+  if (profile) return profile;
   const local = facts.localDisplayName.trim();
   return local || "You";
 }

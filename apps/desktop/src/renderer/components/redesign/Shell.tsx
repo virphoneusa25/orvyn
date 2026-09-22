@@ -206,20 +206,23 @@ export function TopBar({ crumbs, status, onOpenCommand, onReconnectCloud, onOpen
 
       <div className="ov-topbar__right">
         {status.engineReady ? (
-          <span className="ov-pill ov-pill--ok">
+          <span className="ov-pill ov-pill--ok" title="Local engine ready">
             <span className="ov-dot" />
-            Local engine ready
+            <span className="ov-pill__full">Local engine ready</span>
+            <span className="ov-pill__compact">Local</span>
           </span>
         ) : (
-          <span className="ov-pill ov-pill--warn">
+          <span className="ov-pill ov-pill--warn" title="Local engine starting">
             <span className="ov-dot" />
-            Local engine starting
+            <span className="ov-pill__full">Local engine starting</span>
+            <span className="ov-pill__compact">Local</span>
           </span>
         )}
         {!status.cloudOnline && (
-          <button type="button" className="ov-pill ov-pill--warn" onClick={onReconnectCloud}>
+          <button type="button" className="ov-pill ov-pill--warn" onClick={onReconnectCloud} title="Cloud offline — reconnect">
             <span className="ov-dot" />
-            Cloud offline · Reconnect
+            <span className="ov-pill__full">Cloud offline · Reconnect</span>
+            <span className="ov-pill__compact">Cloud</span>
           </button>
         )}
         <button type="button" className="ov-icon-btn" aria-label="Notifications" onClick={onOpenNotifications}>

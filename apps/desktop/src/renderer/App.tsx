@@ -48,10 +48,9 @@ import { TerminalDrawer } from "./components/TerminalDrawer";
 import { useDesktopLayout } from "./useDesktopLayout";
 import {
   AGENT_PANEL_MIN,
-  CHAT_MIN,
+  appGridTemplateColumns,
   clampAgentPanelWidth,
   shouldOverlayAgentPanel,
-  SIDEBAR_WIDTH,
 } from "./desktopLayout";
 import { registerSelectionReader, setWorkspaceSnapshot } from "./workspaceSnapshot";
 import type { Attachment } from "./components/AttachmentBar";
@@ -584,9 +583,11 @@ export function App() {
         className="orvyn-app-columns"
         style={{
           display: "grid",
-          gridTemplateColumns: showRightChrome && !overlayAgentPanel
-            ? `${SIDEBAR_WIDTH}px minmax(${CHAT_MIN}px, 1fr) ${agentPanelWidth}px`
-            : `${SIDEBAR_WIDTH}px minmax(0, 1fr)`,
+          gridTemplateColumns: appGridTemplateColumns({
+            workbenchOpen: showRightChrome,
+            overlay: overlayAgentPanel,
+            workbenchWidth: agentPanelWidth,
+          }),
           flex: 1,
           minHeight: 0,
           minWidth: 0,

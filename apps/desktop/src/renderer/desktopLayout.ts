@@ -84,6 +84,19 @@ export function fitsDockedWorkbench(viewportWidth: number): boolean {
   return viewportWidth >= SIDEBAR_WIDTH + CHAT_MIN + AGENT_PANEL_MIN;
 }
 
+/** Root desktop grid. Closed Workbench is sidebar | main — never a
+ *  phantom third track. Open Workbench adds the panel column. */
+export function appGridTemplateColumns(opts: {
+  workbenchOpen: boolean;
+  overlay?: boolean;
+  workbenchWidth: number;
+}): string {
+  if (opts.workbenchOpen && !opts.overlay) {
+    return `${SIDEBAR_WIDTH}px minmax(${CHAT_MIN}px, 1fr) ${opts.workbenchWidth}px`;
+  }
+  return `${SIDEBAR_WIDTH}px minmax(0, 1fr)`;
+}
+
 function safeUrl(value: unknown): string {
   return typeof value === "string" && value.startsWith("http") && value.length < 2000 ? value : "";
 }

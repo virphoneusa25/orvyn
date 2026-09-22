@@ -2,6 +2,7 @@
 import {
   INITIAL_FACTS,
   deriveCloudConnectionState,
+  readPersistedProfileName,
   reduceConnection,
   type ConnectionFacts,
 } from "./connectionState";
@@ -30,7 +31,7 @@ import {
 
 type Listener = (facts: ConnectionFacts) => void;
 
-let facts: ConnectionFacts = { ...INITIAL_FACTS };
+let facts: ConnectionFacts = { ...INITIAL_FACTS, profileDisplayName: readPersistedProfileName() };
 const listeners = new Set<Listener>();
 let validating = false;
 let observerInstalled = false;
