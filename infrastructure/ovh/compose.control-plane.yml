@@ -26,6 +26,8 @@ services:
       - ORVYN_REDIS_URL=redis://redis:6379/0
       # Qdrant (Phase 5: scalable project intelligence) — internal only
       - ORVYN_QDRANT_URL=http://qdrant:6333
+      # Authorized project roots only. Tenant isolation is path + payload.
+      - ORVYN_PROJECTS_DIR=/projects
 
   postgres:
     image: postgres:16-alpine
