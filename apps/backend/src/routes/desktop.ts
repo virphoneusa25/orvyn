@@ -43,8 +43,11 @@ async function hasDocker(): Promise<boolean> {
   return dockerProbe;
 }
 
-function sandboxSessionFor(tenantId: string, projectRoot: string) {
-  return findSandboxSession(tenantId, projectRoot || undefined);
+function sandboxSessionFor(tenantId: string, _projectRoot: string) {
+  // Cross-path lookup: the client's local path (C:/...) NEVER matches the
+  // server's resolved workspace path. Find by tenant only — the sandbox is
+  // per-tenant, so this is correct and safe.
+  return findSandboxSession(tenantId);
 }
 
 export function desktopRouter(): Router {
