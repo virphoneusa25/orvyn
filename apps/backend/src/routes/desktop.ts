@@ -1,7 +1,18 @@
+// apps/backend/src/routes/desktop.ts
+//
+// Desktop session routes. Two backends:
+//   1. SANDBOX (Docker + Xvfb + openbox + Chromium) — the TRUE visual
+//      desktop, available when Docker runs (OVH backend, CI).
+//   2. PLAYWRIGHT viewport — Chromium page screenshots, the local-dev
+//      fallback when Docker is unavailable (Windows desktop).
+//
+// Both share the same session model, control ownership, input mapping,
+// and audit events. The DesktopView UI is backend-agnostic.
+
 import { Router } from "express";
+import { spawn } from "child_process";
 import { requireTenant } from "../middleware/tenant";
-import { playwrightAvailable } from "../ai/tools/browserTools";
-import { captureBrowserFrame } from "../ai/tools/browserTools";
+import { playwrightAvailable, captureBrowserFrame, getBrowserSession, ensureBrowserSession } from "../ai/tools/browserTools";
 import {
   canUserAct,
   createDesktopSession,
@@ -12,20 +23,63 @@ import {
   requestControl,
   toPublic,
 } from "../desktop/desktopSession";
-import { getBrowserSession, ensureBrowserSession } from "../ai/tools/browserTools";
+import {
+  startSandboxDesktop,
+  captureSandboxFrame,
+  sandboxInput,
+  findSandboxSession,
+  stopSandboxDesktop,
+} from "../desktop/sandboxDesktop";
 import { setElectronBrowserTarget } from "../desktop/electronBrowserTarget";
+
+let dockerProbe: boolean | null = null;
+async function hasDocker(): Promise<boolean> {
+  if (dockerProbe !== null) return dockerProbe;
+  dockerProbe = await new Promise<boolean>((resolve) => {
+    const p = spawn("docker", ["version", "--format", "{{.Server.Version}}"], { windowsHide: true });
+    p.on("close", (code) => resolve(code === 0));
+    p.on("error", () => resolve(false));
+  });
+  return dockerProbe;
+}
+
+function sandboxSessionFor(tenantId: string, projectRoot: string) {
+  return findSandboxSession(tenantId, projectRoot || undefined);
+}
 
 export function desktopRouter(): Router {
   const router = Router();
 
-  router.get("/session", (req, res) => {
+  router.get("/session", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.query.projectRoot ?? t.currentProjectRoot ?? "");
+    const docker = await hasDocker();
+
+    // Sandbox session (true desktop) takes priority when available.
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (sandbox) {
+      return res.json({
+        session: {
+          id: sandbox.id,
+          status: sandbox.status,
+          controlOwner: sandbox.controlOwner,
+          width: sandbox.width,
+          height: sandbox.height,
+          url: sandbox.url,
+          live: sandbox.status === "ready" || sandbox.status === "user_control",
+          transport: "sandbox-x11",
+          error: sandbox.error,
+        },
+        playwright: playwrightAvailable(),
+        sandbox: docker,
+      });
+    }
+
     const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
     const session = getDesktopSession(t.id, runId, projectRoot) ?? listDesktopSessions(t.id)[0];
-    if (!session) return res.json({ session: null, playwright: playwrightAvailable() });
+    if (!session) return res.json({ session: null, playwright: playwrightAvailable(), sandbox: docker });
     if (session.tenantId !== t.id) return res.status(403).json({ error: "Desktop session is not in this workspace." });
-    res.json({ session: toPublic(session), playwright: playwrightAvailable() });
+    res.json({ session: toPublic(session), playwright: playwrightAvailable(), sandbox: docker });
   });
 
   router.post("/session", async (req, res) => {
@@ -33,16 +87,49 @@ export function desktopRouter(): Router {
     const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
     if (!projectRoot) return res.status(400).json({ error: "projectRoot required" });
     const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
+    const url = typeof req.body?.url === "string" ? req.body.url : undefined;
+
+    // PREFER the true sandbox desktop when Docker is available.
+    if (await hasDocker()) {
+      try {
+        const sandbox = await startSandboxDesktop({
+          tenantId: t.id,
+          projectRoot,
+          runId,
+          url,
+        });
+        if (sandbox.status !== "error") {
+          return res.json({
+            session: {
+              id: sandbox.id,
+              status: sandbox.status,
+              controlOwner: sandbox.controlOwner,
+              width: sandbox.width,
+              height: sandbox.height,
+              url: sandbox.url,
+              live: true,
+              transport: "sandbox-x11",
+            },
+            sandbox: true,
+          });
+        }
+        // Sandbox errored — fall through to Playwright with a note.
+      } catch {
+        // Sandbox unavailable (image not built?) — fall through to Playwright.
+      }
+    }
+
+    // PLAYWRIGHT fallback (no Docker — local dev).
     if (!playwrightAvailable()) {
-      return res.status(503).json({ error: "Desktop runtime unavailable. Install Playwright Chromium on the worker." });
+      return res.status(503).json({ error: "Desktop runtime unavailable. Install Playwright Chromium or enable Docker." });
     }
     const session = createDesktopSession({ tenantId: t.id, projectRoot, runId });
     try {
       const browser = await ensureBrowserSession(projectRoot);
       session.status = "agent_control";
       session.controlOwner = "orion";
-      session.url = String(browser.page.url() || req.body?.url || "");
-      res.json({ session: toPublic(session) });
+      session.url = String(browser.page.url() || url || "");
+      res.json({ session: toPublic(session), sandbox: false });
     } catch (err: any) {
       session.status = "error";
       session.error = err.message;
@@ -53,6 +140,21 @@ export function desktopRouter(): Router {
   router.get("/frame", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.query.projectRoot ?? t.currentProjectRoot ?? "");
+
+    // Sandbox frame (X11 capture).
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (sandbox && sandbox.status !== "ended") {
+      const jpeg = await captureSandboxFrame(sandbox);
+      if (!jpeg) return res.status(409).json({ error: "Desktop has no live frame yet." });
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Orvyn-Desktop-Control", sandbox.controlOwner);
+      res.setHeader("X-Orvyn-Desktop-Transport", "sandbox-x11");
+      if (sandbox.url) res.setHeader("X-Orvyn-Desktop-Url", encodeURIComponent(sandbox.url));
+      return res.send(jpeg);
+    }
+
+    // Playwright frame.
     const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
     const session = getDesktopSession(t.id, runId, projectRoot);
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
@@ -64,22 +166,44 @@ export function desktopRouter(): Router {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Orvyn-Desktop-Url", encodeURIComponent(frame.url));
     res.setHeader("X-Orvyn-Desktop-Control", session.controlOwner);
+    res.setHeader("X-Orvyn-Desktop-Transport", "playwright-viewport");
     res.send(frame.jpeg);
   });
 
-  router.post("/control", (req, res) => {
+  router.post("/control", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
-    const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
     const owner = req.body?.owner === "user" ? "user" : req.body?.owner === "orion" ? "orion" : "";
+
+    // Sandbox control.
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (sandbox && sandbox.status !== "ended") {
+      if (owner !== "user" && owner !== "orion") return res.status(400).json({ error: "owner must be user or orion" });
+      sandbox.controlOwner = owner;
+      if (owner === "user") sandbox.status = "user_control";
+      else sandbox.status = "ready";
+      if (sandbox.runId && t.runStore.get(sandbox.runId)) {
+        try {
+          t.runStore.emit(sandbox.runId, "desktop.control.changed", {
+            sessionId: sandbox.id,
+            to: owner,
+            controlOwner: sandbox.controlOwner,
+            status: String(sandbox.status),
+          });
+        } catch { /* audit is best-effort */ }
+      }
+      return res.json({
+        session: { id: sandbox.id, status: sandbox.status, controlOwner: sandbox.controlOwner, width: sandbox.width, height: sandbox.height, url: sandbox.url, live: true, transport: "sandbox-x11" },
+      });
+    }
+
+    // Playwright control.
+    const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
     const session = getDesktopSession(t.id, runId, projectRoot);
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
     if (owner !== "user" && owner !== "orion") return res.status(400).json({ error: "owner must be user or orion" });
     const result = requestControl(session, owner);
     if (!result.ok) return res.status(409).json({ error: result.reason, session: toPublic(session) });
-    // Control transitions are part of the run's auditable history — the same
-    // event stream the Desktop UI replays. Emitted only for the session's
-    // own run; never a fabricated id.
     if (session.runId) {
       try {
         if (t.runStore.get(session.runId)) {
@@ -90,7 +214,7 @@ export function desktopRouter(): Router {
             status: session.status,
           });
         }
-      } catch { /* audit is best-effort; the control change already succeeded */ }
+      } catch { /* best-effort */ }
     }
     res.json({ session: toPublic(session) });
   });
@@ -98,6 +222,16 @@ export function desktopRouter(): Router {
   router.post("/input", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+
+    // Sandbox input (xdotool).
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (sandbox && sandbox.status !== "ended") {
+      if (sandbox.controlOwner !== "user") return res.status(409).json({ error: "Take Control before interacting with this desktop." });
+      const ok = await sandboxInput(sandbox, String(req.body?.type ?? ""), req.body ?? {});
+      return res.json({ ok, session: { id: sandbox.id, controlOwner: sandbox.controlOwner } });
+    }
+
+    // Playwright input.
     const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
     const session = getDesktopSession(t.id, runId, projectRoot);
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
@@ -108,12 +242,7 @@ export function desktopRouter(): Router {
     try {
       if (kind === "move" || kind === "click" || kind === "dblclick" || kind === "rightclick" || kind === "scroll") {
         const mapped = mapClientPoint(
-          {
-            x: Number(req.body.x ?? 0),
-            y: Number(req.body.y ?? 0),
-            width: Number(req.body.viewWidth ?? session.width),
-            height: Number(req.body.viewHeight ?? session.height),
-          },
+          { x: Number(req.body.x ?? 0), y: Number(req.body.y ?? 0), width: Number(req.body.viewWidth ?? session.width), height: Number(req.body.viewHeight ?? session.height) },
           session
         );
         await page.mouse.move(mapped.x, mapped.y);
@@ -135,9 +264,18 @@ export function desktopRouter(): Router {
     }
   });
 
-  router.post("/stop", (req, res) => {
+  router.post("/stop", async (req, res) => {
     const t = requireTenant(req);
     const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+
+    // Stop sandbox.
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (sandbox) {
+      await stopSandboxDesktop(sandbox);
+      return res.json({ session: { id: sandbox.id, status: "ended", controlOwner: "none" } });
+    }
+
+    // Stop Playwright.
     const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
     const session = getDesktopSession(t.id, runId, projectRoot);
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
