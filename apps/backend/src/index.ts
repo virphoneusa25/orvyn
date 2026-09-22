@@ -105,7 +105,13 @@ app.use("/api/v1/auth", ipRateLimit(), authRouter);
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.
 // The rate limit is per tenant, so one customer can't starve the others.
-app.use("/api/v1", resolveTenant, tenantRateLimit(), v1Router);
+app.use("/api/v1", resolveTenant, (req, res, next) => {
+    // Desktop frame polling is a real-time visual stream (~11 FPS), not a
+    // typical API call — exempting it prevents the 300 RPM tenant limiter
+    // from starving the stream with 429s while the user watches.
+    if (req.path.startsWith("/desktop/frame")) return next();
+    return tenantRateLimit()(req, res, next);
+  }, v1Router);
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });

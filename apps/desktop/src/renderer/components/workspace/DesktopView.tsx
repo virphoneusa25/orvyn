@@ -225,7 +225,7 @@ export function DesktopView({
           </div>
         )}
         {frame ? (
-          <img src={frame} alt="ORVYN Desktop" style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
+          <img src={frame} alt="ORVYN Desktop" style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
         ) : (
           <div style={{ ...emptyBody(), padding: 24 }}>Waiting for the first desktop frame…</div>
         )}
