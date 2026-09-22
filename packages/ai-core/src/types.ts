@@ -73,7 +73,7 @@ export interface AIResponse {
   /** Thinking-model chain-of-thought; callers must echo it back (see AIMessage). */
   reasoningContent?: string;
   finishReason: "stop" | "length" | "tool_call" | "error";
-  usage?: { promptTokens: number; completionTokens: number };
+  usage?: { promptTokens: number; completionTokens: number; cachedTokens?: number };
 }
 
 export interface AIChunk {
@@ -93,6 +93,11 @@ export interface AIChunk {
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
+  /** Provider-reported cached/reused prompt tokens, when the API exposes
+   *  them (OpenAI prompt_tokens_details.cached_tokens, Anthropic-style
+   *  cache_read_input_tokens, Qwen-style prompt_cache_hit_tokens).
+   *  Undefined when the provider does not report caching — never guessed. */
+  cachedTokens?: number;
 }
 
 export interface ModelCapabilities {

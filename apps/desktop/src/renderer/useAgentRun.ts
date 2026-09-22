@@ -11,6 +11,12 @@ export interface RunUsage {
   contextTokens: number;
   contextBudget: number;
   modelId?: string;
+  /** Raw model context window (registry), when the run reports it. */
+  contextWindow?: number;
+  /** Pre-request context composition (token estimates per category). */
+  contextBreakdown?: Record<string, number>;
+  /** Provider-reported cache hit rate; undefined when unsupported. */
+  cacheHitRate?: number;
 }
 
 /** A run is over when no further events can arrive for it. */
@@ -118,6 +124,15 @@ export function useAgentRun(
         contextTokens: Number(e.data.contextTokens ?? 0),
         contextBudget: Number(e.data.contextBudget ?? 0),
         modelId: e.data.modelId ? String(e.data.modelId) : undefined,
+        contextWindow: Number(e.data.contextWindow ?? 0) || undefined,
+        contextBreakdown:
+          e.data.contextBreakdown && typeof e.data.contextBreakdown === "object"
+            ? (e.data.contextBreakdown as Record<string, number>)
+            : undefined,
+        cacheHitRate:
+          typeof e.data.cacheHitRate === "number" && Number.isFinite(e.data.cacheHitRate)
+            ? e.data.cacheHitRate
+            : undefined,
       });
     }
   }

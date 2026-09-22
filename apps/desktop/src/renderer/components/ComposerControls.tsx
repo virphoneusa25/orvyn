@@ -54,18 +54,29 @@ const REASONING_LEVELS: { id: Exclude<ReasoningEffort, "auto">; hint: string }[]
 ];
 
 /** Shared dropdown shell: compact trigger + popover + click-outside close. */
-function Dropdown({
+export function Dropdown({
   label,
   title,
   children,
   width = 280,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   label: React.ReactNode;
   title: string;
   children: (close: () => void) => React.ReactNode;
   width?: number;
+  /** Controlled open state (optional) — lets a menu compute data on open. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (v: boolean | ((o: boolean) => boolean)) => {
+    const next = typeof v === "function" ? (v as (o: boolean) => boolean)(open) : v;
+    onOpenChange?.(next);
+    setUncontrolledOpen(next);
+  };
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;

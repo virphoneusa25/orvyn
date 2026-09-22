@@ -380,3 +380,25 @@ test("access mode is run-scoped: the gateway is restored after the run settles",
   assert.equal(h.gateway.profile, "SAFE", "previous autonomy profile restored");
   assert.equal(h.registry.getPermission("terminal"), "ask", "mode baseline re-applied — no upgrade leakage");
 });
+
+// ---- Context-usage instrumentation ------------------------------------------
+
+test("usage.updated carries the context breakdown, raw window, and cache rate", async () => {
+  const h = harness([
+    [toolCallChunk("call_x", "read_file"), { delta: "", done: false }],
+    [{ delta: "", usage: { promptTokens: 100, completionTokens: 10, cachedTokens: 80 } as any, done: true }],
+    [{ delta: "done", done: true }],
+  ]);
+  const runId = h.runtime.start("C:/proj", "inspect");
+  await waitForStatus(h.store, runId);
+  const usage = h.store.get(runId)!.events.filter((e) => e.type === "usage.updated").pop();
+  assert.ok(usage, "usage event emitted");
+  assert.equal(usage!.data.contextWindow, 128_000, "raw model context window reported");
+  const breakdown = usage!.data.contextBreakdown as Record<string, number>;
+  assert.ok(breakdown.systemPrompt > 0, "system prompt measured");
+  assert.ok(breakdown.toolDefinitions > 0, "tool schemas measured");
+  assert.ok(breakdown.messages > 0, "conversation measured");
+  assert.equal(breakdown.projectContext, 0, "no retrieval on this harness");
+  assert.equal(breakdown.memory, 0);
+  assert.ok(Math.abs(Number(usage!.data.cacheHitRate) - 0.8) < 1e-9, "cache hit rate = cached/prompt");
+});

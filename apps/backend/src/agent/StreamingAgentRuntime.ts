@@ -22,7 +22,7 @@ import { modelCallSignal } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
-import { clampToolOutput, compactConversation, estimateConversationTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
+import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import type { LocalStore } from "../persistence/LocalStore";
@@ -89,6 +89,12 @@ interface RunState {
   mode: AgentMode;
   /** Composer reasoning effort; "auto" defers to the provider. */
   reasoningEffort: ReasoningEffort;
+  /** Context composition measured at assembly time (token estimates) —
+   *  feeds the context-usage breakdown in usage.updated events. */
+  contextParts: { systemPrompt: number; projectContext: number; memory: number };
+  /** Cumulative provider-reported cache samples for the run's average. */
+  cachedTokensSum: number;
+  promptTokensSum: number;
   /** Composer access mode (run-scoped snapshot; changes apply to future runs).
    *  Undefined for callers that did not send one — the tenant autonomy
    *  profile applies unchanged for those, preserving legacy behavior. */
@@ -285,6 +291,9 @@ export class StreamingAgentRuntime {
       execution,
       mode,
       reasoningEffort: options?.reasoningEffort ?? "auto",
+      contextParts: { systemPrompt: 0, projectContext: 0, memory: 0 },
+      cachedTokensSum: 0,
+      promptTokensSum: 0,
       ...(accessMode ? { accessMode } : {}),
       previousProfile,
     });
@@ -324,6 +333,24 @@ export class StreamingAgentRuntime {
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
+    // Context composition, measured at assembly time. These estimates feed
+    // the live context-usage breakdown; provider-reported totals (when the
+    // API returns them) remain the source of truth for the overall count.
+    const state0 = this.runs.get(runId);
+    if (state0) {
+      state0.contextParts = {
+        systemPrompt: estimateTokens([
+          def.systemPrompt,
+          CONVERSATION_STYLE,
+          mcpCapabilities(this.mcpSummary),
+          `Project root (absolute): ${projectRoot}`,
+          LANGUAGE_RULE,
+          rules ? `\nProject rules:\n${rules}` : "",
+        ].filter(Boolean).join("\n")),
+        projectContext: 0,
+        memory: estimateTokens(memoryContext),
+      };
+    }
     const messages: AIMessage[] = [
       {
         role: "system",
@@ -359,7 +386,11 @@ export class StreamingAgentRuntime {
           this.mountRemoteTools(runId);
         }
         const codeContext = await this.relevantCode(instruction);
-        if (codeContext) messages[0].content += `\n\nRelevant indexed code (verify with file tools before editing):\n${codeContext}`;
+        if (codeContext) {
+          messages[0].content += `\n\nRelevant indexed code (verify with file tools before editing):\n${codeContext}`;
+          const st = this.runs.get(runId);
+          if (st) st.contextParts.projectContext = estimateTokens(codeContext);
+        }
         await this.loop(runId, messages, instruction, mode, provider);
       } catch (err: any) {
         const st = this.runs.get(runId);
@@ -678,12 +709,39 @@ export class StreamingAgentRuntime {
           if (chunk.reasoning) reasoning = chunk.reasoning;
           if (chunk.usage) {
             const total = this.store.addUsage(runId, chunk.usage);
+            state.cachedTokensSum += Number(chunk.usage.cachedTokens ?? 0);
+            state.promptTokensSum += Number(chunk.usage.promptTokens ?? 0);
             if (total) {
+              // Context composition breakdown: pre-request accounting of what
+              // the next model call carries. Provider-reported totals stay
+              // authoritative for the overall count; these shares explain it.
+              const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : [];
+              let toolDefinitionTokens = 0;
+              let mcpToolTokens = 0;
+              for (const t of toolDefs) {
+                const size = estimateTokens(JSON.stringify(t.parameters)) + estimateTokens(t.description ?? "");
+                if (t.name === "mcp_call" || t.name === "mcp_list") mcpToolTokens += size;
+                else toolDefinitionTokens += size;
+              }
+              const systemMsgTokens = messages[0]?.role === "system" ? estimateMessageTokens(messages[0]) : 0;
+              const conversationTokens = Math.max(0, estimateConversationTokens(messages) - systemMsgTokens);
               this.store.emit(runId, "usage.updated", {
                 ...total,
                 contextTokens: estimateConversationTokens(messages),
                 contextBudget: this.contextBudget(provider),
+                contextWindow: provider.config.contextWindow,
                 modelId: provider.config.id,
+                contextBreakdown: {
+                  systemPrompt: state.contextParts?.systemPrompt ?? 0,
+                  messages: conversationTokens,
+                  toolDefinitions: toolDefinitionTokens,
+                  mcpTools: mcpToolTokens,
+                  projectContext: state.contextParts?.projectContext ?? 0,
+                  memory: state.contextParts?.memory ?? 0,
+                },
+                ...(state.promptTokensSum > 0 && state.cachedTokensSum > 0
+                  ? { cacheHitRate: state.cachedTokensSum / state.promptTokensSum }
+                  : {}),
               });
             }
           }

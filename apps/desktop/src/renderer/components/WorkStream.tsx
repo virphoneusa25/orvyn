@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";
 import { ModelMenu, ReasoningMenu, AccessMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
+import { ContextUsageMenu } from "./ContextUsageMenu";
 import type { ReasoningEffort, AccessMode } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
@@ -32,7 +33,16 @@ export interface RunView {
   approve: (callId: string, approved: boolean, scope?: "once" | "mission") => Promise<void>;
   stop: () => Promise<void>;
   lastEventAt: number;
-  usage?: { promptTokens: number; completionTokens: number; turns: number; modelId?: string } | null;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    turns: number;
+    modelId?: string;
+    contextTokens?: number;
+    contextWindow?: number;
+    contextBreakdown?: Record<string, number>;
+    cacheHitRate?: number;
+  } | null;
 }
 
 /** One durable queued follow-up, as the backend RunStore holds it. */
@@ -927,6 +937,12 @@ export function WorkStream({
                 setReasoningEffort(v);
                 writeComposerDefault("reasoningEffort", v);
                 setActiveChatSetting("reasoningEffort", v);
+              }}
+            />
+            <ContextUsageMenu
+              state={{
+                usage: run.usage,
+                modelContextWindow: composerModels.find((m) => m.id === requestedModelId)?.contextWindow,
               }}
             />
             {runActive ? (

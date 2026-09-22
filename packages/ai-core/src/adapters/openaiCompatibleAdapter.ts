@@ -13,6 +13,21 @@ import {
   ModelStatus,
 } from "../types";
 
+/**
+ * Normalizes every known provider spelling of "prompt tokens served from
+ * cache" into one field. Returns an empty object when the provider did not
+ * report caching — the value is never invented.
+ */
+function cachedTokensOf(usage: any): { cachedTokens?: number } {
+  const candidates = [
+    usage?.prompt_tokens_details?.cached_tokens, // OpenAI
+    usage?.cache_read_input_tokens,              // Anthropic-style
+    usage?.prompt_cache_hit_tokens,              // Qwen/dashscope-style
+    usage?.cached_input_tokens,                  // misc gateways
+  ].filter((v) => typeof v === "number" && v >= 0);
+  return candidates.length ? { cachedTokens: Math.max(...candidates) } : {};
+}
+
 export class OpenAICompatibleAdapter implements AIModelProvider {
   constructor(public readonly config: ModelConfig) {}
 

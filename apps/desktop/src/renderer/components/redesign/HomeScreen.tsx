@@ -18,7 +18,8 @@ import {
   writeComposerDefault,
 } from "../ComposerControls";
 import type { ReasoningEffort, AccessMode } from "../ComposerControls";
-import { IconRocket } from "../Icons";import type {
+import { IconRocket } from "../Icons";
+import { ContextUsageMenu } from "../ContextUsageMenu";import type {
   ComposerMode,
   EngineStatus,
   MissionFilter,
@@ -75,6 +76,13 @@ export interface HomeScreenProps {
   onOpenNotifications?: () => void;
   /** Overrides the greeting subtitle when the shell has a live connection reading. */
   statusLine?: string;
+  /** Live context/usage numbers from the active (or most recent) run. */
+  contextUsage?: {
+    contextTokens?: number;
+    contextWindow?: number;
+    contextBreakdown?: Record<string, number>;
+    cacheHitRate?: number;
+  } | null;
 }
 
 function greetingFor(d: Date): string {
@@ -243,6 +251,12 @@ export function HomeScreen(props: HomeScreenProps) {
                   onChange={(v) => {
                     setReasoningEffort(v);
                     writeComposerDefault("reasoningEffort", v);
+                  }}
+                />
+                <ContextUsageMenu
+                  state={{
+                    usage: props.contextUsage,
+                    modelContextWindow: composerModels.find((m) => m.id === modelId)?.contextWindow,
                   }}
                 />
 
