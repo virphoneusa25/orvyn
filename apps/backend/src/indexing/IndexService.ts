@@ -1,5 +1,5 @@
 // apps/backend/src/indexing/IndexService.ts
-import { watch, type FSWatcher, promises as fs } from "fs";
+import { watch, type FSWatcher, promises as fs, readFileSync } from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { scanProject, shouldIgnoreRelative, toPosixRelative } from "./scanner";
@@ -115,6 +115,7 @@ export class IndexService {
     this.projectRoot = projectRoot;
     this.projectId = logicalProjectId(this.tenantId, projectRoot, explicitProjectId);
     (this.vectorStore as { activateProject?(id: string): void }).activateProject?.(this.projectId);
+    this.restoreMeta();
     this.hybrid = new HybridSearch({
       projectRoot,
       semanticSearch: (q, k) => this.search(q, k),
@@ -277,6 +278,7 @@ export class IndexService {
         dirty: git.dirty,
       };
       this.note("index.completed", `${filesIndexed} files / ${chunksIndexed} chunks`);
+      this.persistMeta();
       this.watch(projectRoot);
     } catch (err: any) {
       this.note("index.failed", err.message);
@@ -350,6 +352,7 @@ export class IndexService {
   }
 
   async search(query: string, topK = 5): Promise<SearchHit[]> {
+    await this.ensureReadyFromStore();
     if (this.stats.status !== "ready" && this.stats.status !== "stale" && this.stats.status !== "degraded") {
       return [];
     }
@@ -377,8 +380,53 @@ export class IndexService {
     if (!this.hybrid) {
       if (this.projectRoot) this.bindProject(this.projectRoot);
     }
+    await this.ensureReadyFromStore();
     if (!this.hybrid) return [];
     return this.hybrid.searchCodebase(query, topK);
+  }
+
+  private metaPath(): string | null {
+    const dir = process.env.ORVYN_DATA_DIR;
+    if (!dir) return null;
+    return path.join(dir, `index-meta-${this.tenantId}-${this.projectId}.json`);
+  }
+
+  private persistMeta(): void {
+    const dest = this.metaPath();
+    if (!dest) return;
+    const payload = {
+      stats: this.getStats(),
+      hashes: [...this.fileHashes.entries()],
+    };
+    void fs.mkdir(path.dirname(dest), { recursive: true }).then(() => fs.writeFile(dest, JSON.stringify(payload)));
+  }
+
+  private restoreMeta(): void {
+    const dest = this.metaPath();
+    if (!dest) return;
+    try {
+      const raw = readFileSync(dest, "utf8");
+      const payload = JSON.parse(raw) as { stats?: IndexStats; hashes?: [string, FileRecord][] };
+      if (payload.hashes) this.fileHashes = new Map(payload.hashes);
+      if (payload.stats && (payload.stats.status === "ready" || payload.stats.status === "stale" || payload.stats.status === "degraded")) {
+        this.stats = { ...payload.stats, status: payload.stats.status === "ready" ? "stale" : payload.stats.status };
+      }
+    } catch {
+      /* first bind */
+    }
+  }
+
+  private async ensureReadyFromStore(): Promise<void> {
+    if (this.stats.status === "ready" || this.stats.status === "stale" || this.stats.status === "degraded") return;
+    this.restoreMeta();
+    const usable = new Set(["ready", "stale", "degraded"]);
+    if (usable.has(this.stats.status)) return;
+    try {
+      const n = await this.vectorStore.size();
+      if (n > 0) this.stats = { ...this.stats, status: "stale", chunksIndexed: n };
+    } catch {
+      /* still idle */
+    }
   }
 
   private async flushPending(): Promise<void> {
