@@ -9,6 +9,8 @@ import {
   type DesktopLayoutState,
 } from "./desktopLayout";
 
+export type { DesktopLayoutState };
+
 export function useDesktopLayout() {
   const [layout, setLayout] = useState<DesktopLayoutState>(getDesktopLayout);
   useEffect(() => subscribeDesktopLayout(setLayout), []);
@@ -19,6 +21,7 @@ export function useDesktopLayout() {
       setBottomTerminalOpen: (bottomTerminalOpen: boolean) => setDesktopLayout({ bottomTerminalOpen }),
       setBottomTerminalHeight: (bottomTerminalHeight: number) => setDesktopLayout({ bottomTerminalHeight }),
       setHelpOpen: (helpOpen: boolean) => setDesktopLayout({ helpOpen }),
+      setWorkspaceLayout: (patch: Partial<DesktopLayoutState>) => setDesktopLayout(patch),
       toggleRightPanel,
       toggleBottomTerminal,
       toggleHelp,

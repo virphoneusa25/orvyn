@@ -55,6 +55,7 @@ export interface OrvynBridge {
     getState(): Promise<{ maximized: boolean }>;
     saveText(payload: { defaultName?: string; content: string }): Promise<{ ok: boolean; canceled?: boolean; path?: string }>;
     writeClipboard?(text: string): Promise<boolean>;
+    openExternal?(url: string): Promise<boolean>;
     toggleDevTools(): Promise<void>;
     reload(): Promise<void>;
     onMaximizedChange(cb: (v: boolean) => void): () => void;

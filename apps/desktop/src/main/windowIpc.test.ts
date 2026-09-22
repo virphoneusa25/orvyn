@@ -6,6 +6,7 @@ import {
   maximizeIconLabel,
   validateSaveTextPayload,
   validateClipboardText,
+  validateExternalUrl,
 } from "./windowIpc.ts";
 
 function fakeWindow(initialMax = false) {
@@ -86,4 +87,12 @@ test("save-text payload rejects paths, oversized content, and non-strings", () =
 test("clipboard write validates input", () => {
   assert.equal(validateClipboardText(12), null);
   assert.equal(validateClipboardText("run-id"), "run-id");
+});
+
+test("open-external only allows http(s) URLs", () => {
+  assert.equal(validateExternalUrl("javascript:alert(1)"), null);
+  assert.equal(validateExternalUrl("file:///etc/passwd"), null);
+  assert.equal(validateExternalUrl("http://127.0.0.1:5173/"), "http://127.0.0.1:5173/");
+  assert.ok(validateExternalUrl("https://docs.orvyn.dev/start")?.startsWith("https://"));
+  assert.equal(WINDOW_IPC.openExternal, "window:open-external");
 });

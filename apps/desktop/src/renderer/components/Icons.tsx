@@ -279,3 +279,39 @@ export const IconMinus = (p: IconProps) => (
     <path d="M5 12h14" />
   </Svg>
 );
+
+export const IconCrosshair = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="3.5" />
+    <path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3" />
+  </Svg>
+);
+
+export const IconMore = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6" cy="12" r="1.2" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+    <circle cx="18" cy="12" r="1.2" fill="currentColor" />
+  </Svg>
+);
+
+export const IconExpand = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 4H4v5M15 4h5v5M4 15v5h5M20 15v5h-5" />
+  </Svg>
+);
+
+export const IconRefresh = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 12a8 8 0 1 1-2.2-5.5" />
+    <path d="M20 4v5h-5" />
+  </Svg>
+);
+
+export const IconExternal = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 5h5v5" />
+    <path d="M19 5 10 14" />
+    <path d="M17 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4.5" />
+  </Svg>
+);

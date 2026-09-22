@@ -5,6 +5,27 @@ import type { OrvynBridge } from "./orvyn-bridge";
 
 export function installPreviewBridge(): void {
   if (typeof window === "undefined" || window.orvyn) return;
+  try {
+    if (!globalThis.localStorage?.getItem("orvyn:desktop-layout")) {
+      globalThis.localStorage.setItem(
+        "orvyn:desktop-layout",
+        JSON.stringify({
+          rightPanelOpen: true,
+          bottomTerminalOpen: false,
+          bottomTerminalHeight: 280,
+          workSurfaceWidth: 560,
+          inspectorWidth: 320,
+          inspectorOpen: true,
+          surfaceTab: "changes",
+          inspectorTab: "files",
+          followOrion: true,
+          expandedPreview: false,
+        })
+      );
+    }
+  } catch {
+    /* private mode */
+  }
   const noop = async () => undefined;
   window.orvyn = {
     system: {
@@ -42,6 +63,10 @@ export function installPreviewBridge(): void {
       saveText: async () => ({ ok: false }),
       writeClipboard: async (text) => {
         await navigator.clipboard.writeText(text);
+        return true;
+      },
+      openExternal: async (url) => {
+        window.open(url, "_blank", "noopener,noreferrer");
         return true;
       },
       toggleDevTools: noop,

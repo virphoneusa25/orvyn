@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("orvyn", {
     getState: (): Promise<{ maximized: boolean }> => ipcRenderer.invoke("window:get-state"),
     saveText: (payload: { defaultName?: string; content: string }) => ipcRenderer.invoke("window:save-text", payload),
     writeClipboard: (text: string) => ipcRenderer.invoke("clipboard:write", text),
+    openExternal: (url: string) => ipcRenderer.invoke("window:open-external", url),
     toggleDevTools: () => ipcRenderer.invoke("window:toggleDevTools"),
     reload: () => ipcRenderer.invoke("window:reload"),
     onMaximizedChange: (cb: (v: boolean) => void) => {

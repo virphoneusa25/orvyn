@@ -13,6 +13,7 @@ export const WINDOW_IPC = {
   maximizedPush: "window:maximized",
   saveText: "window:save-text",
   clipboardWrite: "clipboard:write",
+  openExternal: "window:open-external",
 } as const;
 
 export type WindowAction = "minimize" | "toggleMaximize" | "close" | "getState" | "isMaximized";
@@ -66,4 +67,16 @@ export function validateClipboardText(text: unknown): string | null {
   if (typeof text !== "string") return null;
   if (text.length > 2_000_000) return null;
   return text;
+}
+
+/** Only http(s) URLs may leave the app. javascript: / file: / data: are rejected. */
+export function validateExternalUrl(url: unknown): string | null {
+  if (typeof url !== "string" || url.length > 2048) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }

@@ -1,0 +1,522 @@
+// apps/desktop/src/renderer/agentWorkspaceModel.ts
+//
+// Derives the Agent Workspace from existing run events. No second event store.
+
+export type SurfaceTab = "changes" | "desktop" | "browser" | "preview";
+export type InspectorTab = "files" | "diff" | "terminal" | "review" | "plan" | "docs";
+
+export type FileKind = "created" | "modified" | "deleted" | "read" | "artifact";
+
+export interface WorkspaceFile {
+  path: string;
+  kind: FileKind;
+  additions?: number;
+  deletions?: number;
+  status?: string;
+}
+
+export interface WorkspaceDiff {
+  path: string;
+  kind?: string;
+  additions: number;
+  deletions: number;
+  diff?: { type: string; content: string }[];
+}
+
+export interface PreviewTarget {
+  url: string;
+  label: string;
+  port?: number;
+  source: "dev-server" | "preview.available" | "browser";
+  local: boolean;
+}
+
+export interface BrowserAction {
+  id: string;
+  tool: string;
+  label: string;
+  url?: string;
+  x?: number;
+  y?: number;
+  kind: "click" | "type" | "scroll" | "hover" | "navigate" | "other";
+  live: boolean;
+  snapshot?: string;
+}
+
+export interface WorkspaceActivity {
+  line: string;
+  priority: number;
+  surface: SurfaceTab;
+  inspector: InspectorTab;
+  previewUrl?: string;
+  file?: string;
+}
+
+export interface AgentWorkspaceDerived {
+  files: WorkspaceFile[];
+  artifacts: WorkspaceFile[];
+  diffs: WorkspaceDiff[];
+  previews: PreviewTarget[];
+  browser: {
+    url?: string;
+    actions: BrowserAction[];
+    cursor: { x: number; y: number; kind: BrowserAction["kind"] } | null;
+    console: string[];
+    network: { method: string; url: string; status?: string }[];
+  };
+  activity: WorkspaceActivity | null;
+  suggestedSurface: SurfaceTab;
+  suggestedInspector: InspectorTab;
+  waitingApproval: boolean;
+  changeSummary: { files: number; additions: number; deletions: number };
+}
+
+export interface WorkspaceEvent {
+  id?: string;
+  type: string;
+  timestamp?: number;
+  data?: Record<string, unknown>;
+}
+
+const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i;
+const PREVIEW_URL = /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::(\d{2,5}))?(?:\/[^\s"'<>]*)?/gi;
+const DEV_HINT = /\b(vite|next\.js|nextjs|webpack|astro|nuxt|remix|angular|vue|react|ready in \d|local:\s*http)/i;
+
+export function isSafeHttpUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+export function isLocalPreviewUrl(url: string): boolean {
+  try {
+    return LOCAL_HOST.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function detectPreviewUrls(text: string): PreviewTarget[] {
+  if (!text) return [];
+  const found: PreviewTarget[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(PREVIEW_URL.source, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const raw = m[0]!.replace(/[.,);]+$/, "");
+    if (!isSafeHttpUrl(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    const port = m[1] ? Number(m[1]) : undefined;
+    found.push({
+      url: raw,
+      label: port ? `Preview :${port}` : "Preview",
+      port,
+      source: DEV_HINT.test(text) ? "dev-server" : "dev-server",
+      local: true,
+    });
+  }
+  return found;
+}
+
+export function previewLabel(target: PreviewTarget, projectName?: string | null): string {
+  const name = (projectName || "ORVYN").slice(0, 18);
+  return target.port ? `${name} :${target.port}` : target.label;
+}
+
+function filePath(data: Record<string, unknown> | undefined): string {
+  const preview = data?.preview as { path?: string } | undefined;
+  return String(preview?.path ?? data?.path ?? "").replace(/\\/g, "/");
+}
+
+function actionKind(tool: string, type: string): BrowserAction["kind"] {
+  const t = `${tool} ${type}`.toLowerCase();
+  if (t.includes("click")) return "click";
+  if (t.includes("type") || t.includes("fill") || t.includes("press")) return "type";
+  if (t.includes("scroll")) return "scroll";
+  if (t.includes("hover")) return "hover";
+  if (t.includes("goto") || t.includes("navigate") || t.includes("open")) return "navigate";
+  return "other";
+}
+
+function cursorFrom(data: Record<string, unknown> | undefined): { x: number; y: number } | null {
+  if (!data) return null;
+  const input = (data.input as Record<string, unknown> | undefined) ?? {};
+  const x = Number(data.x ?? data.clientX ?? input.x ?? input.clientX);
+  const y = Number(data.y ?? data.clientY ?? input.y ?? input.clientY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+export function activityPriority(kind: WorkspaceActivity["surface"] | "approval" | "read"): number {
+  if (kind === "approval") return 100;
+  if (kind === "browser" || kind === "preview") return 80;
+  if (kind === "changes") return 70;
+  if (kind === "desktop") return 60;
+  return 20;
+}
+
+export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
+  const type = e.type;
+  const data = e.data ?? {};
+  const tool = String(data.tool ?? "");
+  if (type === "approval.required") {
+    return { line: `Waiting for approval · ${tool || "tool"}`, priority: 100, surface: "changes", inspector: "review" };
+  }
+  if (type.startsWith("browser.") || tool.startsWith("browser_")) {
+    const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
+    const local = url ? isLocalPreviewUrl(url) : false;
+    const kind = actionKind(tool, type);
+    const label =
+      kind === "click" ? `Clicking ${String(data.target ?? data.selector ?? "page")}` :
+      kind === "type" ? "Typing" :
+      kind === "scroll" ? "Scrolling" :
+      url ? `Inspecting ${url}` : "Browsing";
+    return {
+      line: label,
+      priority: 80,
+      surface: local ? "preview" : "browser",
+      inspector: "files",
+      previewUrl: url || undefined,
+    };
+  }
+  if (type === "file.edit") {
+    const path = filePath(data);
+    return { line: path ? `Editing ${path}` : "Editing files", priority: 70, surface: "changes", inspector: "diff", file: path || undefined };
+  }
+  if (type === "terminal.started" || type === "terminal.output" || tool === "terminal") {
+    const cmd = String(data.command ?? data.preview ?? "command").split("\n")[0]!.slice(0, 80);
+    return { line: `Running ${cmd}`, priority: 70, surface: "changes", inspector: "terminal" };
+  }
+  if (type === "preview.available") {
+    const url = String(data.url ?? "");
+    return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, surface: "preview", inspector: "files", previewUrl: url || undefined };
+  }
+  if (type.startsWith("review.") || type === "run.completed" || type === "mission.completed") {
+    return { line: "Reviewing work", priority: 55, surface: "changes", inspector: "review" };
+  }
+  if (type === "file.read") {
+    const path = filePath(data);
+    return { line: path ? `Reading ${path}` : "Reading files", priority: 20, surface: "changes", inspector: "files", file: path || undefined };
+  }
+  if (type === "tool.completed" && tool === "create_document") {
+    return { line: "Created artifact", priority: 65, surface: "changes", inspector: "docs" };
+  }
+  return null;
+}
+
+export function shouldAutoSwitch(
+  previous: WorkspaceActivity | null,
+  next: WorkspaceActivity,
+  elapsedMs: number,
+  debounceMs = 400
+): boolean {
+  if (!previous) return true;
+  if (next.priority >= 100) return true;
+  if (next.priority < 30) return false;
+  if (next.surface === previous.surface && next.inspector === previous.inspector && next.file === previous.file) return false;
+  if (elapsedMs < debounceMs && next.priority <= previous.priority) return false;
+  return next.priority >= previous.priority || elapsedMs >= debounceMs;
+}
+
+export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectName?: string | null }): AgentWorkspaceDerived {
+  const files = new Map<string, WorkspaceFile>();
+  const artifacts = new Map<string, WorkspaceFile>();
+  const diffs: WorkspaceDiff[] = [];
+  const previews = new Map<string, PreviewTarget>();
+  const actions: BrowserAction[] = [];
+  const consoleLines: string[] = [];
+  const network: { method: string; url: string; status?: string }[] = [];
+  let cursor: AgentWorkspaceDerived["browser"]["cursor"] = null;
+  let browserUrl: string | undefined;
+  let waitingApproval = false;
+  let latest: WorkspaceActivity | null = null;
+  let latestAt = 0;
+
+  const absorbPreview = (text: string, source: PreviewTarget["source"] = "dev-server") => {
+    for (const p of detectPreviewUrls(text)) {
+      previews.set(p.url, { ...p, source, label: previewLabel(p, opts?.projectName) });
+    }
+  };
+
+  for (const e of events) {
+    const data = e.data ?? {};
+    const type = e.type;
+    const tool = String(data.tool ?? "");
+    const ts = Number(e.timestamp ?? 0);
+
+    if (type === "preview.available" && typeof data.url === "string" && isSafeHttpUrl(data.url)) {
+      const local = isLocalPreviewUrl(data.url);
+      const port = (() => {
+        try { const n = Number(new URL(data.url).port); return n || undefined; } catch { return undefined; }
+      })();
+      previews.set(data.url, {
+        url: data.url,
+        label: String(data.label ?? previewLabel({ url: data.url, label: "Preview", port, source: "preview.available", local }, opts?.projectName)),
+        port,
+        source: "preview.available",
+        local,
+      });
+    }
+
+    if (type === "terminal.output" || type === "tool.completed" || type === "terminal.started") {
+      absorbPreview(String(data.chunk ?? data.output ?? data.preview ?? data.command ?? ""));
+    }
+
+    if (type === "file.read") {
+      const path = filePath(data);
+      if (path && !files.has(path)) files.set(path, { path, kind: "read", status: "Read" });
+    }
+    if (type === "file.edit") {
+      const preview = data.preview as WorkspaceDiff | undefined;
+      const path = filePath(data);
+      if (path) {
+        const kind: FileKind = preview?.kind === "create" ? "created" : preview?.kind === "delete" ? "deleted" : "modified";
+        files.set(path, {
+          path,
+          kind,
+          additions: preview?.additions,
+          deletions: preview?.deletions,
+          status: kind === "created" ? "Created" : kind === "deleted" ? "Deleted" : "Modified",
+        });
+        if (preview?.path || preview?.diff) {
+          const existing = diffs.findIndex((d) => d.path === path);
+          const next = {
+            path,
+            kind: preview.kind,
+            additions: preview.additions ?? 0,
+            deletions: preview.deletions ?? 0,
+            diff: preview.diff,
+          };
+          if (existing >= 0) diffs[existing] = next;
+          else diffs.push(next);
+        }
+      }
+    }
+    if (type === "tool.completed" && tool === "create_document") {
+      const name = String(data.name ?? data.path ?? data.preview ?? "document");
+      artifacts.set(name, { path: name, kind: "artifact", status: "Artifact" });
+    }
+
+    if (type.startsWith("browser.") || tool.startsWith("browser_")) {
+      const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
+      if (url && isSafeHttpUrl(url)) {
+        browserUrl = url;
+        if (isLocalPreviewUrl(url)) {
+          absorbPreview(url, "browser");
+        }
+      }
+      const xy = cursorFrom(data);
+      const kind = actionKind(tool, type);
+      if (xy) cursor = { ...xy, kind };
+      actions.push({
+        id: String(e.id ?? `${type}-${ts}`),
+        tool: tool || type,
+        label: String(data.preview ?? data.target ?? tool.replace("browser_", "") ?? type),
+        url: url || undefined,
+        x: xy?.x,
+        y: xy?.y,
+        kind,
+        live: type === "browser.action" || type === "tool.started",
+        snapshot: typeof data.screenshot === "string" ? data.screenshot : typeof data.image === "string" ? data.image : undefined,
+      });
+      if (data.console) consoleLines.push(String(data.console).slice(0, 200));
+      if (data.error && String(data.error).includes("http")) consoleLines.push(String(data.error).slice(0, 200));
+      const net = data.request as { method?: string; url?: string; status?: string } | undefined;
+      if (net?.url) network.push({ method: String(net.method ?? "GET"), url: String(net.url), status: net.status ? String(net.status) : undefined });
+    }
+
+    if (type === "approval.required") waitingApproval = true;
+    if (type === "approval.resolved") waitingApproval = false;
+
+    const routed = routeEvent(e);
+    if (routed && shouldAutoSwitch(latest, routed, ts && latestAt ? ts - latestAt : 1000)) {
+      latest = routed;
+      latestAt = ts || latestAt;
+    }
+  }
+
+  const fileList = [...files.values()].reverse();
+  const diffList = diffs.slice().reverse();
+  const previewList = [...previews.values()];
+  let additions = 0;
+  let deletions = 0;
+  for (const d of diffs) {
+    additions += d.additions;
+    deletions += d.deletions;
+  }
+
+  return {
+    files: fileList,
+    artifacts: [...artifacts.values()],
+    diffs: diffList,
+    previews: previewList,
+    browser: {
+      url: browserUrl,
+      actions: actions.slice(-40),
+      cursor,
+      console: consoleLines.slice(-20),
+      network: network.slice(-20),
+    },
+    activity: latest,
+    suggestedSurface: latest?.surface ?? (previewList.length ? "preview" : "changes"),
+    suggestedInspector: latest?.inspector ?? (diffList.length ? "diff" : "files"),
+    waitingApproval,
+    changeSummary: { files: diffs.length || fileList.filter((f) => f.kind !== "read").length, additions, deletions },
+  };
+}
+
+export function mapContextTab(tab?: string): { surface?: SurfaceTab; inspector?: InspectorTab } {
+  if (tab === "browser") return { surface: "browser" };
+  if (tab === "diff") return { inspector: "diff", surface: "changes" };
+  if (tab === "files" || tab === "documents") return { inspector: tab === "documents" ? "docs" : "files" };
+  if (tab === "terminal") return { inspector: "terminal" };
+  if (tab === "review") return { inspector: "review" };
+  if (tab === "plan") return { inspector: "plan" };
+  return {};
+}
+
+export type SurfaceTabId = "changes" | "desktop" | "browser" | `preview:${string}` | `artifact:${string}`;
+
+export function previewTabId(url: string): SurfaceTabId {
+  return `preview:${url}`;
+}
+
+export function parseSurfaceTabId(id: string | undefined): { kind: SurfaceTab; previewUrl?: string; artifact?: string } {
+  if (!id) return { kind: "changes" };
+  if (id.startsWith("preview:")) return { kind: "preview", previewUrl: id.slice("preview:".length) };
+  if (id.startsWith("artifact:")) return { kind: "changes", artifact: id.slice("artifact:".length) };
+  if (id === "desktop" || id === "browser" || id === "preview" || id === "changes") return { kind: id };
+  return { kind: "changes" };
+}
+
+export interface FollowController {
+  followOrion: boolean;
+  paused: boolean;
+}
+
+export function initialFollowState(runActive: boolean): FollowController {
+  return { followOrion: runActive, paused: false };
+}
+
+export function applyManualTab(state: FollowController): FollowController {
+  if (!state.followOrion) return state;
+  return { ...state, paused: true };
+}
+
+export function resumeFollow(): FollowController {
+  return { followOrion: true, paused: false };
+}
+
+export function toggleFollow(state: FollowController): FollowController {
+  if (state.followOrion && !state.paused) return { followOrion: false, paused: false };
+  return { followOrion: true, paused: false };
+}
+
+export function followApplies(state: FollowController): boolean {
+  return state.followOrion && !state.paused;
+}
+
+export function followedSurfaceId(derived: AgentWorkspaceDerived): SurfaceTabId {
+  if (derived.suggestedSurface === "preview") {
+    const url = derived.activity?.previewUrl ?? derived.previews[0]?.url;
+    if (url) return previewTabId(url);
+    return "changes";
+  }
+  return derived.suggestedSurface;
+}
+
+export interface ReviewSummary {
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+  testsPassed: number;
+  testsFailed: number;
+  buildPassed: boolean | null;
+  warnings: number;
+  artifacts: number;
+  completed: boolean;
+}
+
+export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWorkspaceDerived): ReviewSummary {
+  let testsPassed = 0;
+  let testsFailed = 0;
+  let warnings = 0;
+  let buildPassed: boolean | null = null;
+  let completed = false;
+  for (const e of events) {
+    const data = e.data ?? {};
+    if (e.type === "test.completed") {
+      if (data.ok === true) testsPassed += 1;
+      else testsFailed += 1;
+    }
+    if (e.type === "test.started" && String(data.kind ?? "").toLowerCase().includes("build")) {
+      /* counted on completed */
+    }
+    if (e.type === "tool.completed" && /build|vite|tsc|webpack/i.test(String(data.tool ?? data.command ?? data.preview ?? ""))) {
+      buildPassed = true;
+    }
+    if (e.type === "tool.failed" && /build|vite|tsc|webpack/i.test(String(data.tool ?? data.command ?? ""))) {
+      buildPassed = false;
+    }
+    if (e.type === "review.rejected" || e.type === "tool.failed") warnings += 1;
+    if (e.type === "run.completed" || e.type === "mission.completed" || e.type === "review.approved" || e.type === "review.passed") {
+      completed = true;
+    }
+  }
+  return {
+    filesChanged: derived.changeSummary.files,
+    additions: derived.changeSummary.additions,
+    deletions: derived.changeSummary.deletions,
+    testsPassed,
+    testsFailed,
+    buildPassed,
+    warnings,
+    artifacts: derived.artifacts.length,
+    completed,
+  };
+}
+
+export function reconstructWorkspace(events: WorkspaceEvent[], opts?: { projectName?: string | null }): AgentWorkspaceDerived {
+  return deriveAgentWorkspace(events, opts);
+}
+
+export function extractOrionCommands(events: WorkspaceEvent[]): { id: string; command: string; output: string; running: boolean }[] {
+  const cmds: { id: string; command: string; output: string; running: boolean }[] = [];
+  const byId = new Map<string, { id: string; command: string; output: string; running: boolean }>();
+  for (const e of events) {
+    const data = e.data ?? {};
+    const tool = String(data.tool ?? "");
+    if (e.type === "terminal.started" || (e.type === "tool.started" && tool === "terminal")) {
+      const id = String(e.id ?? data.taskId ?? cmds.length);
+      const command = String(data.command ?? data.preview ?? "command").split("\n")[0]!.slice(0, 120);
+      const row = { id, command, output: "", running: true };
+      byId.set(id, row);
+      cmds.push(row);
+    }
+    if (e.type === "terminal.output") {
+      const last = cmds[cmds.length - 1];
+      if (last) last.output = (last.output + String(data.chunk ?? data.output ?? "")).slice(-12000);
+    }
+    if (e.type === "terminal.completed" || (e.type === "tool.completed" && tool === "terminal")) {
+      const last = cmds[cmds.length - 1];
+      if (last) {
+        last.running = false;
+        if (data.output || data.preview) last.output = (last.output + String(data.output ?? data.preview ?? "")).slice(-12000);
+      }
+    }
+  }
+  return cmds.slice(-8);
+}
+
+export function cursorOverlayStyle(
+  cursor: { x: number; y: number; kind: BrowserAction["kind"] } | null,
+  viewport: { width: number; height: number } = { width: 1280, height: 800 }
+): { left: number; top: number; kind: BrowserAction["kind"] } | null {
+  if (!cursor) return null;
+  const left = Math.max(8, Math.min(viewport.width - 8, cursor.x));
+  const top = Math.max(8, Math.min(viewport.height - 8, cursor.y));
+  return { left, top, kind: cursor.kind };
+}

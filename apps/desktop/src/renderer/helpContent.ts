@@ -20,7 +20,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "mission",
     title: "Start a new mission",
     tags: ["missions", "home", "composer"],
-    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center; plan, files, diffs, and review open on the right.",
+    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center. The Agent Workspace on the right shows a Work Surface (Changes, Desktop, Browser, live preview) and an Inspector (Files, Diff, Terminal, Review).",
   },
   {
     id: "modes",
@@ -62,7 +62,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "browser",
     title: "Use the browser",
     tags: ["browser", "playwright"],
-    body: "Browser tools open the right-panel Browser tab with visited URLs and actions. They require the backend Playwright dependency. Selecting Browser in the + menu requests the capability for the next turn — ToolGateway still decides whether a navigation runs.",
+    body: "Browser tools open the Work Surface Browser tab with visited URLs, actions, and a presentational ORION cursor. Localhost apps open a Preview tab instead. They require the backend Playwright dependency. Selecting Browser in the + menu requests the capability for the next turn — ToolGateway still decides whether a navigation runs.",
   },
   {
     id: "approve",
@@ -86,7 +86,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "files",
     title: "View files and diffs",
     tags: ["files", "diff", "panel"],
-    body: "Click an Edit row to open the right panel on Diff. File reads open Files. Use the title-bar panel toggle (Ctrl+Shift+B) if the panel is closed — the click opens it automatically.",
+    body: "The Work Surface shows Changes and live localhost previews. The Inspector shows Files and Diff beside the preview. Follow ORION switches surfaces as work happens; clicking a tab pauses follow. Use the title-bar panel toggle (Ctrl+Shift+B) if the workspace is closed.",
   },
   {
     id: "cloud",

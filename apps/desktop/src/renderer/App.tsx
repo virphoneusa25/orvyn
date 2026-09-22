@@ -15,7 +15,7 @@ import { ViewId } from "./components/Navigation";
 import { Sidebar } from "./components/redesign/Shell";
 import { submitOrvynCommand } from "./orvynCommand";
 import { WorkStream } from "./components/WorkStream";
-import { ContextPanel } from "./components/ContextPanel";
+import { AgentWorkspace } from "./components/workspace/AgentWorkspace";
 import { useAgentRun } from "./useAgentRun";
 import { HomeScreen } from "./components/redesign/HomeScreen";
 import { MissionDetail } from "./components/redesign/MissionDetail";
@@ -40,7 +40,6 @@ import { registerTabAutocomplete } from "./tabComplete";
 import { TitleBar, Menu } from "./components/TitleBar";
 import { ResizablePanel } from "./components/ResizablePanel";
 import { MissionControl } from "./components/MissionControl";
-import { ReviewPanel } from "./components/ReviewPanel";
 import { BottomPanel } from "./components/BottomPanel";
 import { GitScmPanel } from "./components/GitScmPanel";
 import { HelpDrawer } from "./components/HelpDrawer";
@@ -660,7 +659,7 @@ export function App() {
         )}
 
         {(view === "home" || view === "newtask") && (
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+          <div style={{ flex: chrome.layout.expandedPreview && showRightChrome ? "0 0 0px" : 1, minWidth: chrome.layout.expandedPreview && showRightChrome ? 0 : 420, minHeight: 0, overflow: "hidden" }}>
             {/* Deterministic center routing — the nav selection (view) ALWAYS
                 wins over the remembered working mode. Home selected = the
                 animated landing screen, no stale WorkStream underneath. The
@@ -820,33 +819,37 @@ export function App() {
           </div>
         )}
 
-        {/* RIGHT: the dynamic context workspace. No chat lives here — the
-            center WorkStream is the single conversation. */}
+        {/* RIGHT: Agent Workspace — Work Surface + Inspector. Chat stays center. */}
         <div
           className="orvyn-right-panel"
           style={{
-            flex: showRightChrome ? "0 0 auto" : "0 0 0px",
+            flex: showRightChrome ? (chrome.layout.expandedPreview ? "1 1 auto" : "0 0 auto") : "0 0 0px",
             width: showRightChrome ? "auto" : 0,
-            maxWidth: showRightChrome ? 640 : 0,
-            minWidth: showRightChrome ? 260 : 0,
+            minWidth: showRightChrome ? 450 : 0,
+            maxWidth: showRightChrome ? (chrome.layout.expandedPreview ? "100%" : "72%") : 0,
             opacity: showRightChrome ? 1 : 0,
             overflow: "hidden",
             display: "flex",
-            transition: "max-width 180ms ease, min-width 180ms ease, opacity 160ms ease",
+            transition: "min-width 180ms ease, opacity 160ms ease",
             pointerEvents: showRightChrome ? "auto" : "none",
+            position: "relative",
           }}
         >
-          <ResizablePanel side="right" defaultWidth={360} minWidth={260} maxWidth={640}>
-            <ContextPanel
+          {showRightChrome && (
+            <AgentWorkspace
               events={agentRun.events}
               runStatus={agentRun.status}
+              runId={agentRun.runId}
               projectRoot={workspaceRoot}
+              projectName={projectName}
+              layout={chrome.layout}
+              onLayout={(patch) => chrome.setWorkspaceLayout(patch)}
               onOpenFile={(p) => {
                 setView("editor");
                 void handleOpenFile(p);
               }}
             />
-          </ResizablePanel>
+          )}
         </div>
       </div>
 

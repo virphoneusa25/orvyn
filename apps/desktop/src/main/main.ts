@@ -1,6 +1,6 @@
 // apps/desktop/src/main/main.ts
-import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage } from "electron";
-import { handleWindowAction, validateClipboardText, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
+import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell } from "electron";
+import { handleWindowAction, validateClipboardText, validateExternalUrl, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
 import * as path from "path";
 import * as os from "os";
 import { promises as fs } from "fs";
@@ -437,6 +437,12 @@ ipcMain.handle(WINDOW_IPC.clipboardWrite, (_evt, text: unknown) => {
   const valid = validateClipboardText(text);
   if (valid == null) return false;
   clipboard.writeText(valid);
+  return true;
+});
+ipcMain.handle(WINDOW_IPC.openExternal, async (_evt, url: unknown) => {
+  const valid = validateExternalUrl(url);
+  if (!valid) return false;
+  await shell.openExternal(valid);
   return true;
 });
 
