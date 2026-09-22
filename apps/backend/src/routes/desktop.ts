@@ -172,7 +172,23 @@ export function desktopRouter(): Router {
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox && sandbox.status !== "ended") {
       const jpeg = await captureSandboxFrame(sandbox);
-      if (!jpeg) return res.status(409).json({ error: "Desktop has no live frame yet." });
+      if (!jpeg) {
+        // Check if the container actually died — stale sessions lie.
+        const { spawn } = await import("child_process");
+        const alive = await new Promise<boolean>((resolve) => {
+          const p = spawn("docker", ["inspect", "-f", "{{.State.Running}}", sandbox.containerId]);
+          let out = "";
+          p.stdout.on("data", (d) => (out += d));
+          p.on("close", (c) => resolve(c === 0 && out.trim() === "true"));
+          p.on("error", () => resolve(false));
+        });
+        if (!alive) {
+          sandbox.status = "ended";
+          sandbox.error = "Desktop container stopped.";
+          return res.status(410).json({ error: "Desktop container stopped. Start a new session." });
+        }
+        return res.status(409).json({ error: "Desktop is starting up — frame not yet available." });
+      }
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Orvyn-Desktop-Control", sandbox.controlOwner);
