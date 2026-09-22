@@ -735,11 +735,14 @@ export class StreamingAgentRuntime {
       if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
+      // REMOTE runs: the worker relays terminal.started/output/completed through
+      // the event relay — emitting them here too would duplicate every card.
       const terminalLike = call.name === "terminal" || call.name === "run_command";
-      if (terminalLike) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
+      const remoteRun = state.execution?.location === "OVH_WORKER";
+      if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
       const result = await this.tools.execute(call.name, call.arguments, "coder", {
         signal: state.controller.signal,
-        onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
+        onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
       });
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
@@ -765,13 +768,13 @@ export class StreamingAgentRuntime {
           truncated,
           bytes: raw.length,
         });
-        if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
+        if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
         replies.set(call.id, text);
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
         const error = result.error ?? "unknown error";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error });
-        if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
+        if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
         replies.set(
           call.id,
           `The tool "${call.name}" FAILED:\n${error}\n\nDiagnose and try a different approach. Do not repeat the identical call.`
