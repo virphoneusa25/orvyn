@@ -25,7 +25,7 @@ export interface TranscriptInput {
 const SECRET_PATTERNS: RegExp[] = [
   /orvsess_[A-Za-z0-9._-]+/g,
   /Bearer\s+[A-Za-z0-9._\-+=/]+/gi,
-  /(?:api[_-]?key|access[_-]?token|secret|password|passwd|authorization)["\s:=]+["']?[^\s"']{6,}/gi,
+  /(?:api[\s_-]*key|access[\s_-]*token|secret|password|passwd|authorization)["\s:=]+["']?[^\s"']{6,}/gi,
   /ORVYN_[A-Z0-9_]*KEY=\S+/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
   /AKIA[0-9A-Z]{16}/g,
