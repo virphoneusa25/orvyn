@@ -280,7 +280,7 @@ export function DesktopView({
         {interrupted && (
           <div style={{ position: "absolute", inset: 0, zIndex: 5, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(7,11,20,0.78)" }}>
             <div style={emptyTitle()}>Desktop connection interrupted</div>
-            <button style={ghostBtn()} onClick={() => { setInterrupted(false); void pullFrame(); }}>Reconnect</button>
+            <button style={ghostBtn()} onClick={() => { setInterrupted(false); void refreshSession().then(() => void pullFrame()); }}>Reconnect</button>
           </div>
         )}
         {frame ? (
