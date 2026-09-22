@@ -31,14 +31,19 @@ export interface SandboxDesktopSession {
 
 const sessions = new Map<string, SandboxDesktopSession>();
 
-function dockerExec(containerId: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function dockerExec(containerId: string, args: string[], binary = false): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve) => {
     const p = spawn("docker", ["exec", containerId, ...args], { windowsHide: true });
-    let stdout = "", stderr = "";
-    p.stdout.on("data", (d) => (stdout += d));
-    p.stderr.on("data", (d) => (stderr += d));
-    p.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-    p.on("error", () => resolve({ code: -1, stdout: "", stderr: "docker not found" }));
+    const chunks: Buffer[] = [];
+    let stderr = "";
+    if (binary) {
+      p.stdout.on("data", (d: Buffer) => chunks.push(d));
+    } else {
+      p.stdout.on("data", (d: Buffer) => chunks.push(d));
+    }
+    p.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    p.on("close", (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(chunks), stderr }));
+    p.on("error", () => resolve({ code: -1, stdout: Buffer.alloc(0), stderr: "docker not found" }));
   });
 }
 
@@ -112,7 +117,7 @@ export async function startSandboxDesktop(opts: {
     const check = async () => {
       tries++;
       const r = await dockerExec(containerId, ["xdotool", "getdisplaygeometry"]);
-      if (r.code === 0 && r.stdout.trim()) {
+      if (r.code === 0 && r.stdout.toString().trim()) {
         resolve(true);
       } else if (tries < 30) {
         setTimeout(check, 1000);
@@ -143,11 +148,10 @@ export async function captureSandboxFrame(session: SandboxDesktopSession): Promi
   if (session.status !== "ready" && session.status !== "user_control") return null;
   const r = await dockerExec(session.containerId, [
     "import", "-window", "root", "-quality", "75", "jpeg:-",
-  ]);
-  if (r.code === 0 && r.stdout.length > 100) {
+  ], true);
+  if (r.code === 0 && r.stdout.length > 100 && r.stdout[0] === 0xff) {
     session.lastFrameAt = Date.now();
-    // The stdout contains the raw JPEG bytes as a string — convert to Buffer.
-    return Buffer.from(r.stdout, "binary");
+    return r.stdout; // raw JPEG bytes, binary-safe
   }
   return null;
 }
