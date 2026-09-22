@@ -217,6 +217,34 @@ export class StreamingAgentRuntime {
           text: args.text,
         });
         break;
+      // Desktop session lifecycle/actions. The Workbench's Desktop tab,
+      // ORION cursor overlay, and control audit all derive from these —
+      // without them a desktop_* tool call is invisible to the UI.
+      case "desktop_start":
+        this.store.emit(runId, "desktop.started", { tool: call.name, url: args.url });
+        this.store.emit(runId, "desktop.ready", { tool: call.name, url: args.url });
+        break;
+      case "desktop_open_url":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "navigate", url: args.url });
+        break;
+      case "desktop_click":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "click", x: args.x, y: args.y, selector: args.selector });
+        break;
+      case "desktop_type":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "type", text: args.text, selector: args.selector });
+        break;
+      case "desktop_scroll":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "scroll", deltaY: args.deltaY });
+        break;
+      case "desktop_key":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "key", key: args.key });
+        break;
+      case "desktop_screenshot":
+        this.store.emit(runId, "desktop.screenshot", { tool: call.name });
+        break;
+      case "desktop_stop":
+        this.store.emit(runId, "desktop.completed", { tool: call.name });
+        break;
       default:
         break;
     }

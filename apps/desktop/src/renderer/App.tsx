@@ -33,6 +33,7 @@ import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFac
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages } from "./chatSession";
 import { pickReattachRun } from "./appReattach";
+import { fitsDockedWorkbench } from "./desktopLayout";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
 import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
@@ -154,7 +155,10 @@ export function App() {
   const showEditorChrome = view === "editor" || view === "terminal";
   // Title-bar toggle is the source of truth. Hiding the panel on Home made
   // the button look dead: rightPanelOpen flipped, but nothing appeared.
-  const showRightChrome = chrome.layout.rightPanelOpen;
+  // The Workbench docks when there is room and hides when there is not —
+  // it may never overlay the center: covering the chat composer (prompt,
+  // queue, steering) was a real regression users hit on narrow windows.
+  const showRightChrome = chrome.layout.rightPanelOpen && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
   const agentPanelWidth = clampAgentPanelWidth(chrome.layout.agentPanelWidth, viewportWidth);
   const inlineEdit = useInlineEdit(openFile?.path);

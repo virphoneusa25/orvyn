@@ -100,6 +100,8 @@ function harness(turns: AIChunk[][], opts: { onStream?: () => void } = {}) {
   registry.register(makeTool("read_file"));
   registry.register(makeTool("search_code"));
   registry.register(makeTool("write_file"));
+  registry.register(makeTool("desktop_start"));
+  registry.register(makeTool("desktop_click"));
 
   const gateway = new ToolGateway(registry, new PermissionEngine());
   const store = new RunStore();
@@ -401,4 +403,30 @@ test("usage.updated carries the context breakdown, raw window, and cache rate", 
   assert.equal(breakdown.projectContext, 0, "no retrieval on this harness");
   assert.equal(breakdown.memory, 0);
   assert.ok(Math.abs(Number(usage!.data.cacheHitRate) - 0.8) < 1e-9, "cache hit rate = cached/prompt");
+});
+
+// ---- Desktop session events -------------------------------------------------
+
+test("desktop tools emit the desktop.* lifecycle the Workbench derives its tab and cursor from", async () => {
+  const h = harness([
+    [toolCallChunk("call_d1", "desktop_start"), toolCallChunk("call_d2", "desktop_click"), { delta: "", done: false }],
+    [{ delta: "", done: true }],
+  ]);
+  const runId = h.runtime.start("C:/proj", "desktop work");
+  // Desktop tools are approval-gated in agent mode (the real production
+  // path) — resolve each approval as the desktop UI's Allow Once does.
+  for (let i = 0; i < 40; i++) {
+    const evs = h.store.get(runId)?.events ?? [];
+    const pending = evs.find((e) => e.type === "approval.required" && !h.store.get(runId)!.events.some((x) => x.type === "approval.resolved" && x.data.callId === e.data.callId));
+    if (pending) h.runtime.resolveApproval(String(pending.data.callId), true);
+    if ((h.store.get(runId)?.status ?? "") === "completed") break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await waitForStatus(h.store, runId);
+  const types = h.store.get(runId)!.events.map((e) => e.type);
+  assert.ok(types.includes("desktop.started"), "desktop.started");
+  assert.ok(types.includes("desktop.ready"), "desktop.ready");
+  const action = h.store.get(runId)!.events.find((e) => e.type === "desktop.action");
+  assert.ok(action, "desktop.action for clicks");
+  assert.equal((action!.data as any).kind, "click");
 });

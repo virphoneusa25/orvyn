@@ -77,6 +77,21 @@ export function desktopRouter(): Router {
     if (owner !== "user" && owner !== "orion") return res.status(400).json({ error: "owner must be user or orion" });
     const result = requestControl(session, owner);
     if (!result.ok) return res.status(409).json({ error: result.reason, session: toPublic(session) });
+    // Control transitions are part of the run's auditable history — the same
+    // event stream the Desktop UI replays. Emitted only for the session's
+    // own run; never a fabricated id.
+    if (session.runId) {
+      try {
+        if (t.runStore.get(session.runId)) {
+          t.runStore.emit(session.runId, "desktop.control.changed", {
+            sessionId: session.id,
+            to: owner,
+            controlOwner: session.controlOwner,
+            status: session.status,
+          });
+        }
+      } catch { /* audit is best-effort; the control change already succeeded */ }
+    }
     res.json({ session: toPublic(session) });
   });
 

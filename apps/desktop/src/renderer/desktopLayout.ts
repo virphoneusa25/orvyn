@@ -67,8 +67,21 @@ export function clampAgentPanelWidth(width: number, viewportWidth = 1440): numbe
   return Math.max(AGENT_PANEL_MIN, Math.min(Math.round(width), max));
 }
 
-export function shouldOverlayAgentPanel(viewportWidth: number): boolean {
-  return viewportWidth < SIDEBAR_WIDTH + CHAT_MIN + AGENT_PANEL_MIN;
+/**
+ * The Workbench used to ABSOLUTE-overlay the center column on narrow
+ * windows, which hid the chat composer entirely (no prompt box, no queue,
+ * no steering). That regression is why this now always returns false: the
+ * right panel docks or hides, it never covers the conversation.
+ */
+export function shouldOverlayAgentPanel(_viewportWidth: number): boolean {
+  return false;
+}
+
+/** True when the viewport has room for sidebar + chat + docked Workbench.
+ *  When false the Workbench hides (one click to reopen) — the chat with its
+ *  composer ALWAYS stays visible and usable. */
+export function fitsDockedWorkbench(viewportWidth: number): boolean {
+  return viewportWidth >= SIDEBAR_WIDTH + CHAT_MIN + AGENT_PANEL_MIN;
 }
 
 function safeUrl(value: unknown): string {

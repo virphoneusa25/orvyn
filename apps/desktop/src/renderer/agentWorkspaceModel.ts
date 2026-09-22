@@ -356,7 +356,7 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
       artifacts.set(name, { path: name, kind: "artifact", status: "Artifact" });
     }
 
-    if (type.startsWith("browser.") || tool.startsWith("browser_")) {
+    if (type.startsWith("browser.") || tool.startsWith("browser_") || type.startsWith("desktop.") || tool.startsWith("desktop_")) {
       const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
       if (url && isSafeHttpUrl(url)) {
         browserUrl = url;

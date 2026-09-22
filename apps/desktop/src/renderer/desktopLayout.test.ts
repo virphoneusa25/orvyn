@@ -79,7 +79,9 @@ test("workbench width clamps to min 420 and max 75vw / chat room", () => {
   assert.equal(clampAgentPanelWidth(Number.NaN), AGENT_PANEL_DEFAULT);
   assert.equal(shouldOverlayAgentPanel(1920), false);
   assert.equal(shouldOverlayAgentPanel(1280), false);
-  assert.equal(shouldOverlayAgentPanel(1000), true);
+  // The composer must NEVER be covered: overlay is gone entirely.
+  assert.equal(shouldOverlayAgentPanel(1000), false);
+  assert.equal(shouldOverlayAgentPanel(800), false);
 });
 
 test("legacy two-pane keys migrate to one width and one tab", () => {
