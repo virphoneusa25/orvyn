@@ -87,6 +87,21 @@ export function desktopRouter(): Router {
     }
 
     // Desktop sessions exist ONLY as sandbox containers — never browser pages.
+    // Cross-path: the client path does not exist on the server - look by tenant.
+    const anySandbox = findSandboxSession(t.id);
+    if (anySandbox && anySandbox.status !== "ended") {
+      return res.json({
+        session: {
+          id: anySandbox.id, status: anySandbox.status,
+          controlOwner: anySandbox.controlOwner,
+          width: anySandbox.width, height: anySandbox.height,
+          url: anySandbox.url,
+          live: anySandbox.status === "ready" || anySandbox.status === "user_control",
+          transport: "sandbox-x11",
+        },
+        sandbox: docker,
+      });
+    }
     return res.json({ session: null, sandbox: docker });
   });
 
@@ -100,10 +115,17 @@ export function desktopRouter(): Router {
     // PREFER the true sandbox desktop when Docker is available.
     const docker = await hasDocker();
     if (docker) {
+      // Cloud: the client sends its LOCAL path (C:/...) - resolve to a
+      // server-side workspace path the sandbox can actually mount.
+      const pathMod = await import("path");
+      const fsMod = await import("fs");
+      const serverRoot = fsMod.existsSync(projectRoot)
+        ? projectRoot
+        : "/opt/orvyn/workspaces/" + (pathMod.basename(projectRoot) || "default");
       try {
         const sandbox = await startSandboxDesktop({
           tenantId: t.id,
-          projectRoot,
+          projectRoot: serverRoot,
           runId,
           url,
         });
