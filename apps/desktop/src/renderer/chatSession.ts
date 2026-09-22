@@ -327,14 +327,16 @@ export function getActiveChatSettings(): NonNullable<ChatSession["settings"]> {
 }
 
 /** Persists one composer setting into the ACTIVE conversation. */
-export function setActiveChatSetting<K extends keyof NonNullable<ChatSession["settings"]>>(
-  key: K,
-  value: NonNullable<ChatSession["settings"]>[K]
+export function setActiveChatSetting(
+  key: keyof NonNullable<ChatSession["settings"]>,
+  value: string
 ): void {
   const session = active();
   if (!session) return; // no conversation yet — user defaults still apply via the composer
-  session.settings = { ...session.settings, [key]: value } as NonNullable<ChatSession["settings"]>;
-  session.updatedAt = Date.now();
+  const current: NonNullable<ChatSession["settings"]> = { ...(session.settings ?? {}) };
+  // All settings values are flat strings (modelId, reasoningEffort, permissionMode)
+  (current as Record<string, string>)[key] = value;
+  session.settings = current;  session.updatedAt = Date.now();
   persist();
   emit();
 }

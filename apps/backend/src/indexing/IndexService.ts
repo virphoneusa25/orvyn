@@ -338,6 +338,10 @@ export class IndexService {
           void this.flushPending();
         }, 500);
       });
+      // The watcher must never keep the process alive by itself (tests and
+      // CLI one-shots would otherwise hang on the open handle) — and on
+      // Windows an un-closed recursive watcher blocks directory deletion.
+      this.watcher.unref?.();
     } catch (err: any) {
       this.stats = { ...this.stats, error: `Watcher failed: ${err.message}` };
     }

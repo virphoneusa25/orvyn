@@ -3,13 +3,19 @@
     "target": "ES2020",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src/renderer"],
-  "exclude": ["src/renderer/orvynIntent.test.ts", "src/renderer/presentationReducer.test.ts", "src/renderer/fileTypeRegistry.test.ts", "src/renderer/connectionState.test.ts", "src/renderer/connectionMode.test.ts", "src/renderer/appReattach.test.ts", "src/renderer/desktopLayout.test.ts", "src/renderer/shareTranscript.test.ts", "src/renderer/helpContent.test.ts", "src/renderer/addMenuModel.test.ts", "src/renderer/agentWorkspaceModel.test.ts", "src/renderer/agentWorkspaceLayout.test.ts", "src/renderer/buildInfo.test.ts"]
-}
+  "include": [
+    "src/renderer"
+  ],
+  "exclude": []}

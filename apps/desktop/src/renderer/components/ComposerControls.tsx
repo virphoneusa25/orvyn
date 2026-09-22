@@ -13,9 +13,20 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import {
+  readComposerDefaults,
+  writeComposerDefault,
+  toRunPayloadSettings,
+  COMPOSER_MODES,
+  type ComposerDefaults,
+  type ReasoningEffort,
+  type AccessMode,
+} from "../composerSettings";
 
-export type ReasoningEffort = "auto" | "fast" | "standard" | "deep" | "max";
-export type AccessMode = "ask" | "auto_read" | "auto_workspace" | "full_access";
+export { readComposerDefaults, writeComposerDefault, toRunPayloadSettings, COMPOSER_MODES };
+export type { ComposerDefaults, ReasoningEffort, AccessMode };
+
+
 
 export interface ComposerModel {
   id: string;
@@ -144,6 +155,114 @@ function Check({ on }: { on: boolean }) {
     <span style={{ width: 12, flexShrink: 0, color: "var(--orvyn-purple-hi)", fontSize: 11, lineHeight: "16px" }}>
       {on ? "✓" : ""}
     </span>
+  );
+}
+
+
+// ── Shared control-row primitives ──────────────────────────────────────────
+// The SAME pill, attach, and submit styling for both composer contexts
+// (chat WorkStream and Home "new mission") — one implementation, no forks.
+
+
+/** The compact rounded mode pills (selected = filled ORVYN violet). */
+export function ComposerModePills({
+  mode,
+  onChange,
+}: {
+  mode: string;
+  onChange: (m: string) => void;
+}) {
+  return (
+    <>
+      {COMPOSER_MODES.map((m) => (
+        <button
+          key={m.id}
+          title={m.title}
+          aria-pressed={mode === m.id}
+          onClick={() => onChange(m.id)}
+          style={{
+            background: mode === m.id ? "var(--orvyn-purple)" : "transparent",
+            border: `1px solid ${mode === m.id ? "var(--orvyn-purple)" : "var(--orvyn-border)"}`,
+            borderRadius: 999,
+            color: mode === m.id ? "#fff" : "var(--orvyn-text-secondary)",
+            padding: "3px 10px",
+            fontSize: 11,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          {m.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
+/** The square ghost attach button (paperclip), 24px — both composers. */
+export function ComposerAttachButton({ onClick, icon }: { onClick: () => void; icon: React.ReactNode }) {
+  return (
+    <button title="Attach files or images" onClick={onClick} style={ghostBtn()}>
+      {icon}
+    </button>
+  );
+}
+
+/** ghostBtn is exported so both composers share the exact square-button look. */
+export function ghostBtn(): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: "1px solid var(--orvyn-border)",
+    borderRadius: 6,
+    color: "var(--orvyn-text-secondary)",
+    width: 24,
+    height: 24,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    flexShrink: 0,
+  };
+}
+
+/** The primary submit button — Send (chat) and Run mission (Home) share it. */
+export function ComposerSubmitButton({
+  label,
+  icon,
+  onClick,
+  disabled,
+  title,
+}: {
+  label: string;
+  icon?: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        marginLeft: "auto",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        background: "var(--orvyn-purple)",
+        border: "none",
+        borderRadius: "var(--orvyn-radius-sm)",
+        color: "#fff",
+        padding: "6px 18px",
+        fontSize: 12.5,
+        fontWeight: 600,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+        flexShrink: 0,
+      }}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

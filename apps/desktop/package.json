@@ -5,7 +5,7 @@
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "npm run build && electron .",
-    "build": "tsc -p tsconfig.main.json && vite build",
+    "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json && vite build",
     "build:renderer:dev": "vite build --mode development",
     "dist:win": "npm run build && cd ../.. && npm run build -w @orvyn/backend && node scripts/stage-desktop-backend.mjs && cd apps/desktop && electron-builder --win"
   },

@@ -63,7 +63,7 @@ test("C. signed in + cloud online before sync completes", () => {
     view.indicators.map((i) => i.label),
     ["ORVYN Cloud Connected", "Local Engine Ready"]
   );
-  assert.equal(view.userSubtitle === "Synced", false);
+  assert.notEqual(view.userSubtitle, "Synced");
 });
 
 test("D. signed in + synced, and H. worker online is its own indicator", () => {

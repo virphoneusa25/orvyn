@@ -10,7 +10,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";
-import { ModelMenu, ReasoningMenu, AccessMenu, useComposerModels } from "./ComposerControls";
+import { ModelMenu, ReasoningMenu, AccessMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import type { ReasoningEffort, AccessMode } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
@@ -23,15 +23,6 @@ import { AddMenu, ComposerChips, attachmentsFromChips, composerTriggerKey, conte
 import appIcon from "../assets/icon.png";
 import type { CommandMode } from "../orvynIntent";
 import type { AgentEvent } from "./AgentActivityList";
-
-const MODES: { id: CommandMode; label: string }[] = [
-  { id: "auto", label: "Auto" },
-  { id: "code", label: "Code" },
-  { id: "server", label: "Server" },
-  { id: "research", label: "Research" },
-  { id: "deploy", label: "Deploy" },
-  { id: "automate", label: "Automate" },
-];
 
 /** The single run state (owned by App, shared with the right ContextPanel). */
 export interface RunView {
@@ -91,7 +82,7 @@ export function WorkStream({
     const id = getActiveChatId();
     if (id === lastChatId.current) return;
     lastChatId.current = id;
-    const settings = getActiveChatSettings();
+    const settings = getActiveChatSettings() ?? {};
     setRequestedModelId(settings.modelId ?? localStorage.getItem("orvyn:run-model") ?? "auto");
     setReasoningEffort((settings.reasoningEffort ?? (localStorage.getItem("orvyn:reasoning") as ReasoningEffort) ?? "auto"));
     setAccessMode(settings.permissionMode ?? ((localStorage.getItem("orvyn:access") as AccessMode) ?? "auto_read"));
@@ -881,8 +872,7 @@ export function WorkStream({
                 ...ghostBtn(),
                 background: addOpen ? "rgba(108,92,255,0.18)" : "transparent",
                 borderColor: addOpen ? "var(--orvyn-purple)" : "var(--orvyn-border)",
-                color: addOpen ? "var(--orvyn-text)" : "var(--orvyn-text-secondary)",
-              }}
+                color: addOpen ? "var(--orvyn-text)" : "var(--orvyn-text-secondary)",              }}
             >
               <IconPlus size={14} />
             </button>
@@ -904,31 +894,18 @@ export function WorkStream({
                 {chips.length || attachments.length} attached
               </span>
             )}
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                onClick={() => {
-                  setMode(m.id);
-                  localStorage.setItem("orvyn:composer-mode", m.id);
-                }}
-                style={{
-                  background: mode === m.id ? "var(--orvyn-purple)" : "transparent",
-                  border: `1px solid ${mode === m.id ? "var(--orvyn-purple)" : "var(--orvyn-border)"}`,
-                  borderRadius: 999,
-                  color: mode === m.id ? "#fff" : "var(--orvyn-text-secondary)",
-                  padding: "3px 10px",
-                  fontSize: 11,
-                  cursor: "pointer",
-                }}
-              >
-                {m.label}
-              </button>
-            ))}
+            <ComposerModePills
+              mode={mode}
+              onChange={(m) => {
+                setMode(m as CommandMode);
+                writeComposerDefault("mode", m);
+              }}
+            />
             <AccessMenu
               value={accessMode}
               onChange={(v) => {
                 setAccessMode(v);
-                localStorage.setItem("orvyn:access", v);
+                writeComposerDefault("permissionMode", v);
                 setActiveChatSetting("permissionMode", v);
               }}
             />
@@ -937,7 +914,7 @@ export function WorkStream({
               value={requestedModelId}
               onChange={(id) => {
                 setRequestedModelId(id);
-                localStorage.setItem("orvyn:run-model", id);
+                writeComposerDefault("modelId", id);
                 setActiveChatSetting("modelId", id);
               }}
             />
@@ -947,7 +924,7 @@ export function WorkStream({
               modelId={requestedModelId}
               onChange={(v) => {
                 setReasoningEffort(v);
-                localStorage.setItem("orvyn:reasoning", v);
+                writeComposerDefault("reasoningEffort", v);
                 setActiveChatSetting("reasoningEffort", v);
               }}
             />
@@ -974,49 +951,19 @@ export function WorkStream({
                 Stop
               </button>
             ) : (
-              <button
+              <ComposerSubmitButton
+                label="Send"
+                icon={<IconRocket size={13} />}
                 onClick={() => void send()}
                 disabled={!prompt.trim() || busy}
-                style={{
-                  marginLeft: "auto",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  background: "var(--orvyn-purple)",
-                  border: "none",
-                  borderRadius: "var(--orvyn-radius-sm)",
-                  color: "#fff",
-                  padding: "6px 18px",
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  cursor: !prompt.trim() || busy ? "default" : "pointer",
-                  opacity: !prompt.trim() || busy ? 0.55 : 1,
-                }}
-              >
-                <IconRocket size={13} /> Send
-              </button>
+                title="Send (Enter)"
+              />
             )}
           </div>
         </div>
       </div>
     </div>
   );
-}
-
-function ghostBtn(): React.CSSProperties {
-  return {
-    background: "transparent",
-    border: "1px solid var(--orvyn-border)",
-    borderRadius: 6,
-    color: "var(--orvyn-text-secondary)",
-    width: 24,
-    height: 24,
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    cursor: "pointer",
-    flexShrink: 0,
-  };
 }
 
 

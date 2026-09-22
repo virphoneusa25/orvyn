@@ -7,7 +7,18 @@ import { HeroBackdrop } from "./HeroBackdrop";
 import { Icon } from "./icons";
 import { TopBar } from "./Shell";
 import { AddMenu, AddPlusButton, ComposerChips, attachmentsFromChips, composerTriggerKey, contextNoteFromChips, type ComposerChip } from "../AddMenu";
-import type {
+import {
+  ComposerModePills,
+  ComposerSubmitButton,
+  useComposerModels,
+  ModelMenu,
+  ReasoningMenu,
+  AccessMenu,
+  readComposerDefaults,
+  writeComposerDefault,
+} from "../ComposerControls";
+import type { ReasoningEffort, AccessMode } from "../ComposerControls";
+import { IconRocket } from "../Icons";import type {
   ComposerMode,
   EngineStatus,
   MissionFilter,
@@ -40,8 +51,17 @@ export interface HomeScreenProps {
   /** Override the date line (defaults to today). */
   now?: Date;
 
-  onRun: (prompt: string, mode: ComposerMode, extras?: { attachments?: import("../AttachmentBar").Attachment[]; contextNote?: string }) => void;
-  onAttach?: () => void;
+  onRun: (
+    prompt: string,
+    mode: ComposerMode,
+    settings?: {
+      attachments?: import("../AttachmentBar").Attachment[];
+      contextNote?: string;
+      modelId?: string;
+      reasoningEffort?: ReasoningEffort;
+      permissionMode?: AccessMode;
+    }
+  ) => void;  onAttach?: () => void;
   projectRoot?: string | null;
   onOpenTerminal?: () => void;
   onNavigate?: (view: string) => void;
@@ -95,11 +115,18 @@ export function HomeScreen(props: HomeScreenProps) {
   } = props;
 
   const [prompt, setPrompt] = useState("");
-  const [mode, setMode] = useState<ComposerMode>("auto");
+  // Same settings model as the chat composer — ONE defaults reader/writer,
+  // no second Home-specific persistence path. A new mission starts a new
+  // conversation, which inherits these user defaults.
+  const [defaults] = useState(() => readComposerDefaults());
+  const [mode, setMode] = useState<ComposerMode>(defaults.mode as ComposerMode);
+  const [modelId, setModelId] = useState(defaults.modelId);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(defaults.reasoningEffort);
+  const [accessMode, setAccessMode] = useState<AccessMode>(defaults.permissionMode);
+  const composerModels = useComposerModels();
   const [addOpen, setAddOpen] = useState(false);
   const [chips, setChips] = useState<ComposerChip[]>([]);
-  const plusRef = useRef<HTMLButtonElement>(null);
-  const now = props.now ?? new Date();
+  const plusRef = useRef<HTMLButtonElement>(null);  const now = props.now ?? new Date();
   const dateLine = `${now.toLocaleDateString("en-US", { weekday: "long" })} · ${now.getDate()} ${now.toLocaleDateString("en-US", { month: "long" })}`.toUpperCase();
 
   const submit = () => {
@@ -108,7 +135,9 @@ export function HomeScreen(props: HomeScreenProps) {
     props.onRun(text, mode, {
       attachments: attachmentsFromChips(chips),
       contextNote: contextNoteFromChips(chips) || undefined,
-    });
+      modelId,
+      reasoningEffort,
+      permissionMode: accessMode,    });
     setPrompt("");
     setChips([]);
   };
@@ -168,6 +197,10 @@ export function HomeScreen(props: HomeScreenProps) {
                   <ComposerChips chips={chips} onRemove={(id) => setChips((prev) => prev.filter((c) => c.id !== id))} />
                 </div>
               )}
+              {/* Control row — the SAME shared components as the chat
+                  composer: add-menu, pills, shield, model, brain, submit.
+                  ORION is the implied agent (the model selector names the
+                  actual model). */}
               <div className="ov-composer__bar">
                 <AddPlusButton open={addOpen} onClick={() => setAddOpen((v) => !v)} buttonRef={plusRef} />
                 <AddMenu
@@ -180,34 +213,46 @@ export function HomeScreen(props: HomeScreenProps) {
                   projectRoot={props.projectRoot ?? null}
                   anchorRef={plusRef}
                 />
+                <ComposerModePills
+                  mode={mode}
+                  onChange={(m) => {
+                    setMode(m as ComposerMode);
+                    writeComposerDefault("mode", m);
+                  }}
+                />
 
-                <div className="ov-segmented" role="group" aria-label="Mission mode">
-                  {MODES.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      aria-pressed={mode === m.id}
-                      onClick={() => setMode(m.id)}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
+                <AccessMenu
+                  value={accessMode}
+                  onChange={(v) => {
+                    setAccessMode(v);
+                    writeComposerDefault("permissionMode", v);
+                  }}
+                />
+                <ModelMenu
+                  models={composerModels}
+                  value={modelId}
+                  onChange={(id) => {
+                    setModelId(id);
+                    writeComposerDefault("modelId", id);
+                  }}
+                />
+                <ReasoningMenu
+                  value={reasoningEffort}
+                  models={composerModels}
+                  modelId={modelId}
+                  onChange={(v) => {
+                    setReasoningEffort(v);
+                    writeComposerDefault("reasoningEffort", v);
+                  }}
+                />
 
-                <button type="button" className="ov-btn ov-agent-select" onClick={props.onPickAgent}>
-                  <span className="ov-dot" />
-                  {agentName} <span className="ov-agent-select__role">{agentRole}</span>
-                  <Icon name="chevronDown" size={12} strokeWidth={2} />
-                </button>
-
-                <span className="ov-trust" title="The agent asks for your approval before running commands">
-                  <Icon name="shield" size={13} strokeWidth={1.8} />
-                  Asks before acting
-                </span>
-
-                <button type="button" className="ov-btn ov-btn--primary ov-run" onClick={submit}>
-                  Run mission <span className="ov-kbd">Ctrl ↵</span>
-                </button>
+                <ComposerSubmitButton
+                  label="Run mission"
+                  icon={<IconRocket size={13} />}
+                  onClick={submit}
+                  disabled={!prompt.trim()}
+                  title="Run mission (Ctrl+Enter)"
+                />
               </div>
             </div>
 

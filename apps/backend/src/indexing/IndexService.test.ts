@@ -18,18 +18,39 @@ function project(): string {
   return root;
 }
 
+/** Windows hygiene: an index service holds a recursive directory watcher;
+ * tearing it down lets the temp dir be removed cleanly. */
+async function teardown(...services: Array<{ deleteIndex(): Promise<void> }>): Promise<void> {
+  for (const svc of services) {
+    try { await svc.deleteIndex(); } catch { /* best-effort teardown */ }
+  }
+}
+
+/** Windows can hold a recursive-watch handle open for a beat even after
+ * close(); removing a temp dir needs patient retries, not one rmSync. */
+async function removeDir(root: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  try { rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
+}
+
 test("incremental index: unchanged file is not re-embedded", async () => {
   const root = project();
+  const embedder = new HashingEmbedder();
+  const svc = new IndexService(embedder, new InMemoryVectorStore(), "hash", "tenant_a");
   try {
-    const store = new InMemoryVectorStore();
     let embeds = 0;
-    const embedder = new HashingEmbedder();
     const orig = embedder.embedBatch.bind(embedder);
     embedder.embedBatch = async (texts) => {
       embeds += texts.length;
       return orig(texts);
     };
-    const svc = new IndexService(embedder, store, "hash", "tenant_a");
     const first = await svc.build(root);
     assert.equal(first.status, "ready");
     assert.ok((first.chunksIndexed ?? 0) > 0);
@@ -38,15 +59,16 @@ test("incremental index: unchanged file is not re-embedded", async () => {
     assert.equal(second.status, "ready");
     assert.equal(embeds, afterFirst, "unchanged files must not re-embed");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await teardown(svc);
+    await removeDir(root);
   }
 });
 
 test("delete and rename remove stale paths", async () => {
   const root = project();
+  const store = new InMemoryVectorStore();
+  const svc = new IndexService(new HashingEmbedder(), store, "hash", "tenant_a");
   try {
-    const store = new InMemoryVectorStore();
-    const svc = new IndexService(new HashingEmbedder(), store, "hash", "tenant_a");
     await svc.build(root);
     await svc.removeFile("src/user.ts");
     unlinkSync(join(root, "src", "user.ts"));
@@ -59,43 +81,45 @@ test("delete and rename remove stale paths", async () => {
     const hits = await svc.search("sendResetEmail", 8);
     assert.ok(hits.every((h) => !h.path.endsWith("mail.ts")));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await teardown(svc);
+    await removeDir(root);
   }
 });
 
 test("tenant isolation: project ids differ across tenants with the same folder name", async () => {
   const root = project();
+  const a = new IndexService(new HashingEmbedder(), new InMemoryVectorStore(), "hash", "tenant_a");
+  const b = new IndexService(new HashingEmbedder(), new InMemoryVectorStore(), "hash", "tenant_b");
   try {
-    const a = new IndexService(new HashingEmbedder(), new InMemoryVectorStore(), "hash", "tenant_a");
-    const b = new IndexService(new HashingEmbedder(), new InMemoryVectorStore(), "hash", "tenant_b");
     const idA = a.bindProject(root);
     const idB = b.bindProject(root);
     assert.notEqual(idA, idB);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await teardown(a, b);
+    await removeDir(root);
   }
 });
 
 test("secrets are never indexed", async () => {
   assert.equal(isSecretPath(".env"), true);
   const root = project();
+  const svc = new IndexService(new HashingEmbedder(), new InMemoryVectorStore(), "hash", "tenant_a");
   try {
-    const store = new InMemoryVectorStore();
-    const svc = new IndexService(new HashingEmbedder(), store, "hash", "tenant_a");
     await svc.build(root);
     const hits = await svc.search("SECRET=do-not-index", 8);
     assert.ok(!hits.some((h) => h.path.includes(".env")));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await teardown(svc);
+    await removeDir(root);
   }
 });
 
 test("embedding failure leaves a previous good index usable as degraded/error", async () => {
   const root = project();
+  const store = new InMemoryVectorStore();
+  const embedder = new HashingEmbedder();
+  const svc = new IndexService(embedder, store, "hash", "tenant_a");
   try {
-    const store = new InMemoryVectorStore();
-    const embedder = new HashingEmbedder();
-    const svc = new IndexService(embedder, store, "hash", "tenant_a");
     const ok = await svc.build(root);
     assert.equal(ok.status, "ready");
     embedder.embedBatch = async () => { throw new Error("embedder down"); };
@@ -104,6 +128,7 @@ test("embedding failure leaves a previous good index usable as degraded/error", 
     assert.ok(again.status === "degraded" || again.status === "error");
     assert.ok(ok.chunksIndexed > 0);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    await teardown(svc);
+    await removeDir(root);
   }
 });
