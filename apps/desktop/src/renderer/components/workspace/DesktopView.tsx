@@ -101,6 +101,17 @@ export function DesktopView({
     return () => clearInterval(id);
   }, [projectRoot, runId]);
 
+  // AUTO-START: when the Desktop tab is opened with a project, cloud
+  // connected, and no existing session, start one automatically — the user
+  // should never have to click a separate Start button (Cursor behavior).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (autoStarted.current || !projectRoot || sandboxAvailable !== true) return;
+    if (session || starting) return;
+    autoStarted.current = true;
+    void startSession();
+  }, [projectRoot, sandboxAvailable, session, starting]);
+
   useEffect(() => {
     if (!session?.live) return;
     void pullFrame();
@@ -284,9 +295,17 @@ export function DesktopView({
           </div>
         )}
         {frame ? (
-          <img src={frame} alt="ORVYN Desktop" style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
+          <img
+            src={frame}
+            alt="ORVYN Desktop"
+            onError={() => setFrame(null)}
+            style={{ display: "block", width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }}
+          />
         ) : (
-          <div style={{ ...emptyBody(), padding: 24 }}>Waiting for the first desktop frame…</div>
+          <div style={{ ...emptyBody(), padding: 24, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <div>Connecting to Desktop…</div>
+            <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>Streaming the live virtual desktop</div>
+          </div>
         )}
         {!user && (
           <OrionCursorOverlay cursor={cursor ?? null} status={status ?? "ORION is operating this desktop"} />
