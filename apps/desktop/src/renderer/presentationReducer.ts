@@ -117,6 +117,15 @@ export interface SummaryItem {
   detail: string;
 }
 
+export interface CapabilityRequiredItem {
+  kind: "capability";
+  key: string;
+  query: string;
+  reason: string;
+  recommendedServers: { name?: string; server?: string; canonicalId?: string }[];
+  settled?: boolean;
+}
+
 export type PresentationItem =
   | ToolItem
   | GroupItem
@@ -124,7 +133,8 @@ export type PresentationItem =
   | AssistantItem
   | StatusItem
   | ApprovalItem
-  | SummaryItem;
+  | SummaryItem
+  | CapabilityRequiredItem;
 
 // ---- helpers -------------------------------------------------------------
 
@@ -347,6 +357,18 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             break;
           }
         }
+        continue;
+      }
+
+      case "capability.required": {
+        closeThought(e.timestamp);
+        items.push({
+          kind: "capability",
+          key: String(e.id),
+          query: String(e.data.query ?? ""),
+          reason: String(e.data.reason ?? "ORION needs an additional capability."),
+          recommendedServers: Array.isArray(e.data.recommendedServers) ? (e.data.recommendedServers as CapabilityRequiredItem["recommendedServers"]) : [],
+        });
         continue;
       }
 

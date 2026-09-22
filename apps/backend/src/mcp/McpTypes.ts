@@ -8,7 +8,7 @@
 
 export type McpTransportKind = "stdio" | "http";
 
-export type McpConnectionState = "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR" | "DISABLED";
+export type McpConnectionState = "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR" | "DISABLED" | "NEEDS_AUTH";
 
 /** Risk classification for permission policy (spec PHASE 5). */
 export type McpToolRisk = "READ" | "WRITE" | "DESTRUCTIVE" | "EXTERNAL_SIDE_EFFECT";
@@ -41,6 +41,18 @@ export interface McpServerConfig {
   sourceProviders?: string[];
   scope?: "global" | "project" | "run";
   executionLocation?: "local" | "cloud" | "remote";
+  authKind?: "none" | "bearer" | "oauth" | "api_key" | "custom";
+  blocked?: boolean;
+  blockedReason?: string;
+  provenance?: {
+    package?: string;
+    version?: string;
+    registry?: string;
+    integrity?: string;
+    scripts?: string[];
+    installedAt?: number;
+    installSource?: string;
+  };
   // runtime metadata (cached, not authoritative)
   lastConnectedAt?: number;
   lastError?: string;
@@ -75,6 +87,11 @@ export interface McpServerStatus {
   lastError?: string;
   enabled: boolean;
   tools: { name: string; risk: McpToolRisk; permission: McpPermissionMode; description: string }[];
+  executionLocation?: "local" | "cloud" | "remote";
+  scope?: "global" | "project" | "run";
+  authKind?: McpServerConfig["authKind"];
+  blocked?: boolean;
+  blockedReason?: string;
 }
 
 /** Effective permission for a tool: tool override > server override > risk default. */

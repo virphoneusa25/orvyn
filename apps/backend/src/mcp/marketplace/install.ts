@@ -2,6 +2,7 @@ import { mkdirSync } from "fs";
 import { join } from "path";
 import { defaultDataDir } from "../../persistence/LocalStore";
 import type { McpManager } from "../McpManager";
+import { flagRepositoryMismatch, inspectNpmPackage, pinRequired } from "../hardening/provenance";
 import type { MarketplaceMcpServer } from "./types";
 
 export interface MarketplaceInstallInput {
@@ -31,11 +32,16 @@ export function installPlan(server: MarketplaceMcpServer): {
     return { transport: "http", url: http.url, headers, version: server.version, networkRequired: true };
   }
   if (stdio) {
+    const version = server.version ?? server.packages[0]?.version;
+    if (server.packages[0]?.registry === "npm") {
+      const pin = pinRequired(version);
+      if (pin) throw new Error(pin);
+    }
     return {
       transport: "stdio",
       command: stdio.command,
       args: stdio.args,
-      version: server.version ?? server.packages[0]?.version,
+      version,
       networkRequired: server.networkRequired,
     };
   }
@@ -74,11 +80,44 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
     sourceProviders: input.server.sources,
     scope: input.cwd && input.server.filesystemScope === "project" ? "project" : "global",
     executionLocation: plan.transport === "http" ? "remote" : "local",
+    authKind: input.server.auth[0]?.kind,
   });
-  if (input.connect) {
-    return { config: cfg, status: await manager.connect(cfg.id), plan };
+  const npmPkg = input.server.packages.find((p) => p.registry === "npm");
+  if (npmPkg?.identifier && plan.version) {
+    try {
+      const provenance = await inspectNpmPackage(npmPkg.identifier, plan.version);
+      if (input.server.repository) {
+        provenance.claimedRepository = input.server.repository;
+        provenance.repositoryMismatch = flagRepositoryMismatch(input.server.repository, provenance.repository);
+        if (provenance.repositoryMismatch) provenance.signals.push("repository metadata mismatch");
+      }
+      manager.updateServer(cfg.id, {
+        provenance: {
+          package: provenance.package,
+          version: provenance.version,
+          registry: provenance.registry,
+          integrity: provenance.integrity,
+          scripts: provenance.scripts,
+          installedAt: provenance.installedAt,
+          installSource: input.server.sources.join(","),
+        },
+      });
+      (cfg as typeof cfg & { provenanceWarning?: string }).provenanceWarning = provenance.scriptWarning;
+    } catch {
+      /* metadata inspect is best-effort after pin check */
+    }
   }
-  return { config: cfg, status: manager.status(cfg.id), plan };
+  const needsOAuth = input.server.auth.some((a) => a.kind === "oauth");
+  if (plan.transport === "stdio" && input.server.trust.level === "unverified" && input.connect && !needsOAuth) {
+    const probe = await manager.sandboxProbe(cfg.id);
+    if (probe.state !== "CONNECTED") {
+      return { config: cfg, status: probe, plan, sandbox: true, needsOAuth };
+    }
+  }
+  if (input.connect && !needsOAuth) {
+    return { config: cfg, status: await manager.connect(cfg.id), plan, needsOAuth };
+  }
+  return { config: cfg, status: manager.status(cfg.id), plan, needsOAuth };
 }
 
 function sanitizeId(name: string): string {

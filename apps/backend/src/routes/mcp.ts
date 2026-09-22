@@ -7,6 +7,7 @@
 import { Router } from "express";
 import { marketplaceFor } from "../mcp/marketplace/service";
 import { MARKETPLACE_CATEGORIES } from "../mcp/marketplace/types";
+import { hardeningFor } from "../mcp/hardening/hardening";
 
 export function mcpRouter(requireTenant: (req: any) => any): Router {
   const r = Router();
@@ -57,8 +58,16 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
   r.post("/servers/:id/connect", async (req, res) => {
     const t = requireTenant(req);
     try {
+      const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+      const auth = await harden.ensureFreshToken(req.params.id);
+      if (auth === "needs-auth") {
+        t.mcpManager.markNeedsAuth(req.params.id, "Needs Auth");
+        return res.json({ server: t.mcpManager.status(req.params.id) });
+      }
       t.mcpManager.setEnabled(req.params.id, true);
-      res.json({ server: await t.mcpManager.connect(req.params.id) });
+      const server = await t.mcpManager.connect(req.params.id);
+      harden.appendAudit("enable", { serverId: req.params.id });
+      res.json({ server });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -162,10 +171,20 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
         connect: req.body.connect !== false,
         cwd: req.body.cwd,
       });
+      const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+      harden.appendAudit("install", { serverId: out.config.id, marketplaceId: req.body.server?.canonicalId, version: out.plan.version });
+      if (harden.policy().requireApprovalForInstall) {
+        t.mcpManager.setEnabled(out.config.id, false);
+      }
       res.status(201).json({
         server: out.config.id,
         status: out.status,
         plan: { transport: out.plan.transport, version: out.plan.version, networkRequired: out.plan.networkRequired },
+        needsOAuth: out.needsOAuth,
+        provenance: out.config.provenance,
+        scriptWarning: (out.config as { provenanceWarning?: string }).provenanceWarning ?? out.config.provenance?.scripts?.length
+          ? `This package runs ${(out.config.provenance?.scripts ?? []).join(", ")} during install.`
+          : undefined,
       });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -218,6 +237,165 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     const drafts = market.previewImport(req.body.config ?? req.body);
     if (!req.body.confirm) return res.json({ drafts, imported: 0, needsConfirm: true });
     res.json(market.importDrafts(drafts, true));
+  });
+
+  r.post("/oauth/start", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+      const out = await harden.startOAuth({
+        serverId: String(req.body.serverId ?? ""),
+        resource: String(req.body.resource ?? t.mcpManager.listServers().find((s: { id: string }) => s.id === req.body.serverId)?.url ?? ""),
+        clientId: req.body.clientId,
+      });
+      harden.appendAudit("connect", { serverId: req.body.serverId, method: "oauth-start" });
+      res.json(out);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.get("/oauth/status", (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    res.json(harden.oauthStatus(String(req.query.state ?? "")));
+  });
+
+  r.post("/oauth/disconnect/:id", async (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    await harden.disconnectAccount(req.params.id);
+    res.json({ server: t.mcpManager.status(req.params.id) });
+  });
+
+  r.post("/oauth/refresh/:id", async (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    const status = await harden.ensureFreshToken(req.params.id);
+    res.json({ status, server: t.mcpManager.status(req.params.id) });
+  });
+
+  r.post("/gateway/invoke", async (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    const out = await harden.gateway.invoke({
+      tenantId: String(req.body.tenantId ?? t.id),
+      expectedTenantId: t.id,
+      serverId: String(req.body.serverId ?? ""),
+      tool: String(req.body.tool ?? ""),
+      args: req.body.args ?? {},
+      runId: req.body.runId,
+      projectRoot: req.body.projectRoot ?? t.currentProjectRoot,
+      cloudRun: req.body.cloudRun === true,
+    });
+    harden.appendAudit("tool invocation", { serverId: req.body.serverId, tool: req.body.tool, ok: out.ok, cloudRun: req.body.cloudRun === true });
+    res.status(out.ok ? 200 : 403).json(out);
+  });
+
+  r.get("/gateway/health", (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    const servers = t.mcpManager.statuses().map((s: any) => {
+      const snap = harden.obs.snapshot(s.id, {
+        state: s.state,
+        toolCount: s.toolCount,
+        lastConnectedAt: s.lastConnectedAt,
+        enabled: s.enabled,
+        blocked: s.blocked,
+      });
+      return { ...s, health: snap.status, latencyMs: snap.latencyMs, circuitReason: snap.circuitReason, restartCount: snap.restartCount };
+    });
+    res.json({
+      gateway: harden.gateway.available ? "online" : "unavailable",
+      connected: servers.filter((s: any) => s.state === "CONNECTED").length,
+      failing: servers.filter((s: any) => s.health === "Error" || s.health === "Offline" || s.circuitReason),
+      servers,
+    });
+  });
+
+  r.get("/policy", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ policy: hardeningFor(t.mcpManager, t.localStore, t.id).policy() });
+  });
+
+  r.put("/policy", (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    const policy = harden.setPolicy(req.body ?? {});
+    harden.appendAudit("approval", { action: "policy.update", mode: policy.mode });
+    res.json({ policy });
+  });
+
+  r.get("/health", (req, res) => {
+    const t = requireTenant(req);
+    const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
+    const servers = t.mcpManager.statuses().map((s: any) =>
+      harden.obs.snapshot(s.id, {
+        state: s.state,
+        toolCount: s.toolCount,
+        lastConnectedAt: s.lastConnectedAt,
+        enabled: s.enabled,
+        blocked: s.blocked,
+      })
+    );
+    res.json({
+      servers,
+      diagnostics: marketplaceFor(t.mcpManager, t.localStore).index.diagnostics(),
+    });
+  });
+
+  r.patch("/servers/:id/scope", (req, res) => {
+    const t = requireTenant(req);
+    const scope = ["global", "project", "run"].includes(req.body.scope) ? req.body.scope : "global";
+    const cwd = scope === "project" ? (req.body.cwd ?? t.currentProjectRoot) : undefined;
+    const updated = t.mcpManager.setScope(req.params.id, scope, cwd ?? undefined);
+    if (!updated) return res.status(404).json({ error: "Unknown MCP server" });
+    hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("update", { serverId: req.params.id, scope });
+    res.json({ server: updated });
+  });
+
+  r.post("/servers/:id/block", async (req, res) => {
+    const t = requireTenant(req);
+    const blocked = req.body.blocked !== false;
+    const updated = t.mcpManager.setBlocked(req.params.id, blocked, req.body.reason);
+    if (!updated) return res.status(404).json({ error: "Unknown MCP server" });
+    hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit(blocked ? "denial" : "approval", { serverId: req.params.id, reason: req.body.reason });
+    res.json({ server: updated });
+  });
+
+  r.post("/servers/:id/sandbox", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const status = await t.mcpManager.sandboxProbe(req.params.id);
+      res.json({ server: status });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.get("/provenance", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ provenance: hardeningFor(t.mcpManager, t.localStore, t.id).readProvenance() });
+  });
+
+  r.post("/inspect", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const rec = await hardeningFor(t.mcpManager, t.localStore, t.id).inspectInstall(String(req.body.package ?? ""), String(req.body.version ?? ""));
+      res.json({ provenance: rec });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.get("/audit", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ events: hardeningFor(t.mcpManager, t.localStore, t.id).readAudit() });
+  });
+
+  r.get("/capabilities/diagnostics", (req, res) => {
+    const t = requireTenant(req);
+    res.json(marketplaceFor(t.mcpManager, t.localStore).index.diagnostics());
   });
 
   return r;

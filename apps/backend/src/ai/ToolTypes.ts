@@ -23,6 +23,8 @@ export interface ToolResult {
     truncated?: boolean;
     note?: string;
   };
+  /** Structured side-channel (capability.required, activation). Never secrets. */
+  meta?: Record<string, unknown>;
 }
 
 export interface ToolExecutionContext {

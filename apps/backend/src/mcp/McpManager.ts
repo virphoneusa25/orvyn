@@ -67,6 +67,9 @@ export class McpManager {
   private sink?: McpEventSink;
   private store: McpManagerDeps["store"];
   private starting = false;
+  private startGuard?: (id: string) => string | null;
+  private toolGuard?: (serverId: string, tool: string) => string | null;
+  private restartHook?: (id: string) => void;
 
   constructor(deps: McpManagerDeps) {
     this.gateway = deps.gateway;
@@ -80,6 +83,57 @@ export class McpManager {
 
   listServers(): McpServerConfig[] {
     return this.registry.list();
+  }
+
+  secret(id: string, name: string): string | null {
+    return this.registry.secret(id, name);
+  }
+
+  setSecret(id: string, name: string, value: string): void {
+    this.registry.setSecret(id, name, value);
+  }
+
+  deleteSecret(id: string, name: string): void {
+    this.registry.deleteSecret(id, name);
+  }
+
+  setStartGuard(fn: (id: string) => string | null): void {
+    this.startGuard = fn;
+  }
+
+  setToolGuard(fn: (serverId: string, tool: string) => string | null): void {
+    this.toolGuard = fn;
+  }
+
+  setRestartHook(fn: (id: string) => void): void {
+    this.restartHook = fn;
+  }
+
+  setScope(id: string, scope: "global" | "project" | "run", cwd?: string): McpServerConfig | null {
+    return this.updateServer(id, { scope, cwd: cwd ?? this.registry.get(id)?.cwd });
+  }
+
+  setBlocked(id: string, blocked: boolean, reason?: string): McpServerConfig | null {
+    if (blocked) void this.disconnect(id).catch(() => {});
+    return this.updateServer(id, { blocked, blockedReason: reason, enabled: blocked ? false : this.registry.get(id)?.enabled });
+  }
+
+  async invokeDiscoveredTool(serverId: string, originalName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string; error?: string }> {
+    const conn = this.connections.get(serverId);
+    if (!conn || conn.state !== "CONNECTED" || !conn.client) {
+      return { ok: false, output: "", error: `MCP server is not connected` };
+    }
+    const res = await conn.client.callTool(originalName, args);
+    return { ok: res.ok, output: res.output, error: res.isError ? res.output : undefined };
+  }
+
+  async sandboxProbe(id: string): Promise<McpServerStatus> {
+    const status = await this.connect(id, { probe: true });
+    if (status.state === "CONNECTED") {
+      await this.disconnect(id).catch(() => {});
+      this.setEnabled(id, false);
+    }
+    return status;
   }
 
   addServer(input: {
@@ -99,6 +153,8 @@ export class McpManager {
     sourceProviders?: string[];
     scope?: "global" | "project" | "run";
     executionLocation?: "local" | "cloud" | "remote";
+    authKind?: McpServerConfig["authKind"];
+    provenance?: McpServerConfig["provenance"];
   }): McpServerConfig {
     const id = `mcp_${randomUUID().slice(0, 8)}`;
     const secretNames = input.secretValues ? Object.keys(input.secretValues) : [];
@@ -122,6 +178,8 @@ export class McpManager {
       sourceProviders: input.sourceProviders,
       scope: input.scope,
       executionLocation: input.executionLocation ?? (input.transport === "http" ? "remote" : "local"),
+      authKind: input.authKind,
+      provenance: input.provenance,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -161,9 +219,12 @@ export class McpManager {
 
   // ---- Connection lifecycle ----------------------------------------------
 
-  async connect(id: string): Promise<McpServerStatus> {
+  async connect(id: string, opts?: { probe?: boolean }): Promise<McpServerStatus> {
     const cfg = this.registry.get(id);
     if (!cfg) throw new Error("Unknown MCP server");
+    if (cfg.blocked) throw new Error(cfg.blockedReason || "This server is blocked");
+    const guarded = this.startGuard?.(id);
+    if (guarded) throw new Error(guarded);
     if (cfg.transport === "stdio") {
       const liveStdio = this.registry.list().filter((c) => {
         if (c.id === id || c.transport !== "stdio") return false;
@@ -194,6 +255,7 @@ export class McpManager {
               c.state = "ERROR";
               c.lastError = "Connection closed unexpectedly";
               this.sink?.("mcp.disconnected", { serverId: id, name: cfg.name, reason: "closed" });
+              this.restartHook?.(id);
             }
           },
         },
@@ -221,8 +283,8 @@ export class McpManager {
       conn.state = "CONNECTED";
       conn.tools = tools;
       this.updateServer(id, {
-        // A successful connect is the definition of "enabled".
-        enabled: true,
+        // A successful connect is the definition of "enabled" unless this was a sandbox probe.
+        enabled: opts?.probe ? false : true,
         lastConnectedAt: Date.now(),
         lastError: undefined,
         toolCount: tools.length,
@@ -247,6 +309,14 @@ export class McpManager {
     if (conn?.client) await conn.client.close();
     this.connections.set(id, { state: "DISCONNECTED", client: null, tools: [] });
     this.unregisterTools(id);
+  }
+
+  markNeedsAuth(id: string, reason = "Needs Auth"): void {
+    const conn = this.connections.get(id);
+    if (conn?.client) void conn.client.close().catch(() => {});
+    this.connections.set(id, { state: "NEEDS_AUTH", client: null, tools: [], lastError: reason });
+    this.unregisterTools(id);
+    this.updateServer(id, { lastError: reason });
   }
 
   async reconnect(id: string): Promise<McpServerStatus> {
@@ -283,6 +353,8 @@ export class McpManager {
     for (const t of tools) {
       const mode = effectivePermission(t.risk, policy, t.originalName);
       const tool = makeMcpTool(t, async (args) => {
+        const guard = this.startGuard?.(serverId) ?? this.toolGuard?.(serverId, t.originalName) ?? this.toolGuard?.(serverId, t.namespacedName);
+        if (guard) return { ok: false, output: "", error: guard };
         const conn = this.connections.get(serverId);
         if (!conn || conn.state !== "CONNECTED" || !conn.client) {
           return { ok: false, output: "", error: `MCP server "${serverName}" is not connected. Ask the user to reconnect it from Tools & MCP.` };
@@ -337,9 +409,13 @@ export class McpManager {
     const cfg = this.registry.get(id);
     if (!cfg) return null;
     const conn = this.connections.get(id);
-    const state: McpConnectionState = !cfg.enabled
-      ? conn?.state === "ERROR" ? conn.state : "DISABLED"
-      : conn?.state ?? "DISCONNECTED";
+    const state: McpConnectionState = cfg.blocked
+      ? "DISABLED"
+      : conn?.state === "NEEDS_AUTH"
+        ? "NEEDS_AUTH"
+        : !cfg.enabled
+          ? conn?.state === "ERROR" ? conn.state : "DISABLED"
+          : conn?.state ?? "DISCONNECTED";
     const policy = this.registry.policy(id);
     return {
       id: cfg.id,
@@ -352,6 +428,11 @@ export class McpManager {
       lastConnectedAt: cfg.lastConnectedAt,
       lastError: conn?.lastError ?? cfg.lastError,
       enabled: cfg.enabled,
+      executionLocation: cfg.executionLocation ?? (cfg.transport === "http" ? "remote" : "local"),
+      scope: cfg.scope ?? "global",
+      authKind: cfg.authKind,
+      blocked: cfg.blocked,
+      blockedReason: cfg.blockedReason,
       tools: (conn?.tools ?? []).map((t) => ({
         name: t.originalName,
         risk: t.risk,

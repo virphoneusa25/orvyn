@@ -13,7 +13,7 @@ import { randomUUID } from "crypto";
 import { AIMessage, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
-import { AITool } from "../ai/ToolTypes";
+import { AITool, ToolResult } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
@@ -174,6 +174,22 @@ export class StreamingAgentRuntime {
     /** MCP marketplace: hide unused mcp.* schemas so the catalog never floods context. */
     private exposeTool: (name: string) => boolean = () => true
   ) {}
+
+  private cloudMcpInvoke?: (input: {
+    runId: string;
+    tool: string;
+    args: Record<string, unknown>;
+    projectRoot: string;
+  }) => Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
+  private onRunSettled?: (runId: string) => void;
+
+  setHardeningHooks(hooks: {
+    cloudMcpInvoke?: StreamingAgentRuntime["cloudMcpInvoke"];
+    onRunSettled?: (runId: string) => void;
+  }): void {
+    this.cloudMcpInvoke = hooks.cloudMcpInvoke;
+    this.onRunSettled = hooks.onRunSettled;
+  }
 
   private toolDefinitions(): ToolDefinition[] {
     return this.tools
@@ -433,6 +449,11 @@ export class StreamingAgentRuntime {
         }
       } finally {
         this.teardownRemote(runId);
+        try {
+          this.onRunSettled?.(runId);
+        } catch {
+          /* run-scope cleanup must not fail the settle */
+        }
         this.runs.delete(runId);
       }
     })();
@@ -958,10 +979,48 @@ export class StreamingAgentRuntime {
       const terminalLike = call.name === "terminal" || call.name === "run_command";
       const remoteRun = state.execution?.location === "OVH_WORKER";
       if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
-      const result = await this.tools.execute(call.name, call.arguments, "coder", {
-        signal: state.controller.signal,
-        onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
-      });
+      let result: ToolResult;
+      if (call.name.startsWith("mcp.") && remoteRun) {
+        // Cloud runs never fall back to a desktop stdio process. Remote HTTP
+        // MCP is mediated by the Cloud MCP Gateway on the control plane.
+        if (!this.cloudMcpInvoke) {
+          result = { ok: false, error: "MCP Gateway unavailable. Cloud MCP is not reachable. There is no local fallback." };
+        } else {
+          result = await this.cloudMcpInvoke({
+            runId,
+            tool: call.name,
+            args: (call.arguments ?? {}) as Record<string, unknown>,
+            projectRoot: state.projectRoot,
+          });
+        }
+      } else {
+        result = await this.tools.execute(call.name, call.arguments, "coder", {
+          signal: state.controller.signal,
+          onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
+        });
+      }
+      if (call.name === "search_capabilities" && result.ok && result.meta) {
+        const required = result.meta.capabilityRequired as
+          | { query?: string; reason?: string; recommendedServers?: unknown[] }
+          | undefined;
+        if (required) {
+          this.store.emit(runId, "capability.required", {
+            query: required.query,
+            reason: required.reason,
+            recommendedServers: required.recommendedServers ?? [],
+            runId,
+          });
+        }
+        const activated = Array.isArray(result.meta.activated) ? result.meta.activated : [];
+        const diagnostics = (result.meta.diagnostics as Record<string, unknown> | undefined) ?? {};
+        this.store.emit(runId, "mcp.activation", {
+          activatedTools: activated,
+          activatedServers: [...new Set(activated.map((n) => String(n).split(".")[1]).filter(Boolean))],
+          reason: String((call.arguments as { query?: string })?.query ?? "search_capabilities"),
+          tokenFootprint: diagnostics.tokenFootprint ?? 0,
+          budget: { maxServers: diagnostics.maxServers, maxTools: diagnostics.maxTools },
+        });
+      }
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       if (result.ok) {

@@ -100,7 +100,9 @@ export type AgentEventType =
   | "preview.available"
   | "mcp.connected"
   | "mcp.disconnected"
-  | "mcp.error";
+  | "mcp.error"
+  | "capability.required"
+  | "mcp.activation";
 
 export interface AgentEvent {
   id: string;

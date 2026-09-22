@@ -31,7 +31,7 @@ interface McpServerStatus {
   id: string;
   name: string;
   transport: "stdio" | "http";
-  state: "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR" | "DISABLED";
+  state: "DISCONNECTED" | "CONNECTING" | "CONNECTED" | "ERROR" | "DISABLED" | "NEEDS_AUTH";
   toolCount: number;
   resourceCount: number;
   promptCount: number;
@@ -39,14 +39,41 @@ interface McpServerStatus {
   lastError?: string;
   enabled: boolean;
   tools: McpToolRow[];
+  executionLocation?: "local" | "cloud" | "remote";
+  scope?: "global" | "project" | "run";
+  authKind?: string;
+  blocked?: boolean;
+  blockedReason?: string;
 }
 
-const STATE_COLOR: Record<McpServerStatus["state"], string> = {
+interface HealthRow {
+  serverId: string;
+  status: "Healthy" | "Slow" | "Needs Auth" | "Offline" | "Error" | "Disabled" | "Blocked";
+  latencyMs?: number;
+  circuitReason?: string;
+  restartCount?: number;
+}
+
+const STATE_COLOR: Record<string, string> = {
   CONNECTED: "var(--orvyn-green, #20D89B)",
   CONNECTING: "var(--orvyn-yellow, #F5B942)",
   DISCONNECTED: "var(--orvyn-text-muted, #7A8298)",
   ERROR: "var(--orvyn-red, #F25F75)",
   DISABLED: "var(--orvyn-text-muted, #7A8298)",
+  NEEDS_AUTH: "var(--orvyn-yellow, #F5B942)",
+  Healthy: "var(--orvyn-green, #20D89B)",
+  Slow: "var(--orvyn-yellow, #F5B942)",
+  "Needs Auth": "var(--orvyn-yellow, #F5B942)",
+  Offline: "var(--orvyn-text-muted, #7A8298)",
+  Error: "var(--orvyn-red, #F25F75)",
+  Disabled: "var(--orvyn-text-muted, #7A8298)",
+  Blocked: "var(--orvyn-red, #F25F75)",
+};
+
+const SCOPE_HELP: Record<string, string> = {
+  global: "Available to every project for this account (for example a GitHub login).",
+  project: "Only this project can discover or invoke this server (for example a project database).",
+  run: "Ephemeral — active for the current ORION run and deactivated when the run ends.",
 };
 
 function relTime(ts?: number): string {
@@ -65,17 +92,22 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [health, setHealth] = useState<Record<string, HealthRow>>({});
 
   const refresh = useCallback(async () => {
     try {
       const root = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : "";
       const headers = authHeaders();
-      const [t, s] = await Promise.all([
+      const [t, s, h] = await Promise.all([
         fetch(apiUrl(`/tools${root}`), { headers }).then((r) => r.json()).catch(() => ({ tools: [] })),
         fetch(apiUrl("/mcp/statuses"), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
+        fetch(apiUrl("/mcp/health"), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
       ]);
       setNative(t.tools ?? []);
       setServers(s.servers ?? []);
+      const map: Record<string, HealthRow> = {};
+      for (const row of h.servers ?? []) map[row.serverId] = row;
+      setHealth(map);
     } catch {
       /* keep last known */
     }
@@ -111,6 +143,46 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
     setBusy(id);
     try {
       await fetch(apiUrl(`/mcp/servers/${id}`), { method: "DELETE", headers: authHeaders() });
+    } finally {
+      setBusy(null);
+      void refresh();
+    }
+  }
+
+  async function setScope(id: string, scope: "global" | "project" | "run") {
+    await fetch(apiUrl(`/mcp/servers/${id}/scope`), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ scope, cwd: projectRoot }),
+    });
+    void refresh();
+  }
+
+  async function connectAccount(id: string) {
+    setBusy(id);
+    try {
+      const res = await fetch(apiUrl("/mcp/oauth/start"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ serverId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "OAuth start failed");
+      if (data.authorizeUrl && window.orvyn?.window?.openExternal) {
+        await window.orvyn.window.openExternal(data.authorizeUrl);
+      } else if (data.authorizeUrl) {
+        window.open(data.authorizeUrl, "_blank", "noopener");
+      }
+    } finally {
+      setBusy(null);
+      void refresh();
+    }
+  }
+
+  async function disconnectAccount(id: string) {
+    setBusy(id);
+    try {
+      await fetch(apiUrl(`/mcp/oauth/disconnect/${id}`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
     } finally {
       setBusy(null);
       void refresh();
@@ -211,27 +283,52 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {servers.map((s) => (
+        {servers.map((s) => {
+          const h = health[s.id];
+          const label = s.blocked ? "Blocked" : h?.status ?? (s.state === "NEEDS_AUTH" ? "Needs Auth" : s.state);
+          const location = s.executionLocation ?? (s.transport === "http" ? "remote" : "local");
+          return (
           <div key={s.id} style={{ background: "var(--orvyn-surface-2, #121724)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATE_COLOR[s.state], flexShrink: 0 }} />
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATE_COLOR[label] ?? STATE_COLOR[s.state], flexShrink: 0 }} />
               <span style={{ fontSize: 13, fontWeight: 600, color: "var(--orvyn-text)" }}>{s.name}</span>
               <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
-                {s.state} · {s.transport.toUpperCase()} · {s.toolCount} tools{s.resourceCount ? ` · ${s.resourceCount} resources` : ""}
+                {label} · {s.transport.toUpperCase()} · {location === "local" ? "Local Only" : location} · {s.toolCount} tools{s.resourceCount ? ` · ${s.resourceCount} resources` : ""}
+                {h?.latencyMs != null ? ` · ${Math.round(h.latencyMs)}ms` : ""}
               </span>
               <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>connected {relTime(s.lastConnectedAt)}</span>
-              <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(s.authKind === "oauth" || s.state === "NEEDS_AUTH") && (
+                  s.state === "CONNECTED"
+                    ? <SmallBtn label="Disconnect account" onClick={() => void disconnectAccount(s.id)} />
+                    : <SmallBtn label={busy === s.id ? "…" : "Connect account"} onClick={() => void connectAccount(s.id)} />
+                )}
                 {s.state === "CONNECTED" ? (
                   <>
                     <SmallBtn label={busy === s.id ? "…" : "Reconnect"} onClick={() => void serverAction(s.id, "reconnect")} />
                     <SmallBtn label="Disconnect" onClick={() => void serverAction(s.id, "disconnect")} />
                   </>
-                ) : (
+                ) : !s.blocked && s.state !== "NEEDS_AUTH" ? (
                   <SmallBtn label={busy === s.id ? "…" : "Connect"} onClick={() => void serverAction(s.id, "connect")} />
-                )}
+                ) : null}
                 <SmallBtn label="Remove" danger onClick={() => void removeServer(s.id)} />
               </span>
             </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Scope</span>
+              <select
+                value={s.scope ?? "global"}
+                onChange={(e) => void setScope(s.id, e.target.value as "global" | "project" | "run")}
+                style={{ background: "transparent", border: "1px solid var(--orvyn-border)", borderRadius: 4, color: "var(--orvyn-text-secondary)", fontSize: 10, padding: "1px 4px" }}
+              >
+                <option value="global">Global</option>
+                <option value="project">This Project</option>
+                <option value="run">This Run</option>
+              </select>
+              <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", maxWidth: 420 }}>{SCOPE_HELP[s.scope ?? "global"]}</span>
+            </div>
+            {s.blocked && <div style={{ fontSize: 11, color: "var(--orvyn-red, #F25F75)", marginTop: 6 }}>Blocked: {s.blockedReason || "policy"}</div>}
+            {h?.circuitReason && <div style={{ fontSize: 11, color: "var(--orvyn-yellow, #F5B942)", marginTop: 6 }}>Circuit open: {h.circuitReason}</div>}
             {s.lastError && <div style={{ fontSize: 11, color: "var(--orvyn-red, #F25F75)", marginTop: 6 }}>{s.lastError}</div>}
             {s.tools.length > 0 && (
               <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -255,7 +352,8 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
         {servers.length === 0 && (
           <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "18px 0" }}>
             No MCP servers configured. Add one to extend ORION with external tools.

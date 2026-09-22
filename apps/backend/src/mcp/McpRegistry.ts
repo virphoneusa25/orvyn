@@ -111,6 +111,10 @@ export class McpRegistry {
     this.secrets.set(`${id}.${name}`, value);
   }
 
+  deleteSecret(id: string, name: string): void {
+    this.secrets.delete(`${id}.${name}`);
+  }
+
   /** Resolves {{secretName}} header references at connect time. */
   resolveHeaders(id: string, headers: Record<string, string> | undefined): Record<string, string> {
     if (!headers) return {};

@@ -324,3 +324,22 @@ test("diff counts attach to exact paths when basenames collide", () => {
   assert.equal(a.detail, "+4 −2");
   assert.equal(b.detail, undefined);
 });
+
+test("capability.required becomes a chat card, not a tool dump", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("capability.required", {
+        query: "create a pull request",
+        reason: "ORION needs GitHub to create a pull request.",
+        recommendedServers: [{ name: "GitHub" }],
+        runId: "run_1",
+      }),
+    ],
+    "running"
+  );
+  const card = items.find((i) => i.kind === "capability") as { reason: string; recommendedServers: { name?: string }[] };
+  assert.ok(card);
+  assert.match(card.reason, /GitHub/);
+  assert.equal(card.recommendedServers[0]?.name, "GitHub");
+});

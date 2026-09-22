@@ -235,6 +235,7 @@ function ServerCard({ server, onView, onInstall, busy }: { server: MarketServer;
           <span key={s} style={badge}>{SOURCE_LABEL[s]}</span>
         ))}
         <span style={badge}>{server.trust.level}</span>
+        {server.sources.includes("private") && <span style={{ ...badge, color: "var(--orvyn-cyan, #22D3EE)" }}>Organization Approved</span>}
         {server.installed && <span style={{ ...badge, color: "var(--orvyn-green, #86D69A)" }}>Installed</span>}
       </div>
       <div style={{ fontSize: 14, fontWeight: 600 }}>{label}</div>
@@ -291,6 +292,8 @@ function DetailDrawer({
             <Meta row="Trust" value={`${server.trust.level} — ${server.trust.reasons.join("; ")}`} />
             <Meta row="Compatibility" value={`${server.compatibility}${server.compatibilityReason ? ` · ${server.compatibilityReason}` : ""}`} />
             <Meta row="Network" value={server.networkRequired ? "Network access required" : "No remote endpoint advertised"} />
+            <Meta row="Location" value={server.transports.some((t) => t.kind === "http") ? "Remote (cloud-reachable)" : "Local Only — desktop stdio, not reachable from OVH"} />
+            {server.auth.some((a) => a.kind === "oauth") && <Meta row="Auth" value="OAuth — Connect account after install. Tokens stay in ORVYN secure storage." />}
             {server.qualityNote && <Meta row="External signal" value={server.qualityNote} />}
             {!!server.tools?.length && (
               <div style={{ marginTop: 14 }}>
@@ -319,6 +322,11 @@ function DetailDrawer({
         {step === 2 && (
           <>
             <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginBottom: 8 }}>{server.auth[0]?.label ?? "No auth advertised"}</div>
+            {server.auth.some((a) => a.kind === "oauth") ? (
+              <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                This server uses OAuth. After install, click <b>Connect account</b> on Installed — ORVYN opens your browser, receives the callback on a short-lived localhost port, and stores tokens in the secret store (never localStorage).
+              </div>
+            ) : (
             <input
               type="password"
               value={token}
@@ -326,6 +334,7 @@ function DetailDrawer({
               placeholder="API token (stored as a secret reference, never in config)"
               style={searchInput}
             />
+            )}
           </>
         )}
         {step === 3 && (

@@ -91,11 +91,10 @@ Access cannot bypass hard policy.
 
 ## Local vs cloud
 
-- `stdio` servers run on the same machine as their files/runtimes.
-- Streamable HTTP can be invoked remotely when authenticated.
-- Cloud ORION cannot assume a desktop stdio process is reachable.
-- A future ORVYN-managed MCP Gateway is reserved; not required for this
-  milestone.
+- `stdio` servers run on the same machine as their files/runtimes and are marked **Local Only**.
+- Streamable HTTP is `remote` and can be invoked from OVH ORION through the Cloud MCP Gateway.
+- Cloud ORION never pretends a Windows-local stdio process is reachable. There is no hidden local fallback.
+- See `docs/MCP_GATEWAY.md` and `docs/MCP_SECURITY.md`.
 
 ## UI
 
@@ -121,3 +120,59 @@ Context popover reports MCP tool schema tokens separately from native tools.
 - `POST /mcp/marketplace/import`
 
 Existing `/mcp/servers`, `/mcp/test`, `/mcp/statuses` remain the host API.
+
+Production hardening endpoints:
+
+- `POST /mcp/oauth/start` — Authorization Code + PKCE, loopback callback
+- `GET /mcp/oauth/status`
+- `POST /mcp/oauth/disconnect/:id` — clear token refs, best-effort revoke (does not uninstall)
+- `POST /mcp/oauth/refresh/:id`
+- `POST /mcp/gateway/invoke` — tenant-bound Cloud MCP Gateway
+- `GET /mcp/gateway/health`
+- `GET|PUT /mcp/policy` — Open / Verified Only / Allowlist Only
+- `GET /mcp/health` — Healthy / Slow / Needs Auth / Offline / Error / Disabled / Blocked
+- `PATCH /mcp/servers/:id/scope` — Global / This Project / This Run
+- `POST /mcp/servers/:id/block`
+- `POST /mcp/servers/:id/sandbox` — initialize + tools/resources/prompts list only
+- `GET /mcp/provenance` · `POST /mcp/inspect` · `GET /mcp/audit`
+- `GET /mcp/capabilities/diagnostics` — activated schemas + token footprint
+
+## OAuth
+
+When `auth.kind === oauth`, Installed shows **Connect account**. ORVYN discovers standard
+OAuth metadata, opens the system browser, binds a short-lived `127.0.0.1` loopback,
+validates `state`, exchanges the code with PKCE S256, and stores access/refresh/expiry
+in the existing `mcp.secret.*` store. Tokens are refreshed before expiry; refresh
+failure becomes **Needs Auth** with a 60s backoff. Disconnect clears refs and tries
+revocation. The server stays installed.
+
+## Scoping
+
+- **Global** — every project for this account (e.g. GitHub).
+- **This Project** — only the selected workspace (e.g. a project database).
+- **This Run** — ephemeral; deactivated when the ORION run settles.
+
+Discovery respects tenant, user, project, and run. Inaccessible tools are not shown to ORION.
+
+## Enterprise policy
+
+Modes: **Open**, **Verified Only**, **Allowlist Only**. Blocklists cover canonical id,
+package, publisher, tool, and registry source. Admin tool deny is a hard deny and
+overrides Full Access. Organization-approved servers can be listed on the allowlist.
+
+## Health
+
+Installed shows Healthy / Slow / Needs Auth / Offline / Error / Disabled / Blocked,
+plus latency, restart count, and circuit-open reason. Local crashes retry with
+bounded backoff (1s / 4s / 16s, max 3). Five failures in 60s open a 30s circuit.
+
+## Capability recommendations
+
+`search_capabilities` still activates only matching installed tools within the
+8-server / 40-tool budget. If nothing is installed, ORION emits `capability.required`
+(`query`, `reason`, `recommendedServers`, `runId`). Chat shows Connect / View options /
+Cancel. ORION never silently installs executables.
+
+Ranking uses task relevance, installed status, scope, health, trust, and recent
+successful use. Run replay stores `mcp.activation` (activated servers/tools, reason,
+schema token footprint).

@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
-import { reducePresentation, fmtDuration, type ApprovalItem } from "../presentationReducer";
+import { reducePresentation, fmtDuration, type ApprovalItem, type CapabilityRequiredItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 
 export interface AgentEvent {
@@ -265,11 +265,44 @@ export function AgentActivityList({
             );
           case "approval":
             return <ApprovalCard key={item.key} item={item} onApprove={onApprove} />;
+          case "capability":
+            return <CapabilityCard key={item.key} item={item} />;
           default:
             return null;
         }
       })}
     </>
+  );
+}
+
+function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
+  const [settled, setSettled] = useState(Boolean(item.settled));
+  const primary = item.recommendedServers[0]?.name || item.recommendedServers[0]?.server || "this integration";
+  const openMarket = (query: string) => {
+    document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail: { query } }));
+  };
+  return (
+    <div style={card("var(--accent)")}>
+      <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
+        ORION needs {primary} to {item.query || "continue"}.
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10, lineHeight: 1.45 }}>{item.reason}</div>
+      {settled ? (
+        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Cancelled — ORION will not install this itself.</span>
+      ) : (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => openMarket(primary)} style={btn("var(--accent)")}>
+            Connect {primary}
+          </button>
+          <button onClick={() => openMarket(item.query || primary)} style={btn("var(--border)")}>
+            View options
+          </button>
+          <button onClick={() => setSettled(true)} style={btn("var(--border)")}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

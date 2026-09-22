@@ -33,6 +33,8 @@ import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import { McpHub } from "../mcp/McpHub";
 import { McpManager } from "../mcp/McpManager";
 import { marketplaceFor } from "../mcp/marketplace/service";
+import { hardeningFor } from "../mcp/hardening/hardening";
+import { sanitizeToolName } from "../mcp/McpToolAdapter";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
@@ -169,6 +171,27 @@ export class TenantManager {
       engine: tenant.permissionEngine as unknown as { declareCapabilities(name: string, caps: string[]): void; forgetCapabilities(name: string): void },
       store: localStore as unknown as { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
     });
+    const harden = hardeningFor(tenant.mcpManager, localStore, id);
+    tenant.mcpManager.setStartGuard((serverId) => {
+      const cfg = tenant.mcpManager.listServers().find((s) => s.id === serverId);
+      return harden.denyServer({
+        id: cfg?.id,
+        marketplaceId: cfg?.marketplaceId,
+        packageIdentifier: cfg?.packageIdentifier,
+        sourceProviders: cfg?.sourceProviders,
+      });
+    });
+    tenant.mcpManager.setToolGuard((_serverId, tool) => (harden.toolHardDenied(tool) ? `Admin hard deny: ${tool}` : null));
+    tenant.mcpManager.setRestartHook((serverId) => {
+      const decision = harden.obs.canRestart(serverId);
+      if (!decision.ok) return;
+      harden.obs.noteRestart(serverId);
+      setTimeout(() => {
+        void tenant.mcpManager.connect(serverId).then((st) => {
+          if (st.state === "CONNECTED") harden.obs.resetRestarts(serverId);
+        }).catch(() => {});
+      }, decision.waitMs);
+    });
     // Restore the autonomy profile the user last selected.
     const savedProfile = localStore.getSetting("profile") as PermissionProfile | null;
     if (savedProfile && PROFILES[savedProfile]) tenant.toolGateway.profile = savedProfile;
@@ -189,6 +212,53 @@ export class TenantManager {
       () => tenant.mcpManager.capabilitySummary(),
       (name) => marketplaceFor(tenant.mcpManager, localStore).index.exposeToModel(name)
     );
+    const market = marketplaceFor(tenant.mcpManager, localStore);
+    market.index.rankContext = {
+      get projectRoot() {
+        return tenant.currentProjectRoot;
+      },
+      inScope: (serverName) => {
+        const cfg = tenant.mcpManager.listServers().find((s) => s.name === serverName);
+        if (!cfg) return true;
+        return harden.inScope(cfg, tenant.currentProjectRoot);
+      },
+      healthOf: (serverName) => {
+        const cfg = tenant.mcpManager.listServers().find((s) => s.name === serverName);
+        if (!cfg) return {};
+        const st = tenant.mcpManager.status(cfg.id);
+        return harden.obs.snapshot(cfg.id, {
+          state: st?.state ?? "DISCONNECTED",
+          toolCount: st?.toolCount ?? 0,
+          lastConnectedAt: st?.lastConnectedAt,
+          enabled: cfg.enabled,
+          blocked: cfg.blocked,
+        });
+      },
+    };
+    tenant.agentRuntime.setHardeningHooks({
+      cloudMcpInvoke: async ({ runId, tool, args, projectRoot }) => {
+        const serverKey = tool.split(".")[1] ?? "";
+        const cfg = tenant.mcpManager.listServers().find((s) => sanitizeToolName(s.name) === serverKey);
+        if (!cfg) return { ok: false, error: "Unknown MCP server for this tenant" };
+        const out = await harden.gateway.invoke({
+          tenantId: id,
+          expectedTenantId: id,
+          serverId: cfg.id,
+          tool,
+          args,
+          runId,
+          projectRoot,
+          cloudRun: true,
+        });
+        harden.appendAudit("tool invocation", { serverId: cfg.id, tool, ok: out.ok, runId, executionLocation: out.executionLocation });
+        return { ok: out.ok, output: out.output, error: out.error };
+      },
+      onRunSettled: () => {
+        for (const s of tenant.mcpManager.listServers()) {
+          if (s.scope === "run") tenant.mcpManager.setEnabled(s.id, false);
+        }
+      },
+    });
     tenant.multiAgentRuntime = new MultiAgentRuntime(
       tenant.modelService,
       tenant.toolGateway,

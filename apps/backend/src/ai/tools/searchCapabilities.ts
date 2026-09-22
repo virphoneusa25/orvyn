@@ -19,20 +19,42 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
     async execute(args): Promise<ToolResult> {
       const query = String(args.query ?? "").trim();
       if (!query) return { ok: false, error: "query is required" };
-      const { hits, activated, askInstall } = await market().index.search(query);
+      const { hits, activated, askInstall, diagnostics } = await market().index.search(query);
       const lines: string[] = [`Capability search for “${query}” (${hits.length} hits).`];
-      if (activated.length) lines.push(`Activated for this run (schema budget): ${activated.slice(0, 12).join(", ")}`);
+      if (activated.length) lines.push(`Activated for this run (schema budget ${diagnostics.maxServers} servers / ${diagnostics.maxTools} tools, ~${diagnostics.tokenFootprint} tokens): ${activated.slice(0, 12).join(", ")}`);
       for (const h of hits.slice(0, 10)) {
         lines.push(`- [${h.kind}${h.installed ? ", installed" : ""}] ${h.name} · ${h.server} — ${h.description.slice(0, 140)}`);
       }
+      const recommended = askInstall.map((h) => ({
+        name: h.name,
+        server: h.server,
+        canonicalId: h.canonicalId,
+        description: h.description,
+      }));
       if (askInstall.length) {
+        const primary = askInstall[0].name;
         lines.push(
-          "Not installed. Ask the user to open Tools & MCP → Marketplace and install one of: " +
-            askInstall.map((h) => h.name).join(", ") +
-            `. Explain that you need this capability to complete their request.`
+          `ORION needs ${primary} to complete “${query}”. Ask the user to Connect or open Tools & MCP → Marketplace. Do not install executable servers yourself. Options: ` +
+            askInstall.map((h) => h.name).join(", ")
         );
       }
-      return { ok: true, output: lines.join("\n") };
+      return {
+        ok: true,
+        output: lines.join("\n"),
+        meta: {
+          activated,
+          diagnostics,
+          ...(askInstall.length
+            ? {
+                capabilityRequired: {
+                  query,
+                  reason: `ORION needs ${askInstall[0].name} to ${query}.`,
+                  recommendedServers: recommended,
+                },
+              }
+            : {}),
+        },
+      };
     },
   };
 }
