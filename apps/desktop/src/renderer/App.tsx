@@ -168,7 +168,11 @@ export function App() {
   // the user should never have to hunt for the panel toggle when ORION works.
   const runIsActive = agentRun.status === "running" || agentRun.status === "awaiting_approval" || agentRun.status === "queued";
   const hasDesktopEvents = agentRun.events.some((e) => String(e.type).startsWith("desktop."));
-  const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents;
+  // If the user was last on the Desktop tab, they want to see it — open
+  // the panel. Between runs the user's explicit close still wins UNLESS
+  // the last tab they were viewing was Desktop (they came back for it).
+  const lastTabWasDesktop = chrome.layout.activeTabId === "desktop";
+  const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents || lastTabWasDesktop;
   const showRightChrome = effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
