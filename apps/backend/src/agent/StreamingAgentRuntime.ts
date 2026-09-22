@@ -170,12 +170,15 @@ export class StreamingAgentRuntime {
     private memoryStore?: LocalStore,
     private indexService?: IndexService,
     /** Compact MCP capability summary provider (one line per connected server). */
-    private mcpSummary: () => string[] = () => []
+    private mcpSummary: () => string[] = () => [],
+    /** MCP marketplace: hide unused mcp.* schemas so the catalog never floods context. */
+    private exposeTool: (name: string) => boolean = () => true
   ) {}
 
   private toolDefinitions(): ToolDefinition[] {
     return this.tools
       .list()
+      .filter((t) => this.exposeTool(t.name))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
@@ -748,7 +751,7 @@ export class StreamingAgentRuntime {
               let mcpToolTokens = 0;
               for (const t of toolDefs) {
                 const size = estimateTokens(JSON.stringify(t.parameters)) + estimateTokens(t.description ?? "");
-                if (t.name === "mcp_call" || t.name === "mcp_list") mcpToolTokens += size;
+                if (t.name.startsWith("mcp.") || t.name === "mcp_call" || t.name === "mcp_list") mcpToolTokens += size;
                 else toolDefinitionTokens += size;
               }
               const systemMsgTokens = messages[0]?.role === "system" ? estimateMessageTokens(messages[0]) : 0;

@@ -34,6 +34,8 @@ import { makeGenerateImageTool } from "./tools/imageTool";
 import { makeFetchUrlTool, makeWebSearchTool } from "./tools/netTools";
 import { makeSshExecTool } from "./tools/sshTools";
 import { makeMcpListTool, makeMcpCallTool } from "./tools/mcpTools";
+import { makeSearchCapabilitiesTool } from "./tools/searchCapabilities";
+import { marketplaceFor } from "../mcp/marketplace/service";
 import {
   makeBrowserOpenTool,
   makeBrowserNavigateTool,
@@ -144,6 +146,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   // MCP (servers from .orvyn/mcp.json — the hub is the only MCP speaker)
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
   g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
+  g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore)));
 
   // Later phases append here: diagnostics/tests (Phase 5), browser (Phase 8),
   // checkpoints (Phase 9), MCP (Phase 10). Kept in one function so the gateway

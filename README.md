@@ -24,6 +24,10 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   reworked it, the tester verified `npm start` output, and the mission
   review approved with score 100. See `scripts/acceptance-mission.mjs` to
   reproduce.
+- **MCP Marketplace** — Tools & MCP → Marketplace federates the Official
+  MCP Registry (and Glama when `GLAMA_API_KEY` is set), plus private and
+  local servers. ORION discovers capabilities via `search_capabilities`
+  instead of loading the catalog. See `docs/MCP_MARKETPLACE.md`.
 - **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
   background processes, diagnostics/typecheck/tests/lint, git (status →
   commit), fetch/web-search, image generation, MCP, Playwright browser QA

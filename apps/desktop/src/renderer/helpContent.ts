@@ -101,6 +101,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer (or the Browser address bar when a browser tab is active) · Ctrl+R reload the page in Browser, not ORVYN · Ctrl+W close the current Workbench tab · Ctrl+` toggle terminal · Ctrl+Shift+B toggle Workbench · Ctrl+Shift+D focus Desktop · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
   },
   {
+    id: "marketplace",
+    title: "MCP Marketplace",
+    tags: ["mcp", "marketplace", "tools", "orion"],
+    body: "Open Tools & MCP → Marketplace to search Official MCP Registry and optional directories. Install or connect a server; ORION discovers extra capabilities with search_capabilities instead of loading the whole catalog. Every MCP tool still goes through ToolGateway. Executable servers never install silently.",
+  },
+  {
     id: "update",
     title: "Get desktop UI updates",
     tags: ["update", "desktop", "install", "windows"],

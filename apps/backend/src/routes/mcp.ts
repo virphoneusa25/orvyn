@@ -5,6 +5,8 @@
 // secret values never leave the backend.
 
 import { Router } from "express";
+import { marketplaceFor } from "../mcp/marketplace/service";
+import { MARKETPLACE_CATEGORIES } from "../mcp/marketplace/types";
 
 export function mcpRouter(requireTenant: (req: any) => any): Router {
   const r = Router();
@@ -120,6 +122,102 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
   r.get("/capabilities", (req, res) => {
     const t = requireTenant(req);
     res.json({ summary: t.mcpManager.capabilitySummary() });
+  });
+
+  r.get("/marketplace/search", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const market = marketplaceFor(t.mcpManager, t.localStore);
+      const q = String(req.query.q ?? "");
+      if (!q.trim()) {
+        const featured = await market.featured();
+        return res.json(featured);
+      }
+      const out = await market.search({
+        query: q,
+        limit: Number(req.query.limit ?? 24) || 24,
+        cursor: req.query.cursor ? String(req.query.cursor) : undefined,
+        category: req.query.category ? String(req.query.category) : undefined,
+      });
+      res.json(out);
+    } catch (err: any) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  r.get("/marketplace/health", async (req, res) => {
+    const t = requireTenant(req);
+    res.json({ providers: await marketplaceFor(t.mcpManager, t.localStore).health() });
+  });
+
+  r.get("/marketplace/categories", (_req, res) => {
+    res.json({ categories: MARKETPLACE_CATEGORIES });
+  });
+
+  r.post("/marketplace/install", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      const out = await marketplaceFor(t.mcpManager, t.localStore).install(req.body.server, {
+        secrets: req.body.secrets,
+        connect: req.body.connect !== false,
+        cwd: req.body.cwd,
+      });
+      res.status(201).json({
+        server: out.config.id,
+        status: out.status,
+        plan: { transport: out.plan.transport, version: out.plan.version, networkRequired: out.plan.networkRequired },
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  r.get("/marketplace/registries", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ registries: marketplaceFor(t.mcpManager, t.localStore).listPrivateRegistries() });
+  });
+
+  r.post("/marketplace/registries", (req, res) => {
+    const t = requireTenant(req);
+    const id = String(req.body.id ?? `reg_${Date.now()}`);
+    const cfg = marketplaceFor(t.mcpManager, t.localStore).upsertPrivateRegistry(
+      {
+        id,
+        name: String(req.body.name ?? "Private registry"),
+        url: String(req.body.url ?? ""),
+        enabled: req.body.enabled !== false,
+        authType: req.body.token ? "bearer" : "none",
+      },
+      req.body.token
+    );
+    res.status(201).json({ registry: cfg });
+  });
+
+  r.get("/marketplace/featured", async (req, res) => {
+    const t = requireTenant(req);
+    try {
+      res.json(await marketplaceFor(t.mcpManager, t.localStore).featured());
+    } catch (err: any) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  r.get("/marketplace/updates", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ updates: marketplaceFor(t.mcpManager, t.localStore).updates() });
+  });
+
+  r.get("/marketplace/export", (req, res) => {
+    const t = requireTenant(req);
+    res.json(marketplaceFor(t.mcpManager, t.localStore).exportConfig());
+  });
+
+  r.post("/marketplace/import", (req, res) => {
+    const t = requireTenant(req);
+    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const drafts = market.previewImport(req.body.config ?? req.body);
+    if (!req.body.confirm) return res.json({ drafts, imported: 0, needsConfirm: true });
+    res.json(market.importDrafts(drafts, true));
   });
 
   return r;

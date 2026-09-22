@@ -34,6 +34,13 @@ export interface McpServerConfig {
   authType?: "none" | "bearer" | "custom";
   /** Names of secrets held in the secure store (values never in config). */
   secretNames?: string[];
+  /** Marketplace provenance — optional; existing manual servers omit these. */
+  version?: string;
+  packageIdentifier?: string;
+  marketplaceId?: string;
+  sourceProviders?: string[];
+  scope?: "global" | "project" | "run";
+  executionLocation?: "local" | "cloud" | "remote";
   // runtime metadata (cached, not authoritative)
   lastConnectedAt?: number;
   lastError?: string;

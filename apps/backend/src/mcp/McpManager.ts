@@ -48,6 +48,8 @@ export interface McpManagerDeps {
 }
 
 const CALL_TIMEOUT = Number(process.env.ORVYN_MCP_CALL_TIMEOUT_MS) || 120_000;
+const CONNECT_TIMEOUT = Number(process.env.ORVYN_MCP_CONNECT_TIMEOUT_MS) || 30_000;
+const MAX_LOCAL_PROCESSES = Number(process.env.ORVYN_MCP_MAX_LOCAL) || 16;
 
 /** MCP risk classes mapped onto the engine's capability vocabulary. */
 const RISK_CAPS: Record<string, string[]> = {
@@ -91,6 +93,12 @@ export class McpManager {
     headers?: Record<string, string>;
     description?: string;
     secretValues?: Record<string, string>;
+    version?: string;
+    packageIdentifier?: string;
+    marketplaceId?: string;
+    sourceProviders?: string[];
+    scope?: "global" | "project" | "run";
+    executionLocation?: "local" | "cloud" | "remote";
   }): McpServerConfig {
     const id = `mcp_${randomUUID().slice(0, 8)}`;
     const secretNames = input.secretValues ? Object.keys(input.secretValues) : [];
@@ -108,6 +116,12 @@ export class McpManager {
       headers: input.headers,
       authType: input.secretValues && Object.keys(input.secretValues).length ? "bearer" : "none",
       secretNames,
+      version: input.version,
+      packageIdentifier: input.packageIdentifier,
+      marketplaceId: input.marketplaceId,
+      sourceProviders: input.sourceProviders,
+      scope: input.scope,
+      executionLocation: input.executionLocation ?? (input.transport === "http" ? "remote" : "local"),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -150,6 +164,14 @@ export class McpManager {
   async connect(id: string): Promise<McpServerStatus> {
     const cfg = this.registry.get(id);
     if (!cfg) throw new Error("Unknown MCP server");
+    if (cfg.transport === "stdio") {
+      const liveStdio = this.registry.list().filter((c) => {
+        if (c.id === id || c.transport !== "stdio") return false;
+        const st = this.connections.get(c.id)?.state;
+        return st === "CONNECTED" || st === "CONNECTING";
+      }).length;
+      if (liveStdio >= MAX_LOCAL_PROCESSES) throw new Error(`Local MCP process budget reached (${MAX_LOCAL_PROCESSES}). Disable another server first.`);
+    }
     await this.disconnect(id).catch(() => {});
     const conn: Connection = { state: "CONNECTING", client: null, tools: [] };
     this.connections.set(id, conn);
@@ -178,7 +200,12 @@ export class McpManager {
         cfg.name
       );
       conn.client = client;
-      await client.connect();
+      await Promise.race([
+        client.connect(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Connect timed out after ${CONNECT_TIMEOUT}ms`)), CONNECT_TIMEOUT)
+        ),
+      ]);
       const discovered: DiscoveredTool[] = await client.listTools();
       const resources = await client.listResources();
       const prompts = await client.listPrompts();

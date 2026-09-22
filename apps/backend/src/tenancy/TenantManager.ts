@@ -32,6 +32,7 @@ import { MultiAgentRuntime } from "../agent/MultiAgentRuntime";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import { McpHub } from "../mcp/McpHub";
 import { McpManager } from "../mcp/McpManager";
+import { marketplaceFor } from "../mcp/marketplace/service";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
@@ -185,7 +186,8 @@ export class TenantManager {
       tenant.checkpointEngine,
       tenant.localStore,
       tenant.indexService,
-      () => tenant.mcpManager.capabilitySummary()
+      () => tenant.mcpManager.capabilitySummary(),
+      (name) => marketplaceFor(tenant.mcpManager, localStore).index.exposeToModel(name)
     );
     tenant.multiAgentRuntime = new MultiAgentRuntime(
       tenant.modelService,

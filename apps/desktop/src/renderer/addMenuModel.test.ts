@@ -35,6 +35,7 @@ function snap(over: Partial<AddMenuSnapshot> = {}): AddMenuSnapshot {
 test("catalog uses real snapshot data and does not invent plugins", () => {
   const items = buildAddMenuItems(snap());
   assert.ok(items.some((i) => i.kind === "attachments"));
+  assert.ok(items.some((i) => i.name === "Add MCP capability" && i.view === "marketplace"));
   assert.ok(items.some((i) => i.name === "Selected code" && /App\.tsx · lines 120–184/.test(i.description)));
   assert.ok(items.some((i) => i.name === "Debugging"));
   assert.ok(items.some((i) => i.name === "GitHub MCP"));

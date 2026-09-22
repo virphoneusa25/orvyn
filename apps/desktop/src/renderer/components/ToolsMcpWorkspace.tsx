@@ -11,6 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import { McpMarketplace } from "./McpMarketplace";
 
 interface NativeTool {
   name: string;
@@ -58,6 +59,8 @@ function relTime(ts?: number): string {
 }
 
 export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null }) {
+  const [page, setPage] = useState<"marketplace" | "installed" | "builtin">("marketplace");
+  const [marketQuery, setMarketQuery] = useState("");
   const [native, setNative] = useState<NativeTool[]>([]);
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [adding, setAdding] = useState(false);
@@ -83,6 +86,16 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    const open = (e: Event) => {
+      const q = (e as CustomEvent<{ query?: string }>).detail?.query ?? "";
+      setPage("marketplace");
+      setMarketQuery(q);
+    };
+    document.addEventListener("orvyn:marketplace-open", open as EventListener);
+    return () => document.removeEventListener("orvyn:marketplace-open", open as EventListener);
+  }, []);
 
   async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect") {
     setBusy(id);
@@ -115,7 +128,36 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
 
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: "20px 24px", minWidth: 0 }}>
-      {/* ── BUILT-IN TOOLS ─────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+        {([
+          ["marketplace", "Marketplace"],
+          ["installed", "Installed"],
+          ["builtin", "Built-in tools"],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setPage(id)}
+            style={{
+              background: page === id ? "rgba(85,99,245,0.18)" : "transparent",
+              border: `1px solid ${page === id ? "var(--orvyn-purple, #5563F5)" : "var(--orvyn-border)"}`,
+              borderRadius: 8,
+              color: page === id ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
+              fontSize: 12,
+              padding: "6px 12px",
+              cursor: "pointer",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {page === "marketplace" && (
+        <McpMarketplace projectRoot={projectRoot} initialQuery={marketQuery} onInstalled={() => { setPage("installed"); void refresh(); }} />
+      )}
+
+      {page === "builtin" && (
+        <>
       <h2 style={{ fontSize: 13, letterSpacing: 1.2, color: "var(--orvyn-text-muted)", margin: "0 0 10px" }}>BUILT-IN TOOLS</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginBottom: 28 }}>
         {native.map((t) => (
@@ -142,7 +184,11 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
         ))}
         {native.length === 0 && <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)" }}>No native tools registered.</div>}
       </div>
+        </>
+      )}
 
+      {page === "installed" && (
+        <>
       {/* ── MCP SERVERS ────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
         <h2 style={{ fontSize: 13, letterSpacing: 1.2, color: "var(--orvyn-text-muted)", margin: 0 }}>MCP SERVERS</h2>
@@ -218,6 +264,8 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       </div>
 
       {adding && <AddServerDialog onClose={() => setAdding(false)} onDone={() => { setAdding(false); void refresh(); }} />}
+        </>
+      )}
     </div>
   );
 }

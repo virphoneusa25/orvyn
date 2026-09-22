@@ -125,6 +125,14 @@ export function buildAddMenuItems(snap: AddMenuSnapshot): AddMenuItem[] {
     name: "Attachments",
     description: "Attach files and images",
   });
+  items.push({
+    id: "nav:marketplace",
+    section: "add",
+    kind: "navigate",
+    name: "Add MCP capability",
+    description: "Search the MCP Marketplace for servers and tools",
+    view: "marketplace",
+  });
 
   const hasWorkspace = Boolean(snap.workspaceRoot && snap.workspaceKind === "folder");
 
