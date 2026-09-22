@@ -1,3 +1,15 @@
+// apps/desktop/src/renderer/components/workspace/DesktopView.tsx
+//
+// Desktop is a REAL isolated virtual computer (Linux desktop with Xvfb +
+// window manager + Chromium + terminal + file manager inside a Docker
+// container on the OVH worker). It is NOT a browser viewport.
+//
+// Browser is a SEPARATE Workbench tab with an embedded web view.
+// They share nothing except the Workbench tab system.
+//
+// When the backend cannot run Docker (local Windows dev without Docker),
+// Desktop truthfully says it needs ORVYN Cloud — no Playwright fake.
+
 import React, { useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders } from "../../connection";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
@@ -13,6 +25,7 @@ interface DesktopPublic {
   height: number;
   url?: string;
   live: boolean;
+  transport?: string;
   error?: string;
 }
 
@@ -28,7 +41,7 @@ export function DesktopView({
   status?: string | null;
 }) {
   const [session, setSession] = useState<DesktopPublic | null>(null);
-  const [playwright, setPlaywright] = useState<boolean | null>(null);
+  const [sandboxAvailable, setSandboxAvailable] = useState<boolean | null>(null);
   const [frame, setFrame] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -42,7 +55,7 @@ export function DesktopView({
     const res = await fetch(apiUrl(`/desktop/session?${q}`), { headers: authHeaders() });
     if (!res.ok) return;
     const data = await res.json();
-    setPlaywright(data.playwright !== false);
+    setSandboxAvailable(data.sandbox === true);
     setSession(data.session ?? null);
   }
 
@@ -121,20 +134,26 @@ export function DesktopView({
     });
   }
 
+  // ── Honest states, in truth order ──────────────────────────────────────
+
   if (!projectRoot) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
         <div style={emptyTitle()}>Open a project to start Desktop</div>
-        <div style={emptyBody()}>Desktop is an isolated Chromium session ORION can see and control.</div>
+        <div style={emptyBody()}>Desktop is a full virtual Linux computer ORION can see and control.</div>
       </div>
     );
   }
 
-  if (playwright === false) {
+  // No Docker on the backend (local Windows) → Desktop truthfully needs Cloud
+  if (sandboxAvailable === false) {
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
-        <div style={emptyTitle()}>Desktop runtime unavailable</div>
-        <div style={emptyBody()}>Install Playwright Chromium on the ORVYN worker to stream a live sandbox desktop. Screenshots are not shown as a fake live session.</div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 10, textAlign: "center" }}>
+        <div style={emptyTitle()}>Desktop requires ORVYN Cloud</div>
+        <div style={emptyBody()}>
+          Desktop sessions run as isolated Linux containers (Xvfb + window manager + Chromium + terminal) on ORVYN infrastructure.
+          Connect to ORVYN Cloud to start a Desktop session. Browser is available locally for web pages.
+        </div>
       </div>
     );
   }
@@ -143,10 +162,12 @@ export function DesktopView({
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 10, textAlign: "center" }}>
         <div style={emptyTitle()}>ORVYN Desktop</div>
-        <div style={emptyBody()}>Start an isolated desktop so you can watch ORION inspect the live app, then Take Control when you want the mouse.</div>
+        <div style={emptyBody()}>
+          A full virtual Linux desktop — wallpaper, window manager, Chromium, terminal — that ORION operates visually. Take Control to use it yourself.
+        </div>
         {error && <div style={{ color: "var(--orvyn-red)", fontSize: 12 }}>{error}</div>}
         <button style={ghostBtn()} disabled={starting} onClick={() => void startSession()}>
-          {starting ? "Starting ORVYN Desktop…" : "Start Desktop"}
+          {starting ? "Starting Desktop…" : "Start Desktop"}
         </button>
       </div>
     );
@@ -155,7 +176,8 @@ export function DesktopView({
   if (session.status === "starting") {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
-        <div style={emptyTitle()}>Starting ORVYN Desktop…</div>
+        <div style={emptyTitle()}>Starting Desktop…</div>
+        <div style={emptyBody()}>Booting the virtual Linux desktop (Xvfb + openbox + Chromium).</div>
       </div>
     );
   }
@@ -164,15 +186,18 @@ export function DesktopView({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14" }}>
+      {/* Control bar — shows DESKTOP state, not browser URLs */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: user ? "var(--orvyn-yellow)" : "var(--orvyn-cyan)" }}>
           {user ? "You are controlling" : session.controlOwner === "orion" ? "ORION controlling" : session.status}
         </span>
-        <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{session.url || "Desktop"}</code>
+        <span style={{ flex: 1, fontSize: 10.5, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
+          Desktop session · {session.width}×{session.height} · {session.transport === "sandbox-x11" ? "Linux sandbox" : session.status}
+        </span>
         <select
           value={quality}
           onChange={(e) => setQuality(e.target.value as "auto" | "low" | "high")}
-          title="Desktop quality"
+          title="Desktop stream quality"
           style={{ background: "transparent", border: "1px solid var(--orvyn-border-soft)", color: "var(--orvyn-text-secondary)", fontSize: 10, borderRadius: 6, padding: "2px 4px" }}
         >
           <option value="auto">Auto</option>
@@ -185,9 +210,11 @@ export function DesktopView({
           <button style={ghostBtn()} onClick={() => void setOwner("user")}>Take Control</button>
         )}
         <button style={ghostBtn()} onClick={() => void fetch(apiUrl("/desktop/stop"), { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot, runId }) }).then(() => setSession(null))}>
-          Stop Session
+          Stop
         </button>
       </div>
+
+      {/* The live virtual desktop viewport */}
       <div
         ref={viewRef}
         style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden" }}
@@ -211,7 +238,7 @@ export function DesktopView({
         } : undefined}
         onKeyDown={user ? (e) => {
           e.preventDefault();
-          void sendInput("key", { key: e.key.length === 1 ? e.key : e.key });
+          void sendInput("key", { key: e.key });
         } : undefined}
         onWheel={user ? (e) => {
           e.preventDefault();
@@ -230,7 +257,7 @@ export function DesktopView({
           <div style={{ ...emptyBody(), padding: 24 }}>Waiting for the first desktop frame…</div>
         )}
         {!user && (
-          <OrionCursorOverlay cursor={cursor ?? null} status={status ?? "ORION is inspecting this desktop"} />
+          <OrionCursorOverlay cursor={cursor ?? null} status={status ?? "ORION is operating this desktop"} />
         )}
         {!user && (
           <button

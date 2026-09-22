@@ -75,11 +75,8 @@ export function desktopRouter(): Router {
       });
     }
 
-    const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
-    const session = getDesktopSession(t.id, runId, projectRoot) ?? listDesktopSessions(t.id)[0];
-    if (!session) return res.json({ session: null, playwright: playwrightAvailable(), sandbox: docker });
-    if (session.tenantId !== t.id) return res.status(403).json({ error: "Desktop session is not in this workspace." });
-    res.json({ session: toPublic(session), playwright: playwrightAvailable(), sandbox: docker });
+    // Desktop sessions exist ONLY as sandbox containers — never browser pages.
+    return res.json({ session: null, sandbox: docker });
   });
 
   router.post("/session", async (req, res) => {
@@ -90,7 +87,8 @@ export function desktopRouter(): Router {
     const url = typeof req.body?.url === "string" ? req.body.url : undefined;
 
     // PREFER the true sandbox desktop when Docker is available.
-    if (await hasDocker()) {
+    const docker = await hasDocker();
+    if (docker) {
       try {
         const sandbox = await startSandboxDesktop({
           tenantId: t.id,
@@ -119,22 +117,12 @@ export function desktopRouter(): Router {
       }
     }
 
-    // PLAYWRIGHT fallback (no Docker — local dev).
-    if (!playwrightAvailable()) {
-      return res.status(503).json({ error: "Desktop runtime unavailable. Install Playwright Chromium or enable Docker." });
-    }
-    const session = createDesktopSession({ tenantId: t.id, projectRoot, runId });
-    try {
-      const browser = await ensureBrowserSession(projectRoot);
-      session.status = "agent_control";
-      session.controlOwner = "orion";
-      session.url = String(browser.page.url() || url || "");
-      res.json({ session: toPublic(session), sandbox: false });
-    } catch (err: any) {
-      session.status = "error";
-      session.error = err.message;
-      res.status(500).json({ error: err.message, session: toPublic(session) });
-    }
+    // Desktop is a REAL sandbox (Xvfb + WM + Chromium in a container).
+    // No Playwright fallback — a browser viewport is NOT a desktop.
+    return res.status(503).json({
+      error: "Desktop requires ORVYN Cloud (Docker sandbox runtime). Connect to ORVYN Cloud, or use the Browser tab for web pages.",
+      sandbox: docker,
+    });
   });
 
   router.get("/frame", async (req, res) => {
@@ -154,20 +142,8 @@ export function desktopRouter(): Router {
       return res.send(jpeg);
     }
 
-    // Playwright frame.
-    const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
-    const session = getDesktopSession(t.id, runId, projectRoot);
-    if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
-    const frame = await captureBrowserFrame(projectRoot);
-    if (!frame) return res.status(409).json({ error: "Desktop has no live frame yet." });
-    session.lastFrameAt = Date.now();
-    session.url = frame.url;
-    res.setHeader("Content-Type", "image/jpeg");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-Orvyn-Desktop-Url", encodeURIComponent(frame.url));
-    res.setHeader("X-Orvyn-Desktop-Control", session.controlOwner);
-    res.setHeader("X-Orvyn-Desktop-Transport", "playwright-viewport");
-    res.send(frame.jpeg);
+    // Desktop frames come ONLY from the sandbox container.
+    return res.status(404).json({ error: "No Desktop session. Desktop requires the Docker sandbox runtime." });
   });
 
   router.post("/control", async (req, res) => {
