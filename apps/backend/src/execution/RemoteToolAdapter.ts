@@ -71,10 +71,14 @@ function makeRemoteTool(
 
 function rpcResponseToResult(name: string, response: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string }): ToolResult {
   if (response.ok) return { ok: true, output: response.output ?? "" };
-  return {
-    ok: false,
-    error: response.error ?? `Remote tool failed (exit ${response.exitCode ?? "?"})${response.stderr ? `: ${response.stderr.slice(0, 200)}` : ""}`,
-  };
+  const err = response.error ?? `Remote tool failed (exit ${response.exitCode ?? "?"})`;
+  // A failing command still carries the evidence — test output, compiler
+  // errors, grep misses. Surface it so the model can diagnose the failure
+  // instead of being blind to the very output it asked for.
+  const evidence = `${(response.output ?? "").trim()}${response.stderr ? `\n${response.stderr.trim()}` : ""}`.trim();
+  return evidence
+    ? { ok: false, error: `${err}\n--- output ---\n${evidence.slice(-4000)}` }
+    : { ok: false, error: err };
 }
 
 /** Reads a remote file as text; returns null when the read fails. */
