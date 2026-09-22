@@ -29,6 +29,10 @@ export interface OrvynCommand {
   previousRunId?: string | null;
   /** "auto" or a concrete registry model id; honored per run. */
   requestedModelId?: string;
+  /** Composer reasoning effort — honored by models that declare support. */
+  reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
+  /** Composer access mode — run-scoped ToolGateway permission mapping. */
+  permissionMode?: "ask" | "auto_read" | "auto_workspace" | "full_access";
 }
 
 export type CommandOutcome =
@@ -62,6 +66,7 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
           userMessage: cmd.prompt,
           attachments: cmd.attachments ?? [],
           requestedModelId: cmd.requestedModelId,
+          reasoningEffort: cmd.reasoningEffort,
           context: cmd.projectRoot ? { projectRoot: cmd.projectRoot, useRag: true } : { useRag: false },
         })
       );
@@ -93,7 +98,7 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   const res = await fetch(apiUrl("/agent/orchestrate"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId }),
+    body: JSON.stringify({ projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
@@ -116,6 +121,8 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"):
       attachments: cmd.attachments,
       previousRunId: cmd.previousRunId,
       requestedModelId: cmd.requestedModelId,
+      reasoningEffort: cmd.reasoningEffort,
+      permissionMode: cmd.permissionMode,
     }),
   });
   const data = await res.json();

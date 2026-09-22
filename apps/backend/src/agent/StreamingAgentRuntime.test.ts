@@ -45,7 +45,7 @@ class FakeProvider {
   constructor(private turns: AIChunk[][], private onStream?: () => void) {}
 
   async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-    this.requests.push(JSON.parse(JSON.stringify({ messages: request.messages })));
+    this.requests.push(JSON.parse(JSON.stringify({ messages: request.messages, reasoningEffort: request.reasoningEffort })));
     this.onStream?.();
 
     const turn = this.turns.shift() ?? [{ delta: "Done.", done: true }];
@@ -348,4 +348,35 @@ test("failed writes never emit a successful file change", async () => {
   const events = h.store.get(id)!.events;
   assert.ok(events.some(e => e.type === "tool.failed"));
   assert.ok(!events.some(e => e.type === "file.edit"));
+});
+
+// ---- Composer controls: model/reasoning/access metadata + restore ----------
+
+test("run metadata records requested/actual model, reasoning, and access mode; reasoning reaches the provider", async () => {
+  const h = harness([[{ delta: "Done.", done: true }]]);
+  const runId = h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
+    reasoningEffort: "deep",
+    accessMode: "auto_workspace",
+  });
+  await waitForStatus(h.store, runId);
+  const started = h.store.get(runId)!.events.find((e) => e.type === "run.started")!;
+  assert.equal(started.data.requestedModelId, "auto");
+  assert.equal(started.data.actualModelId, "fake-model");
+  assert.equal(started.data.reasoningEffortRequested, "deep");
+  assert.equal(started.data.reasoningEffortApplied, "not supported by this model", "truthful when the model declares no support");
+  assert.equal(started.data.permissionMode, "Auto Workspace");
+  assert.equal(h.provider.requests[0].reasoningEffort, "deep", "provider call carries the effort");
+});
+
+test("access mode is run-scoped: the gateway is restored after the run settles", async () => {
+  const h = harness([[{ delta: "Done.", done: true }]]);
+  h.gateway.profile = "SAFE";
+  const runId = h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
+    accessMode: "full_access",
+  });
+  await waitForStatus(h.store, runId);
+  // give the async kickoff's finally a beat
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(h.gateway.profile, "SAFE", "previous autonomy profile restored");
+  assert.equal(h.registry.getPermission("terminal"), "ask", "mode baseline re-applied — no upgrade leakage");
 });

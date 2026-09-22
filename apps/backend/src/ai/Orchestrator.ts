@@ -37,6 +37,8 @@ export interface ChatTurnRequest {
   attachments?: Attachment[];
   /** "auto" or a concrete configured model id selected for this chat turn. */
   requestedModelId?: string;
+  /** Composer reasoning effort; honored only by models that declare support. */
+  reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
 }
 
 function modeInstructions(mode: ChatMode | undefined): string {
@@ -231,7 +233,7 @@ export class Orchestrator {
     let buffered = "";
     let decided = false;
     try {
-      for await (const chunk of provider.stream({ messages, stream: true, temperature })) {
+      for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort })) {
         if (!decided) {
           if (chunk.delta) buffered += chunk.delta;
           if (buffered.trim().length < 8 && !chunk.done) continue; // not enough signal yet

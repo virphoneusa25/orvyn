@@ -39,12 +39,19 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>; // JSON Schema
 }
 
+/** Provider-neutral reasoning effort. "auto" defers entirely to the
+ *  provider's default — it is never translated to a concrete level. */
+export type ReasoningEffort = "auto" | "fast" | "standard" | "deep" | "max";
+
 export interface AIRequest {
   messages: AIMessage[];
   tools?: ToolDefinition[];
   temperature?: number;
   topP?: number;
   maxOutputTokens?: number;
+  /** Requested reasoning effort; only honored when the model declares
+   *  reasoningControl and the level exists in its levels map. */
+  reasoningEffort?: ReasoningEffort;
   stream?: boolean;
   /**
    * Aborts the in-flight HTTP request. This is what makes a "Stop" button
@@ -113,6 +120,17 @@ export interface ModelConfig {
   defaultTopP: number;
   streaming: boolean;
   capabilities: ModelCapabilities;
+  /**
+   * Truthful reasoning-effort support: when absent, the model does NOT
+   * accept a reasoning control and any requested level is ignored (never
+   * silently sent). `param` is the wire field; `levels` maps our neutral
+   * levels to this provider's values — only levels present here are
+   * offered/allowed (e.g. a model without "max" support omits it).
+   */
+  reasoningControl?: {
+    param: string;
+    levels: Partial<Record<Exclude<ReasoningEffort, "auto">, string>>;
+  };
 }
 
 export type ModelStatus = "online" | "connecting" | "offline" | "error";

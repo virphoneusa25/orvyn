@@ -28,6 +28,14 @@ export interface ChatSession {
   projectName?: string;
   /** The run this chat created or is linked to (if any). */
   runId?: string;
+  /** Conversation-scoped composer settings — explicit choices made in THIS
+   *  chat never alter other chats; unset values fall back to the user-level
+   *  defaults stored by the composer. */
+  settings?: {
+    modelId?: string;
+    reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
+    permissionMode?: "ask" | "auto_read" | "auto_workspace" | "full_access";
+  };
   missionId?: string;
 }
 
@@ -309,4 +317,24 @@ export function newChat(): void {
 /** Backward-compatible export for older components. */
 export function listChatSessions(): { id: string; title: string; updatedAt: number; count: number }[] {
   return listChatSummaries().map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messageCount }));
+}
+
+
+/** Reads the active conversation's composer settings (conversation value →
+ *  caller-supplied user default → undefined). */
+export function getActiveChatSettings(): ChatSession["settings"] {
+  return active()?.settings ?? {};
+}
+
+/** Persists one composer setting into the ACTIVE conversation. */
+export function setActiveChatSetting<K extends NonNullable<keyof NonNullable<ChatSession["settings"]>>>(
+  key: K,
+  value: ChatSession["settings"][K]
+): void {
+  const session = active();
+  if (!session) return; // no conversation yet — user defaults still apply via the composer
+  session.settings = { ...session.settings, [key]: value };
+  session.updatedAt = Date.now();
+  persist();
+  emit();
 }

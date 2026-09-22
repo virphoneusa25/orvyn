@@ -343,6 +343,24 @@ export class ModelService {
         );
       }
     }
+
+    // Reasoning-effort support is DECLARED, never guessed: ORVYN_REASONING_EFFORT_MODELS
+    // lists ids whose provider accepts the OpenAI-style reasoning_effort field
+    // (append "+max" when the provider also honors a level above "high").
+    // Models not listed expose no reasoning control — the composer shows Auto only.
+    const effortDeclared = (process.env.ORVYN_REASONING_EFFORT_MODELS ?? "")
+      .split(",").map((x) => x.trim()).filter(Boolean);
+    for (const entry of effortDeclared) {
+      const [id, flag] = entry.split(/\+/, 2);
+      const provider = this.registry.get(id.trim());
+      if (!provider) continue;
+      provider.config.reasoningControl = {
+        param: "reasoning_effort",
+        levels: flag === "max"
+          ? { fast: "low", standard: "medium", deep: "high", max: "xhigh" }
+          : { fast: "low", standard: "medium", deep: "high" },
+      };
+    }
   }
 
   addModel(config: ModelConfig): AIModelProvider {

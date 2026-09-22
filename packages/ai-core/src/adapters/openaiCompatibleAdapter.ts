@@ -110,6 +110,19 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     }));
   }
 
+  /**
+   * Resolves the reasoning-effort wire field for a request. Only models that
+   * DECLARE reasoningControl get one, and only for levels present in their
+   * levels map — a setting the provider cannot honor is never sent, so the
+   * provider can't pretend and we can't lie about having applied it.
+   */
+  private reasoningParam(request: AIRequest): Record<string, string> | undefined {
+    const control = this.config.reasoningControl;
+    if (!control || !request.reasoningEffort || request.reasoningEffort === "auto") return undefined;
+    const value = control.levels[request.reasoningEffort];
+    return value !== undefined ? { [control.param]: value } : undefined;
+  }
+
   async generate(request: AIRequest): Promise<AIResponse> {
     const res = await fetch(`${this.config.endpoint}/v1/chat/completions`, {
       method: "POST",
@@ -121,6 +134,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
         temperature: request.temperature ?? this.config.defaultTemperature,
         top_p: request.topP ?? this.config.defaultTopP,
         max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
+        ...this.reasoningParam(request),
         tools: this.openaiTools(request),
         stream: false,
       }),
@@ -159,6 +173,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
         temperature: request.temperature ?? this.config.defaultTemperature,
         top_p: request.topP ?? this.config.defaultTopP,
         max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
+        ...this.reasoningParam(request),
         tools: this.openaiTools(request),
         stream: true,
         // Most OpenAI-compatible servers only report token usage on a stream

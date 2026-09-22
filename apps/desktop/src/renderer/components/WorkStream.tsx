@@ -9,7 +9,9 @@
 // chain-of-thought. Detail lives in the right ContextPanel.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getChatMessages, isChatStreaming, subscribeChat, newChat } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";
+import { ModelMenu, ReasoningMenu, AccessMenu, useComposerModels } from "./ComposerControls";
+import type { ReasoningEffort, AccessMode } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
@@ -66,6 +68,25 @@ export function WorkStream({
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [requestedModelId, setRequestedModelId] = useState(() => localStorage.getItem("orvyn:run-model") || "auto");
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
+    () => (localStorage.getItem("orvyn:reasoning") as ReasoningEffort) || "auto"
+  );
+  const [accessMode, setAccessMode] = useState<AccessMode>(
+    () => ((localStorage.getItem("orvyn:access") as AccessMode) || "auto_read")
+  );
+  const composerModels = useComposerModels();
+  /** Conversation-scoped controls: switching chats re-applies that chat's
+   *  explicit choices (falling back to the user-level defaults). */
+  const lastChatId = useRef<string | null>(getActiveChatId());
+  useEffect(() => {
+    const id = getActiveChatId();
+    if (id === lastChatId.current) return;
+    lastChatId.current = id;
+    const settings = getActiveChatSettings();
+    setRequestedModelId(settings.modelId ?? localStorage.getItem("orvyn:run-model") ?? "auto");
+    setReasoningEffort((settings.reasoningEffort ?? (localStorage.getItem("orvyn:reasoning") as ReasoningEffort) ?? "auto"));
+    setAccessMode(settings.permissionMode ?? ((localStorage.getItem("orvyn:access") as AccessMode) ?? "auto_read"));
+  }, [tick]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /**
@@ -215,6 +236,8 @@ export function WorkStream({
         previousRunId: run.runId,
         attachments,
         requestedModelId,
+        reasoningEffort,
+        permissionMode: accessMode,
       });
       if (outcome.kind === "error") throw new Error(outcome.error);
       setPrompt("");
@@ -431,6 +454,43 @@ export function WorkStream({
           </button>
         </span>
       </div>
+
+      {/* Run configuration truth line — what is actually executing this run:
+          model (requested→actual), reasoning, access, execution location. */}
+      {(() => {
+        const started = run.events.find((e) => e.type === "run.started")?.data as any;
+        const exec = run.events.find((e) => e.type === "run.execution")?.data as any;
+        if (!started) return null;
+        const modelLine =
+          started.requestedModelId && started.requestedModelId !== "auto" && started.requestedModelId !== started.actualModelId
+            ? `${started.requestedModelId} → ${started.actualModelId}`
+            : started.actualModelId ?? "";
+        const reasoning =
+          started.reasoningEffortRequested && started.reasoningEffortRequested !== "auto"
+            ? `Reasoning ${started.reasoningEffortRequested}${started.reasoningEffortApplied && started.reasoningEffortApplied !== "not supported by this model" ? ` (${started.reasoningEffortApplied})` : ""}`
+            : "";
+        const fallback = started.fallbackReason ? ` — fallback: ${started.fallbackReason}` : "";
+        return (
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              padding: "3px 16px 5px",
+              borderBottom: "1px solid var(--orvyn-border-soft)",
+              fontSize: 10,
+              fontFamily: "var(--font-mono)",
+              color: "var(--orvyn-text-muted)",
+              flexShrink: 0,
+            }}
+          >
+            <span>● {modelLine}{fallback}</span>
+            {reasoning && <span>🧠 {reasoning}</span>}
+            {started.permissionMode && <span>🛡 {started.permissionMode}</span>}
+            {exec?.location && <span>⬈ {String(exec.location).replace("_", " ")}</span>}
+          </div>
+        );
+      })()}
 
       {/* The stream: conversation + activity, top to bottom. */}
       <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -739,7 +799,7 @@ export function WorkStream({
               }
             }}
             rows={2}
-            placeholder="Ask ORVYN to build, fix, deploy, research…"
+            placeholder={runActive ? "Keep typing to queue follow-up changes…" : "Ask ORVYN to build, fix, deploy, research…"}
             style={{
               width: "100%",
               background: "transparent",
@@ -802,8 +862,33 @@ export function WorkStream({
                 {m.label}
               </button>
             ))}
-            <span style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>ORION</span>
-            <ModelPicker value={requestedModelId} onChange={(id) => { setRequestedModelId(id); localStorage.setItem("orvyn:run-model", id); }} />
+            <AccessMenu
+              value={accessMode}
+              onChange={(v) => {
+                setAccessMode(v);
+                localStorage.setItem("orvyn:access", v);
+                setActiveChatSetting("permissionMode", v);
+              }}
+            />
+            <ModelMenu
+              models={composerModels}
+              value={requestedModelId}
+              onChange={(id) => {
+                setRequestedModelId(id);
+                localStorage.setItem("orvyn:run-model", id);
+                setActiveChatSetting("modelId", id);
+              }}
+            />
+            <ReasoningMenu
+              value={reasoningEffort}
+              models={composerModels}
+              modelId={requestedModelId}
+              onChange={(v) => {
+                setReasoningEffort(v);
+                localStorage.setItem("orvyn:reasoning", v);
+                setActiveChatSetting("reasoningEffort", v);
+              }}
+            />
             {runActive ? (
               <button
                 onClick={() => void run.stop()}
@@ -872,46 +957,6 @@ function ghostBtn(): React.CSSProperties {
   };
 }
 
-/**
- * Model for the next runs. Auto = the router decides; an explicit pick is
- * written to the REAL routing overrides (POST /routing, capability-validated
- * by the backend, honored by the model router and persisted) — this is the
- * same path the Model Manager writes, so the picker genuinely controls the
- * model that executes. Takes effect on the NEXT run; a run already in flight
- * keeps its model.
- */
-function ModelPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
-  const [models, setModels] = useState<{ id: string; name: string }[]>([]);
-  useEffect(() => {
-    fetch(apiUrl("/models"), { headers: authHeaders() })
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error("models unavailable")))
-      .then((d) => setModels((d.models ?? [])
-        .filter((m: any) => m.capabilities?.agent && m.capabilities?.tools)
-        .map((m: any) => ({ id: m.id, name: m.name ?? m.id }))))
-      .catch(() => setModels([]));
-  }, []);
-
-  return (
-    <select
-      title="Model for this run — Auto lets ORION choose"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        background: "transparent",
-        border: "1px solid var(--orvyn-border)",
-        borderRadius: 6,
-        color: "var(--orvyn-text-secondary)",
-        fontSize: 10.5,
-        padding: "3px 6px",
-        maxWidth: 170,
-        cursor: "pointer",
-      }}
-    >
-      <option value="auto">Auto · ORION</option>
-      {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-    </select>
-  );
-}
 
 
 /** "Working for 4s" — self-contained 1s ticker so only this chip re-renders,

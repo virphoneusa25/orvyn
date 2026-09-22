@@ -339,6 +339,7 @@ v1Router.post("/chat/completions", async (req, res) => {
       history: req.body.history ?? [],
       userMessage: req.body.message,
       context: req.body.context,
+      reasoningEffort: req.body.reasoningEffort,
     });
     res.json(response);
   } catch (err: any) {
@@ -351,6 +352,7 @@ v1Router.post("/chat/completions", async (req, res) => {
 // --- Streaming agent runs (typed event protocol) ---
 import { registerProjectToolsFor as _regTools } from "../ai/registerProjectTools";
 import { isTerminal } from "../agent/events";
+import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
@@ -385,7 +387,13 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     req.body.attachments,
     history,
     typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
-    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot, tenantId: t.id } : undefined
+    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot, tenantId: t.id } : undefined,
+    {
+      reasoningEffort: ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
+        ? req.body.reasoningEffort
+        : undefined,
+      accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
+    }
   );
   res.status(201).json({ runId, executionLocation: requestedLocation });
 });
@@ -619,10 +627,16 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
   // Multi-agent runtime still owns task decomposition. Until each worker has
-  // its own run-scoped provider parameter, honor an explicit selection by
-  // routing this request through the single-agent ORION tool loop instead of
-  // silently ignoring the user's chosen model.
-  if (typeof req.body.requestedModelId === "string" && req.body.requestedModelId !== "auto") {
+  // its own run-scoped provider parameter, honor ANY explicit composer
+  // control (model, reasoning, access mode) by routing this request through
+  // the single-agent ORION tool loop instead of silently ignoring the user's
+  // chosen settings.
+  const reasoningEffort = ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
+    ? req.body.reasoningEffort
+    : undefined;
+  const accessMode = isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined;
+  const explicitModel = typeof req.body.requestedModelId === "string" && req.body.requestedModelId !== "auto";
+  if (explicitModel || (reasoningEffort && reasoningEffort !== "auto") || accessMode) {
     const runId = t.agentRuntime.start(
       req.body.projectRoot,
       req.body.goal,
@@ -630,7 +644,9 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       "agent",
       req.body.attachments,
       [],
-      req.body.requestedModelId
+      typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
+      undefined,
+      { reasoningEffort, accessMode }
     );
     return res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
   }

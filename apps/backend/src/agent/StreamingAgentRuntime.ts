@@ -20,6 +20,8 @@ import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
+import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
+import type { ReasoningEffort } from "@orvyn/ai-core";
 import { clampToolOutput, compactConversation, estimateConversationTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
@@ -85,6 +87,20 @@ interface RunState {
   /** The run's mode — needed to restore the permission profile after a
    *  remote run puts its tool variants back. */
   mode: AgentMode;
+  /** Composer reasoning effort; "auto" defers to the provider. */
+  reasoningEffort: ReasoningEffort;
+  /** Composer access mode (run-scoped snapshot; changes apply to future runs).
+   *  Undefined for callers that did not send one — the tenant autonomy
+   *  profile applies unchanged for those, preserving legacy behavior. */
+  accessMode?: AccessMode;
+  /** Gateway autonomy profile before this run mounted its access mode. */
+  previousProfile?: "SAFE" | "BALANCED" | "AUTONOMOUS";
+}
+
+/** Per-run composer options — everything optional so existing callers are unaffected. */
+export interface RunOptions {
+  reasoningEffort?: ReasoningEffort;
+  accessMode?: AccessMode;
 }
 
 /**
@@ -202,7 +218,8 @@ export class StreamingAgentRuntime {
     attachments?: Attachment[],
     history: AIMessage[] = [],
     requestedModelId?: string,
-    execution?: ExecutionSpec
+    execution?: ExecutionSpec,
+    options?: RunOptions
   ): string {
     const runId = randomUUID();
     const provider = requestedModelId && requestedModelId !== "auto"
@@ -218,7 +235,16 @@ export class StreamingAgentRuntime {
     // Mode controls tool permissions as well as prompting, so a read-only
     // mode genuinely cannot write even if the model tries.
     const def = applyMode(this.tools.registry, mode);
-    this.tools.applyProfile();
+    // Composer access mode rides ON TOP of the mode when the caller passes
+    // one (run-scoped snapshot — changing the composer later affects future
+    // runs only). Profiles only upgrade ask→allowed and never touch denied,
+    // so mode restrictions (e.g. Research read-only) always win over Full
+    // Access. Without an explicit mode, the tenant's autonomy profile applies
+    // exactly as before.
+    const accessMode = options?.accessMode && isAccessMode(options.accessMode) ? options.accessMode : undefined;
+    const previousProfile = this.tools.profile;
+    if (accessMode) applyAccessMode(this.tools.registry, accessMode);
+    else this.tools.applyProfile();
 
     this.runs.set(runId, {
       controller: new AbortController(),
@@ -233,6 +259,9 @@ export class StreamingAgentRuntime {
       failedFingerprints: new Map(),
       execution,
       mode,
+      reasoningEffort: options?.reasoningEffort ?? "auto",
+      ...(accessMode ? { accessMode } : {}),
+      previousProfile,
     });
 
     // Remote runs: the worker prepares an isolated mission container and
@@ -385,6 +414,7 @@ export class StreamingAgentRuntime {
   private teardownRemote(runId: string): void {
     const state = this.runs.get(runId);
     toolRpc.cleanup(runId);
+    this.restoreAccessMode(runId);
     if (state?.replacedTools) {
       for (const tool of state.replacedTools) this.tools.register(tool);
       state.replacedTools = undefined;
@@ -397,6 +427,19 @@ export class StreamingAgentRuntime {
       for (const [name, permission] of state.savedPermissions) this.tools.setPermission(name, permission);
       state.savedPermissions = undefined;
     }
+  }
+
+  /** Puts the gateway back the way it was before this run mounted its
+   *  composer access mode — a run's permissions never leak into the next.
+   *  Re-applying the mode baseline undoes every profile upgrade AND the ASK
+   *  downgrade; the previous autonomy profile is then re-applied on top. */
+  private restoreAccessMode(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state?.previousProfile) return;
+    this.tools.profile = state.previousProfile;
+    applyMode(this.tools.registry, state.mode);
+    this.tools.applyProfile();
+    state.previousProfile = undefined;
   }
 
   private relevantMemory(projectRoot: string, instruction: string): string {
@@ -464,7 +507,24 @@ export class StreamingAgentRuntime {
     // provider connection must surface as a failure, not freeze the run.
     const signal = modelCallSignal(state.controller.signal);
 
-    this.store.emit(runId, "run.started", { instruction, mode, maxSteps: MAX_STEPS, requestedModelId: state.requestedModelId ?? "auto", actualModelId: provider.config.id, provider: provider.config.provider });
+    const reasoningControl = provider.config.reasoningControl;
+    const reasoningApplied =
+      state.reasoningEffort === "auto" ? "auto"
+      : reasoningControl?.levels[state.reasoningEffort] !== undefined
+        ? String(reasoningControl.levels[state.reasoningEffort])
+        : "not supported by this model";
+    this.store.emit(runId, "run.started", {
+      instruction, mode, maxSteps: MAX_STEPS,
+      requestedModelId: state.requestedModelId ?? "auto",
+      actualModelId: provider.config.id,
+      provider: provider.config.provider,
+      reasoningEffortRequested: state.reasoningEffort,
+      reasoningEffortApplied: reasoningApplied,
+      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label } : {}),
+      ...(state.requestedModelId && state.requestedModelId !== provider.config.id
+        ? { fallbackReason: `requested model "${state.requestedModelId}" resolved to "${provider.config.id}"` }
+        : {}),
+    });
 
     let steps = 0;
     let consecutiveFailures = 0;
@@ -536,6 +596,7 @@ export class StreamingAgentRuntime {
         for await (const chunk of provider.stream({
           messages,
           tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : undefined,
+          reasoningEffort: state.reasoningEffort,
           stream: true,
           signal,
         })) {
@@ -551,6 +612,7 @@ export class StreamingAgentRuntime {
                 const retry = await generateEnglish(provider, {
                   messages,
                   tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : undefined,
+                  reasoningEffort: state.reasoningEffort,
                 });
                 const text = String(retry?.content ?? "");
                 for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
@@ -650,9 +712,10 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "run.error", { message: err.message });
       this.store.setStatus(runId, "error");
-    } finally {
-      this.runs.delete(runId);
     }
+    // NOTE: run state is NOT deleted here — the start() kickoff's finally
+    // owns teardown (remote tools + access-mode restore read it after the
+    // loop settles); deleting here would skip that restoration.
   }
 
   /**

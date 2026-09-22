@@ -17,6 +17,57 @@ import { ToolRegistry } from "../ai/ToolTypes";
 
 export type PermissionProfile = "SAFE" | "BALANCED" | "AUTONOMOUS";
 
+/**
+ * Composer access modes (user-facing). They map onto the EXISTING profiles —
+ * no second permission engine. ASK additionally downgrades network-facing
+ * reads to per-call approval, making it the most approval-heavy mode.
+ */
+export type AccessMode = "ask" | "auto_read" | "auto_workspace" | "full_access";
+
+export const ACCESS_MODES: Record<AccessMode, { profile: PermissionProfile; label: string; description: string }> = {
+  ask: {
+    profile: "SAFE",
+    label: "Ask",
+    description: "Confirm write/command actions",
+  },
+  auto_read: {
+    profile: "SAFE",
+    label: "Auto Read",
+    description: "Read/search automatically",
+  },
+  auto_workspace: {
+    profile: "BALANCED",
+    label: "Auto Workspace",
+    description: "Workspace development automatically",
+  },
+  full_access: {
+    profile: "AUTONOMOUS",
+    label: "Full Access",
+    description: "Maximum permitted autonomy",
+  },
+};
+
+/** Tools ASK additionally gates: reaching beyond the machine is not a plain
+ *  "read" even when the capability class says NETWORK — the most
+ *  approval-heavy mode asks for those too. */
+const ASK_DOWNGRADE = new Set([
+  "fetch_url",
+  "web_search",
+  "browser_open",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_screenshot",
+  "browser_console_errors",
+  "browser_evidence",
+  "mcp_call",
+  "ssh_exec",
+]);
+
+export function isAccessMode(v: unknown): v is AccessMode {
+  return typeof v === "string" && v in ACCESS_MODES;
+}
+
 export const PROFILES: Record<PermissionProfile, { label: string; description: string }> = {
   SAFE: {
     label: "Safe",
@@ -75,11 +126,33 @@ const ALLOW: Record<PermissionProfile, Set<string>> = {
  * user per-tool overrides (so the user still has the last word).
  */
 export function applyProfile(registry: ToolRegistry, profile: PermissionProfile): void {
+  // SAFE pre-approves nothing and downgrades nothing: a tool's permission is
+  // whatever the MODE baseline gave it (undoing a prior profile's upgrades is
+  // the mode re-application's job, not the profile's — blanket downgrading
+  // here would also kill natively-allowed tools like web search).
   if (profile === "SAFE") return;
   const allow = ALLOW[profile];
   for (const tool of registry.list()) {
     if (allow.has(tool.name) && registry.getPermission(tool.name) === "ask") {
       registry.setPermission(tool.name, "allowed");
+    }
+  }
+}
+
+/**
+ * Applies a composer access mode: the mode's profile upgrades, plus the ASK
+ * downgrade for network-facing tools. Call AFTER applyMode() — profiles only
+ * upgrade ask→allowed and never touch denied, so a read-only mode (Research)
+ * stays read-only no matter what the composer says.
+ */
+export function applyAccessMode(registry: ToolRegistry, mode: AccessMode): void {
+  const conf = ACCESS_MODES[mode];
+  applyProfile(registry, conf.profile);
+  if (mode === "ask") {
+    for (const tool of registry.list()) {
+      if (ASK_DOWNGRADE.has(tool.name) && registry.getPermission(tool.name) === "allowed") {
+        registry.setPermission(tool.name, "ask");
+      }
     }
   }
 }

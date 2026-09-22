@@ -204,3 +204,58 @@ test("toolRpc: cleanup resolves pending as ended; a late result cannot resolve a
   assert.match(r.error ?? '', /run has ended/);
   assert.equal(rpc.resolve(resultOf(req!.requestId)), false, "late result after cleanup ignored");
 });
+
+// ---- Reasoning-effort adapter mapping ---------------------------------------
+// The wire field is only sent when the model DECLARES reasoningControl and
+// the requested level exists in its levels map — never pretended.
+
+import { OpenAICompatibleAdapter } from "@orvyn/ai-core";
+
+function reasoningAdapter(levels?: Record<string, string>) {
+  const captured: any[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: any, init: any) => {
+    captured.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 });
+  }) as any;
+  const adapter = new OpenAICompatibleAdapter({
+    id: "reason-model",
+    name: "Reason Model",
+    provider: "openai-compatible",
+    endpoint: "http://reason.test",
+    contextWindow: 128000,
+    maxOutputTokens: 4000,
+    defaultTemperature: 0,
+    defaultTopP: 1,
+    streaming: false,
+    capabilities: { chat: true, code: true, agent: true, tools: true, vision: false, embeddings: false, completion: false, image: false },
+    ...(levels ? { reasoningControl: { param: "reasoning_effort", levels } } : {}),
+  } as any);
+  return { adapter, captured, restore: () => { globalThis.fetch = originalFetch; } };
+}
+
+test("reasoning: declared levels map onto the wire field", async () => {
+  const { adapter, captured, restore } = reasoningAdapter({ fast: "low", standard: "medium", deep: "high" });
+  try {
+    await adapter.generate({ messages: [{ role: "user", content: "hi" }], reasoningEffort: "deep" } as any);
+    assert.equal(captured[0].reasoning_effort, "high");
+  } finally { restore(); }
+});
+
+test("reasoning: auto never sends the field; undeclared levels are not sent", async () => {
+  const { adapter, captured, restore } = reasoningAdapter({ fast: "low", standard: "medium", deep: "high" });
+  try {
+    await adapter.generate({ messages: [{ role: "user", content: "hi" }], reasoningEffort: "auto" } as any);
+    assert.equal(captured[0].reasoning_effort, undefined, "auto defers entirely");
+    await adapter.generate({ messages: [{ role: "user", content: "hi" }], reasoningEffort: "max" } as any);
+    assert.equal(captured[1].reasoning_effort, undefined, "max not declared → not sent");
+  } finally { restore(); }
+});
+
+test("reasoning: model without reasoningControl never receives the field", async () => {
+  const { adapter, captured, restore } = reasoningAdapter(undefined);
+  try {
+    await adapter.generate({ messages: [{ role: "user", content: "hi" }], reasoningEffort: "deep" } as any);
+    assert.equal(captured[0].reasoning_effort, undefined, "unsupported model — setting ignored, not pretended");
+  } finally { restore(); }
+});
