@@ -38,7 +38,7 @@ export interface DesktopLayoutState {
 }
 
 export const DEFAULT_DESKTOP_LAYOUT: DesktopLayoutState = {
-  rightPanelOpen: false,
+  rightPanelOpen: true,
   bottomTerminalOpen: false,
   bottomTerminalHeight: TERMINAL_DEFAULT_HEIGHT,
   helpOpen: false,

@@ -158,12 +158,20 @@ export function App() {
   // The Workbench docks when there is room and hides when there is not —
   // it may never overlay the center: covering the chat composer (prompt,
   // queue, steering) was a real regression users hit on narrow windows.
-  const showRightChrome = chrome.layout.rightPanelOpen && fitsDockedWorkbench(viewportWidth);
-  const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
+  // Auto-opens when a run is active so the user sees ORION's work without
+  // hunting for the panel toggle; the user's explicit close still wins
+  // between runs.
   const agentPanelWidth = clampAgentPanelWidth(chrome.layout.agentPanelWidth, viewportWidth);
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
+  // Auto-open the Workbench when a run is active or desktop events flow —
+  // the user should never have to hunt for the panel toggle when ORION works.
+  const runIsActive = agentRun.status === "running" || agentRun.status === "awaiting_approval" || agentRun.status === "queued";
+  const hasDesktopEvents = agentRun.events.some((e) => String(e.type).startsWith("desktop."));
+  const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents;
+  const showRightChrome = effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
+  const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
   const runView = {
     events: agentRun.events,

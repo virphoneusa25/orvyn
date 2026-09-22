@@ -88,9 +88,12 @@ export function AgentWorkspace({
   const desktopLive = events.some((e) => String(e.type).startsWith("desktop.") && e.type !== "desktop.completed" && e.type !== "desktop.failed");
 
   const tabs = useMemo(() => {
-    const ids = layout.openTabIds.length ? layout.openTabIds : ["changes", "browser"];
+    const ids = layout.openTabIds.length ? layout.openTabIds : ["changes", "browser", "desktop"];
     let list = ids.map(parseWorkbenchTab);
-    if (desktopLive && !list.some((t) => t.id === "desktop")) list = upsertTab(list, parseWorkbenchTab("desktop"));
+    // The Desktop tab is ALWAYS available when a project is open — the user
+    // can start or watch a session without waiting for desktop.* run events.
+    // desktopLive only controls the cyan "live" indicator on the tab.
+    if (projectRoot && !list.some((t) => t.id === "desktop")) list = upsertTab(list, parseWorkbenchTab("desktop"));
 
     const nativeBrowser = browserState.tabs.filter((t) => t.kind === "browser");
     if (nativeBrowser.length) {
