@@ -406,7 +406,9 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
 async function executeJob(job: JobAssignment): Promise<void> {
   const runId = job.runId;
   console.log(`[worker] executeJob START: ${runId} (role=${job.role ?? "executor"})`);
-  const containerName = `orvyn-worker-${runId.slice(0, 12)}`;
+  // Distinct prefix from the SERVICE container (orvyn-worker-N): mission
+  // containers must never match the worker's own name in any filter.
+  const containerName = `orvyn-mission-${runId.slice(0, 12)}`;
   let containerId = "";
   const cancelTimer = startCancelPolling(runId);
 
@@ -550,7 +552,9 @@ async function detectDocker(): Promise<void> {
  * their runs can no longer be served — so remove them by name prefix.
  */
 async function cleanupStaleMissionContainers(): Promise<void> {
-  const res = await docker(["ps", "-a", "--filter", "name=orvyn-worker-", "--format", "{{.ID}} {{.Names}}"]);
+  // orvyn-mission-* only — never the worker service container itself
+  // (orvyn-worker-N), which a broader prefix would match and destroy.
+  const res = await docker(["ps", "-a", "--filter", "name=orvyn-mission-", "--format", "{{.ID}} {{.Names}}"]);
   if (res.code !== 0) return;
   const lines = res.stdout.split("\n").filter(Boolean);
   for (const line of lines) {
