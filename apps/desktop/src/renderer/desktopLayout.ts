@@ -88,8 +88,10 @@ function safeTabIds(value: unknown): string[] {
 function migrateActiveTab(rec: Record<string, unknown>): AgentWorkspaceTab {
   if (isAgentWorkspaceTab(rec.activeTab)) return rec.activeTab;
   const id = typeof rec.activeTabId === "string" ? rec.activeTabId : "";
-  const parsed = parseWorkbenchTab(id);
-  if (isAgentWorkspaceTab(parsed.kind)) return parsed.kind;
+  if (id) {
+    const parsed = parseWorkbenchTab(id);
+    if (isAgentWorkspaceTab(parsed.kind)) return parsed.kind;
+  }
   const surface = typeof rec.surfaceTab === "string" ? rec.surfaceTab : "";
   if (surface.startsWith("preview")) return "preview";
   if (isAgentWorkspaceTab(surface)) return surface;

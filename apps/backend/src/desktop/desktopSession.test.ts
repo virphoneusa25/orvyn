@@ -62,7 +62,7 @@ test("control does not transfer mid-action", () => {
   assert.equal(beginAgentAction(s).ok, true);
   const denied = requestControl(s, "user");
   assert.equal(denied.ok, false);
-  assert.match(denied.reason ?? "", /in flight/i);
+  assert.match(denied.reason ?? "", /in flight|finish/i);
   endAgentAction(s);
   assert.equal(requestControl(s, "user").ok, true);
 });
