@@ -17,7 +17,7 @@ export interface DesktopLayoutState {
 }
 
 export const DEFAULT_DESKTOP_LAYOUT: DesktopLayoutState = {
-  rightPanelOpen: true,
+  rightPanelOpen: false,
   bottomTerminalOpen: false,
   bottomTerminalHeight: TERMINAL_DEFAULT_HEIGHT,
   helpOpen: false,
@@ -33,7 +33,7 @@ export function parseDesktopLayout(raw: unknown): DesktopLayoutState {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_DESKTOP_LAYOUT };
   const rec = raw as Partial<DesktopLayoutState>;
   return {
-    rightPanelOpen: rec.rightPanelOpen !== false,
+    rightPanelOpen: rec.rightPanelOpen === true,
     bottomTerminalOpen: rec.bottomTerminalOpen === true,
     bottomTerminalHeight: clampTerminalHeight(Number(rec.bottomTerminalHeight ?? TERMINAL_DEFAULT_HEIGHT)),
     helpOpen: rec.helpOpen === true,

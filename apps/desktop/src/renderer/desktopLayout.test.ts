@@ -8,9 +8,13 @@ import {
   TERMINAL_MIN_HEIGHT,
 } from "./desktopLayout.ts";
 
+test("an explicit true preference means the right panel should show", () => {
+  assert.equal(parseDesktopLayout({ rightPanelOpen: true }).rightPanelOpen, true);
+});
+
 test("right panel / terminal / help parse with safe defaults", () => {
   const empty = parseDesktopLayout(null);
-  assert.equal(empty.rightPanelOpen, true);
+  assert.equal(empty.rightPanelOpen, false);
   assert.equal(empty.bottomTerminalOpen, false);
   assert.equal(empty.helpOpen, false);
   assert.equal(empty.bottomTerminalHeight, TERMINAL_DEFAULT_HEIGHT);

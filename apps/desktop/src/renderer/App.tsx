@@ -140,13 +140,9 @@ export function App() {
   // Home is the landing surface; Code and Terminal share the editor chrome;
   // the context panel rides along wherever work happens.
   const showEditorChrome = view === "editor" || view === "terminal";
-  // The approved Home has NO right panel — the dashboard owns the full
-  // center. Context appears only once work begins (or in the editor).
-  const showContext =
-    view === "editor" ||
-    view === "terminal" ||
-    ((view === "home" || view === "newtask") && centerMode === "work");
-  const showRightChrome = showContext && chrome.layout.rightPanelOpen;
+  // Title-bar toggle is the source of truth. Hiding the panel on Home made
+  // the button look dead: rightPanelOpen flipped, but nothing appeared.
+  const showRightChrome = chrome.layout.rightPanelOpen;
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
@@ -829,14 +825,14 @@ export function App() {
         <div
           className="orvyn-right-panel"
           style={{
-            width: showRightChrome ? undefined : 0,
+            flex: showRightChrome ? "0 0 auto" : "0 0 0px",
+            width: showRightChrome ? "auto" : 0,
             maxWidth: showRightChrome ? 640 : 0,
+            minWidth: showRightChrome ? 260 : 0,
             opacity: showRightChrome ? 1 : 0,
             overflow: "hidden",
-            flexShrink: 0,
             display: "flex",
-            minWidth: 0,
-            transition: "max-width 180ms ease, opacity 160ms ease",
+            transition: "max-width 180ms ease, min-width 180ms ease, opacity 160ms ease",
             pointerEvents: showRightChrome ? "auto" : "none",
           }}
         >
