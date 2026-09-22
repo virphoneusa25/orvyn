@@ -136,10 +136,14 @@ export class TenantManager {
       indexService: new IndexService(embedder, new ResilientVectorStore(
         // Qdrant-first (remote, scalable), local fallback when unreachable
         process.env.ORVYN_QDRANT_URL
-          ? new QdrantVectorStore({ url: process.env.ORVYN_QDRANT_URL, collection: "orvyn_code" }, id, "default")
+          ? new QdrantVectorStore({
+              url: process.env.ORVYN_QDRANT_URL,
+              collection: "orvyn_code",
+              dimension: embedder.dimensions,
+            }, id, "default")
           : new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
         new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
-      ), label),
+      ), label, id),
       toolRegistry,
       permissionEngine,
       toolGateway: new ToolGateway(toolRegistry, permissionEngine),

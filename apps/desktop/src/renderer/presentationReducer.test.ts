@@ -130,8 +130,8 @@ test("consecutive reads roll into one inspection WorkGroup; edits and checks for
   assert.equal(wgs.length, 3, "inspection + edits + checks = three phase groups, not 10 rows");
   const [insp, edits, checks] = wgs;
   assert.equal(insp.type, "inspection");
-  assert.equal(insp.title, "Inspected project");
-  assert.ok(String(insp.summary).startsWith("8 files"), `summary counts files (got: ${insp.summary})`);
+  assert.equal(insp.title, "Explore");
+  assert.ok(String(insp.summary).includes("8 files"), `summary counts files (got: ${insp.summary})`);
   assert.equal(insp.items.length, 8, "expandable to the individual reads");
   assert.equal(edits.type, "edits");
   assert.equal(edits.title, "Updated keep.ts");
@@ -171,7 +171,7 @@ test("a running inspection reports running state and phase title", () => {
   );
   const wg = items.find((i) => i.kind === "workgroup") as WgItem;
   assert.equal(wg.status, "running");
-  assert.equal(wg.title, "Inspecting project…");
+  assert.equal(wg.title, "Explore");
 });
 
 test("approval required → resolved shows settled state; cancelled run ends in a subtle Stopped summary", () => {
@@ -266,6 +266,55 @@ test("blocked and partial missions never present successful completion", () => {
   }
   const item = reducePresentation([ev("run.completed", { steps: 3 })], "completed")[0];
   if (item.kind === "summary") assert.equal(item.detail, "Completed");
+});
+
+test("search + read collapse into Explore · N searches, N files", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "s", tool: "search_codebase" }),
+      ev("tool.input", { callId: "s", tool: "search_codebase", input: { query: "initChatHistory" } }),
+      ev("tool.completed", { callId: "s", tool: "search_codebase", preview: "2 results" }),
+      ev("tool.started", { callId: "r", tool: "read_file" }),
+      ev("tool.input", { callId: "r", tool: "read_file", input: { path: "src/App.tsx" } }),
+      ev("tool.completed", { callId: "r", tool: "read_file", preview: "x" }),
+    ],
+    "completed"
+  );
+  const wg = items.find((i) => i.kind === "workgroup") as WgItem;
+  assert.equal(wg.title, "Explore");
+  assert.match(String(wg.summary), /^1 search, 1 file/);
+});
+
+test("agent.phase becomes a safe Thought row, never private reasoning", () => {
+  reset();
+  const items = reducePresentation(
+    [ev("agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" })],
+    "running"
+  );
+  const thought = items.find((i) => i.kind === "status") as { label: string; thought?: { summary?: string } };
+  assert.equal(thought.label, "Thought");
+  assert.equal(thought.thought?.summary, "Gathering relevant context");
+  assert.ok(!JSON.stringify(items).includes("reasoningContent"));
+});
+
+test("replay of the same sequence is idempotent — no duplicate rows", () => {
+  reset();
+  const events = [
+    ev("message.delta", { content: "Checking restore." }),
+    ev("message.completed", {}),
+    ev("tool.started", { callId: "c1", tool: "search_codebase" }),
+    ev("tool.input", { callId: "c1", tool: "search_codebase", input: { query: "active run" } }),
+    ev("tool.completed", { callId: "c1", tool: "search_codebase", preview: "1 result" }),
+    ev("run.completed", { steps: 1 }),
+  ];
+  const first = reducePresentation(events, "completed");
+  const again = reducePresentation(events, "completed");
+  assert.deepEqual(
+    first.map((i) => i.kind + ":" + i.key),
+    again.map((i) => i.kind + ":" + i.key)
+  );
+  assert.equal(first.filter((i) => i.kind === "summary").length, 1);
 });
 
 test("diff counts attach to exact paths when basenames collide", () => {

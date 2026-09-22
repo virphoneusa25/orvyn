@@ -61,6 +61,25 @@ test("findSymbol: locates the function definition", async () => {
   }
 });
 
+test("exact filename outranks a weaker semantic-looking path", async () => {
+  const { root, files } = fixture();
+  try {
+    const hs = new HybridSearch({
+      projectRoot: root,
+      semanticSearch: async () => [
+        { path: "src/utils/helpers.ts", startLine: 1, endLine: 2, snippet: "format", score: 0.9 },
+      ],
+      listFiles: async () => [...files.keys()],
+      readFile: async (rel) => files.get(rel) ?? "",
+    });
+    const hits = await hs.searchCodebase("package.json", 5);
+    assert.ok(hits[0].path.endsWith("package.json"), `expected package.json first, got ${hits[0]?.path}`);
+    assert.ok(hits[0].matchedBy.includes("filename") || hits[0].matchedBy.includes("exact-file"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("findFile: partial path match, shortest wins", async () => {
   const { root, files } = fixture();
   try {
@@ -89,6 +108,47 @@ test("relatedFiles: same directory and shared symbols rank higher", async () => 
     });
     const related = await hs.relatedFiles("src/auth/login.ts");
     assert.ok(related.includes("src/auth/session.ts"), `session.ts related (same dir + shared symbol): ${related.join(", ")}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("diversity caps chunks per file so one file cannot collapse results", async () => {
+  const { root, files } = fixture();
+  try {
+    const hs = new HybridSearch({
+      projectRoot: root,
+      semanticSearch: async () => [
+        { path: "src/auth/login.ts", startLine: 1, endLine: 2, snippet: "a", score: 0.99 },
+        { path: "src/auth/login.ts", startLine: 3, endLine: 4, snippet: "b", score: 0.98 },
+        { path: "src/auth/login.ts", startLine: 5, endLine: 6, snippet: "c", score: 0.97 },
+        { path: "src/auth/login.ts", startLine: 7, endLine: 8, snippet: "d", score: 0.96 },
+        { path: "src/auth/session.ts", startLine: 1, endLine: 2, snippet: "e", score: 0.4 },
+      ],
+      listFiles: async () => [...files.keys()],
+      readFile: async (rel) => files.get(rel) ?? "",
+    });
+    const hits = await hs.searchCodebase("session token helper", 8);
+    const loginHits = hits.filter((h) => h.path === "src/auth/login.ts").length;
+    assert.ok(loginHits <= 3, `expected at most 3 chunks from login.ts, got ${loginHits}`);
+    assert.ok(hits.some((h) => h.path !== "src/auth/login.ts"), "other files still appear");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic outage still returns keyword/symbol hits", async () => {
+  const { root, files } = fixture();
+  try {
+    const hs = new HybridSearch({
+      projectRoot: root,
+      semanticSearch: async () => { throw new Error("Qdrant down"); },
+      listFiles: async () => [...files.keys()],
+      readFile: async (rel) => files.get(rel) ?? "",
+    });
+    const hits = await hs.searchCodebase("loginUser", 5);
+    assert.ok(hits.length > 0, "fallback search must still work");
+    assert.ok(hits.some((h) => h.matchedBy.includes("symbol") || h.matchedBy.includes("keyword")));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

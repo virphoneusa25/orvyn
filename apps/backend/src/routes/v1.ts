@@ -165,8 +165,14 @@ v1Router.delete("/routing/:task", (req, res) => {
 // --- Codebase indexing / RAG ---
 v1Router.post("/index/build", async (req, res) => {
   const t = requireTenant(req);
+  if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
   t.usage.indexBuilds++;
-  const stats = await t.indexService.build(req.body.projectRoot);
+  t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
+  if (req.body.background === true) {
+    void t.indexService.build(req.body.projectRoot, { rebuild: Boolean(req.body.rebuild), projectId: req.body.projectId });
+    return res.status(202).json({ stats: t.indexService.getStats() });
+  }
+  const stats = await t.indexService.build(req.body.projectRoot, { rebuild: Boolean(req.body.rebuild), projectId: req.body.projectId });
   if (stats.status === "error") return res.status(500).json({ stats });
   res.json({ stats });
 });
@@ -178,13 +184,62 @@ v1Router.post("/index/watch", (req, res) => {
   res.json({ stats: t.indexService.getStats() });
 });
 
+v1Router.post("/index/update", async (req, res) => {
+  const t = requireTenant(req);
+  if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
+  t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
+  if (req.body.deleted) await t.indexService.removeFile(String(req.body.path ?? ""));
+  else if (req.body.from && req.body.to) await t.indexService.renameFile(String(req.body.from), String(req.body.to));
+  else if (req.body.path) await t.indexService.updateFile(String(req.body.path));
+  else await t.indexService.build(req.body.projectRoot, { projectId: req.body.projectId });
+  res.json({ stats: t.indexService.getStats() });
+});
+
+v1Router.post("/index/cancel", (req, res) => {
+  requireTenant(req).indexService.cancelBuild();
+  res.json({ stats: requireTenant(req).indexService.getStats() });
+});
+
+v1Router.delete("/index", async (req, res) => {
+  await requireTenant(req).indexService.deleteIndex();
+  res.json({ stats: requireTenant(req).indexService.getStats() });
+});
+
 v1Router.get("/index/status", (req, res) => {
   res.json({ stats: requireTenant(req).indexService.getStats() });
 });
 
+v1Router.post("/index/snapshot", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
+    const { buildProjectSnapshot } = await import("../indexing/projectSnapshot");
+    const snapshot = await buildProjectSnapshot(t.id, req.body.projectRoot, {
+      projectId: req.body.projectId,
+      source: req.body.source,
+    });
+    res.json({ snapshot });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 v1Router.post("/search/semantic", async (req, res) => {
   try {
-    const hits = await requireTenant(req).indexService.search(req.body.query, req.body.topK ?? 5);
+    const t = requireTenant(req);
+    if (req.body.projectRoot) t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
+    const hits = await t.indexService.search(req.body.query, req.body.topK ?? 5);
+    res.json({ hits });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+v1Router.post("/search/hybrid", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    if (req.body.projectRoot) t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
+    const hits = await t.indexService.searchHybrid(req.body.query, req.body.topK ?? 10);
     res.json({ hits });
   } catch (err: any) {
     res.status(400).json({ error: err.message });

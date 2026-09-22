@@ -16,6 +16,7 @@ import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
+import "./ConversationActivity.css";
 import { Attachment, fileToAttachment } from "./AttachmentBar";
 import { IconPaperclip, IconRocket } from "./Icons";
 import appIcon from "../assets/icon.png";
@@ -101,10 +102,48 @@ export function WorkStream({
   const draggedId = useRef<string | null>(null);
   /** Auto-follow only while the user is at the bottom; scrolling up pauses it. */
   const [follow, setFollow] = useState(true);
+  const [indexHint, setIndexHint] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const attachRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!projectRoot) {
+      setIndexHint(null);
+      return;
+    }
+    let cancelled = false;
+    const apply = async () => {
+      try {
+        const res = await fetch(apiUrl("/index/status"), { headers: authHeaders() });
+        const data = await res.json();
+        const st = String(data.stats?.status ?? "idle");
+        if (cancelled) return;
+        setIndexHint(st === "ready" ? "Indexed" : st === "indexing" ? "Indexing" : st === "stale" ? "Stale" : st === "degraded" ? "Degraded" : st === "error" ? "Index error" : null);
+        if (st === "idle") {
+          await fetch(apiUrl("/index/build"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ projectRoot, background: true }),
+          });
+        } else if (st === "stale") {
+          await fetch(apiUrl("/index/update"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ projectRoot }),
+          });
+        }
+      } catch {
+        /* offline */
+      }
+    };
+    void apply();
+    const timer = window.setInterval(() => { void apply(); }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [projectRoot]);
   useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
   const messages = getChatMessages();
 
@@ -406,6 +445,11 @@ export function WorkStream({
             {projectName}
           </span>
         )}
+        {indexHint && (
+          <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)", letterSpacing: 0.3 }}>
+            {indexHint}
+          </span>
+        )}
         {run.status !== "idle" && (
           <span
             style={{
@@ -514,20 +558,8 @@ export function WorkStream({
 
         {messages.map((m, i) =>
           m.role === "user" ? (
-            <div key={i} style={{ display: "flex", justifyContent: "flex-end", margin: "10px 0" }}>
-              <div
-                style={{
-                  maxWidth: "72%",
-                  background: "rgba(108,92,255,0.14)",
-                  border: "1px solid rgba(108,92,255,0.35)",
-                  borderRadius: "var(--orvyn-radius-md)",
-                  borderTopRightRadius: 4,
-                  padding: "8px 12px",
-                  fontSize: 13,
-                  color: "var(--orvyn-text)",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
+            <div key={i} style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 10px" }}>
+              <div className="user-pill">
                 {m.content}
                 {m.attachments && m.attachments.length > 0 && (
                   <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan)", marginTop: 4 }}>

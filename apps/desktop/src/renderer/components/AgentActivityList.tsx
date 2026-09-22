@@ -202,7 +202,14 @@ export function AgentActivityList({
             // one-line status label — never private reasoning.
             if (item.thought) {
               const live = !item.thought.endTs && (status === "running" || status === "awaiting_approval");
-              const dur = item.thought.endTs ? fmtDuration(item.thought.endTs - item.thought.ts) : undefined;
+              const durMs = item.thought.endTs ? item.thought.endTs - item.thought.ts : 0;
+              const dur = item.thought.endTs
+                ? durMs < 1500
+                  ? "a few seconds"
+                  : durMs < 60_000
+                    ? `${Math.round(durMs / 1000)} seconds`
+                    : `${Math.round(durMs / 60_000)} minutes`
+                : undefined;
               if (live) {
                 return (
                   <div key={item.key} className="activity-thinking" role="status" title={item.thought.summary ?? "Working"}>
@@ -214,10 +221,12 @@ export function AgentActivityList({
               return (
                 <div
                   key={item.key}
+                  className="stream-thought"
                   title={item.thought.summary ?? "Worked"}
-                  style={{ fontSize: 11, margin: "4px 0", color: "var(--text-muted)", fontStyle: "italic" }}
                 >
-                  Thought · {dur ?? "a few seconds"}
+                  <span aria-hidden="true">✦</span>
+                  <span className="stream-thought-label">Thought</span>
+                  <span>· {dur ?? "a few seconds"}</span>
                 </div>
               );
             }

@@ -81,8 +81,10 @@ export class HybridSearch {
     for (const rel of files.slice(0, 300)) {
       // Path relevance
       const base = path.basename(rel).toLowerCase();
-      if (base.includes(qLower) || qLower.includes(base.replace(/\.[^.]+$/, ""))) {
-        add(rel, { path: rel, startLine: 0, endLine: 0, snippet: "", score: PATH_WEIGHT, matchedBy: ["path"] });
+      if (base === qLower || base.replace(/\.[^.]+$/, "") === qLower) {
+        add(rel, { path: rel, startLine: 1, endLine: 1, snippet: rel, score: PATH_WEIGHT * 6, matchedBy: ["filename"] });
+      } else if (base.includes(qLower) || qLower.includes(base.replace(/\.[^.]+$/, ""))) {
+        add(rel, { path: rel, startLine: 1, endLine: 1, snippet: rel, score: PATH_WEIGHT, matchedBy: ["path"] });
       }
       // Content keywords (bounded read)
       try {
@@ -119,7 +121,8 @@ export class HybridSearch {
       }
     }
 
-    return [...scores.values()].sort((a, b) => b.score - a.score).slice(0, topK);
+    const ranked = [...scores.values()].sort((a, b) => b.score - a.score);
+    return diversify(boostExact(ranked, query), topK);
   }
 
   /** Symbol-level search across the project. */
@@ -173,6 +176,32 @@ export class HybridSearch {
     return related.sort((a, b) => b.score - a.score).slice(0, 8).map((r) => r.path);
   }
 
+  async searchTests(targetPath: string): Promise<string[]> {
+    const files = await this.deps.listFiles().catch(() => [] as string[]);
+    const base = path.basename(targetPath).replace(/\.[^.]+$/, "");
+    const dir = path.dirname(targetPath);
+    return files
+      .filter((f) => {
+        const n = f.toLowerCase();
+        return (
+          n.includes(".test.") ||
+          n.includes(".spec.") ||
+          n.includes("/tests/") ||
+          n.includes("/__tests__/") ||
+          (path.dirname(f) === dir && n.includes(base.toLowerCase()) && n !== targetPath.toLowerCase())
+        );
+      })
+      .slice(0, 12);
+  }
+
+  async outline(): Promise<{ directories: string[]; entryPoints: string[]; configs: string[] }> {
+    const files = await this.deps.listFiles().catch(() => [] as string[]);
+    const directories = [...new Set(files.map((f) => f.split("/")[0]).filter(Boolean))].slice(0, 16);
+    const configs = files.filter((f) => /^(package\.json|tsconfig|pyproject|go\.mod|Cargo\.toml|Dockerfile|README)/i.test(path.basename(f))).slice(0, 12);
+    const entryPoints = files.filter((f) => /(^|\/)(index|main|app|server)\.[a-z]+$/i.test(f)).slice(0, 12);
+    return { directories, entryPoints, configs };
+  }
+
   private async getSymbols(relPath: string): Promise<CodeSymbol[]> {
     const cached = this.symbolCache.get(relPath);
     if (cached) return cached;
@@ -185,4 +214,30 @@ export class HybridSearch {
       return [];
     }
   }
+}
+
+function boostExact(hits: HybridHit[], query: string): HybridHit[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return hits;
+  return hits.map((h) => {
+    const base = path.basename(h.path).toLowerCase();
+    const exactSymbol = h.symbol?.toLowerCase().endsWith(q);
+    if (exactSymbol) return { ...h, score: h.score + SYMBOL_WEIGHT, matchedBy: [...new Set([...h.matchedBy, "exact-symbol"])] };
+    if (base === q) return { ...h, score: h.score + PATH_WEIGHT * 4, matchedBy: [...new Set([...h.matchedBy, "exact-file"])] };
+    return h;
+  }).sort((a, b) => b.score - a.score);
+}
+
+/** Prefer evidence from several files over many chunks of one file. */
+function diversify(hits: HybridHit[], topK: number, maxPerFile = 3): HybridHit[] {
+  const counts = new Map<string, number>();
+  const out: HybridHit[] = [];
+  for (const hit of hits) {
+    const n = counts.get(hit.path) ?? 0;
+    if (n >= maxPerFile) continue;
+    counts.set(hit.path, n + 1);
+    out.push(hit);
+    if (out.length >= topK) break;
+  }
+  return out;
 }

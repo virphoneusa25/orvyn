@@ -48,12 +48,24 @@ export function ToolActivityGroup({ group }: { group: GroupItem }) {
   return <details className="activity-group"><summary>{group.items.length} file operations</summary>{group.items.map(item => <ToolActivityRow key={item.key} item={item} />)}</details>;
 }
 export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
-  // File changes and commands are always visible. Only repetitive inspections collapse.
-  if (group.type !== "inspection" || group.items.length <= 3) {
-    return <div className="activity-phase">{group.items.map(item => <ToolActivityRow key={item.key} item={item} />)}</div>;
+  if (group.type === "inspection") {
+    return (
+      <details className="activity-group stream-explore" open={group.status === "running" ? true : undefined}>
+        <summary>
+          <IconSearch size={14} />
+          <span className="stream-explore-title">{group.title}{group.summary ? ` · ${group.summary}` : ""}</span>
+          <span className="activity-state">{group.status === "running" ? "Running" : group.status === "done" ? "Done" : "Needs attention"}</span>
+        </summary>
+        {group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}
+      </details>
+    );
   }
-  return <details className="activity-group" open={group.status === "running" ? true : undefined}>
-    <summary><IconSearch size={14} /><span>{group.title}</span><span className="activity-detail">{group.summary}</span><span className="activity-state">{group.status === "running" ? "In progress" : group.status === "done" ? "Done" : "Needs attention"}</span></summary>
-    {group.items.map(item => <ToolActivityRow key={item.key} item={item} />)}
-  </details>;
+  if (group.items.length === 1) {
+    return <div className="activity-phase">{group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>;
+  }
+  return (
+    <div className="activity-phase">
+      {group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}
+    </div>
+  );
 }

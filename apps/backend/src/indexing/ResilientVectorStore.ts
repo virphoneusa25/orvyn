@@ -66,4 +66,9 @@ export class ResilientVectorStore implements VectorStore {
     // The last operation's route — useful for truthful health reporting
     return !(this.primary as any).isHealthy;
   }
+
+  activateProject(projectIdOrRoot: string): void {
+    (this.primary as { activateProject?(id: string): void }).activateProject?.(projectIdOrRoot);
+    (this.fallback as { activateProject?(id: string): void }).activateProject?.(projectIdOrRoot);
+  }
 }

@@ -164,8 +164,14 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       return { op: "edit", ...fileArg(), ctx: "files" };
     case "search_files":
     case "search_code":
+    case "search_codebase":
+    case "find_symbol":
+    case "find_file":
+    case "related_files":
+    case "search_tests":
+    case "get_project_outline":
     case "search":
-      return { op: "search", label: String(args?.query ?? args?.pattern ?? ""), ctx: "files" };
+      return { op: "search", label: String(args?.query ?? args?.pattern ?? args?.name ?? args?.path ?? ""), ctx: "files" };
     case "list_directory":
     case "list_files":
     case "list_symbols":
@@ -247,6 +253,26 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "message.completed":
         flushAssistant(false);
         continue;
+
+      case "agent.phase": {
+        flushAssistant(false);
+        const note = String(e.data.note ?? e.data.phase ?? "Working");
+        const last = items[items.length - 1];
+        if (last?.kind === "status" && last.thought) {
+          last.thought.endTs = e.timestamp;
+          last.thought.summary = note.slice(0, 90);
+          continue;
+        }
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: "Thought",
+          ephemeral: false,
+          tone: "thought",
+          thought: { ts: e.timestamp, summary: note.slice(0, 90) },
+        });
+        continue;
+      }
 
       case "thinking": {
         // High-level status only — never reasoning content. Consecutive
@@ -550,9 +576,12 @@ function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGrou
   if (type === "inspection") {
     const files = items.filter((i) => i.op === "read").length;
     const searches = items.filter((i) => i.op === "search").length;
-    title = anyRunning ? "Inspecting project…" : "Inspected project";
-    const parts = [files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : "", searches > 0 ? `${searches} ${searches === 1 ? "search" : "searches"}` : ""].filter(Boolean);
-    summary = parts.join(" · ") || undefined;
+    title = "Explore";
+    const parts = [
+      searches > 0 ? `${searches} ${searches === 1 ? "search" : "searches"}` : "",
+      files > 0 ? `${files} ${files === 1 ? "file" : "files"}` : "",
+    ].filter(Boolean);
+    summary = parts.join(", ") || undefined;
   } else if (type === "checks") {
     if (items.length === 1) {
       const label = items[0].label ?? "command";

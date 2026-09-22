@@ -13,6 +13,8 @@ interface QdrantConfig {
   url: string;          // e.g. http://qdrant:6333
   collection: string;   // e.g. orvyn_code
   apiKey?: string;
+  /** Must match the embedder. Never mix dimensions in one collection. */
+  dimension?: number;
 }
 
 interface ScopedMetadata extends Record<string, unknown> {
@@ -40,6 +42,7 @@ export class QdrantVectorStore implements VectorStore {
   private apiKey?: string;
   private tenantId: string;
   private projectId: string;
+  private dimension: number;
   private healthy = false;
   private healthCheckedAt = 0;
   private readonly HEALTH_TTL = 30_000; // re-check health every 30s
@@ -50,6 +53,12 @@ export class QdrantVectorStore implements VectorStore {
     this.apiKey = config.apiKey;
     this.tenantId = tenantId;
     this.projectId = projectId;
+    this.dimension = config.dimension ?? 256;
+  }
+
+  /** Switch the active project namespace without creating a second collection. */
+  activateProject(projectId: string): void {
+    if (projectId) this.projectId = projectId;
   }
 
   private headers(): Record<string, string> {
@@ -64,7 +73,7 @@ export class QdrantVectorStore implements VectorStore {
       method: "PUT",
       headers: this.headers(),
       body: JSON.stringify({
-        vectors: { size: 384, distance: "Cosine" }, // matches the hash embedder
+        vectors: { size: this.dimension, distance: "Cosine" },
       }),
       signal: AbortSignal.timeout(10_000),
     });

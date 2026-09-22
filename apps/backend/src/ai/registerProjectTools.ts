@@ -12,6 +12,14 @@ import {
   makeMoveFileTool,
 } from "./tools/fileTools";
 import { makeSearchCodeTool } from "./tools/searchCodeTool";
+import {
+  makeFindFileTool,
+  makeFindSymbolTool,
+  makeProjectOutlineTool,
+  makeRelatedFilesTool,
+  makeSearchCodebaseTool,
+  makeSearchTestsTool,
+} from "./tools/projectIntelligenceTools";
 import { makeListSymbolsTool } from "./tools/symbolTools";
 import { makeTerminalTool } from "./tools/terminalTool";
 import {
@@ -72,7 +80,14 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeListDirectoryTool(projectRoot));
   g.register(makeSearchFilesTool(projectRoot));
   g.register(makeSearchCodeTool(projectRoot));
+  g.register(makeSearchCodebaseTool(tenant.indexService, projectRoot));
+  g.register(makeFindSymbolTool(tenant.indexService, projectRoot));
+  g.register(makeFindFileTool(tenant.indexService, projectRoot));
+  g.register(makeRelatedFilesTool(tenant.indexService, projectRoot));
+  g.register(makeSearchTestsTool(tenant.indexService, projectRoot));
+  g.register(makeProjectOutlineTool(tenant.indexService, projectRoot));
   g.register(makeListSymbolsTool(projectRoot));
+  tenant.indexService.bindProject(projectRoot);
   g.register(makeWriteFileTool(projectRoot));
   g.register(makeEditFileTool(projectRoot));
   g.register(makeMoveFileTool(projectRoot));

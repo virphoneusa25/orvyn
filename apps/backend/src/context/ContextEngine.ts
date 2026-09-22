@@ -42,7 +42,10 @@ export class ContextEngine {
 
     try {
       for (const kw of keywordsOf(taskDescription)) {
-        const hits = await this.tools.execute("search_code", { pattern: kw, max_results: 8 }, "orchestrator");
+        let hits = await this.tools.execute("search_codebase", { query: kw, limit: 6 }, "orchestrator").catch(() => ({ ok: false, output: "" }));
+        if (!hits.ok || !hits.output || /no matches/i.test(hits.output)) {
+          hits = await this.tools.execute("search_code", { pattern: kw, max_results: 8 }, "orchestrator");
+        }
         if (hits.ok && hits.output && !/no matches/i.test(hits.output)) {
           parts.push(`Code hits for "${kw}":\n${hits.output.split("\n").slice(0, 8).join("\n")}`);
         }

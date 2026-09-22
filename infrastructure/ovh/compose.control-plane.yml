@@ -72,7 +72,7 @@ services:
         max-file: "3"
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.13.6
     restart: always
     # INTERNAL ONLY — no public ports
     expose:
@@ -83,11 +83,14 @@ services:
     environment:
       # Bounded memory for the vector index
       - QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=2
+    # Official image has no curl. /readyz is checked by the backend probe;
+    # Docker only needs the HTTP port to accept a TCP connection.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 8
+      start_period: 20s
     logging:
       driver: json-file
       options:

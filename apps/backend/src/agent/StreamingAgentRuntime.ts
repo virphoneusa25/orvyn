@@ -309,7 +309,9 @@ export class StreamingAgentRuntime {
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
           `Project root (absolute): ${projectRoot}`,
-          "File tools take paths relative to the project root. Start vague tasks with list_directory on \".\".",
+          "File tools take paths relative to the project root.",
+          "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
+          "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
             LANGUAGE_RULE,
           rules ? `\nProject rules:\n${rules}` : "",
@@ -455,10 +457,24 @@ export class StreamingAgentRuntime {
   }
 
   private async relevantCode(instruction: string): Promise<string> {
-    if (!this.indexService || this.indexService.getStats().status !== "ready") return "";
+    if (!this.indexService) return "";
+    const status = this.indexService.getStats().status;
+    if (status !== "ready" && status !== "stale" && status !== "degraded") return "";
     try {
-      const hits = await this.indexService.search(instruction, 6);
-      return hits.map((h) => `- ${h.path}:${h.startLine}-${h.endLine}\n${h.snippet}`).join("\n\n").slice(0, 9000);
+      const hits = await this.indexService.searchHybrid(instruction, 8).catch(() => this.indexService!.search(instruction, 6));
+      const perFile = new Map<string, number>();
+      const picked = [];
+      for (const h of hits) {
+        const n = perFile.get(h.path) ?? 0;
+        if (n >= 2) continue;
+        perFile.set(h.path, n + 1);
+        picked.push(h);
+        if (picked.length >= 8) break;
+      }
+      return picked
+        .map((h) => `- ${h.path}:${h.startLine}-${h.endLine}${h.symbol ? " " + h.symbol : ""}\n${h.snippet}`)
+        .join("\n\n")
+        .slice(0, 6000);
     } catch { return ""; }
   }
 

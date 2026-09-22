@@ -41,7 +41,9 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   Anthropic/Google are typed Pending adapters, never faked.
 - **IDE** — Electron (hardened: contextIsolation, sandbox, no Node in
   renderer), Monaco editor, tabs, explorer, Ctrl+P/Ctrl+K, inline edit,
-  streaming chat with natural-language image generation, RAG index.
+  streaming chat with natural-language image generation, Qdrant-backed
+  hybrid project intelligence (structural chunks, tenant-scoped vectors,
+  incremental reindex). See `docs/PROJECT_INTELLIGENCE.md`.
 - **Intelligence UI** — right pane Chat / Plan / Build / Review; Mission
   Control (agent roster + live task graphs); Agent Activity bottom panel;
   Source Control panel with git + checkpoint restore/compare.
@@ -95,8 +97,8 @@ the mission completes with an approved review.
 - Organizations/RBAC, email verification, OAuth, billing (per-user
   accounts with isolated tenants ARE implemented — Settings → Account)
 - Cloud tier: job queue, isolated Docker workers, WebSocket fanout
-- Tree-sitter/LSP code intelligence (`list_symbols` is regex v1;
-  `find_references` pending)
+- Tree-sitter/LSP (`list_symbols` is regex v1; `find_references` pending).
+  Hybrid search + structural symbol chunking are implemented.
 
 Pending features are visible as **Pending** in the UI with the reason —
 nothing is faked.

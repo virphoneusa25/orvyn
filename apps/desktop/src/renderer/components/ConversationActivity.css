@@ -37,5 +37,15 @@
 .activity-item { background: transparent; border: none; border-radius: 5px; padding: 6px 0; }
 .activity-command { margin: 4px 0 0 26px; padding: 0; background: transparent; color: var(--text-secondary); max-height: 78px; }
 .activity-detail { margin-left: 26px; }
-.conversation-reply { font-size: 14px; line-height: 1.75; margin: 20px 0 14px; }
+.conversation-reply { font-size: 15px; line-height: 1.65; margin: 20px 0 14px; }
 .activity-output { border: 1px solid var(--border); }
+.stream-explore { margin: 8px 0; border-left: none; padding-left: 0; }
+.stream-explore summary { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.stream-explore-title { color: var(--text-secondary); font-weight: 500; }
+.stream-thought { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 13px; color: var(--text-muted); }
+.stream-thought-label { font-weight: 500; }
+.user-pill { max-width: 78%; background: rgba(255,255,255,0.04); border: 1px solid var(--orvyn-border-soft, var(--border)); border-radius: 14px; padding: 7px 12px; font-size: 13.5px; line-height: 1.5; color: var(--orvyn-text, var(--text)); white-space: pre-wrap; }
+.activity-item.activity-edit strong { color: var(--text); }
+.activity-done .activity-target strong { color: var(--text); }
+.edit-plus { color: #3fb950; }
+.edit-minus { color: #f85149; }

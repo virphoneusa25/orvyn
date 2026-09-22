@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
 import { workerStats } from "./routes/worker";
+import { probeQdrant } from "./indexing/qdrantHealth";
 import { authRouter } from "./routes/auth";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
@@ -68,12 +69,30 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
   const ws = workerStats();
   checks.workers = { healthy: true, detail: `${ws.online}/${ws.total} online` };
 
+  const qdrant = await probeQdrant();
+  if (qdrant.status === "not_configured") {
+    checks.qdrant = { healthy: true, detail: "not configured (local mode)" };
+  } else {
+    checks.qdrant = {
+      healthy: qdrant.status === "healthy",
+      detail: qdrant.status === "healthy"
+        ? `${qdrant.version ?? "qdrant"} collections=${qdrant.collections ?? 0}`
+        : qdrant.detail ?? "unreachable",
+    };
+  }
+
   const allHealthy = Object.values(checks).every((c) => c.healthy);
   res.status(allHealthy ? 200 : 503).json({
     status: allHealthy ? "ok" : "degraded",
     service: "orvyn-backend",
     version: "0.2.0",
     checks,
+    qdrant: {
+      status: qdrant.status === "not_configured" ? "not_configured" : qdrant.status,
+      version: qdrant.version,
+      reachable: qdrant.reachable,
+      collections: qdrant.collections,
+    },
     timestamp: new Date().toISOString(),
   });
 });

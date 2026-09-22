@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
 
 interface IndexStats {
-  status: "idle" | "indexing" | "ready" | "error";
+  status: "idle" | "indexing" | "ready" | "error" | "stale" | "degraded";
   filesIndexed: number;
   chunksIndexed: number;
   tookMs?: number;
@@ -10,6 +10,10 @@ interface IndexStats {
   error?: string;
   watching?: boolean;
   embedder?: string;
+  embeddingModel?: string;
+  indexVersion?: string;
+  revision?: string;
+  projectId?: string;
 }
 
 interface SearchHit {
@@ -18,6 +22,8 @@ interface SearchHit {
   endLine: number;
   snippet: string;
   score: number;
+  symbol?: string;
+  matchedBy?: string[];
 }
 
 
@@ -51,10 +57,16 @@ export function SearchPanel({
       const res = await fetch(apiUrl("/index/build"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ projectRoot: workspaceRoot }),
+        body: JSON.stringify({ projectRoot: workspaceRoot, background: true }),
       });
       const data = await res.json();
       setStats(data.stats);
+      const poll = window.setInterval(async () => {
+        const s = await fetch(apiUrl("/index/status"), { headers: authHeaders() });
+        const body = await s.json();
+        setStats(body.stats);
+        if (body.stats?.status && body.stats.status !== "indexing") window.clearInterval(poll);
+      }, 800);
     } finally {
       setBuilding(false);
     }
@@ -64,10 +76,10 @@ export function SearchPanel({
     if (!query.trim()) return;
     setSearching(true);
     try {
-      const res = await fetch(apiUrl("/search/semantic"), {
+      const res = await fetch(apiUrl("/search/hybrid"), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ query, topK: 8 }),
+        body: JSON.stringify({ query, topK: 8, projectRoot: workspaceRoot }),
       });
       const data = await res.json();
       setHits(data.hits ?? []);
@@ -94,7 +106,8 @@ export function SearchPanel({
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 12 }}>
         <span>
           Index: <strong>{stats?.status ?? "idle"}</strong>
-          {stats?.status === "ready" && ` · ${stats.filesIndexed} files · ${stats.chunksIndexed} chunks · ${stats.tookMs}ms${stats.watching ? " · watching" : ""}`}
+          {(stats?.status === "ready" || stats?.status === "stale" || stats?.status === "degraded") &&
+            ` · ${stats.filesIndexed} files · ${stats.chunksIndexed} chunks${stats.embeddingModel ? ` · ${stats.embeddingModel}` : ""}${stats.revision ? ` · ${String(stats.revision).slice(0, 8)}` : ""}${stats.lastIndexedAt ? ` · ${new Date(stats.lastIndexedAt).toLocaleString()}` : ""}`}
           {stats?.status === "error" && ` · ${stats.error}`}
         </span>
         <button onClick={handleBuild} disabled={building} style={btnGhost()}>
@@ -110,7 +123,7 @@ export function SearchPanel({
           placeholder="Search the codebase…"
           style={{ flex: 1, background: "#0f1420", border: "1px solid #1c2330", borderRadius: 6, color: "#e6e9f0", padding: "6px 10px", fontSize: 13 }}
         />
-        <button onClick={handleSearch} disabled={searching || stats?.status !== "ready"} style={{ background: "#3b5bfd", border: "none", borderRadius: 6, color: "white", padding: "6px 14px", cursor: "pointer" }}>
+        <button onClick={handleSearch} disabled={searching || !stats || stats.status === "idle" || stats.status === "indexing"} style={{ background: "#3b5bfd", border: "none", borderRadius: 6, color: "white", padding: "6px 14px", cursor: "pointer" }}>
           {searching ? "Searching…" : "Search"}
         </button>
       </div>
@@ -118,7 +131,7 @@ export function SearchPanel({
       {hits.map((hit, i) => (
         <div key={i} style={{ border: "1px solid #1c2330", borderRadius: 8, padding: 10, marginBottom: 10 }}>
           <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>
-            {hit.path}:{hit.startLine}-{hit.endLine} · score {hit.score.toFixed(3)}
+            {hit.path}:{hit.startLine}-{hit.endLine}{hit.symbol ? ` · ${hit.symbol}` : ""} · score {hit.score.toFixed(3)}{hit.matchedBy?.length ? ` · ${hit.matchedBy.join(", ")}` : ""}
           </div>
           <pre style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap", fontFamily: "monospace" }}>{hit.snippet}</pre>
         </div>
