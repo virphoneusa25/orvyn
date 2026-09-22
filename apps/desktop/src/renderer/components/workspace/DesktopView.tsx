@@ -84,11 +84,15 @@ export function DesktopView({
     }
     setInterrupted(false);
     const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    setFrame((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return url;
+    if (blob.type && !blob.type.startsWith("image/")) return; // auth error body, not a frame
+    // Data URLs work universally in <img> tags — blob:file:// URLs can
+    // fail to load in Electron's file:// origin depending on webSecurity.
+    const reader = new FileReader();
+    const dataUrl = await new Promise<string>((resolve) => {
+      reader.onloadend = () => resolve(String(reader.result));
+      reader.readAsDataURL(blob);
     });
+    setFrame(dataUrl);
   }
 
   useEffect(() => {
