@@ -21,3 +21,4 @@ _zip_*/
 _vp_*.py
 
 apps/desktop/resources/backend/
+.orvyn-test-account.txt

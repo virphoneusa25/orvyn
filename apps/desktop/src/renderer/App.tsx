@@ -32,6 +32,7 @@ import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat, openChatSession, initChatHistory } from "./chatSession";
+import { pickReattachRun } from "./appReattach";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
 import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
@@ -186,6 +187,26 @@ export function App() {
     const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => { noteProtectedStatus(r.status, apiUrl("/missions")); return r.ok ? r.json() : Promise.reject(); }).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));
     void load(); const t = setInterval(load, 5000); return () => clearInterval(t);
   }, [workspaceRoot]);
+
+  // Restart reattachment: if the backend still has a run in flight (cloud or
+  // local), reopen its Active Workspace after startup so a restart never
+  // orphans live work. The attach path replays missed events by sequence.
+  // Runs once per app launch, after the session/connection has settled.
+  const reattachTried = useRef(false);
+  useEffect(() => {
+    if (reattachTried.current) return;
+    const t = setTimeout(() => {
+      reattachTried.current = true;
+      fetch(apiUrl("/agent/stream/runs"), { headers: authHeaders() })
+        .then((r) => (r.ok ? r.json() : { runs: [] }))
+        .then((d) => {
+          const reattach = pickReattachRun(d.runs ?? []);
+          if (reattach) document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: reattach }));
+        })
+        .catch(() => { /* offline/local-only: nothing to reattach */ });
+    }, 5000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Home's "View All"/"Manage" links navigate via custom events.
   useEffect(() => {
