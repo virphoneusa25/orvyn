@@ -77,6 +77,9 @@ interface RunState {
   execution?: ExecutionSpec;
   /** Local tools replaced by remote variants for this run (restored on settle). */
   replacedTools?: AITool[];
+  /** Permission snapshot taken when remote variants mounted — restored on
+   *  settle so per-run denials never leak into later local runs. */
+  savedPermissions?: Map<string, "allowed" | "ask" | "denied">;
   /** The run's mode — needed to restore the permission profile after a
    *  remote run puts its tool variants back. */
   mode: AgentMode;
@@ -355,11 +358,25 @@ export class StreamingAgentRuntime {
       "terminal", "run_command", "run_tests", "run_typecheck",
     ]);
     state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
+    state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));
     registerRemoteTools(this.tools, toolRpc, runId);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(this.tools.registry, state.mode);
     this.tools.applyProfile();
+    // NO SILENT LOCAL EXECUTION: tools with no remote variant that touch
+    // machine state (processes, git, the local FS) are flatly denied for
+    // forced-remote runs — otherwise the model could unknowingly mutate the
+    // CONTROL PLANE while believing it works on the mission container.
+    // Pure info-plane tools (web search, fetch, MCP listing) stay available.
+    const localOnlyStateful = new Set([
+      "start_process", "stop_process", "read_process_logs", "list_processes",
+      "git_status", "git_diff", "git_commit", "git_log", "git_branch", "git_checkout",
+      "delete_file", "move_file", "create_document", "ssh_exec", "generate_image",
+    ]);
+    for (const t of this.tools.list()) {
+      if (localOnlyStateful.has(t.name)) this.tools.setPermission(t.name, "denied");
+    }
   }
 
   /** Restores local tools and drops the run's Tool RPC state. */
@@ -371,6 +388,12 @@ export class StreamingAgentRuntime {
       state.replacedTools = undefined;
       applyMode(this.tools.registry, state.mode);
       this.tools.applyProfile();
+    }
+    // Per-run denials of local-only tools are undone exactly — a snapshot
+    // restore, so a remote run never constrains the next local run.
+    if (state?.savedPermissions) {
+      for (const [name, permission] of state.savedPermissions) this.tools.setPermission(name, permission);
+      state.savedPermissions = undefined;
     }
   }
 

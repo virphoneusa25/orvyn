@@ -20,11 +20,17 @@ if (!KEY || !runId) {
   process.exit(1);
 }
 
+// Seed only NON-approval events: a pending approval found in the log was
+// never resolved — skipping it would strand the run. Re-approving an
+// already-resolved call is a harmless no-op, so approvals always re-fire.
 const seen = new Set();
 if (existsSync(LOG)) {
   for (const l of readFileSync(LOG, "utf8").split("\n")) {
     if (!l.trim()) continue;
-    try { seen.add(JSON.parse(l).id); } catch {}
+    try {
+      const e = JSON.parse(l);
+      if (e.type !== "approval.required") seen.add(e.id);
+    } catch {}
   }
 }
 
