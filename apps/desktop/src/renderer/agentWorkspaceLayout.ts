@@ -28,11 +28,24 @@ export function inspectorPlacement(
 }
 
 export function isMeaningfulInspectorActivity(activity: WorkspaceActivity | null | undefined): boolean {
-  if (!activity) return false;
+  if (!activity || activity.openInspector === false) return false;
   if (activity.inspector === "diff" && activity.priority >= 70) return true;
-  if (activity.inspector === "review") return true;
+  if (activity.inspector === "review" && activity.openInspector === true) return true;
   if (activity.inspector === "terminal" && activity.priority >= 70) return true;
   return false;
+}
+
+export function inspectorOpenForRun(input: {
+  runStatus: string;
+  rightPanelOpen: boolean;
+  inspectorPinned: boolean;
+  inspectorOpen: boolean;
+  explicitContext?: boolean;
+}): boolean {
+  if (!input.rightPanelOpen) return false;
+  if (input.inspectorPinned || input.explicitContext) return true;
+  if (/awaiting[_-]?approval/i.test(input.runStatus)) return false;
+  return input.inspectorOpen;
 }
 
 export function surfacePrefersClosedInspector(surface: SurfaceTab | string | undefined): boolean {

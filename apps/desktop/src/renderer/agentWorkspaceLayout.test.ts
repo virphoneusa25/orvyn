@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   countRightColumns,
   decideInspectorFollow,
+  inspectorOpenForRun,
   inspectorPlacement,
   isMeaningfulInspectorActivity,
   surfacePrefersClosedInspector,
@@ -108,6 +109,38 @@ test("pinned Inspector stays open on preview", () => {
     surfaceId: "preview",
   });
   assert.equal(next.inspectorOpen, true);
+});
+
+test("awaiting approval does not open Review Inspector", () => {
+  const approval = { line: "Waiting for approval · terminal", priority: 100, surface: "changes" as const, inspector: "files" as const, openInspector: false as const };
+  assert.equal(isMeaningfulInspectorActivity(approval), false);
+  const next = decideInspectorFollow({
+    pinned: false,
+    inspectorOpen: false,
+    dismissed: false,
+    activity: approval,
+    surfaceId: "changes",
+  });
+  assert.equal(next.inspectorOpen, false);
+  assert.equal(
+    inspectorOpenForRun({
+      runStatus: "awaiting_approval",
+      rightPanelOpen: true,
+      inspectorPinned: false,
+      inspectorOpen: false,
+    }),
+    false
+  );
+  assert.equal(
+    inspectorOpenForRun({
+      runStatus: "awaiting_approval",
+      rightPanelOpen: true,
+      inspectorPinned: false,
+      inspectorOpen: false,
+      explicitContext: true,
+    }),
+    true
+  );
 });
 
 test("narrow windows overlay Inspector instead of crushing chat", () => {

@@ -50,6 +50,8 @@ export interface WorkspaceActivity {
   inspector: InspectorTab;
   previewUrl?: string;
   file?: string;
+  /** When false, Follow ORION updates the activity line only — Inspector stays closed. */
+  openInspector?: boolean;
 }
 
 export interface AgentWorkspaceDerived {
@@ -163,7 +165,7 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   const data = e.data ?? {};
   const tool = String(data.tool ?? "");
   if (type === "approval.required") {
-    return { line: `Waiting for approval · ${tool || "tool"}`, priority: 100, surface: "changes", inspector: "review" };
+    return { line: `Waiting for approval · ${tool || "tool"}`, priority: 100, surface: "changes", inspector: "files", openInspector: false };
   }
   if (type.startsWith("browser.") || tool.startsWith("browser_")) {
     const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
@@ -195,7 +197,8 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
     return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, surface: "preview", inspector: "files", previewUrl: url || undefined };
   }
   if (type.startsWith("review.") || type === "run.completed" || type === "mission.completed") {
-    return { line: "Reviewing work", priority: 55, surface: "changes", inspector: "review" };
+    const complete = type === "review.passed" || type === "review.approved" || type === "run.completed" || type === "mission.completed";
+    return { line: complete ? "Review ready" : "Review in progress", priority: 55, surface: "changes", inspector: "review", openInspector: complete };
   }
   if (type === "file.read") {
     const path = filePath(data);

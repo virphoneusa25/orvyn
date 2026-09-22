@@ -86,6 +86,8 @@ test("event routing maps file/browser/terminal/review with priorities", () => {
 
   const approval = routeEvent(ev("approval.required", { tool: "terminal" }));
   assert.equal(approval?.priority, 100);
+  assert.equal(approval?.openInspector, false);
+  assert.equal(approval?.inspector, "files");
 });
 
 test("debounce and priority stop tab thrash on tiny events", () => {
@@ -126,7 +128,7 @@ test("derive aggregates files, diffs, previews, cursor, and artifacts", () => {
   assert.equal(ws.artifacts.some((a) => a.path === "report.md"), true);
   assert.equal(ws.waitingApproval, true);
   assert.equal(ws.suggestedSurface, "changes");
-  assert.equal(ws.suggestedInspector, "review");
+  assert.notEqual(ws.suggestedInspector, "review");
 });
 
 test("follow ORION default on, manual override pauses, resume restores", () => {

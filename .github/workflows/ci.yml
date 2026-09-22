@@ -44,8 +44,8 @@ jobs:
 
   windows-installer:
     name: Windows installer artifact
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    runs-on: windows-latest
+    timeout-minutes: 60
     if: github.event_name == 'push'
     steps:
       - name: Checkout
@@ -60,16 +60,42 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Short SHA
+        shell: pwsh
+        run: |
+          $sha = $env:GITHUB_SHA
+          "SHORT_SHA=$($sha.Substring(0,7))" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Packaging desktop SHA $sha"
+
       - name: Build Windows installer
         env:
           GITHUB_SHA: ${{ github.sha }}
+          ORVYN_BUILD_SHA: ${{ github.sha }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run dist:win -w @orvyn/desktop
+
+      - name: List packaging output
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE "apps/desktop/release"
+          if (-not (Test-Path $root)) { throw "electron-builder output directory missing: $root" }
+          Get-ChildItem -Recurse $root | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+
+      - name: Verify Windows installer exists
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE "apps/desktop/release"
+          $files = @(Get-ChildItem -Path $root -Filter *.exe -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) { throw "No Windows installer generated in apps/desktop/release" }
+          foreach ($f in $files) { Write-Host ("FOUND {0} {1} bytes" -f $f.Name, $f.Length) }
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: orvyn-windows-${{ github.sha }}
+          name: orvyn-windows-${{ env.SHORT_SHA }}
           path: |
             apps/desktop/release/*.exe
             apps/desktop/release/*.yml
-          if-no-files-found: warn
+            apps/desktop/release/*.blockmap
+          if-no-files-found: error
+          retention-days: 14

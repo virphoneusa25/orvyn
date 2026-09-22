@@ -18,6 +18,7 @@ import {
 import {
   countRightColumns,
   decideInspectorFollow,
+  inspectorOpenForRun,
   inspectorPlacement,
 } from "../../agentWorkspaceLayout";
 import {
@@ -100,14 +101,20 @@ export function AgentWorkspace({
       activity: derived.activity,
       surfaceId: nextSurface,
     });
+    const allowInspector = inspectorOpenForRun({
+      runStatus,
+      rightPanelOpen: true,
+      inspectorPinned: layout.inspectorPinned,
+      inspectorOpen: decision.inspectorOpen,
+    });
     const patch: Partial<DesktopLayoutState> = {};
     if (nextSurface && nextSurface !== surfaceTab) patch.surfaceTab = nextSurface;
-    if (decision.inspectorTab && decision.inspectorTab !== inspectorTab) patch.inspectorTab = decision.inspectorTab;
-    if (decision.inspectorOpen !== layout.inspectorOpen) patch.inspectorOpen = decision.inspectorOpen;
+    if (decision.inspectorTab && decision.inspectorTab !== inspectorTab && allowInspector) patch.inspectorTab = decision.inspectorTab;
+    if (allowInspector !== layout.inspectorOpen) patch.inspectorOpen = allowInspector;
     if (derived.activity?.file) setSelectedDiff(derived.activity.file);
     setDismissed(decision.dismissed);
     if (Object.keys(patch).length) onLayout(patch);
-  }, [derived.activity, visiblePreviews.length, follow, layout.inspectorPinned, dismissed]);
+  }, [derived.activity, visiblePreviews.length, follow, layout.inspectorPinned, dismissed, runStatus]);
 
   useEffect(() => {
     const onCtxTab = (e: Event) => {
