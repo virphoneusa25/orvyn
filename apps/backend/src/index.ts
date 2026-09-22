@@ -4,6 +4,7 @@ import cors from "cors";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
+import { workerStats } from "./routes/worker";
 import { authRouter } from "./routes/auth";
 import { resolveTenant, resolveTenantFromToken } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
@@ -62,8 +63,10 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     checks.redis = { healthy: true, detail: "not configured (local mode)" };
   }
 
-  // Worker count (0 is valid — workers are Phase 4)
-  checks.workers = { healthy: true, detail: "0 workers (Phase 4)" };
+  // Workers — the real registry count (0 registered is healthy but reported
+  // honestly; forced-remote runs are refused while 0 are online).
+  const ws = workerStats();
+  checks.workers = { healthy: true, detail: `${ws.online}/${ws.total} online` };
 
   const allHealthy = Object.values(checks).every((c) => c.healthy);
   res.status(allHealthy ? 200 : 503).json({

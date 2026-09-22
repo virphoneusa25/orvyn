@@ -46,11 +46,17 @@ const jobQueue: PendingJob[] = [];
 
 /** True when at least one worker has heartbeated within the stale window. */
 export function hasOnlineWorker(): boolean {
+  return workerStats().online > 0;
+}
+
+/** Real worker registry stats for health reporting — never a stub count. */
+export function workerStats(): { online: number; total: number } {
   const cutoff = Date.now() - 45_000;
+  let online = 0;
   for (const w of workers.values()) {
-    if (w.status !== "offline" && w.lastHeartbeat >= cutoff) return true;
+    if (w.status !== "offline" && w.lastHeartbeat >= cutoff) online++;
   }
-  return false;
+  return { online, total: workers.size };
 }
 
 /**
