@@ -38,6 +38,21 @@ interface BrowserSession {
 // or when the owning run completes (closeBrowserSession).
 const sessions = new Map<string, BrowserSession>();
 
+export function getBrowserSession(projectRoot: string): BrowserSession | undefined {
+  return sessions.get(projectRoot);
+}
+
+export async function ensureBrowserSession(projectRoot: string): Promise<BrowserSession> {
+  return sessions.get(projectRoot) ?? openSession(projectRoot);
+}
+
+export async function captureBrowserFrame(projectRoot: string): Promise<{ jpeg: Buffer; url: string } | null> {
+  const s = sessions.get(projectRoot);
+  if (!s) return null;
+  const jpeg = Buffer.from(await s.page.screenshot({ type: "jpeg", quality: 62 }));
+  return { jpeg, url: String(s.page.url()) };
+}
+
 /** Closes the browser session for a project — called on run completion. */
 export function closeBrowserSession(projectRoot: string): void {
   const s = sessions.get(projectRoot);

@@ -133,6 +133,15 @@ const SERIAL_ONLY_TOOLS = new Set([
   "browser_click",
   "browser_type",
   "browser_screenshot",
+  "desktop_start",
+  "desktop_open_url",
+  "desktop_click",
+  "desktop_type",
+  "desktop_scroll",
+  "desktop_key",
+  "desktop_screenshot",
+  "desktop_wait",
+  "desktop_stop",
 ]);
 
 /** Compact MCP capability summary — one line per connected server, so

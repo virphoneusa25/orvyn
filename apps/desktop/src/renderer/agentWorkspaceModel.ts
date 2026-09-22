@@ -214,6 +214,23 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
       previewUrl: url || undefined,
     };
   }
+  if (type.startsWith("desktop.") || tool.startsWith("desktop_")) {
+    const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
+    const complete = type === "desktop.completed" || type === "desktop.failed" || tool === "desktop_stop";
+    const line =
+      type === "desktop.failed" ? "Desktop failed" :
+      tool === "desktop_click" ? `Desktop click ${String(data.target ?? data.selector ?? "")}`.trim() :
+      tool === "desktop_type" ? "Desktop typing" :
+      tool === "desktop_scroll" ? "Desktop scrolling" :
+      url ? `Desktop ${url}` : "Desktop session";
+    return {
+      line,
+      priority: 82,
+      tab: "desktop",
+      previewUrl: url || undefined,
+      switchTab: !complete || type === "desktop.failed",
+    };
+  }
   if (type === "file.edit") {
     const path = filePath(data);
     return { line: path ? `Editing ${path}` : "Editing files", priority: 70, tab: "diff", file: path || undefined };

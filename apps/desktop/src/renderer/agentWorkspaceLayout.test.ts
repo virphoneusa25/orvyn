@@ -132,18 +132,32 @@ test("narrow windows overlay the one panel instead of adding a column", () => {
   assert.equal(countRightColumns({ rightPanelOpen: true }), 1);
 });
 
-test("DOM contract: one agent-workspace, one tab bar, no inspector-panel", () => {
-  const html = `<aside data-testid="agent-workspace" data-right-columns="1"><nav data-testid="agent-workspace-tabbar"></nav></aside>`;
+test("DOM contract: one agent-workbench, one tab bar, no inspector-panel", () => {
+  const html = `<aside data-testid="agent-workbench" data-right-columns="1"><nav data-testid="agent-workbench-tabbar"></nav></aside>`;
   const contract = workspaceMarkupContract(html);
   assert.equal(contract.workspaces, 1);
   assert.equal(contract.tabbars, 1);
   assert.equal(contract.inspectors, 0);
   const twoPane = workspaceMarkupContract(
-    `<div data-testid="agent-workspace"></div><div data-testid="inspector-panel"></div>`
+    `<div data-testid="agent-workbench"></div><div data-testid="inspector-panel"></div>`
   );
   assert.equal(twoPane.workspaces, 1);
   assert.equal(twoPane.inspectors, 1);
   assert.notEqual(twoPane.inspectors, 0);
+});
+
+test("desktop events switch the same Workbench tab", () => {
+  const next = nextWorkspaceLayout(
+    { open: true, width: 650, activeTab: "changes", followOrion: true },
+    routeEvent(ev("desktop.ready", { url: "http://127.0.0.1:43191" }))
+  );
+  assert.equal(next.activeTab, "desktop");
+  assert.equal(next.columns, 1);
+  const paused = nextWorkspaceLayout(
+    { open: true, width: 650, activeTab: "browser", followOrion: true, followPaused: true },
+    routeEvent(ev("tool.started", { tool: "desktop_click" }))
+  );
+  assert.equal(paused.activeTab, "browser");
 });
 
 test("layout snapshot exposes a single AgentWorkspaceLayout", () => {

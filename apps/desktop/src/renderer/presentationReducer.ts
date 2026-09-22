@@ -53,7 +53,7 @@ export interface ToolItem {
   seq: number;
   ts: number;
   /** Which right-panel tab the row opens on click, if any. */
-  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents";
+  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
 }
 
 export interface GroupItem {
@@ -76,7 +76,7 @@ export interface WorkGroupItem {
   status: "running" | "done" | "warning" | "failed";
   durationMs?: number;
   items: ToolItem[];
-  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents";
+  ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
 }
 
 export interface AssistantItem {
@@ -197,6 +197,9 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "git_commit":
       return { op: "git", label: "git commit", ctx: "files" };
     default:
+      if (name.startsWith("desktop_")) {
+        return { op: "browser", label: String(args?.url ?? name.replace(/^desktop_/, "desktop ")), ctx: "desktop" };
+      }
       return name.startsWith("browser_")
         ? { op: "browser", label: String(args?.url ?? name.replace(/^browser_/, "")), ctx: "browser" }
         : { op: "other", label: name.replace(/_/g, " ") };

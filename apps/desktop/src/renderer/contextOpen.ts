@@ -1,11 +1,10 @@
 // apps/desktop/src/renderer/contextOpen.ts
 //
-// THE one controller for opening run artifacts in the right context panel
-// (spec Part I). Every clickable row — tool rows, work groups, file chips —
-// goes through openArtifactInContext(); the ContextPanel is the only
-// listener. No component resolves files its own way.
+// THE one controller for opening run artifacts in the Workbench.
+// Every clickable row — tool rows, work groups, file chips — goes through
+// openArtifactInContext(). AgentWorkspace is the listener.
 
-export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review" | "documents";
+export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
 
 export interface ArtifactTarget {
   tab: ContextTab;

@@ -113,6 +113,7 @@ export function FilesInspector({
                     onClick={() => {
                       setSelected(f.path);
                       if (f.kind === "artifact") onPreviewArtifact?.(f.path);
+                      else onOpenFile(f.path);
                     }}
                     style={{
                       width: "100%",

@@ -88,6 +88,12 @@ test("event routing maps file/browser/terminal/review onto one tab", () => {
   assert.equal(approval?.priority, 100);
   assert.equal(approval?.switchTab, false);
   assert.notEqual(approval?.tab, "review");
+
+  const desk = routeEvent(ev("tool.started", { tool: "desktop_start", url: "http://127.0.0.1:43191" }));
+  assert.equal(desk?.tab, "desktop");
+  assert.equal(desk?.switchTab, true);
+  const deskStop = routeEvent(ev("desktop.completed"));
+  assert.equal(deskStop?.tab, "desktop");
 });
 
 test("debounce and priority stop tab thrash on tiny events", () => {

@@ -8,11 +8,13 @@ export function ReviewInspector({
   summary,
   onOpenDiff,
   onOpenTerminal,
+  onOpenArtifact,
 }: {
   runId?: string;
   summary: ReviewSummary;
   onOpenDiff: () => void;
   onOpenTerminal: () => void;
+  onOpenArtifact?: () => void;
 }) {
   const empty = !summary.completed && summary.filesChanged === 0 && summary.testsPassed === 0 && summary.artifacts === 0;
   return (
@@ -40,7 +42,11 @@ export function ReviewInspector({
             </button>
           )}
           {summary.warnings > 0 && <div style={{ fontSize: 12, color: "var(--orvyn-yellow)" }}>⚠ {summary.warnings} warning{summary.warnings === 1 ? "" : "s"}</div>}
-          {summary.artifacts > 0 && <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)" }}>{summary.artifacts} artifact{summary.artifacts === 1 ? "" : "s"}</div>}
+          {summary.artifacts > 0 && (
+            <button onClick={onOpenArtifact} style={linkRow()}>
+              {summary.artifacts} artifact{summary.artifacts === 1 ? "" : "s"}
+            </button>
+          )}
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>

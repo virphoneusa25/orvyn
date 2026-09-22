@@ -66,6 +66,14 @@ const READ_ONLY: Record<string, ToolPermission> = {
   browser_type: "denied",
   browser_screenshot: "denied",
   browser_console_errors: "denied",
+  desktop_start: "denied",
+  desktop_open_url: "denied",
+  desktop_click: "denied",
+  desktop_type: "denied",
+  desktop_scroll: "denied",
+  desktop_key: "denied",
+  desktop_screenshot: "denied",
+  desktop_stop: "denied",
 };
 
 // Full-access profile shared by Agent and Multitask: reads are free, anything
@@ -117,6 +125,15 @@ const FULL_WITH_APPROVAL: Record<string, ToolPermission> = {
   browser_screenshot: "ask",
   // Read-only report of already-collected errors — safe to auto-run.
   browser_console_errors: "allowed",
+  desktop_start: "ask",
+  desktop_open_url: "ask",
+  desktop_click: "ask",
+  desktop_type: "ask",
+  desktop_scroll: "ask",
+  desktop_key: "ask",
+  desktop_screenshot: "ask",
+  desktop_wait: "allowed",
+  desktop_stop: "ask",
 };
 
 export const MODES: Record<AgentMode, ModeDefinition> = {

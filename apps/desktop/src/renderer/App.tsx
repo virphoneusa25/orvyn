@@ -849,13 +849,13 @@ export function App() {
         )}
         </div>
 
-        {/* RIGHT: one Agent Workspace. Never a second Inspector column. */}
+        {/* RIGHT: one Workbench. Never a second Inspector column. */}
         <div
           className="orvyn-right-panel"
           data-placement={overlayAgentPanel ? "overlay" : showRightChrome ? "dock" : "hidden"}
           style={{
             minWidth: showRightChrome && !overlayAgentPanel ? AGENT_PANEL_MIN : 0,
-            maxWidth: showRightChrome ? "70vw" : 0,
+            maxWidth: showRightChrome ? "75vw" : 0,
             opacity: showRightChrome ? 1 : 0,
             overflow: "hidden",
             display: showRightChrome ? "flex" : "none",

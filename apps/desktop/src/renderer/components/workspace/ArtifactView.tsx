@@ -1,9 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
 export function ArtifactView({
   name,
-  content,
+  content: provided,
 }: {
   name: string;
   content?: string | null;
@@ -13,6 +13,30 @@ export function ArtifactView({
   const isHtml = ext === "html" || ext === "htm";
   const isImage = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
   const [mode, setMode] = useState<"render" | "raw">(isHtml || isMd || isImage ? "render" : "raw");
+  const [fit, setFit] = useState(true);
+  const [loaded, setLoaded] = useState<string | null>(provided ?? null);
+
+  useEffect(() => {
+    if (provided) {
+      setLoaded(provided);
+      return;
+    }
+    if (!name || !window.orvyn?.project?.readFile) return;
+    let cancelled = false;
+    void window.orvyn.project.readFile(name).then(
+      (text) => {
+        if (!cancelled) setLoaded(text);
+      },
+      () => {
+        if (!cancelled) setLoaded(null);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [name, provided]);
+
+  const content = loaded;
 
   if (!name) {
     return (
@@ -32,10 +56,15 @@ export function ArtifactView({
             {mode === "raw" ? (isMd ? "Rendered" : "Preview") : isMd ? "Raw" : "Source"}
           </button>
         )}
+        {isImage && (
+          <button style={ghostBtn()} onClick={() => setFit((v) => !v)}>
+            {fit ? "100%" : "Fit"}
+          </button>
+        )}
       </div>
       {isImage && content ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 16 }}>
-          <img src={content} alt={name} style={{ maxWidth: "100%", maxHeight: "100%" }} />
+          <img src={content} alt={name} style={fit ? { maxWidth: "100%", maxHeight: "100%" } : { transform: "scale(1.4)", transformOrigin: "center" }} />
         </div>
       ) : mode === "render" && isHtml && content ? (
         <iframe title={name} sandbox="allow-scripts" srcDoc={content} style={{ flex: 1, border: "none", background: "#fff" }} />

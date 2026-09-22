@@ -7,8 +7,8 @@ import type { AgentWorkspaceTab, WorkspaceActivity } from "./agentWorkspaceModel
 import type { AgentWorkspaceLayout, DesktopLayoutState } from "./desktopLayout.ts";
 import { AGENT_PANEL_DEFAULT, AGENT_PANEL_MIN, CHAT_MIN, SIDEBAR_WIDTH } from "./desktopLayout.ts";
 
-export const AGENT_WORKSPACE_TEST_ID = "agent-workspace";
-export const AGENT_WORKSPACE_TABBAR_TEST_ID = "agent-workspace-tabbar";
+export const AGENT_WORKSPACE_TEST_ID = "agent-workbench";
+export const AGENT_WORKSPACE_TABBAR_TEST_ID = "agent-workbench-tabbar";
 export const INSPECTOR_PANEL_TEST_ID = "inspector-panel";
 
 export function countRightColumns(state: Pick<DesktopLayoutState, "rightPanelOpen"> | Pick<AgentWorkspaceLayout, "open">): 0 | 1 {
@@ -77,9 +77,9 @@ export function assertSingleAgentWorkspace(root: ParentNode): void {
 
 export function workspaceMarkupContract(html: string): { workspaces: number; inspectors: number; tabbars: number } {
   return {
-    workspaces: (html.match(/data-testid="agent-workspace"/g) ?? []).length,
+    workspaces: (html.match(/data-testid="agent-workbench"/g) ?? []).length,
     inspectors: (html.match(/data-testid="inspector-panel"/g) ?? []).length,
-    tabbars: (html.match(/data-testid="agent-workspace-tabbar"/g) ?? []).length,
+    tabbars: (html.match(/data-testid="agent-workbench-tabbar"/g) ?? []).length,
   };
 }
 

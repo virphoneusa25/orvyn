@@ -6,7 +6,7 @@
 // (submitOrvynCommand); no duplicate chat exists anywhere else.
 //
 // Rich items stay concise per the co-worker model: actions and results, no
-// chain-of-thought. Detail lives in the right ContextPanel.
+// chain-of-thought. Detail lives in the Workbench.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";

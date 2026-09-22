@@ -1,5 +1,6 @@
 import { documentRouter } from "./documents";
 import { mcpRouter } from "./mcp";
+import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
@@ -14,6 +15,7 @@ import { MODES } from "../agent/modes";
 
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
+v1Router.use("/desktop", desktopRouter());
 v1Router.use("/mcp", mcpRouter(requireTenant));
 v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
   if (!tenantId) {

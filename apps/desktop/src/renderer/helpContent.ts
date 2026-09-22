@@ -20,7 +20,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "mission",
     title: "Start a new mission",
     tags: ["missions", "home", "composer"],
-    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center. The Agent Workspace on the right is a single panel with tabs: Preview, Changes, Files, Diff, Terminal, Browser, and Review.",
+    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center. The Workbench on the right is an IDE surface: Changes, Desktop, Browser, live Preview tabs, Files, Diff, Terminal, and Review.",
   },
   {
     id: "modes",
@@ -62,7 +62,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "browser",
     title: "Use the browser",
     tags: ["browser", "playwright"],
-    body: "Browser tools open the Agent Workspace Browser tab with visited URLs, actions, and a presentational ORION cursor. Localhost apps open the Preview tab instead. They require the backend Playwright dependency. Follow ORION switches to Browser or Preview in the same panel — it does not open a second column.",
+    body: "Browser is for external docs and research. Local apps ORION starts open as Preview tabs (ORVYN :port) with a live iframe. Desktop is a real Chromium session ORION can control — Take Control hands the mouse to you without cancelling the run. Follow ORION switches Workbench tabs; a manual click pauses it.",
   },
   {
     id: "approve",
@@ -86,7 +86,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "files",
     title: "View files and diffs",
     tags: ["files", "diff", "panel"],
-    body: "The title-bar panel toggle opens one Agent Workspace. Preview, Changes, Files, Diff, Terminal, Browser, and Review are tabs in that same panel. Follow ORION only switches the active tab. Clicking a file, a diff, or a terminal event never creates a second column.",
+    body: "The title-bar panel toggle opens the Workbench. Changes, Desktop, Browser, and live Preview tabs share one region. Follow ORION only switches the active tab. Clicking a file opens a Diff or editor tab in that same Workbench.",
   },
   {
     id: "cloud",
@@ -98,7 +98,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "shortcuts",
     title: "Keyboard shortcuts",
     tags: ["shortcuts", "keyboard"],
-    body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer · Ctrl+` toggle terminal · Ctrl+Shift+B toggle right panel · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
+    body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer · Ctrl+` toggle terminal · Ctrl+Shift+B toggle Workbench · Ctrl+Shift+D focus Desktop · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
   },
   {
     id: "update",

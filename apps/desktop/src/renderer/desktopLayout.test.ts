@@ -52,7 +52,11 @@ test("persistence omits ephemeral help and never writes inspector keys", () => {
     helpOpen: true,
     agentPanelWidth: 520,
     activeTab: "changes",
+    activeTabId: "changes",
+    openTabIds: ["changes", "browser"],
     previewUrl: "",
+    browserUrl: "",
+    recentUrls: [],
     followOrion: true,
     expandedPreview: false,
   });
@@ -68,9 +72,9 @@ test("persistence omits ephemeral help and never writes inspector keys", () => {
   assert.equal("workSurfaceWidth" in stored, false);
 });
 
-test("agent panel width clamps to min 360 and max 70vw / chat room", () => {
+test("workbench width clamps to min 420 and max 75vw / chat room", () => {
   assert.equal(clampAgentPanelWidth(40), AGENT_PANEL_MIN);
-  assert.ok(clampAgentPanelWidth(4000, 1920) <= Math.floor(1920 * 0.7));
+  assert.ok(clampAgentPanelWidth(4000, 1920) <= Math.floor(1920 * 0.75));
   assert.ok(clampAgentPanelWidth(4000, 1280) <= 1280 - 248 - 500);
   assert.equal(clampAgentPanelWidth(Number.NaN), AGENT_PANEL_DEFAULT);
   assert.equal(shouldOverlayAgentPanel(1920), false);
@@ -96,6 +100,25 @@ test("legacy two-pane keys migrate to one width and one tab", () => {
   assert.equal(parsed.followOrion, false);
   assert.equal(parsed.expandedPreview, true);
   assert.equal("inspectorOpen" in parsed, false);
+});
+
+test("workbench tabs, selected tab, width, and recent URLs survive restart", () => {
+  const parsed = parseDesktopLayout({
+    rightPanelOpen: true,
+    agentPanelWidth: 680,
+    activeTab: "browser",
+    activeTabId: "preview:http://127.0.0.1:43191",
+    openTabIds: ["changes", "browser", "preview:http://127.0.0.1:43191"],
+    recentUrls: ["http://127.0.0.1:43191", "https://docs.example.com"],
+    followOrion: false,
+  });
+  assert.equal(parsed.agentPanelWidth, 680);
+  assert.equal(parsed.activeTabId, "preview:http://127.0.0.1:43191");
+  assert.deepEqual(parsed.openTabIds, ["changes", "browser", "preview:http://127.0.0.1:43191"]);
+  assert.deepEqual(parsed.recentUrls, ["http://127.0.0.1:43191", "https://docs.example.com"]);
+  const stored = persistableLayout(parsed);
+  assert.equal(stored.activeTabId, parsed.activeTabId);
+  assert.deepEqual(stored.recentUrls, parsed.recentUrls);
 });
 
 test("stored activeTab and agentPanelWidth win over legacy keys", () => {

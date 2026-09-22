@@ -60,6 +60,14 @@ const ASK_DOWNGRADE = new Set([
   "browser_screenshot",
   "browser_console_errors",
   "browser_evidence",
+  "desktop_start",
+  "desktop_open_url",
+  "desktop_click",
+  "desktop_type",
+  "desktop_scroll",
+  "desktop_key",
+  "desktop_screenshot",
+  "desktop_stop",
   "mcp_call",
   "ssh_exec",
 ]);
@@ -111,6 +119,13 @@ const AUTONOMOUS_ALLOW = new Set([
   "browser_click",
   "browser_type",
   "browser_screenshot",
+  "desktop_start",
+  "desktop_open_url",
+  "desktop_click",
+  "desktop_type",
+  "desktop_scroll",
+  "desktop_key",
+  "desktop_screenshot",
   // Deliberately NOT here: mcp_call (external services stay approval-gated).
 ]);
 

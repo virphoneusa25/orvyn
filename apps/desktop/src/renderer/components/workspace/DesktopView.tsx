@@ -1,21 +1,259 @@
-import React from "react";
-import { emptyBody, emptyTitle } from "./workspaceChrome";
+import React, { useEffect, useRef, useState } from "react";
+import { apiUrl, authHeaders } from "../../connection";
+import { OrionCursorOverlay } from "./OrionCursorOverlay";
+import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
-export function DesktopView({ snapshot }: { snapshot?: string | null }) {
-  if (!snapshot) {
+type ControlOwner = "orion" | "user" | "none";
+
+interface DesktopPublic {
+  id: string;
+  status: string;
+  controlOwner: ControlOwner;
+  width: number;
+  height: number;
+  url?: string;
+  live: boolean;
+  error?: string;
+}
+
+export function DesktopView({
+  projectRoot,
+  runId,
+  cursor,
+  status,
+}: {
+  projectRoot: string | null;
+  runId?: string | null;
+  cursor?: { x: number; y: number; kind: "click" | "type" | "scroll" | "hover" | "navigate" | "other" } | null;
+  status?: string | null;
+}) {
+  const [session, setSession] = useState<DesktopPublic | null>(null);
+  const [playwright, setPlaywright] = useState<boolean | null>(null);
+  const [frame, setFrame] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [quality, setQuality] = useState<"auto" | "low" | "high">("auto");
+  const [interrupted, setInterrupted] = useState(false);
+  const viewRef = useRef<HTMLDivElement | null>(null);
+
+  async function refreshSession() {
+    if (!projectRoot) return;
+    const q = new URLSearchParams({ projectRoot, ...(runId ? { runId } : {}) });
+    const res = await fetch(apiUrl(`/desktop/session?${q}`), { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    setPlaywright(data.playwright !== false);
+    setSession(data.session ?? null);
+  }
+
+  async function pullFrame() {
+    if (!projectRoot || !session?.live) return;
+    const q = new URLSearchParams({ projectRoot, ...(runId ? { runId } : {}) });
+    const res = await fetch(apiUrl(`/desktop/frame?${q}`), { headers: authHeaders() });
+    if (!res.ok) {
+      setInterrupted(true);
+      return;
+    }
+    setInterrupted(false);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    setFrame((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+  }
+
+  useEffect(() => {
+    void refreshSession();
+    const id = setInterval(() => void refreshSession(), 2000);
+    return () => clearInterval(id);
+  }, [projectRoot, runId]);
+
+  useEffect(() => {
+    if (!session?.live) return;
+    void pullFrame();
+    const ms = quality === "low" ? 220 : quality === "high" ? 55 : 90;
+    const id = setInterval(() => void pullFrame(), ms);
+    return () => clearInterval(id);
+  }, [session?.id, session?.live, session?.controlOwner, projectRoot, runId, quality]);
+
+  async function startSession() {
+    if (!projectRoot) return;
+    setStarting(true);
+    setError(null);
+    const res = await fetch(apiUrl("/desktop/session"), {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ projectRoot, runId }),
+    });
+    const data = await res.json();
+    if (!res.ok) setError(data.error ?? "Desktop could not start.");
+    else setSession(data.session);
+    setStarting(false);
+  }
+
+  async function setOwner(owner: "user" | "orion") {
+    if (!projectRoot) return;
+    const res = await fetch(apiUrl("/desktop/control"), {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ projectRoot, runId, owner }),
+    });
+    const data = await res.json();
+    if (!res.ok) setError(data.error ?? "Control change blocked.");
+    else setSession(data.session);
+  }
+
+  async function sendInput(type: string, extra: Record<string, unknown>) {
+    if (!projectRoot || session?.controlOwner !== "user") return;
+    const box = viewRef.current?.getBoundingClientRect();
+    await fetch(apiUrl("/desktop/input"), {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectRoot,
+        runId,
+        type,
+        viewWidth: box?.width ?? session?.width,
+        viewHeight: box?.height ?? session?.height,
+        ...extra,
+      }),
+    });
+  }
+
+  if (!projectRoot) {
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", gap: 8 }}>
-        <div style={emptyTitle()}>No desktop session active</div>
-        <div style={emptyBody()}>Desktop or computer-use evidence will appear here when ORION interacts with the local app window.</div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
+        <div style={emptyTitle()}>Open a project to start Desktop</div>
+        <div style={emptyBody()}>Desktop is an isolated Chromium session ORION can see and control.</div>
       </div>
     );
   }
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "6px 10px", fontSize: 10, color: "var(--orvyn-text-muted)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>Snapshot</div>
-      <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-        <img src={snapshot} alt="Desktop session" style={{ maxWidth: "100%", maxHeight: "100%", borderRadius: 8, border: "1px solid var(--orvyn-border-soft)" }} />
+
+  if (playwright === false) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
+        <div style={emptyTitle()}>Desktop runtime unavailable</div>
+        <div style={emptyBody()}>Install Playwright Chromium on the ORVYN worker to stream a live sandbox desktop. Screenshots are not shown as a fake live session.</div>
       </div>
+    );
+  }
+
+  if (!session || session.status === "ended") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 10, textAlign: "center" }}>
+        <div style={emptyTitle()}>ORVYN Desktop</div>
+        <div style={emptyBody()}>Start an isolated desktop so you can watch ORION inspect the live app, then Take Control when you want the mouse.</div>
+        {error && <div style={{ color: "var(--orvyn-red)", fontSize: 12 }}>{error}</div>}
+        <button style={ghostBtn()} disabled={starting} onClick={() => void startSession()}>
+          {starting ? "Starting ORVYN Desktop…" : "Start Desktop"}
+        </button>
+      </div>
+    );
+  }
+
+  if (session.status === "starting") {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+        <div style={emptyTitle()}>Starting ORVYN Desktop…</div>
+      </div>
+    );
+  }
+
+  const user = session.controlOwner === "user";
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: user ? "var(--orvyn-yellow)" : "var(--orvyn-cyan)" }}>
+          {user ? "You are controlling" : session.controlOwner === "orion" ? "ORION controlling" : session.status}
+        </span>
+        <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{session.url || "Desktop"}</code>
+        <select
+          value={quality}
+          onChange={(e) => setQuality(e.target.value as "auto" | "low" | "high")}
+          title="Desktop quality"
+          style={{ background: "transparent", border: "1px solid var(--orvyn-border-soft)", color: "var(--orvyn-text-secondary)", fontSize: 10, borderRadius: 6, padding: "2px 4px" }}
+        >
+          <option value="auto">Auto</option>
+          <option value="low">Low</option>
+          <option value="high">High</option>
+        </select>
+        {user ? (
+          <button style={ghostBtn()} onClick={() => void setOwner("orion")}>Return to ORION</button>
+        ) : (
+          <button style={ghostBtn()} onClick={() => void setOwner("user")}>Take Control</button>
+        )}
+        <button style={ghostBtn()} onClick={() => void fetch(apiUrl("/desktop/stop"), { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot, runId }) }).then(() => setSession(null))}>
+          Stop Session
+        </button>
+      </div>
+      <div
+        ref={viewRef}
+        style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden" }}
+        onMouseMove={user ? (e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          void sendInput("move", { x: e.clientX - r.left, y: e.clientY - r.top });
+        } : undefined}
+        onClick={user ? (e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          void sendInput("click", { x: e.clientX - r.left, y: e.clientY - r.top });
+        } : undefined}
+        tabIndex={user ? 0 : -1}
+        onContextMenu={user ? (e) => {
+          e.preventDefault();
+          const r = e.currentTarget.getBoundingClientRect();
+          void sendInput("rightclick", { x: e.clientX - r.left, y: e.clientY - r.top });
+        } : undefined}
+        onDoubleClick={user ? (e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          void sendInput("dblclick", { x: e.clientX - r.left, y: e.clientY - r.top });
+        } : undefined}
+        onKeyDown={user ? (e) => {
+          e.preventDefault();
+          void sendInput("key", { key: e.key.length === 1 ? e.key : e.key });
+        } : undefined}
+        onWheel={user ? (e) => {
+          e.preventDefault();
+          void sendInput("scroll", { deltaY: e.deltaY });
+        } : undefined}
+      >
+        {interrupted && (
+          <div style={{ position: "absolute", inset: 0, zIndex: 5, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(7,11,20,0.78)" }}>
+            <div style={emptyTitle()}>Desktop connection interrupted</div>
+            <button style={ghostBtn()} onClick={() => { setInterrupted(false); void pullFrame(); }}>Reconnect</button>
+          </div>
+        )}
+        {frame ? (
+          <img src={frame} alt="ORVYN Desktop" style={{ width: "100%", height: "100%", objectFit: "contain", pointerEvents: "none" }} />
+        ) : (
+          <div style={{ ...emptyBody(), padding: 24 }}>Waiting for the first desktop frame…</div>
+        )}
+        {!user && (
+          <OrionCursorOverlay cursor={cursor ?? null} status={status ?? "ORION is inspecting this desktop"} />
+        )}
+        {!user && (
+          <button
+            onClick={() => void setOwner("user")}
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: 28,
+              transform: "translateX(-50%)",
+              background: "rgba(11,18,32,0.86)",
+              border: "1px solid var(--orvyn-border)",
+              color: "var(--orvyn-text)",
+              borderRadius: 999,
+              padding: "8px 16px",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            Take Control
+          </button>
+        )}
+      </div>
+      {error && <div style={{ padding: "6px 10px", color: "var(--orvyn-yellow)", fontSize: 11 }}>{error}</div>}
     </div>
   );
 }

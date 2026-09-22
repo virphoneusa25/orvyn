@@ -44,10 +44,12 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   streaming chat with natural-language image generation, Qdrant-backed
   hybrid project intelligence (structural chunks, tenant-scoped vectors,
   incremental reindex). See `docs/PROJECT_INTELLIGENCE.md`.
-- **Intelligence UI** — center chat/stream plus one Agent Workspace panel
-  (Preview / Changes / Files / Diff / Terminal / Browser / Review tabs,
-  Follow ORION switches the active tab only); Mission Control; Agent
-  Activity bottom panel; Source Control with git + checkpoint restore/compare.
+- **Intelligence UI** — center chat/stream plus one IDE Workbench
+  (Changes / Desktop / Browser plus dynamic Preview, Files, Diff, Terminal,
+  Artifact, and Review tabs). Follow ORION switches the active tab only.
+  Desktop is a live Chromium session with Take Control / Return to ORION.
+  Mission Control; Agent Activity bottom panel; Source Control with git +
+  checkpoint restore/compare.
 - **Checkpoints** — automatic snapshot before autonomous write batches;
   create/restore/compare/delete via API and SCM panel. Never auto-push.
 - **Deployable** — `docker compose up -d` gives backend + automatic HTTPS
