@@ -86,6 +86,12 @@ function pruneStaleWorkers(): void {
 }
 setInterval(pruneStaleWorkers, 15_000).unref();
 
+/** Live registry snapshot. Status is online | busy | offline — not inferred from the API process. */
+export function listKnownWorkers(): { workerId: string; status: WorkerRecord["status"]; hostname: string }[] {
+  pruneStaleWorkers();
+  return [...workers.values()].map((w) => ({ workerId: w.workerId, status: w.status, hostname: w.hostname }));
+}
+
 export function workerRouter(
   auth: (req: any) => any,
   getRunStore: (tenantId?: string) => RunStore

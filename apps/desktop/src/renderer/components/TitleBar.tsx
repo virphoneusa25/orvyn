@@ -8,6 +8,7 @@
 // element must opt out with `no-drag` or it becomes un-clickable.
 import React, { useEffect, useRef, useState } from "react";
 import appIcon from "../assets/icon.png";
+import { AccountCluster } from "./AccountCluster";
 
 export interface MenuItem {
   label?: string;
@@ -29,6 +30,8 @@ export function TitleBar({
   usageTitle,
   planLabel,
   onOpenCommand,
+  onOpenSettings,
+  onSwitchWorkspace,
 }: {
   menus: Menu[];
   title?: string;
@@ -38,6 +41,8 @@ export function TitleBar({
   /** Real plan/mode label; omit when there is no account backend. */
   planLabel?: string | null;
   onOpenCommand?: () => void;
+  onOpenSettings?: () => void;
+  onSwitchWorkspace?: () => void;
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -285,30 +290,7 @@ export function TitleBar({
           </svg>
         </button>
         <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
-        {/* Local account truthfully rendered in the approved avatar shape. */}
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <span
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: "50%",
-              background: "linear-gradient(135deg, #6C5CFF, #22D3EE)",
-              color: "#fff",
-              fontSize: 10.5,
-              fontWeight: 700,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-            title="No cloud account connected"
-          >
-            O
-          </span>
-          <span style={{ display: "flex", flexDirection: "column", lineHeight: 1.15, marginRight: 4 }}>
-            <span style={{ fontSize: 11, color: "var(--orvyn-text)" }}>Local Mode</span>
-            <span style={{ fontSize: 9.5, color: "var(--orvyn-text-muted)" }}>connect account →</span>
-          </span>
-        </span>
+        <AccountCluster onOpenSettings={onOpenSettings} onSwitchWorkspace={onSwitchWorkspace} />
         <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
       </div>
 

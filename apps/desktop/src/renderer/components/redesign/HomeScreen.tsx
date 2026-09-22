@@ -49,6 +49,8 @@ export interface HomeScreenProps {
   onOpenCommand?: () => void;
   onReconnectCloud?: () => void;
   onOpenNotifications?: () => void;
+  /** Overrides the greeting subtitle when the shell has a live connection reading. */
+  statusLine?: string;
 }
 
 function greetingFor(d: Date): string {
@@ -121,7 +123,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 <h1>
                   {greetingFor(now)}, {userName}.
                 </h1>
-                <p>{summaryLine(missions)}</p>
+                <p>{props.statusLine ?? summaryLine(missions)}</p>
               </div>
             </div>
 

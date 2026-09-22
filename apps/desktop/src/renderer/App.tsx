@@ -27,7 +27,9 @@ import { HonestState } from "./components/HonestState";
 import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace } from "./components/Workspaces";
 import { ToolsMcpWorkspace } from "./components/ToolsMcpWorkspace";
 import { EditorTabs } from "./components/EditorTabs";
-import { loadConnectionConfig, apiUrl, authHeaders, getOrchestratorStatus, onOrchestratorStatus } from "./connection";
+import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus } from "./connection";
+import { describeConnection, heroStatusLine } from "./connectionState";
+import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat, openChatSession, initChatHistory } from "./chatSession";
 import { useInlineEdit } from "./useInlineEdit";
@@ -115,7 +117,7 @@ export function App() {
   const [palette, setPalette] = useState<PaletteMode | null>(null);
   const [projectFiles, setProjectFiles] = useState<string[]>([]);
   const [homeMissions, setHomeMissions] = useState<MissionSummary[]>([]);
-  const [cloudOnline, setCloudOnline] = useState(() => getOrchestratorStatus() === "online");
+  const [facts, setFacts] = useState(getConnectionFacts);
   const [runtimeCaps, setRuntimeCaps] = useState({ engineReady: false, dockerAvailable: false, sshHostCount: 0, githubConnected: false, postgresConnected: false, cloudSignedIn: false });
   const [missionDetail, setMissionDetail] = useState<ApiMissionDetail | null>(null);
 
@@ -150,23 +152,38 @@ export function App() {
   };
 
   const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
+  const presentation = describeConnection(facts);
+  const cloudOnline = presentation.state === "cloud-online" || presentation.state === "cloud-synced";
+  const heroLine = heroStatusLine(facts, homeMissions);
 
   useEffect(() => {
-    const off = onOrchestratorStatus((s) => setCloudOnline(s === "online"));
+    const stop = startConnectionRuntime();
+    const off = onConnectionFacts(setFacts);
     return () => {
       off();
+      stop();
     };
   }, []);
 
   useEffect(() => {
+    noteWorkspaceName(projectName);
+  }, [projectName]);
+
+  useEffect(() => {
     const suffix = workspaceRoot ? `?projectRoot=${encodeURIComponent(workspaceRoot)}` : "";
-    const load = () => fetch(apiUrl(`/runtime/capabilities${suffix}`), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(setRuntimeCaps).catch(() => setRuntimeCaps(v => ({ ...v, engineReady: false, dockerAvailable: false })));
+    const load = () => fetch(apiUrl(`/runtime/capabilities${suffix}`), { headers: authHeaders() }).then(r => {
+      noteProtectedStatus(r.status, apiUrl(`/runtime/capabilities${suffix}`));
+      return r.ok ? r.json() : Promise.reject();
+    }).then((caps) => {
+      setRuntimeCaps(caps);
+      if (typeof caps.engineReady === "boolean") noteLocalEngine(caps.engineReady ? "ready" : "offline");
+    }).catch(() => setRuntimeCaps(v => ({ ...v, dockerAvailable: false })));
     void load(); const t = setInterval(load, 10000); return () => clearInterval(t);
   }, [workspaceRoot]);
 
   useEffect(() => {
     if (!workspaceRoot) { setHomeMissions([]); return; }
-    const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => r.ok ? r.json() : Promise.reject()).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));
+    const load = () => fetch(apiUrl("/missions"), { headers: authHeaders() }).then(r => { noteProtectedStatus(r.status, apiUrl("/missions")); return r.ok ? r.json() : Promise.reject(); }).then(d => { const rows: ApiMissionRow[] = Array.isArray(d.missions) ? d.missions : []; setHomeMissions(rows.map(toMissionSummary)); }).catch(() => setHomeMissions([]));
     void load(); const t = setInterval(load, 5000); return () => clearInterval(t);
   }, [workspaceRoot]);
 
@@ -424,6 +441,8 @@ export function App() {
         // and the status bar already present this — showing it twice was the
         // reported duplicate-header issue.
         onOpenCommand={() => setPalette("commands")}
+        onOpenSettings={() => setView("settings")}
+        onSwitchWorkspace={() => setView("projects")}
       />
 
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
@@ -439,8 +458,8 @@ export function App() {
             }
             if (v === "home") setCenterMode("home");
           }}
-          workspace={{ name: projectName ?? "No project", subtitle: "Local workspace" }}
-          user={{ name: "Royce", subtitle: cloudOnline ? "Synced" : "Local mode · not synced" }}
+          workspace={{ name: projectName ?? "No project", subtitle: presentation.workspaceLabel }}
+          user={{ name: presentation.userName, subtitle: presentation.userSubtitle }}
           usage={{ valueLabel: agentRun.usage ? `${((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / 1000).toFixed(1)}k` : "—", limitLabel: "current run", percent: agentRun.usage ? Math.min(100, ((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / Math.max(agentRun.usage.contextBudget || 2_000_000, 1)) * 100) : 0 }}
           missionsNeedingYou={homeMissions.filter(m => ["approval","blocked","paused"].includes(m.tone)).length}
           onNewMission={() => { newChat(); setView("newtask"); setCenterMode("work"); setActiveRunId(null); }}
@@ -524,7 +543,7 @@ export function App() {
                 active run/chat is only hidden, never destroyed. */}
             {view === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>
-                <HomeScreen userName="Royce" workspaceName={projectName ?? "No project"} status={{ engineReady: runtimeCaps.engineReady, cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: runtimeCaps.cloudSignedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             ) : view === "newtask" && missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
@@ -532,7 +551,7 @@ export function App() {
               <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} />
             ) : (
               <div className="ov-app" style={{ height: "100%" }}>
-                <HomeScreen userName="Royce" workspaceName={projectName ?? "No project"} status={{ engineReady: runtimeCaps.engineReady, cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: runtimeCaps.cloudSignedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             )}
           </div>

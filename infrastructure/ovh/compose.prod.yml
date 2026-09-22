@@ -9,6 +9,10 @@
 
 services:
   backend:
+    environment:
+      # Production cloud: missing or invalid credentials must not become the
+      # local default tenant. Local `npm run backend:dev` leaves this unset.
+      - ORVYN_CLOUD_MODE=true
     restart: always
     healthcheck:
       # node:20-slim has no curl; use node's built-in fetch.

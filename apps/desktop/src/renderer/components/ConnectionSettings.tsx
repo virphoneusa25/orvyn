@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { getConnectionConfig, loadConnectionConfig, saveConnectionConfig, apiUrl, authHeaders } from "../connection";
+import { getConnectionConfig, loadConnectionConfig, saveConnectionConfig, apiUrl, authHeaders, isSessionToken, ORVYN_CLOUD_URL } from "../connection";
+import { onConnectionFacts, signInWithCredentials, signOutOfCloud } from "../connectionRuntime";
+import { describeConnection } from "../connectionState";
 
 interface ProfileInfo {
   id: string;
@@ -29,18 +31,20 @@ export function ConnectionSettings() {
   const [authName, setAuthName] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [stateLine, setStateLine] = useState("Local workspace");
 
   useEffect(() => {
     loadConnectionConfig().then((c) => {
       setBackendUrl(c.backendUrl);
-      setApiKey(c.apiKey);
-      // Session tokens live in the same credential slot as API keys; if one
-      // is stored, resolve it to a display name.
-      if (c.apiKey.startsWith("orvsess_")) {
-        fetch(apiUrl("/auth/me"), { headers: { Authorization: `Bearer ${c.apiKey}` } })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => d && setAccount(d.user))
-          .catch(() => {});
+      setApiKey(c.apiKey.startsWith("orvsess_") ? "" : c.apiKey);
+    });
+    const off = onConnectionFacts((f) => {
+      const view = describeConnection(f);
+      setStateLine(view.userSubtitle);
+      if (f.accountState === "signed-in" && f.accountEmail) {
+        setAccount({ id: "", email: f.accountEmail, name: f.accountName });
+      } else if (f.accountState !== "signed-in") {
+        setAccount(null);
       }
     });
     fetch(apiUrl("/profile"), { headers: authHeaders() })
@@ -50,6 +54,7 @@ export function ConnectionSettings() {
         setProfiles(d.profiles ?? []);
       })
       .catch(() => setProfileError("Backend unreachable — profile unavailable"));
+    return () => off();
   }, []);
 
   async function selectProfile(id: string) {
@@ -82,7 +87,9 @@ export function ConnectionSettings() {
   }
 
   async function handleSave() {
-    await saveConnectionConfig({ backendUrl: backendUrl.trim(), apiKey: apiKey.trim() });
+    const existing = getConnectionConfig();
+    const nextKey = apiKey.trim() || (isSessionToken(existing.apiKey) ? existing.apiKey : "");
+    await saveConnectionConfig({ backendUrl: backendUrl.trim(), apiKey: nextKey });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -90,49 +97,37 @@ export function ConnectionSettings() {
   async function handleAuth() {
     setAuthError("");
     setAuthBusy(true);
-    try {
-      const path = authMode === "register" ? "/auth/register" : "/auth/login";
-      const body: Record<string, string> = { email: authEmail.trim(), password: authPassword };
-      if (authMode === "register" && authName.trim()) body.name = authName.trim();
-      const base = backendUrl.trim().replace(/\/$/, "") || getConnectionConfig().backendUrl.replace(/\/$/, "");
-      const res = await fetch(`${base}/api/v1${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
-      // The session token becomes the app-wide credential (same slot the
-      // API key uses), so every panel and the WS pick it up immediately.
-      await saveConnectionConfig({ backendUrl: base, apiKey: data.token });
-      setApiKey(data.token);
-      setAccount(data.user);
-      setAuthPassword("");
-    } catch (err: any) {
-      setAuthError(err.message);
-    } finally {
-      setAuthBusy(false);
+    const base = backendUrl.trim() || ORVYN_CLOUD_URL;
+    const result = await signInWithCredentials({
+      backendUrl: base,
+      email: authEmail,
+      password: authPassword,
+      name: authName,
+      mode: authMode === "register" ? "register" : "login",
+    });
+    setAuthBusy(false);
+    if (!result.ok) {
+      setAuthError(result.error);
+      return;
     }
+    setBackendUrl(base);
+    setApiKey("");
+    setAuthPassword("");
   }
 
   async function handleSignOut() {
-    const cfg = getConnectionConfig();
-    try {
-      await fetch(apiUrl("/auth/logout"), { method: "POST", headers: authHeaders() });
-    } catch {
-      // Session revocation is best-effort; clear the local credential anyway.
-    }
-    await saveConnectionConfig({ backendUrl: cfg.backendUrl, apiKey: "" });
+    await signOutOfCloud();
     setApiKey("");
     setAccount(null);
+    setBackendUrl(getConnectionConfig().backendUrl);
   }
 
   return (
     <div style={{ padding: 20, color: "#c9d1e0", maxWidth: 480 }}>
-      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Connection</div>
+      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Advanced Connection Settings</div>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 16 }}>
-        Point ORVYN at a local backend (default) or a backend you've deployed to a cloud server.
-        Every panel — Chat, Composer, Agent, Search, Model Manager — uses this connection.
+        Developers can point ORVYN at localhost, staging, or {ORVYN_CLOUD_URL}. Sign-in from the account menu uses the production cloud.
+        Every panel shares this connection. Current account state: {stateLine}.
       </div>
 
       <label style={{ display: "block", fontSize: 11, opacity: 0.6, marginBottom: 4 }}>Backend URL</label>

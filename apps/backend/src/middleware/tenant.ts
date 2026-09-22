@@ -12,6 +12,15 @@ declare global {
   }
 }
 
+/** Production cloud refuses the local default tenant. Local dev leaves this unset. */
+export function cloudModeEnabled(): boolean {
+  return process.env.ORVYN_CLOUD_MODE === "true";
+}
+
+export function unauthenticatedTenantAllowed(): boolean {
+  return !cloudModeEnabled() && !tenantManager.hasRegisteredKeys();
+}
+
 function extractKey(req: Request): string | undefined {
   const header = req.header("authorization");
   if (header?.startsWith("Bearer ")) return header.slice(7);
@@ -28,8 +37,9 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
   const key = extractKey(req);
 
   if (!key) {
-    // No key: only allowed when no API keys are registered (pure local dev).
-    if (tenantManager.hasRegisteredKeys()) {
+    // No key: only allowed for pure local dev. Cloud mode and any deployment
+    // with registered API keys must not silently become the default tenant.
+    if (!unauthenticatedTenantAllowed()) {
       res.status(401).json({ error: "Unauthorized — missing API key" });
       return;
     }
@@ -75,4 +85,17 @@ export function resolveTenantFromToken(token: string | null): Tenant | undefined
   const user = authService.verify(token);
   if (user) return tenantManager.ensureUserTenant(user.id, user.email);
   return tenantManager.resolveByApiKey(token);
+}
+
+/**
+ * WebSocket admission. In cloud mode (or when API keys exist) a missing or
+ * invalid token is a hard reject — never the local default tenant.
+ */
+export function authorizeSocket(token: string | null): { ok: true; tenant: Tenant } | { ok: false; error: string } {
+  const tenant = resolveTenantFromToken(token);
+  if (tenant) return { ok: true, tenant };
+  if (!unauthenticatedTenantAllowed()) {
+    return { ok: false, error: "Unauthorized — missing or invalid token" };
+  }
+  return { ok: true, tenant: tenantManager.ensureLocalDefault() };
 }

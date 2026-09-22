@@ -23,6 +23,7 @@ export interface ChatAttachment {
 export interface OrvynBridge {
   system: {
     getStats(): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }>;
+    getIdentity?(): Promise<{ name: string }>;
   };
   terminal: {
     start(): Promise<string>;

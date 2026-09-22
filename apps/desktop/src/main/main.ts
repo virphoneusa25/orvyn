@@ -1,5 +1,5 @@
 // apps/desktop/src/main/main.ts
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, safeStorage } from "electron";
 import * as path from "path";
 import * as os from "os";
 import { promises as fs } from "fs";
@@ -340,12 +340,59 @@ ipcMain.handle("project:readBinary", async (_evt, relativePath: string) => {
 const CONFIG_PATH = path.join(app.getPath("userData"), "orvyn-connection.json");
 const DEFAULT_CONFIG = { backendUrl: "http://localhost:4570", apiKey: "" };
 
+interface PersistedConfig {
+  backendUrl?: string;
+  apiKey?: string;
+  /** OS-keychain ciphertext for orvsess_ tokens. Never the raw token. */
+  sessionTokenEnc?: string;
+}
+
+function encryptionAvailable(): boolean {
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function decryptSession(enc: string): string {
+  if (!encryptionAvailable()) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(enc, "base64"));
+  } catch {
+    return "";
+  }
+}
+
+async function writeConfig(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> {
+  const stored: PersistedConfig = { backendUrl: config.backendUrl };
+  // Session tokens go through the OS credential store (Electron safeStorage).
+  // Developer API keys stay in the config file at mode 0600 — they are not
+  // account sessions. The token itself is never written to a log.
+  if (config.apiKey.startsWith("orvsess_") && encryptionAvailable()) {
+    stored.sessionTokenEnc = safeStorage.encryptString(config.apiKey).toString("base64");
+  } else if (config.apiKey) {
+    stored.apiKey = config.apiKey;
+  }
+  await fs.writeFile(CONFIG_PATH, JSON.stringify(stored, null, 2), { mode: 0o600 });
+  return { backendUrl: config.backendUrl, apiKey: config.apiKey };
+}
+
 async function readConfig(): Promise<typeof DEFAULT_CONFIG> {
   try {
     const raw = await fs.readFile(CONFIG_PATH, "utf-8");
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as PersistedConfig;
+    const backendUrl = parsed.backendUrl || DEFAULT_CONFIG.backendUrl;
+    if (parsed.sessionTokenEnc) {
+      return { backendUrl, apiKey: decryptSession(parsed.sessionTokenEnc) };
+    }
+    const apiKey = typeof parsed.apiKey === "string" ? parsed.apiKey : "";
+    if (apiKey.startsWith("orvsess_")) {
+      return writeConfig({ backendUrl, apiKey });
+    }
+    return { backendUrl, apiKey };
   } catch {
-    return DEFAULT_CONFIG;
+    return { ...DEFAULT_CONFIG };
   }
 }
 
@@ -486,6 +533,14 @@ ipcMain.handle("system:getStats", async () => {
 });
 
 ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: string }) => {
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
-  return config;
+  return writeConfig({
+    backendUrl: String(config?.backendUrl ?? DEFAULT_CONFIG.backendUrl),
+    apiKey: String(config?.apiKey ?? ""),
+  });
+});
+
+ipcMain.handle("system:getIdentity", () => {
+  const username = os.userInfo().username?.trim() ?? "";
+  const name = username ? username.charAt(0).toUpperCase() + username.slice(1) : "";
+  return { name };
 });

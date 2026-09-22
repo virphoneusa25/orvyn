@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("orvyn", {
     /** Live machine stats for the status bar — sampled in main, never guessed. */
     getStats: (): Promise<{ cpuPercent: number; ramPercent: number; diskPercent: number }> =>
       ipcRenderer.invoke("system:getStats"),
+    getIdentity: (): Promise<{ name: string }> => ipcRenderer.invoke("system:getIdentity"),
   },
   terminal: {
     start: (): Promise<string> => ipcRenderer.invoke("terminal:start"),

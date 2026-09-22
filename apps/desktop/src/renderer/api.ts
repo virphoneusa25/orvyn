@@ -1,5 +1,5 @@
 // apps/desktop/src/renderer/api.ts
-import { apiUrl, authHeaders } from "./connection";
+import { apiUrl, authHeaders, noteProtectedStatus } from "./connection";
 
 export interface ModelCapabilities {
   chat: boolean;
@@ -51,9 +51,13 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 function req(path: string, options: RequestInit = {}): Promise<Response> {
-  return fetch(apiUrl(path), {
+  const url = apiUrl(path);
+  return fetch(url, {
     ...options,
     headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...authHeaders(), ...options.headers },
+  }).then((res) => {
+    noteProtectedStatus(res.status, url);
+    return res;
   });
 }
 

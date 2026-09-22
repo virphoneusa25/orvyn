@@ -6,7 +6,7 @@ import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
 import { workerStats } from "./routes/worker";
 import { authRouter } from "./routes/auth";
-import { resolveTenant, resolveTenantFromToken } from "./middleware/tenant";
+import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
@@ -94,16 +94,13 @@ const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 102
 wss.on("connection", (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = resolveTenantFromToken(token);
-
-  // If API keys are registered, a valid token is mandatory on the socket too —
-  // otherwise the WS would be an unauthenticated bypass around the REST auth.
-  if (tenantManager.hasRegisteredKeys() && !tenant) {
-    socket.send(JSON.stringify({ delta: "", done: true, error: "Unauthorized — missing or invalid token" }));
+  const admitted = authorizeSocket(token);
+  if (!admitted.ok) {
+    socket.send(JSON.stringify({ delta: "", done: true, error: admitted.error }));
     socket.close();
     return;
   }
-  if (!tenant) tenant = tenantManager.ensureLocalDefault();
+  const tenant = admitted.tenant;
 
   socket.send(JSON.stringify({ type: "connection.ready", service: "orvyn-backend", at: Date.now() }));
 

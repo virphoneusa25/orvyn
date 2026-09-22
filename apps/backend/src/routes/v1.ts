@@ -829,7 +829,9 @@ v1Router.get("/runtime/capabilities", async (req, res) => {
     // These integrations do not yet expose authoritative connection probes.
     githubConnected: false,
     postgresConnected: false,
-    cloudSignedIn: false,
+    // True only for a per-user session tenant. API-key and local-default
+    // tenants are not a signed-in account.
+    cloudSignedIn: t.id.startsWith("user_"),
   });
 });
 

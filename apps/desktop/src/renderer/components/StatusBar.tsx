@@ -4,7 +4,9 @@
 // version, running agent runs, active missions. CPU/RAM/Disk have no IPC
 // source yet and are omitted rather than faked (audit note).
 import React, { useEffect, useState } from "react";
-import { apiUrl, authHeaders, getConnectionConfig, connectOrchestratorHeartbeat, getOrchestratorStatus, onOrchestratorStatus } from "../connection";
+import { authHeaders, apiUrl, healthUrl, noteProtectedStatus } from "../connection";
+import { describeConnection, type ConnectionPresentation } from "../connectionState";
+import { getConnectionFacts, onConnectionFacts } from "../connectionRuntime";
 
 interface Health {
   status: string;
@@ -19,7 +21,7 @@ interface StatusBarState {
 }
 
 export function StatusBar() {
-  const [orchestratorStatus, setOrchestratorStatus] = useState(getOrchestratorStatus());
+  const [connection, setConnection] = useState<ConnectionPresentation>(() => describeConnection(getConnectionFacts()));
   const [state, setState] = useState<StatusBarState>({
     health: null,
     runningRuns: 0,
@@ -28,18 +30,27 @@ export function StatusBar() {
   });
 
   useEffect(() => {
-    const offStatus = onOrchestratorStatus(setOrchestratorStatus);
-    const stopHeartbeat = connectOrchestratorHeartbeat();
+    const offConnection = onConnectionFacts((facts) => setConnection(describeConnection(facts)));
     let alive = true;
     async function load() {
       try {
         const headers = authHeaders();
-        const [h, runs, missions, stats] = await Promise.all([
-          fetch(apiUrl("/../api/v1/health")).then((r) => r.json()).catch(() => null),
-          fetch(apiUrl("/agent/stream/runs"), { headers }).then((r) => r.json()).catch(() => ({ runs: [] })),
-          fetch(apiUrl("/missions"), { headers }).then((r) => r.json()).catch(() => ({ missions: [] })),
+        const runsUrl = apiUrl("/agent/stream/runs");
+        const missionsUrl = apiUrl("/missions");
+        const [h, runsRes, missionsRes, stats] = await Promise.all([
+          fetch(healthUrl()).then((r) => r.json()).catch(() => null),
+          fetch(runsUrl, { headers }).then((r) => {
+            noteProtectedStatus(r.status, runsUrl);
+            return r.json();
+          }).catch(() => ({ runs: [] })),
+          fetch(missionsUrl, { headers }).then((r) => {
+            noteProtectedStatus(r.status, missionsUrl);
+            return r.json();
+          }).catch(() => ({ missions: [] })),
           window.orvyn.system?.getStats?.().catch(() => null) ?? null,
         ]);
+        const runs = runsRes;
+        const missions = missionsRes;
         if (!alive) return;
         const running = (runs.runs ?? []).filter(
           (r: { status: string }) => r.status === "running" || r.status === "awaiting_approval"
@@ -57,14 +68,9 @@ export function StatusBar() {
     return () => {
       alive = false;
       clearInterval(timer);
-      offStatus();
-      stopHeartbeat();
+      offConnection();
     };
   }, []);
-
-  const cfg = getConnectionConfig();
-  const online = state.health?.status === "ok" && orchestratorStatus === "online";
-  const backendName = cfg.backendUrl?.replace(/^https?:\/\//, "").split("/")[0] || "backend";
 
   return (
     <div
@@ -82,25 +88,23 @@ export function StatusBar() {
         userSelect: "none",
       }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            background: online ? "var(--orvyn-green)" : "var(--orvyn-text-muted)",
-          }}
-        />
-        ORVYN Cloud {online ? `Online · ${backendName}` : orchestratorStatus === "connecting" ? "Connecting…" : "Offline"}
-      </span>
-      {/* Local engine readiness is independent of cloud reachability:
-          files, editor, git, terminal and local config all work either way. */}
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-green)" }} />
-        Local Engine Ready
-      </span>
+      {connection.indicators.map((item) => (
+        <span key={item.label} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: item.tone === "on" ? "var(--orvyn-green)" : item.tone === "pending" ? "var(--orvyn-amber, #e6b35a)" : "transparent",
+              border: item.tone === "off" ? "1.5px solid var(--orvyn-text-muted)" : "none",
+              boxSizing: "border-box",
+            }}
+          />
+          {item.label}
+        </span>
+      ))}
       {state.health?.version && <span>v{state.health.version}</span>}
-      <span>{cfg.backendUrl?.includes("localhost") ? "Local" : "Cloud"}</span>
+      <span>{connection.modeLabel}</span>
       <span style={{ marginLeft: "auto", display: "inline-flex", gap: 16 }}>
         {state.stats && (
           <>
