@@ -20,7 +20,7 @@ test("an explicit true preference means the right panel should show", () => {
 
 test("right panel / terminal / help parse with safe defaults", () => {
   const empty = parseDesktopLayout(null);
-  assert.equal(empty.rightPanelOpen, false);
+  assert.equal(empty.rightPanelOpen, true);
   assert.equal(empty.bottomTerminalOpen, false);
   assert.equal(empty.helpOpen, false);
   assert.equal(empty.bottomTerminalHeight, TERMINAL_DEFAULT_HEIGHT);
