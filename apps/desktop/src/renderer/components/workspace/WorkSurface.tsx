@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { AgentWorkspaceDerived, PreviewTarget, SurfaceTabId } from "../../agentWorkspaceModel";
 import { parseSurfaceTabId } from "../../agentWorkspaceModel";
-import { IconCrosshair, IconMore, IconPlus } from "../Icons";
+import { IconCrosshair, IconMore, IconPanelRight, IconPin, IconPlus } from "../Icons";
 import { AgentActivityHeader } from "./AgentActivityHeader";
 import { ArtifactView } from "./ArtifactView";
 import { BrowserView } from "./BrowserView";
@@ -21,6 +21,10 @@ export function WorkSurface({
   onExpand,
   onClosePreview,
   onOpenPlus,
+  inspectorOpen,
+  inspectorPinned,
+  onToggleInspector,
+  onTogglePin,
 }: {
   derived: AgentWorkspaceDerived;
   surfaceTab: string;
@@ -32,6 +36,10 @@ export function WorkSurface({
   onExpand: () => void;
   onClosePreview: (url: string) => void;
   onOpenPlus: (kind: "browser" | "changes" | "desktop") => void;
+  inspectorOpen: boolean;
+  inspectorPinned: boolean;
+  onToggleInspector: () => void;
+  onTogglePin: () => void;
 }) {
   const parsed = parseSurfaceTabId(surfaceTab);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -82,6 +90,12 @@ export function WorkSurface({
             onClick={onFollowClick}
           >
             <IconCrosshair size={14} />
+          </button>
+          <button title={inspectorOpen ? "Close Inspector" : "Toggle Inspector"} style={iconBtn(inspectorOpen)} onClick={onToggleInspector}>
+            <IconPanelRight size={14} />
+          </button>
+          <button title={inspectorPinned ? "Unpin Inspector" : "Pin Inspector"} style={iconBtn(inspectorPinned)} onClick={onTogglePin}>
+            <IconPin size={13} />
           </button>
           <div style={{ position: "relative" }}>
             <button title="More views" style={iconBtn(moreOpen)} onClick={() => setMoreOpen((v) => !v)}>

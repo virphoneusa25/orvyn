@@ -86,7 +86,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "files",
     title: "View files and diffs",
     tags: ["files", "diff", "panel"],
-    body: "The Work Surface shows Changes and live localhost previews. The Inspector shows Files and Diff beside the preview. Follow ORION switches surfaces as work happens; clicking a tab pauses follow. Use the title-bar panel toggle (Ctrl+Shift+B) if the workspace is closed.",
+    body: "The title-bar panel toggle opens one Work Surface (Changes, Desktop, Browser, live preview). Inspector (Files, Diff, Terminal, Review) stays closed until you click a file, pin it, or open it from the Work Surface header. Follow ORION switches Work Surface tabs; it does not keep Inspector open.",
   },
   {
     id: "cloud",
@@ -99,6 +99,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "Keyboard shortcuts",
     tags: ["shortcuts", "keyboard"],
     body: "Ctrl+Shift+P command palette · Ctrl+P quick open · Ctrl+L focus composer · Ctrl+` toggle terminal · Ctrl+Shift+B toggle right panel · F1 help · Ctrl+Enter run from Home · Enter send in Chat · Esc stop / close menus.",
+  },
+  {
+    id: "update",
+    title: "Get desktop UI updates",
+    tags: ["update", "desktop", "install", "windows"],
+    body: "The installed Windows ORVYN app is a packaged Electron build. Pushing commits to git does not change that installed app. Check the status-bar Desktop SHA. To see new UI, install a build produced from the same commit (GitHub Actions artifact or npm run dist:win), or run npm run desktop:dev from a checkout of that branch.",
   },
 ];
 

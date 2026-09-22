@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { authHeaders, apiUrl, healthUrl, noteProtectedStatus } from "../connection";
 import { describeConnection, type ConnectionPresentation } from "../connectionState";
 import { getConnectionFacts, onConnectionFacts } from "../connectionRuntime";
+import { shortBuildSha } from "../buildInfo";
 
 interface Health {
   status: string;
@@ -104,6 +105,7 @@ export function StatusBar() {
         </span>
       ))}
       {state.health?.version && <span>v{state.health.version}</span>}
+      <span title="Desktop build identity. Packaged Electron does not update from git until you install a new build.">Desktop {shortBuildSha()}</span>
       <span>Backend: {connection.statusFacts.backend}</span>
       <span>Account: {connection.statusFacts.account}</span>
       <span>Worker: {connection.statusFacts.worker}</span>

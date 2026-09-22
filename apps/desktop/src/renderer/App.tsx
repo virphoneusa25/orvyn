@@ -659,7 +659,7 @@ export function App() {
         )}
 
         {(view === "home" || view === "newtask") && (
-          <div style={{ flex: chrome.layout.expandedPreview && showRightChrome ? "0 0 0px" : 1, minWidth: chrome.layout.expandedPreview && showRightChrome ? 0 : 420, minHeight: 0, overflow: "hidden" }}>
+          <div style={{ flex: chrome.layout.expandedPreview && showRightChrome ? "0 0 0px" : 1, minWidth: chrome.layout.expandedPreview && showRightChrome ? 0 : 500, minHeight: 0, overflow: "hidden" }}>
             {/* Deterministic center routing — the nav selection (view) ALWAYS
                 wins over the remembered working mode. Home selected = the
                 animated landing screen, no stale WorkStream underneath. The

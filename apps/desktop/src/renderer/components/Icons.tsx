@@ -308,6 +308,13 @@ export const IconRefresh = (p: IconProps) => (
   </Svg>
 );
 
+export const IconPin = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 17v4" />
+    <path d="M8 3h8l-1 7h3l-6 6-6-6h3L8 3z" />
+  </Svg>
+);
+
 export const IconExternal = (p: IconProps) => (
   <Svg {...p}>
     <path d="M14 5h5v5" />

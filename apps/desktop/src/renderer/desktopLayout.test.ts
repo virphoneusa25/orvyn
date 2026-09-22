@@ -52,6 +52,7 @@ test("persistence omits ephemeral help and stores workspace prefs", () => {
     workSurfaceWidth: 560,
     inspectorWidth: 320,
     inspectorOpen: true,
+    inspectorPinned: false,
     surfaceTab: "changes",
     inspectorTab: "files",
     followOrion: true,
@@ -76,6 +77,12 @@ test("workspace widths clamp to chat and inspector room", () => {
   assert.equal(clampInspectorWidth(Number.NaN), INSPECTOR_DEFAULT);
 });
 
+test("default and empty parse keep Inspector closed", () => {
+  const empty = parseDesktopLayout(null);
+  assert.equal(empty.inspectorOpen, false);
+  assert.equal(empty.inspectorPinned, false);
+});
+
 test("layout parse restores tabs, follow, and split widths", () => {
   const parsed = parseDesktopLayout({
     rightPanelOpen: true,
@@ -91,6 +98,7 @@ test("layout parse restores tabs, follow, and split widths", () => {
   assert.equal(parsed.workSurfaceWidth >= WORK_SURFACE_MIN, true);
   assert.equal(parsed.inspectorWidth, 340);
   assert.equal(parsed.inspectorOpen, false);
+  assert.equal(parsed.inspectorPinned, false);
   assert.equal(parsed.surfaceTab, "preview:http://127.0.0.1:43173");
   assert.equal(parsed.inspectorTab, "diff");
   assert.equal(parsed.followOrion, false);

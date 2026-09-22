@@ -20,6 +20,7 @@ test("help covers the required getting-started topics", () => {
     "files",
     "cloud",
     "shortcuts",
+    "update",
   ]) {
     assert.ok(ids.includes(id), `missing help topic ${id}`);
   }

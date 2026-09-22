@@ -16,6 +16,11 @@ import {
   type SurfaceTabId,
 } from "../../agentWorkspaceModel";
 import {
+  countRightColumns,
+  decideInspectorFollow,
+  inspectorPlacement,
+} from "../../agentWorkspaceLayout";
+import {
   clampInspectorWidth,
   clampWorkSurfaceWidth,
   INSPECTOR_MIN,
@@ -58,6 +63,8 @@ export function AgentWorkspace({
   const [focus, setFocus] = useState<{ path?: string; fileName?: string } | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
   const [closedPreviews, setClosedPreviews] = useState<string[]>([]);
+  const [dismissed, setDismissed] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
   const [drag, setDrag] = useState<null | "surface" | "inspector">(null);
   const start = useRef({ x: 0, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth });
 
@@ -69,6 +76,13 @@ export function AgentWorkspace({
     () => ({ ...derived, previews: visiblePreviews }),
     [derived, visiblePreviews]
   );
+  const placement = inspectorPlacement(viewportWidth, inspectorOpen, layout.workSurfaceWidth);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (running && layout.followOrion && !follow.followOrion) {
@@ -79,13 +93,21 @@ export function AgentWorkspace({
   useEffect(() => {
     if (!followApplies(follow)) return;
     const nextSurface = followedSurfaceId({ ...derived, previews: visiblePreviews });
-    const nextInspector = derived.suggestedInspector;
+    const decision = decideInspectorFollow({
+      pinned: layout.inspectorPinned,
+      inspectorOpen: layout.inspectorOpen,
+      dismissed,
+      activity: derived.activity,
+      surfaceId: nextSurface,
+    });
     const patch: Partial<DesktopLayoutState> = {};
     if (nextSurface && nextSurface !== surfaceTab) patch.surfaceTab = nextSurface;
-    if (nextInspector && nextInspector !== inspectorTab) patch.inspectorTab = nextInspector;
+    if (decision.inspectorTab && decision.inspectorTab !== inspectorTab) patch.inspectorTab = decision.inspectorTab;
+    if (decision.inspectorOpen !== layout.inspectorOpen) patch.inspectorOpen = decision.inspectorOpen;
     if (derived.activity?.file) setSelectedDiff(derived.activity.file);
+    setDismissed(decision.dismissed);
     if (Object.keys(patch).length) onLayout(patch);
-  }, [derived.activity, derived.suggestedSurface, derived.suggestedInspector, visiblePreviews.length, follow]);
+  }, [derived.activity, visiblePreviews.length, follow, layout.inspectorPinned, dismissed]);
 
   useEffect(() => {
     const onCtxTab = (e: Event) => {
@@ -94,7 +116,11 @@ export function AgentWorkspace({
       setFollow((s) => applyManualTab(s));
       const patch: Partial<DesktopLayoutState> = {};
       if (mapped.surface) patch.surfaceTab = mapped.surface;
-      if (mapped.inspector) patch.inspectorTab = mapped.inspector;
+      if (mapped.inspector) {
+        patch.inspectorTab = mapped.inspector;
+        patch.inspectorOpen = true;
+        setDismissed(false);
+      }
       if (Object.keys(patch).length) onLayout(patch);
     };
     const onOpen = (e: Event) => {
@@ -104,10 +130,11 @@ export function AgentWorkspace({
       setFollow((s) => applyManualTab(s));
       setFocus(d.path || d.fileName ? { path: d.path, fileName: d.fileName } : null);
       if (d.path) setSelectedDiff(d.path);
+      setDismissed(false);
       onLayout({
         rightPanelOpen: true,
         ...(mapped.surface ? { surfaceTab: mapped.surface } : {}),
-        ...(mapped.inspector ? { inspectorTab: mapped.inspector } : {}),
+        ...(mapped.inspector ? { inspectorTab: mapped.inspector, inspectorOpen: true } : {}),
       });
     };
     document.addEventListener("orvyn:context-tab", onCtxTab);
@@ -123,7 +150,7 @@ export function AgentWorkspace({
     function onMove(e: MouseEvent) {
       const dx = e.clientX - start.current.x;
       if (drag === "surface") {
-        onLayout({ workSurfaceWidth: clampWorkSurfaceWidth(start.current.surface + dx, window.innerWidth, inspectorOpen, layout.inspectorWidth) });
+        onLayout({ workSurfaceWidth: clampWorkSurfaceWidth(start.current.surface + dx, window.innerWidth, placement === "dock", layout.inspectorWidth) });
       } else {
         onLayout({ inspectorWidth: clampInspectorWidth(start.current.inspector - dx, window.innerWidth) });
       }
@@ -141,16 +168,40 @@ export function AgentWorkspace({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [drag, inspectorOpen, layout.inspectorWidth, onLayout]);
+  }, [drag, placement, layout.inspectorWidth, onLayout]);
 
   function selectSurface(id: SurfaceTabId, manual = true) {
     if (manual) setFollow((s) => applyManualTab(s));
-    onLayout({ surfaceTab: id, expandedPreview: false });
+    const patch: Partial<DesktopLayoutState> = { surfaceTab: id, expandedPreview: false };
+    if (!layout.inspectorPinned && (id === "browser" || id === "desktop" || id.startsWith("preview:"))) {
+      patch.inspectorOpen = false;
+    }
+    onLayout(patch);
   }
 
   function selectInspector(tab: InspectorTab, manual = true) {
     if (manual) setFollow((s) => applyManualTab(s));
+    setDismissed(false);
     onLayout({ inspectorTab: tab, inspectorOpen: true });
+  }
+
+  function closeInspector() {
+    setDismissed(true);
+    onLayout({ inspectorOpen: false });
+  }
+
+  function toggleInspector() {
+    if (layout.inspectorOpen) closeInspector();
+    else {
+      setDismissed(false);
+      onLayout({ inspectorOpen: true });
+    }
+  }
+
+  function togglePin() {
+    const next = !layout.inspectorPinned;
+    setDismissed(false);
+    onLayout({ inspectorPinned: next, inspectorOpen: next ? true : layout.inspectorOpen });
   }
 
   function onFollowClick() {
@@ -159,14 +210,18 @@ export function AgentWorkspace({
     onLayout({ followOrion: next.followOrion });
   }
 
+  const docked = placement === "dock";
+  const overlay = placement === "overlay";
   const surfaceWidth = layout.expandedPreview
-    ? Math.max(WORK_SURFACE_MIN, window.innerWidth - 240)
-    : clampWorkSurfaceWidth(layout.workSurfaceWidth, typeof window !== "undefined" ? window.innerWidth : 1440, inspectorOpen, layout.inspectorWidth);
-  const inspectorWidth = inspectorOpen ? clampInspectorWidth(layout.inspectorWidth) : 0;
+    ? Math.max(WORK_SURFACE_MIN, viewportWidth - 240)
+    : clampWorkSurfaceWidth(layout.workSurfaceWidth, viewportWidth, docked, layout.inspectorWidth);
+  const inspectorWidth = inspectorOpen ? clampInspectorWidth(layout.inspectorWidth, viewportWidth) : 0;
 
   return (
     <div
       className="orvyn-agent-workspace"
+      data-right-columns={countRightColumns({ rightPanelOpen: true, inspectorOpen })}
+      data-inspector={inspectorOpen ? (overlay ? "overlay" : "dock") : "closed"}
       style={{
         display: "flex",
         height: "100%",
@@ -189,18 +244,22 @@ export function AgentWorkspace({
           if (!drag) e.currentTarget.style.background = "transparent";
         }}
       />
-      <div style={{ width: surfaceWidth, minWidth: WORK_SURFACE_MIN, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div style={{ width: surfaceWidth, minWidth: WORK_SURFACE_MIN, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
         <WorkSurface
           derived={derivedVisible}
           surfaceTab={surfaceTab}
           follow={follow}
           running={running}
+          inspectorOpen={inspectorOpen}
+          inspectorPinned={layout.inspectorPinned}
           onSelectTab={(id) => selectSurface(id, true)}
           onSelectDiff={(path) => {
             setSelectedDiff(path);
             selectInspector("diff", true);
           }}
           onFollowClick={onFollowClick}
+          onToggleInspector={toggleInspector}
+          onTogglePin={togglePin}
           onExpand={() => onLayout({ expandedPreview: !layout.expandedPreview })}
           onClosePreview={(url) => {
             setClosedPreviews((list) => [...list, url]);
@@ -232,21 +291,41 @@ export function AgentWorkspace({
       </div>
       {inspectorOpen && (
         <>
+          {docked && (
+            <div
+              onMouseDown={(e) => {
+                start.current = { x: e.clientX, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth };
+                setDrag("inspector");
+              }}
+              title="Drag to resize inspector"
+              style={splitHandle(drag === "inspector")}
+              onMouseEnter={(e) => {
+                if (!drag) e.currentTarget.style.background = "rgba(34,211,238,0.28)";
+              }}
+              onMouseLeave={(e) => {
+                if (!drag) e.currentTarget.style.background = "transparent";
+              }}
+            />
+          )}
           <div
-            onMouseDown={(e) => {
-              start.current = { x: e.clientX, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth };
-              setDrag("inspector");
+            style={{
+              width: inspectorWidth,
+              minWidth: INSPECTOR_MIN,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+              ...(overlay
+                ? {
+                    position: "absolute",
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 24,
+                    boxShadow: "var(--orvyn-shadow)",
+                  }
+                : {}),
             }}
-            title="Drag to resize inspector"
-            style={splitHandle(drag === "inspector")}
-            onMouseEnter={(e) => {
-              if (!drag) e.currentTarget.style.background = "rgba(34,211,238,0.28)";
-            }}
-            onMouseLeave={(e) => {
-              if (!drag) e.currentTarget.style.background = "transparent";
-            }}
-          />
-          <div style={{ width: inspectorWidth, minWidth: INSPECTOR_MIN, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          >
             <InspectorPanel
               derived={derivedVisible}
               events={events}
@@ -257,6 +336,9 @@ export function AgentWorkspace({
               focus={focus}
               selectedDiff={selectedDiff}
               review={review}
+              pinned={layout.inspectorPinned}
+              onClose={closeInspector}
+              onTogglePin={togglePin}
               onSelectTab={(t) => selectInspector(t, true)}
               onSelectDiff={(path) => setSelectedDiff(path)}
               onOpenFile={onOpenFile}

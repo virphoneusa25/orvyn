@@ -13,7 +13,8 @@ export const WORK_SURFACE_MIN = 450;
 export const WORK_SURFACE_DEFAULT = 560;
 export const INSPECTOR_MIN = 280;
 export const INSPECTOR_DEFAULT = 320;
-export const CHAT_MIN = 420;
+export const CHAT_MIN = 500;
+export const SIDEBAR_WIDTH = 222;
 
 export interface DesktopLayoutState {
   rightPanelOpen: boolean;
@@ -23,6 +24,7 @@ export interface DesktopLayoutState {
   workSurfaceWidth: number;
   inspectorWidth: number;
   inspectorOpen: boolean;
+  inspectorPinned: boolean;
   surfaceTab: string;
   inspectorTab: string;
   followOrion: boolean;
@@ -36,7 +38,8 @@ export const DEFAULT_DESKTOP_LAYOUT: DesktopLayoutState = {
   helpOpen: false,
   workSurfaceWidth: WORK_SURFACE_DEFAULT,
   inspectorWidth: INSPECTOR_DEFAULT,
-  inspectorOpen: true,
+  inspectorOpen: false,
+  inspectorPinned: false,
   surfaceTab: "changes",
   inspectorTab: "files",
   followOrion: true,
@@ -51,7 +54,7 @@ export function clampTerminalHeight(height: number, viewportHeight = 900): numbe
 
 export function clampWorkSurfaceWidth(width: number, viewportWidth = 1440, inspectorOpen = true, inspectorWidth = INSPECTOR_DEFAULT): number {
   if (!Number.isFinite(width)) return WORK_SURFACE_DEFAULT;
-  const sidebar = 222;
+  const sidebar = SIDEBAR_WIDTH;
   const inspector = inspectorOpen ? Math.max(INSPECTOR_MIN, inspectorWidth) : 0;
   const max = Math.max(WORK_SURFACE_MIN, Math.floor(viewportWidth * 0.65));
   const room = Math.max(WORK_SURFACE_MIN, viewportWidth - sidebar - CHAT_MIN - inspector - 8);
@@ -70,8 +73,12 @@ function safeTab(value: unknown, fallback: string): string {
 
 export function parseDesktopLayout(raw: unknown): DesktopLayoutState {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_DESKTOP_LAYOUT };
-  const rec = raw as Partial<DesktopLayoutState>;
-  const inspectorOpen = rec.inspectorOpen !== false;
+  const rec = raw as Partial<DesktopLayoutState> & { inspectorPinned?: unknown };
+  const inspectorPinned = rec.inspectorPinned === true;
+  // Older builds defaulted Inspector open and had no pin flag — migrate those
+  // to a single Work Surface so reopening the app is not a permanent double pane.
+  const legacyAlwaysOn = rec.inspectorOpen === true && rec.inspectorPinned === undefined;
+  const inspectorOpen = inspectorPinned ? rec.inspectorOpen === true : !legacyAlwaysOn && rec.inspectorOpen === true;
   const inspectorWidth = clampInspectorWidth(Number(rec.inspectorWidth ?? INSPECTOR_DEFAULT));
   return {
     rightPanelOpen: rec.rightPanelOpen === true,
@@ -79,6 +86,7 @@ export function parseDesktopLayout(raw: unknown): DesktopLayoutState {
     bottomTerminalHeight: clampTerminalHeight(Number(rec.bottomTerminalHeight ?? TERMINAL_DEFAULT_HEIGHT)),
     helpOpen: rec.helpOpen === true,
     inspectorOpen,
+    inspectorPinned,
     inspectorWidth,
     workSurfaceWidth: clampWorkSurfaceWidth(Number(rec.workSurfaceWidth ?? WORK_SURFACE_DEFAULT), 1440, inspectorOpen, inspectorWidth),
     surfaceTab: safeTab(rec.surfaceTab, "changes"),
@@ -96,6 +104,7 @@ export function persistableLayout(state: DesktopLayoutState): Omit<DesktopLayout
     workSurfaceWidth: Math.max(WORK_SURFACE_MIN, Math.round(Number(state.workSurfaceWidth) || WORK_SURFACE_DEFAULT)),
     inspectorWidth: clampInspectorWidth(state.inspectorWidth, 2400),
     inspectorOpen: state.inspectorOpen,
+    inspectorPinned: state.inspectorPinned,
     surfaceTab: state.surfaceTab,
     inspectorTab: state.inspectorTab,
     followOrion: state.followOrion,
@@ -145,12 +154,14 @@ export function getDesktopLayout(): DesktopLayoutState {
 export function setDesktopLayout(patch: Partial<DesktopLayoutState>): DesktopLayoutState {
   const current = loadDesktopLayout();
   const inspectorOpen = patch.inspectorOpen ?? current.inspectorOpen;
+  const inspectorPinned = patch.inspectorPinned ?? current.inspectorPinned;
   const inspectorWidth = clampInspectorWidth(patch.inspectorWidth ?? current.inspectorWidth);
   state = {
     ...current,
     ...patch,
     bottomTerminalHeight: clampTerminalHeight(patch.bottomTerminalHeight ?? current.bottomTerminalHeight),
     inspectorOpen,
+    inspectorPinned,
     inspectorWidth,
     workSurfaceWidth: clampWorkSurfaceWidth(
       patch.workSurfaceWidth ?? current.workSurfaceWidth,

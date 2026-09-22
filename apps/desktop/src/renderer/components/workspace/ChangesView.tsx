@@ -33,8 +33,8 @@ export function ChangesView({
   if (rows.length === 0) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", gap: 8 }}>
-        <div style={emptyTitle()}>No changes yet</div>
-        <div style={emptyBody()}>Edits will appear here as ORION works.</div>
+        <div style={emptyTitle()}>No activity yet</div>
+        <div style={emptyBody()}>ORION previews, files, browser sessions, and changes will appear here.</div>
       </div>
     );
   }

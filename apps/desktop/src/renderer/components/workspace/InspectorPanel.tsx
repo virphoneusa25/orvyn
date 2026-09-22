@@ -3,7 +3,7 @@ import type { AgentEvent } from "../AgentActivityList";
 import type { AgentWorkspaceDerived, InspectorTab, ReviewSummary } from "../../agentWorkspaceModel";
 import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
-import { IconMore } from "../Icons";
+import { IconClose, IconMore, IconPin } from "../Icons";
 import { DiffInspector } from "./DiffInspector";
 import { FilesInspector } from "./FilesInspector";
 import { ReviewInspector } from "./ReviewInspector";
@@ -31,6 +31,9 @@ export function InspectorPanel({
   onSelectDiff,
   onOpenFile,
   onPreviewArtifact,
+  pinned,
+  onClose,
+  onTogglePin,
 }: {
   derived: AgentWorkspaceDerived;
   events: AgentEvent[];
@@ -45,6 +48,9 @@ export function InspectorPanel({
   onSelectDiff: (path: string) => void;
   onOpenFile: (path: string) => void;
   onPreviewArtifact?: (path: string) => void;
+  pinned: boolean;
+  onClose: () => void;
+  onTogglePin: () => void;
 }) {
   const [more, setMore] = useState(false);
 
@@ -56,7 +62,13 @@ export function InspectorPanel({
             {t.label}
           </button>
         ))}
-        <span style={{ marginLeft: "auto", position: "relative" }}>
+        <span style={{ marginLeft: "auto", position: "relative", display: "inline-flex", alignItems: "center" }}>
+          <button title={pinned ? "Unpin Inspector" : "Pin Inspector"} style={iconBtn(pinned)} onClick={onTogglePin}>
+            <IconPin size={13} />
+          </button>
+          <button title="Close Inspector" style={iconBtn()} onClick={onClose}>
+            <IconClose size={13} />
+          </button>
           <button title="Plan, Docs, and more" style={iconBtn(more || tab === "plan" || tab === "docs")} onClick={() => setMore((v) => !v)}>
             <IconMore size={14} />
           </button>
