@@ -119,6 +119,12 @@
   color: var(--ov-text-3); cursor: pointer;
 }
 .ov-icon-btn:hover { background: var(--ov-control); }
+.ov-icon-btn.is-active,
+.ov-icon-btn[aria-expanded="true"] {
+  background: rgba(108, 92, 255, 0.18);
+  border-color: var(--orvyn-purple, #6C5CFF);
+  color: var(--ov-text);
+}
 .ov-kbd { font-family: var(--ov-mono); font-size: 11px; opacity: .7; }
 
 /* ───────────── Sidebar ───────────── */

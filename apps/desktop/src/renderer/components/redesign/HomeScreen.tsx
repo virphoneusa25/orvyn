@@ -2,10 +2,11 @@
 // Home / mission control: top bar, animated hero (greeting + composer),
 // missions list with plain-language reasons, and the "Connect your stack"
 // checklist. Presentational — all data and actions come in through props.
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { HeroBackdrop } from "./HeroBackdrop";
 import { Icon } from "./icons";
 import { TopBar } from "./Shell";
+import { AddMenu, AddPlusButton, ComposerChips, attachmentsFromChips, composerTriggerKey, contextNoteFromChips, type ComposerChip } from "../AddMenu";
 import type {
   ComposerMode,
   EngineStatus,
@@ -39,8 +40,11 @@ export interface HomeScreenProps {
   /** Override the date line (defaults to today). */
   now?: Date;
 
-  onRun: (prompt: string, mode: ComposerMode) => void;
+  onRun: (prompt: string, mode: ComposerMode, extras?: { attachments?: import("../AttachmentBar").Attachment[]; contextNote?: string }) => void;
   onAttach?: () => void;
+  projectRoot?: string | null;
+  onOpenTerminal?: () => void;
+  onNavigate?: (view: string) => void;
   onPickAgent?: () => void;
   onOpenMission: (id: string) => void;
   onMissionAction?: (id: string) => void;
@@ -92,14 +96,21 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<ComposerMode>("auto");
+  const [addOpen, setAddOpen] = useState(false);
+  const [chips, setChips] = useState<ComposerChip[]>([]);
+  const plusRef = useRef<HTMLButtonElement>(null);
   const now = props.now ?? new Date();
   const dateLine = `${now.toLocaleDateString("en-US", { weekday: "long" })} · ${now.getDate()} ${now.toLocaleDateString("en-US", { month: "long" })}`.toUpperCase();
 
   const submit = () => {
     const text = prompt.trim();
     if (!text) return;
-    props.onRun(text, mode);
+    props.onRun(text, mode, {
+      attachments: attachmentsFromChips(chips),
+      contextNote: contextNoteFromChips(chips) || undefined,
+    });
     setPrompt("");
+    setChips([]);
   };
 
   return (
@@ -138,14 +149,37 @@ export function HomeScreen(props: HomeScreenProps) {
                   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
                     submit();
+                    return;
+                  }
+                  const trigger = composerTriggerKey(e.key);
+                  if (trigger && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                    const el = e.currentTarget;
+                    const atEdge = el.selectionStart === 0 || /\s/.test(el.value[el.selectionStart - 1] ?? " ");
+                    if (atEdge) {
+                      e.preventDefault();
+                      setAddOpen(true);
+                    }
                   }
                 }}
                 placeholder="Describe what ORVYN should build, fix, or run — e.g. “Find why BLF presence drops on Yealink phones and propose a fix”"
               />
+              {chips.length > 0 && (
+                <div style={{ padding: "0 16px 8px" }}>
+                  <ComposerChips chips={chips} onRemove={(id) => setChips((prev) => prev.filter((c) => c.id !== id))} />
+                </div>
+              )}
               <div className="ov-composer__bar">
-                <button type="button" className="ov-icon-btn" aria-label="Attach files or context" onClick={props.onAttach}>
-                  <Icon name="paperclip" size={16} />
-                </button>
+                <AddPlusButton open={addOpen} onClick={() => setAddOpen((v) => !v)} buttonRef={plusRef} />
+                <AddMenu
+                  open={addOpen}
+                  onOpenChange={setAddOpen}
+                  selected={chips}
+                  onSelectedChange={setChips}
+                  onOpenTerminal={props.onOpenTerminal}
+                  onNavigate={props.onNavigate}
+                  projectRoot={props.projectRoot ?? null}
+                  anchorRef={plusRef}
+                />
 
                 <div className="ov-segmented" role="group" aria-label="Mission mode">
                   {MODES.map((m) => (

@@ -322,18 +322,18 @@ export function listChatSessions(): { id: string; title: string; updatedAt: numb
 
 /** Reads the active conversation's composer settings (conversation value →
  *  caller-supplied user default → undefined). */
-export function getActiveChatSettings(): ChatSession["settings"] {
+export function getActiveChatSettings(): NonNullable<ChatSession["settings"]> {
   return active()?.settings ?? {};
 }
 
 /** Persists one composer setting into the ACTIVE conversation. */
-export function setActiveChatSetting<K extends NonNullable<keyof NonNullable<ChatSession["settings"]>>>(
+export function setActiveChatSetting<K extends keyof NonNullable<ChatSession["settings"]>>(
   key: K,
-  value: ChatSession["settings"][K]
+  value: NonNullable<ChatSession["settings"]>[K]
 ): void {
   const session = active();
   if (!session) return; // no conversation yet — user defaults still apply via the composer
-  session.settings = { ...session.settings, [key]: value };
+  session.settings = { ...session.settings, [key]: value } as NonNullable<ChatSession["settings"]>;
   session.updatedAt = Date.now();
   persist();
   emit();

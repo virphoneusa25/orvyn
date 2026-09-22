@@ -249,3 +249,33 @@ export const IconAgents = (p: IconProps) => (
     <path d="M10.5 7.8 7 14.7M13.5 7.8l3.5 6.9M8 17h8" />
   </Svg>
 );
+
+export const IconShare = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="18" cy="5" r="2.2" />
+    <circle cx="6" cy="12" r="2.2" />
+    <circle cx="18" cy="19" r="2.2" />
+    <path d="M8.1 10.8 15.8 6.4M8.1 13.2 15.8 17.6" />
+  </Svg>
+);
+
+export const IconHelp = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.8.4-1.2.9-1.2 1.8" />
+    <path d="M12 17.2h.01" />
+  </Svg>
+);
+
+export const IconPanelRight = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <path d="M15 4.5v15" />
+  </Svg>
+);
+
+export const IconMinus = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 12h14" />
+  </Svg>
+);

@@ -9,6 +9,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import appIcon from "../assets/icon.png";
 import { AccountCluster } from "./AccountCluster";
+import { ShareMenu } from "./ShareMenu";
+import { IconHelp, IconPanelRight, IconShare, IconTerminal } from "./Icons";
+import type { TranscriptInput } from "../shareTranscript";
 
 export interface MenuItem {
   label?: string;
@@ -32,6 +35,15 @@ export function TitleBar({
   onOpenCommand,
   onOpenSettings,
   onSwitchWorkspace,
+  workspaceName,
+  rightPanelOpen,
+  onToggleRightPanel,
+  terminalOpen,
+  onToggleTerminal,
+  helpOpen,
+  onToggleHelp,
+  shareTranscript,
+  shareDiagnostics,
 }: {
   menus: Menu[];
   title?: string;
@@ -43,8 +55,18 @@ export function TitleBar({
   onOpenCommand?: () => void;
   onOpenSettings?: () => void;
   onSwitchWorkspace?: () => void;
+  workspaceName?: string | null;
+  rightPanelOpen?: boolean;
+  onToggleRightPanel?: () => void;
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
+  helpOpen?: boolean;
+  onToggleHelp?: () => void;
+  shareTranscript?: TranscriptInput;
+  shareDiagnostics?: { runId?: string | null; backendHost?: string; workspaceName?: string | null; engineState?: string; cloudMode?: boolean };
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
   const [maximized, setMaximized] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -74,6 +96,11 @@ export function TitleBar({
     <div
       ref={barRef}
       className="drag-region"
+      onDoubleClick={(e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest(".no-drag")) return;
+        void window.orvyn.window.toggleMaximize().then(setMaximized);
+      }}
       style={{
         height: "var(--orvyn-topbar-height)",
         display: "flex",
@@ -219,6 +246,7 @@ export function TitleBar({
             Ask ORVYN to build, fix, deploy, research, or run a task…
           </span>
           <span
+            className="orvyn-title-optional"
             style={{
               marginLeft: "auto",
               fontSize: 10,
@@ -274,6 +302,7 @@ export function TitleBar({
           </span>
         )}
         <button
+          className="orvyn-title-optional"
           title="Notifications — none"
           style={{
             background: "transparent",
@@ -291,14 +320,50 @@ export function TitleBar({
         </button>
         <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
         <AccountCluster onOpenSettings={onOpenSettings} onSwitchWorkspace={onSwitchWorkspace} />
+        <button
+          type="button"
+          className="orvyn-title-optional"
+          title={workspaceName ? `Workspace: ${workspaceName}` : "Choose workspace"}
+          onClick={() => onSwitchWorkspace?.()}
+          style={chromeBtn()}
+        >
+          <span style={{ maxWidth: 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11 }}>
+            {workspaceName || "Folder"} ▾
+          </span>
+        </button>
+        <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
+        <div style={{ position: "relative" }}>
+          <ChromeButton
+            label="Share"
+            active={shareOpen}
+            onClick={() => setShareOpen((v) => !v)}
+          >
+            <IconShare size={14} />
+          </ChromeButton>
+          <ShareMenu
+            open={shareOpen}
+            onClose={() => setShareOpen(false)}
+            transcript={shareTranscript ?? { messages: [] }}
+            diagnostics={shareDiagnostics ?? {}}
+          />
+        </div>
+        <ChromeButton label="Help" active={helpOpen} onClick={() => onToggleHelp?.()}>
+          <IconHelp size={14} />
+        </ChromeButton>
+        <ChromeButton label="Toggle terminal" active={terminalOpen} onClick={() => onToggleTerminal?.()}>
+          <IconTerminal size={14} />
+        </ChromeButton>
+        <ChromeButton label="Toggle right panel" active={rightPanelOpen} onClick={() => onToggleRightPanel?.()}>
+          <IconPanelRight size={14} />
+        </ChromeButton>
         <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />
       </div>
 
-      <div style={{ display: "flex", height: "100%" }} className="no-drag">
+      <div style={{ display: "flex", height: "100%" }} className="no-drag orvyn-window-controls">
         <WinButton onClick={() => window.orvyn.window.minimize()} label="Minimize">
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
         </WinButton>
-        <WinButton onClick={() => window.orvyn.window.toggleMaximize().then(setMaximized)} label="Maximize">
+        <WinButton onClick={() => window.orvyn.window.toggleMaximize().then(setMaximized)} label={maximized ? "Restore" : "Maximize"}>
           {maximized ? (
             <svg width="10" height="10" viewBox="0 0 10 10">
               <rect x="0.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth="1" />
@@ -317,6 +382,63 @@ export function TitleBar({
         </WinButton>
       </div>
     </div>
+  );
+}
+
+function chromeBtn(): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: "1px solid var(--orvyn-border-soft)",
+    borderRadius: 6,
+    color: "var(--orvyn-text-secondary)",
+    height: 26,
+    padding: "0 8px",
+    display: "inline-flex",
+    alignItems: "center",
+    cursor: "pointer",
+  };
+}
+
+function ChromeButton({
+  label,
+  onClick,
+  active,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="orvyn-chrome-btn no-drag"
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        width: 34,
+        height: 34,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: active ? "rgba(108,92,255,0.16)" : "transparent",
+        border: "none",
+        borderRadius: 6,
+        color: active ? "var(--orvyn-text)" : "var(--orvyn-text-secondary)",
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.background = "var(--bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = active ? "rgba(108,92,255,0.16)" : "transparent";
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

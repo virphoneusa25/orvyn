@@ -330,45 +330,67 @@ export interface TerminalState {
   kill: () => Promise<void>;
 }
 
+/** One PTY for the bottom drawer and the right-panel Terminal tab. */
+const sharedTerm = {
+  sessionId: null as string | null,
+  output: "",
+  busy: false,
+  listening: false,
+  offData: null as null | (() => void),
+  listeners: new Set<() => void>(),
+};
+
+function emitSharedTerm(): void {
+  sharedTerm.listeners.forEach((l) => l());
+}
+
+function ensureTerminalListener(): void {
+  if (sharedTerm.listening) return;
+  sharedTerm.listening = true;
+  sharedTerm.offData = window.orvyn.terminal.onData((e) => {
+    sharedTerm.output = (sharedTerm.output + stripAnsi(e.data)).slice(-16000);
+    emitSharedTerm();
+  });
+}
+
 export function useTerminalSession(): TerminalState {
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [output, setOutput] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [, tick] = useState(0);
 
   useEffect(() => {
-    const off = window.orvyn.terminal.onData((e) => {
-      // Shells emit ANSI control sequences; a text view must not show them
-      // as garbage — translate colors/cursor codes away, keep clean lines.
-      setOutput((prev) => (prev + stripAnsi(e.data)).slice(-16000));
-    });
+    ensureTerminalListener();
+    const onChange = () => tick((n) => n + 1);
+    sharedTerm.listeners.add(onChange);
     return () => {
-      off();
+      sharedTerm.listeners.delete(onChange);
     };
   }, []);
 
   return {
-    sessionId,
-    output,
-    busy,
+    sessionId: sharedTerm.sessionId,
+    output: sharedTerm.output,
+    busy: sharedTerm.busy,
     start: async () => {
-      if (sessionId || busy) return;
-      setBusy(true);
+      if (sharedTerm.sessionId || sharedTerm.busy) return;
+      sharedTerm.busy = true;
+      emitSharedTerm();
       try {
         const id = await window.orvyn.terminal.start();
-        setSessionId(id);
+        sharedTerm.sessionId = id;
       } finally {
-        setBusy(false);
+        sharedTerm.busy = false;
+        emitSharedTerm();
       }
     },
     sendLine: async (line: string) => {
-      if (!sessionId) return;
-      await window.orvyn.terminal.write(sessionId, line + "\r\n");
+      if (!sharedTerm.sessionId) return;
+      await window.orvyn.terminal.write(sharedTerm.sessionId, line + "\r\n");
     },
     kill: async () => {
-      if (!sessionId) return;
-      await window.orvyn.terminal.kill(sessionId);
-      setSessionId(null);
-      setOutput("");
+      if (!sharedTerm.sessionId) return;
+      await window.orvyn.terminal.kill(sharedTerm.sessionId);
+      sharedTerm.sessionId = null;
+      sharedTerm.output = "";
+      emitSharedTerm();
     },
   };
 }

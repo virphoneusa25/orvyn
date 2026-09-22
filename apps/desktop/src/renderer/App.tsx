@@ -27,11 +27,11 @@ import { HonestState } from "./components/HonestState";
 import { AgentsWorkspace, ProjectsWorkspace, ServersWorkspace } from "./components/Workspaces";
 import { ToolsMcpWorkspace } from "./components/ToolsMcpWorkspace";
 import { EditorTabs } from "./components/EditorTabs";
-import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus } from "./connection";
+import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConnectionConfig, isCloudBackend } from "./connection";
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat, openChatSession, initChatHistory } from "./chatSession";
+import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages } from "./chatSession";
 import { pickReattachRun } from "./appReattach";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
@@ -43,6 +43,12 @@ import { MissionControl } from "./components/MissionControl";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { BottomPanel } from "./components/BottomPanel";
 import { GitScmPanel } from "./components/GitScmPanel";
+import { HelpDrawer } from "./components/HelpDrawer";
+import { TerminalDrawer } from "./components/TerminalDrawer";
+import { useDesktopLayout } from "./useDesktopLayout";
+import { registerSelectionReader, setWorkspaceSnapshot } from "./workspaceSnapshot";
+import type { Attachment } from "./components/AttachmentBar";
+import type { ComposerMode } from "./components/redesign/types";
 
 
 interface OpenFile {
@@ -121,6 +127,8 @@ export function App() {
   const [facts, setFacts] = useState(getConnectionFacts);
   const [runtimeCaps, setRuntimeCaps] = useState({ engineReady: false, dockerAvailable: false, sshHostCount: 0, githubConnected: false, postgresConnected: false, cloudSignedIn: false });
   const [missionDetail, setMissionDetail] = useState<ApiMissionDetail | null>(null);
+  const chrome = useDesktopLayout();
+  const editorRef = useRef<{ getSelection: () => { path: string; startLine: number; endLine: number; text?: string } | null } | null>(null);
 
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -138,6 +146,7 @@ export function App() {
     view === "editor" ||
     view === "terminal" ||
     ((view === "home" || view === "newtask") && centerMode === "work");
+  const showRightChrome = showContext && chrome.layout.rightPanelOpen;
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
@@ -151,6 +160,24 @@ export function App() {
     lastEventAt: agentRun.lastEventAt,
     usage: agentRun.usage,
   };
+
+  function handleHomeRun(prompt: string, mode: ComposerMode, extras?: { attachments?: Attachment[]; contextNote?: string }) {
+    const text = extras?.contextNote ? `${prompt}\n\n${extras.contextNote}` : prompt;
+    void submitOrvynCommand({
+      prompt: text,
+      mode,
+      source: "HOME",
+      projectRoot: workspaceRoot,
+      attachments: extras?.attachments,
+    }).then((outcome) => {
+      setCenterMode("work");
+      setView("newtask");
+      if (outcome.kind === "mission" || outcome.kind === "run") {
+        newChat();
+        setActiveRunId(outcome.runId);
+      }
+    });
+  }
 
   const projectName = workspaceRoot ? (workspaceRoot.split(/[\\/]/).pop() ?? null) : null;
   const presentation = describeConnection(facts);
@@ -228,11 +255,20 @@ export function App() {
       setView("newtask");
     };
     document.addEventListener("orvyn:open-run", onOpenRun);
+    const onCtx = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      chrome.setRightPanelOpen(true);
+      if (tab === "terminal") chrome.setBottomTerminalOpen(true);
+    };
+    document.addEventListener("orvyn:context-open", onCtx);
+    document.addEventListener("orvyn:context-tab", onCtx);
     return () => {
       document.removeEventListener("orvyn:nav", onNav);
       document.removeEventListener("orvyn:open-run", onOpenRun);
+      document.removeEventListener("orvyn:context-open", onCtx);
+      document.removeEventListener("orvyn:context-tab", onCtx);
     };
-  }, []);
+  }, [chrome]);
 
   useEffect(() => {
     const dispose = registerTabAutocomplete();
@@ -246,7 +282,22 @@ export function App() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.key === "F1") {
+        e.preventDefault();
+        chrome.toggleHelp();
+        return;
+      }
       const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === "`") {
+        e.preventDefault();
+        chrome.toggleBottomTerminal();
+        return;
+      }
+      if (mod && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        chrome.toggleRightPanel();
+        return;
+      }
       if (!mod) return;
       if (e.key.toLowerCase() !== "p") return;
       e.preventDefault();
@@ -254,12 +305,24 @@ export function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [chrome]);
 
   useEffect(() => {
     if (!workspace?.root) return;
     window.orvyn.project.listFiles().then(setProjectFiles).catch(() => setProjectFiles([]));
   }, [workspace?.root]);
+
+  useEffect(() => {
+    setWorkspaceSnapshot({
+      root: workspace?.root ?? null,
+      name: projectName,
+      kind: workspace?.kind ?? null,
+      recents: workspace?.recents ?? [],
+      openTabs: tabs.map((t) => t.path),
+      activePath,
+    });
+    registerSelectionReader(() => editorRef.current?.getSelection() ?? null);
+  }, [workspace, projectName, tabs, activePath]);
 
   useEffect(() => {
     if (!workspace?.root) return;
@@ -429,6 +492,9 @@ export function App() {
         { label: "Search & RAG", onClick: () => setView("search") },
         { label: "AI Models", onClick: () => setView("models") },
         { separator: true },
+        { label: "Toggle Right Panel", accelerator: "Ctrl+Shift+B", onClick: () => chrome.toggleRightPanel() },
+        { label: "Toggle Terminal", accelerator: "Ctrl+`", onClick: () => chrome.toggleBottomTerminal() },
+        { separator: true },
         { label: "Toggle Developer Tools", accelerator: "Ctrl+Shift+I", onClick: () => void window.orvyn.window.toggleDevTools() },
         { label: "Reload", accelerator: "Ctrl+R", onClick: () => void window.orvyn.window.reload() },
       ],
@@ -445,6 +511,7 @@ export function App() {
     {
       label: "Help",
       items: [
+        { label: "Getting Started", accelerator: "F1", onClick: () => chrome.setHelpOpen(true) },
         { label: "Connection Settings", onClick: () => setView("settings") },
         { label: "Keyboard Shortcuts", onClick: () => setPalette("commands") },
         { separator: true },
@@ -464,6 +531,28 @@ export function App() {
         onOpenCommand={() => setPalette("commands")}
         onOpenSettings={() => setView("settings")}
         onSwitchWorkspace={() => setView("projects")}
+        workspaceName={projectName}
+        rightPanelOpen={chrome.layout.rightPanelOpen}
+        onToggleRightPanel={() => chrome.toggleRightPanel()}
+        terminalOpen={chrome.layout.bottomTerminalOpen}
+        onToggleTerminal={() => chrome.toggleBottomTerminal()}
+        helpOpen={chrome.layout.helpOpen}
+        onToggleHelp={() => chrome.toggleHelp()}
+        shareTranscript={{
+          title: getActiveChat()?.title,
+          runId: agentRun.runId ?? getActiveChat()?.runId ?? null,
+          messages: getChatMessages(),
+          events: agentRun.events,
+        }}
+        shareDiagnostics={{
+          runId: agentRun.runId,
+          backendHost: (() => {
+            try { return new URL(getConnectionConfig().backendUrl).host; } catch { return undefined; }
+          })(),
+          workspaceName: projectName,
+          engineState: facts.localEngineState,
+          cloudMode: isCloudBackend(getConnectionConfig().backendUrl),
+        }}
       />
 
       <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
@@ -530,7 +619,25 @@ export function App() {
                     inlineSuggest: { enabled: true },
                     quickSuggestions: { other: false, comments: false, strings: false },
                   }}
-                  onMount={(editor) => inlineEdit.attach(editor)}
+                  onMount={(editor) => {
+                    inlineEdit.attach(editor);
+                    editorRef.current = {
+                      getSelection: () => {
+                        const model = editor.getModel();
+                        const sel = editor.getSelection();
+                        const file = tabs.find((t) => t.path === (editor.getModel()?.uri.path.split("/").pop() ?? "")) ?? tabs.find((t) => t.path === activePath);
+                        if (!model || !sel || sel.isEmpty()) return null;
+                        const path = openFile?.path ?? file?.path ?? activePath;
+                        if (!path) return null;
+                        return {
+                          path,
+                          startLine: sel.startLineNumber,
+                          endLine: sel.endLineNumber,
+                          text: model.getValueInRange(sel).slice(0, 8000),
+                        };
+                      },
+                    };
+                  }}
                   onChange={(value) =>
                     setTabs((prev) =>
                       prev.map((t) =>
@@ -564,15 +671,15 @@ export function App() {
                 active run/chat is only hidden, never destroyed. */}
             {view === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>
-                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={handleHomeRun} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} projectRoot={workspaceRoot} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={(v) => setView(v as ViewId)} />
               </div>
             ) : view === "newtask" && missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
             ) : view === "newtask" && centerMode === "work" ? (
-              <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} />
+              <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={(v) => setView(v as ViewId)} />
             ) : (
               <div className="ov-app" style={{ height: "100%" }}>
-                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={(prompt, mode) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+                <HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" onRun={handleHomeRun} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} projectRoot={workspaceRoot} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={(v) => setView(v as ViewId)} />
               </div>
             )}
           </div>
@@ -719,7 +826,20 @@ export function App() {
 
         {/* RIGHT: the dynamic context workspace. No chat lives here — the
             center WorkStream is the single conversation. */}
-        {showContext && (
+        <div
+          className="orvyn-right-panel"
+          style={{
+            width: showRightChrome ? undefined : 0,
+            maxWidth: showRightChrome ? 640 : 0,
+            opacity: showRightChrome ? 1 : 0,
+            overflow: "hidden",
+            flexShrink: 0,
+            display: "flex",
+            minWidth: 0,
+            transition: "max-width 180ms ease, opacity 160ms ease",
+            pointerEvents: showRightChrome ? "auto" : "none",
+          }}
+        >
           <ResizablePanel side="right" defaultWidth={360} minWidth={260} maxWidth={640}>
             <ContextPanel
               events={agentRun.events}
@@ -731,12 +851,20 @@ export function App() {
               }}
             />
           </ResizablePanel>
-        )}
+        </div>
       </div>
 
       {(view === "editor" || view === "terminal") && <BottomPanel />}
 
+      <TerminalDrawer
+        open={chrome.layout.bottomTerminalOpen}
+        height={chrome.layout.bottomTerminalHeight}
+        onHeightChange={(h) => chrome.setBottomTerminalHeight(h)}
+        onClose={() => chrome.setBottomTerminalOpen(false)}
+      />
+
       <StatusBar />
+      <HelpDrawer open={chrome.layout.helpOpen} onClose={() => chrome.setHelpOpen(false)} />
       {palette && (
         <CommandPalette
           mode={palette}

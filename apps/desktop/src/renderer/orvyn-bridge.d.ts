@@ -45,12 +45,16 @@ export interface OrvynBridge {
   };
   attachments: {
     pick(): Promise<ChatAttachment[]>;
+    pickFolder(): Promise<{ path: string; name: string } | { error: string } | null>;
   };
   window: {
     minimize(): Promise<void>;
     toggleMaximize(): Promise<boolean>;
     close(): Promise<void>;
     isMaximized(): Promise<boolean>;
+    getState(): Promise<{ maximized: boolean }>;
+    saveText(payload: { defaultName?: string; content: string }): Promise<{ ok: boolean; canceled?: boolean; path?: string }>;
+    writeClipboard?(text: string): Promise<boolean>;
     toggleDevTools(): Promise<void>;
     reload(): Promise<void>;
     onMaximizedChange(cb: (v: boolean) => void): () => void;

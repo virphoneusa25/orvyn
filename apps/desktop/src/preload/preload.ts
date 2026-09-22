@@ -34,12 +34,16 @@ contextBridge.exposeInMainWorld("orvyn", {
   },
   attachments: {
     pick: () => ipcRenderer.invoke("attachments:pick"),
+    pickFolder: () => ipcRenderer.invoke("attachments:pickFolder"),
   },
   window: {
     minimize: () => ipcRenderer.invoke("window:minimize"),
     toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke("window:toggleMaximize"),
     close: () => ipcRenderer.invoke("window:close"),
     isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:isMaximized"),
+    getState: (): Promise<{ maximized: boolean }> => ipcRenderer.invoke("window:get-state"),
+    saveText: (payload: { defaultName?: string; content: string }) => ipcRenderer.invoke("window:save-text", payload),
+    writeClipboard: (text: string) => ipcRenderer.invoke("clipboard:write", text),
     toggleDevTools: () => ipcRenderer.invoke("window:toggleDevTools"),
     reload: () => ipcRenderer.invoke("window:reload"),
     onMaximizedChange: (cb: (v: boolean) => void) => {

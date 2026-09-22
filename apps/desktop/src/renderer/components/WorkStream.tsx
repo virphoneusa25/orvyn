@@ -17,8 +17,9 @@ import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
 import "./ConversationActivity.css";
-import { Attachment, fileToAttachment } from "./AttachmentBar";
-import { IconPaperclip, IconRocket } from "./Icons";
+import { Attachment } from "./AttachmentBar";
+import { IconPlus, IconRocket } from "./Icons";
+import { AddMenu, ComposerChips, attachmentsFromChips, composerTriggerKey, contextNoteFromChips, type ComposerChip } from "./AddMenu";
 import appIcon from "../assets/icon.png";
 import type { CommandMode } from "../orvynIntent";
 import type { AgentEvent } from "./AgentActivityList";
@@ -56,11 +57,15 @@ export function WorkStream({
   projectName,
   run,
   onRunStarted,
+  onOpenTerminal,
+  onNavigate,
 }: {
   projectRoot: string | null;
   projectName: string | null;
   run: RunView;
   onRunStarted: (runId: string | null) => void;
+  onOpenTerminal?: () => void;
+  onNavigate?: (view: string) => void;
 }) {
   const [tick, setTick] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -68,6 +73,9 @@ export function WorkStream({
     () => (localStorage.getItem("orvyn:composer-mode") as CommandMode) || "auto"
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [chips, setChips] = useState<ComposerChip[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
+  const plusRef = useRef<HTMLButtonElement>(null);
   const [requestedModelId, setRequestedModelId] = useState(() => localStorage.getItem("orvyn:run-model") || "auto");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     () => (localStorage.getItem("orvyn:reasoning") as ReasoningEffort) || "auto"
@@ -105,7 +113,6 @@ export function WorkStream({
   const [indexHint, setIndexHint] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const attachRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!projectRoot) {
@@ -238,18 +245,22 @@ export function WorkStream({
   /** Submits bypassing the active-run guard — used for queued delivery. */
   const deliver = useRef<(text: string) => void>(() => {});
   async function send(text?: string, bypassQueue = false) {
+    const chipNote = contextNoteFromChips(chips);
+    const chipAtt = attachmentsFromChips(chips);
     const instruction = (text ?? prompt).trim();
+    const outgoing = chipNote && !text ? `${instruction}\n\n${chipNote}` : instruction;
     if (!instruction || busy) return;
     // While a run is active the instruction joins the DURABLE queue — the
     // backend RunStore holds it, so reconnects and restarts never lose it.
     if (runActive && !bypassQueue && run.runId) {
       setPrompt("");
       setAttachments([]);
+      setChips([]);
       try {
         const r = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/queue`), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ text: instruction }),
+          body: JSON.stringify({ text: outgoing }),
         });
         if (r.status === 409) {
           // The run settled between render and click — send it directly.
@@ -268,12 +279,12 @@ export function WorkStream({
     setError(null);
     try {
       const outcome = await submitOrvynCommand({
-        prompt: instruction,
+        prompt: outgoing,
         mode,
         source: "CHAT",
         projectRoot,
         previousRunId: run.runId,
-        attachments,
+        attachments: [...attachments, ...chipAtt],
         requestedModelId,
         reasoningEffort,
         permissionMode: accessMode,
@@ -281,6 +292,7 @@ export function WorkStream({
       if (outcome.kind === "error") throw new Error(outcome.error);
       setPrompt("");
       setAttachments([]);
+      setChips([]);
       if (outcome.kind !== "chat") onRunStarted(outcome.runId);
     } catch (err: any) {
       setError(err.message);
@@ -828,6 +840,16 @@ export function WorkStream({
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
+                return;
+              }
+              const trigger = composerTriggerKey(e.key);
+              if (trigger && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                const el = e.currentTarget;
+                const atEdge = el.selectionStart === 0 || /\s/.test(el.value[el.selectionStart - 1] ?? " ");
+                if (atEdge) {
+                  e.preventDefault();
+                  setAddOpen(true);
+                }
               }
             }}
             rows={2}
@@ -843,36 +865,44 @@ export function WorkStream({
               fontFamily: "inherit",
             }}
           />
+          <ComposerChips
+            chips={chips}
+            onRemove={(id) => setChips((prev) => prev.filter((c) => c.id !== id))}
+          />
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
             <button
-              title="Attach files or images"
-              onClick={() => attachRef.current?.click()}
-              style={ghostBtn()}
-            >
-              <IconPaperclip size={13} />
-            </button>
-            <input
-              ref={attachRef}
-              type="file"
-              multiple
-              style={{ display: "none" }}
-              onChange={async (e) => {
-                const files = Array.from(e.target.files ?? []);
-                const loaded: Attachment[] = [];
-                for (const f of files) {
-                  try {
-                    const a = await fileToAttachment(f);
-                    if (a) loaded.push(a);
-                  } catch (error: any) {
-                    setError(error.message ?? "Could not read attachment.");
-                  }
-                }
-                setAttachments((prev) => [...prev, ...loaded]);
-                e.target.value = "";
+              ref={plusRef}
+              type="button"
+              title="Add attachments, context, skills, or plugins"
+              aria-label="Add attachments, context, skills, or plugins"
+              aria-expanded={addOpen}
+              onClick={() => setAddOpen((v) => !v)}
+              style={{
+                ...ghostBtn(),
+                background: addOpen ? "rgba(108,92,255,0.18)" : "transparent",
+                borderColor: addOpen ? "var(--orvyn-purple)" : "var(--orvyn-border)",
+                color: addOpen ? "var(--orvyn-text)" : "var(--orvyn-text-secondary)",
               }}
+            >
+              <IconPlus size={14} />
+            </button>
+            <AddMenu
+              open={addOpen}
+              onOpenChange={setAddOpen}
+              selected={chips}
+              onSelectedChange={(next) => {
+                setChips(next);
+                setAttachments(attachmentsFromChips(next));
+              }}
+              onOpenTerminal={onOpenTerminal}
+              onNavigate={onNavigate}
+              projectRoot={projectRoot}
+              anchorRef={plusRef}
             />
-            {attachments.length > 0 && (
-              <span style={{ fontSize: 11, color: "var(--orvyn-cyan)" }}>{attachments.length} attached</span>
+            {(attachments.length > 0 || chips.length > 0) && (
+              <span style={{ fontSize: 11, color: "var(--orvyn-cyan)" }}>
+                {chips.length || attachments.length} attached
+              </span>
             )}
             {MODES.map((m) => (
               <button

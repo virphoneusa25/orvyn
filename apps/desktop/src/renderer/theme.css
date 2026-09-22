@@ -145,6 +145,19 @@ button {
   -webkit-app-region: no-drag;
 }
 
+.orvyn-chrome-btn {
+  -webkit-app-region: no-drag;
+}
+.orvyn-window-controls {
+  -webkit-app-region: no-drag;
+}
+
+@media (max-width: 1100px) {
+  .orvyn-title-optional {
+    display: none !important;
+  }
+}
+
 @keyframes orvyn-caret-blink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

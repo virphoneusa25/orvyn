@@ -1,5 +1,6 @@
 // apps/desktop/src/main/main.ts
-import { app, BrowserWindow, ipcMain, dialog, safeStorage } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage } from "electron";
+import { handleWindowAction, validateClipboardText, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
 import * as path from "path";
 import * as os from "os";
 import { promises as fs } from "fs";
@@ -309,6 +310,22 @@ async function readAttachment(filePath: string): Promise<{
   return { path: name, kind: "text", content: content.slice(0, 12_000) };
 }
 
+ipcMain.handle("attachments:pickFolder", async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const folder = result.filePaths[0];
+  const root = currentProjectRoot;
+  if (root) {
+    const rel = path.relative(root, folder);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return { error: "Folder must be inside the open workspace." };
+    }
+    return { path: rel.split(path.sep).join("/"), name: path.basename(folder) };
+  }
+  return { error: "Open a workspace to add folders as context." };
+});
+
 ipcMain.handle("attachments:pick", async () => {
   if (!mainWindow) return [];
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -395,22 +412,33 @@ async function readConfig(): Promise<typeof DEFAULT_CONFIG> {
   }
 }
 
-ipcMain.handle("window:minimize", () => {
-  mainWindow?.minimize();
+ipcMain.handle(WINDOW_IPC.minimize, () => handleWindowAction(mainWindow, "minimize"));
+ipcMain.handle(WINDOW_IPC.toggleMaximize, () => handleWindowAction(mainWindow, "toggleMaximize"));
+ipcMain.handle(WINDOW_IPC.toggleMaximizeAlias, () => handleWindowAction(mainWindow, "toggleMaximize"));
+ipcMain.handle(WINDOW_IPC.close, () => handleWindowAction(mainWindow, "close"));
+ipcMain.handle(WINDOW_IPC.isMaximized, () => handleWindowAction(mainWindow, "isMaximized"));
+ipcMain.handle(WINDOW_IPC.getState, () => handleWindowAction(mainWindow, "getState"));
+ipcMain.handle(WINDOW_IPC.saveText, async (_evt, payload: unknown) => {
+  const valid = validateSaveTextPayload(payload);
+  if (!valid || !mainWindow) return { ok: false };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: valid.defaultName,
+    filters: [
+      { name: "Markdown", extensions: ["md"] },
+      { name: "JSON", extensions: ["json"] },
+      { name: "Text", extensions: ["txt"] },
+    ],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  await fs.writeFile(result.filePath, valid.content, "utf-8");
+  return { ok: true, path: result.filePath };
 });
-
-ipcMain.handle("window:toggleMaximize", () => {
-  if (!mainWindow) return false;
-  if (mainWindow.isMaximized()) mainWindow.unmaximize();
-  else mainWindow.maximize();
-  return mainWindow.isMaximized();
+ipcMain.handle(WINDOW_IPC.clipboardWrite, (_evt, text: unknown) => {
+  const valid = validateClipboardText(text);
+  if (valid == null) return false;
+  clipboard.writeText(valid);
+  return true;
 });
-
-ipcMain.handle("window:close", () => {
-  mainWindow?.close();
-});
-
-ipcMain.handle("window:isMaximized", () => mainWindow?.isMaximized() ?? false);
 
 ipcMain.handle("window:toggleDevTools", () => {
   mainWindow?.webContents.toggleDevTools();
