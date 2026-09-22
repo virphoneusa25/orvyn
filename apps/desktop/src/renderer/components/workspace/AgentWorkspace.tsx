@@ -5,32 +5,58 @@ import {
   deriveAgentWorkspace,
   deriveReviewSummary,
   followApplies,
-  followedSurfaceId,
+  followedPreviewUrl,
   initialFollowState,
   mapContextTab,
-  parseSurfaceTabId,
+  OVERFLOW_WORKSPACE_TABS,
+  PRIMARY_WORKSPACE_TABS,
   resumeFollow,
   toggleFollow,
+  type AgentWorkspaceTab,
   type FollowController,
-  type InspectorTab,
-  type SurfaceTabId,
+  type PreviewTarget,
 } from "../../agentWorkspaceModel";
 import {
+  AGENT_WORKSPACE_TABBAR_TEST_ID,
+  AGENT_WORKSPACE_TEST_ID,
+  assertSingleAgentWorkspace,
   countRightColumns,
-  decideInspectorFollow,
-  inspectorOpenForRun,
-  inspectorPlacement,
+  followActiveTab,
 } from "../../agentWorkspaceLayout";
 import {
-  clampInspectorWidth,
-  clampWorkSurfaceWidth,
-  INSPECTOR_MIN,
-  WORK_SURFACE_MIN,
+  AGENT_PANEL_MIN,
+  clampAgentPanelWidth,
+  shouldOverlayAgentPanel,
+  SIDEBAR_WIDTH,
   type DesktopLayoutState,
 } from "../../desktopLayout";
-import { InspectorPanel } from "./InspectorPanel";
-import { WorkSurface } from "./WorkSurface";
-import { splitHandle } from "./workspaceChrome";
+import { DocumentsPanel } from "../DocumentsPanel";
+import { MissionPlan } from "../MissionPlan";
+import { IconClose, IconCrosshair, IconMore } from "../Icons";
+import { AgentActivityHeader } from "./AgentActivityHeader";
+import { ArtifactView } from "./ArtifactView";
+import { BrowserView } from "./BrowserView";
+import { ChangesView } from "./ChangesView";
+import { DesktopView } from "./DesktopView";
+import { DiffInspector } from "./DiffInspector";
+import { FilesInspector } from "./FilesInspector";
+import { PreviewView } from "./PreviewView";
+import { ReviewInspector } from "./ReviewInspector";
+import { TerminalInspector } from "./TerminalInspector";
+import { iconBtn, splitHandle, tabBtn } from "./workspaceChrome";
+
+export function AgentWorkspacePanel(props: {
+  events: AgentEvent[];
+  runStatus: string;
+  runId?: string | null;
+  projectRoot: string | null;
+  projectName?: string | null;
+  layout: DesktopLayoutState;
+  onLayout: (patch: Partial<DesktopLayoutState>) => void;
+  onOpenFile: (path: string) => void;
+}) {
+  return <AgentWorkspace {...props} />;
+}
 
 export function AgentWorkspace({
   events,
@@ -64,25 +90,35 @@ export function AgentWorkspace({
   const [focus, setFocus] = useState<{ path?: string; fileName?: string } | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<string | null>(null);
   const [closedPreviews, setClosedPreviews] = useState<string[]>([]);
-  const [dismissed, setDismissed] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
-  const [drag, setDrag] = useState<null | "surface" | "inspector">(null);
-  const start = useRef({ x: 0, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth });
+  const [dragging, setDragging] = useState(false);
+  const start = useRef({ x: 0, width: layout.agentPanelWidth });
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  const surfaceTab = layout.surfaceTab;
-  const inspectorTab = (layout.inspectorTab as InspectorTab) || "files";
-  const inspectorOpen = layout.inspectorOpen && !layout.expandedPreview;
+  const activeTab = layout.activeTab;
   const visiblePreviews = derived.previews.filter((p) => !closedPreviews.includes(p.url));
-  const derivedVisible = useMemo(
-    () => ({ ...derived, previews: visiblePreviews }),
-    [derived, visiblePreviews]
-  );
-  const placement = inspectorPlacement(viewportWidth, inspectorOpen, layout.workSurfaceWidth);
+  const preview =
+    visiblePreviews.find((p) => p.url === layout.previewUrl) ??
+    visiblePreviews.find((p) => p.url === derived.activity?.previewUrl) ??
+    visiblePreviews[0];
+  const overlay = shouldOverlayAgentPanel(viewportWidth);
+  const overflowActive = OVERFLOW_WORKSPACE_TABS.some((t) => t.id === activeTab);
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    const root = rootRef.current?.ownerDocument ?? (typeof document !== "undefined" ? document : null);
+    if (!root) return;
+    try {
+      assertSingleAgentWorkspace(root);
+    } catch (err) {
+      console.error(err);
+    }
   }, []);
 
   useEffect(() => {
@@ -93,42 +129,23 @@ export function AgentWorkspace({
 
   useEffect(() => {
     if (!followApplies(follow)) return;
-    const nextSurface = followedSurfaceId({ ...derived, previews: visiblePreviews });
-    const decision = decideInspectorFollow({
-      pinned: layout.inspectorPinned,
-      inspectorOpen: layout.inspectorOpen,
-      dismissed,
-      activity: derived.activity,
-      surfaceId: nextSurface,
-    });
-    const allowInspector = inspectorOpenForRun({
-      runStatus,
-      rightPanelOpen: true,
-      inspectorPinned: layout.inspectorPinned,
-      inspectorOpen: decision.inspectorOpen,
-    });
+    const nextTab = followActiveTab(derived.activity, activeTab);
     const patch: Partial<DesktopLayoutState> = {};
-    if (nextSurface && nextSurface !== surfaceTab) patch.surfaceTab = nextSurface;
-    if (decision.inspectorTab && decision.inspectorTab !== inspectorTab && allowInspector) patch.inspectorTab = decision.inspectorTab;
-    if (allowInspector !== layout.inspectorOpen) patch.inspectorOpen = allowInspector;
+    if (nextTab !== activeTab) patch.activeTab = nextTab;
+    if (nextTab === "preview") {
+      const url = followedPreviewUrl({ ...derived, previews: visiblePreviews });
+      if (url && url !== layout.previewUrl) patch.previewUrl = url;
+    }
     if (derived.activity?.file) setSelectedDiff(derived.activity.file);
-    setDismissed(decision.dismissed);
     if (Object.keys(patch).length) onLayout(patch);
-  }, [derived.activity, visiblePreviews.length, follow, layout.inspectorPinned, dismissed, runStatus]);
+  }, [derived.activity, visiblePreviews.length, follow, activeTab, layout.previewUrl, onLayout]);
 
   useEffect(() => {
     const onCtxTab = (e: Event) => {
       const detail = (e as CustomEvent<{ tab?: string }>).detail;
       const mapped = mapContextTab(detail?.tab);
       setFollow((s) => applyManualTab(s));
-      const patch: Partial<DesktopLayoutState> = {};
-      if (mapped.surface) patch.surfaceTab = mapped.surface;
-      if (mapped.inspector) {
-        patch.inspectorTab = mapped.inspector;
-        patch.inspectorOpen = true;
-        setDismissed(false);
-      }
-      if (Object.keys(patch).length) onLayout(patch);
+      if (mapped) onLayout({ activeTab: mapped, rightPanelOpen: true });
     };
     const onOpen = (e: Event) => {
       const d = (e as CustomEvent<{ tab?: string; path?: string; fileName?: string }>).detail;
@@ -137,11 +154,9 @@ export function AgentWorkspace({
       setFollow((s) => applyManualTab(s));
       setFocus(d.path || d.fileName ? { path: d.path, fileName: d.fileName } : null);
       if (d.path) setSelectedDiff(d.path);
-      setDismissed(false);
       onLayout({
         rightPanelOpen: true,
-        ...(mapped.surface ? { surfaceTab: mapped.surface } : {}),
-        ...(mapped.inspector ? { inspectorTab: mapped.inspector, inspectorOpen: true } : {}),
+        ...(mapped ? { activeTab: mapped } : {}),
       });
     };
     document.addEventListener("orvyn:context-tab", onCtxTab);
@@ -153,17 +168,12 @@ export function AgentWorkspace({
   }, [onLayout]);
 
   useEffect(() => {
-    if (!drag) return;
+    if (!dragging) return;
     function onMove(e: MouseEvent) {
-      const dx = e.clientX - start.current.x;
-      if (drag === "surface") {
-        onLayout({ workSurfaceWidth: clampWorkSurfaceWidth(start.current.surface + dx, window.innerWidth, placement === "dock", layout.inspectorWidth) });
-      } else {
-        onLayout({ inspectorWidth: clampInspectorWidth(start.current.inspector - dx, window.innerWidth) });
-      }
+      onLayout({ agentPanelWidth: clampAgentPanelWidth(start.current.width - (e.clientX - start.current.x), window.innerWidth) });
     }
     function onUp() {
-      setDrag(null);
+      setDragging(false);
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -175,40 +185,16 @@ export function AgentWorkspace({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [drag, placement, layout.inspectorWidth, onLayout]);
+  }, [dragging, onLayout]);
 
-  function selectSurface(id: SurfaceTabId, manual = true) {
+  function selectTab(tab: AgentWorkspaceTab, manual = true, previewUrl?: string) {
     if (manual) setFollow((s) => applyManualTab(s));
-    const patch: Partial<DesktopLayoutState> = { surfaceTab: id, expandedPreview: false };
-    if (!layout.inspectorPinned && (id === "browser" || id === "desktop" || id.startsWith("preview:"))) {
-      patch.inspectorOpen = false;
-    }
-    onLayout(patch);
-  }
-
-  function selectInspector(tab: InspectorTab, manual = true) {
-    if (manual) setFollow((s) => applyManualTab(s));
-    setDismissed(false);
-    onLayout({ inspectorTab: tab, inspectorOpen: true });
-  }
-
-  function closeInspector() {
-    setDismissed(true);
-    onLayout({ inspectorOpen: false });
-  }
-
-  function toggleInspector() {
-    if (layout.inspectorOpen) closeInspector();
-    else {
-      setDismissed(false);
-      onLayout({ inspectorOpen: true });
-    }
-  }
-
-  function togglePin() {
-    const next = !layout.inspectorPinned;
-    setDismissed(false);
-    onLayout({ inspectorPinned: next, inspectorOpen: next ? true : layout.inspectorOpen });
+    setMoreOpen(false);
+    onLayout({
+      activeTab: tab,
+      expandedPreview: false,
+      ...(previewUrl ? { previewUrl } : {}),
+    });
   }
 
   function onFollowClick() {
@@ -217,143 +203,293 @@ export function AgentWorkspace({
     onLayout({ followOrion: next.followOrion });
   }
 
-  const docked = placement === "dock";
-  const overlay = placement === "overlay";
-  const surfaceWidth = layout.expandedPreview
-    ? Math.max(WORK_SURFACE_MIN, viewportWidth - 240)
-    : clampWorkSurfaceWidth(layout.workSurfaceWidth, viewportWidth, docked, layout.inspectorWidth);
-  const inspectorWidth = inspectorOpen ? clampInspectorWidth(layout.inspectorWidth, viewportWidth) : 0;
+  function closeWorkspace() {
+    onLayout({ rightPanelOpen: false });
+  }
+
+  const width = layout.expandedPreview
+    ? Math.max(AGENT_PANEL_MIN, viewportWidth - SIDEBAR_WIDTH - 24)
+    : clampAgentPanelWidth(layout.agentPanelWidth, viewportWidth);
+  const followActive = follow.followOrion && !follow.paused;
+  const columns = countRightColumns({ rightPanelOpen: true });
 
   return (
     <div
+      ref={rootRef}
       className="orvyn-agent-workspace"
-      data-right-columns={countRightColumns({ rightPanelOpen: true, inspectorOpen })}
-      data-inspector={inspectorOpen ? (overlay ? "overlay" : "dock") : "closed"}
+      data-testid={AGENT_WORKSPACE_TEST_ID}
+      data-right-columns={columns}
+      data-active-tab={activeTab}
+      data-overlay={overlay ? "true" : "false"}
       style={{
         display: "flex",
         height: "100%",
-        minWidth: 0,
-        position: "relative",
-        flex: layout.expandedPreview ? 1 : "0 0 auto",
+        width: overlay ? width : "100%",
+        minWidth: overlay ? AGENT_PANEL_MIN : 0,
+        maxWidth: overlay ? Math.floor(viewportWidth * 0.7) : "100%",
+        minHeight: 0,
+        position: overlay ? "absolute" : "relative",
+        top: overlay ? 0 : undefined,
+        right: overlay ? 0 : undefined,
+        bottom: overlay ? 0 : undefined,
+        zIndex: overlay ? 24 : undefined,
+        boxShadow: overlay ? "var(--orvyn-shadow)" : undefined,
+        background: "var(--orvyn-surface-1)",
+        borderLeft: "1px solid var(--orvyn-border-soft)",
       }}
     >
       <div
         onMouseDown={(e) => {
-          start.current = { x: e.clientX, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth };
-          setDrag("surface");
+          start.current = { x: e.clientX, width: layout.agentPanelWidth };
+          setDragging(true);
         }}
-        title="Drag to resize work surface"
-        style={splitHandle(drag === "surface")}
+        title="Drag to resize Agent Workspace"
+        style={splitHandle(dragging)}
         onMouseEnter={(e) => {
-          if (!drag) e.currentTarget.style.background = "rgba(34,211,238,0.28)";
+          if (!dragging) e.currentTarget.style.background = "rgba(34,211,238,0.28)";
         }}
         onMouseLeave={(e) => {
-          if (!drag) e.currentTarget.style.background = "transparent";
+          if (!dragging) e.currentTarget.style.background = "transparent";
         }}
       />
-      <div style={{ width: surfaceWidth, minWidth: WORK_SURFACE_MIN, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
-        <WorkSurface
-          derived={derivedVisible}
-          surfaceTab={surfaceTab}
-          follow={follow}
-          running={running}
-          inspectorOpen={inspectorOpen}
-          inspectorPinned={layout.inspectorPinned}
-          onSelectTab={(id) => selectSurface(id, true)}
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          data-testid={AGENT_WORKSPACE_TABBAR_TEST_ID}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            height: 32,
+            borderBottom: "1px solid var(--orvyn-border-soft)",
+            padding: "0 4px",
+            flexShrink: 0,
+            minWidth: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", minWidth: 0, overflowX: "auto", flex: 1 }}>
+            {PRIMARY_WORKSPACE_TABS.map((t) => (
+              <button
+                key={t.id}
+                data-tab={t.id}
+                onClick={() => selectTab(t.id, true, t.id === "preview" ? preview?.url : undefined)}
+                style={tabBtn(activeTab === t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <span style={{ marginLeft: 4, display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+            {follow.paused && follow.followOrion && (
+              <span style={{ fontSize: 10, color: "var(--orvyn-yellow)", paddingRight: 4 }}>Follow paused</span>
+            )}
+            <div style={{ position: "relative" }}>
+              <button
+                title="Plan, Docs, Desktop"
+                style={iconBtn(moreOpen || overflowActive)}
+                onClick={() => setMoreOpen((v) => !v)}
+              >
+                <IconMore size={14} />
+              </button>
+              {moreOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    right: 0,
+                    top: 28,
+                    zIndex: 20,
+                    minWidth: 128,
+                    background: "var(--orvyn-surface-2)",
+                    border: "1px solid var(--orvyn-border)",
+                    borderRadius: 8,
+                    padding: 4,
+                    boxShadow: "var(--orvyn-shadow)",
+                  }}
+                >
+                  {OVERFLOW_WORKSPACE_TABS.map((t) => (
+                    <button
+                      key={t.id}
+                      style={overflowItem(activeTab === t.id)}
+                      onClick={() => selectTab(t.id, true)}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              title={follow.paused ? "Resume following ORION" : followActive ? "Following ORION" : "Follow ORION"}
+              style={iconBtn(followActive)}
+              onClick={onFollowClick}
+            >
+              <IconCrosshair size={14} />
+            </button>
+            <button title="Close Agent Workspace" style={iconBtn()} onClick={closeWorkspace}>
+              <IconClose size={13} />
+            </button>
+          </span>
+        </div>
+        <AgentActivityHeader line={derived.activity?.line} running={running} waitingApproval={derived.waitingApproval} />
+        <WorkspaceView
+          tab={activeTab}
+          derived={{ ...derived, previews: visiblePreviews }}
+          events={events}
+          review={review}
+          runStatus={runStatus}
+          runId={runId ?? undefined}
+          projectRoot={projectRoot}
+          focus={focus}
+          selectedDiff={selectedDiff}
+          preview={preview}
+          onSelectTab={(tab) => selectTab(tab, true)}
           onSelectDiff={(path) => {
             setSelectedDiff(path);
-            selectInspector("diff", true);
+            selectTab("diff", true);
           }}
-          onFollowClick={onFollowClick}
-          onToggleInspector={toggleInspector}
-          onTogglePin={togglePin}
+          onOpenFile={onOpenFile}
+          onPreviewArtifact={() => selectTab("docs", true)}
           onExpand={() => onLayout({ expandedPreview: !layout.expandedPreview })}
           onClosePreview={(url) => {
             setClosedPreviews((list) => [...list, url]);
-            const parsed = parseSurfaceTabId(surfaceTab);
-            if (parsed.previewUrl === url) onLayout({ surfaceTab: "changes" });
+            if (layout.previewUrl === url) onLayout({ previewUrl: "", activeTab: "changes" });
           }}
-          onOpenPlus={(kind) => selectSurface(kind, true)}
         />
-        {layout.expandedPreview && (
-          <button
-            onClick={() => onLayout({ expandedPreview: false })}
-            style={{
-              position: "absolute",
-              top: 40,
-              right: 16,
-              zIndex: 30,
-              background: "var(--orvyn-surface-2)",
-              border: "1px solid var(--orvyn-border)",
-              color: "var(--orvyn-text)",
-              borderRadius: 6,
-              fontSize: 11,
-              padding: "4px 10px",
-              cursor: "pointer",
-            }}
-          >
-            Restore layout
-          </button>
-        )}
       </div>
-      {inspectorOpen && (
-        <>
-          {docked && (
-            <div
-              onMouseDown={(e) => {
-                start.current = { x: e.clientX, surface: layout.workSurfaceWidth, inspector: layout.inspectorWidth };
-                setDrag("inspector");
-              }}
-              title="Drag to resize inspector"
-              style={splitHandle(drag === "inspector")}
-              onMouseEnter={(e) => {
-                if (!drag) e.currentTarget.style.background = "rgba(34,211,238,0.28)";
-              }}
-              onMouseLeave={(e) => {
-                if (!drag) e.currentTarget.style.background = "transparent";
-              }}
-            />
-          )}
-          <div
-            style={{
-              width: inspectorWidth,
-              minWidth: INSPECTOR_MIN,
-              display: "flex",
-              flexDirection: "column",
-              minHeight: 0,
-              ...(overlay
-                ? {
-                    position: "absolute",
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                    zIndex: 24,
-                    boxShadow: "var(--orvyn-shadow)",
-                  }
-                : {}),
-            }}
-          >
-            <InspectorPanel
-              derived={derivedVisible}
-              events={events}
-              tab={inspectorTab}
-              runStatus={runStatus}
-              runId={runId ?? undefined}
-              projectRoot={projectRoot}
-              focus={focus}
-              selectedDiff={selectedDiff}
-              review={review}
-              pinned={layout.inspectorPinned}
-              onClose={closeInspector}
-              onTogglePin={togglePin}
-              onSelectTab={(t) => selectInspector(t, true)}
-              onSelectDiff={(path) => setSelectedDiff(path)}
-              onOpenFile={onOpenFile}
-              onPreviewArtifact={(path) => selectSurface(`artifact:${path}`, true)}
-            />
-          </div>
-        </>
-      )}
     </div>
   );
+}
+
+function WorkspaceView({
+  tab,
+  derived,
+  events,
+  review,
+  runStatus,
+  runId,
+  projectRoot,
+  focus,
+  selectedDiff,
+  preview,
+  onSelectTab,
+  onSelectDiff,
+  onOpenFile,
+  onPreviewArtifact,
+  onExpand,
+  onClosePreview,
+}: {
+  tab: AgentWorkspaceTab;
+  derived: ReturnType<typeof deriveAgentWorkspace>;
+  events: AgentEvent[];
+  review: ReturnType<typeof deriveReviewSummary>;
+  runStatus: string;
+  runId?: string;
+  projectRoot: string | null;
+  focus: { path?: string; fileName?: string } | null;
+  selectedDiff: string | null;
+  preview?: PreviewTarget;
+  onSelectTab: (tab: AgentWorkspaceTab) => void;
+  onSelectDiff: (path: string) => void;
+  onOpenFile: (path: string) => void;
+  onPreviewArtifact: (path: string) => void;
+  onExpand: () => void;
+  onClosePreview: (url: string) => void;
+}) {
+  if (tab === "preview") {
+    return (
+      <PreviewView
+        target={preview}
+        cursor={derived.browser.cursor}
+        status={derived.activity?.tab === "preview" ? derived.activity.line : null}
+        live={Boolean(preview?.local)}
+        snapshot={derived.browser.actions.find((a) => a.snapshot)?.snapshot}
+        onExpand={onExpand}
+        onClose={preview ? () => onClosePreview(preview.url) : undefined}
+      />
+    );
+  }
+  if (tab === "changes") {
+    return (
+      <ChangesView
+        files={derived.files}
+        diffs={derived.diffs}
+        summary={derived.changeSummary}
+        selected={selectedDiff ?? derived.activity?.file}
+        onSelect={onSelectDiff}
+      />
+    );
+  }
+  if (tab === "files") {
+    return (
+      <FilesInspector
+        files={derived.files}
+        artifacts={derived.artifacts}
+        projectRoot={projectRoot}
+        focus={focus}
+        activePath={selectedDiff ?? derived.activity?.file}
+        onOpenFile={(path) => {
+          onOpenFile(path);
+          onSelectDiff(path);
+        }}
+        onPreviewArtifact={onPreviewArtifact}
+      />
+    );
+  }
+  if (tab === "diff") {
+    return (
+      <DiffInspector
+        diffs={derived.diffs}
+        focus={focus}
+        selectedPath={selectedDiff ?? derived.activity?.file}
+        onSelect={onSelectDiff}
+      />
+    );
+  }
+  if (tab === "terminal") {
+    return <TerminalInspector events={events} />;
+  }
+  if (tab === "browser") {
+    return (
+      <BrowserView
+        browser={derived.browser}
+        status={derived.activity?.tab === "browser" ? derived.activity.line : null}
+      />
+    );
+  }
+  if (tab === "review") {
+    return (
+      <ReviewInspector
+        runId={runId}
+        summary={review}
+        onOpenDiff={() => onSelectTab("diff")}
+        onOpenTerminal={() => onSelectTab("terminal")}
+      />
+    );
+  }
+  if (tab === "plan") {
+    return (
+      <div style={{ flex: 1, overflowY: "auto", padding: 10 }}>
+        <MissionPlan events={events} status={runStatus} />
+      </div>
+    );
+  }
+  if (tab === "docs") {
+    const artifact = derived.artifacts[0];
+    if (artifact) return <ArtifactView name={artifact.path} />;
+    return <DocumentsPanel projectRoot={projectRoot} revision={derived.artifacts.length} />;
+  }
+  return <DesktopView />;
+}
+
+function overflowItem(active: boolean): React.CSSProperties {
+  return {
+    display: "block",
+    width: "100%",
+    background: active ? "rgba(108,92,255,0.12)" : "transparent",
+    border: "none",
+    color: "var(--orvyn-text-secondary)",
+    textAlign: "left",
+    fontSize: 12,
+    padding: "6px 8px",
+    cursor: "pointer",
+    borderRadius: 5,
+  };
 }

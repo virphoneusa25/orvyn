@@ -8,14 +8,13 @@ import {
   detectPreviewUrls,
   extractOrionCommands,
   followApplies,
-  followedSurfaceId,
+  followedTab,
   initialFollowState,
   isLocalPreviewUrl,
   isSafeHttpUrl,
   mapContextTab,
-  parseSurfaceTabId,
+  parseActiveTab,
   previewLabel,
-  previewTabId,
   reconstructWorkspace,
   resumeFollow,
   routeEvent,
@@ -23,6 +22,7 @@ import {
   toggleFollow,
   type WorkspaceEvent,
 } from "./agentWorkspaceModel.ts";
+import { followActiveTab, nextWorkspaceLayout } from "./agentWorkspaceLayout.ts";
 
 function ev(type: string, data: Record<string, unknown> = {}, timestamp = 1, id?: string): WorkspaceEvent {
   return { id: id ?? type, type, timestamp, data };
@@ -58,36 +58,36 @@ test("preview labels prefer project name + port", () => {
   assert.equal(previewLabel({ url: "http://localhost", label: "Preview", source: "dev-server", local: true }), "Preview");
 });
 
-test("event routing maps file/browser/terminal/review with priorities", () => {
+test("event routing maps file/browser/terminal/review onto one tab", () => {
   const edit = routeEvent(ev("file.edit", { preview: { path: "App.tsx" } }));
-  assert.equal(edit?.surface, "changes");
-  assert.equal(edit?.inspector, "diff");
+  assert.equal(edit?.tab, "diff");
   assert.equal(edit?.priority, 70);
   assert.match(edit?.line ?? "", /App\.tsx/);
 
   const read = routeEvent(ev("file.read", { path: "readme.md" }));
   assert.equal(read?.priority, 20);
-  assert.equal(read?.inspector, "files");
+  assert.equal(read?.tab, "files");
+  assert.equal(read?.switchTab, false);
 
   const localBrowse = routeEvent(ev("browser.action", { tool: "browser_click", url: "http://127.0.0.1:5173", target: "Sign In", x: 40, y: 80 }));
-  assert.equal(localBrowse?.surface, "preview");
+  assert.equal(localBrowse?.tab, "preview");
   assert.match(localBrowse?.line ?? "", /Sign In/);
 
   const extBrowse = routeEvent(ev("browser.action", { tool: "browser_goto", url: "https://docs.stripe.com" }));
-  assert.equal(extBrowse?.surface, "browser");
+  assert.equal(extBrowse?.tab, "browser");
 
   const term = routeEvent(ev("terminal.started", { command: "npm test" }));
-  assert.equal(term?.inspector, "terminal");
+  assert.equal(term?.tab, "terminal");
   assert.match(term?.line ?? "", /npm test/);
 
   const preview = routeEvent(ev("preview.available", { url: "http://localhost:4173" }));
-  assert.equal(preview?.surface, "preview");
+  assert.equal(preview?.tab, "preview");
   assert.ok((preview?.priority ?? 0) > 80);
 
   const approval = routeEvent(ev("approval.required", { tool: "terminal" }));
   assert.equal(approval?.priority, 100);
-  assert.equal(approval?.openInspector, false);
-  assert.equal(approval?.inspector, "files");
+  assert.equal(approval?.switchTab, false);
+  assert.notEqual(approval?.tab, "review");
 });
 
 test("debounce and priority stop tab thrash on tiny events", () => {
@@ -127,8 +127,8 @@ test("derive aggregates files, diffs, previews, cursor, and artifacts", () => {
   assert.equal(ws.browser.cursor?.kind, "click");
   assert.equal(ws.artifacts.some((a) => a.path === "report.md"), true);
   assert.equal(ws.waitingApproval, true);
-  assert.equal(ws.suggestedSurface, "changes");
-  assert.notEqual(ws.suggestedInspector, "review");
+  assert.notEqual(ws.suggestedTab, "review");
+  assert.equal(followActiveTab(ws.activity, "changes"), "changes");
 });
 
 test("follow ORION default on, manual override pauses, resume restores", () => {
@@ -153,13 +153,13 @@ test("follow ORION default on, manual override pauses, resume restores", () => {
   assert.equal(idle.followOrion, false);
 });
 
-test("followed surface opens preview tab for localhost automation", () => {
+test("followed tab opens Preview for localhost automation", () => {
   const derived = deriveAgentWorkspace([
     ev("preview.available", { url: "http://localhost:43173" }, 1),
     ev("browser.action", { tool: "browser_click", url: "http://localhost:43173", x: 10, y: 10 }, 2),
   ]);
-  assert.equal(followedSurfaceId(derived), previewTabId("http://localhost:43173"));
-  assert.deepEqual(parseSurfaceTabId(previewTabId("http://localhost:43173")), { kind: "preview", previewUrl: "http://localhost:43173" });
+  assert.equal(followedTab(derived), "preview");
+  assert.deepEqual(parseActiveTab("preview:http://localhost:43173"), { tab: "preview", previewUrl: "http://localhost:43173" });
 });
 
 test("cursor overlay clamps coordinates and keeps click kind", () => {
@@ -201,15 +201,22 @@ test("review summary and ORION terminal sessions derive from events", () => {
   assert.equal(review.filesChanged, 1);
   assert.equal(review.testsPassed, 1);
   assert.equal(review.completed, true);
+  assert.equal(derived.suggestedTab, "review");
   const cmds = extractOrionCommands(events);
   assert.equal(cmds[0]!.command, "npm test");
   assert.match(cmds[0]!.output, /174 passing/);
   assert.equal(cmds[0]!.running, false);
+  const switched = nextWorkspaceLayout(
+    { open: true, width: 520, activeTab: "changes", followOrion: true },
+    derived.activity
+  );
+  assert.equal(switched.activeTab, "review");
+  assert.equal(switched.columns, 1);
 });
 
-test("mapContextTab keeps Docs/Plan reachable from overflow", () => {
-  assert.deepEqual(mapContextTab("documents"), { inspector: "docs" });
-  assert.deepEqual(mapContextTab("plan"), { inspector: "plan" });
-  assert.deepEqual(mapContextTab("browser"), { surface: "browser" });
-  assert.deepEqual(mapContextTab("diff"), { inspector: "diff", surface: "changes" });
+test("mapContextTab resolves Docs/Plan/Diff onto the single tab set", () => {
+  assert.equal(mapContextTab("documents"), "docs");
+  assert.equal(mapContextTab("plan"), "plan");
+  assert.equal(mapContextTab("browser"), "browser");
+  assert.equal(mapContextTab("diff"), "diff");
 });

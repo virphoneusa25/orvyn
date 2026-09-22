@@ -45,6 +45,13 @@ import { GitScmPanel } from "./components/GitScmPanel";
 import { HelpDrawer } from "./components/HelpDrawer";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { useDesktopLayout } from "./useDesktopLayout";
+import {
+  AGENT_PANEL_MIN,
+  CHAT_MIN,
+  clampAgentPanelWidth,
+  shouldOverlayAgentPanel,
+  SIDEBAR_WIDTH,
+} from "./desktopLayout";
 import { registerSelectionReader, setWorkspaceSnapshot } from "./workspaceSnapshot";
 import type { Attachment } from "./components/AttachmentBar";
 import type { ComposerMode } from "./components/redesign/types";
@@ -127,6 +134,12 @@ export function App() {
   const [runtimeCaps, setRuntimeCaps] = useState({ engineReady: false, dockerAvailable: false, sshHostCount: 0, githubConnected: false, postgresConnected: false, cloudSignedIn: false });
   const [missionDetail, setMissionDetail] = useState<ApiMissionDetail | null>(null);
   const chrome = useDesktopLayout();
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const editorRef = useRef<{ getSelection: () => { path: string; startLine: number; endLine: number; text?: string } | null } | null>(null);
 
   /** The run any entry point last started — ONE state, shared by center + right. */
@@ -142,6 +155,8 @@ export function App() {
   // Title-bar toggle is the source of truth. Hiding the panel on Home made
   // the button look dead: rightPanelOpen flipped, but nothing appeared.
   const showRightChrome = chrome.layout.rightPanelOpen;
+  const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
+  const agentPanelWidth = clampAgentPanelWidth(chrome.layout.agentPanelWidth, viewportWidth);
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
@@ -550,7 +565,20 @@ export function App() {
         }}
       />
 
-      <div style={{ display: "flex", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
+      <div
+        className="orvyn-app-columns"
+        style={{
+          display: "grid",
+          gridTemplateColumns: showRightChrome && !overlayAgentPanel
+            ? `${SIDEBAR_WIDTH}px minmax(${CHAT_MIN}px, 1fr) ${agentPanelWidth}px`
+            : `${SIDEBAR_WIDTH}px minmax(0, 1fr)`,
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
         <Sidebar
           view={view}
           onChange={(v) => {
@@ -572,6 +600,7 @@ export function App() {
           onOpenUsage={() => setView("usage")}
         />
 
+        <div className="orvyn-main" style={{ minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden" }}>
         {showEditorChrome && (
           <>
             <ResizablePanel side="left" defaultWidth={220} minWidth={160}>
@@ -659,7 +688,7 @@ export function App() {
         )}
 
         {(view === "home" || view === "newtask") && (
-          <div style={{ flex: chrome.layout.expandedPreview && showRightChrome ? "0 0 0px" : 1, minWidth: chrome.layout.expandedPreview && showRightChrome ? 0 : 500, minHeight: 0, overflow: "hidden" }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             {/* Deterministic center routing — the nav selection (view) ALWAYS
                 wins over the remembered working mode. Home selected = the
                 animated landing screen, no stale WorkStream underneath. The
@@ -818,21 +847,25 @@ export function App() {
             <ConnectionSettings />
           </div>
         )}
+        </div>
 
-        {/* RIGHT: Agent Workspace — Work Surface + Inspector. Chat stays center. */}
+        {/* RIGHT: one Agent Workspace. Never a second Inspector column. */}
         <div
           className="orvyn-right-panel"
+          data-placement={overlayAgentPanel ? "overlay" : showRightChrome ? "dock" : "hidden"}
           style={{
-            flex: showRightChrome ? (chrome.layout.expandedPreview ? "1 1 auto" : "0 0 auto") : "0 0 0px",
-            width: showRightChrome ? "auto" : 0,
-            minWidth: showRightChrome ? 450 : 0,
-            maxWidth: showRightChrome ? (chrome.layout.expandedPreview ? "100%" : "72%") : 0,
+            minWidth: showRightChrome && !overlayAgentPanel ? AGENT_PANEL_MIN : 0,
+            maxWidth: showRightChrome ? "70vw" : 0,
             opacity: showRightChrome ? 1 : 0,
             overflow: "hidden",
-            display: "flex",
-            transition: "min-width 180ms ease, opacity 160ms ease",
+            display: showRightChrome ? "flex" : "none",
             pointerEvents: showRightChrome ? "auto" : "none",
-            position: "relative",
+            position: overlayAgentPanel ? "absolute" : "relative",
+            top: overlayAgentPanel ? 0 : undefined,
+            right: overlayAgentPanel ? 0 : undefined,
+            bottom: overlayAgentPanel ? 0 : undefined,
+            width: overlayAgentPanel ? agentPanelWidth : undefined,
+            zIndex: overlayAgentPanel ? 24 : undefined,
           }}
         >
           {showRightChrome && (

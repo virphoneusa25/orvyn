@@ -127,6 +127,26 @@
 }
 .ov-kbd { font-family: var(--ov-mono); font-size: 11px; opacity: .7; }
 
+/* ───────────── App columns: sidebar | main | one Agent Workspace ───────────── */
+.orvyn-app-columns {
+  --sidebar-width: 248px;
+  --agent-panel-width: 520px;
+}
+.orvyn-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.orvyn-right-panel {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.orvyn-right-panel[data-placement="hidden"] { display: none; }
+.orvyn-agent-workspace { min-width: 0; min-height: 0; }
+
 /* ───────────── Sidebar ───────────── */
 .ov-sidebar {
   width: 248px; flex-shrink: 0;

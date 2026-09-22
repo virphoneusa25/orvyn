@@ -20,7 +20,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "mission",
     title: "Start a new mission",
     tags: ["missions", "home", "composer"],
-    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center. The Agent Workspace on the right shows a Work Surface (Changes, Desktop, Browser, live preview) and an Inspector (Files, Diff, Terminal, Review).",
+    body: "On Home, describe the outcome in the composer and press Run mission (Ctrl+Enter). In Chat, type a follow-up and press Enter. Work streams in the center. The Agent Workspace on the right is a single panel with tabs: Preview, Changes, Files, Diff, Terminal, Browser, and Review.",
   },
   {
     id: "modes",
@@ -62,7 +62,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "browser",
     title: "Use the browser",
     tags: ["browser", "playwright"],
-    body: "Browser tools open the Work Surface Browser tab with visited URLs, actions, and a presentational ORION cursor. Localhost apps open a Preview tab instead. They require the backend Playwright dependency. Selecting Browser in the + menu requests the capability for the next turn — ToolGateway still decides whether a navigation runs.",
+    body: "Browser tools open the Agent Workspace Browser tab with visited URLs, actions, and a presentational ORION cursor. Localhost apps open the Preview tab instead. They require the backend Playwright dependency. Follow ORION switches to Browser or Preview in the same panel — it does not open a second column.",
   },
   {
     id: "approve",
@@ -86,7 +86,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "files",
     title: "View files and diffs",
     tags: ["files", "diff", "panel"],
-    body: "The title-bar panel toggle opens one Work Surface (Changes, Desktop, Browser, live preview). Inspector (Files, Diff, Terminal, Review) stays closed until you click a file, pin it, or open it from the Work Surface header. Follow ORION switches Work Surface tabs; it does not keep Inspector open.",
+    body: "The title-bar panel toggle opens one Agent Workspace. Preview, Changes, Files, Diff, Terminal, Browser, and Review are tabs in that same panel. Follow ORION only switches the active tab. Clicking a file, a diff, or a terminal event never creates a second column.",
   },
   {
     id: "cloud",

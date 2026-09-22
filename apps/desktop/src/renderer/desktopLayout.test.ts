@@ -1,17 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  clampInspectorWidth,
+  AGENT_PANEL_DEFAULT,
+  AGENT_PANEL_MIN,
+  clampAgentPanelWidth,
   clampTerminalHeight,
-  clampWorkSurfaceWidth,
-  INSPECTOR_DEFAULT,
-  INSPECTOR_MIN,
   parseDesktopLayout,
   persistableLayout,
+  shouldOverlayAgentPanel,
   TERMINAL_DEFAULT_HEIGHT,
   TERMINAL_MIN_HEIGHT,
-  WORK_SURFACE_DEFAULT,
-  WORK_SURFACE_MIN,
 } from "./desktopLayout.ts";
 
 test("an explicit true preference means the right panel should show", () => {
@@ -24,6 +22,9 @@ test("right panel / terminal / help parse with safe defaults", () => {
   assert.equal(empty.bottomTerminalOpen, false);
   assert.equal(empty.helpOpen, false);
   assert.equal(empty.bottomTerminalHeight, TERMINAL_DEFAULT_HEIGHT);
+  assert.equal(empty.activeTab, "changes");
+  assert.equal(empty.agentPanelWidth, AGENT_PANEL_DEFAULT);
+  assert.equal(empty.followOrion, true);
 
   const parsed = parseDesktopLayout({
     rightPanelOpen: false,
@@ -43,18 +44,15 @@ test("terminal height is clamped so it cannot cover the app", () => {
   assert.equal(clampTerminalHeight(Number.NaN), TERMINAL_DEFAULT_HEIGHT);
 });
 
-test("persistence omits ephemeral help and stores workspace prefs", () => {
+test("persistence omits ephemeral help and never writes inspector keys", () => {
   const stored = persistableLayout({
     rightPanelOpen: false,
     bottomTerminalOpen: true,
     bottomTerminalHeight: 260,
     helpOpen: true,
-    workSurfaceWidth: 560,
-    inspectorWidth: 320,
-    inspectorOpen: true,
-    inspectorPinned: false,
-    surfaceTab: "changes",
-    inspectorTab: "files",
+    agentPanelWidth: 520,
+    activeTab: "changes",
+    previewUrl: "",
     followOrion: true,
     expandedPreview: false,
   });
@@ -62,45 +60,52 @@ test("persistence omits ephemeral help and stores workspace prefs", () => {
   assert.equal(stored.rightPanelOpen, false);
   assert.equal(stored.bottomTerminalOpen, true);
   assert.equal(stored.bottomTerminalHeight, 260);
-  assert.equal(stored.workSurfaceWidth, 560);
-  assert.equal(stored.inspectorWidth, 320);
+  assert.equal(stored.agentPanelWidth, 520);
+  assert.equal(stored.activeTab, "changes");
   assert.equal(stored.followOrion, true);
+  assert.equal("inspectorOpen" in stored, false);
+  assert.equal("inspectorWidth" in stored, false);
+  assert.equal("workSurfaceWidth" in stored, false);
 });
 
-test("workspace widths clamp to chat and inspector room", () => {
-  assert.equal(clampWorkSurfaceWidth(40), WORK_SURFACE_MIN);
-  assert.ok(clampWorkSurfaceWidth(4000, 1200, true, 320) >= WORK_SURFACE_MIN);
-  assert.ok(clampWorkSurfaceWidth(4000, 1200, true, 320) <= Math.floor(1200 * 0.65));
-  assert.equal(clampInspectorWidth(40), INSPECTOR_MIN);
-  assert.ok(clampInspectorWidth(900, 1200) <= 480);
-  assert.equal(clampWorkSurfaceWidth(Number.NaN), WORK_SURFACE_DEFAULT);
-  assert.equal(clampInspectorWidth(Number.NaN), INSPECTOR_DEFAULT);
+test("agent panel width clamps to min 360 and max 70vw / chat room", () => {
+  assert.equal(clampAgentPanelWidth(40), AGENT_PANEL_MIN);
+  assert.ok(clampAgentPanelWidth(4000, 1920) <= Math.floor(1920 * 0.7));
+  assert.ok(clampAgentPanelWidth(4000, 1280) <= 1280 - 248 - 500);
+  assert.equal(clampAgentPanelWidth(Number.NaN), AGENT_PANEL_DEFAULT);
+  assert.equal(shouldOverlayAgentPanel(1920), false);
+  assert.equal(shouldOverlayAgentPanel(1280), false);
+  assert.equal(shouldOverlayAgentPanel(1000), true);
 });
 
-test("default and empty parse keep Inspector closed", () => {
-  const empty = parseDesktopLayout(null);
-  assert.equal(empty.inspectorOpen, false);
-  assert.equal(empty.inspectorPinned, false);
-});
-
-test("layout parse restores tabs, follow, and split widths", () => {
+test("legacy two-pane keys migrate to one width and one tab", () => {
   const parsed = parseDesktopLayout({
     rightPanelOpen: true,
     workSurfaceWidth: 600,
     inspectorWidth: 340,
-    inspectorOpen: false,
+    inspectorOpen: true,
+    inspectorPinned: true,
     surfaceTab: "preview:http://127.0.0.1:43173",
     inspectorTab: "diff",
     followOrion: false,
     expandedPreview: true,
   });
   assert.equal(parsed.rightPanelOpen, true);
-  assert.equal(parsed.workSurfaceWidth >= WORK_SURFACE_MIN, true);
-  assert.equal(parsed.inspectorWidth, 340);
-  assert.equal(parsed.inspectorOpen, false);
-  assert.equal(parsed.inspectorPinned, false);
-  assert.equal(parsed.surfaceTab, "preview:http://127.0.0.1:43173");
-  assert.equal(parsed.inspectorTab, "diff");
+  assert.equal(parsed.agentPanelWidth >= AGENT_PANEL_MIN, true);
+  assert.equal(parsed.activeTab, "preview");
   assert.equal(parsed.followOrion, false);
   assert.equal(parsed.expandedPreview, true);
+  assert.equal("inspectorOpen" in parsed, false);
+});
+
+test("stored activeTab and agentPanelWidth win over legacy keys", () => {
+  const parsed = parseDesktopLayout({
+    rightPanelOpen: true,
+    activeTab: "review",
+    agentPanelWidth: 480,
+    inspectorTab: "files",
+    surfaceTab: "changes",
+  });
+  assert.equal(parsed.activeTab, "review");
+  assert.equal(parsed.agentPanelWidth, 480);
 });

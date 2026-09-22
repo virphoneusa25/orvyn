@@ -353,7 +353,7 @@ export function TitleBar({
         <ChromeButton label="Toggle terminal" active={terminalOpen} onClick={() => onToggleTerminal?.()}>
           <IconTerminal size={14} />
         </ChromeButton>
-        <ChromeButton label="Toggle right panel" active={rightPanelOpen} onClick={() => onToggleRightPanel?.()}>
+        <ChromeButton label="Toggle Agent Workspace" active={rightPanelOpen} onClick={() => onToggleRightPanel?.()}>
           <IconPanelRight size={14} />
         </ChromeButton>
         <span style={{ width: 1, height: 16, background: "var(--orvyn-border)" }} />

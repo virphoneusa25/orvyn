@@ -5,7 +5,7 @@ import type { WorkspaceFile } from "../../agentWorkspaceModel";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
 const GROUPS: { key: WorkspaceFile["kind"][]; label: string }[] = [
-  { key: ["modified"], label: "Changed" },
+  { key: ["modified"], label: "Touched" },
   { key: ["created"], label: "Created" },
   { key: ["deleted"], label: "Deleted" },
   { key: ["read"], label: "Read" },

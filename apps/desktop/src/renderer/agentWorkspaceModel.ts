@@ -2,8 +2,40 @@
 //
 // Derives the Agent Workspace from existing run events. No second event store.
 
-export type SurfaceTab = "changes" | "desktop" | "browser" | "preview";
-export type InspectorTab = "files" | "diff" | "terminal" | "review" | "plan" | "docs";
+export const AGENT_WORKSPACE_TABS = [
+  "preview",
+  "changes",
+  "files",
+  "diff",
+  "terminal",
+  "browser",
+  "review",
+  "plan",
+  "docs",
+  "desktop",
+] as const;
+
+export type AgentWorkspaceTab = (typeof AGENT_WORKSPACE_TABS)[number];
+
+export const PRIMARY_WORKSPACE_TABS: { id: AgentWorkspaceTab; label: string }[] = [
+  { id: "preview", label: "Preview" },
+  { id: "changes", label: "Changes" },
+  { id: "files", label: "Files" },
+  { id: "diff", label: "Diff" },
+  { id: "terminal", label: "Terminal" },
+  { id: "browser", label: "Browser" },
+  { id: "review", label: "Review" },
+];
+
+export const OVERFLOW_WORKSPACE_TABS: { id: AgentWorkspaceTab; label: string }[] = [
+  { id: "plan", label: "Plan" },
+  { id: "docs", label: "Docs" },
+  { id: "desktop", label: "Desktop" },
+];
+
+export function isAgentWorkspaceTab(value: unknown): value is AgentWorkspaceTab {
+  return typeof value === "string" && (AGENT_WORKSPACE_TABS as readonly string[]).includes(value);
+}
 
 export type FileKind = "created" | "modified" | "deleted" | "read" | "artifact";
 
@@ -46,12 +78,11 @@ export interface BrowserAction {
 export interface WorkspaceActivity {
   line: string;
   priority: number;
-  surface: SurfaceTab;
-  inspector: InspectorTab;
+  tab: AgentWorkspaceTab;
   previewUrl?: string;
   file?: string;
-  /** When false, Follow ORION updates the activity line only — Inspector stays closed. */
-  openInspector?: boolean;
+  /** When false, Follow ORION updates the activity line only — the active tab stays put. */
+  switchTab?: boolean;
 }
 
 export interface AgentWorkspaceDerived {
@@ -67,8 +98,7 @@ export interface AgentWorkspaceDerived {
     network: { method: string; url: string; status?: string }[];
   };
   activity: WorkspaceActivity | null;
-  suggestedSurface: SurfaceTab;
-  suggestedInspector: InspectorTab;
+  suggestedTab: AgentWorkspaceTab;
   waitingApproval: boolean;
   changeSummary: { files: number; additions: number; deletions: number };
 }
@@ -152,11 +182,12 @@ function cursorFrom(data: Record<string, unknown> | undefined): { x: number; y: 
   return { x, y };
 }
 
-export function activityPriority(kind: WorkspaceActivity["surface"] | "approval" | "read"): number {
+export function activityPriority(kind: AgentWorkspaceTab | "approval" | "read"): number {
   if (kind === "approval") return 100;
   if (kind === "browser" || kind === "preview") return 80;
-  if (kind === "changes") return 70;
-  if (kind === "desktop") return 60;
+  if (kind === "review") return 75;
+  if (kind === "diff" || kind === "terminal" || kind === "changes") return 70;
+  if (kind === "desktop" || kind === "docs" || kind === "plan") return 60;
   return 20;
 }
 
@@ -165,7 +196,7 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   const data = e.data ?? {};
   const tool = String(data.tool ?? "");
   if (type === "approval.required") {
-    return { line: `Waiting for approval · ${tool || "tool"}`, priority: 100, surface: "changes", inspector: "files", openInspector: false };
+    return { line: `Waiting for approval · ${tool || "tool"}`, priority: 100, tab: "changes", switchTab: false };
   }
   if (type.startsWith("browser.") || tool.startsWith("browser_")) {
     const url = String(data.url ?? (data.input as { url?: string } | undefined)?.url ?? "");
@@ -179,33 +210,38 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
     return {
       line: label,
       priority: 80,
-      surface: local ? "preview" : "browser",
-      inspector: "files",
+      tab: local ? "preview" : "browser",
       previewUrl: url || undefined,
     };
   }
   if (type === "file.edit") {
     const path = filePath(data);
-    return { line: path ? `Editing ${path}` : "Editing files", priority: 70, surface: "changes", inspector: "diff", file: path || undefined };
+    return { line: path ? `Editing ${path}` : "Editing files", priority: 70, tab: "diff", file: path || undefined };
   }
   if (type === "terminal.started" || type === "terminal.output" || tool === "terminal") {
     const cmd = String(data.command ?? data.preview ?? "command").split("\n")[0]!.slice(0, 80);
-    return { line: `Running ${cmd}`, priority: 70, surface: "changes", inspector: "terminal" };
+    return { line: `Running ${cmd}`, priority: 70, tab: "terminal" };
   }
   if (type === "preview.available") {
     const url = String(data.url ?? "");
-    return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, surface: "preview", inspector: "files", previewUrl: url || undefined };
+    return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, tab: "preview", previewUrl: url || undefined };
   }
   if (type.startsWith("review.") || type === "run.completed" || type === "mission.completed") {
     const complete = type === "review.passed" || type === "review.approved" || type === "run.completed" || type === "mission.completed";
-    return { line: complete ? "Review ready" : "Review in progress", priority: 55, surface: "changes", inspector: "review", openInspector: complete };
+    const rejected = type === "review.rejected" || type === "review.failed";
+    return {
+      line: complete ? "Review ready" : rejected ? "Review failed" : "Review in progress",
+      priority: complete || rejected ? 75 : 40,
+      tab: "review",
+      switchTab: complete || rejected,
+    };
   }
   if (type === "file.read") {
     const path = filePath(data);
-    return { line: path ? `Reading ${path}` : "Reading files", priority: 20, surface: "changes", inspector: "files", file: path || undefined };
+    return { line: path ? `Reading ${path}` : "Reading files", priority: 20, tab: "files", file: path || undefined, switchTab: false };
   }
   if (type === "tool.completed" && tool === "create_document") {
-    return { line: "Created artifact", priority: 65, surface: "changes", inspector: "docs" };
+    return { line: "Created artifact", priority: 65, tab: "docs" };
   }
   return null;
 }
@@ -219,7 +255,7 @@ export function shouldAutoSwitch(
   if (!previous) return true;
   if (next.priority >= 100) return true;
   if (next.priority < 30) return false;
-  if (next.surface === previous.surface && next.inspector === previous.inspector && next.file === previous.file) return false;
+  if (next.tab === previous.tab && next.file === previous.file) return false;
   if (elapsedMs < debounceMs && next.priority <= previous.priority) return false;
   return next.priority >= previous.priority || elapsedMs >= debounceMs;
 }
@@ -364,35 +400,30 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
       network: network.slice(-20),
     },
     activity: latest,
-    suggestedSurface: latest?.surface ?? (previewList.length ? "preview" : "changes"),
-    suggestedInspector: latest?.inspector ?? (diffList.length ? "diff" : "files"),
+    suggestedTab: latest?.tab ?? (previewList.length ? "preview" : diffList.length ? "diff" : "changes"),
     waitingApproval,
     changeSummary: { files: diffs.length || fileList.filter((f) => f.kind !== "read").length, additions, deletions },
   };
 }
 
-export function mapContextTab(tab?: string): { surface?: SurfaceTab; inspector?: InspectorTab } {
-  if (tab === "browser") return { surface: "browser" };
-  if (tab === "diff") return { inspector: "diff", surface: "changes" };
-  if (tab === "files" || tab === "documents") return { inspector: tab === "documents" ? "docs" : "files" };
-  if (tab === "terminal") return { inspector: "terminal" };
-  if (tab === "review") return { inspector: "review" };
-  if (tab === "plan") return { inspector: "plan" };
-  return {};
+export function mapContextTab(tab?: string): AgentWorkspaceTab | undefined {
+  if (!tab) return undefined;
+  if (tab === "documents") return "docs";
+  if (tab.startsWith("preview")) return "preview";
+  if (isAgentWorkspaceTab(tab)) return tab;
+  return undefined;
 }
 
-export type SurfaceTabId = "changes" | "desktop" | "browser" | `preview:${string}` | `artifact:${string}`;
-
-export function previewTabId(url: string): SurfaceTabId {
-  return `preview:${url}`;
+export function previewTabId(url: string): AgentWorkspaceTab {
+  return url ? "preview" : "changes";
 }
 
-export function parseSurfaceTabId(id: string | undefined): { kind: SurfaceTab; previewUrl?: string; artifact?: string } {
-  if (!id) return { kind: "changes" };
-  if (id.startsWith("preview:")) return { kind: "preview", previewUrl: id.slice("preview:".length) };
-  if (id.startsWith("artifact:")) return { kind: "changes", artifact: id.slice("artifact:".length) };
-  if (id === "desktop" || id === "browser" || id === "preview" || id === "changes") return { kind: id };
-  return { kind: "changes" };
+export function parseActiveTab(id: string | undefined): { tab: AgentWorkspaceTab; previewUrl?: string } {
+  if (!id) return { tab: "changes" };
+  if (id.startsWith("preview:")) return { tab: "preview", previewUrl: id.slice("preview:".length) };
+  if (id.startsWith("artifact:")) return { tab: "docs" };
+  if (isAgentWorkspaceTab(id)) return { tab: id };
+  return { tab: "changes" };
 }
 
 export interface FollowController {
@@ -422,13 +453,15 @@ export function followApplies(state: FollowController): boolean {
   return state.followOrion && !state.paused;
 }
 
-export function followedSurfaceId(derived: AgentWorkspaceDerived): SurfaceTabId {
-  if (derived.suggestedSurface === "preview") {
-    const url = derived.activity?.previewUrl ?? derived.previews[0]?.url;
-    if (url) return previewTabId(url);
-    return "changes";
+export function followedTab(derived: AgentWorkspaceDerived): AgentWorkspaceTab {
+  if (derived.activity && derived.activity.switchTab === false) {
+    return derived.suggestedTab === "review" ? "changes" : derived.suggestedTab;
   }
-  return derived.suggestedSurface;
+  return derived.activity?.tab ?? derived.suggestedTab;
+}
+
+export function followedPreviewUrl(derived: AgentWorkspaceDerived): string | undefined {
+  return derived.activity?.previewUrl ?? derived.previews[0]?.url;
 }
 
 export interface ReviewSummary {
