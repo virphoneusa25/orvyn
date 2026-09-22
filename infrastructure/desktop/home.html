@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ORVYN Desktop</title>
+<style>
+  :root { --cyan:#22d3ee; --violet:#8b5cf6; --text:#e6edf9; --muted:#8a97b8; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 28px; font-family: "Segoe UI", "DejaVu Sans", sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(1200px 700px at 80% 110%, #12307e 0%, transparent 60%),
+      radial-gradient(900px 600px at 10% 115%, #3b2a7e 0%, transparent 55%),
+      linear-gradient(160deg, #050a18 0%, #07122a 55%, #10194a 100%);
+  }
+  .mark { width: 88px; height: 88px; }
+  h1 { font-size: 30px; letter-spacing: .35em; font-weight: 600; margin-left: .35em; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: -18px; }
+  .cards { display: flex; gap: 16px; margin-top: 12px; }
+  .card {
+    width: 190px; padding: 18px 16px; border-radius: 14px; text-decoration: none;
+    color: var(--text); background: rgba(13, 22, 48, .62);
+    border: 1px solid rgba(56, 189, 248, .22); backdrop-filter: blur(6px);
+    transition: border-color .15s, transform .15s;
+  }
+  .card:hover { border-color: var(--cyan); transform: translateY(-2px); }
+  .card .t { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .card .d { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--cyan);
+         margin-right:6px; box-shadow:0 0 8px var(--cyan); }
+</style>
+</head>
+<body>
+  <img class="mark" src="orvyn-mark.png" alt="ORVYN">
+  <h1>ORVYN</h1>
+  <div class="sub">Your Code. Your Models. Your AI.</div>
+  <div class="cards">
+    <a class="card" href="file:///workspace">
+      <div class="t"><span class="dot"></span>Workspace</div>
+      <div class="d">Open the synced project workspace at /workspace.</div>
+    </a>
+    <a class="card" href="file:///home/orvyn">
+      <div class="t"><span class="dot"></span>Home</div>
+      <div class="d">Session home directory inside this isolated Linux desktop.</div>
+    </a>
+    <a class="card" href="about:blank">
+      <div class="t"><span class="dot"></span>New Tab</div>
+      <div class="d">Start a blank page. Network access follows sandbox policy.</div>
+    </a>
+  </div>
+</body>
+</html>

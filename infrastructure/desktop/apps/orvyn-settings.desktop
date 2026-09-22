@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Desktop appearance settings
+Exec=lxappearance
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
+StartupNotify=true

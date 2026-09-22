@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Code Editor
+Comment=Edit workspace files
+Exec=geany /workspace
+Icon=accessories-text-editor
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true

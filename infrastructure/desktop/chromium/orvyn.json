@@ -1,0 +1,9 @@
+{
+  "HomepageLocation": "file:///usr/share/orvyn/home.html",
+  "NewTabPageLocation": "file:///usr/share/orvyn/home.html",
+  "HomepageIsNewTabPage": false,
+  "ShowHomeButton": true,
+  "RestoreOnStartup": 4,
+  "DefaultBrowserSettingEnabled": false,
+  "BrowserGuestModeEnabled": true
+}

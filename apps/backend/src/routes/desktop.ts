@@ -10,7 +10,7 @@
 // and audit events. The DesktopView UI is backend-agnostic.
 
 import { Router } from "express";
-import { spawn } from "child_process";
+import { randomUUID } from "crypto";
 import { requireTenant } from "../middleware/tenant";
 import { playwrightAvailable, captureBrowserFrame, getBrowserSession, ensureBrowserSession } from "../ai/tools/browserTools";
 import {
@@ -25,22 +25,24 @@ import {
 } from "../desktop/desktopSession";
 import {
   startSandboxDesktop,
+  restartSandboxDesktop,
   captureSandboxFrame,
+  captureSandboxScreenshot,
   sandboxInput,
+  sandboxSendKeys,
+  sandboxLaunchApp,
   findSandboxSession,
   stopSandboxDesktop,
+  resolveKeyCombo,
+  dockerAvailable,
+  type SandboxDesktopSession,
+  type FrameQuality,
 } from "../desktop/sandboxDesktop";
+import { defaultDataDir } from "../persistence/LocalStore";
 import { setElectronBrowserTarget } from "../desktop/electronBrowserTarget";
 
-let dockerProbe: boolean | null = null;
 async function hasDocker(): Promise<boolean> {
-  if (dockerProbe !== null) return dockerProbe;
-  dockerProbe = await new Promise<boolean>((resolve) => {
-    const p = spawn("docker", ["version", "--format", "{{.Server.Version}}"], { windowsHide: true });
-    p.on("close", (code) => resolve(code === 0));
-    p.on("error", () => resolve(false));
-  });
-  return dockerProbe;
+  return dockerAvailable();
 }
 
 function sandboxSessionFor(tenantId: string, _projectRoot: string) {
@@ -48,6 +50,28 @@ function sandboxSessionFor(tenantId: string, _projectRoot: string) {
   // server's resolved workspace path. Find by tenant only — the sandbox is
   // per-tenant, so this is correct and safe.
   return findSandboxSession(tenantId);
+}
+
+/** Public wire shape for a sandbox session — includes truthful resource
+ *  metadata so the UI can display "Linux · 2 vCPU · 4 GB RAM". */
+function publicSandbox(s: SandboxDesktopSession) {
+  return {
+    id: s.id,
+    status: s.status,
+    controlOwner: s.controlOwner,
+    width: s.width,
+    height: s.height,
+    url: s.url,
+    live: s.status === "ready" || s.status === "user_control",
+    transport: "sandbox-x11",
+    error: s.error,
+    resources: s.resources,
+    startedAt: s.startedAt ?? new Date(s.createdAt).toISOString(),
+  };
+}
+
+function frameQuality(raw: unknown): FrameQuality {
+  return raw === "low" || raw === "high" ? raw : "auto";
 }
 
 export function desktopRouter(): Router {
@@ -73,17 +97,7 @@ export function desktopRouter(): Router {
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox) {
       return res.json({
-        session: {
-          id: sandbox.id,
-          status: sandbox.status,
-          controlOwner: sandbox.controlOwner,
-          width: sandbox.width,
-          height: sandbox.height,
-          url: sandbox.url,
-          live: sandbox.status === "ready" || sandbox.status === "user_control",
-          transport: "sandbox-x11",
-          error: sandbox.error,
-        },
+        session: publicSandbox(sandbox),
         playwright: playwrightAvailable(),
         sandbox: docker,
       });
@@ -93,17 +107,7 @@ export function desktopRouter(): Router {
     // Cross-path: the client path does not exist on the server - look by tenant.
     const anySandbox = findSandboxSession(t.id);
     if (anySandbox && anySandbox.status !== "ended") {
-      return res.json({
-        session: {
-          id: anySandbox.id, status: anySandbox.status,
-          controlOwner: anySandbox.controlOwner,
-          width: anySandbox.width, height: anySandbox.height,
-          url: anySandbox.url,
-          live: anySandbox.status === "ready" || anySandbox.status === "user_control",
-          transport: "sandbox-x11",
-        },
-        sandbox: docker,
-      });
+      return res.json({ session: publicSandbox(anySandbox), sandbox: docker });
     }
     return res.json({ session: null, sandbox: docker });
   });
@@ -136,19 +140,7 @@ export function desktopRouter(): Router {
           url,
         });
         if (sandbox.status !== "error") {
-          return res.json({
-            session: {
-              id: sandbox.id,
-              status: sandbox.status,
-              controlOwner: sandbox.controlOwner,
-              width: sandbox.width,
-              height: sandbox.height,
-              url: sandbox.url,
-              live: true,
-              transport: "sandbox-x11",
-            },
-            sandbox: true,
-          });
+          return res.json({ session: publicSandbox(sandbox), sandbox: true });
         }
         // Sandbox errored — fall through to Playwright with a note.
       } catch (sandboxErr) {
@@ -171,7 +163,7 @@ export function desktopRouter(): Router {
     // Sandbox frame (X11 capture).
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox && sandbox.status !== "ended") {
-      const jpeg = await captureSandboxFrame(sandbox);
+      const jpeg = await captureSandboxFrame(sandbox, frameQuality(req.query.q));
       if (!jpeg) {
         return res.status(409).json({ error: "Desktop frame not yet available." });
       }
@@ -209,9 +201,7 @@ export function desktopRouter(): Router {
           });
         } catch { /* audit is best-effort */ }
       }
-      return res.json({
-        session: { id: sandbox.id, status: sandbox.status, controlOwner: sandbox.controlOwner, width: sandbox.width, height: sandbox.height, url: sandbox.url, live: true, transport: "sandbox-x11" },
-      });
+      return res.json({ session: publicSandbox(sandbox) });
     }
 
     // Playwright control.
@@ -298,6 +288,89 @@ export function desktopRouter(): Router {
     if (!session || session.tenantId !== t.id) return res.status(404).json({ error: "No Desktop session." });
     endDesktopSession(session);
     res.json({ session: toPublic(session) });
+  });
+
+  // ── Screenshot → artifact/evidence ─────────────────────────────────────
+  router.post("/screenshot", async (req, res) => {
+    const t = requireTenant(req);
+    const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (!sandbox || sandbox.status === "ended") {
+      return res.status(404).json({ error: "No Desktop session." });
+    }
+    const png = await captureSandboxScreenshot(sandbox);
+    if (!png) return res.status(409).json({ error: "Desktop frame not yet available." });
+
+    const fs = await import("fs");
+    const path = await import("path");
+    const dir = path.join(defaultDataDir(), "desktop-shots", t.id);
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `desktop-${sandbox.id}-${Date.now()}.png`;
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, png);
+
+    const artifact = {
+      id: `shot_${randomUUID().slice(0, 12)}`,
+      projectRoot: projectRoot || null,
+      runId: sandbox.runId ?? null,
+      kind: "screenshot",
+      name,
+      path: file,
+      mediaType: "image/png",
+    };
+    try { t.localStore.saveArtifact(artifact); } catch { /* persistence best-effort */ }
+    if (sandbox.runId && t.runStore.get(sandbox.runId)) {
+      try {
+        t.runStore.emit(sandbox.runId, "desktop.screenshot", { name, path: file, sessionId: sandbox.id });
+      } catch { /* audit best-effort */ }
+    }
+    res.json({ ok: true, artifact });
+  });
+
+  // ── Send Keys (named combos; host clipboard is NEVER synced) ───────────
+  router.post("/keys", async (req, res) => {
+    const t = requireTenant(req);
+    const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (!sandbox || sandbox.status === "ended") {
+      return res.status(404).json({ error: "No Desktop session." });
+    }
+    const combo = String(req.body?.combo ?? "");
+    if (!resolveKeyCombo(combo)) {
+      return res.status(400).json({ error: `Unknown key combo: ${combo}` });
+    }
+    const ok = await sandboxSendKeys(sandbox, combo);
+    res.json({ ok });
+  });
+
+  // ── Restart the desktop container ──────────────────────────────────────
+  router.post("/restart", async (req, res) => {
+    const t = requireTenant(req);
+    const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (!sandbox) return res.status(404).json({ error: "No Desktop session." });
+    try {
+      const fresh = await restartSandboxDesktop(sandbox);
+      res.json({ session: publicSandbox(fresh) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Launch a dock app inside the live desktop ──────────────────────────
+  router.post("/launch", async (req, res) => {
+    const t = requireTenant(req);
+    const projectRoot = String(req.body?.projectRoot ?? t.currentProjectRoot ?? "");
+    const sandbox = sandboxSessionFor(t.id, projectRoot);
+    if (!sandbox || sandbox.status === "ended") {
+      return res.status(404).json({ error: "No Desktop session." });
+    }
+    const app = String(req.body?.app ?? "");
+    if (!["terminal", "files", "chromium", "editor", "settings"].includes(app)) {
+      return res.status(400).json({ error: `Unknown app: ${app}` });
+    }
+    const ok = await sandboxLaunchApp(sandbox, app as "terminal" | "files" | "chromium" | "editor" | "settings");
+    res.json({ ok });
   });
 
   router.post("/browser-target", (req, res) => {

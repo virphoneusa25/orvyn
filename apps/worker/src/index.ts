@@ -109,7 +109,7 @@ function workerInfo(): WorkerInfo {
   return {
     workerId: WORKER_ID,
     hostname: os.hostname(),
-    capabilities: ["docker", "node", "mission-execution", "browser"],
+    capabilities: ["docker", "node", "mission-execution", "browser", "desktop"],
     cpuCount: os.cpus().length,
     ramMb: Math.round(os.totalmem() / 1024 / 1024),
     diskGb: Math.round(os.freemem() / 1024 / 1024 / 1024),

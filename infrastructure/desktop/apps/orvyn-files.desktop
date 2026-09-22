@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=Browse the synced workspace
+Exec=thunar /workspace
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;
+StartupNotify=true
