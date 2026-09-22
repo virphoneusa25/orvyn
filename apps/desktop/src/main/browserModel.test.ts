@@ -47,7 +47,7 @@ test("recents are newest first, unique, and drop unsafe URLs", () => {
 test("tab ids and titles", () => {
   assert.deepEqual(parseBrowserWorkbenchId("browser:abc"), { kind: "browser", sessionId: "abc" });
   assert.deepEqual(parseBrowserWorkbenchId("preview:http://127.0.0.1:1"), { kind: "preview", sessionId: "http://127.0.0.1:1" });
-  assert.equal(truncateTabTitle("Global Voice & Telecom Infrastructure | VirPhone USA"), "Global Voice & Telecom Inf…");
+  assert.equal(truncateTabTitle("Global Voice & Telecom Infrastructure | VirPhone USA"), "Global Voice & Telecom Infr…");
   assert.equal(previewWorkbenchTitle("http://127.0.0.1:43191", "ORVYN"), "ORVYN :43191");
   assert.equal(previewWorkbenchTitle("http://127.0.0.1:5173", "PawMart"), "PawMart :5173");
 });

@@ -50,7 +50,7 @@ test("browser session tabs are closable and titled from the page", () => {
   assert.equal(tab.kind, "browser");
   assert.equal(tab.closable, true);
   assert.equal(tab.id, "browser:abc");
-  assert.equal(truncateTabTitle("Global Voice & Telecom Infrastructure | VirPhone USA"), "Global Voice & Telecom Inf…");
+  assert.equal(truncateTabTitle("Global Voice & Telecom Infrastructure | VirPhone USA"), "Global Voice & Telecom Infr…");
 });
 
 test("recent URLs are real, newest first, no duplicates", () => {
