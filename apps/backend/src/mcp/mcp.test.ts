@@ -145,6 +145,14 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
     mgr.setToolPermission(cfg.id, "delete_item", "ALLOW");
     assert.equal(gateway.getPermission("mcp.echosrv.delete_item"), "allowed");
 
+    // ORION run start clears the gateway — connected MCP tools must come back.
+    gateway.registry.clear();
+    assert.equal(gateway.list().some((t) => t.name === "mcp.echosrv.echo_message"), false);
+    mgr.reregisterConnectedTools();
+    assert.ok(gateway.list().some((t) => t.name === "mcp.echosrv.echo_message"));
+    const afterClear = await gateway.execute("mcp.echosrv.echo_message", { message: "still here" }, "coder");
+    assert.ok(afterClear.ok, `reregistered echo should succeed: ${afterClear.error}`);
+
     // Disable → tools become denied (removed from availability)
     mgr.setEnabled(cfg.id, false);
     assert.equal(gateway.getPermission("mcp.echosrv.echo_message"), "denied");

@@ -265,6 +265,19 @@ export class McpManager {
 
   // ---- Gateway registration ----------------------------------------------
 
+  /**
+   * Re-bind connected MCP tools into ToolGateway after a registry.clear()
+   * (every ORION run calls registerProjectToolsFor). Connections stay up;
+   * only the gateway entries are rewritten. Does not spawn or listTools.
+   */
+  reregisterConnectedTools(): void {
+    for (const cfg of this.registry.list()) {
+      const conn = this.connections.get(cfg.id);
+      if (!conn || conn.state !== "CONNECTED" || conn.tools.length === 0) continue;
+      this.registerTools(cfg.id, cfg.name, conn.tools);
+    }
+  }
+
   private registerTools(serverId: string, serverName: string, tools: McpToolInfo[]): void {
     const policy = this.registry.policy(serverId);
     for (const t of tools) {

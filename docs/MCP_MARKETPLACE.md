@@ -70,6 +70,12 @@ The install wizard: Review → Permissions → Authentication → Install → Te
 Created config is a normal `McpManager` record, so restart reconnects
 enabled servers through `startEnabled()`.
 
+`registerProjectToolsFor` clears the tool registry at the start of every
+ORION run (so native tools rebind to the current project). After native
+registration it calls `McpManager.reregisterConnectedTools()` so already-
+connected marketplace servers keep their `mcp.<server>.<tool>` gateway
+entries. Connections are not restarted.
+
 ## Dynamic discovery
 
 ORION calls `search_capabilities({ query: "create GitHub PR" })`.

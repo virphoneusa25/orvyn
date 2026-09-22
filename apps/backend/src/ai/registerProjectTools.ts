@@ -147,6 +147,9 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
   g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
   g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore)));
+  // registry.clear() above dropped namespaced mcp.* tools. Re-bind any
+  // servers that are still CONNECTED so marketplace installs survive a run.
+  tenant.mcpManager.reregisterConnectedTools();
 
   // Later phases append here: diagnostics/tests (Phase 5), browser (Phase 8),
   // checkpoints (Phase 9), MCP (Phase 10). Kept in one function so the gateway
