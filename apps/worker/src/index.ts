@@ -289,24 +289,27 @@ async function remoteRunTests(runId: string, containerId: string): Promise<Comma
   return remoteTerminal(containerId, "npm test 2>&1");
 }
 
-/** Copies the project into the container workspace. */
-async function transferProject(containerId: string, sourcePath: string): Promise<boolean> {
-  if (!sourcePath || !fs.existsSync(sourcePath)) return false;
-  // tar pipe: stream project into container's /workspace
+/** Copies the project into the container workspace.
+ *  Returns "ok" | "missing" (no such source) | "failed" (transfer error). */
+async function transferProject(containerId: string, sourcePath: string): Promise<"ok" | "missing" | "failed"> {
+  if (!sourcePath || !fs.existsSync(sourcePath)) return "missing";
+  // tar pipe: stream project into container's /workspace. --no-same-owner:
+  // the container drops every capability, so restoring source ownership
+  // (chown) would fail — and ownership is irrelevant inside the sandbox.
   const workspace = "/workspace";
   return new Promise((resolve) => {
     const tar = spawn("tar", ["cf", "-", "-C", sourcePath, "."], { windowsHide: true });
-    const dock = spawn("docker", ["exec", "-i", containerId, "tar", "-xf", "-", "-C", workspace], { windowsHide: true });
+    const dock = spawn("docker", ["exec", "-i", containerId, "tar", "-xf", "-", "--no-same-owner", "-C", workspace], { windowsHide: true });
     let err = "";
     dock.stderr.on("data", (d) => (err += d));
     tar.stderr.on("data", (d) => (err += d));
     tar.stdout.pipe(dock.stdin);
     dock.on("close", (code) => {
       console.log(`[worker] project transfer: code=${code} err=${err.slice(0, 100)}`);
-      resolve(code === 0);
+      resolve(code === 0 ? "ok" : "failed");
     });
-    tar.on("error", () => resolve(false));
-    dock.on("error", () => resolve(false));
+    tar.on("error", () => resolve("failed"));
+    dock.on("error", () => resolve("failed"));
   });
 }
 
@@ -445,20 +448,27 @@ async function executeJob(job: JobAssignment): Promise<void> {
       capDrop: "ALL", memory: "1g", cpus: "1", pidsLimit: 256,
     });
 
-    // Transfer project if provided
+    // Transfer project if provided. Only a SUCCESSFUL transfer makes the
+    // sandbox ready — sandbox.ready is what unblocks the control-plane model
+    // loop, so it must never precede the workspace being staged.
     if (job.projectRoot) {
       await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Transferring project to remote workspace" });
       const transferred = await transferProject(containerId, job.projectRoot);
       await emitEvent(runId, "tool.completed", {
         tool: "project_transfer",
-        preview: transferred ? `Project copied to remote workspace from ${job.projectRoot}` : `No project at ${job.projectRoot}`,
-        ok: transferred,
+        preview: transferred === "ok"
+          ? `Project copied to remote workspace from ${job.projectRoot}`
+          : transferred === "missing"
+            ? `No project at ${job.projectRoot}`
+            : `Project transfer from ${job.projectRoot} failed`,
+        ok: transferred === "ok",
       });
-      if (!transferred) throw new Error(`Project transfer failed — no project found at ${job.projectRoot}`);
+      if (transferred !== "ok") throw new Error(`Project transfer ${transferred === "missing" ? "source not found" : "failed"}: ${job.projectRoot}`);
     }
 
     // ENTER THE TOOL RPC LOOP — the control-plane ORION model drives all
     // tool calls from here. The worker executes generic requests only.
+    await emitEvent(runId, "sandbox.ready", { container: containerName, projectRoot: job.projectRoot ?? "" });
     await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Mission container ready for tool requests" });
     console.log("[worker] entering tool RPC loop for " + runId);
     await pollForToolRequests(runId, containerId);

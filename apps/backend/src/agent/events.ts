@@ -65,6 +65,7 @@ export type AgentEventType =
   | "checkpoint.restored"
   // --- Sandbox execution (cloud missions run commands in Docker) ---
   | "sandbox.started"
+  | "sandbox.ready"
   | "sandbox.stopped"
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"

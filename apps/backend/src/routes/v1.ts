@@ -17,15 +17,19 @@ v1Router.use("/documents", documentRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
 v1Router.use("/worker", workerRouter(requireTenant, () => tenantManager.ensureLocalDefault().runStore));
 
-// Validate every explicit project root before an endpoint uses it.
+// Validate every explicit project root before an endpoint uses it. A forced
+// remote run (executionLocation=OVH_WORKER) is exempt: its projectRoot names
+// a WORKER-side path the control plane cannot stat — the worker validates it
+// truthfully at project transfer, and a missing project fails the run there.
 v1Router.use(async (req, res, next) => {
   try {
-    if (req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
+    const forcedRemote = req.body?.executionLocation === "OVH_WORKER";
+    if (!forcedRemote && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
     if (req.method === "POST" && ["/agent/stream/runs", "/agent/orchestrate"].includes(req.path)) {
       const tenant = requireTenant(req);
       if (tenant.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) return res.status(409).json({error:"A task is already active. Stop it or wait before starting another."});
-      req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
+      if (!forcedRemote) req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
     }
     next();
   } catch (e: any) { res.status(400).json({error:e.message}); }

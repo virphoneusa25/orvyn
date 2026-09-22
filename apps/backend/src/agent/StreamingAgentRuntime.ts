@@ -317,16 +317,22 @@ export class StreamingAgentRuntime {
   }
 
   /**
-   * Waits until the worker reports the mission container ready
-   * (sandbox.started event relayed into the RunStore). No local fallback:
-   * on timeout the run fails with a clear reason.
+   * Waits until the worker reports the mission container READY — the project
+   * is transferred and the tool RPC loop is serving (sandbox.ready event).
+   * A sandbox.stopped before readiness fails immediately; on timeout the run
+   * fails with a clear reason. No local fallback either way.
    */
   private async awaitRemoteReady(runId: string): Promise<void> {
     const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
     this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: "Waiting for the OVH worker to prepare the mission container" });
     while (Date.now() < deadline) {
       const run = this.store.get(runId);
-      if (run?.events.some((e) => e.type === "sandbox.started")) return;
+      const types = new Set(run?.events.map((e) => e.type));
+      if (types.has("sandbox.ready")) return;
+      if (types.has("sandbox.stopped")) {
+        const reason = run?.events.filter((e) => e.type === "sandbox.stopped").pop()?.data?.reason;
+        throw new Error(`The OVH worker failed to prepare the mission container: ${reason ?? "unknown reason"}. The run failed — there is no local fallback for remote runs.`);
+      }
       const state = this.runs.get(runId);
       if (state?.cancelled) throw new Error("run cancelled before the worker was ready");
       await new Promise((r) => setTimeout(r, 500));
