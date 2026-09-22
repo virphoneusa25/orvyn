@@ -6,6 +6,7 @@
 // says so — nothing here is decorative.
 import React, { useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import { getDesktopLayout, setDesktopLayout, subscribeDesktopLayout } from "../desktopLayout";
 import {
   IconAgents,
   IconBox,
@@ -19,6 +20,7 @@ import {
   IconGlobe,
   IconHome,
   IconList,
+  IconMonitor,
   IconReport,
   IconRocket,
   IconSearch,
@@ -35,6 +37,7 @@ export type ViewId =
   | "newtask"
   | "missions"
   | "automations"
+  | "desktops"
   | "projects"
   | "editor"
   | "terminal"
@@ -84,8 +87,9 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: "INFRASTRUCTURE",
+    title: "COMPUTE",
     items: [
+      { id: "desktops", label: "Desktops", Icon: IconMonitor },
       { id: "servers", label: "Servers", Icon: IconServer },
       { id: "containers", label: "Containers", Icon: IconBox },
       { id: "databases", label: "Databases", Icon: IconDatabase },
@@ -111,6 +115,14 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
+/** Desktops is a launcher, not a view: it opens the Workbench's Desktop
+ *  tab (persisted so it activates even if the panel mounts after this
+ *  click) and lets the context-open event bring the panel up. */
+function openDesktopSurface() {
+  setDesktopLayout({ rightPanelOpen: true, activeTab: "desktop", activeTabId: "desktop" });
+  document.dispatchEvent(new CustomEvent("orvyn:context-open", { detail: { tab: "desktop" } }));
+}
+
 export function Navigation({
   view,
   onChange,
@@ -120,6 +132,14 @@ export function Navigation({
   onChange: (v: ViewId) => void;
   projectRoot?: string | null;
 }) {
+  const [desktopActive, setDesktopActive] = useState(
+    () => getDesktopLayout().rightPanelOpen && getDesktopLayout().activeTabId === "desktop",
+  );
+  useEffect(() => {
+    return subscribeDesktopLayout((l) => {
+      setDesktopActive(l.rightPanelOpen && l.activeTabId === "desktop");
+    });
+  }, []);
   return (
     <div
       style={{
@@ -152,7 +172,13 @@ export function Navigation({
                 </div>
               )}
               {section.items.map(({ id, label, Icon }) => (
-                <NavItemButton key={id} label={label} active={view === id} onClick={() => onChange(id)} Icon={Icon} />
+                <NavItemButton
+                  key={id}
+                  label={label}
+                  active={id === "desktops" ? desktopActive : view === id}
+                  onClick={id === "desktops" ? openDesktopSurface : () => onChange(id)}
+                  Icon={Icon}
+                />
               ))}
             </div>
           );

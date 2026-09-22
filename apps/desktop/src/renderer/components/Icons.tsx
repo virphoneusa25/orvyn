@@ -214,6 +214,13 @@ export const IconDatabase = (p: IconProps) => (
   </Svg>
 );
 
+export const IconMonitor = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="12" rx="1.8" />
+    <path d="M8.5 20h7M12 16v4" />
+  </Svg>
+);
+
 export const IconCloud = (p: IconProps) => (
   <Svg {...p}>
     <path d="M7 18a4 4 0 0 1-.5-8A5.5 5.5 0 0 1 17 8.5 3.8 3.8 0 0 1 17.5 16H7z" />

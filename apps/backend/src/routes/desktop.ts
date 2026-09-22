@@ -12,13 +12,11 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { requireTenant } from "../middleware/tenant";
-import { playwrightAvailable, captureBrowserFrame, getBrowserSession, ensureBrowserSession } from "../ai/tools/browserTools";
+import { playwrightAvailable, getBrowserSession } from "../ai/tools/browserTools";
 import {
   canUserAct,
-  createDesktopSession,
   endDesktopSession,
   getDesktopSession,
-  listDesktopSessions,
   mapClientPoint,
   requestControl,
   toPublic,

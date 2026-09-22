@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Chromium
+Comment=Web browser inside the sandbox desktop
+Exec=chromium --no-sandbox --disable-dev-shm-usage --start-maximized file:///usr/share/orvyn/home.html
+Icon=chromium
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true

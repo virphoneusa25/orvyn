@@ -18,6 +18,11 @@ if command -v dbus-launch &>/dev/null; then
   eval "$(dbus-launch --sh-syntax)" || true
 fi
 
+# Window manager.
+openbox &
+OPENBOX_PID=$!
+sleep 1
+
 # ORVYN wallpaper (deep-space / network motif, generated original art).
 if command -v feh &>/dev/null; then
   feh --bg-scale /usr/share/backgrounds/orvyn/orvyn-desktop.png 2>/dev/null || \
@@ -25,11 +30,6 @@ if command -v feh &>/dev/null; then
 else
   xsetroot -solid "#07122a" 2>/dev/null || true
 fi
-
-# Window manager.
-openbox &
-OPENBOX_PID=$!
-sleep 1
 
 # Top panel (Activities, launcher, centered clock, indicators).
 tint2 -c /home/orvyn/.config/tint2/top.conf &
@@ -49,6 +49,11 @@ sleep 1.5
 # Center + size the file manager window like the approved mockup.
 wmctrl -r "orvyn - File Manager" -e "0,$((SCREEN_WIDTH*27/100)),$((SCREEN_HEIGHT*24/100)),$((SCREEN_WIDTH*46/100)),$((SCREEN_HEIGHT*52/100))" 2>/dev/null || \
 wmctrl -r "File Manager" -e "0,$((SCREEN_WIDTH*27/100)),$((SCREEN_HEIGHT*24/100)),$((SCREEN_WIDTH*46/100)),$((SCREEN_HEIGHT*52/100))" 2>/dev/null || true
+
+# Optional: a start URL opens Chromium alongside the file manager.
+if [ -n "$START_URL" ]; then
+  chromium --no-sandbox --disable-dev-shm-usage --start-maximized "$START_URL" &
+fi
 
 echo "=============================================="
 echo " ORVYN Desktop sandbox ready on :99"

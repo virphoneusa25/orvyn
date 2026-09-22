@@ -134,7 +134,7 @@ export function DesktopView({
     if (!projectRoot || !session?.live) return;
     try {
       const q = new URLSearchParams({ projectRoot, q: quality, ...(runId ? { runId } : {}) });
-      const res = await fetch(apiUrl(`/desktop/frame?${q}`), { headers: authHeaders() });
+      const res = await fetch(apiUrl(`/desktop/frame?${q}&_=${Date.now()}`), { headers: authHeaders(), cache: "no-store" });
       if (!res.ok) { setInterrupted(true); return; }
       setInterrupted(false);
       const blob = await res.blob();
