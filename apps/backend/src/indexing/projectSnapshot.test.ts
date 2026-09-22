@@ -26,6 +26,6 @@ test("snapshot hashes files and diffs incremental changes", async () => {
     assert.equal(diff.added[0].path, "src/c.ts");
     assert.ok(diff.unchanged.some((f) => f.path === "src/b.ts"));
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
