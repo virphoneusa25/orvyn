@@ -114,8 +114,8 @@ npm install
 npm run dist:win -w apps/desktop
 ```
 
-This produces a `ORVYN Setup <version>.exe` NSIS installer in
-`apps/desktop/release/`. Distribute that `.exe` to any Windows machine —
+This produces `apps/desktop/release/ORVYN Setup 0.1.0-<short-sha>.exe`.
+Distribute that `.exe` to any Windows machine —
 double-click to install, no admin rights required beyond the standard
 Windows install prompt (`"oneClick": false` in the build config means the
 user picks the install directory, matching normal Windows installer UX).

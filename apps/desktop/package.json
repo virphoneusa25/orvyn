@@ -7,7 +7,7 @@
     "dev": "npm run build && electron .",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json && vite build",
     "build:renderer:dev": "vite build --mode development",
-    "dist:win": "npm run build && cd ../.. && npm run build -w @orvyn/ai-core && npm run build -w @orvyn/backend && node scripts/stage-desktop-backend.mjs && cd apps/desktop && electron-builder --win"
+    "dist:win": "node ../../scripts/dist-win.mjs"
   },
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",
@@ -60,11 +60,13 @@
         "nsis"
       ],
       "icon": "resources/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "ORVYN Setup 0.1.0-${env.ORVYN_SHORT_SHA}.${ext}"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "ORVYN Setup 0.1.0-${env.ORVYN_SHORT_SHA}.${ext}"
     }
   }
 }
