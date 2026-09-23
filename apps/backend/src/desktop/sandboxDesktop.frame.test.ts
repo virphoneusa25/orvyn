@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CACHED_FRAME_PATH, frameCaptureCommand, formatDesktopCommand, jpegFromOutput, pngFromOutput, usesCachedFrame } from "./sandboxDesktop";
+import { CACHED_FRAME_PATH, frameCaptureCommand, formatDesktopCommand, jpegFromOutput, memoryFrameIsFresh, pngFromOutput, usesCachedFrame } from "./sandboxDesktop";
 
 test("frame capture grabs the root window instead of waiting for a click", () => {
   const cmd = frameCaptureCommand("auto");
@@ -12,6 +12,9 @@ test("frame capture grabs the root window instead of waiting for a click", () =>
   assert.equal(usesCachedFrame("low"), true);
   assert.equal(usesCachedFrame("high"), false);
   assert.equal(CACHED_FRAME_PATH, "/tmp/orvyn-frame.jpg");
+  assert.equal(memoryFrameIsFresh(1_000, 1_100, 5_000), true);
+  assert.equal(memoryFrameIsFresh(1_000, 1_300, 5_000), false);
+  assert.equal(memoryFrameIsFresh(1_000, 1_050, 20), false);
 });
 
 test("desktop commands stay on one line the input reader can trust", () => {

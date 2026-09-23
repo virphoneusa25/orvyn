@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ORVYN brand assets: wallpaper, mark, dock glyphs, landing page.
 COPY assets/ /usr/share/backgrounds/orvyn/
 RUN mkdir -p /usr/share/orvyn/icons /usr/share/orvyn/indicators && \
+    cp /usr/share/backgrounds/orvyn/orvyn-brand.png /usr/share/orvyn/orvyn-brand.png && \
     cp /usr/share/backgrounds/orvyn/orvyn-mark.png /usr/share/orvyn/ && \
     cp /usr/share/backgrounds/orvyn/orvyn-lockup.png /usr/share/orvyn/ && \
     cp /usr/share/backgrounds/orvyn/icons/* /usr/share/orvyn/icons/ && \

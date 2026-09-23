@@ -17,7 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
-import { FRAME_REQUEST_MS, gatePointerMove, imageKind, releasePointerMove, sessionCanStream, shouldCoverFrame, type MoveGate } from "../../desktopStream";
+import { FRAME_REQUEST_MS, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -87,8 +87,6 @@ export function DesktopView({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastFrameAt = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const moveGate = useRef<MoveGate>({ inFlight: false, pending: null });
-
   function showToast(msg: string) {
     setToast(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -272,6 +270,7 @@ export function DesktopView({
       controlOwner: owner,
       status: owner === "user" ? "user_control" : current.status === "user_control" ? "ready" : current.status,
     } : current);
+    if (owner === "user") viewRef.current?.focus();
     const { ok, data } = await post("/desktop/control", { owner });
     if (!ok) {
       setError(data.error ?? "Control change blocked.");
@@ -295,21 +294,6 @@ export function DesktopView({
       viewHeight: imageRect.h || sessionRef.current?.height,
       ...extra,
     });
-  }
-
-  function emitMove(point: { x: number; y: number }) {
-    const step = gatePointerMove(moveGate.current, point);
-    moveGate.current = step.gate;
-    if (!step.send) return;
-    void (async () => {
-      let send: { x: number; y: number } | null = step.send;
-      while (send) {
-        await sendInput("move", send);
-        const released = releasePointerMove(moveGate.current);
-        moveGate.current = released.gate;
-        send = released.send;
-      }
-    })();
   }
 
   /** clientX/Y → coords inside the displayed image (letterbox-correct). */
@@ -491,10 +475,11 @@ export function DesktopView({
         flex: 1, minWidth: 0, minHeight: 0, width: "100%", position: "relative", overflow: "hidden",
         background: "#04060f",
         outline: "none",
+        cursor: "default",
       }}
       tabIndex={user ? 0 : -1}
-      onMouseMove={user ? (e) => { const p = imagePoint(e); if (p) emitMove(p); } : undefined}
-      onClick={user ? (e) => { e.currentTarget.focus(); const p = imagePoint(e); if (p) void sendInput("click", p); } : undefined}
+      onMouseDown={user ? (e) => { e.currentTarget.focus(); } : undefined}
+      onClick={user ? (e) => { const p = imagePoint(e); if (p) void sendInput("click", p); } : undefined}
       onContextMenu={user ? (e) => { e.preventDefault(); const p = imagePoint(e); if (p) void sendInput("rightclick", p); } : undefined}
       onDoubleClick={user ? (e) => { const p = imagePoint(e); if (p) void sendInput("dblclick", p); } : undefined}
       onKeyDown={user ? (e) => { e.preventDefault(); void sendInput("key", { key: e.key }); } : undefined}
@@ -516,7 +501,7 @@ export function DesktopView({
         }}
       />
       {!frameDrawn && (
-        <div style={{ ...emptyBody(), position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <div style={{ ...emptyBody(), position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, pointerEvents: "none" }}>
           <div>Connecting to Desktop…</div>
           <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>{streamNote ?? "Streaming the live virtual desktop"}</div>
         </div>

@@ -119,6 +119,25 @@ export function usesCachedFrame(quality: FrameQuality): boolean {
   return quality !== "high";
 }
 
+/** Serve a frame we already read instead of starting another docker exec. */
+export const MEMORY_FRAME_MS = 200;
+
+export function memoryFrameIsFresh(at: number, now: number, bytes: number): boolean {
+  return bytes > 1000 && now - at < MEMORY_FRAME_MS;
+}
+
+interface MemoryFrame {
+  jpeg: Buffer;
+  at: number;
+  pending?: Promise<Buffer | null>;
+}
+
+const memoryFrames = new Map<string, MemoryFrame>();
+
+function dropMemoryFrame(id: string): void {
+  memoryFrames.delete(id);
+}
+
 export async function startSandboxDesktop(opts: {
   tenantId: string;
   projectRoot?: string;
@@ -214,6 +233,7 @@ export async function startSandboxDesktop(opts: {
   session.status = "ready";
   session.startedAt = new Date().toISOString();
   sessions.set(id, session);
+  openInputPipe(session);
   return session;
 }
 
@@ -229,10 +249,41 @@ function qualityArgs(quality: FrameQuality): string[] {
 
 const frameInFlight = new Map<string, Promise<Buffer | null>>();
 
+async function pullContainerFrame(session: SandboxDesktopSession): Promise<Buffer | null> {
+  const cached = await dockerExec(session.containerId, ["timeout", "2", "cat", CACHED_FRAME_PATH], 3000);
+  const ready = jpegFromOutput(cached.stdout);
+  const slot = memoryFrames.get(session.id) ?? { jpeg: Buffer.alloc(0), at: 0 };
+  if (ready && ready.length > 1000) {
+    slot.jpeg = ready;
+    slot.at = Date.now();
+    memoryFrames.set(session.id, slot);
+    return ready;
+  }
+  return null;
+}
+
+function scheduleContainerFrame(session: SandboxDesktopSession): Promise<Buffer | null> {
+  const hit = memoryFrames.get(session.id);
+  if (hit?.pending) return hit.pending;
+  const pending = pullContainerFrame(session).finally(() => {
+    const cur = memoryFrames.get(session.id);
+    if (cur?.pending === pending) cur.pending = undefined;
+  });
+  const slot = hit ?? { jpeg: Buffer.alloc(0), at: 0 };
+  slot.pending = pending;
+  memoryFrames.set(session.id, slot);
+  return pending;
+}
+
 async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality): Promise<Buffer | null> {
   if (usesCachedFrame(quality)) {
-    const cached = await dockerExec(session.containerId, ["timeout", "2", "cat", CACHED_FRAME_PATH], 3000);
-    const ready = jpegFromOutput(cached.stdout);
+    const hit = memoryFrames.get(session.id);
+    if (hit && memoryFrameIsFresh(hit.at, Date.now(), hit.jpeg.length)) return hit.jpeg;
+    if (hit && hit.jpeg.length > 1000) {
+      void scheduleContainerFrame(session);
+      return hit.jpeg;
+    }
+    const ready = await scheduleContainerFrame(session);
     if (ready && ready.length > 1000) return ready;
   }
   const viaXwd = await dockerExec(
@@ -402,18 +453,31 @@ interface InputPipe {
 
 const inputPipes = new Map<string, InputPipe>();
 const inputMode = new Map<string, "pipe" | "exec">();
-const pendingMove = new Map<string, string>();
-const moveTimer = new Map<string, ReturnType<typeof setTimeout>>();
 
 function dropInputPipe(id: string): void {
-  const timer = moveTimer.get(id);
-  if (timer) clearTimeout(timer);
-  moveTimer.delete(id);
-  pendingMove.delete(id);
   inputMode.delete(id);
   const pipe = inputPipes.get(id);
   inputPipes.delete(id);
   if (pipe && !pipe.proc.killed) pipe.proc.kill();
+}
+
+function openInputPipe(session: SandboxDesktopSession): void {
+  if (!session.containerId) return;
+  const existing = inputPipes.get(session.id);
+  if (existing && !existing.dead) return;
+  const proc = spawn("docker", ["exec", "-i", session.containerId, "/usr/local/bin/orvyn-input"], {
+    windowsHide: true,
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  const pipe: InputPipe = { proc, dead: false };
+  inputPipes.set(session.id, pipe);
+  inputMode.set(session.id, "pipe");
+  const markDead = () => {
+    pipe.dead = true;
+    if (inputPipes.get(session.id)?.proc === proc) inputMode.set(session.id, "exec");
+  };
+  proc.on("error", markDead);
+  proc.on("exit", markDead);
 }
 
 async function desktopInputMode(session: SandboxDesktopSession): Promise<"pipe" | "exec"> {
@@ -427,31 +491,13 @@ async function desktopInputMode(session: SandboxDesktopSession): Promise<"pipe" 
 
 function writeInputLine(session: SandboxDesktopSession, line: string): boolean {
   let pipe = inputPipes.get(session.id);
-  if (!pipe || pipe.dead) {
-    const proc = spawn("docker", ["exec", "-i", session.containerId, "/usr/local/bin/orvyn-input"], {
-      windowsHide: true,
-      stdio: ["pipe", "ignore", "ignore"],
-    });
-    pipe = { proc, dead: false };
-    inputPipes.set(session.id, pipe);
-    const markDead = () => {
-      pipe!.dead = true;
-      if (inputPipes.get(session.id)?.proc === proc) inputMode.set(session.id, "exec");
-    };
-    proc.on("error", markDead);
-    proc.on("exit", markDead);
-  }
-  if (pipe.dead || !pipe.proc.stdin) return false;
-  return pipe.proc.stdin.write(`${line}\n`);
-}
-
-function flushMove(session: SandboxDesktopSession): void {
-  const timer = moveTimer.get(session.id);
-  if (timer) clearTimeout(timer);
-  moveTimer.delete(session.id);
-  const line = pendingMove.get(session.id);
-  pendingMove.delete(session.id);
-  if (line) writeInputLine(session, line);
+  if (!pipe || pipe.dead) openInputPipe(session);
+  pipe = inputPipes.get(session.id);
+  const stdin = pipe?.proc.stdin;
+  if (!pipe || pipe.dead || !stdin || stdin.destroyed) return false;
+  // A false return means the buffer is full. The line is still queued.
+  stdin.write(`${line}\n`);
+  return true;
 }
 
 async function sandboxAct(
@@ -468,24 +514,16 @@ async function sandboxAct(
     deltaY: Number(args.deltaY ?? 0),
   });
   if (line == null) return type === "type" ? true : false;
+  // Pointer-move spam was queued ahead of clicks, so Take Control felt frozen.
+  // Clicks already carry the coordinates. Do not send a move for every pixel.
+  if (type === "move") return true;
 
-  if ((await desktopInputMode(session)) === "pipe") {
-    if (type === "move") {
-      pendingMove.set(session.id, line);
-      if (!moveTimer.has(session.id)) {
-        moveTimer.set(session.id, setTimeout(() => flushMove(session), 16));
-      }
-      return true;
-    }
-    flushMove(session);
-    return writeInputLine(session, line);
-  }
+  if ((await desktopInputMode(session)) === "pipe" && writeInputLine(session, line)) return true;
 
   let cmd: string[] = [];
   switch (type) {
     case "move":
-      cmd = ["xdotool", "mousemove", String(x), String(y)];
-      break;
+      return true;
     case "click":
       cmd = ["xdotool", "mousemove", String(x), String(y), "click", "1"];
       break;
@@ -576,6 +614,7 @@ export async function stopSandboxDesktop(session: SandboxDesktopSession): Promis
   session.status = "ended";
   session.controlOwner = "none";
   dropInputPipe(session.id);
+  dropMemoryFrame(session.id);
   exec(`docker rm -f ${session.containerId}`, { windowsHide: true }, () => {
     sessions.delete(session.id);
   });
@@ -603,5 +642,6 @@ export function listSandboxSessions(tenantId: string): SandboxDesktopSession[] {
 
 export function resetSandboxSessionsForTests(): void {
   for (const id of inputPipes.keys()) dropInputPipe(id);
+  memoryFrames.clear();
   sessions.clear();
 }

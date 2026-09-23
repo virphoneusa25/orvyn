@@ -31,9 +31,10 @@ def session_wallpaper() -> None:
         draw_mask.line([(0, 450 - 48 + i), (560, 450 - 48 + i)], fill=alpha)
     base.paste(patch, (80, 0), mask)
 
-    mark = Image.open(ASSETS / "orvyn-mark.png").convert("RGBA")
-    mark = mark.crop(mark.getbbox()).resize((124, 124), Image.Resampling.LANCZOS)
-    base.alpha_composite(mark, (968, 236))
+    brand_path = ASSETS / "orvyn-brand.png"
+    mark = Image.open(brand_path if brand_path.exists() else ASSETS / "orvyn-mark.png").convert("RGBA")
+    mark = mark.crop(mark.getbbox()).resize((140, 140), Image.Resampling.LANCZOS)
+    base.alpha_composite(mark, (948, 226))
     draw = ImageDraw.Draw(base)
     draw.text((1104, 258), "ORVYN", font=face(SANS, 30), fill=(244, 247, 255, 255))
     draw.text((1104, 298), "BUILD FASTER", font=face(MED, 13), fill=(220, 228, 242, 240))
@@ -42,48 +43,41 @@ def session_wallpaper() -> None:
     base.convert("RGB").save(ASSETS / "orvyn-session.png", "PNG", optimize=True)
 
 
-def glyph(draw: ImageDraw.ImageDraw, kind: str, color: tuple[int, int, int, int]) -> None:
-    if kind == "home":
-        draw.polygon([(32, 26), (12, 42), (52, 42)], fill=color)
-        draw.rectangle([18, 40, 46, 56], fill=color)
-        draw.rectangle([28, 46, 36, 56], fill=(11, 16, 32, 255))
-    elif kind == "folder":
-        draw.rounded_rectangle([10, 24, 54, 54], radius=5, fill=color)
-        draw.polygon([(10, 28), (20, 16), (34, 16), (34, 26), (10, 26)], fill=color)
-    elif kind == "trash":
-        draw.rectangle([22, 14, 42, 18], fill=color)
-        draw.rectangle([16, 18, 48, 22], fill=color)
-        draw.rounded_rectangle([18, 24, 46, 54], radius=3, fill=color)
+TILE = (12, 20, 40)
+
+
+def opaque_icon(kind: str) -> Image.Image:
+    """Fully opaque tiles. tint2 has no compositor, so transparent PNGs paint as beige blocks."""
+    img = Image.new("RGB", (64, 64), TILE)
+    draw = ImageDraw.Draw(img)
+    if kind == "firefox":
+        draw.ellipse([6, 6, 58, 58], fill=(0, 96, 223))
+        draw.pieslice([6, 6, 58, 58], 210, 20, fill=(255, 113, 57))
+        draw.ellipse([24, 24, 40, 40], fill=(255, 255, 255))
     elif kind == "terminal":
-        draw.rounded_rectangle([6, 10, 58, 54], radius=10, fill=(15, 23, 42, 255))
-        draw.line([(18, 26), (30, 34), (18, 42)], fill=(56, 189, 248, 255), width=3)
-        draw.line([(34, 42), (46, 42)], fill=(226, 232, 240, 255), width=3)
+        draw.rounded_rectangle([5, 8, 59, 56], radius=8, fill=(15, 23, 42))
+        draw.line([(16, 22), (28, 32), (16, 42)], fill=(56, 189, 248), width=3)
+        draw.line([(32, 42), (48, 42)], fill=(226, 232, 240), width=3)
+    elif kind == "folder":
+        draw.rounded_rectangle([8, 22, 56, 52], radius=5, fill=(59, 130, 246))
+        draw.polygon([(8, 26), (18, 14), (34, 14), (38, 24), (8, 24)], fill=(147, 197, 253))
+    elif kind == "code":
+        draw.rounded_rectangle([4, 4, 60, 60], radius=12, fill=(37, 99, 235))
+        draw.line([(28, 18), (16, 32), (28, 46)], fill=(255, 255, 255), width=3)
+        draw.line([(36, 18), (48, 32), (36, 46)], fill=(255, 255, 255), width=3)
     elif kind == "grid":
         for row in range(3):
             for col in range(3):
                 x = 14 + col * 14
                 y = 14 + row * 14
-                draw.rounded_rectangle([x, y, x + 8, y + 8], radius=2, fill=color)
-    elif kind == "code":
-        draw.rounded_rectangle([8, 8, 56, 56], radius=10, fill=(37, 99, 235, 255))
-        draw.line([(26, 20), (16, 32), (26, 44)], fill=(255, 255, 255, 255), width=3)
-        draw.line([(38, 20), (48, 32), (38, 44)], fill=(255, 255, 255, 255), width=3)
+                draw.rounded_rectangle([x, y, x + 9, y + 9], radius=2, fill=(236, 242, 250))
+    return img
 
 
 def icons() -> None:
     ICONS.mkdir(parents=True, exist_ok=True)
-    white = (236, 242, 250, 255)
-    for name, color in {
-        "home": white,
-        "folder": (96, 165, 250, 255),
-        "trash": white,
-        "terminal": white,
-        "grid": white,
-        "code": white,
-    }.items():
-        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        glyph(ImageDraw.Draw(img), name, color)
-        img.save(ICONS / f"{name}.png", "PNG")
+    for name in ("firefox", "terminal", "folder", "code", "grid"):
+        opaque_icon(name).save(ICONS / f"{name}.png", "PNG")
 
 
 def main() -> None:

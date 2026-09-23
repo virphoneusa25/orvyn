@@ -37,8 +37,7 @@ else
   feh --bg-scale /usr/share/backgrounds/orvyn/orvyn-desktop.png 2>/dev/null || xsetroot -solid "#07122a" || true
 fi
 
-tint2 -c /home/orvyn/.config/tint2/left.conf &
-sleep 0.2
+# No left tint2 panel. Without a compositor its window is a solid black box.
 tint2 -c /home/orvyn/.config/tint2/dock.conf &
 sleep 0.2
 tint2 -c /home/orvyn/.config/tint2/clock.conf &
@@ -63,10 +62,10 @@ fi
 # inside the Take Control request.
 (
   while true; do
-    if xwd -root -silent | convert -quality 55 xwd:- /tmp/orvyn-frame.jpg.new 2>/dev/null; then
+    if nice -n 19 xwd -root -silent | nice -n 19 convert -quality 45 xwd:- /tmp/orvyn-frame.jpg.new 2>/dev/null; then
       mv -f /tmp/orvyn-frame.jpg.new /tmp/orvyn-frame.jpg
     fi
-    sleep 0.04
+    sleep 0.25
   done
 ) &
 
