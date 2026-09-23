@@ -16,6 +16,9 @@ export interface DesktopSession {
   id: string;
   runId?: string;
   tenantId: string;
+  organizationId?: string;
+  userId?: string;
+  workerId?: string;
   projectRoot: string;
   status: DesktopStatus;
   controlOwner: ControlOwner;
@@ -58,6 +61,9 @@ export function createDesktopSession(input: {
   tenantId: string;
   projectRoot: string;
   runId?: string;
+  organizationId?: string;
+  userId?: string;
+  workerId?: string;
   width?: number;
   height?: number;
   transport?: DesktopSession["transport"];
@@ -72,6 +78,9 @@ export function createDesktopSession(input: {
     id: `desk_${Math.random().toString(36).slice(2, 10)}`,
     runId: input.runId,
     tenantId: input.tenantId,
+    organizationId: input.organizationId,
+    userId: input.userId,
+    workerId: input.workerId,
     projectRoot: input.projectRoot,
     status: "starting",
     controlOwner: "none",

@@ -57,6 +57,17 @@ authRouter.post("/logout", (req, res) => {
   res.json({ ok: true });
 });
 
+authRouter.post("/switch-organization", (req, res) => {
+  const token = bearerToken(req);
+  if (!token) return res.status(401).json({ error: "Not signed in" });
+  try {
+    const switched = authService.switchOrganization(token, String(req.body.organizationId ?? ""));
+    res.json(switched);
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message === "Not found" ? "Not found" : err.message });
+  }
+});
+
 authRouter.get("/me", (req, res) => {
   const token = bearerToken(req);
   const session = token ? authService.verifyPrincipal(token) : null;

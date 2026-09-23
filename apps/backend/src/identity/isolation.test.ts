@@ -62,6 +62,38 @@ test("tenant A cannot read tenant B project, chat, or guessed ids", async () => 
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+test("company organization members share tenant; outsiders cannot join themselves", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-orgc-"));
+  const auth = new AuthService(dir);
+  const a1 = auth.register("a1@example.com", "password1", "A1");
+  const a2 = auth.register("a2@example.com", "password1", "A2");
+  const b1 = auth.register("b1@example.com", "password1", "B1");
+  const pa1 = auth.verifyPrincipal(a1.token)!.principal;
+  const pa2 = auth.verifyPrincipal(a2.token)!.principal;
+  const pb1 = auth.verifyPrincipal(b1.token)!.principal;
+  const company = auth.createOrganization(pa1, "Acme Inc");
+  auth.addOrganizationMember(pa1, company.id, pa2.userId, "member");
+  assert.throws(() => auth.addOrganizationMember(pb1, company.id, pb1.userId, "member"), /Not found/);
+  const switched = auth.switchOrganization(a2.token, company.id);
+  assert.equal(switched.principal.tenantId, company.tenantId);
+  assert.equal(switched.principal.role, "member");
+  assert.throws(() => auth.switchOrganization(b1.token, company.id), /Not found/);
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test("organization switch refreshes tenant context and rejects foreign orgs", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-orgsw-"));
+  const auth = new AuthService(dir);
+  const a = auth.register("sw-a@example.com", "password1", "A");
+  const b = auth.register("sw-b@example.com", "password1", "B");
+  assert.throws(() => auth.switchOrganization(a.token, b.organization.id), /Not found/);
+  const again = auth.switchOrganization(a.token, a.organization.id);
+  assert.equal(again.principal.organizationId, a.organization.id);
+  assert.notEqual(again.token, a.token);
+  assert.equal(auth.verifyPrincipal(a.token), null);
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
 test("client-supplied tenantId cannot override the session", () => {
   assert.equal(claimedTenantId({ body: { tenantId: "user_other" } }), "user_other");
   assert.throws(() => rejectTenantOverride("user_me", "user_other"), /session/);

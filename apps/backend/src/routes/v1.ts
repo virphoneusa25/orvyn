@@ -91,6 +91,26 @@ v1Router.get("/organizations", (req, res) => {
   res.json({ organizations: authService.listOrganizations(principal.userId) });
 });
 
+v1Router.post("/organizations", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const organization = authService.createOrganization(principal, String(req.body.name ?? "Organization"));
+    res.status(201).json({ organization });
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message });
+  }
+});
+
+v1Router.post("/organizations/:id/members", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    authService.addOrganizationMember(principal, req.params.id, String(req.body.userId ?? ""), req.body.role === "admin" ? "admin" : "member");
+    res.status(201).json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: "Not found" });
+  }
+});
+
 v1Router.get("/projects", (req, res) => {
   const principal = requirePrincipal(req);
   res.json({ projects: authService.listProjects(principal.tenantId) });

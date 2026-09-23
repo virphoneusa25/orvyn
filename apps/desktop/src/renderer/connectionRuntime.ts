@@ -28,6 +28,7 @@ import {
   stopOrchestratorHeartbeat,
   type OrchestratorConnectionState,
 } from "./connection";
+import { applyAuthPayload, clearSession } from "./sessionContext";
 
 type Listener = (facts: ConnectionFacts) => void;
 
@@ -133,12 +134,14 @@ async function validateSession(): Promise<void> {
       return;
     }
     const data = await res.json();
+    applyAuthPayload(data);
     const user = data.user ?? {};
     apply({
       type: "session-valid",
-      name: user.name ? String(user.name) : null,
-      email: user.email ? String(user.email) : null,
+      name: user.name ? String(user.name) : data.principal?.name ?? null,
+      email: user.email ? String(user.email) : data.principal?.email ?? null,
     });
+    if (data.principal?.organizationName) apply({ type: "workspace", name: String(data.principal.organizationName) });
     if (getOrchestratorStatus() === "online") apply({ type: "backend", state: "online" });
     await refreshWorkers();
   } catch {
@@ -183,10 +186,31 @@ export async function signInWithCredentials(
     return { ok: false, error: data.error || `HTTP ${res.status}` };
   }
   resetAuthFailureLatch();
+  clearSession();
+  applyAuthPayload(data);
   await saveConnectionConfig({ backendUrl: base, apiKey: String(data.token) });
   ensureOrchestratorHeartbeat();
   await validateSession();
   return { ok: true };
+}
+
+export async function switchOrganization(organizationId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(apiUrl("/auth/switch-organization"), {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ organizationId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.token) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    clearSession();
+    applyAuthPayload(data);
+    await saveConnectionConfig({ backendUrl: getConnectionConfig().backendUrl, apiKey: String(data.token) });
+    await validateSession();
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Could not switch organization" };
+  }
 }
 
 export async function signOutOfCloud(): Promise<void> {
@@ -196,9 +220,10 @@ export async function signOutOfCloud(): Promise<void> {
       await fetch(apiUrl("/auth/logout"), { method: "POST", headers: authHeaders() });
     }
   } catch {
-    // Revocation is best-effort. Local projects and chat history stay.
+    // Revocation is best-effort. Session caches must not survive the next login.
   }
   resetAuthFailureLatch();
+  clearSession();
   apply({ type: "signed-out" });
   await saveConnectionConfig({ backendUrl: LOCAL_BACKEND_URL, apiKey: "" });
   ensureOrchestratorHeartbeat();
@@ -206,6 +231,7 @@ export async function signOutOfCloud(): Promise<void> {
 
 export async function continueInLocalMode(): Promise<void> {
   resetAuthFailureLatch();
+  clearSession();
   apply({ type: "signed-out" });
   await saveConnectionConfig({ backendUrl: LOCAL_BACKEND_URL, apiKey: "" });
   ensureOrchestratorHeartbeat();

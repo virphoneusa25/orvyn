@@ -238,6 +238,35 @@ export class AuthService {
     return org;
   }
 
+  createOrganization(owner: Principal, name: string, kind: "company" | "personal" = "company"): OrganizationRecord {
+    const org: OrganizationRecord = {
+      id: `org_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      name: name.trim() || "Organization",
+      kind,
+      tenantId: `org_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(`INSERT INTO organizations (id, name, kind, tenant_id, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(org.id, org.name, org.kind, org.tenantId, org.createdAt);
+    this.db
+      .prepare(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`)
+      .run(org.id, owner.userId, "owner", Date.now());
+    return org;
+  }
+
+  addOrganizationMember(actor: Principal, organizationId: string, userId: string, role: OrgRole = "member"): void {
+    const membership = this.db
+      .prepare(`SELECT role FROM organization_members WHERE organization_id = ? AND user_id = ?`)
+      .get(organizationId, actor.userId) as { role?: string } | undefined;
+    if (!membership || (membership.role !== "owner" && membership.role !== "admin")) {
+      throw Object.assign(new Error("Not found"), { status: 404 });
+    }
+    this.db
+      .prepare(`INSERT OR REPLACE INTO organization_members (organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`)
+      .run(organizationId, userId, role, Date.now());
+  }
+
   listOrganizations(userId: string): OrganizationRecord[] {
     const rows = this.db
       .prepare(
@@ -328,6 +357,18 @@ export class AuthService {
 
   logout(token: string): void {
     this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
+  }
+
+  switchOrganization(token: string, organizationId: string): { token: string; organization: OrganizationRecord; principal: Principal } {
+    const session = this.verifyPrincipal(token);
+    if (!session) throw Object.assign(new Error("Not signed in"), { status: 401 });
+    const org = this.listOrganizations(session.user.id).find((o) => o.id === organizationId);
+    if (!org) isolation404();
+    this.logout(token);
+    const next = this.createSession(session.user.id, org.id);
+    const verified = this.verifyPrincipal(next);
+    if (!verified) throw new Error("Failed to switch organization");
+    return { token: next, organization: org, principal: verified.principal };
   }
 
   userCount(): number {
