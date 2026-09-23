@@ -99,3 +99,28 @@ jobs:
             apps/desktop/release/*.blockmap
           if-no-files-found: error
           retention-days: 14
+
+  deploy-ovh:
+    name: Deploy OVH control plane
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to OVH
+        env:
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$OVH_SSH_PRIVATE_KEY" ]; then
+            echo "OVH_SSH_PRIVATE_KEY is not set — add it as a GitHub Actions secret to auto-deploy."
+            exit 0
+          fi
+          install -m 600 /dev/null "$HOME/.ssh/ovh_deploy"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" > "$HOME/.ssh/ovh_deploy"
+          chmod 600 "$HOME/.ssh/ovh_deploy"
+          export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
+          bash scripts/deploy-ovh.sh
+          shred -u "$HOME/.ssh/ovh_deploy" 2>/dev/null || rm -f "$HOME/.ssh/ovh_deploy"

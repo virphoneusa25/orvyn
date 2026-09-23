@@ -102,13 +102,31 @@ Storage becomes the primary backup.
 
 ## Updating
 
+From a machine that can SSH to the box (this Cloud Agent already can):
+
 ```bash
-git pull
-docker compose up -d --build
+./scripts/deploy-ovh.sh
 ```
 
-The backend is stateless today (in-memory missions/runs); an update
-restarts cleanly but clears mission history.
+That rsyncs `apps/backend`, `apps/worker`, `packages`, and `infrastructure`
+and rebuilds only `backend` + `worker`. The server `.env` and named volumes
+(Postgres, Redis, Qdrant, Caddy) are not overwritten.
+
+GitHub Actions job **Deploy OVH control plane** runs the same script after
+CI on push to `main` or `fix/core-agent-runtime` when the repository secret
+`OVH_SSH_PRIVATE_KEY` is set.
+
+Manual on the server:
+
+```bash
+# after code is already on the box
+docker compose \
+  -f docker-compose.yml \
+  -f infrastructure/ovh/compose.prod.yml \
+  -f infrastructure/ovh/compose.control-plane.yml \
+  -f infrastructure/ovh/compose.worker.yml \
+  up -d --build backend worker
+```
 
 ## Scaling later
 
