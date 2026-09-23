@@ -21,6 +21,7 @@ import { CapabilityIndex } from "./searchCapabilities";
 import { parseImportedMcpConfig, exportOrvynMcpConfig } from "./importExport";
 import { verificationFor } from "./verifiedCatalog";
 import { ToolSchemaCache } from "./schemaCache";
+import { MarketplaceService } from "./service";
 import type { MarketplaceMcpServer, McpRegistryProvider, RegistryResult } from "./types";
 
 function sampleOfficial(name: string, description: string, extra: Record<string, unknown> = {}) {
@@ -204,6 +205,19 @@ test("official provider uses injected fetch (no live network in unit test)", asy
   assert.ok(out.results.some((r) => r.server.name.includes("obsidian")));
   const h = await p.health!();
   assert.equal(h.status, "online");
+});
+
+test("provider secrets persist under mcp.secret.* and are never returned", () => {
+  const saved: Record<string, string> = {};
+  const store = { getSetting: (k: string) => saved[k], setSetting: (k: string, v: string) => { saved[k] = v; } };
+  const manager = { listServers: () => [], searchTools: () => [], statuses: () => [] } as any;
+  const svc = new MarketplaceService(manager, store);
+  const after = svc.setProviderSecret("glama", "glm_TEST_NOT_A_REAL_KEY");
+  assert.equal(after.glama, true);
+  assert.equal(saved["mcp.secret.glama"], "glm_TEST_NOT_A_REAL_KEY");
+  const status = svc.providerSecretStatus();
+  assert.deepEqual(status, { glama: true, smithery: false });
+  assert.equal(JSON.stringify(status).includes("glm_"), false);
 });
 
 test("glama without API key stays needs-key and returns empty search", async () => {

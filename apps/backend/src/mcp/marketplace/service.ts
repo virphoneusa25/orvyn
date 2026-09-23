@@ -77,6 +77,25 @@ export class MarketplaceService {
     this.index.aggregator = this.aggregator;
   }
 
+  providerSecretStatus(): { glama: boolean; smithery: boolean } {
+    return {
+      glama: Boolean(this.secret("mcp.secret.glama") || process.env.GLAMA_API_KEY),
+      smithery: Boolean(this.secret("mcp.secret.smithery") || process.env.SMITHERY_API_KEY),
+    };
+  }
+
+  setProviderSecret(provider: "glama" | "smithery", token: string): { glama: boolean; smithery: boolean } {
+    const key = provider === "glama" ? "mcp.secret.glama" : "mcp.secret.smithery";
+    const value = token.trim();
+    if (!value) {
+      this.store.setSetting(key, "");
+    } else {
+      this.store.setSetting(key, value);
+    }
+    this.refreshProviders();
+    return this.providerSecretStatus();
+  }
+
   invalidateCatalog(query?: string): void {
     this.aggregator.invalidate(query);
   }

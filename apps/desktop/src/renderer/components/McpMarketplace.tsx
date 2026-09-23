@@ -1260,6 +1260,14 @@ function PrivateRegistries({ onSaved }: { onSaved: () => void }) {
   const [name, setName] = useState("Organization registry");
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
+  const [glama, setGlama] = useState("");
+  const [configured, setConfigured] = useState<{ glama?: boolean; smithery?: boolean }>({});
+  useEffect(() => {
+    void fetch(apiUrl("/mcp/marketplace/secrets"), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((body) => setConfigured(body.configured ?? {}))
+      .catch(() => undefined);
+  }, []);
   async function save() {
     await fetch(apiUrl("/mcp/marketplace/registries"), {
       method: "POST",
@@ -1269,8 +1277,24 @@ function PrivateRegistries({ onSaved }: { onSaved: () => void }) {
     setToken("");
     onSaved();
   }
+  async function saveGlama() {
+    const res = await fetch(apiUrl("/mcp/marketplace/secrets"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ glama }),
+    });
+    const body = await res.json().catch(() => ({}));
+    setConfigured(body.configured ?? {});
+    setGlama("");
+    onSaved();
+  }
   return (
     <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>
+        Glama directory key {configured.glama ? "· configured" : "· not set"}
+      </div>
+      <input style={{ ...searchInput, marginBottom: 6 }} type="password" value={glama} onChange={(e) => setGlama(e.target.value)} placeholder="glm_… stored as mcp.secret.glama" />
+      <button onClick={() => void saveGlama()} style={{ ...ghostBtn, marginBottom: 14 }}>Save Glama key</button>
       <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>Private registry (Official API)</div>
       <input style={{ ...searchInput, marginBottom: 6 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
       <input style={{ ...searchInput, marginBottom: 6 }} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://registry.example.com" />

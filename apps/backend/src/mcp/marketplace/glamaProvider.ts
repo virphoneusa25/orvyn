@@ -52,7 +52,10 @@ export function glamaProvider(
         };
       }
       const url = new URL(`${GLAMA_API_URL}/v1/servers`);
-      if (query.query) url.searchParams.set("query", query.query);
+      if (query.query) {
+        url.searchParams.set("query", query.query);
+        url.searchParams.set("sort", "search-relevance:desc");
+      }
       url.searchParams.set("first", String(Math.min(query.limit ?? 20, 50)));
       if (query.cursor) url.searchParams.set("after", query.cursor);
       const { body } = await fetchCatalogJson({
@@ -111,7 +114,7 @@ export function normalizeGlama(n: any): MarketplaceMcpServer {
     sources: ["glama"],
     repository: n.repository?.url,
     homepage: n.url,
-    iconUrl: n.iconUrl || n.image || n.logo || undefined,
+    iconUrl: n.thumbnailUrl || n.iconUrl || n.image || n.logo || undefined,
     categories: inferCategories(name, description),
     packages: n.npmPackage ? [{ registry: "npm", identifier: String(n.npmPackage) }] : [],
     transports: n.url && String(n.url).startsWith("http") && !String(n.url).includes("glama.ai/mcp/servers")
@@ -124,7 +127,7 @@ export function normalizeGlama(n: any): MarketplaceMcpServer {
     compatibilityReason: "Listed on Glama — confirm transport before install",
     toolCount: tools.length || n.toolCount,
     qualityNote: n.qualityScore != null ? `Glama quality signal: ${n.qualityScore} (attributed, not an ORVYN safety rating)` : undefined,
-    license: n.spdxLicense,
+    license: typeof n.spdxLicense === "string" ? n.spdxLicense : n.spdxLicense?.name,
     networkRequired: true,
     filesystemScope: "none",
   };

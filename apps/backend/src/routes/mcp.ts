@@ -213,6 +213,19 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     }
   });
 
+  r.get("/marketplace/secrets", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ configured: marketplaceFor(t.mcpManager, t.localStore).providerSecretStatus() });
+  });
+
+  r.put("/marketplace/secrets", (req, res) => {
+    const t = requireTenant(req);
+    const market = marketplaceFor(t.mcpManager, t.localStore);
+    if (req.body?.glama !== undefined) market.setProviderSecret("glama", String(req.body.glama ?? ""));
+    if (req.body?.smithery !== undefined) market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
+    res.json({ configured: market.providerSecretStatus() });
+  });
+
   r.get("/marketplace/registries", (req, res) => {
     const t = requireTenant(req);
     res.json({ registries: marketplaceFor(t.mcpManager, t.localStore).listPrivateRegistries() });

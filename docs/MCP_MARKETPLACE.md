@@ -28,7 +28,7 @@ activated `mcp.<server>.<tool>` schemas (default: 8 servers / 40 tools).
 | id | Source | Required? | Timeout |
 |---|---|---|---|
 | `official` | Official MCP Registry (`registry.modelcontextprotocol.io`) | No — cached/local results remain if it is down | 12s |
-| `glama` | Glama directory (`GLAMA_API_KEY` or `mcp.secret.glama`) | No — returns `needs-key` without a key | 10s |
+| `glama` | Glama directory (`GLAMA_API_KEY` or `mcp.secret.glama` via PUT `/mcp/marketplace/secrets`) | No — returns `needs-key` without a key | 10s |
 | `smithery` | Smithery directory (`SMITHERY_API_KEY` or `mcp.secret.smithery`) | No — returns `needs-key` without a key | 10s |
 | `local` | Servers already in McpManager | Always | in-process |
 | `private` | User-added Official-API-compatible registries | Optional | 10s (configurable) |
