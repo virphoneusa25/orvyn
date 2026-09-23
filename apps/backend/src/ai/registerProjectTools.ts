@@ -50,6 +50,7 @@ import {
 } from "./tools/browserTools";
 import { registerDesktopTools } from "./tools/desktopTools";
 import { registerHostDesktopTools } from "./tools/hostDesktopTools";
+import { registerComputerUseTools } from "../computerUse/computerUseTools";
 import {
   makeGetDiagnosticsTool,
   makeRunTypecheckTool,
@@ -136,6 +137,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeBrowserEvidenceTool(projectRoot));
   registerDesktopTools((tool) => g.register(tool), projectRoot, tenant.id);
   registerHostDesktopTools((tool) => g.register(tool), tenant.id);
+  registerComputerUseTools((tool) => g.register(tool), (alias, target) => g.registerAlias(alias, target), projectRoot, tenant.id, tenant.artifactService);
 
   // Git
   g.register(makeGitStatusTool(projectRoot));

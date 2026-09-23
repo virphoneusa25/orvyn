@@ -397,6 +397,29 @@ test("desktop verification and preview events render compact activity", () => {
   assert.ok(labels.some((l) => /Desktop · Verification passed/.test(l)));
 });
 
+test("provider computer-use block and Auto fallback stay truthful in the stream", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("desktop.started", { tool: "computer_open_app" }),
+      ev("model.capability.blocked", { modelId: "Claude", pinned: false, capability: "computer_use", desktopHealthy: true }),
+      ev("model.fallback", { actualModel: "GPT-4o", requestedModel: "auto", extraProviderUsage: true }),
+      ev("desktop.screenshot", { sessionId: "desk_1" }),
+      ev("desktop.control.changed", { to: "user" }),
+      ev("desktop.returned", { sessionId: "desk_1" }),
+    ],
+    "completed"
+  );
+  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
+  assert.ok(labels.some((l) => /Computer use · Starting Desktop/.test(l)));
+  assert.ok(labels.some((l) => /Claude cannot use computer control/.test(l)));
+  assert.ok(labels.some((l) => /Switched to GPT-4o/.test(l)));
+  assert.ok(labels.some((l) => /Desktop · Inspecting app/.test(l)));
+  assert.ok(labels.some((l) => /Take Control/.test(l)));
+  assert.ok(labels.some((l) => /Returned to ORION/.test(l)));
+  assert.ok(!labels.some((l) => /Desktop unavailable/i.test(l)));
+});
+
 test("capability.required becomes a chat card, not a tool dump", () => {
   reset();
   const items = reducePresentation(

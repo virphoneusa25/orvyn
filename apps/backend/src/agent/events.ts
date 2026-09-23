@@ -99,6 +99,7 @@ export type AgentEventType =
   | "desktop.control.changed"
   | "desktop.action"
   | "desktop.screenshot"
+  | "desktop.returned"
   | "desktop.completed"
   | "desktop.failed"
   | "desktop.verification.started"
@@ -109,7 +110,9 @@ export type AgentEventType =
   | "mcp.disconnected"
   | "mcp.error"
   | "capability.required"
-  | "mcp.activation";
+  | "mcp.activation"
+  | "model.capability.blocked"
+  | "model.fallback";
 
 export interface AgentEvent {
   id: string;

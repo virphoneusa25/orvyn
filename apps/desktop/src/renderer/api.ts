@@ -10,6 +10,8 @@ export interface ModelCapabilities {
   embeddings: boolean;
   completion: boolean;
   image: boolean;
+  computerUseViaTools?: boolean;
+  nativeComputerUse?: boolean;
 }
 
 export interface ModelConfig {

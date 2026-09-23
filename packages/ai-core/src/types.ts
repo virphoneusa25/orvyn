@@ -109,6 +109,10 @@ export interface ModelCapabilities {
   embeddings: boolean;
   completion: boolean;
   image: boolean;
+  /** Can drive ORVYN computer_* tools. Default: same as tools. Native provider CU is never required. */
+  computerUseViaTools?: boolean;
+  /** Optional provider-native computer-use API. ORVYN Desktop does not depend on this. */
+  nativeComputerUse?: boolean;
 }
 
 export interface ModelConfig {

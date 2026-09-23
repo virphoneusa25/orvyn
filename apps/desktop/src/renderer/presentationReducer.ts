@@ -234,8 +234,8 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "artifact_delete":
       return { op: "delete", label: String(args?.id ?? "artifact"), ctx: "files" };
     default:
-      if (name.startsWith("desktop_")) {
-        return { op: "browser", label: String(args?.url ?? name.replace(/^desktop_/, "desktop ")), ctx: "desktop" };
+      if (name.startsWith("desktop_") || name.startsWith("computer_") || name.startsWith("computer.")) {
+        return { op: "browser", label: String(args?.url ?? name.replace(/^(desktop_|computer[._])/, "computer ")), ctx: "desktop" };
       }
       if (name.startsWith("browser_")) {
         const url = String(args?.url ?? "");
@@ -591,6 +591,59 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "summary", key: e.id, ok: false, cancelled: true, detail: "Stopped" });
         continue;
 
+      case "model.capability.blocked": {
+        flushAssistant(false);
+        const model = String(e.data.modelId ?? e.data.provider ?? "Selected model");
+        const pinned = Boolean(e.data.pinned);
+        const vision = e.data.capability === "vision";
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: vision
+            ? `Model · ${model} cannot inspect images`
+            : pinned
+              ? `Model · ${model} cannot use computer control here`
+              : `Model · ${model} cannot use computer control here`,
+          ephemeral: false,
+        });
+        continue;
+      }
+      case "model.fallback": {
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Model · Switched to ${String(e.data.actualModel ?? "a compatible model")} for visual verification`,
+          ephemeral: false,
+          tone: "working",
+        });
+        continue;
+      }
+      case "desktop.started":
+      case "desktop.ready":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: "Computer use · Starting Desktop", ephemeral: false, tone: "working" });
+        continue;
+      case "desktop.screenshot":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: "Desktop · Inspecting app", ephemeral: false, tone: "working" });
+        continue;
+      case "desktop.returned":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: "Desktop · Returned to ORION", ephemeral: false, tone: "working" });
+        continue;
+      case "desktop.control.changed": {
+        flushAssistant(false);
+        const to = String(e.data.to ?? e.data.controlOwner ?? "");
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: to === "user" ? "Desktop · Take Control — ORION input paused" : "Desktop · Returned to ORION",
+          ephemeral: false,
+          tone: "working",
+        });
+        continue;
+      }
       case "desktop.verification.started":
         flushAssistant(false);
         items.push({ kind: "status", key: e.id, label: "Desktop · Verification started", ephemeral: false, tone: "working" });

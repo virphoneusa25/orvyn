@@ -1,5 +1,6 @@
 import { AITool, ToolResult } from "../ToolTypes";
 import type { MarketplaceService } from "../../mcp/marketplace/service";
+import { builtinComputerUseHit } from "../../computerUse/modelComputerCapabilities";
 
 export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AITool {
   return {
@@ -22,6 +23,9 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
       if (!query) return { ok: false, error: "query is required" };
       const { hits, activated, askInstall, diagnostics } = await market().index.search(query);
       const lines: string[] = [`Capability search for “${query}” (${hits.length} hits).`];
+      if (builtinComputerUseHit(query)) {
+        lines.push("- [orvyn] computer_use · ORVYN — Desktop/Browser control via computer_screenshot, computer_click, computer_type. Independent of MCP and of provider-native computer-use APIs.");
+      }
       if (activated.length) lines.push(`Activated for this run (schema budget ${diagnostics.maxServers} servers / ${diagnostics.maxTools} tools, ~${diagnostics.tokenFootprint} tokens): ${activated.slice(0, 12).join(", ")}`);
       for (const h of hits.slice(0, 10)) {
         lines.push(`- [${h.kind}${h.installed ? ", installed" : ""}] ${h.name} · ${h.server} — ${h.description.slice(0, 140)}`);

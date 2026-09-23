@@ -385,7 +385,11 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
       const visible = await electron("/v1/browser/screenshot");
       if (visible?.ok && typeof visible.png === "string") {
         await fs.writeFile(file, Buffer.from(visible.png, "base64"));
-        return { ok: true, output: `Screenshot saved: ${file}` };
+        return {
+          ok: true,
+          output: `Screenshot saved: ${file}`,
+          meta: { screenshot: { b64: visible.png, mediaType: "image/png" }, surface: "browser", desktopHealthy: true },
+        };
       }
       const missing = needPlaywright();
       if (missing) return missing;

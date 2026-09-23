@@ -68,6 +68,12 @@ const ASK_DOWNGRADE = new Set([
   "desktop_key",
   "desktop_screenshot",
   "desktop_stop",
+  "computer_click",
+  "computer_type",
+  "computer_scroll",
+  "computer_key",
+  "computer_move",
+  "computer_open_app",
   "mcp_call",
   "ssh_exec",
 ]);
@@ -130,7 +136,16 @@ const AUTONOMOUS_ALLOW = new Set([
   "desktop_scroll",
   "desktop_key",
   "desktop_screenshot",
+  "computer_screenshot",
+  "computer_click",
+  "computer_type",
+  "computer_scroll",
+  "computer_key",
+  "computer_move",
+  "computer_wait",
+  "computer_open_app",
   // Deliberately NOT here: mcp_call (external services stay approval-gated).
+  // Host desktop tools stay SYSTEM + explicit opt-in.
 ]);
 
 const ALLOW: Record<PermissionProfile, Set<string>> = {

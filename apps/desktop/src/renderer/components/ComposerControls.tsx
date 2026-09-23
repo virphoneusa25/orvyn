@@ -396,6 +396,8 @@ export function ModelMenu({
                 const caps: string[] = [];
                 if (m.capabilities?.tools) caps.push("Tools");
                 if (m.capabilities?.vision) caps.push("Vision");
+                if (m.capabilities?.tools && m.capabilities?.computerUseViaTools !== false) caps.push("Computer use ✓");
+                else if (m.capabilities?.computerUseViaTools === false) caps.push("Computer use Restricted");
                 if (m.reasoningControl) caps.push("Reasoning");
                 return (
                   <button

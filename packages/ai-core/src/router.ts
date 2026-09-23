@@ -84,4 +84,21 @@ export class ModelRouter {
       `No model available for task "${task}" (needs capability "${capability}"). Configure one in Settings > AI Models.`
     );
   }
+
+  /** ORVYN computer-use via tools (vision + tool calling). Not a separate "computer model". */
+  supportsComputerUseViaTools(provider: AIModelProvider): boolean {
+    const c = provider.config.capabilities;
+    return c.tools === true && c.computerUseViaTools !== false;
+  }
+
+  findComputerUseCompatible(opts?: { requireVision?: boolean; excludeId?: string }): AIModelProvider | undefined {
+    const requireVision = opts?.requireVision !== false;
+    return this.registry.list().find((p) => {
+      if (opts?.excludeId && p.config.id === opts.excludeId) return false;
+      if (!p.config.capabilities.agent) return false;
+      if (!this.supportsComputerUseViaTools(p)) return false;
+      if (requireVision && !p.config.capabilities.vision) return false;
+      return true;
+    });
+  }
 }

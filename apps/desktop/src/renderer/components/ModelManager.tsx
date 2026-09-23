@@ -61,7 +61,35 @@ const EMPTY_CAPS: ModelCapabilities = {
   embeddings: false,
   completion: false,
   image: false,
+  computerUseViaTools: true,
+  nativeComputerUse: false,
 };
+
+const CAP_LABEL: Record<keyof ModelCapabilities, string> = {
+  chat: "Chat",
+  code: "Code",
+  agent: "Agent",
+  tools: "Tools",
+  vision: "Vision",
+  embeddings: "Embeddings",
+  completion: "Completion",
+  image: "Image",
+  computerUseViaTools: "Computer use (ORVYN tools)",
+  nativeComputerUse: "Native CU (optional, unused)",
+};
+
+function capabilitySummary(caps: ModelCapabilities): string {
+  const computer =
+    caps.tools && caps.computerUseViaTools !== false ? "Computer use ✓" : "Computer use Restricted";
+  return [
+    caps.code ? "Code ✓" : null,
+    caps.tools ? "Tools ✓" : null,
+    caps.vision ? "Vision ✓" : null,
+    computer,
+  ]
+    .filter(Boolean)
+    .join("   ");
+}
 
 function emptyModel(): ModelConfig {
   return {
@@ -237,8 +265,8 @@ function ModelForm({
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, fontSize: 12 }}>
         {(Object.keys(EMPTY_CAPS) as (keyof ModelCapabilities)[]).map((cap) => (
           <label key={cap} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-            <input type="checkbox" checked={model.capabilities[cap]} onChange={(e) => setCap(cap, e.target.checked)} />
-            {cap}
+            <input type="checkbox" checked={Boolean(model.capabilities[cap])} onChange={(e) => setCap(cap, e.target.checked)} />
+            {CAP_LABEL[cap] ?? cap}
           </label>
         ))}
         <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
@@ -389,12 +417,10 @@ export function ModelManager() {
             </div>
 
             <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
-              endpoint: {model.endpoint || "(none)"} · context: {model.contextWindow.toLocaleString()} tok ·
-              {" "}
-              {Object.entries(model.capabilities)
-                .filter(([, v]) => v)
-                .map(([k]) => k)
-                .join(", ") || "no capabilities set"}
+              {capabilitySummary(model.capabilities)}
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
+              endpoint: {model.endpoint || "(none)"} · context: {model.contextWindow.toLocaleString()} tok
               {h?.latencyMs !== undefined && ` · ${h.latencyMs}ms`}
               {h?.error && ` · ${h.error}`}
             </div>

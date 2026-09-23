@@ -14,7 +14,7 @@ import { skillsPromptFor } from "../learning/validatedSkills";
 // resume without disturbing the run.
 
 import { randomUUID } from "crypto";
-import { AIMessage, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
+import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { AITool, ToolResult } from "../ai/ToolTypes";
@@ -34,6 +34,13 @@ import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
 import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
+import { classifyProviderError, classifyProviderText, providerBlockUserMessage } from "../computerUse/providerErrors";
+import { decideComputerUseFallback } from "../computerUse/modelFallback";
+import { canInspectScreenshots, resolveRuntimeCapabilities } from "../computerUse/modelComputerCapabilities";
+import { COMPUTER_USE_TOOLS } from "../computerUse/computerUseTools";
+import { runWithComputerContext } from "../computerUse/context";
+import { readComputerUsePolicy } from "../computerUse/modelPolicy";
+import { auditComputerUse } from "../computerUse/capabilityMatrix";
 
 /** Where a run's tools execute. LOCAL is the default; OVH_WORKER forces
  *  remote execution with NO local fallback — if the worker cannot serve the
@@ -86,6 +93,9 @@ interface RunState {
   /** Run-scoped model selection; never mutates global routing. */
   requestedModelId?: string;
   actualModelId: string;
+  fallbackCount: number;
+  fallbackReason?: string;
+  extraProviderCalls: number;
   /** Failed call fingerprints prevent the model from looping on the exact same broken action. */
   failedFingerprints: Map<string, number>;
   /** Remote execution spec; when OVH_WORKER the coding tools route over Tool RPC. */
@@ -163,6 +173,21 @@ const SERIAL_ONLY_TOOLS = new Set([
   "desktop_screenshot",
   "desktop_wait",
   "desktop_stop",
+  "computer_screenshot",
+  "computer_click",
+  "computer_type",
+  "computer_scroll",
+  "computer_key",
+  "computer_move",
+  "computer_wait",
+  "computer_open_app",
+  "computer.screenshot",
+  "computer.click",
+  "computer.type",
+  "computer.scroll",
+  "computer.key",
+  "computer.move",
+  "computer.wait",
 ]);
 
 /** Compact MCP capability summary — one line per connected server, so
@@ -259,7 +284,7 @@ export class StreamingAgentRuntime {
   private toolDefinitions(): ToolDefinition[] {
     return this.tools
       .list()
-      .filter((t) => this.exposeTool(t.name))
+      .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
@@ -325,7 +350,29 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "desktop.action", { tool: call.name, kind: "key", key: args.key });
         break;
       case "desktop_screenshot":
+      case "computer_screenshot":
         this.store.emit(runId, "desktop.screenshot", { tool: call.name });
+        break;
+      case "computer_click":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "click", x: args.x, y: args.y });
+        break;
+      case "computer_type":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "type", text: args.text });
+        break;
+      case "computer_scroll":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "scroll", deltaY: args.deltaY });
+        break;
+      case "computer_key":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "key", key: args.key });
+        break;
+      case "computer_move":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "move", x: args.x, y: args.y });
+        break;
+      case "computer_wait":
+        this.store.emit(runId, "desktop.action", { tool: call.name, kind: "wait" });
+        break;
+      case "computer_open_app":
+        this.store.emit(runId, "desktop.started", { tool: call.name, app: args.app });
         break;
       case "desktop_stop":
         this.store.emit(runId, "desktop.completed", { tool: call.name });
@@ -347,7 +394,7 @@ export class StreamingAgentRuntime {
 
   /** Read-ish tools may run concurrently; anything that mutates runs in order. */
   private isParallelSafe(name: string): boolean {
-    if (SERIAL_ONLY_TOOLS.has(name)) return false;
+    if (SERIAL_ONLY_TOOLS.has(name) || COMPUTER_USE_TOOLS.has(name)) return false;
     const caps = this.tools.permissions.capabilitiesOf(name);
     // Unknown tools resolve to SYSTEM and correctly fail this test.
     return caps.every((c) => c === "READ" || c === "GIT" || c === "NETWORK");
@@ -400,6 +447,8 @@ export class StreamingAgentRuntime {
       modelCalls: 0,
       requestedModelId: requestedModelId && requestedModelId !== "auto" ? requestedModelId : undefined,
       actualModelId: provider.config.id,
+      fallbackCount: 0,
+      extraProviderCalls: 0,
       failedFingerprints: new Map(),
       execution,
       mode,
@@ -725,6 +774,60 @@ export class StreamingAgentRuntime {
     return true;
   }
 
+  private applyComputerUseFallback(
+    runId: string,
+    state: RunState,
+    current: AIModelProvider,
+    block: ReturnType<typeof classifyProviderError>
+  ): AIModelProvider | undefined {
+    if (!block) return undefined;
+    this.store.emit(runId, "model.capability.blocked", {
+      ...block,
+      desktopHealthy: true,
+      modelId: current.config.id,
+      pinned: Boolean(state.requestedModelId),
+    });
+    const policy = readComputerUsePolicy();
+    const result = decideComputerUseFallback({
+      auto: !state.requestedModelId,
+      pinnedModelId: state.requestedModelId,
+      current,
+      registry: this.modelService.registry,
+      fallbackCount: state.fallbackCount,
+      requireVision: block.capability === "vision" || block.capability === "computer_use",
+      allowlist: policy.allowlist,
+      policyDisabled: policy.fallbackDisabled,
+    });
+    if (!result.decision.switched || !result.next) return undefined;
+    state.fallbackCount = result.decision.fallbackCount;
+    state.fallbackReason = result.decision.fallbackReason;
+    state.actualModelId = result.next.config.id;
+    state.extraProviderCalls += 1;
+    this.store.emit(runId, "model.fallback", {
+      ...auditComputerUse({
+        provider: current.config.provider,
+        model: current.config.id,
+        capability: block.capability,
+        blocked: true,
+        fallbackModel: result.next.config.id,
+      }),
+      requestedModel: result.decision.requestedModel,
+      actualModel: result.decision.actualModel,
+      fallbackReason: result.decision.fallbackReason,
+      previousModel: current.config.id,
+      provider: result.next.config.provider,
+      desktopSessionPreserved: true,
+      extraProviderUsage: true,
+      extraProviderCalls: state.extraProviderCalls,
+      runId,
+      tenantId: state.execution?.tenantId,
+    });
+    this.store.emit(runId, "message.delta", {
+      content: `Model · Switched to ${result.next.config.name} for visual verification\n`,
+    });
+    return result.next;
+  }
+
   private finishCancelled(runId: string, steps: number): void {
     this.store.emit(runId, "run.cancelled", { steps, reason: "Stopped by user" });
     this.store.setStatus(runId, "cancelled");
@@ -829,6 +932,7 @@ export class StreamingAgentRuntime {
         }
         let langChecked = false;
         let langBuffer = "";
+        try {
         for await (const chunk of provider.stream({
           messages,
           tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : undefined,
@@ -911,6 +1015,24 @@ export class StreamingAgentRuntime {
           }
           if (chunk.done) break;
         }
+        } catch (err: any) {
+          const block = classifyProviderError(err, provider.config.provider);
+          if (block) {
+            const next = this.applyComputerUseFallback(runId, state, provider, block);
+            if (next) {
+              provider = next;
+              continue;
+            }
+            this.store.emit(runId, "run.error", {
+              message: providerBlockUserMessage(block, Boolean(state.requestedModelId)),
+              desktopHealthy: true,
+              code: block.code,
+            });
+            this.store.setStatus(runId, "error");
+            return;
+          }
+          throw err;
+        }
 
         if (state.cancelled) return this.finishCancelled(runId, steps);
 
@@ -922,6 +1044,22 @@ export class StreamingAgentRuntime {
           seen.add(c.id);
           return true;
         });
+
+        const textBlock = classifyProviderText(content, provider.config.provider);
+        if (textBlock && calls.length === 0) {
+          const next = this.applyComputerUseFallback(runId, state, provider, textBlock);
+          if (next) {
+            provider = next;
+            continue;
+          }
+          this.store.emit(runId, "run.error", {
+            message: providerBlockUserMessage(textBlock, Boolean(state.requestedModelId)),
+            desktopHealthy: true,
+            code: textBlock.code,
+          });
+          this.store.setStatus(runId, "error");
+          return;
+        }
 
         if (calls.length > 0) {
           // Record the assistant turn that requested the tools BEFORE pushing
@@ -952,7 +1090,7 @@ export class StreamingAgentRuntime {
           }
           state.toolCalls += calls.length;
 
-          const outcome = await this.executeToolCalls(runId, state, calls, messages);
+          const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
           if (outcome === "cancelled") return this.finishCancelled(runId, steps);
           if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
             const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -1035,9 +1173,11 @@ export class StreamingAgentRuntime {
     runId: string,
     state: RunState,
     calls: ToolCall[],
-    messages: AIMessage[]
+    messages: AIMessage[],
+    provider?: AIModelProvider
   ): Promise<"ok" | "all_failed" | "cancelled"> {
     const replies = new Map<string, string>();
+    const screenshots: Array<{ b64: string; mediaType: string; name: string }> = [];
     const runnable: ToolCall[] = [];
     const previews = new Map<string, EditPreview | undefined>();
 
@@ -1147,10 +1287,21 @@ export class StreamingAgentRuntime {
           });
         }
       } else {
-        result = await this.tools.execute(call.name, call.arguments, "coder", {
-          signal: state.controller.signal,
-          onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
-        });
+        result = await runWithComputerContext(
+          {
+            tenantId: state.execution?.tenantId || "",
+            userId: state.execution?.userId ?? null,
+            organizationId: state.execution?.organizationId ?? null,
+            projectId: state.execution?.projectId ?? null,
+            projectRoot: state.projectRoot,
+            runId,
+          },
+          () =>
+            this.tools.execute(call.name, call.arguments, "coder", {
+              signal: state.controller.signal,
+              onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
+            })
+        );
       }
       if (call.name === "search_capabilities" && result.ok && result.meta) {
         const required = result.meta.capabilityRequired as
@@ -1242,6 +1393,13 @@ export class StreamingAgentRuntime {
           size: first?.size,
         });
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
+        const shot = result.meta?.screenshot as { b64?: string; mediaType?: string } | undefined;
+        if (shot?.b64) {
+          screenshots.push({ b64: shot.b64, mediaType: shot.mediaType || "image/png", name: `${call.name}.jpg` });
+          if (result.meta?.sessionId) {
+            this.store.emit(runId, "desktop.screenshot", { tool: call.name, sessionId: result.meta.sessionId, surface: result.meta.surface });
+          }
+        }
         replies.set(call.id, text);
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
@@ -1272,6 +1430,22 @@ export class StreamingAgentRuntime {
         toolCallId: call.id,
         content: replies.get(call.id) ?? `Tool "${call.name}" produced no result.`,
       });
+    }
+
+    if (screenshots.length > 0) {
+      const caps = provider ? resolveRuntimeCapabilities(provider.config) : { vision: false, toolCalling: true, computerUseViaTools: true, nativeComputerUse: false };
+      if (canInspectScreenshots(caps)) {
+        messages.push({
+          role: "user",
+          content: "ORVYN screenshot of the same visible session. Inspect this frame, then click/type/wait — do not request a provider-native computer-use API.",
+          attachments: screenshots.map((s) => ({ kind: "image" as const, name: s.name, b64: s.b64, mediaType: s.mediaType })),
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: "A screenshot was captured, but the selected model cannot inspect images. Do not invent visual verification. Use a vision-capable model or report the limitation.",
+        });
+      }
     }
 
     return anySucceeded || runnable.length === 0 ? "ok" : "all_failed";

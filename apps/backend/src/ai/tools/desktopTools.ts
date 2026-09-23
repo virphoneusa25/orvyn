@@ -267,14 +267,22 @@ export function makeDesktopScreenshotTool(projectRoot: string, tenantId: string,
         const frame = await captureSandboxFrame(s, "high");
         if (!frame) return { ok: false, error: "No Desktop frame available." };
         s.lastFrameAt = Date.now();
-        return { ok: true, output: `Desktop frame ${frame.length} bytes (${s.width}×${s.height})${s.url ? ` at ${s.url}` : ""}` };
+        return {
+          ok: true,
+          output: `Desktop frame ${frame.length} bytes (${s.width}×${s.height})${s.url ? ` at ${s.url}` : ""}`,
+          meta: { sessionId: s.id, screenshot: { b64: frame.toString("base64"), mediaType: "image/jpeg" }, desktopHealthy: true },
+        };
       }
       return playwrightGuard(projectRoot, tenantId, runId, async (session) => {
         const frame = await captureBrowserFrame(projectRoot);
         if (!frame) return { ok: false, error: "No Desktop frame. Call desktop_start first." };
         session.lastFrameAt = Date.now();
         session.url = frame.url;
-        return { ok: true, output: `Desktop frame ${frame.jpeg.length} bytes at ${frame.url}` };
+        return {
+          ok: true,
+          output: `Desktop frame ${frame.jpeg.length} bytes at ${frame.url}`,
+          meta: { sessionId: session.id, screenshot: { b64: frame.jpeg.toString("base64"), mediaType: "image/jpeg" }, desktopHealthy: true },
+        };
       })(args);
     },
   };

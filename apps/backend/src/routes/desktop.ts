@@ -197,6 +197,9 @@ export function desktopRouter(): Router {
             controlOwner: sandbox.controlOwner,
             status: String(sandbox.status),
           });
+          if (owner === "orion") {
+            t.runStore.emit(sandbox.runId, "desktop.returned", { sessionId: sandbox.id, refreshScreenshot: true });
+          }
         } catch { /* audit is best-effort */ }
       }
       return res.json({ session: publicSandbox(sandbox) });
@@ -218,6 +221,9 @@ export function desktopRouter(): Router {
             controlOwner: session.controlOwner,
             status: session.status,
           });
+          if (owner === "orion") {
+            t.runStore.emit(session.runId, "desktop.returned", { sessionId: session.id, refreshScreenshot: true });
+          }
         }
       } catch { /* best-effort */ }
     }
