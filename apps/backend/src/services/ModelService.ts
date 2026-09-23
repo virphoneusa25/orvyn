@@ -407,6 +407,25 @@ export class ModelService {
     }));
   }
 
+  /** Production role → model map. Mock is never treated as production. */
+  roles() {
+    const tasks = ["chat", "code", "agent", "planner", "reviewer", "executor", "image", "completion"] as const;
+    return tasks.map((task) => {
+      try {
+        const provider = this.router.resolve(task);
+        const id = provider.config.id;
+        return {
+          task,
+          modelId: id,
+          name: provider.config.name,
+          production: id !== "orvyn-mock",
+        };
+      } catch (err: any) {
+        return { task, modelId: null, name: null, production: false, error: err?.message ?? "unconfigured" };
+      }
+    });
+  }
+
   async healthCheckAll() {
     const results = await Promise.all(
       this.registry.list().map(async (p) => ({

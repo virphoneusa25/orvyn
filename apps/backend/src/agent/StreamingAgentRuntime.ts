@@ -1,6 +1,8 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
-import { availableArtifactsPrompt, groundAssistantClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
+import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
+import { evaluateCompletionGates } from "./completionGates";
+import { skillsPromptFor } from "../learning/validatedSkills";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
 //
 // The agent loop, re-expressed as an event producer. Instead of returning a
@@ -45,6 +47,7 @@ export interface ExecutionSpec {
   targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
   targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
   fallbackReason?: string;
+  executionLabel?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -109,6 +112,7 @@ interface RunState {
   /** Persisted artifacts created this run — the only names ORION may claim. */
   createdArtifacts: GroundedArtifact[];
   instruction: string;
+  gateRetries: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -404,6 +408,7 @@ export class StreamingAgentRuntime {
       previousProfile,
       createdArtifacts: [],
       instruction,
+      gateRetries: 0,
     });
 
     // Remote runs: the worker prepares an isolated mission container and
@@ -413,7 +418,8 @@ export class StreamingAgentRuntime {
     if (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX") {
       const actual = execution.targetActual
         ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
-      const label = actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";
+      const label = execution.executionLabel
+        ?? (actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker");
       this.store.emit(runId, "run.execution", {
         location: execution.location === "OVH_WORKER" ? "OVH_WORKER" : actual === "local_sandbox" ? "LOCAL_SANDBOX" : "LOCAL",
         executionTargetRequested: execution.targetRequested ?? "auto",
@@ -425,7 +431,9 @@ export class StreamingAgentRuntime {
           ? "Tools execute on a remote worker inside an isolated mission container. No local fallback."
           : actual === "local_sandbox"
             ? "Tools execute in a local Docker sandbox. Project stays on this machine."
-            : "Tools execute on this machine. Project files are not uploaded to OVH.",
+            : label === "Cloud"
+              ? "Generated files persist on the Cloud control plane in virtual file storage. Open Files → Generated."
+              : "Tools execute on this machine. Project files are not uploaded to OVH.",
       });
       if (execution.location === "OVH_WORKER") {
         queueExecutorJob(runId, execution.remoteProjectRoot ?? "", execution.tenantId);
@@ -487,6 +495,7 @@ export class StreamingAgentRuntime {
         content: [
           def.systemPrompt,
           CONVERSATION_STYLE,
+          skillsPromptFor(instruction, this.memoryStore),
           mcpCapabilities(this.mcpSummary),
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
@@ -945,6 +954,26 @@ export class StreamingAgentRuntime {
         }
 
         // No tool call: token deltas were already emitted while streaming.
+        const gates = evaluateCompletionGates({
+          instruction: state.instruction,
+          artifacts: state.createdArtifacts,
+          events: this.store.get(runId)?.events ?? [],
+        });
+        if (!gates.ok) {
+          this.store.emit(runId, "completion.blocked", {
+            gate: gates.failedGate,
+            reasons: gates.reasons,
+            retries: state.gateRetries,
+          });
+          if (state.gateRetries < 1) {
+            state.gateRetries += 1;
+            messages.push({ role: "user", content: gates.retryPrompt });
+            continue;
+          }
+          this.store.emit(runId, "run.error", { message: gates.failMessage });
+          this.store.setStatus(runId, "error");
+          return;
+        }
         const grounded = groundAssistantClaims(content, state.createdArtifacts);
         const wantedFile = looksLikeFileDeliverableRequest(state.instruction);
         if (wantedFile && state.createdArtifacts.length === 0) {
@@ -956,6 +985,10 @@ export class StreamingAgentRuntime {
         } else if (grounded.blocked) {
           this.store.emit(runId, "message.grounded", { content: grounded.text, blocked: true });
           this.emitNarration(runId, grounded.text, false);
+        } else if (state.createdArtifacts.length > 0 && !/files\s*→\s*generated/i.test(content)) {
+          const copy = filesGeneratedCopy(state.createdArtifacts);
+          this.store.emit(runId, "message.grounded", { content: copy, blocked: true });
+          this.emitNarration(runId, copy, false);
         } else {
           this.emitNarration(runId, content, streamedText);
         }
@@ -1174,6 +1207,13 @@ export class StreamingAgentRuntime {
               runId,
               chatId: state.instruction ? runId : undefined,
               tool: call.name,
+            });
+            this.store.emit(runId, "files.ready", {
+              artifactId: art.artifactId,
+              name: art.name,
+              location: "Files → Generated",
+              virtualWorkspace: true,
+              message: `${art.name} is in Files → Generated (virtual file storage).`,
             });
           }
         }

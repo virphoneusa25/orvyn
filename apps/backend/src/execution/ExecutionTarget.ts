@@ -25,6 +25,8 @@ export interface ExecutionRouteInput {
   isArtifact?: boolean;
   /** Ordinary local coding / tests. */
   isLocalCoding?: boolean;
+  /** OVH control plane (desktop is a Cloud client). Artifact work stays here. */
+  cloudControlPlane?: boolean;
 }
 
 export interface ExecutionRoute {
@@ -43,6 +45,7 @@ export interface ExecutionRoute {
  *   background / cloud mission             → ovh_worker
  *   risky / untrusted                      → local_sandbox
  *   local project + normal coding          → local_host
+ *   artifact / no-repo on Cloud control plane → local_host (in-process, virtual storage)
  *   artifact / no-repo generation          → local_host (virtual workspace)
  *   otherwise                              → local_host
  */
@@ -77,6 +80,13 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
   }
   if (input.isRisky) {
     return { requested, actual: "local_sandbox", reason: "Untrusted or isolation-required command" };
+  }
+  if (input.cloudControlPlane && (input.isArtifact || !input.hasLocalProject) && !input.isLocalCoding) {
+    return {
+      requested,
+      actual: "local_host",
+      reason: "Cloud control plane — virtual file storage. Desktop is the client; no worker sandbox.",
+    };
   }
   if (input.hasLocalProject || input.isLocalCoding) {
     return { requested, actual: "local_host", reason: "Local project + normal coding" };

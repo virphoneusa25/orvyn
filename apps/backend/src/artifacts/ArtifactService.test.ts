@@ -150,6 +150,13 @@ test("claim validator blocks generated claims without artifactId", () => {
   assert.equal(ok.blocked, false);
   const invented = groundAssistantClaims("Download fake-name.png", [{ artifactId: "art_1", name: "virphone-logo.png" }]);
   assert.equal(invented.blocked, true);
+  const sandbox = groundAssistantClaims(
+    "Generated the PNG logo: download virphone-logo-2.png (sandbox/artifacts/art_a00bec51040e94710/download).",
+    [{ artifactId: "art_a00bec51040e94710", name: "virphone-logo-2.png" }]
+  );
+  assert.equal(sandbox.blocked, true);
+  assert.match(sandbox.text, /Files → Generated/);
+  assert.doesNotMatch(sandbox.text, /sandbox\/artifacts/);
   assert.equal(looksLikeFileDeliverableRequest("Generate a simple VirPhone logo and provide it as a PNG."), true);
 });
 

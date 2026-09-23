@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { apiUrl, authHeaders } from "../../connection";
+import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
@@ -78,7 +78,10 @@ export function FilesInspector({
 
   useEffect(() => {
     let alive = true;
-    const suffix = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : "";
+    const cloud = isCloudBackend(getConnectionConfig().backendUrl);
+    const foreign = Boolean(projectRoot && (/^[A-Za-z]:[\\/]/.test(projectRoot) || projectRoot.startsWith("\\\\")));
+    const usableRoot = projectRoot && !(cloud && foreign) ? projectRoot : null;
+    const suffix = usableRoot ? `?projectRoot=${encodeURIComponent(usableRoot)}` : "";
     fetch(apiUrl("/files" + suffix), { headers: authHeaders() })
       .then((r) => r.json())
       .then((d) => {

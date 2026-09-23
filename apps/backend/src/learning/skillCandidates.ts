@@ -51,6 +51,11 @@ export function skillCandidatesFromExperiences(experiences: Experience[]): Skill
 
 export function persistSkillCandidates(store: LocalStore, experiences: Experience[]): SkillCandidate[] {
   const skills = skillCandidatesFromExperiences(experiences);
-  for (const s of skills) store.saveLearningRecord({ id: s.id, kind: "skill", payload: s });
+  const existing = store.listLearningRecords("skill", 200);
+  for (const s of skills) {
+    const hit = existing.find((r) => r.id === s.id);
+    if (hit && (hit.payload as { validated?: boolean }).validated) continue;
+    store.saveLearningRecord({ id: s.id, kind: "skill", payload: s });
+  }
   return skills;
 }

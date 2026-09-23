@@ -260,9 +260,15 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   if (type === "tool.completed" && tool === "create_document") {
     return { line: "Created artifact", priority: 65, tab: "docs" };
   }
-  if (type === "artifact.created" && (data.artifactId || data.id)) {
+  if (type === "files.ready" || (type === "artifact.created" && (data.artifactId || data.id))) {
     const name = String(data.name ?? data.filename ?? data.path ?? "file");
-    return { line: `Created ${name}`, priority: 65, tab: "files", file: name };
+    return { line: `${name} is in Files → Generated`, priority: 90, tab: "files", file: name, switchTab: true };
+  }
+  if (type === "tool.completed" && (tool === "generate_image" || data.artifactId)) {
+    const name = String(data.artifactName ?? data.name ?? data.filename ?? "");
+    if (name || data.artifactId) {
+      return { line: `${name || "File"} is in Files → Generated`, priority: 90, tab: "files", file: name || undefined, switchTab: true };
+    }
   }
   return null;
 }
@@ -359,9 +365,9 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
       const name = String(data.name ?? data.path ?? data.preview ?? "document");
       artifacts.set(name, { path: name, kind: "artifact", status: "Artifact" });
     }
-    if (type === "artifact.created" || (type === "tool.completed" && tool === "generate_image")) {
-      const name = String(data.name ?? data.filename ?? data.path ?? "");
-      if (name) artifacts.set(name, { path: name, kind: "artifact", status: data.kind === "generated" ? "Generated" : "Artifact" });
+    if (type === "artifact.created" || type === "files.ready" || (type === "tool.completed" && (tool === "generate_image" || data.artifactId))) {
+      const name = String(data.name ?? data.filename ?? data.artifactName ?? data.path ?? "");
+      if (name) artifacts.set(name, { path: name, kind: "artifact", status: data.kind === "generated" || tool === "generate_image" ? "Generated" : "Artifact" });
     }
 
     if (type.startsWith("browser.") || tool.startsWith("browser_") || type.startsWith("desktop.") || tool.startsWith("desktop_")) {
@@ -395,7 +401,17 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "approval.required") waitingApproval = true;
     if (type === "approval.resolved") waitingApproval = false;
 
-    const routed = routeEvent(e);
+    let routed = routeEvent(e);
+    if ((type === "run.completed" || type === "mission.completed") && artifacts.size > 0) {
+      const first = [...artifacts.values()][0];
+      routed = {
+        line: `${first.path} is in Files → Generated`,
+        priority: 90,
+        tab: "files",
+        file: first.path,
+        switchTab: true,
+      };
+    }
     if (routed && shouldAutoSwitch(latest, routed, ts && latestAt ? ts - latestAt : 1000)) {
       latest = routed;
       latestAt = ts || latestAt;

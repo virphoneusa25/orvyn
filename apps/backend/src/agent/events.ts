@@ -34,6 +34,8 @@ export type AgentEventType =
   | "terminal.completed"
   | "image.generated"
   | "artifact.created"
+  | "files.ready"
+  | "completion.blocked"
   | "context.updated"
   | "approval.required"
   | "approval.resolved"

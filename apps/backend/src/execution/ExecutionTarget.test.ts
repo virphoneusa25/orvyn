@@ -57,6 +57,17 @@ test("Auto + artifact request without a project stays Local", () => {
   assert.equal(d.actual, "local_host");
 });
 
+test("Auto + artifact on Cloud control plane stays on the control plane", () => {
+  const d = routeExecutionTarget({
+    requested: "auto",
+    hasLocalProject: false,
+    isArtifact: true,
+    cloudControlPlane: true,
+  });
+  assert.equal(d.actual, "local_host");
+  assert.match(d.reason, /control plane/);
+});
+
 test("invalid requested value is treated as Auto", () => {
   const d = routeExecutionTarget({ requested: "wherever", hasLocalProject: true });
   assert.equal(d.requested, "auto");

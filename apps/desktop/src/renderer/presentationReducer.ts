@@ -467,6 +467,33 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             if (det) item.detail = det;
           }
         }
+        const artifactId = e.data.artifactId ? String(e.data.artifactId) : undefined;
+        const artifactName = e.data.artifactName ? String(e.data.artifactName) : e.data.name ? String(e.data.name) : undefined;
+        if (artifactId && !items.some((it) => it.kind === "attachment" && it.artifactId === artifactId)) {
+          flushAssistant(false);
+          items.push({
+            kind: "attachment",
+            key: `att-${e.id}`,
+            name: artifactName || "file",
+            artifactId,
+            mediaType: e.data.mimeType ? String(e.data.mimeType) : undefined,
+            downloadPath: `/artifacts/${artifactId}/download`,
+            previewUrl: `/artifacts/${artifactId}/preview`,
+            kindLabel: String(e.data.kind ?? (item?.toolName === "generate_image" ? "generated" : "file")),
+            size: typeof e.data.size === "number" ? e.data.size : undefined,
+          });
+        }
+        continue;
+      }
+      case "files.ready": {
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: String(e.data.message ?? `${e.data.name ?? "File"} is in Files → Generated (virtual file storage).`),
+          ephemeral: false,
+          tone: "working",
+        });
         continue;
       }
       case "message.grounded": {
@@ -599,6 +626,16 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           label: `Execution · ${String(e.data.executionLabel ?? e.data.executionTargetActual ?? e.data.location ?? "Local")}${e.data.fallbackReason ? ` — ${String(e.data.fallbackReason).slice(0, 80)}` : ""}`,
           ephemeral: false,
           tone: "working",
+        });
+        continue;
+      case "completion.blocked":
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Needs proof · ${String(Array.isArray(e.data.reasons) ? e.data.reasons[0] : e.data.gate ?? "completion gate")}`,
+          ephemeral: false,
+          tone: "rework",
         });
         continue;
 

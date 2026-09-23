@@ -7,6 +7,7 @@ export interface GroundedArtifact {
 const CLAIM =
   /\b(generated|created file|download(?:able)?|attached|saved|files\s*→\s*generated|you'll find it|card above)\b/i;
 const FILENAME = /\b[\w.-]+\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|csv|zip|txt|md|html|json)\b/gi;
+const SANDBOX_PATH = /\b(?:sandbox|\/opt\/orvyn|worker-local)\/\S+/i;
 
 export function looksLikeFileDeliverableRequest(text: string): boolean {
   const t = String(text || "").trim();
@@ -32,18 +33,24 @@ export function inventedFilenames(text: string, artifacts: GroundedArtifact[]): 
  * If the assistant claims a file exists without a persisted artifactId, rewrite.
  * Cards must never be inferred from this text.
  */
+export function filesGeneratedCopy(artifacts: GroundedArtifact[]): string {
+  const names = artifacts.filter((a) => a.artifactId && a.name).map((a) => a.name).join(", ");
+  if (!names) return "No file was saved. There is nothing in Files → Generated.";
+  return `Saved ${names} in Files → Generated (virtual file storage). Preview or download it from the card — that is the real file.`;
+}
+
 export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[]): { text: string; blocked: boolean } {
   const list = artifacts.filter((a) => a.artifactId && a.name);
   if (list.length > 0) {
     const invented = inventedFilenames(text, list);
-    if (invented.length === 0) return { text, blocked: false };
-    const names = list.map((a) => a.name).join(", ");
-    return {
-      text: `Saved ${names}. Download or open it from the card — only those persisted files exist.`,
-      blocked: true,
-    };
+    const leakedPath = SANDBOX_PATH.test(text) || /sandbox\/artifacts/i.test(text);
+    const namesOk = invented.length === 0;
+    if (namesOk && !leakedPath) return { text, blocked: false };
+    return { text: filesGeneratedCopy(list), blocked: true };
   }
-  if (!claimsGeneratedFile(text) && !looksLikeFileDeliverableRequest(text)) return { text, blocked: false };
+  if (!claimsGeneratedFile(text) && !looksLikeFileDeliverableRequest(text) && !SANDBOX_PATH.test(text)) {
+    return { text, blocked: false };
+  }
   return {
     text: "No file was saved. Generation or persistence failed, so there is nothing to download and nothing in Files → Generated.",
     blocked: true,

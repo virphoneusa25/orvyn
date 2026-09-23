@@ -358,6 +358,22 @@ test("assistant text mentioning a filename does not create a file card", () => {
   assert.equal(items.some((i) => i.kind === "attachment"), false);
 });
 
+test("tool.completed with artifactId also becomes an attachment card", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "c1", tool: "generate_image" }),
+      ev("tool.completed", { callId: "c1", tool: "generate_image", artifactId: "art_2", artifactName: "virphone-logo-2.png", mimeType: "image/png" }),
+      ev("files.ready", { artifactId: "art_2", name: "virphone-logo-2.png", message: "virphone-logo-2.png is in Files → Generated (virtual file storage)." }),
+    ],
+    "completed"
+  );
+  const card = items.find((i) => i.kind === "attachment") as { name: string; artifactId?: string };
+  assert.ok(card);
+  assert.equal(card.artifactId, "art_2");
+  assert.ok(items.some((i) => i.kind === "status" && /Files → Generated/.test(String((i as { label?: string }).label))));
+});
+
 test("artifact.created without artifactId is ignored", () => {
   reset();
   const items = reducePresentation([ev("artifact.created", { name: "virphone-logo.png", kind: "generated" })], "completed");

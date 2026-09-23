@@ -40,9 +40,17 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   only from `artifact.created` with a real artifactId. Files lists Project,
   Generated, Recents, Run Artifacts, and Uploads without a local project.
 - **Execution target** is separate from run mode. Auto / Local / Sandbox /
-  Cloud choose WHERE tools run. Auto keeps ordinary coding and generated
-  artifacts on Local (virtual workspace). Explicit Local/Sandbox/Cloud
-  never silently fall back.
+  Cloud choose WHERE tools run. When the desktop is a Cloud client, Auto
+  generated-file work stays on the OVH control plane (virtual file
+  storage + Files → Generated) — not a worker sandbox and not the
+  Windows Local Worker. Explicit Local/Sandbox/Cloud never silently
+  fall back.
+- **Validated Skills + completion gates.** ORION loads playbooks for
+  generated files, code-with-tests, and visual verify. A file request
+  cannot complete without a persisted artifactId; a test request cannot
+  complete without a passing test; UI work cannot complete without a
+  screenshot or desktop verification. Sandbox paths are rewritten to
+  Files → Generated.
 - **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
   background processes, diagnostics/typecheck/tests/lint, git (status →
   commit), fetch/web-search, image generation, MCP, Playwright browser QA

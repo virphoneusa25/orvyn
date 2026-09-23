@@ -3,7 +3,7 @@ import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
-import { isVirtualWorkspace, resolveWorkspace } from "../documents/workspace";
+import { isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 // apps/backend/src/routes/v1.ts
@@ -64,6 +64,15 @@ v1Router.use(async (req, res, next) => {
 // --- Models ---
 v1Router.get("/models", (req, res) => {
   res.json({ models: requireTenant(req).modelService.list() });
+});
+
+v1Router.get("/models/roles", (req, res) => {
+  const t = requireTenant(req);
+  const roles = t.modelService.roles();
+  res.json({
+    roles,
+    production: roles.filter((r) => r.task !== "image").every((r) => r.production),
+  });
 });
 
 v1Router.post("/models", (req, res) => {
@@ -444,6 +453,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const virtualWorkspace = Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id);
   const hasLocalProject = Boolean(resolvedRoot) && !virtualWorkspace;
   const hints = classifyExecutionHints(String(req.body.instruction ?? req.body.goal ?? ""), String(req.body.composerMode ?? req.body.mode ?? "auto"));
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
   const routed = routeExecutionTarget({
     requested: requestedTarget,
     mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
@@ -453,14 +463,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     requiresRemote: req.body.executionLocation === "OVH_WORKER" || String(req.body.composerMode ?? "") === "server" || hints.requiresRemote,
     isArtifact: hints.isArtifact,
     isLocalCoding: hints.isLocalCoding,
+    cloudControlPlane: cloudHost,
   });
 
-  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
   const inProcessLocal = !cloudHost;
-  // Virtual workspace lives on the control plane. Auto / remapped Windows
-  // paths must not demand the desktop Local Worker or an OVH worker.
-  const controlPlaneVirtual = virtualWorkspace && requestedTarget === "auto";
+  // Virtual workspace + generated-file work lives on the Cloud control plane.
+  // Auto must not demand the desktop Local Worker or an OVH sandbox for a logo.
+  const controlPlaneVirtual =
+    requestedTarget === "auto" &&
+    (virtualWorkspace || (cloudHost && (hints.isArtifact || !hasLocalProject) && !hints.isLocalCoding));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
@@ -494,6 +506,9 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     ? "LOCAL"
     : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
   const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+  const executionLabel = controlPlaneVirtual && cloudHost
+    ? "Cloud"
+    : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";
 
   _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
   t.usage.agentRuns++;
@@ -513,7 +528,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       tenantId: t.id,
       targetRequested: routed.requested,
       targetActual: routed.actual,
-      fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" ? "in-process local backend (same host)" : undefined),
+      executionLabel,
+      fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),
     },
     {
       reasoningEffort: ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
@@ -530,7 +546,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     executionLocation: location,
     executionTargetRequested: routed.requested,
     executionTargetActual: routed.actual,
-    executionLabel: routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker",
+    executionLabel,
   });
 });
 
@@ -891,9 +907,12 @@ v1Router.get("/artifacts", (req, res) => {
 v1Router.get("/files", async (req, res) => {
   try {
     const t = requireTenant(req);
-    const root = typeof req.query.projectRoot === "string" && req.query.projectRoot
+    const requested = typeof req.query.projectRoot === "string" && req.query.projectRoot
       ? String(req.query.projectRoot)
       : t.currentProjectRoot;
+    const root = requested && looksLikeForeignAbsolutePath(requested)
+      ? t.artifactService.virtualRoot()
+      : requested;
     res.json(await t.artifactService.filesTree(root));
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -1187,6 +1206,7 @@ v1Router.get("/usage", (req, res) => {
 
 import { ModelRegistry } from "../learning/ModelRegistry";
 import { persistSkillCandidates } from "../learning/skillCandidates";
+import { listValidatedSkills, seedValidatedSkills } from "../learning/validatedSkills";
 import { persistDataset } from "../learning/datasetBuilder";
 import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
@@ -1222,6 +1242,18 @@ v1Router.get("/learning/experiences", (req, res) => {
 v1Router.get("/learning/skills", (req, res) => {
   const t = requireTenant(req);
   res.json({ skills: t.localStore.listLearningRecords("skill", 80).map((r) => r.payload) });
+});
+
+v1Router.get("/skills", (req, res) => {
+  const t = requireTenant(req);
+  seedValidatedSkills(t.localStore);
+  res.json({ skills: listValidatedSkills(t.localStore) });
+});
+
+v1Router.get("/agent/skills", (req, res) => {
+  const t = requireTenant(req);
+  seedValidatedSkills(t.localStore);
+  res.json({ skills: listValidatedSkills(t.localStore) });
 });
 
 v1Router.get("/learning/datasets", (req, res) => {

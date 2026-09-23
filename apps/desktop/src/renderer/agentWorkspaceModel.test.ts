@@ -222,6 +222,24 @@ test("review summary and ORION terminal sessions derive from events", () => {
   assert.equal(switched.columns, 1);
 });
 
+test("generated file run opens Files, not empty Review", () => {
+  const events: WorkspaceEvent[] = [
+    ev("tool.started", { tool: "generate_image" }, 1),
+    ev("tool.completed", { tool: "generate_image", artifactId: "art_2", artifactName: "virphone-logo-2.png" }, 2),
+    ev("artifact.created", { artifactId: "art_2", name: "virphone-logo-2.png", kind: "generated" }, 3),
+    ev("files.ready", { name: "virphone-logo-2.png" }, 4),
+    ev("run.completed", { artifactCount: 1 }, 5),
+  ];
+  const derived = deriveAgentWorkspace(events);
+  assert.equal(derived.artifacts.some((a) => a.path === "virphone-logo-2.png"), true);
+  assert.equal(derived.suggestedTab, "files");
+  const switched = nextWorkspaceLayout(
+    { open: true, width: 520, activeTab: "changes", followOrion: true },
+    derived.activity
+  );
+  assert.equal(switched.activeTab, "files");
+});
+
 test("mapContextTab resolves Docs/Plan/Diff onto the single tab set", () => {
   assert.equal(mapContextTab("documents"), "docs");
   assert.equal(mapContextTab("plan"), "plan");

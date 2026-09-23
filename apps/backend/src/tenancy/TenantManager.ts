@@ -40,6 +40,7 @@ import { LocalStore } from "../persistence/LocalStore";
 import { ArtifactService } from "../artifacts/ArtifactService";
 import { ExperienceStore } from "../learning/ExperienceStore";
 import { persistSkillCandidates } from "../learning/skillCandidates";
+import { seedValidatedSkills } from "../learning/validatedSkills";
 import { persistDataset } from "../learning/datasetBuilder";
 import { DEFAULT_PRIVACY } from "../orgs/organization";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
@@ -175,6 +176,7 @@ export class TenantManager {
       artifactService: new ArtifactService(id, localStore),
       experienceStore: new ExperienceStore(id, localStore),
     };
+    seedValidatedSkills(localStore);
     // MCP host gets the now-constructed tenant's gateway.
     tenant.mcpManager = new McpManager({
       gateway: tenant.toolGateway,
