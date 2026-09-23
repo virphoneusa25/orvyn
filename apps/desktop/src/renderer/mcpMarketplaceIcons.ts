@@ -12,7 +12,7 @@ export interface ResolvedIcon {
 }
 
 const BRANDS: { test: RegExp; src: string }[] = [
-  { test: /\bgithub\b|\/github-mcp/i, src: brandSvg("#f0f6fc", ghPath()) },
+  { test: /\bgithub\b|\/github-mcp/i, src: brandSvg("#24292f", ghPath()) },
   { test: /\bpostgres|postgresql\b/i, src: brandSvg("#4169E1", pgPath()) },
   { test: /\bslack\b/i, src: brandSvg("#4A154B", slackPath()) },
   { test: /\bdocker\b/i, src: brandSvg("#2496ED", dockerPath()) },
@@ -59,11 +59,11 @@ export function brandIconSrc(haystack: string): string | undefined {
 export function iconCandidates(server: MarketServer): string[] {
   const hay = `${serverLabel(server)} ${server.name} ${server.publisher ?? ""} ${server.canonicalId}`;
   const out: string[] = [];
-  const brand = brandIconSrc(hay);
-  if (brand) out.push(brand);
   if (server.iconUrl) out.push(server.iconUrl);
   const avatar = githubOwnerAvatar(server.repository) ?? githubOwnerAvatar(server.homepage);
   if (avatar) out.push(avatar);
+  const brand = brandIconSrc(hay);
+  if (brand) out.push(brand);
   const fav = homepageFavicon(server.homepage) ?? homepageFavicon(server.repository);
   if (fav) out.push(fav);
   return [...new Set(out)];

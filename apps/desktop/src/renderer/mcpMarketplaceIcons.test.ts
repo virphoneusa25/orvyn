@@ -56,8 +56,9 @@ test("GitHub / PostgreSQL rows resolve real product or publisher icons", () => {
     repository: "https://github.com/musaddiq-dev/postgresql-mcp-server",
   });
   const candidates = iconCandidates(pg);
-  assert.ok(candidates[0]?.startsWith("data:image/svg+xml"));
   assert.ok(candidates.some((c) => c.includes("github.com/musaddiq-dev.png")));
+  assert.ok(candidates.some((c) => c.startsWith("data:image/svg+xml")));
+  assert.ok(candidates[0].includes("github.com/musaddiq-dev.png") || candidates[0].startsWith("data:image/svg+xml"));
 });
 
 test("publisher avatars and homepage favicons stay https-only", () => {

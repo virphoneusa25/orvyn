@@ -36,7 +36,7 @@ import {
   type Recommendation,
   type UpdateRow,
 } from "../mcpMarketplaceModel";
-import { parseApiJson, resolveMarketplaceIcon } from "../mcpMarketplaceIcons";
+import { iconCandidates, parseApiJson, resolveMarketplaceIcon } from "../mcpMarketplaceIcons";
 
 interface Health {
   id: string;
@@ -561,7 +561,7 @@ function DetailPane({
           </div>
         )}
         <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
-          <ServerGlyph server={server} size={56} />
+          <ServerGlyph key={server.canonicalId} server={server} size={56} />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 28, fontWeight: 650, letterSpacing: "-0.03em", lineHeight: 1.1 }}>{serverLabel(server)}</div>
             <div style={{ fontSize: 13, color: "var(--orvyn-text-muted)", marginTop: 6 }}>
@@ -857,7 +857,7 @@ function ServerRow({
       }}
     >
       <span style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
-      <ServerGlyph server={server} size={36} />
+      <ServerGlyph key={server.canonicalId} server={server} size={36} />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{serverLabel(server)}</div>
         <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -882,15 +882,16 @@ function ServerRow({
 
 function ServerGlyph({ server, size }: { server: MarketServer; size: number }) {
   const icon = resolveMarketplaceIcon(server);
-  const [broken, setBroken] = useState(false);
-  const showImage = icon.kind === "image" && icon.src && !broken;
+  const candidates = iconCandidates(server);
+  const [index, setIndex] = useState(0);
+  const src = candidates[index];
   return (
     <div
       style={{
         width: size,
         height: size,
         borderRadius: 10,
-        background: showImage ? "#10141E" : `linear-gradient(145deg, ${icon.hue}33, #10141E)`,
+        background: src ? "#10141E" : `linear-gradient(145deg, ${icon.hue}33, #10141E)`,
         border: `1px solid ${icon.hue}66`,
         display: "flex",
         alignItems: "center",
@@ -902,14 +903,14 @@ function ServerGlyph({ server, size }: { server: MarketServer; size: number }) {
         overflow: "hidden",
       }}
     >
-      {showImage ? (
+      {src ? (
         <img
-          src={icon.src}
+          src={src}
           alt=""
           width={size}
           height={size}
           referrerPolicy="no-referrer"
-          onError={() => setBroken(true)}
+          onError={() => setIndex((i) => i + 1)}
           style={{ width: size, height: size, objectFit: "cover" }}
         />
       ) : (
