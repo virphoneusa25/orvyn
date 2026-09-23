@@ -289,6 +289,7 @@ export function DesktopView({
   async function reconnect() {
     setOpenMenu(null);
     setInterrupted(false);
+    setSession(null); // force the pump useEffect to restart on re-find
     await refreshSession();
     void pullFrame();
   }
