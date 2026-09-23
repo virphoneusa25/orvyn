@@ -52,33 +52,40 @@ export function BrowserWorkbench({
     }
   }, [requestedUrl, kind, sessionId]);
 
+  const tabForBounds = activeTab(state);
+  const surfaceShown = Boolean(tabForBounds?.url && !tabForBounds.error);
+
   useEffect(() => {
     const node = surface.current;
-    if (!node || !api) return;
+    if (!node || !api || !surfaceShown) return;
     const send = () => {
       const r = node.getBoundingClientRect();
-      void api.setBounds({ x: r.left, y: r.top, width: r.width, height: r.height });
+      void api.setBounds({ x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) });
     };
     const ro = new ResizeObserver(send);
     ro.observe(node);
     window.addEventListener("resize", send);
     send();
+    const again = window.setTimeout(send, 50);
     return () => {
+      window.clearTimeout(again);
       ro.disconnect();
       window.removeEventListener("resize", send);
     };
-  }, [state.activeId, state.tabs.length]);
+  }, [api, surfaceShown, state.activeId, tabForBounds?.url]);
 
   useEffect(() => {
     const tab = activeTab(state);
     const show = Boolean(surfaceActive && hasNative && tab?.url && !tab.error && !menu);
     void api?.setVisible(show);
-    if (surfaceActive && tab?.id) void api?.activate(tab.id);
-    if (!surfaceActive) void api?.setVisible(false);
+    if (show && tab?.id && state.activeId !== tab.id) void api?.activate(tab.id);
+  }, [state.activeId, tabForBounds?.url, tabForBounds?.error, hasNative, surfaceActive, menu]);
+
+  useEffect(() => {
     return () => {
       void api?.setVisible(false);
     };
-  }, [state.activeId, state.tabs, hasNative, surfaceActive, menu]);
+  }, [api]);
 
   function apply(next: WorkbenchBrowserState) {
     setState(next);
@@ -169,12 +176,14 @@ export function BrowserWorkbench({
       ) : tab?.error ? (
         <ErrorPage tab={tab} local={kind === "preview"} onRetry={() => void go(tab.url)} />
       ) : (
-        <div ref={surface} data-testid="workbench-browser-surface" className="orvyn-browser-surface" style={{ flex: 1, minHeight: 0, background: "transparent" }}>
-          {!hasNative && (
+        <div ref={surface} data-testid="workbench-browser-surface" className="orvyn-browser-surface" style={{ flex: 1, minHeight: 0, background: "#0b0e14", color: "var(--orvyn-text-muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {!hasNative ? (
             <div style={{ padding: 28, textAlign: "center" }}>
               <div style={emptyTitle()}>Embedded browser requires ORVYN Desktop</div>
               <div style={emptyBody()}>The packaged app opens real websites in a sandboxed WebContentsView. Vite preview cannot host native web contents.</div>
             </div>
+          ) : (
+            <div style={{ fontSize: 12 }}>{tab?.loading ? `Opening ${tab.url}` : "Page opens in this pane."}</div>
           )}
         </div>
       )}
