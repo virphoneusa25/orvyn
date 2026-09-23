@@ -1022,7 +1022,10 @@ v1Router.get("/files/read", async (req, res) => {
           : undefined,
       });
     }
-    const rel = String(req.query.path ?? "").replace(/^\/+/, "");
+    const rel = String(req.query.path ?? "").replace(/^\/+/, "").replace(/\\/g, "/");
+    if (/(^|\/)generated\//i.test(rel) || /^generated(\/|$)/i.test(rel)) {
+      return res.status(404).json({ error: "Artifact unavailable" });
+    }
     const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? t.artifactService.virtualRoot());
     const abs = path.resolve(root, rel);
     const base = path.resolve(root);
@@ -1039,7 +1042,8 @@ v1Router.get("/files/read", async (req, res) => {
       dataUrl: image ? `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${bytes.toString("base64")}` : undefined,
     });
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    const raw = String(err?.message ?? "");
+    res.status(404).json({ error: /enoent|not found|no such file/i.test(raw) ? "Artifact unavailable" : "Could not open this file." });
   }
 });
 

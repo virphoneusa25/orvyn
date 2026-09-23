@@ -320,9 +320,9 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
         </div>
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: image ? "preview" : "files", path: item.path, fileName: item.name, op: "create" })}>Preview</button>
+        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, artifactId: item.artifactId, op: "create" })}>Preview</button>
         <button style={ghostBtn()} disabled={busy} onClick={() => void download()}>{busy ? "Downloading…" : "Download"}</button>
-        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, op: "create" })}>Show in Files</button>
+        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, artifactId: item.artifactId, op: "create" })}>Show in Files</button>
       </div>
     </div>
   );

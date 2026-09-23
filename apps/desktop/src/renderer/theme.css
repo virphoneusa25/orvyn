@@ -71,6 +71,11 @@
   --orvyn-quick-height: 64px;
   --orvyn-dashboard-height: 208px;
   --orvyn-bottompanel-height: 176px;
+  --orvyn-z-content: 10;
+  --orvyn-z-tabbar: 20;
+  --orvyn-z-popover: 1000;
+  --orvyn-z-modal: 2000;
+  --orvyn-z-tooltip: 3000;
 }
 
 * {

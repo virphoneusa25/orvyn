@@ -232,6 +232,8 @@ test("generated file run opens Files, not empty Review", () => {
   ];
   const derived = deriveAgentWorkspace(events);
   assert.equal(derived.artifacts.some((a) => a.path === "virphone-logo-2.png"), true);
+  assert.equal(derived.artifacts.find((a) => a.path === "virphone-logo-2.png")?.artifactId, "art_2");
+  assert.equal(derived.activity?.artifactId, "art_2");
   assert.equal(derived.suggestedTab, "files");
   const switched = nextWorkspaceLayout(
     { open: true, width: 520, activeTab: "changes", followOrion: true },

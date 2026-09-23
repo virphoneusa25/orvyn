@@ -128,6 +128,20 @@ test("workbench tabs, selected tab, width, and recent URLs survive restart", () 
   assert.deepEqual(stored.recentUrls, parsed.recentUrls);
 });
 
+test("maximize and collapse keep workbench tabs intact", () => {
+  const parsed = parseDesktopLayout({
+    rightPanelOpen: false,
+    expandedPreview: true,
+    openTabIds: ["files", "terminal", "browser"],
+    activeTabId: "files",
+    activeTab: "files",
+  });
+  assert.equal(parsed.rightPanelOpen, false);
+  assert.equal(parsed.expandedPreview, true);
+  assert.deepEqual(parsed.openTabIds, ["files", "terminal", "browser"]);
+  assert.equal(parsed.activeTabId, "files");
+});
+
 test("app grid is two tracks when Workbench is closed", () => {
   assert.equal(
     appGridTemplateColumns({ workbenchOpen: false, overlay: false, workbenchWidth: 650 }),

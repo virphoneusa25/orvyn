@@ -27,6 +27,17 @@ test("File tree unifies project, generated artifacts, and uploads", () => {
   assert.equal(isBinaryName("virphone-logo.png"), true);
 });
 
+test("live extras with artifactId stay in Generated, never as project paths", () => {
+  const tree = mergeFileSections(
+    [{ id: "project", files: [] }],
+    "local",
+    [{ id: "art_logo2", artifactId: "art_logo2", name: "virphone-logo-2.png", path: "virphone-logo-2.png", source: "artifact", kind: "generated", mediaType: "image/png" }]
+  );
+  const generated = tree.sections.find((s) => s.id === "generated")!;
+  assert.equal(generated.files[0]?.artifactId, "art_logo2");
+  assert.equal(tree.sections.find((s) => s.id === "project")!.files.length, 0);
+});
+
 test("empty project still lists generated and uploads", () => {
   const tree = mergeFileSections(
     [

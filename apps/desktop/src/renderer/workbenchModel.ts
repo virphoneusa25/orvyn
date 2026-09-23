@@ -16,19 +16,28 @@ export type WorkbenchTabKind =
   | "environment";
 
 export const WORKBENCH_LAUNCHERS: { id: "changes" | "browser" | "terminal" | "files"; label: string; hint: string }[] = [
-  { id: "changes", label: "Changes", hint: "Modified, added, and deleted project files" },
-  { id: "browser", label: "Browser", hint: "Local and forwarded previews" },
-  { id: "terminal", label: "Terminal", hint: "Shell for the current environment" },
-  { id: "files", label: "File", hint: "Project, generated artifacts, and uploads" },
+  { id: "changes", label: "Changes", hint: "View and manage code changes" },
+  { id: "browser", label: "Browser", hint: "Open websites and web apps" },
+  { id: "terminal", label: "Terminal", hint: "Run commands in your environment" },
+  { id: "files", label: "Files", hint: "Browse and edit your workspace" },
 ];
 
-export const WORKBENCH_PLUS_ITEMS: { id: string; label: string; kind: WorkbenchTabKind }[] = [
-  { id: "files", label: "File", kind: "files" },
-  { id: "terminal", label: "Terminal", kind: "terminal" },
-  { id: "browser", label: "Browser", kind: "browser" },
-  { id: "changes", label: "Changes", kind: "changes" },
-  { id: "desktop", label: "Desktop", kind: "desktop" },
-  { id: "environment", label: "Environment", kind: "environment" },
+export const WORKBENCH_PLUS_ITEMS: {
+  id: string;
+  label: string;
+  kind: WorkbenchTabKind | "subscriptions" | "side-chat";
+  shortcut?: string;
+  disabled?: boolean;
+}[] = [
+  { id: "files", label: "File", kind: "files", shortcut: "Ctrl+O" },
+  { id: "terminal", label: "Terminal", kind: "terminal", shortcut: "Ctrl+J" },
+  { id: "browser", label: "Browser", kind: "browser", shortcut: "Ctrl+Shift+B" },
+  { id: "changes", label: "Changes", kind: "changes", shortcut: "Ctrl+E" },
+  { id: "desktop", label: "Desktop", kind: "desktop", shortcut: "Ctrl+D" },
+  { id: "environment", label: "Environment", kind: "environment", shortcut: "Ctrl+S" },
+  { id: "review", label: "Review", kind: "review" },
+  { id: "subscriptions", label: "Subscriptions", kind: "subscriptions", shortcut: "Ctrl+U", disabled: true },
+  { id: "side-chat", label: "New Side Chat", kind: "side-chat", shortcut: "Ctrl+Shift+N", disabled: true },
 ];
 
 export interface WorkbenchTab {
@@ -38,6 +47,7 @@ export interface WorkbenchTab {
   closable: boolean;
   url?: string;
   path?: string;
+  artifactId?: string;
 }
 
 export const WORKBENCH_TEST_ID = "agent-workbench";
@@ -55,7 +65,8 @@ export function diffTabId(path: string): string {
   return `diff:${path}`;
 }
 
-export function artifactTabId(name: string): string {
+export function artifactTabId(name: string, artifactId?: string): string {
+  if (artifactId) return `artifact:${artifactId}:${name}`;
   return `artifact:${name}`;
 }
 
@@ -94,8 +105,14 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
     return { id, kind: "diff", title: `${fileTitle(path)} — Diff`, closable: true, path };
   }
   if (id.startsWith("artifact:")) {
-    const path = id.slice("artifact:".length);
-    return { id, kind: "artifact", title: fileTitle(path), closable: true, path };
+    const rest = id.slice("artifact:".length);
+    const split = rest.indexOf(":");
+    if (split > 0 && !rest.slice(0, split).includes("/") && !rest.slice(0, split).includes("\\")) {
+      const artifactId = rest.slice(0, split);
+      const path = rest.slice(split + 1);
+      return { id, kind: "artifact", title: fileTitle(path), closable: true, path, artifactId };
+    }
+    return { id, kind: "artifact", title: fileTitle(rest), closable: true, path: rest };
   }
   if (id.startsWith("browser:")) {
     return { id, kind: "browser", title: "Browser", closable: true };
@@ -144,12 +161,12 @@ export function rememberUrl(recents: string[], url: string, limit = 8): string[]
   return next.slice(0, limit);
 }
 
-export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: string; path?: string; name?: string; browserId?: string }): WorkbenchTab {
+export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: string; path?: string; name?: string; browserId?: string; artifactId?: string }): WorkbenchTab {
   if (kind === "preview" && extras?.url) return parseWorkbenchTab(previewTabId(extras.url));
   if (kind === "browser" && extras?.browserId) return parseWorkbenchTab(`browser:${extras.browserId}`);
   if (kind === "diff" && extras?.path) return parseWorkbenchTab(diffTabId(extras.path));
   if (kind === "file" && extras?.path) return parseWorkbenchTab(fileTabId(extras.path));
-  if (kind === "artifact" && extras?.name) return parseWorkbenchTab(artifactTabId(extras.name));
+  if (kind === "artifact" && extras?.name) return parseWorkbenchTab(artifactTabId(extras.name, extras.artifactId));
   return parseWorkbenchTab(kind);
 }
 

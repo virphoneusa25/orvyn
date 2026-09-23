@@ -324,6 +324,10 @@ ipcMain.handle("project:listFiles", async () => {
 });
 
 ipcMain.handle("project:readFile", async (_evt, relativePath: string) => {
+  const n = String(relativePath ?? "").replace(/\\/g, "/");
+  if (/(^|\/)generated\//i.test(n) || /^generated(\/|$)/i.test(n)) {
+    throw new Error("This generated file is an artifact. Open it from Files.");
+  }
   const target = resolveInProject(relativePath);
   return fs.readFile(target, "utf-8");
 });

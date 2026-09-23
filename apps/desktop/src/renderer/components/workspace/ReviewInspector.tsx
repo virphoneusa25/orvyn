@@ -25,7 +25,18 @@ export function ReviewInspector({
           <div style={{ ...emptyBody(), margin: "8px auto 0" }}>A summary will appear when work is ready.</div>
         </div>
       ) : (
-        <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--orvyn-border-soft)", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--orvyn-border-soft)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 650 }}>{summary.completed ? "Review ready" : "Review in progress"}</div>
+              <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
+                {summary.filesChanged} files · <span style={{ color: "var(--orvyn-green)" }}>+{summary.additions}</span>{" "}
+                <span style={{ color: "var(--orvyn-red)" }}>−{summary.deletions}</span>
+              </div>
+            </div>
+            <button style={actionBtn("var(--orvyn-green)")} onClick={onOpenDiff}>Approve</button>
+            <button style={actionBtn("var(--orvyn-yellow)")} onClick={onOpenDiff}>Request changes</button>
+          </div>
           <button onClick={onOpenDiff} style={linkRow()}>
             {summary.filesChanged} files changed · <span style={{ color: "var(--orvyn-green)" }}>+{summary.additions}</span>{" "}
             <span style={{ color: "var(--orvyn-red)" }}>−{summary.deletions}</span>
@@ -54,6 +65,18 @@ export function ReviewInspector({
       </div>
     </div>
   );
+}
+
+function actionBtn(color: string): CSSProperties {
+  return {
+    background: "transparent",
+    border: `1px solid ${color}`,
+    color,
+    borderRadius: 8,
+    fontSize: 12,
+    padding: "6px 12px",
+    cursor: "pointer",
+  };
 }
 
 function linkRow(): CSSProperties {

@@ -563,7 +563,7 @@ export class ArtifactService {
     const source = projectFileSource(root);
     await fs.mkdir(root, { recursive: true });
     const out: FilesLocation["files"] = [];
-    const skip = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);
+    const skip = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn", "generated"]);
     async function walk(dir: string, rel: string, depth: number): Promise<void> {
       if (out.length >= max || depth > 3) return;
       let entries: import("fs").Dirent[] = [];

@@ -7,6 +7,7 @@ export type FileSourceBadge = "LOCAL" | "CLOUD" | "SANDBOX" | "GENERATED" | "UPL
 
 export interface WorkspaceFileEntry {
   id?: string;
+  artifactId?: string;
   name: string;
   path: string;
   source: FileSourceKind;
@@ -80,6 +81,7 @@ export function normalizeRemoteFile(raw: Record<string, unknown>, fallbackSource
   const source = (raw.source as FileSourceKind | undefined) ?? inferSource(kind, fallbackSource);
   return {
     id: typeof raw.id === "string" ? raw.id : typeof raw.artifactId === "string" ? raw.artifactId : undefined,
+    artifactId: typeof raw.artifactId === "string" ? raw.artifactId : typeof raw.id === "string" ? raw.id : undefined,
     name: String(raw.name ?? fileName(String(raw.path ?? "file"))),
     path: String(raw.path ?? raw.name ?? ""),
     source,
@@ -127,11 +129,15 @@ export function mergeFileSections(
     }
   }
   const generated = byId.get("generated")!;
-  const artifacts = byId.get("artifacts")!;
   const recents = byId.get("recents")!;
   for (const extra of extras) {
-    const target = extra.kind === "artifact" || extra.source === "artifact" ? generated : extra.source === "upload" ? byId.get("uploads")! : artifacts;
-    if (!target.files.some((f) => f.path === extra.path)) target.files.push(extra);
+    const isArtifact = extra.kind === "artifact" || extra.kind === "generated" || extra.source === "artifact";
+    const isUpload = extra.source === "upload" || extra.kind === "upload";
+    if (!isArtifact && !isUpload) continue;
+    const target = isUpload && !isArtifact ? byId.get("uploads")! : generated;
+    if (!target.files.some((f) => (f.id && extra.id && f.id === extra.id) || (f.artifactId && extra.artifactId && f.artifactId === extra.artifactId) || f.path === extra.path)) {
+      target.files.push(extra);
+    }
     if (!recents.files.some((f) => f.path === extra.path)) recents.files.unshift(extra);
   }
   recents.files = recents.files.slice(0, 24);

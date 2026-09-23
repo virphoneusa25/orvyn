@@ -15,6 +15,7 @@ export function TerminalInspector({
   const term = useTerminalSession();
   const commands = useMemo(() => extractOrionCommands(events), [events]);
   const [session, setSession] = useState<"orion" | "local">("orion");
+  const [cleared, setCleared] = useState(false);
   const active = commands[commands.length - 1];
   const title = environmentLabel || (environment === "cloud" ? "Terminal · Cloud Worker" : environment === "sandbox" ? "Terminal · Sandbox" : "Terminal · Local");
 
@@ -23,7 +24,7 @@ export function TerminalInspector({
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
-        <span style={{ fontSize: 11.5, fontWeight: 650, color: "var(--orvyn-text-secondary)" }}>{title}</span>
+        <span style={{ fontSize: 12, fontWeight: 650, color: "var(--orvyn-text)" }}>{title}</span>
         <select
           value={showLocal && !active ? "local" : session}
           onChange={(e) => setSession(e.target.value as "orion" | "local")}
@@ -36,7 +37,7 @@ export function TerminalInspector({
             padding: "3px 6px",
           }}
         >
-          {active && <option value="orion">ORION process</option>}
+          {active && <option value="orion">Terminal 1 · ORION</option>}
           {environment !== "cloud" && environment !== "sandbox" && <option value="local">This environment</option>}
         </select>
         {active && (
@@ -44,8 +45,10 @@ export function TerminalInspector({
             {active.command} · {active.running ? "Running…" : "Done"}
           </span>
         )}
-        <span style={{ marginLeft: "auto" }}>
-          {!term.sessionId && <button style={ghostBtn()} onClick={() => void term.start()}>Start local</button>}
+        <span style={{ marginLeft: "auto", display: "inline-flex", gap: 6 }}>
+          {!term.sessionId && <button style={ghostBtn()} onClick={() => void term.start()}>New</button>}
+          {term.sessionId && <button style={ghostBtn()} onClick={() => void term.start()}>Split</button>}
+          <button style={ghostBtn()} onClick={() => setCleared(true)}>Clear</button>
         </span>
       </div>
       {session === "orion" && active ? (
@@ -62,7 +65,7 @@ export function TerminalInspector({
             whiteSpace: "pre-wrap",
           }}
         >
-          {active.output || (active.running ? "Running…" : "No output captured.")}
+          {cleared ? "" : active.output || (active.running ? "Running…" : "No output captured.")}
         </pre>
       ) : term.sessionId || term.busy ? (
         <TerminalView term={term} />

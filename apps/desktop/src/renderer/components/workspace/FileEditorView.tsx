@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
+import { isFabricatedGeneratedPath, userFacingFileError } from "../../workbenchFileAccess";
 import { emptyBody, emptyTitle } from "./workspaceChrome";
 
 function guessLanguage(path: string): string {
@@ -30,6 +31,12 @@ export function FileEditorView({ path }: { path?: string | null }) {
     let cancelled = false;
     if (!path) {
       setContent(null);
+      setError(null);
+      return;
+    }
+    if (isFabricatedGeneratedPath(path)) {
+      setContent(null);
+      setError("This generated file is an artifact. Open it from Files.");
       return;
     }
     setError(null);
@@ -38,7 +45,7 @@ export function FileEditorView({ path }: { path?: string | null }) {
         if (!cancelled) setContent(text);
       },
       (err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setError(userFacingFileError(err));
       }
     );
     return () => {
@@ -50,7 +57,7 @@ export function FileEditorView({ path }: { path?: string | null }) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
         <div style={emptyTitle()}>No file open</div>
-        <div style={emptyBody()}>Select a file from Changes or Files.</div>
+        <div style={emptyBody()}>Select a workspace file from Files.</div>
       </div>
     );
   }

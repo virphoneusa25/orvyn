@@ -397,6 +397,7 @@ export function DesktopView({
 
   const header = (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }}>
+      <span style={{ fontSize: 13, fontWeight: 650 }}>Live Desktop Session</span>
       <span style={{
         display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600,
         color: statusColor, background: "rgba(52,211,153,0.08)",

@@ -46,6 +46,8 @@ export interface WorkspaceFile {
   additions?: number;
   deletions?: number;
   status?: string;
+  artifactId?: string;
+  mimeType?: string;
 }
 
 export interface WorkspaceDiff {
@@ -82,6 +84,7 @@ export interface WorkspaceActivity {
   tab: AgentWorkspaceTab;
   previewUrl?: string;
   file?: string;
+  artifactId?: string;
   /** When false, Follow ORION updates the activity line only — the active tab stays put. */
   switchTab?: boolean;
 }
@@ -263,12 +266,14 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   }
   if (type === "files.ready" || (type === "artifact.created" && (data.artifactId || data.id))) {
     const name = String(data.name ?? data.filename ?? data.path ?? "file");
-    return { line: `${name} is in Files → Generated`, priority: 90, tab: "files", file: name, switchTab: true };
+    const artifactId = typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : undefined;
+    return { line: `${name} is in Files → Generated`, priority: 90, tab: "files", file: name, artifactId, switchTab: true };
   }
   if (type === "tool.completed" && (tool === "generate_image" || data.artifactId)) {
     const name = String(data.artifactName ?? data.name ?? data.filename ?? "");
-    if (name || data.artifactId) {
-      return { line: `${name || "File"} is in Files → Generated`, priority: 90, tab: "files", file: name || undefined, switchTab: true };
+    const artifactId = typeof data.artifactId === "string" ? data.artifactId : undefined;
+    if (name || artifactId) {
+      return { line: `${name || "File"} is in Files → Generated`, priority: 90, tab: "files", file: name || undefined, artifactId, switchTab: true };
     }
   }
   return null;
@@ -368,7 +373,15 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     }
     if (type === "artifact.created" || type === "files.ready" || (type === "tool.completed" && (tool === "generate_image" || data.artifactId))) {
       const name = String(data.name ?? data.filename ?? data.artifactName ?? data.path ?? "");
-      if (name) artifacts.set(name, { path: name, kind: "artifact", status: data.kind === "generated" || tool === "generate_image" ? "Generated" : "Artifact" });
+      if (name) {
+        artifacts.set(name, {
+          path: name,
+          kind: "artifact",
+          status: data.kind === "generated" || tool === "generate_image" ? "Generated" : "Artifact",
+          artifactId: typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : undefined,
+          mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+        });
+      }
     }
 
     if (type.startsWith("browser.") || tool.startsWith("browser_") || type.startsWith("desktop.") || tool.startsWith("desktop_")) {

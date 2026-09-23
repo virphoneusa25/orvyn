@@ -12,6 +12,8 @@ export interface ArtifactTarget {
   path?: string;
   /** Filename alone, for tolerant matching against event paths. */
   fileName?: string;
+  /** ArtifactService identity. Never treat this as a project path. */
+  artifactId?: string;
   /** The operation that produced it (read/edit/create/delete). */
   op?: string;
 }
