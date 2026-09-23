@@ -1,0 +1,10 @@
+{
+  "policies": {
+    "Homepage": {
+      "URL": "file:///usr/share/orvyn/home.html",
+      "StartPage": "homepage"
+    },
+    "NoDefaultBookmarks": true,
+    "DisableAppUpdate": true
+  }
+}

@@ -77,3 +77,8 @@ fi
 echo "OVH deploy healthy: $PUBLIC_HEALTH"
 curl -sS -m 8 "$PUBLIC_HEALTH"
 echo
+
+echo "Building orvyn-desktop image on $HOST"
+if ! "${SSH[@]}" "$HOST" "cd '$REMOTE/infrastructure/desktop' && docker build -t orvyn-desktop:latest ."; then
+  echo "Desktop image build failed. Existing sessions keep the previous orvyn-desktop image until the next successful build." >&2
+fi

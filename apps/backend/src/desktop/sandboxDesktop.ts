@@ -112,6 +112,13 @@ export function frameCaptureCommand(quality: FrameQuality): string {
   return `xwd -root -silent | convert ${resize}-quality ${q} xwd:- jpeg:-`;
 }
 
+/** The desktop image refreshes this file in the background. */
+export const CACHED_FRAME_PATH = "/tmp/orvyn-frame.jpg";
+
+export function usesCachedFrame(quality: FrameQuality): boolean {
+  return quality !== "high";
+}
+
 export async function startSandboxDesktop(opts: {
   tenantId: string;
   projectRoot?: string;
@@ -223,6 +230,11 @@ function qualityArgs(quality: FrameQuality): string[] {
 const frameInFlight = new Map<string, Promise<Buffer | null>>();
 
 async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality): Promise<Buffer | null> {
+  if (usesCachedFrame(quality)) {
+    const cached = await dockerExec(session.containerId, ["timeout", "2", "cat", CACHED_FRAME_PATH], 3000);
+    const ready = jpegFromOutput(cached.stdout);
+    if (ready && ready.length > 1000) return ready;
+  }
   const viaXwd = await dockerExec(
     session.containerId,
     ["timeout", "6", "sh", "-c", frameCaptureCommand(quality)],
@@ -307,6 +319,44 @@ const NAMED_KEYS: Record<string, string> = {
   "f11": "F11",
 };
 
+/** One line for the in-desktop `orvyn-input` reader. Coordinates are already remote pixels. */
+export function formatDesktopCommand(
+  type: string,
+  x: number,
+  y: number,
+  extra: { key?: string; text?: string; deltaY?: number } = {},
+): string | null {
+  const xi = Math.max(0, Math.round(x));
+  const yi = Math.max(0, Math.round(y));
+  switch (type) {
+    case "move":
+      return `MOVE ${xi} ${yi}`;
+    case "click":
+      return `CLICK ${xi} ${yi} 1`;
+    case "rightclick":
+      return `CLICK ${xi} ${yi} 3`;
+    case "dblclick":
+      return `DCLICK ${xi} ${yi}`;
+    case "scroll": {
+      const button = Number(extra.deltaY ?? 0) > 0 ? 5 : 4;
+      const times = Math.min(5, Math.abs(Math.round(Number(extra.deltaY ?? 0) / 100)) || 1);
+      return `SCROLL ${xi} ${yi} ${button} ${times}`;
+    }
+    case "key": {
+      const raw = extra.key === "Enter" ? "Return" : extra.key === " " ? "space" : extra.key === "Escape" ? "Escape" : String(extra.key ?? "");
+      if (!/^[\w+]+$/.test(raw)) return null;
+      return `KEY ${raw}`;
+    }
+    case "type": {
+      const text = String(extra.text ?? "");
+      if (!text) return null;
+      return `TYPE ${Buffer.from(text, "utf8").toString("base64")}`;
+    }
+    default:
+      return null;
+  }
+}
+
 /** Maps a Send-Keys combo name to xdotool key syntax. Returns null if unknown. */
 export function resolveKeyCombo(combo: string): string | null {
   const key = NAMED_KEYS[String(combo ?? "").trim().toLowerCase()];
@@ -345,6 +395,65 @@ export async function sandboxAgentInput(
   return sandboxAct(session, type, args);
 }
 
+interface InputPipe {
+  proc: ReturnType<typeof spawn>;
+  dead: boolean;
+}
+
+const inputPipes = new Map<string, InputPipe>();
+const inputMode = new Map<string, "pipe" | "exec">();
+const pendingMove = new Map<string, string>();
+const moveTimer = new Map<string, ReturnType<typeof setTimeout>>();
+
+function dropInputPipe(id: string): void {
+  const timer = moveTimer.get(id);
+  if (timer) clearTimeout(timer);
+  moveTimer.delete(id);
+  pendingMove.delete(id);
+  inputMode.delete(id);
+  const pipe = inputPipes.get(id);
+  inputPipes.delete(id);
+  if (pipe && !pipe.proc.killed) pipe.proc.kill();
+}
+
+async function desktopInputMode(session: SandboxDesktopSession): Promise<"pipe" | "exec"> {
+  const known = inputMode.get(session.id);
+  if (known) return known;
+  const probe = await dockerExec(session.containerId, ["test", "-x", "/usr/local/bin/orvyn-input"], 4000);
+  const mode = probe.code === 0 ? "pipe" : "exec";
+  inputMode.set(session.id, mode);
+  return mode;
+}
+
+function writeInputLine(session: SandboxDesktopSession, line: string): boolean {
+  let pipe = inputPipes.get(session.id);
+  if (!pipe || pipe.dead) {
+    const proc = spawn("docker", ["exec", "-i", session.containerId, "/usr/local/bin/orvyn-input"], {
+      windowsHide: true,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    pipe = { proc, dead: false };
+    inputPipes.set(session.id, pipe);
+    const markDead = () => {
+      pipe!.dead = true;
+      if (inputPipes.get(session.id)?.proc === proc) inputMode.set(session.id, "exec");
+    };
+    proc.on("error", markDead);
+    proc.on("exit", markDead);
+  }
+  if (pipe.dead || !pipe.proc.stdin) return false;
+  return pipe.proc.stdin.write(`${line}\n`);
+}
+
+function flushMove(session: SandboxDesktopSession): void {
+  const timer = moveTimer.get(session.id);
+  if (timer) clearTimeout(timer);
+  moveTimer.delete(session.id);
+  const line = pendingMove.get(session.id);
+  pendingMove.delete(session.id);
+  if (line) writeInputLine(session, line);
+}
+
 async function sandboxAct(
   session: SandboxDesktopSession,
   type: string,
@@ -353,6 +462,24 @@ async function sandboxAct(
   const viewW = Number(args.viewWidth ?? session.width);
   const viewH = Number(args.viewHeight ?? session.height);
   const { x, y } = mapSandboxPoint(session, Number(args.x ?? 0), Number(args.y ?? 0), viewW, viewH);
+  const line = formatDesktopCommand(type, x, y, {
+    key: args.key == null ? undefined : String(args.key),
+    text: args.text == null ? undefined : String(args.text),
+    deltaY: Number(args.deltaY ?? 0),
+  });
+  if (line == null) return type === "type" ? true : false;
+
+  if ((await desktopInputMode(session)) === "pipe") {
+    if (type === "move") {
+      pendingMove.set(session.id, line);
+      if (!moveTimer.has(session.id)) {
+        moveTimer.set(session.id, setTimeout(() => flushMove(session), 16));
+      }
+      return true;
+    }
+    flushMove(session);
+    return writeInputLine(session, line);
+  }
 
   let cmd: string[] = [];
   switch (type) {
@@ -366,13 +493,13 @@ async function sandboxAct(
       cmd = ["xdotool", "mousemove", String(x), String(y), "click", "3"];
       break;
     case "dblclick":
-      cmd = ["xdotool", "mousemove", String(x), String(y), "click", "--repeat", "2", "--delay", "100", "1"];
+      cmd = ["xdotool", "mousemove", String(x), String(y), "click", "--repeat", "2", "--delay", "40", "1"];
       break;
     case "scroll": {
       const deltaY = Number(args.deltaY ?? 0);
       const button = deltaY > 0 ? "5" : "4";
       const times = Math.min(5, Math.abs(Math.round(deltaY / 100)) || 1);
-      cmd = ["xdotool", "mousemove", String(x), String(y), "click", "--repeat", String(times), "--delay", "50", button];
+      cmd = ["xdotool", "mousemove", String(x), String(y), "click", "--repeat", String(times), "--delay", "16", button];
       break;
     }
     case "key": {
@@ -383,7 +510,7 @@ async function sandboxAct(
     }
     case "type": {
       const text = String(args.text ?? "");
-      if (text) cmd = ["xdotool", "type", "--delay", "30", "--clearmodifiers", text];
+      if (text) cmd = ["xdotool", "type", "--delay", "0", "--clearmodifiers", text];
       break;
     }
     default:
@@ -403,8 +530,8 @@ export async function sandboxLaunchApp(
   const cmds: Record<string, string[]> = {
     terminal: ["lxterminal", "--working-directory=/workspace"],
     files: ["thunar", "/workspace"],
-    chromium: ["chromium", "--no-sandbox", "--disable-dev-shm-usage", "--start-maximized"],
-    editor: ["geany", "/workspace"],
+    chromium: ["sh", "-c", "if command -v firefox-esr >/dev/null; then exec firefox-esr --new-window file:///usr/share/orvyn/home.html; fi; exec chromium --no-sandbox --disable-dev-shm-usage --start-maximized"],
+    editor: ["sh", "-c", "if command -v code >/dev/null; then exec code --no-sandbox --disable-gpu /workspace; fi; exec geany /workspace"],
     settings: ["lxappearance"],
   };
   const cmd = cmds[app];
@@ -415,14 +542,15 @@ export async function sandboxLaunchApp(
 
 export async function sandboxNavigate(session: SandboxDesktopSession, url: string): Promise<boolean> {
   if (session.status !== "ready") return false;
-  // Launch Chromium at the URL (it may not be running yet in the new layout).
-  const running = await dockerExec(session.containerId, ["sh", "-c", "xdotool search --name 'Chromium' | head -1"]);
-  if (!running.stdout.toString().trim()) {
-    await dockerExec(session.containerId, ["sh", "-c", `nohup chromium --no-sandbox --disable-dev-shm-usage --start-maximized >/dev/null 2>&1 &`]);
+  const titled = async (name: string) => (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${name}' | head -1`])).stdout.toString().trim();
+  let title = (await titled("Firefox")) ? "Firefox" : (await titled("Chromium")) ? "Chromium" : "";
+  if (!title) {
+    await dockerExec(session.containerId, ["sh", "-c", "if command -v firefox-esr >/dev/null; then nohup firefox-esr --new-window >/dev/null 2>&1 &; else nohup chromium --no-sandbox --disable-dev-shm-usage --start-maximized >/dev/null 2>&1 &; fi"]);
     await new Promise((res) => setTimeout(res, 2500));
+    title = (await titled("Firefox")) ? "Firefox" : "Chromium";
   }
   const r = await dockerExec(session.containerId, [
-    "xdotool", "search", "--name", "Chromium", "windowactivate", "--sync",
+    "xdotool", "search", "--name", title, "windowactivate", "--sync",
     "key", "--clearmodifiers", "ctrl+l",
   ]);
   await new Promise((res) => setTimeout(res, 200));
@@ -447,6 +575,7 @@ export function findSandboxSession(tenantId: string, projectRoot?: string): Sand
 export async function stopSandboxDesktop(session: SandboxDesktopSession): Promise<void> {
   session.status = "ended";
   session.controlOwner = "none";
+  dropInputPipe(session.id);
   exec(`docker rm -f ${session.containerId}`, { windowsHide: true }, () => {
     sessions.delete(session.id);
   });
@@ -473,5 +602,6 @@ export function listSandboxSessions(tenantId: string): SandboxDesktopSession[] {
 }
 
 export function resetSandboxSessionsForTests(): void {
+  for (const id of inputPipes.keys()) dropInputPipe(id);
   sessions.clear();
 }

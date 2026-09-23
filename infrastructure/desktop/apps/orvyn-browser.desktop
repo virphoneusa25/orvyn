@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Firefox
+Comment=Web browser inside the sandbox desktop
+Exec=/usr/local/bin/orvyn-launch browser
+Icon=firefox-esr
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true

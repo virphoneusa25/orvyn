@@ -17,7 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
-import { FRAME_REQUEST_MS, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
+import { FRAME_REQUEST_MS, gatePointerMove, imageKind, releasePointerMove, sessionCanStream, shouldCoverFrame, type MoveGate } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -47,23 +47,6 @@ const SEND_KEYS: { label: string; combo: string }[] = [
   { label: "Esc", combo: "esc" },
   { label: "Enter", combo: "enter" },
 ];
-
-function PointerIcon({ size = 13, color = "#22d3ee" }: { size?: number; color?: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 18 18" style={{ display: "block" }}>
-      <path d="M3 1.8 15.6 8.6l-6.2 1.5L7.6 16.4Z" fill={color} stroke="#0b1220" strokeWidth="1" />
-    </svg>
-  );
-}
-
-function MonitorIcon({ size = 13 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" style={{ display: "block" }}>
-      <rect x="1.5" y="2.5" width="13" height="9" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M5.5 13.5h5M8 11.5v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function Dot({ color }: { color: string }) {
   return (
@@ -102,9 +85,9 @@ export function DesktopView({
   const [imageRect, setImageRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const viewRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number } | null>(null);
   const lastFrameAt = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moveGate = useRef<MoveGate>({ inFlight: false, pending: null });
 
   function showToast(msg: string) {
     setToast(msg);
@@ -284,9 +267,16 @@ export function DesktopView({
   }
 
   async function setOwner(owner: "user" | "orion") {
+    setSession((current) => current ? {
+      ...current,
+      controlOwner: owner,
+      status: owner === "user" ? "user_control" : current.status === "user_control" ? "ready" : current.status,
+    } : current);
     const { ok, data } = await post("/desktop/control", { owner });
-    if (!ok) setError(data.error ?? "Control change blocked.");
-    else setSession(data.session);
+    if (!ok) {
+      setError(data.error ?? "Control change blocked.");
+      void refreshSession();
+    } else setSession(data.session);
   }
 
   async function endSession() {
@@ -298,13 +288,28 @@ export function DesktopView({
   }
 
   async function sendInput(type: string, extra: Record<string, unknown>) {
-    if (!projectRoot || session?.controlOwner !== "user") return;
+    if (!projectRoot || sessionRef.current?.controlOwner !== "user") return;
     await post("/desktop/input", {
       type,
-      viewWidth: imageRect.w || session?.width,
-      viewHeight: imageRect.h || session?.height,
+      viewWidth: imageRect.w || sessionRef.current?.width,
+      viewHeight: imageRect.h || sessionRef.current?.height,
       ...extra,
     });
+  }
+
+  function emitMove(point: { x: number; y: number }) {
+    const step = gatePointerMove(moveGate.current, point);
+    moveGate.current = step.gate;
+    if (!step.send) return;
+    void (async () => {
+      let send: { x: number; y: number } | null = step.send;
+      while (send) {
+        await sendInput("move", send);
+        const released = releasePointerMove(moveGate.current);
+        moveGate.current = released.gate;
+        send = released.send;
+      }
+    })();
   }
 
   /** clientX/Y → coords inside the displayed image (letterbox-correct). */
@@ -435,36 +440,35 @@ export function DesktopView({
   const statusColor = user ? "#22d3ee" : "#34d399";
 
   const header = (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 650 }}>Live Desktop Session</span>
-      <span style={{
-        display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600,
-        color: statusColor, background: "rgba(52,211,153,0.08)",
-        border: `1px solid ${user ? "rgba(34,211,238,0.35)" : "rgba(52,211,153,0.3)"}`,
-        borderRadius: 999, padding: "3px 10px",
-      }}>
-        <Dot color={statusColor} /> {statusLabel}
-      </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
-        <MonitorIcon /> {session.width} × {session.height}
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }}>
+      <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 8, minWidth: 0 }}>
+        <span style={{ marginTop: 5 }}><Dot color={statusColor} /></span>
+        <span style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 650 }}>Live Desktop Session</div>
+          <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>ORION can operate this desktop. You can take control at any time.</div>
+        </span>
       </span>
       <span style={{ flex: 1 }} />
-      <button
-        style={ghostBtn()}
-        onClick={() => setExpanded(v => !v)}
-        title={expanded ? "Collapse Desktop to Workbench panel" : "Expand Desktop to full window"}
-      >
-        {expanded ? "⤡ Collapse" : "⤢ Expand"}
-      </button>
-      {user && (
-        <button style={ghostBtn()} onClick={() => void setOwner("orion")}>Return to ORION</button>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--orvyn-text-muted)" }}>
+        <span style={{ opacity: 0.7 }}>Connection</span>
+        <span style={{ color: "var(--orvyn-text)", fontWeight: 600 }}>Cloud Sandbox</span>
+      </span>
+      {!user && (
+        <button
+          style={{ ...ghostBtn(), background: "#2563eb", borderColor: "#2563eb", color: "#f8fafc", fontWeight: 650 }}
+          onClick={() => void setOwner("user")}
+        >
+          Take Control
+        </button>
       )}
+      <button style={ghostBtn()} onClick={() => void setOwner("orion")}>Return to ORION</button>
       <div style={{ position: "relative" }} onMouseDown={(e) => e.stopPropagation()}>
         <button title="More" style={iconBtn()} onClick={() => setOpenMenu(openMenu === "overflow" ? null : "overflow")}>
           <svg width="14" height="14" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.4" fill="currentColor" /><circle cx="8" cy="8" r="1.4" fill="currentColor" /><circle cx="13" cy="8" r="1.4" fill="currentColor" /></svg>
         </button>
         {openMenu === "overflow" && (
           <div style={menuStyle()}>
+            <MenuItem label={expanded ? "Collapse" : "Expand"} onClick={() => { setOpenMenu(null); setExpanded((v) => !v); }} />
             <MenuItem label="Session details" onClick={() => { setOpenMenu(null); setDetailsOpen(true); }} />
             <MenuItem label="Reconnect" onClick={() => void reconnect()} />
             <MenuItem label="Restart desktop" onClick={() => void restart()} />
@@ -472,10 +476,10 @@ export function DesktopView({
         )}
       </div>
       <button
-        style={{ ...ghostBtn(), color: "#f87171", borderColor: "rgba(248,113,113,0.4)" }}
+        style={{ ...ghostBtn(), background: "#dc2626", borderColor: "#dc2626", color: "#fff", fontWeight: 650 }}
         onClick={() => void endSession()}
       >
-        End Session
+        Stop Session
       </button>
     </div>
   );
@@ -489,9 +493,7 @@ export function DesktopView({
         outline: "none",
       }}
       tabIndex={user ? 0 : -1}
-      onMouseMove={user ? (e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          setRemoteCursor({ x: e.clientX - r.left, y: e.clientY - r.top }); const p = imagePoint(e); if (p) void sendInput("move", p); } : undefined}
+      onMouseMove={user ? (e) => { const p = imagePoint(e); if (p) emitMove(p); } : undefined}
       onClick={user ? (e) => { e.currentTarget.focus(); const p = imagePoint(e); if (p) void sendInput("click", p); } : undefined}
       onContextMenu={user ? (e) => { e.preventDefault(); const p = imagePoint(e); if (p) void sendInput("rightclick", p); } : undefined}
       onDoubleClick={user ? (e) => { const p = imagePoint(e); if (p) void sendInput("dblclick", p); } : undefined}
@@ -541,23 +543,6 @@ export function DesktopView({
           cursor={cursor ? { ...cursor, ...remoteToClient(cursor.x, cursor.y, imageRect, session.width, session.height) } : null}
           status={status ?? "ORION is operating this desktop"}
         />
-      )}
-      {!user && !interrupted && (
-        <button
-          onClick={() => void setOwner("user")}
-          style={{
-            position: "absolute", left: "50%", top: "62%", transform: "translate(-50%, -50%)",
-            display: "inline-flex", alignItems: "center", gap: 9,
-            background: "rgba(11,18,32,0.82)",
-            border: "1px solid rgba(34,211,238,0.55)",
-            boxShadow: "0 0 22px rgba(34,211,238,0.28), inset 0 0 12px rgba(139,92,246,0.12)",
-            color: "var(--orvyn-text)",
-            borderRadius: 999, padding: "11px 22px", cursor: "pointer", fontSize: 13, fontWeight: 600,
-            zIndex: 5, backdropFilter: "blur(6px)",
-          }}
-        >
-          <PointerIcon /> Take Control
-        </button>
       )}
       {fullscreen && (
         <button

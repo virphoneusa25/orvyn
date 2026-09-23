@@ -33,6 +33,28 @@ export function shouldCoverFrame(lastFrameAt: number, now: number): boolean {
   return now - lastFrameAt > FRAME_STALE_MS;
 }
 
+export interface PointerPoint {
+  x: number;
+  y: number;
+}
+
+export interface MoveGate {
+  inFlight: boolean;
+  pending: PointerPoint | null;
+}
+
+/** Keep only the newest pointer position. A move already on the wire is not followed by a queue. */
+export function gatePointerMove(gate: MoveGate, point: PointerPoint): { gate: MoveGate; send: PointerPoint | null } {
+  if (gate.inFlight) return { gate: { inFlight: true, pending: point }, send: null };
+  return { gate: { inFlight: true, pending: null }, send: point };
+}
+
+/** After a move finishes, send the position the pointer has since moved to. */
+export function releasePointerMove(gate: MoveGate): { gate: MoveGate; send: PointerPoint | null } {
+  if (gate.pending) return { gate: { inFlight: true, pending: null }, send: gate.pending };
+  return { gate: { inFlight: false, pending: null }, send: null };
+}
+
 export function imageKind(bytes: Uint8Array): "jpeg" | "png" | null {
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return "jpeg";
   if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";

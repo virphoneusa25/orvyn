@@ -1,68 +1,80 @@
 #!/bin/bash
-# entrypoint.sh — ORVYN virtual desktop:
-#   Xvfb + openbox + tint2 top panel + tint2 bottom dock + feh wallpaper
-#   + Thunar (file manager, opens /workspace centered) + jgmenu app menu
-#
-# The control plane captures frames via `docker exec ... import -window root jpeg:-`
-# and injects input via `docker exec ... xdotool ...`.
+# ORVYN virtual desktop: Xvfb + openbox + left rail + bottom dock + clock.
+# Firefox, terminal, files, and VS Code. Frames are written to
+# /tmp/orvyn-frame.jpg so Take Control does not wait on a fresh grab.
 
 set -e
 
-# Start Xvfb on :99 at the configured resolution.
 Xvfb :99 -screen 0 "${SCREEN_WIDTH}x${SCREEN_HEIGHT}x24" -nolisten tcp &
 XVFB_PID=$!
-sleep 1
+sleep 0.6
 
-# Session bus for thunar/GTK apps (best-effort).
 if command -v dbus-launch &>/dev/null; then
   eval "$(dbus-launch --sh-syntax)" || true
 fi
 
-# Window manager.
-openbox &
-OPENBOX_PID=$!
-sleep 1
+export GTK_THEME=Adwaita-dark
 
-# ORVYN wallpaper (deep-space / network motif, generated original art).
-if command -v feh &>/dev/null; then
-  feh --bg-scale /usr/share/backgrounds/orvyn/orvyn-desktop.png 2>/dev/null || \
-    xsetroot -solid "#07122a" || true
-else
-  xsetroot -solid "#07122a" 2>/dev/null || true
+mkdir -p \
+  "$HOME/.config/openbox" \
+  "$HOME/.themes/orvyn/openbox-3" \
+  "$HOME/Documents" "$HOME/Downloads" "$HOME/Pictures" "$HOME/Music" "$HOME/Videos" \
+  "$HOME/.local/share/Trash/files" \
+  /tmp
+
+if [ -f /etc/xdg/openbox/rc.xml ]; then
+  cp /etc/xdg/openbox/rc.xml "$HOME/.config/openbox/rc.xml"
+  sed -i 's/<name>Clearlooks<\/name>/<name>orvyn<\/name>/' "$HOME/.config/openbox/rc.xml" || true
 fi
+cp /usr/share/orvyn/openbox-themerc "$HOME/.themes/orvyn/openbox-3/themerc" 2>/dev/null || true
 
-# Top panel (Activities, launcher, centered clock, indicators).
-tint2 -c /home/orvyn/.config/tint2/top.conf &
-TOP_PID=$!
+openbox &
 sleep 0.4
 
-# Bottom dock (terminal / files / chromium / editor / settings).
-tint2 -c /home/orvyn/.config/tint2/dock.conf &
-DOCK_PID=$!
-sleep 0.6
-
-# File manager — the default surface, showing the synced workspace.
-thunar /workspace &
-THUNAR_PID=$!
-sleep 1.5
-
-# Center + size the file manager window like the approved mockup.
-wmctrl -r "orvyn - File Manager" -e "0,$((SCREEN_WIDTH*27/100)),$((SCREEN_HEIGHT*24/100)),$((SCREEN_WIDTH*46/100)),$((SCREEN_HEIGHT*52/100))" 2>/dev/null || \
-wmctrl -r "File Manager" -e "0,$((SCREEN_WIDTH*27/100)),$((SCREEN_HEIGHT*24/100)),$((SCREEN_WIDTH*46/100)),$((SCREEN_HEIGHT*52/100))" 2>/dev/null || true
-
-# Optional: a start URL opens Chromium alongside the file manager.
-if [ -n "$START_URL" ]; then
-  chromium --no-sandbox --disable-dev-shm-usage --start-maximized "$START_URL" &
+if [ -f /usr/share/backgrounds/orvyn/orvyn-session.png ]; then
+  feh --bg-scale /usr/share/backgrounds/orvyn/orvyn-session.png 2>/dev/null || xsetroot -solid "#07122a" || true
+else
+  feh --bg-scale /usr/share/backgrounds/orvyn/orvyn-desktop.png 2>/dev/null || xsetroot -solid "#07122a" || true
 fi
+
+tint2 -c /home/orvyn/.config/tint2/left.conf &
+sleep 0.2
+tint2 -c /home/orvyn/.config/tint2/dock.conf &
+sleep 0.2
+tint2 -c /home/orvyn/.config/tint2/clock.conf &
+sleep 0.3
+
+# Show a project tree when the mounted workspace is empty and writable.
+if [ -d /opt/orvyn/demo ] && [ -d /workspace ] && [ -z "$(ls -A /workspace 2>/dev/null)" ] && [ -w /workspace ]; then
+  cp -a /opt/orvyn/demo/. /workspace/ || true
+fi
+
+thunar /workspace &
+sleep 1.2
+
+wmctrl -r "workspace" -e "0,$((SCREEN_WIDTH*14/100)),$((SCREEN_HEIGHT*8/100)),$((SCREEN_WIDTH*50/100)),$((SCREEN_HEIGHT*68/100))" 2>/dev/null || \
+wmctrl -r "File Manager" -e "0,$((SCREEN_WIDTH*14/100)),$((SCREEN_HEIGHT*8/100)),$((SCREEN_WIDTH*50/100)),$((SCREEN_HEIGHT*68/100))" 2>/dev/null || true
+
+if [ -n "$START_URL" ]; then
+  /usr/local/bin/orvyn-launch browser "$START_URL" &
+fi
+
+# Keep a JPEG ready. The control plane cats this file instead of capturing
+# inside the Take Control request.
+(
+  while true; do
+    if xwd -root -silent | convert -quality 55 xwd:- /tmp/orvyn-frame.jpg.new 2>/dev/null; then
+      mv -f /tmp/orvyn-frame.jpg.new /tmp/orvyn-frame.jpg
+    fi
+    sleep 0.04
+  done
+) &
 
 echo "=============================================="
 echo " ORVYN Desktop sandbox ready on :99"
 echo "   Resolution: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
-echo "   WM: openbox + tint2 panel + dock"
-echo "   Apps: Thunar, Chromium, lxterminal, geany"
-echo "   Wallpaper: /usr/share/backgrounds/orvyn/orvyn-desktop.png"
-echo "   Workspace: /workspace"
+echo "   Apps: Firefox, terminal, files, code"
+echo "   Frame: /tmp/orvyn-frame.jpg"
 echo "=============================================="
 
-# Keep alive — wait for Xvfb (the display server is the core).
 wait $XVFB_PID

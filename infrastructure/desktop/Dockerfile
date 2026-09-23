@@ -1,9 +1,9 @@
 # orvyn-desktop: sandbox desktop runtime
 #
 # A true visual sandbox desktop — not just a browser viewport:
-#   Xvfb (virtual display) + openbox (lightweight WM) + tint2 (top panel +
-#   bottom dock) + Thunar (file manager) + Chromium + lxterminal + geany
-#   + feh (ORVYN wallpaper) + xdotool (input) + ImageMagick (frame capture)
+#   Xvfb + openbox + tint2 (left rail, bottom dock, clock) + Thunar
+#   + Firefox + lxterminal + VS Code (geany fallback)
+#   + feh (ORVYN wallpaper) + xdotool (input) + ImageMagick (frame pump)
 #
 # The control plane drives everything from OUTSIDE the container via
 # docker exec: frames come from `xwd -root -silent | convert … jpeg:-`
@@ -23,12 +23,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openbox \
       tint2 \
       feh \
-      chromium \
+      firefox-esr \
       thunar \
       lxterminal \
       geany \
       lxappearance \
       jgmenu \
+      gnome-themes-extra \
       xterm \
       xdotool \
       imagemagick \
@@ -37,33 +38,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
       dbus-x11 \
       ca-certificates \
+      wget \
       fonts-liberation \
       fonts-dejavu-core \
       papirus-icon-theme \
     && rm -rf /var/lib/apt/lists/*
 
-# ORVYN brand assets: wallpaper, mark, indicator glyphs, landing page.
+# ORVYN brand assets: wallpaper, mark, dock glyphs, landing page.
 COPY assets/ /usr/share/backgrounds/orvyn/
-RUN mkdir -p /usr/share/orvyn && \
+RUN mkdir -p /usr/share/orvyn/icons /usr/share/orvyn/indicators && \
     cp /usr/share/backgrounds/orvyn/orvyn-mark.png /usr/share/orvyn/ && \
     cp /usr/share/backgrounds/orvyn/orvyn-lockup.png /usr/share/orvyn/ && \
-    cp -r /usr/share/backgrounds/orvyn/indicators /usr/share/orvyn/indicators
+    cp /usr/share/backgrounds/orvyn/icons/* /usr/share/orvyn/icons/ && \
+    cp /usr/share/backgrounds/orvyn/indicators/* /usr/share/orvyn/indicators/
 COPY home.html /usr/share/orvyn/home.html
+COPY openbox/themerc /usr/share/orvyn/openbox-themerc
+COPY orvyn-input orvyn-launch /usr/local/bin/
+RUN chmod 755 /usr/local/bin/orvyn-input /usr/local/bin/orvyn-launch
 
 # Dock/panel launchers.
 COPY apps/*.desktop /usr/share/applications/
 
-# Chromium defaults: ORVYN landing page as home/new-tab.
-RUN mkdir -p /etc/chromium/policies/managed
-COPY chromium/orvyn.json /etc/chromium/policies/managed/orvyn.json
+# Firefox opens the ORVYN landing page for a new window.
+RUN mkdir -p /etc/firefox/policies /etc/firefox-esr/policies
+COPY firefox/policies.json /etc/firefox/policies/policies.json
+COPY firefox/policies.json /etc/firefox-esr/policies/policies.json
+
+# VS Code is the dock editor. Geany remains the fallback if this download fails.
+RUN wget -qO /tmp/code.deb "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" \
+    && apt-get update \
+    && apt-get install -y /tmp/code.deb \
+    && rm -f /tmp/code.deb \
+    && rm -rf /var/lib/apt/lists/* \
+    || true
 
 # Non-root user for the desktop session (GUI apps).
 RUN useradd -m -s /bin/bash orvyn && \
-    mkdir -p /home/orvyn/.config/tint2 /home/orvyn/.config/chromium /workspace && \
+    mkdir -p /home/orvyn/.config/tint2 /home/orvyn/.config/gtk-3.0 /home/orvyn/.config/Thunar /workspace /opt/orvyn/demo && \
     chown -R orvyn:orvyn /home/orvyn /workspace
-COPY tint2-top.conf /home/orvyn/.config/tint2/top.conf
+COPY tint2-left.conf /home/orvyn/.config/tint2/left.conf
 COPY tint2-dock.conf /home/orvyn/.config/tint2/dock.conf
-RUN chown -R orvyn:orvyn /home/orvyn/.config
+COPY tint2-clock.conf /home/orvyn/.config/tint2/clock.conf
+COPY config/gtk-3.0/ /home/orvyn/.config/gtk-3.0/
+COPY config/Thunar/thunarrc /home/orvyn/.config/Thunar/thunarrc
+COPY demo/ /opt/orvyn/demo/
+RUN chown -R orvyn:orvyn /home/orvyn/.config /opt/orvyn/demo
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

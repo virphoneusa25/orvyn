@@ -2,8 +2,8 @@
 Type=Application
 Name=Files
 Comment=Browse the synced workspace
-Exec=thunar /workspace
-Icon=system-file-manager
+Exec=/usr/local/bin/orvyn-launch files
+Icon=/usr/share/orvyn/icons/folder.png
 Terminal=false
 Categories=System;FileManager;
 StartupNotify=true

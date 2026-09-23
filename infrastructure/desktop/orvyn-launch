@@ -1,0 +1,32 @@
+#!/bin/bash
+# Dock and rail launcher. Firefox, terminal, files, and VS Code.
+app="${1:-}"
+shift || true
+case "$app" in
+  browser|chromium)
+    url="${1:-file:///usr/share/orvyn/home.html}"
+    if command -v firefox-esr >/dev/null 2>&1; then
+      exec firefox-esr --new-window "$url"
+    fi
+    exec chromium --no-sandbox --disable-dev-shm-usage --start-maximized "$url"
+    ;;
+  code|editor)
+    if command -v code >/dev/null 2>&1; then
+      exec code --no-sandbox --disable-gpu /workspace
+    fi
+    exec geany /workspace
+    ;;
+  terminal)
+    exec lxterminal --working-directory=/workspace
+    ;;
+  files)
+    exec thunar /workspace
+    ;;
+  apps)
+    exec jgmenu_run
+    ;;
+  *)
+    echo "unknown app: $app" >&2
+    exit 1
+    ;;
+esac

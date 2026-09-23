@@ -1,0 +1,35 @@
+#!/bin/bash
+# Reads desktop input from stdin, one command per line.
+# MOVE/CLICK/DCLICK/SCROLL take integer coordinates. TYPE is base64.
+while IFS= read -r line; do
+  cmd="${line%% *}"
+  rest="${line#"$cmd"}"
+  rest="${rest# }"
+  case "$cmd" in
+    MOVE)
+      set -- $rest
+      [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] && xdotool mousemove "$1" "$2"
+      ;;
+    CLICK)
+      set -- $rest
+      [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ && "$3" =~ ^[13]$ ]] && xdotool mousemove "$1" "$2" click "$3"
+      ;;
+    DCLICK)
+      set -- $rest
+      [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]] && xdotool mousemove "$1" "$2" click --repeat 2 --delay 40 1
+      ;;
+    SCROLL)
+      set -- $rest
+      [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ && "$3" =~ ^[45]$ && "$4" =~ ^[1-5]$ ]] && xdotool mousemove "$1" "$2" click --repeat "$4" --delay 16 "$3"
+      ;;
+    KEY)
+      [[ "$rest" =~ ^[A-Za-z0-9_+]+$ ]] && xdotool key --clearmodifiers "$rest"
+      ;;
+    TYPE)
+      if [[ "$rest" =~ ^[A-Za-z0-9+/=]+$ ]]; then
+        text="$(printf '%s' "$rest" | base64 -d 2>/dev/null || true)"
+        [ -n "$text" ] && xdotool type --delay 0 --clearmodifiers "$text"
+      fi
+      ;;
+  esac
+done

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { frameCaptureCommand, jpegFromOutput, pngFromOutput } from "./sandboxDesktop";
+import { CACHED_FRAME_PATH, frameCaptureCommand, formatDesktopCommand, jpegFromOutput, pngFromOutput, usesCachedFrame } from "./sandboxDesktop";
 
 test("frame capture grabs the root window instead of waiting for a click", () => {
   const cmd = frameCaptureCommand("auto");
@@ -8,6 +8,18 @@ test("frame capture grabs the root window instead of waiting for a click", () =>
   assert.doesNotMatch(cmd, /\bimport\b/);
   assert.match(frameCaptureCommand("low"), /-resize 55%/);
   assert.match(frameCaptureCommand("high"), /-quality 92/);
+  assert.equal(usesCachedFrame("auto"), true);
+  assert.equal(usesCachedFrame("low"), true);
+  assert.equal(usesCachedFrame("high"), false);
+  assert.equal(CACHED_FRAME_PATH, "/tmp/orvyn-frame.jpg");
+});
+
+test("desktop commands stay on one line the input reader can trust", () => {
+  assert.equal(formatDesktopCommand("move", 10.2, 20.8), "MOVE 10 21");
+  assert.equal(formatDesktopCommand("click", 3, 4), "CLICK 3 4 1");
+  assert.equal(formatDesktopCommand("key", 0, 0, { key: "Enter" }), "KEY Return");
+  assert.equal(formatDesktopCommand("key", 0, 0, { key: "rm -rf" }), null);
+  assert.match(formatDesktopCommand("type", 0, 0, { text: "hi" }) ?? "", /^TYPE [A-Za-z0-9+/=]+$/);
 });
 
 test("JPEG bytes are recovered when a warning is prefixed", () => {

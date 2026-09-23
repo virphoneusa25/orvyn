@@ -1,0 +1,16 @@
+border.width: 1
+padding.width: 4
+padding.height: 2
+window.handle.width: 2
+window.client.padding.width: 0
+window.active.border.color: #1e3a5f
+window.inactive.border.color: #121826
+window.active.title.bg.color: #121826
+window.inactive.title.bg.color: #0d1320
+window.active.label.text.color: #e8eef8
+window.inactive.label.text.color: #8b97b3
+window.active.button.unpressed.bg.color: #121826
+window.inactive.button.unpressed.bg.color: #0d1320
+menu.items.bg.color: #121826
+menu.items.text.color: #e8eef8
+menu.overlap: 0

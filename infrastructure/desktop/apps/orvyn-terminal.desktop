@@ -2,8 +2,8 @@
 Type=Application
 Name=Terminal
 Comment=ORVYN sandbox terminal
-Exec=lxterminal --working-directory=/workspace
-Icon=utilities-terminal
+Exec=/usr/local/bin/orvyn-launch terminal
+Icon=/usr/share/orvyn/icons/terminal.png
 Terminal=false
 Categories=System;TerminalEmulator;
 StartupNotify=true

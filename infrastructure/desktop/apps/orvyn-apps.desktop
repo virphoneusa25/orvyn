@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Apps
+Comment=Application menu
+Exec=/usr/local/bin/orvyn-launch apps
+Icon=/usr/share/orvyn/icons/grid.png
+Terminal=false
+Categories=System;
+StartupNotify=false

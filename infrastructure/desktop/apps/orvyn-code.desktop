@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Code
+Comment=Edit the workspace
+Exec=/usr/local/bin/orvyn-launch code
+Icon=/usr/share/orvyn/icons/code.png
+Terminal=false
+Categories=Development;IDE;
+StartupNotify=true
