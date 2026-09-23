@@ -62,6 +62,9 @@ contextBridge.exposeInMainWorld("orvyn", {
     set: (config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> =>
       ipcRenderer.invoke("config:set", config),
   },
+  marketplace: {
+    officialSearch: (query: string, limit?: number) => ipcRenderer.invoke("marketplace:officialSearch", query, limit),
+  },
   browser: {
     list: () => ipcRenderer.invoke("browser:list"),
     create: (kind?: "browser" | "preview", url?: string) => ipcRenderer.invoke("browser:create", kind, url),

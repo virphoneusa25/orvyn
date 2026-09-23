@@ -99,6 +99,7 @@ export const SOURCE_LABEL: Record<MarketSource, string> = {
 };
 
 export const SIDEBAR_MIN = 320;
+export const SIDEBAR_COMPACT = 240;
 export const SIDEBAR_DEFAULT = 380;
 export const SIDEBAR_MAX = 520;
 export const TOOL_BUDGET = { maxServers: 8, maxTools: 40 };
@@ -238,6 +239,21 @@ export function recommendServers(
       "Recommended because it matches the requested capability."
     );
   }
+  if (!q.trim()) {
+    push(
+      servers.find((s) => /io\.github\.github\/github-mcp|github\/github-mcp-server/i.test(s.name)) ??
+        servers.find((s) => /^(github|github mcp)$/i.test(s.title ?? "") || (/github/i.test(s.name) && s.sources.includes("official") && !/obsidian/i.test(s.name))),
+      "Official GitHub MCP — pull requests, issues, and repositories."
+    );
+    push(
+      servers.find((s) => /postgres/i.test(`${s.name} ${s.title ?? ""}`)),
+      "PostgreSQL MCP for project databases."
+    );
+    push(
+      servers.find((s) => /slack/i.test(`${s.name} ${s.title ?? ""}`)),
+      "Slack MCP for workspace messages."
+    );
+  }
   for (const s of servers.filter((x) => x.trust.level === "verified" && !x.installed)) {
     if (out.length >= 6) break;
     push(s, "Organization-trusted / ORVYN Verified and not yet installed.");
@@ -330,8 +346,29 @@ export function clampSidebar(width: number): number {
   return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(width)));
 }
 
-export function overlaySidebar(viewportWidth: number): boolean {
-  return viewportWidth > 0 && viewportWidth < 960;
+/** Overlay only when the marketplace pane itself cannot fit detail + list. */
+export function overlaySidebar(containerWidth: number): boolean {
+  return containerWidth > 0 && containerWidth < 480;
+}
+
+/** Keep a usable left detail pane when Tools & MCP shares the window with Desktop. */
+export function sidebarForContainer(containerWidth: number, current = SIDEBAR_DEFAULT): number {
+  if (containerWidth >= 960) return clampSidebar(current);
+  if (containerWidth >= 720) return Math.min(current, 300);
+  if (containerWidth >= 480) return Math.min(current, SIDEBAR_COMPACT);
+  return SIDEBAR_COMPACT;
+}
+
+export function pickSelectedServer(
+  filtered: MarketServer[],
+  recommended: Recommendation[],
+  selectedId: string | null
+): MarketServer | null {
+  if (selectedId) {
+    const hit = filtered.find((s) => s.canonicalId === selectedId);
+    if (hit) return hit;
+  }
+  return recommended[0]?.server ?? filtered[0] ?? null;
 }
 
 export function initials(server: MarketServer): string {

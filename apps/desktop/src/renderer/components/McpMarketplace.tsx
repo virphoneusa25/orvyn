@@ -19,7 +19,9 @@ import {
   mergeInstalled,
   overlaySidebar,
   permissionSummary,
+  pickSelectedServer,
   primaryAction,
+  sidebarForContainer,
   providerWarning,
   recommendServers,
   schemaArgNames,
@@ -37,6 +39,7 @@ import {
   type UpdateRow,
 } from "../mcpMarketplaceModel";
 import { iconCandidates, parseApiJson, resolveMarketplaceIcon } from "../mcpMarketplaceIcons";
+import { installPayload, loadOfficialFallbackCatalog, shouldUseOfficialFallback } from "../mcpOfficialCatalog";
 
 interface Health {
   id: string;
@@ -90,6 +93,7 @@ export function McpMarketplace({
   });
   const [sidebar, setSidebar] = useState(SIDEBAR_DEFAULT);
   const [viewport, setViewport] = useState(typeof window === "undefined" ? 1280 : window.innerWidth);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [wizard, setWizard] = useState<MarketServer | null>(null);
   const [settings, setSettings] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
@@ -111,9 +115,16 @@ export function McpMarketplace({
   }, [q]);
 
   useEffect(() => {
-    const onResize = () => setViewport(window.innerWidth);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const el = rootRef.current;
+    const apply = () => setViewport(el?.clientWidth || window.innerWidth);
+    apply();
+    if (!el || typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", apply);
+      return () => window.removeEventListener("resize", apply);
+    }
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   const search = useCallback(async (query: string) => {
@@ -139,13 +150,31 @@ export function McpMarketplace({
       const statusParsed = parseApiJson(statusRes.status, statusText);
       const updateParsed = parseApiJson(updateRes.status, updateText);
       const data = parsed.body ?? {};
-      const catalog: MarketServer[] = parsed.ok ? (data.results?.map((r: { server: MarketServer }) => r.server) ?? []) : [];
+      let catalog: MarketServer[] = parsed.ok ? (data.results?.map((r: { server: MarketServer }) => r.server) ?? []) : [];
       const statuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
-      if (!parsed.ok) setError(parsed.error || `HTTP ${searchRes.status}`);
-      else setError(null);
+      const notices = [...(data.degraded ?? providerWarning(healthParsed.body.providers ?? []))];
+      if (shouldUseOfficialFallback(parsed.ok, catalog.length)) {
+        try {
+          const official = await loadOfficialFallbackCatalog(query);
+          if (official.length) {
+            catalog = official;
+            notices.push(
+              parsed.ok
+                ? "Showing Official MCP Registry."
+                : "Showing Official MCP Registry — the connected Cloud API is not serving /mcp/marketplace."
+            );
+          } else if (!parsed.ok) {
+            setError(parsed.error || `HTTP ${searchRes.status}`);
+          }
+        } catch (err: any) {
+          if (!parsed.ok) setError(parsed.error || err.message || `HTTP ${searchRes.status}`);
+        }
+      } else {
+        setError(null);
+      }
       setResults(mergeInstalled(catalog, statuses));
       setHealth(data.health ?? healthParsed.body.providers ?? []);
-      setDegraded(data.degraded ?? providerWarning(healthParsed.body.providers ?? []));
+      setDegraded(notices);
       setUpdates(updateParsed.body.updates ?? []);
     } catch (err: any) {
       setError(err.message);
@@ -165,7 +194,7 @@ export function McpMarketplace({
     [filtered, debounced, capabilityBanner, initialQuery, projectRoot]
   );
   const groups = useMemo(() => groupMarketplace(filtered, updates, recommended), [filtered, updates, recommended]);
-  const selected = filtered.find((s) => s.canonicalId === selectedId) ?? filtered[0] ?? null;
+  const selected = pickSelectedServer(filtered, recommended, selectedId);
 
   useEffect(() => {
     if (selected && selected.canonicalId !== selectedId) setSelectedId(selected.canonicalId);
@@ -220,8 +249,25 @@ export function McpMarketplace({
         headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({ server, secrets, connect: true, cwd: projectRoot }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Install failed");
+      const text = await res.text();
+      const parsed = parseApiJson(res.status, text);
+      if (!parsed.ok) {
+        const host = await fetch(apiUrl("/mcp/servers"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify(installPayload(server, secrets)),
+        });
+        const hostText = await host.text();
+        const hostParsed = parseApiJson(host.status, hostText);
+        if (!hostParsed.ok) throw new Error(hostParsed.error || parsed.error || "Install failed");
+        const createdId = hostParsed.body?.server?.id;
+        if (createdId) {
+          await fetch(apiUrl(`/mcp/servers/${createdId}/connect`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+          }).catch(() => undefined);
+        }
+      }
       onInstalled?.();
       await search(debounced);
       setWizard(null);
@@ -306,6 +352,7 @@ export function McpMarketplace({
   }
 
   const overlay = overlaySidebar(viewport);
+  const listWidth = overlay ? undefined : sidebarForContainer(viewport, sidebar);
   const warnings = degraded.length ? degraded : providerWarning(health);
   const recReason = (id: string) => recommended.find((r) => r.server.canonicalId === id)?.reason;
 
@@ -327,6 +374,7 @@ export function McpMarketplace({
 
   return (
     <div
+      ref={rootRef}
       data-testid="mcp-marketplace"
       style={{ display: "flex", height: "100%", minHeight: 0, background: "var(--orvyn-bg, #0B0E14)", position: "relative" }}
     >
@@ -366,8 +414,8 @@ export function McpMarketplace({
 
       <aside
         style={{
-          width: overlay ? "min(92vw, 420px)" : sidebar,
-          minWidth: overlay ? undefined : 320,
+          width: overlay ? "min(92vw, 420px)" : listWidth,
+          minWidth: overlay ? undefined : Math.min(listWidth ?? 240, 240),
           position: overlay ? "absolute" : "relative",
           right: 0,
           top: 0,

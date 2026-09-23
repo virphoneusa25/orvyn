@@ -8,6 +8,7 @@ import { spawn, ChildProcess } from "child_process";
 import { createWriteStream } from "fs";
 import { connectionFileRecord } from "./connectionRecord";
 import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowserManager } from "./workbenchBrowser";
+import { fetchOfficialRegistry } from "./officialRegistryFetch";
 
 let browserManager: WorkbenchBrowserManager | null = null;
 
@@ -481,6 +482,9 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("config:get", () => readConfig());
+ipcMain.handle("marketplace:officialSearch", (_evt, query: unknown, limit: unknown) =>
+  fetchOfficialRegistry(typeof query === "string" ? query : "", typeof limit === "number" ? limit : 24)
+);
 
 // ── Real terminal: PowerShell through child_process pipes ────────────────
 // node-pty (full interactive TUI) remains the upgrade path; pipes give a

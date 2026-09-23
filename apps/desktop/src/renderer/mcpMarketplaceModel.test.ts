@@ -11,7 +11,9 @@ import {
   initials,
   mergeInstalled,
   overlaySidebar,
+  pickSelectedServer,
   permissionSummary,
+  sidebarForContainer,
   primaryAction,
   providerWarning,
   recommendServers,
@@ -183,10 +185,27 @@ test("ORION capability query deep-links GitHub recommendations first", () => {
   assert.match(rec[0].reason, /pull-request|GitHub/);
 });
 
+test("empty browse still recommends official GitHub so Cloud Mode is not a blank form", () => {
+  const servers = [
+    sample({ name: "ai.example/random", title: "Random" }),
+    sample({ name: "io.github.github/github-mcp-server", title: "GitHub MCP", sources: ["official"] }),
+    sample({ name: "io.github.postgres/postgres", title: "PostgreSQL", sources: ["official"] }),
+  ];
+  const rec = recommendServers(servers, { query: "" });
+  assert.equal(rec[0].server.title, "GitHub MCP");
+  assert.ok(rec.some((r) => r.server.title === "PostgreSQL"));
+  const selected = pickSelectedServer(servers, rec, null);
+  assert.equal(selected?.title, "GitHub MCP");
+  assert.equal(pickSelectedServer(servers, rec, "ai.example/random")?.title, "Random");
+});
+
 test("sidebar split stays within IDE marketplace bounds", () => {
   assert.equal(clampSidebar(200), 320);
   assert.equal(clampSidebar(380), 380);
   assert.equal(clampSidebar(900), 520);
-  assert.equal(overlaySidebar(800), true);
+  assert.equal(overlaySidebar(400), true);
+  assert.equal(overlaySidebar(800), false);
   assert.equal(overlaySidebar(1280), false);
+  assert.equal(sidebarForContainer(500, 380), 240);
+  assert.equal(sidebarForContainer(1280, 380), 380);
 });

@@ -68,6 +68,9 @@ export interface OrvynBridge {
     get(): Promise<{ backendUrl: string; apiKey: string }>;
     set(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }>;
   };
+  marketplace?: {
+    officialSearch(query: string, limit?: number): Promise<{ ok: boolean; status?: number; body: unknown; error?: string }>;
+  };
   browser?: {
     list(): Promise<WorkbenchBrowserState>;
     create(kind?: "browser" | "preview", url?: string): Promise<WorkbenchBrowserState>;

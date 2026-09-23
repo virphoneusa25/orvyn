@@ -26,8 +26,11 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   reproduce.
 - **MCP Marketplace** — Tools & MCP → Marketplace federates the Official
   MCP Registry (and Glama when `GLAMA_API_KEY` is set), plus private and
-  local servers. ORION discovers capabilities via `search_capabilities`
-  instead of loading the catalog. See `docs/MCP_MARKETPLACE.md`.
+  local servers. If Cloud Mode's control plane does not serve
+  `/mcp/marketplace`, the desktop still loads Official Registry results
+  (including the GitHub MCP card and logo). ORION discovers capabilities
+  via `search_capabilities` instead of loading the catalog. See
+  `docs/MCP_MARKETPLACE.md`.
 - **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
   background processes, diagnostics/typecheck/tests/lint, git (status →
   commit), fetch/web-search, image generation, MCP, Playwright browser QA
