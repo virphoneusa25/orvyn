@@ -220,11 +220,13 @@ function qualityArgs(quality: FrameQuality): string[] {
   }
 }
 
+const frameInFlight = new Map<string, Promise<Buffer | null>>();
+
 async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality): Promise<Buffer | null> {
   const viaXwd = await dockerExec(
     session.containerId,
-    ["timeout", "4", "sh", "-c", frameCaptureCommand(quality)],
-    6000,
+    ["timeout", "6", "sh", "-c", frameCaptureCommand(quality)],
+    8000,
   );
   const jpeg = jpegFromOutput(viaXwd.stdout);
   if (jpeg) return jpeg;
@@ -232,8 +234,8 @@ async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality):
   // a window-select hang cannot pin the HTTP request.
   const viaImport = await dockerExec(
     session.containerId,
-    ["timeout", "4", "import", "-silent", "-window", "root", ...qualityArgs(quality), "jpeg:-"],
-    6000,
+    ["timeout", "5", "import", "-silent", "-window", "root", ...qualityArgs(quality), "jpeg:-"],
+    7000,
   );
   return jpegFromOutput(viaImport.stdout);
 }
@@ -243,7 +245,14 @@ export async function captureSandboxFrame(
   quality: FrameQuality = "auto",
 ): Promise<Buffer | null> {
   if (session.status !== "ready" && session.status !== "user_control") return null;
-  const jpeg = await grabFrame(session, quality);
+  // The pane polls faster than a capture finishes. Share one grab so a
+  // disconnected client does not stack docker execs and slow the next frame.
+  let job = frameInFlight.get(session.id);
+  if (!job) {
+    job = grabFrame(session, quality).finally(() => frameInFlight.delete(session.id));
+    frameInFlight.set(session.id, job);
+  }
+  const jpeg = await job;
   if (!jpeg) return null;
   session.lastFrameAt = Date.now();
   return jpeg;

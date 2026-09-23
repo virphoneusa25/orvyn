@@ -17,7 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
-import { imageKind, sessionCanStream } from "../../desktopStream";
+import { FRAME_REQUEST_MS, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -151,20 +151,23 @@ export function DesktopView({
     if (!root || !sessionCanStream(current) || frameInFlight.current) return;
     frameInFlight.current = true;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const timer = setTimeout(() => ctrl.abort(), FRAME_REQUEST_MS);
+    const noteProblem = (message: string) => {
+      if (!shouldCoverFrame(lastFrameAt.current, Date.now())) return;
+      setInterrupted(true);
+      setStreamNote(message);
+    };
     try {
       const q = new URLSearchParams({ projectRoot: root, q: qualityRef.current, ...(runRef.current ? { runId: runRef.current } : {}) });
       const res = await fetch(apiUrl(`/desktop/frame?${q}&_=${Date.now()}`), { headers: authHeaders(), cache: "no-store", signal: ctrl.signal });
       if (!res.ok) {
-        setInterrupted(true);
-        setStreamNote(res.status === 409 ? "The desktop is up, but the picture is not ready yet." : `Picture request failed (${res.status}).`);
+        noteProblem(res.status === 409 ? "The desktop is up, but the picture is not ready yet." : `Picture request failed (${res.status}).`);
         return;
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
       const kind = imageKind(bytes);
       if (!kind) {
-        setInterrupted(true);
-        setStreamNote("Desktop replied without a picture.");
+        noteProblem("Desktop replied without a picture.");
         return;
       }
       const bitmap = await createImageBitmap(new Blob([bytes], { type: kind === "png" ? "image/png" : "image/jpeg" }));
@@ -183,8 +186,7 @@ export function DesktopView({
       }
       bitmap.close();
     } catch {
-      setInterrupted(true);
-      setStreamNote("The picture stream timed out.");
+      noteProblem("The picture stream timed out.");
     } finally {
       clearTimeout(timer);
       frameInFlight.current = false;
