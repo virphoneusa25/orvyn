@@ -30,9 +30,12 @@ services:
       ORVYN_REDIS_URL: "redis://redis-staging:6379/1"
       ORVYN_REDIS_PREFIX: "orvyn:staging:"
       ORVYN_QDRANT_URL: "http://qdrant-staging:6333"
+      ORVYN_WORKSPACE_DIR: /opt/orvyn/workspaces-staging
+      ORVYN_MAX_CONCURRENT_PER_TENANT: "2"
     volumes:
       - staging-data:/data
       - staging-projects:/projects
+      - staging-workspaces:/opt/orvyn/workspaces-staging
       - /var/run/docker.sock:/var/run/docker.sock
     expose:
       - "4570"
@@ -92,6 +95,33 @@ services:
     networks:
       - staging
 
+  worker-staging:
+    container_name: worker-staging
+    build:
+      context: ../..
+      dockerfile: apps/worker/Dockerfile
+    restart: always
+    env_file:
+      - ../../.env.staging
+    environment:
+      ORVYN_CONTROL_PLANE: "http://backend-staging:4570"
+      ORVYN_WORKSPACE_DIR: /opt/orvyn/workspaces-staging
+      ORVYN_MAX_CONCURRENT_RUNS: "4"
+      ORVYN_WORKER_NAME: staging-worker
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - staging-workspaces:/opt/orvyn/workspaces-staging
+    depends_on:
+      backend-staging:
+        condition: service_healthy
+    networks:
+      - staging
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   qdrant-staging:
     image: qdrant/qdrant:v1.13.6
     restart: always
@@ -113,6 +143,7 @@ volumes:
   staging-projects:
   staging-postgres:
   staging-qdrant:
+  staging-workspaces:
 
 networks:
   staging:

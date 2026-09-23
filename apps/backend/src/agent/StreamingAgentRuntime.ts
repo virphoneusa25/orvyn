@@ -44,6 +44,9 @@ export interface ExecutionSpec {
   remoteProjectRoot?: string;
   /** Tenant that owns the run. Worker events must land here, never the default tenant. */
   tenantId?: string;
+  organizationId?: string;
+  userId?: string;
+  projectId?: string | null;
   targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
   targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
   fallbackReason?: string;
@@ -436,7 +439,13 @@ export class StreamingAgentRuntime {
               : "Tools execute on this machine. Project files are not uploaded to OVH.",
       });
       if (execution.location === "OVH_WORKER") {
-        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", execution.tenantId);
+        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
+          tenantId: execution.tenantId ?? "",
+          organizationId: execution.organizationId ?? "",
+          userId: execution.userId ?? "",
+          projectId: execution.projectId ?? null,
+          runId,
+        });
       }
     } else if (execution?.targetActual === "local_host") {
       this.store.emit(runId, "run.execution", {

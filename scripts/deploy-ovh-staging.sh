@@ -19,11 +19,15 @@ RSH="${SSH[*]}"
 
 echo "Syncing staging sources → $HOST:$REMOTE (production .env is not copied)"
 
-"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts'"
+"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts'"
 
 rsync -az --delete -e "$RSH" \
   --exclude node_modules/ --exclude dist/ --exclude '*.log' \
   "$ROOT/apps/backend/" "$HOST:$REMOTE/apps/backend/"
+
+rsync -az --delete -e "$RSH" \
+  --exclude node_modules/ --exclude dist/ --exclude '*.log' \
+  "$ROOT/apps/worker/" "$HOST:$REMOTE/apps/worker/"
 
 rsync -az --delete -e "$RSH" \
   --exclude node_modules/ --exclude dist/ \

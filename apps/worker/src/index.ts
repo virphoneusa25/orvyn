@@ -42,6 +42,18 @@ interface JobAssignment {
   instruction: string;
   projectRoot?: string;
   mode?: string;
+  tenantId?: string;
+  organizationId?: string;
+  userId?: string;
+  projectId?: string | null;
+  workspace?: string;
+  identity?: {
+    tenantId: string;
+    organizationId: string;
+    userId: string;
+    projectId: string | null;
+    runId: string;
+  } | null;
   /**
    * "executor": prepare the mission container and serve tool RPC requests.
    * The control-plane ORION model drives ALL tool decisions; this worker
@@ -101,7 +113,37 @@ async function cp(pathname: string, method = "GET", body?: unknown): Promise<any
 // ── Worker state ───────────────────────────────────────────────────────────
 
 const activeContainers = new Map<string, string>(); // runId → containerId
+const jobIdentity = new Map<string, JobAssignment>();
 const cancelledRuns = new Set<string>();
+
+function sanitizeSegment(raw: string): string {
+  const value = String(raw ?? "").trim();
+  if (!value || value.includes("\0") || value.includes("/") || value.includes("\\") || value.includes("..")) {
+    throw new Error("invalid mission path segment");
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(value)) throw new Error("invalid mission path segment");
+  return value;
+}
+
+function trustedJob(job: JobAssignment): JobAssignment {
+  const tenantId = job.identity?.tenantId || job.tenantId;
+  if (!tenantId) throw new Error("control plane omitted tenantId — worker will not invent one");
+  sanitizeSegment(tenantId);
+  sanitizeSegment(job.runId);
+  return { ...job, tenantId };
+}
+
+function workspaceFor(job: JobAssignment): string {
+  if (job.workspace) {
+    const resolved = path.resolve(job.workspace);
+    const root = path.resolve(WORKSPACE_DIR);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      throw new Error("workspace escapes worker root");
+    }
+    return resolved;
+  }
+  return path.join(WORKSPACE_DIR, sanitizeSegment(job.tenantId || ""), sanitizeSegment(job.runId));
+}
 let dockerVersion = "unknown";
 let registered = false;
 
@@ -136,7 +178,16 @@ function docker(args: string[]): Promise<{ code: number; stdout: string; stderr:
 // ── Event streaming ────────────────────────────────────────────────────────
 
 async function emitEvent(runId: string, type: string, data: Record<string, unknown> = {}): Promise<void> {
-  await cp(`/api/v1/worker/events/${runId}`, "POST", { type, data, sequence: Date.now() }).catch(() => {});
+  const job = jobIdentity.get(runId);
+  await cp(`/api/v1/worker/events/${runId}`, "POST", {
+    type,
+    data,
+    sequence: Date.now(),
+    tenantId: job?.tenantId,
+    organizationId: job?.organizationId,
+    userId: job?.userId,
+    runId,
+  }).catch(() => {});
 }
 
 // ── Cancellation ───────────────────────────────────────────────────────────
@@ -168,7 +219,8 @@ function stopCancelPolling(timer: NodeJS.Timeout): void {
 
 /** Lists files in the workspace before cleanup — real artifacts from the run. */
 async function collectArtifacts(runId: string): Promise<string[]> {
-  const workspace = path.join(WORKSPACE_DIR, runId);
+  const job = jobIdentity.get(runId);
+  const workspace = job ? workspaceFor(job) : path.join(WORKSPACE_DIR, "_unknown", runId);
   const artifacts: string[] = [];
   function walk(dir: string, prefix: string): void {
     try {
@@ -196,8 +248,10 @@ async function collectArtifacts(runId: string): Promise<string[]> {
 
 /** Resolves a workspace-relative path, refusing escapes. */
 function workspacePath(runId: string, relative: string): string | null {
+  const job = jobIdentity.get(runId);
+  if (!job) return null;
   const clean = String(relative ?? "").replace(/^[/\\]+/, "");
-  const base = path.join(WORKSPACE_DIR, runId);
+  const base = workspaceFor(job);
   const resolved = path.resolve(base, clean);
   if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
   return resolved;
@@ -406,12 +460,15 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
 
 // ── Mission container lifecycle ────────────────────────────────────────────
 
-async function executeJob(job: JobAssignment): Promise<void> {
+async function executeJob(raw: JobAssignment): Promise<void> {
+  const job = trustedJob(raw);
   const runId = job.runId;
-  console.log(`[worker] executeJob START: ${runId} (role=${job.role ?? "executor"})`);
+  jobIdentity.set(runId, job);
+  console.log(`[worker] executeJob START: ${runId} tenant=${job.tenantId} (role=${job.role ?? "executor"})`);
   // Distinct prefix from the SERVICE container (orvyn-worker-N): mission
   // containers must never match the worker's own name in any filter.
-  const containerName = `orvyn-mission-${runId.slice(0, 12)}`;
+  const tenantTag = sanitizeSegment(job.tenantId || "unknown").replace(/[^A-Za-z0-9]/g, "").slice(0, 12);
+  const containerName = `orvyn-mission-${tenantTag}-${runId.slice(0, 8)}`;
   let containerId = "";
   const cancelTimer = startCancelPolling(runId);
 
@@ -420,17 +477,19 @@ async function executeJob(job: JobAssignment): Promise<void> {
     // worker never claims either. It only reports its own lifecycle.
     await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing remote mission container" });
 
-    // Create workspace
-    const workspace = path.join(WORKSPACE_DIR, runId);
+    const workspace = workspaceFor(job);
+    fs.rmSync(workspace, { recursive: true, force: true });
     fs.mkdirSync(workspace, { recursive: true });
 
-    // Create isolated mission container
     const create = await docker([
       "create", "--name", containerName,
       "--network", "none",
       "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges",
       "--memory", "1g", "--cpus", "1", "--pids-limit", "256",
+      "--label", `orvyn.tenant_id=${job.tenantId}`,
+      "--label", `orvyn.run_id=${runId}`,
+      "--label", `orvyn.organization_id=${job.organizationId || ""}`,
       "-v", `${workspace}:/workspace`,
       "-w", "/workspace",
       SANDBOX_IMAGE,
@@ -497,8 +556,9 @@ async function executeJob(job: JobAssignment): Promise<void> {
     }
     activeContainers.delete(runId);
     cancelledRuns.delete(runId);
-    try { fs.rmSync(path.join(WORKSPACE_DIR, runId), { recursive: true, force: true }); } catch {}
-    console.log(`[worker] executeJob DONE: ${runId} (worker alive: yes)`);
+    try { fs.rmSync(workspaceFor(job), { recursive: true, force: true }); } catch {}
+    jobIdentity.delete(runId);
+    console.log(`[worker] executeJob DONE: ${runId} tenant=${job.tenantId} (worker alive: yes)`);
   }
 }
 
@@ -542,7 +602,7 @@ async function pollForJobs(): Promise<void> {
   try {
     const res = await cp(`/api/v1/worker/poll?workerId=${WORKER_ID}`);
     if (res.job) {
-      console.log(`[worker] job received: ${res.job.runId}`);
+      console.log(`[worker] job received: ${res.job.runId} tenant=${res.job.tenantId ?? "?"}`);
       void executeJob(res.job);
     }
   } catch { /* transient */ }

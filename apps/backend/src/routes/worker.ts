@@ -10,6 +10,13 @@ import type { RunStore } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
+import {
+  assertTrustedMission,
+  countActiveByTenant,
+  missionWorkspacePath,
+  pickFairJob,
+  type MissionIdentity,
+} from "../identity/mission";
 
 interface WorkerRecord {
   workerId: string;
@@ -31,6 +38,10 @@ interface PendingJob {
   projectRoot?: string;
   mode?: string;
   tenantId?: string;
+  organizationId?: string;
+  userId?: string;
+  projectId?: string | null;
+  workspace?: string;
   assignedTo?: string;
   createdAt: number;
   /**
@@ -46,13 +57,24 @@ const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
 /** Tenant bound when a job was queued. Survives removal from the queue so late events still land in the right store. */
 const runTenants = new Map<string, string>();
+const runMissions = new Map<string, MissionIdentity>();
+const WORKSPACE_ROOT = process.env.ORVYN_WORKSPACE_DIR || "/opt/orvyn/workspaces";
 
-function rememberTenant(runId: string, tenantId?: string): void {
+function rememberTenant(runId: string, tenantId?: string, identity?: MissionIdentity): void {
   if (tenantId) runTenants.set(runId, tenantId);
+  if (identity) runMissions.set(runId, identity);
 }
 
 function tenantForRun(runId: string): string | undefined {
   return jobQueue.find((j) => j.runId === runId)?.tenantId ?? runTenants.get(runId);
+}
+
+function missionForRun(runId: string): MissionIdentity | undefined {
+  return runMissions.get(runId);
+}
+
+function bindWorkerRun(runId: string): MissionIdentity | undefined {
+  return missionForRun(runId);
 }
 
 /** True when at least one worker has heartbeated within the stale window. */
@@ -75,9 +97,29 @@ export function workerStats(): { online: number; total: number } {
  * for `runId` (transferring the project from its local `projectRoot`) and
  * then serves tool RPC requests until the control-plane run finishes.
  */
-export function queueExecutorJob(runId: string, projectRoot: string, tenantId?: string): void {
-  rememberTenant(runId, tenantId);
-  jobQueue.push({ runId, missionId: `mission_${runId.slice(0, 8)}`, instruction: "", projectRoot, tenantId, role: "executor", createdAt: Date.now() });
+export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string): void {
+  const mission = assertTrustedMission({
+    ...(typeof identity === "string" ? { tenantId: identity } : identity ?? {}),
+    runId,
+    organizationId: typeof identity === "string" ? identity : identity?.organizationId || identity?.tenantId || "",
+    userId: typeof identity === "string" ? identity : identity?.userId || identity?.tenantId || "",
+    tenantId: typeof identity === "string" ? identity : identity?.tenantId || "",
+    projectId: typeof identity === "string" ? null : identity?.projectId ?? null,
+  });
+  rememberTenant(runId, mission.tenantId, mission);
+  jobQueue.push({
+    runId,
+    missionId: `mission_${runId.slice(0, 8)}`,
+    instruction: "",
+    projectRoot,
+    tenantId: mission.tenantId,
+    organizationId: mission.organizationId,
+    userId: mission.userId,
+    projectId: mission.projectId,
+    workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, mission.runId),
+    role: "executor",
+    createdAt: Date.now(),
+  });
 }
 
 /** Removes any queued job for the run and drops pending tool RPCs. */
@@ -161,10 +203,11 @@ export function workerRouter(
     if (!worker || worker.status === "offline") {
       return res.status(409).json({ error: "Worker not registered or offline" });
     }
-    const job = jobQueue.find((j) => !j.assignedTo);
+    const eligible = jobQueue.filter((j): j is PendingJob & { tenantId: string } => Boolean(j.tenantId));
+    const job = pickFairJob(eligible, countActiveByTenant(eligible));
     if (job) {
       job.assignedTo = workerId;
-      res.json({ job });
+      res.json({ job: { ...job, identity: missionForRun(String(job.runId)) ?? null } });
     } else {
       res.json({ job: null });
     }
@@ -176,6 +219,9 @@ export function workerRouter(
   // WORKER never decides completion — it only observes it here.
   r.get("/tools/:runId/next", (req, res) => {
     if (denyUnlessWorker(req, res)) return;
+    if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const request = toolRpc.poll(req.params.runId);
     let finished = false;
     try {
@@ -192,6 +238,9 @@ export function workerRouter(
   // ── Tool RPC: worker submits the tool result ──────────────────────────
   r.post("/tools/:runId/result", (req, res) => {
     if (denyUnlessWorker(req, res)) return;
+    if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const resolved = toolRpc.resolve({
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
@@ -250,10 +299,16 @@ export function workerRouter(
     });
     if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
     const tenantId = decision.tenantId;
-
-    // Create the run in the RunStore FIRST so events have a home.
     const runId = randomUUID();
-    rememberTenant(runId, tenantId);
+    const mission = assertTrustedMission({
+      tenantId,
+      organizationId: typeof req.body?.organizationId === "string" && req.body.organizationId ? req.body.organizationId : tenantId,
+      userId: typeof req.body?.userId === "string" && req.body.userId ? req.body.userId : tenantId,
+      projectId: typeof req.body?.projectId === "string" ? req.body.projectId : null,
+      runId,
+    });
+
+    rememberTenant(runId, tenantId, mission);
     try {
       const store = getRunStore(tenantId);
       if (!store.get(runId)) {
@@ -268,11 +323,15 @@ export function workerRouter(
       instruction,
       projectRoot,
       mode,
-      tenantId,
+      tenantId: mission.tenantId,
+      organizationId: mission.organizationId,
+      userId: mission.userId,
+      projectId: mission.projectId,
+      workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, mission.runId),
       createdAt: Date.now(),
     };
     jobQueue.push(job);
-    res.status(201).json({ runId: job.runId, missionId: job.missionId });
+    res.status(201).json({ runId: job.runId, missionId: job.missionId, workspace: job.workspace, tenantId: mission.tenantId });
   });
 
   // ── Worker list (monitoring/debugging) ──────────────────────────────
