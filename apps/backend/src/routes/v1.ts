@@ -407,7 +407,7 @@ v1Router.post("/images/generate", async (req, res) => {
 v1Router.post("/chat/completions", async (req, res) => {
   try {
     const tc = requireTenant(req);
-    const response = await new Orchestrator(tc.modelService, tc.indexService).chat({
+    const response = await new Orchestrator(tc.modelService, tc.indexService, tc.artifactService).chat({
       task: req.body.task ?? "chat",
       history: req.body.history ?? [],
       userMessage: req.body.message,
@@ -867,21 +867,16 @@ v1Router.delete("/memory/:id", (req, res) => {
   res.status(204).end();
 });
 
+function publicArtifact(svc: { toPublic: (a: any) => unknown }, record: any) {
+  return svc.toPublic(record);
+}
+
 v1Router.get("/artifacts", (req, res) => {
   const t = requireTenant(req);
   const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
-  const artifacts = t.artifactService.list({ kind }).map((a) => ({
-    id: a.id,
-    name: a.name,
-    path: a.path,
-    kind: a.kind,
-    mediaType: a.mediaType,
-    createdAt: a.createdAt,
-    projectRoot: a.projectRoot,
-    runId: a.runId,
-    downloadUrl: `/artifacts/${a.id}/download`,
-  }));
-  res.json({ artifacts });
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  const rows = q ? t.artifactService.search(q) : t.artifactService.listArtifacts({ kind });
+  res.json({ artifacts: rows.map((a) => publicArtifact(t.artifactService, a)) });
 });
 
 v1Router.get("/files", async (req, res) => {
@@ -904,10 +899,10 @@ v1Router.get("/files/read", async (req, res) => {
       const { record, bytes } = await t.artifactService.read(id);
       const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html|svg)$/i.test(record.name);
       return res.json({
-        artifact: { ...record, downloadUrl: `/artifacts/${record.id}/download` },
+        artifact: publicArtifact(t.artifactService, record),
         content: textish ? bytes.toString("utf-8") : undefined,
-        dataUrl: !textish && (record.mediaType ?? "").startsWith("image/")
-          ? `data:${record.mediaType};base64,${bytes.toString("base64")}`
+        dataUrl: !textish && record.mimeType.startsWith("image/")
+          ? `data:${record.mimeType};base64,${bytes.toString("base64")}`
           : undefined,
       });
     }
@@ -944,7 +939,7 @@ v1Router.post("/artifacts", async (req, res) => {
       runId: req.body.runId,
       projectRoot: req.body.projectRoot ?? t.currentProjectRoot,
     });
-    res.status(201).json({ artifact: { ...rec, downloadUrl: `/artifacts/${rec.id}/download` } });
+    res.status(201).json({ artifact: publicArtifact(t.artifactService, rec) });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -955,10 +950,23 @@ v1Router.get("/artifacts/:id", async (req, res) => {
     const { record, bytes } = await requireTenant(req).artifactService.read(req.params.id);
     const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html)$/i.test(record.name);
     res.json({
-      artifact: { ...record, downloadUrl: `/artifacts/${record.id}/download` },
+      artifact: publicArtifact(requireTenant(req).artifactService, record),
       content: textish ? bytes.toString("utf-8") : undefined,
-      dataUrl: (record.mediaType ?? "").startsWith("image/") ? `data:${record.mediaType};base64,${bytes.toString("base64")}` : undefined,
+      dataUrl: record.mimeType.startsWith("image/") ? `data:${record.mimeType};base64,${bytes.toString("base64")}` : undefined,
     });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+v1Router.get("/artifacts/:id/preview", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    const { record, bytes, filename } = await t.artifactService.previewArtifact(req.params.id);
+    res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Content-Disposition", `inline; filename="${filename.replace(/"/g, "")}"`);
+    res.send(bytes);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
@@ -966,13 +974,26 @@ v1Router.get("/artifacts/:id", async (req, res) => {
 
 v1Router.get("/artifacts/:id/download", async (req, res) => {
   try {
-    const { record, bytes, filename } = await requireTenant(req).artifactService.getDownload(req.params.id);
-    res.setHeader("Content-Type", record.mediaType || "application/octet-stream");
+    const t = requireTenant(req);
+    const token = typeof req.query.token === "string" ? req.query.token : "";
+    if (token) {
+      const resolved = t.artifactService.resolveDownload(token);
+      if (resolved !== req.params.id) return res.status(403).json({ error: "Token does not match this artifact." });
+    }
+    const { record, bytes, filename } = await t.artifactService.getDownload(req.params.id);
+    res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+    res.setHeader("Content-Length", String(bytes.length));
     res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "")}"`);
     res.send(bytes);
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
+});
+
+v1Router.get("/files/search", (req, res) => {
+  const t = requireTenant(req);
+  const q = String(req.query.q ?? "");
+  res.json({ artifacts: t.artifactService.search(q).map((a) => publicArtifact(t.artifactService, a)) });
 });
 
 v1Router.delete("/artifacts/:id", async (req, res) => {

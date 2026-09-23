@@ -25,6 +25,17 @@ export interface ToolResult {
   };
   /** Structured side-channel (capability.required, activation). Never secrets. */
   meta?: Record<string, unknown>;
+  /** Persisted file-producing results. Success requires artifactId on each entry. */
+  artifacts?: Array<{
+    artifactId: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    sha256?: string;
+    previewUrl?: string;
+    downloadUrl?: string;
+    kind?: string;
+  }>;
 }
 
 export interface ToolExecutionContext {

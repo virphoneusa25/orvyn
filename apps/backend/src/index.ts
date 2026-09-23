@@ -88,6 +88,22 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     };
   }
 
+  try {
+    const { defaultDataDir } = await import("./persistence/LocalStore");
+    const { artifactStorageRoot } = await import("./documents/workspace");
+    const { promises: fsp } = await import("fs");
+    const { join } = await import("path");
+    const root = artifactStorageRoot("health", defaultDataDir());
+    await fsp.mkdir(root, { recursive: true });
+    const probe = join(root, ".health");
+    const stamp = String(Date.now());
+    await fsp.writeFile(probe, stamp);
+    const read = await fsp.readFile(probe, "utf-8");
+    checks.artifacts = { healthy: read === stamp, detail: read === stamp ? "writable" : "readback mismatch" };
+  } catch (err: any) {
+    checks.artifacts = { healthy: false, detail: err?.message ?? "artifact storage unavailable" };
+  }
+
   const allHealthy = Object.values(checks).every((c) => c.healthy);
   res.status(allHealthy ? 200 : 503).json({
     status: allHealthy ? "ok" : "degraded",
@@ -151,7 +167,7 @@ wss.on("connection", (socket, req) => {
     }
 
     try {
-      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService);
+      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService);
       const rawSocket = (socket as any)._socket;
       if (rawSocket?.setNoDelay) rawSocket.setNoDelay(true);
       for await (const chunk of orchestrator.streamChat(body)) {

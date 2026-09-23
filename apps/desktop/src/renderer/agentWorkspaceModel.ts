@@ -260,7 +260,7 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   if (type === "tool.completed" && tool === "create_document") {
     return { line: "Created artifact", priority: 65, tab: "docs" };
   }
-  if (type === "artifact.created" || (type === "tool.completed" && (tool === "generate_image" || tool.startsWith("artifact_")))) {
+  if (type === "artifact.created" && (data.artifactId || data.id)) {
     const name = String(data.name ?? data.filename ?? data.path ?? "file");
     return { line: `Created ${name}`, priority: 65, tab: "files", file: name };
   }

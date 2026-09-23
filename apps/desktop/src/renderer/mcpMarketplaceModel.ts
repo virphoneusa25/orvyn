@@ -322,8 +322,8 @@ export function mergeInstalled(
   statuses: {
     id: string;
     name: string;
-    state: string;
-    enabled: boolean;
+    state?: string;
+    enabled?: boolean;
     toolCount?: number;
     tools?: MarketTool[];
     scope?: "global" | "project" | "run";
@@ -341,8 +341,8 @@ export function mergeInstalled(
       ...s,
       installed: {
         serverId: st.id,
-        enabled: st.enabled,
-        state: st.state,
+        enabled: st.enabled ?? true,
+        state: st.state ?? "DISCONNECTED",
         scope: st.scope,
         authKind: st.authKind,
         lastError: st.lastError,
@@ -370,8 +370,8 @@ export function mergeInstalled(
       networkRequired: st.transport === "http",
       installed: {
         serverId: st.id,
-        enabled: st.enabled,
-        state: st.state,
+        enabled: st.enabled ?? true,
+        state: st.state ?? "DISCONNECTED",
         scope: st.scope,
         authKind: st.authKind,
         lastError: st.lastError,

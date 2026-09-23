@@ -134,7 +134,10 @@ export interface AttachmentItem {
   path?: string;
   mediaType?: string;
   downloadPath?: string;
+  previewUrl?: string;
   kindLabel: string;
+  size?: number;
+  sha256?: string;
 }
 
 export type PresentationItem =
@@ -170,6 +173,7 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "read_document":
       return { op: "read", ...fileArg(), ctx: "documents" };
     case "create_document":
+    case "create_zip":
       return { op: "create", ...fileArg("name"), ctx: "documents" };
     case "read_file":
       return { op: "read", ...fileArg(), ctx: "files" };
@@ -452,9 +456,24 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           item.endedAt = e.timestamp;
           item.output = typeof e.data.output === "string" ? e.data.output.slice(-16000) : item.output;
           item.outputTruncated = item.outputTruncated || Boolean(e.data.outputTruncated) || (typeof e.data.output === "string" && e.data.output.length > 16000);
-          const preview = typeof e.data.preview === "string" ? e.data.preview : undefined;
-          const det = detailFromPreview(item.op, preview);
-          if (det) item.detail = det;
+          if (e.data.artifactName) {
+            item.fileName = String(e.data.artifactName);
+            item.detail = item.toolName === "generate_image"
+              ? `Generated ${e.data.artifactName}`
+              : `Created ${e.data.artifactName}`;
+          } else {
+            const preview = typeof e.data.preview === "string" ? e.data.preview : undefined;
+            const det = detailFromPreview(item.op, preview);
+            if (det) item.detail = det;
+          }
+        }
+        continue;
+      }
+      case "message.grounded": {
+        const lastAssistant = [...items].reverse().find((it) => it.kind === "assistant") as AssistantItem | undefined;
+        if (lastAssistant && typeof e.data.content === "string") {
+          lastAssistant.content = String(e.data.content);
+          lastAssistant.streaming = false;
         }
         continue;
       }
@@ -547,10 +566,9 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
 
       case "artifact.created":
       case "image.generated": {
-        const artifactId = e.data.id ? String(e.data.id) : undefined;
+        const artifactId = e.data.artifactId ? String(e.data.artifactId) : e.data.id ? String(e.data.id) : undefined;
         const name = String(e.data.name ?? e.data.filename ?? "").trim();
-        if (!artifactId && !name) continue;
-        if (e.type === "image.generated" && !artifactId) continue;
+        if (!artifactId) continue;
         if (artifactId && items.some((it) => it.kind === "attachment" && it.artifactId === artifactId)) continue;
         flushAssistant(false);
         items.push({
@@ -559,9 +577,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           name: name || "file",
           artifactId,
           path: e.data.path ? String(e.data.path) : undefined,
-          mediaType: e.data.mediaType ? String(e.data.mediaType) : undefined,
-          downloadPath: e.data.downloadPath ? String(e.data.downloadPath) : artifactId ? `/artifacts/${artifactId}/download` : undefined,
+          mediaType: e.data.mimeType ? String(e.data.mimeType) : e.data.mediaType ? String(e.data.mediaType) : undefined,
+          downloadPath: e.data.downloadPath ? String(e.data.downloadPath) : e.data.downloadUrl ? String(e.data.downloadUrl) : `/artifacts/${artifactId}/download`,
+          previewUrl: e.data.previewUrl ? String(e.data.previewUrl) : `/artifacts/${artifactId}/preview`,
           kindLabel: String(e.data.kind ?? (e.type === "image.generated" ? "generated" : "file")),
+          size: typeof e.data.size === "number" ? e.data.size : undefined,
+          sha256: e.data.sha256 ? String(e.data.sha256) : undefined,
         });
         continue;
       }

@@ -85,8 +85,11 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
   artifact_write: ["WRITE"],
   artifact_list: ["READ"],
   artifact_read: ["READ"],
+  artifact_get: ["READ"],
   artifact_delete: ["DELETE"],
   artifact_get_download: ["READ"],
+  artifact_download: ["READ"],
+  create_zip: ["WRITE"],
   mcp_list: ["NETWORK"],
   mcp_call: ["NETWORK"],
 };

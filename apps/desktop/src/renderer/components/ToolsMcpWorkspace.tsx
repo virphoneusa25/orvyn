@@ -11,7 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
-import { fetchInstalledMcpStatuses } from "../mcpPublicInstall";
+import { fetchInstalledMcpStatuses, type McpStatusRow } from "../mcpPublicInstall";
 import { McpMarketplace } from "./McpMarketplace";
 
 interface NativeTool {
@@ -77,6 +77,31 @@ const SCOPE_HELP: Record<string, string> = {
   run: "Ephemeral — active for the current ORION run and deactivated when the run ends.",
 };
 
+const SERVER_STATES = new Set(["DISCONNECTED", "CONNECTING", "CONNECTED", "ERROR", "DISABLED", "NEEDS_AUTH"]);
+
+function asServerStatus(row: McpStatusRow): McpServerStatus {
+  const state = SERVER_STATES.has(String(row.state)) ? (row.state as McpServerStatus["state"]) : "DISCONNECTED";
+  const tools = Array.isArray(row.tools) ? (row.tools as McpToolRow[]) : [];
+  return {
+    id: row.id,
+    name: row.name,
+    transport: row.transport === "http" ? "http" : "stdio",
+    state,
+    toolCount: Number(row.toolCount ?? tools.length),
+    resourceCount: Number(row.resourceCount ?? 0),
+    promptCount: Number(row.promptCount ?? 0),
+    lastConnectedAt: typeof row.lastConnectedAt === "number" ? row.lastConnectedAt : undefined,
+    lastError: typeof row.lastError === "string" ? row.lastError : undefined,
+    enabled: row.enabled !== false,
+    tools,
+    executionLocation: row.executionLocation === "cloud" || row.executionLocation === "remote" ? row.executionLocation : "local",
+    scope: row.scope === "project" || row.scope === "run" ? row.scope : "global",
+    authKind: typeof row.authKind === "string" ? row.authKind : undefined,
+    blocked: Boolean(row.blocked),
+    blockedReason: typeof row.blockedReason === "string" ? row.blockedReason : undefined,
+  };
+}
+
 function relTime(ts?: number): string {
   if (!ts) return "never";
   const s = Math.max(0, (Date.now() - ts) / 1000);
@@ -106,7 +131,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
         fetch(apiUrl("/mcp/health"), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
       ]);
       setNative(t.tools ?? []);
-      setServers(s.servers ?? []);
+      setServers((s.servers ?? []).map(asServerStatus));
       const map: Record<string, HealthRow> = {};
       for (const row of h.servers ?? []) map[row.serverId] = row;
       setHealth(map);

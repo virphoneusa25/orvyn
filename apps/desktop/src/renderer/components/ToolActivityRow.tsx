@@ -23,8 +23,19 @@ function ActivityIcon({ op }: { op: ToolOp }) {
 export function ToolActivityRow({ item }: { item: ToolItem }) {
   const [expanded, setExpanded] = useState(false);
   const command = item.op === "terminal";
-  const state = item.status === "running" ? "In progress" : item.status === "done" ? "Done" : item.status === "stopped" ? "Stopped" : "Failed";
-  const verb = item.status === "failed" || item.status === "stopped" ? LABELS[item.op][0] : LABELS[item.op][item.status === "running" ? 0 : 1];
+  const generating = item.toolName === "generate_image" || item.toolName === "create_document" || item.toolName === "create_zip" || item.toolName === "artifact_create";
+  const state = item.status === "failed"
+    ? "Failed"
+    : item.status === "stopped"
+      ? "Stopped"
+      : item.status === "running"
+        ? "In progress"
+        : generating && item.fileName
+          ? item.fileName
+          : "Done";
+  const verb = item.toolName === "generate_image"
+    ? (item.status === "done" && item.fileName ? "Generated" : "Generate image")
+    : item.status === "failed" || item.status === "stopped" ? LABELS[item.op][0] : LABELS[item.op][item.status === "running" ? 0 : 1];
   return <div className={`activity-item activity-${item.status}`}>
     <div className="activity-row" onClick={() => { if (item.op === "browser" && item.ctx) openArtifactInContext({ tab: item.ctx, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op }); }}>
       {item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}

@@ -1,9 +1,8 @@
 // apps/backend/src/images/ImageService.ts
-import { promises as fs } from "fs";
-import * as path from "path";
 import { ModelService } from "../services/ModelService";
 import type { ArtifactService } from "../artifacts/ArtifactService";
 import { sanitizeArtifactName } from "../artifacts/ArtifactService";
+import { validateBytes } from "../artifacts/bytes";
 
 export interface GenerateImageRequest {
   prompt: string;
@@ -15,23 +14,18 @@ export interface GenerateImageRequest {
   modelId?: string;
   filename?: string;
   runId?: string;
+  chatId?: string;
 }
 
 export interface GeneratedImage {
-  relativePath?: string;
-  path?: string;
-  filename?: string;
-  dataUrl?: string;
-  url?: string;
+  filename: string;
+  artifactId: string;
+  mimeType: string;
+  size: number;
+  sha256: string;
+  downloadUrl: string;
+  previewUrl?: string;
   revisedPrompt?: string;
-  artifactId?: string;
-}
-
-function safeProjectDir(projectRoot: string): string {
-  const resolved = path.resolve(projectRoot, ".orvyn", "generated");
-  const root = path.resolve(projectRoot);
-  if (!resolved.startsWith(root)) throw new Error("Refused to write outside the project");
-  return resolved;
 }
 
 function slugName(prompt: string, index: number): string {
@@ -43,14 +37,27 @@ function slugName(prompt: string, index: number): string {
   return `${slug}${index > 1 ? `-${index}` : ""}.png`;
 }
 
+async function bytesFromProviderItem(item: { b64?: string; url?: string }): Promise<Buffer> {
+  if (item.b64) return Buffer.from(item.b64, "base64");
+  if (item.url) {
+    const res = await fetch(item.url);
+    if (!res.ok) throw new Error(`Image provider URL returned HTTP ${res.status}.`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!buf.length) throw new Error("Image provider URL returned zero bytes.");
+    return buf;
+  }
+  throw new Error("Image provider returned neither image bytes nor a downloadable URL.");
+}
+
 export class ImageService {
   constructor(
     private modelService: ModelService,
-    private artifacts?: ArtifactService
+    private artifacts: ArtifactService
   ) {}
 
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
+    if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
     const provider = req.modelId
       ? this.modelService.registry.get(req.modelId)
       : this.modelService.router.resolve("image");
@@ -68,46 +75,36 @@ export class ImageService {
 
     const images: GeneratedImage[] = [];
     for (const item of raw) {
-      let b64 = item.b64;
-      if (!b64 && item.url) {
-        try {
-          const res = await fetch(item.url);
-          if (res.ok) b64 = Buffer.from(await res.arrayBuffer()).toString("base64");
-        } catch {
-          // Keep the remote URL if we cannot download it.
-        }
-      }
+      const bytes = await bytesFromProviderItem(item);
       const filename = req.filename
         ? sanitizeArtifactName(req.filename.endsWith(".png") ? req.filename : `${req.filename}.png`)
         : slugName(req.prompt, images.length + 1);
-      const out: GeneratedImage = { url: item.url, revisedPrompt: item.revisedPrompt, filename };
-      if (b64) {
-        const bytes = Buffer.from(b64, "base64");
-        out.dataUrl = `data:image/png;base64,${b64}`;
-        if (this.artifacts) {
-          const rec = await this.artifacts.create({
-            name: filename,
-            kind: "generated",
-            bytes,
-            mediaType: "image/png",
-            projectRoot: req.projectRoot ?? null,
-            runId: req.runId ?? null,
-          });
-          out.artifactId = rec.id;
-          out.relativePath = rec.path;
-          out.path = rec.path;
-        } else if (req.projectRoot) {
-          const dir = safeProjectDir(req.projectRoot);
-          await fs.mkdir(dir, { recursive: true });
-          const file = filename;
-          await fs.writeFile(path.join(dir, file), bytes);
-          out.relativePath = `.orvyn/generated/${file}`;
-          out.path = out.relativePath;
-        }
-      }
-      images.push(out);
+      validateBytes(filename, "image/png", bytes);
+      const rec = await this.artifacts.persistArtifact({
+        name: filename,
+        kind: "generated",
+        bytes,
+        mimeType: "image/png",
+        projectRoot: req.projectRoot ?? null,
+        runId: req.runId ?? null,
+        chatId: req.chatId ?? null,
+        sourceTool: "generate_image",
+      });
+      if (!rec.artifactId) throw new Error("Image bytes were produced but artifact persistence returned no artifactId.");
+      const pub = this.artifacts.toToolResult(rec);
+      images.push({
+        filename: rec.name,
+        artifactId: rec.artifactId,
+        mimeType: rec.mimeType,
+        size: rec.size,
+        sha256: rec.sha256,
+        downloadUrl: pub.downloadUrl ?? `/artifacts/${rec.artifactId}/download`,
+        previewUrl: pub.previewUrl,
+        revisedPrompt: item.revisedPrompt,
+      });
     }
     if (images.length === 0) throw new Error("The image model returned no images");
+    if (images.some((img) => !img.artifactId)) throw new Error("Image generation produced no persisted artifact.");
     return { model: provider.config.id, images };
   }
 }

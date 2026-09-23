@@ -4,7 +4,7 @@ import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
-type LocationId = "project" | "generated" | "downloads" | "artifacts" | "uploads" | "run";
+type LocationId = "project" | "generated" | "downloads" | "artifacts" | "uploads" | "run" | "recents";
 
 interface TreeFile {
   id?: string;
@@ -26,6 +26,7 @@ interface Location {
 const LOCATION_ORDER: { id: string; label: string }[] = [
   { id: "project", label: "Project" },
   { id: "generated", label: "Generated" },
+  { id: "recents", label: "Recents" },
   { id: "downloads", label: "Downloads" },
   { id: "artifacts", label: "Run Artifacts" },
   { id: "uploads", label: "Uploads" },
@@ -65,6 +66,8 @@ export function FilesInspector({
   const [content, setContent] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<"raw" | "render">("raw");
+  const [query, setQuery] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const runTouched = useMemo(() => {
     const map = new Map<string, WorkspaceFile>();
@@ -116,7 +119,16 @@ export function FilesInspector({
     return LOCATION_ORDER.map((l) => byId.get(l.id)!).filter(Boolean);
   }, [locations, runTouched]);
 
-  const allFiles = useMemo(() => merged.flatMap((l) => l.files), [merged]);
+  const allFiles = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const files = merged.flatMap((l) => l.files);
+    if (!q) return files;
+    return files.filter((f) =>
+      f.name.toLowerCase().includes(q) ||
+      (f.mediaType ?? "").toLowerCase().includes(q) ||
+      (f.kind ?? "").toLowerCase().includes(q)
+    );
+  }, [merged, query]);
 
   useEffect(() => {
     if (activePath) setSelected(activePath);
@@ -183,7 +195,23 @@ export function FilesInspector({
     URL.revokeObjectURL(href);
   }
 
-  if (total === 0) {
+  async function deleteSelected() {
+    const file = selectedFile;
+    if (!file?.id) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    const r = await fetch(apiUrl(`/artifacts/${file.id}`), { method: "DELETE", headers: authHeaders() });
+    if (r.ok || r.status === 204) {
+      setLocations((prev) => prev.map((loc) => ({ ...loc, files: loc.files.filter((f) => f.id !== file.id) })));
+      setSelected(null);
+      setSelectedId(null);
+    }
+    setConfirmDelete(false);
+  }
+
+  if (total === 0 && !query) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", gap: 8 }}>
         <div style={emptyTitle()}>No files yet</div>
@@ -196,6 +224,14 @@ export function FilesInspector({
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "6px 8px 0" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search files and artifacts"
+          style={{ width: "100%", fontSize: 11, padding: "5px 8px", borderRadius: 6, border: "1px solid var(--orvyn-border-soft)", background: "transparent", color: "var(--orvyn-text)" }}
+        />
+      </div>
       <div style={{ flex: "0 0 42%", minHeight: 120, overflowY: "auto", borderBottom: "1px solid var(--orvyn-border-soft)", padding: "6px 8px" }}>
         {merged.map((loc) => (
           <div key={loc.id} style={{ marginBottom: 10 }}>
@@ -236,6 +272,7 @@ export function FilesInspector({
                   >
                     <span style={{ color: mark.color, width: 12 }}>{mark.glyph}</span>
                     <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</code>
+                    <span style={{ fontSize: 9, color: "var(--orvyn-text-muted)", letterSpacing: 0.3 }}>{f.kind === "project" ? "Project" : loc.id === "generated" || f.kind === "generated" ? "Generated" : loc.label}</span>
                   </button>
                 );
               })
@@ -254,7 +291,18 @@ export function FilesInspector({
             )}
             <button style={ghostBtn()} onClick={() => void downloadSelected()}>Download</button>
             <button style={ghostBtn()} onClick={() => onOpenFile(selected)}>Open</button>
+            {selectedFile?.id && (
+              <button style={ghostBtn()} onClick={() => void deleteSelected()}>{confirmDelete ? "Confirm delete" : "Delete"}</button>
+            )}
           </div>
+          {selectedFile && (
+            <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", padding: "6px 8px 0", display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <span>{selectedFile.mediaType || selectedFile.kind}</span>
+              {selectedFile.bytes ? <span>{selectedFile.bytes < 1024 ? `${selectedFile.bytes} B` : `${(selectedFile.bytes / 1024).toFixed(1)} KB`}</span> : null}
+              {selectedFile.createdAt ? <span>{new Date(selectedFile.createdAt).toLocaleString()}</span> : null}
+              {selectedFile.id ? <span>id {selectedFile.id}</span> : null}
+            </div>
+          )}
           {isImage && previewUrl ? (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 12 }}>
               <img src={previewUrl} alt={selectedFile?.name ?? selected} style={{ maxWidth: "100%", maxHeight: "100%" }} />

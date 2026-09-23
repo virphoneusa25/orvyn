@@ -7,12 +7,24 @@
 export type CommandMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
 export type CommandIntent = "chat" | "code" | "research" | "automate";
 
+export type FileRequestClass = "modify-workspace" | "create-workspace" | "generate-artifact";
+
+/** A = edit existing local file; B = new project file; C = user-facing artifact (no project required). */
+export function classifyFileRequest(text: string): FileRequestClass | null {
+  const t = text.trim();
+  if (!t) return null;
+  if (looksLikeGeneratedFileRequest(t) && !/\b(src\/|apps\/|\.orvyn\/|[A-Za-z]:\\)/.test(t)) return "generate-artifact";
+  if (/\b(edit|update|fix|change|modify|rewrite)\b/i.test(t) && /\b(file|folder|src|code)\b/i.test(t)) return "modify-workspace";
+  if (/\b(create|add|write|new)\b/i.test(t) && /\b(file|folder|component|module)\b/i.test(t)) return "create-workspace";
+  return null;
+}
+
 /** Logos, PNGs, PDFs and other deliverables do not need a local project folder. */
 export function looksLikeGeneratedFileRequest(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-  if (/\.(png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|pptx)\b/i.test(t)) return true;
-  const artNoun = /\b(images?|pictures?|photos?|icons?|logos?|illustrations?|artwork|mock-?ups?|banners?|thumbnails?|pdf|docx|document|report)\b/i;
+  if (/\.(png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|pptx|csv|zip|txt|md|html|json)\b/i.test(t)) return true;
+  const artNoun = /\b(images?|pictures?|photos?|icons?|logos?|illustrations?|artwork|mock-?ups?|banners?|thumbnails?|pdf|docx|document|report|zip|artifact|spreadsheet)\b/i;
   const artVerb = /\b(generate|draw|render|paint|sketch|imagine|design|make|create|export|save)\b/i;
   return artVerb.test(t) && artNoun.test(t);
 }

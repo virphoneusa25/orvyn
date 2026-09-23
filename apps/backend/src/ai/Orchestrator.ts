@@ -193,7 +193,11 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService):
 }
 
 export class Orchestrator {
-  constructor(private modelService: ModelService, private indexService?: IndexService) {}
+  constructor(
+    private modelService: ModelService,
+    private indexService?: IndexService,
+    private artifacts?: import("../artifacts/ArtifactService").ArtifactService
+  ) {}
 
   private resolveProvider(req: ChatTurnRequest) {
     const requested = req.requestedModelId?.trim();
@@ -281,20 +285,23 @@ export class Orchestrator {
   private async *streamGeneratedImage(req: ChatTurnRequest): AsyncIterable<AIChunk> {
     yield { delta: "Generating image…\n\n", done: false };
     try {
+      if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
       const prompt = stripImagePrefix(req.userMessage) || req.userMessage;
-      const result = await new ImageService(this.modelService).generate({
+      const result = await new ImageService(this.modelService, this.artifacts).generate({
         prompt,
         projectRoot: req.context?.projectRoot,
         size: "1024x1024",
       });
       const blocks = result.images
         .map((img) => {
-          const src = img.dataUrl || img.url;
-          const cap = img.relativePath || img.url || "image";
-          return src ? `![${cap}](${src})\n\nSaved as \`${cap}\`` : `Saved as \`${cap}\``;
+          const cap = img.filename;
+          const src = img.previewUrl ? `${img.previewUrl}` : "";
+          return src
+            ? `Persisted \`${cap}\` (artifact ${img.artifactId}). Preview and download from the card or Files → Generated.`
+            : `Persisted \`${cap}\` as artifact ${img.artifactId}.`;
         })
         .join("\n\n");
-      yield { delta: `Here's a generated mockup (${result.model}):\n\n${blocks}`, done: true };
+      yield { delta: `Generated with ${result.model}:\n\n${blocks}`, done: true };
     } catch (err: any) {
       yield {
         delta:

@@ -278,11 +278,21 @@ export function AgentActivityList({
   );
 }
 
+function formatBytes(n?: number): string {
+  if (!n || n <= 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function ArtifactCard({ item }: { item: AttachmentItem }) {
   const [busy, setBusy] = useState(false);
+  if (!item.artifactId) return null;
   const image = (item.mediaType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(item.name);
+  const typeLabel = item.mediaType?.split("/")[1]?.toUpperCase() || (item.name.split(".").pop() ?? "FILE").toUpperCase();
+  const meta = [typeLabel, formatBytes(item.size)].filter(Boolean).join(" · ");
   async function download() {
-    if (!item.artifactId && !item.downloadPath) return;
+    if (!item.artifactId) return;
     setBusy(true);
     try {
       const r = await fetch(apiUrl(item.downloadPath || `/artifacts/${item.artifactId}/download`), { headers: authHeaders() });
@@ -306,12 +316,12 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
         <IconFile />
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{item.kindLabel === "generated" ? "Generated image" : item.kindLabel === "document" ? "Document" : "Artifact"} ready</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{meta || (item.kindLabel === "generated" ? "Generated" : "Artifact")}</div>
         </div>
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: image ? "files" : "documents", path: item.path, fileName: item.name, op: "create" })}>Open</button>
-        <button style={ghostBtn()} disabled={busy || (!item.artifactId && !item.downloadPath)} onClick={() => void download()}>{busy ? "Downloading…" : "Download"}</button>
+        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: image ? "preview" : "files", path: item.path, fileName: item.name, op: "create" })}>Preview</button>
+        <button style={ghostBtn()} disabled={busy} onClick={() => void download()}>{busy ? "Downloading…" : "Download"}</button>
         <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, op: "create" })}>Show in Files</button>
       </div>
     </div>

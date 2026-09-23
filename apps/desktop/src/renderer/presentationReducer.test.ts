@@ -346,6 +346,24 @@ test("artifact.created becomes a downloadable attachment card", () => {
   assert.equal(card.downloadPath, "/artifacts/art_logo1/download");
 });
 
+test("assistant text mentioning a filename does not create a file card", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("message.delta", { content: "Your Virphone logo has been generated as virphone-logo.png. Download it from the card above." }),
+      ev("message.completed", {}),
+    ],
+    "completed"
+  );
+  assert.equal(items.some((i) => i.kind === "attachment"), false);
+});
+
+test("artifact.created without artifactId is ignored", () => {
+  reset();
+  const items = reducePresentation([ev("artifact.created", { name: "virphone-logo.png", kind: "generated" })], "completed");
+  assert.equal(items.some((i) => i.kind === "attachment"), false);
+});
+
 test("capability.required becomes a chat card, not a tool dump", () => {
   reset();
   const items = reducePresentation(

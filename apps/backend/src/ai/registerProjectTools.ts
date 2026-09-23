@@ -1,4 +1,4 @@
-import { makeReadDocumentTool, makeCreateDocumentTool } from "./tools/documentTools";
+import { makeReadDocumentTool, makeCreateDocumentTool, makeCreateZipTool } from "./tools/documentTools";
 // apps/backend/src/ai/registerProjectTools.ts
 import type { Tenant } from "../tenancy/TenantManager";
 import type { ToolPermission } from "./ToolTypes";
@@ -80,6 +80,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
 
   g.register(makeReadDocumentTool(projectRoot));
   g.register(makeCreateDocumentTool(projectRoot, tenant.artifactService));
+  g.register(makeCreateZipTool(tenant.artifactService));
   registerArtifactTools((tool) => g.register(tool), tenant.artifactService);
 
   // Filesystem

@@ -94,6 +94,50 @@ export function defaultDataDir(): string {
   return process.env.ORVYN_DATA_DIR?.trim() || path.join(os.homedir(), ".orvyn", "data");
 }
 
+export interface ArtifactRowInput {
+  id: string;
+  projectRoot?: string | null;
+  runId?: string | null;
+  chatId?: string | null;
+  kind: string;
+  name: string;
+  path: string;
+  mediaType?: string | null;
+  sha256?: string | null;
+  size?: number | null;
+  sourceTool?: string | null;
+  tenantId?: string | null;
+  status?: string | null;
+  previewable?: boolean;
+  downloadable?: boolean;
+  userId?: string | null;
+  projectId?: string | null;
+}
+
+function mapArtifactRow(r: any) {
+  return {
+    id: String(r.id),
+    projectRoot: r.project_root,
+    runId: r.run_id,
+    chatId: r.chat_id,
+    kind: r.kind,
+    name: r.name,
+    path: r.path,
+    mediaType: r.media_type,
+    createdAt: Number(r.created_at),
+    sha256: r.sha256,
+    size: r.size != null ? Number(r.size) : undefined,
+    sourceTool: r.source_tool,
+    tenantId: r.tenant_id,
+    status: r.status,
+    updatedAt: r.updated_at != null ? Number(r.updated_at) : undefined,
+    previewable: r.previewable,
+    downloadable: r.downloadable,
+    userId: r.user_id,
+    projectId: r.project_id,
+  };
+}
+
 export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
@@ -103,6 +147,30 @@ export class LocalStore {
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.migrateArtifacts();
+  }
+
+  private migrateArtifacts(): void {
+    try {
+      const cols = this.db.prepare(`PRAGMA table_info(artifacts)`).all() as { name: string }[];
+      const names = new Set(cols.map((c) => c.name));
+      const add = (name: string, def: string) => {
+        if (!names.has(name)) this.db.exec(`ALTER TABLE artifacts ADD COLUMN ${name} ${def}`);
+      };
+      add("sha256", "TEXT");
+      add("size", "INTEGER");
+      add("chat_id", "TEXT");
+      add("source_tool", "TEXT");
+      add("tenant_id", "TEXT");
+      add("status", "TEXT");
+      add("updated_at", "INTEGER");
+      add("previewable", "INTEGER");
+      add("downloadable", "INTEGER");
+      add("user_id", "TEXT");
+      add("project_id", "TEXT");
+    } catch {
+      /* existing DBs without artifacts stay usable */
+    }
   }
 
   private guard<T>(what: string, fn: () => T): T | undefined {
@@ -303,11 +371,47 @@ export class LocalStore {
     this.guard("deleteMemory", () => this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id));
   }
 
-  saveArtifact(input: { id: string; projectRoot?: string | null; runId?: string | null; kind: string; name: string; path: string; mediaType?: string | null }): void {
-    this.guard("saveArtifact", () => this.db.prepare(
-      `INSERT INTO artifacts (id, project_root, run_id, kind, name, path, media_type, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET path=excluded.path, name=excluded.name, media_type=excluded.media_type`
-    ).run(input.id, input.projectRoot ?? null, input.runId ?? null, input.kind, input.name, input.path, input.mediaType ?? null, Date.now()));
+  saveArtifact(input: ArtifactRowInput): void {
+    this.guard("saveArtifact", () => this.writeArtifactRow(input));
+  }
+
+  /** Throws on storage failure — required for persist-before-ok. */
+  saveArtifactStrict(input: ArtifactRowInput): void {
+    this.writeArtifactRow(input);
+  }
+
+  private writeArtifactRow(input: ArtifactRowInput): void {
+    const now = Date.now();
+    this.db.prepare(
+      `INSERT INTO artifacts (id, project_root, run_id, kind, name, path, media_type, created_at, sha256, size, chat_id, source_tool, tenant_id, status, updated_at, previewable, downloadable, user_id, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         path=excluded.path, name=excluded.name, media_type=excluded.media_type,
+         sha256=excluded.sha256, size=excluded.size, chat_id=excluded.chat_id,
+         source_tool=excluded.source_tool, tenant_id=excluded.tenant_id, status=excluded.status,
+         updated_at=excluded.updated_at, previewable=excluded.previewable, downloadable=excluded.downloadable,
+         run_id=excluded.run_id, user_id=excluded.user_id, project_id=excluded.project_id`
+    ).run(
+      input.id,
+      input.projectRoot ?? null,
+      input.runId ?? null,
+      input.kind,
+      input.name,
+      input.path,
+      input.mediaType ?? null,
+      now,
+      input.sha256 ?? null,
+      input.size ?? null,
+      input.chatId ?? null,
+      input.sourceTool ?? null,
+      input.tenantId ?? null,
+      input.status ?? "ready",
+      now,
+      input.previewable === false ? 0 : 1,
+      input.downloadable === false ? 0 : 1,
+      input.userId ?? null,
+      input.projectId ?? null
+    );
   }
 
   listArtifacts(projectRoot?: string | null, limit = 200): any[] {
@@ -320,18 +424,7 @@ export class LocalStore {
   getArtifact(id: string): any | null {
     return this.guard("getArtifact", () => {
       const r: any = this.db.prepare(`SELECT * FROM artifacts WHERE id = ?`).get(id);
-      return r
-        ? {
-            id: String(r.id),
-            projectRoot: r.project_root,
-            runId: r.run_id,
-            kind: r.kind,
-            name: r.name,
-            path: r.path,
-            mediaType: r.media_type,
-            createdAt: Number(r.created_at),
-          }
-        : null;
+      return r ? mapArtifactRow(r) : null;
     }) ?? null;
   }
 

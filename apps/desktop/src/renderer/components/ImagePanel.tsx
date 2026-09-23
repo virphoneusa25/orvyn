@@ -3,6 +3,10 @@ import { apiUrl, authHeaders } from "../connection";
 import { api, ModelConfig } from "../api";
 
 interface GeneratedImage {
+  artifactId?: string;
+  filename?: string;
+  downloadUrl?: string;
+  previewUrl?: string;
   relativePath?: string;
   dataUrl?: string;
   url?: string;
@@ -55,9 +59,8 @@ export function ImagePanel({ workspaceRoot }: { workspaceRoot: string | null }) 
     <div style={{ padding: 20, color: "var(--text)", height: "100%", overflowY: "auto" }}>
       <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Image generator</div>
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-        Uses Cheaper Inference image models (nano-banana / GPT Image). Saves into{" "}
-        <code>.orvyn/generated/</code> when a folder is open. Agent can call the same
-        <code> generate_image</code> tool.
+        Uses the configured image model. Success only after the PNG is persisted
+        as an ORVYN artifact (Files → Generated). No local project required.
       </div>
 
       {models.length === 0 && (
@@ -128,12 +131,9 @@ export function ImagePanel({ workspaceRoot }: { workspaceRoot: string | null }) 
       )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginTop: 20 }}>
         {images.map((img, i) => (
-          <div key={`${img.relativePath ?? img.url ?? i}`} style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg-elevated)" }}>
-            {(img.dataUrl || img.url) && (
-              <img src={img.dataUrl || img.url} alt="" style={{ width: "100%", display: "block", background: "#000" }} />
-            )}
+          <div key={img.artifactId ?? i} style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg-elevated)" }}>
             <div style={{ padding: 8, fontSize: 11, color: "var(--text-muted)" }}>
-              {img.relativePath || img.url || "image"}
+              {img.artifactId ? `${img.filename ?? "image.png"} · ${img.artifactId}` : "Generation did not persist an artifact."}
             </div>
           </div>
         ))}

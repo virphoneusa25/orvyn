@@ -1,5 +1,6 @@
 import type { AITool, ToolResult } from "../ToolTypes";
 import type { ArtifactService } from "../../artifacts/ArtifactService";
+import { errorArtifactPayload, successArtifactPayload } from "../../artifacts/artifactContract";
 
 function json(value: unknown): string {
   return JSON.stringify(value);
@@ -9,40 +10,40 @@ export function makeArtifactCreateTool(artifacts: ArtifactService): AITool {
   return {
     name: "artifact_create",
     description:
-      "Create a downloadable file in ORVYN artifact storage. Use this for logos, PNGs, PDFs, and other deliverables when no local project folder is required. Files appear in Files → Generated or Run Artifacts and as chat download cards.",
+      "Create a downloadable file in ORVYN artifact storage. Use this for logos, PNGs, PDFs, text, HTML, JSON, and other deliverables when no local project folder is required. Success only after bytes are persisted. Files appear in Files → Generated and as a chat card.",
     parameters: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Filename with extension, e.g. virphone-logo.png" },
-        content: { type: "string", description: "Text content, or omit when writing binary via generate_image" },
+        name: { type: "string", description: "Filename with extension, e.g. virphone-logo.png or test-output.txt" },
+        content: { type: "string", description: "Text content (required unless generating binary via generate_image)" },
         kind: { type: "string", description: "generated | document | download | upload | run | file" },
         media_type: { type: "string" },
       },
-      required: ["name"],
+      required: ["name", "content"],
     },
     defaultPermission: "ask",
     async execute(args): Promise<ToolResult> {
       try {
-        const rec = await artifacts.create({
+        const rec = await artifacts.persistArtifact({
           name: String(args.name ?? ""),
           content: args.content != null ? String(args.content) : "",
-          kind: args.kind ? String(args.kind) : "file",
+          kind: args.kind ? String(args.kind) : "generated",
           mediaType: args.media_type ? String(args.media_type) : undefined,
+          sourceTool: "artifact_create",
         });
+        if (!rec.artifactId) throw new Error("Persistence returned no artifactId.");
+        const art = artifacts.toToolResult(rec);
         return {
           ok: true,
+          artifacts: [art],
           output: json({
-            id: rec.id,
-            name: rec.name,
-            path: rec.path,
+            ...successArtifactPayload(art),
             kind: rec.kind,
-            mediaType: rec.mediaType,
-            downloadPath: `/artifacts/${rec.id}/download`,
-            message: `Created ${rec.name}. Open it from Files or download from the chat card.`,
+            message: `Persisted ${rec.name} as artifact ${rec.artifactId}.`,
           }),
         };
       } catch (e: any) {
-        return { ok: false, error: e.message };
+        return { ok: false, error: e.message, output: json(errorArtifactPayload("ARTIFACT_CREATE_FAILED", e.message)) };
       }
     },
   };
@@ -51,7 +52,7 @@ export function makeArtifactCreateTool(artifacts: ArtifactService): AITool {
 export function makeArtifactWriteTool(artifacts: ArtifactService): AITool {
   return {
     name: "artifact_write",
-    description: "Overwrite an existing ORVYN artifact by id with new text or data.",
+    description: "Overwrite an existing ORVYN artifact by id with new text or data. Success only after the new bytes are persisted.",
     parameters: {
       type: "object",
       properties: {
@@ -63,10 +64,12 @@ export function makeArtifactWriteTool(artifacts: ArtifactService): AITool {
     defaultPermission: "ask",
     async execute(args): Promise<ToolResult> {
       try {
-        const rec = await artifacts.write(String(args.id ?? ""), String(args.content ?? ""));
-        return { ok: true, output: json({ id: rec.id, name: rec.name, path: rec.path, downloadPath: `/artifacts/${rec.id}/download` }) };
+        const rec = await artifacts.writeArtifact(String(args.id ?? ""), String(args.content ?? ""));
+        if (!rec.artifactId) throw new Error("Write returned no artifactId.");
+        const art = artifacts.toToolResult(rec);
+        return { ok: true, artifacts: [art], output: json(successArtifactPayload(art)) };
       } catch (e: any) {
-        return { ok: false, error: e.message };
+        return { ok: false, error: e.message, output: json(errorArtifactPayload("ARTIFACT_WRITE_FAILED", e.message)) };
       }
     },
   };
@@ -75,27 +78,30 @@ export function makeArtifactWriteTool(artifacts: ArtifactService): AITool {
 export function makeArtifactListTool(artifacts: ArtifactService): AITool {
   return {
     name: "artifact_list",
-    description: "List files in ORVYN artifact storage (generated images, documents, downloads, uploads). Works without a local project folder.",
+    description: "List files in ORVYN artifact storage (generated images, documents, downloads, uploads). Use an explicit query — do not dump the whole library into context. Works without a local project folder.",
     parameters: {
       type: "object",
       properties: {
         kind: { type: "string", description: "Optional filter: generated, document, download, upload, run, file" },
+        query: { type: "string", description: "Optional name/mime/run search" },
       },
     },
     defaultPermission: "allowed",
     async execute(args): Promise<ToolResult> {
       try {
-        const items = artifacts.list({ kind: args.kind ? String(args.kind) : undefined });
+        const items = args.query
+          ? artifacts.search(String(args.query))
+          : artifacts.listArtifacts({ kind: args.kind ? String(args.kind) : undefined });
         return {
           ok: true,
           output: json({
-            artifacts: items.map((a) => ({
-              id: a.id,
+            artifacts: items.slice(0, 40).map((a) => ({
+              artifactId: a.artifactId,
               name: a.name,
-              path: a.path,
               kind: a.kind,
-              mediaType: a.mediaType,
-              downloadPath: `/artifacts/${a.id}/download`,
+              mimeType: a.mimeType,
+              size: a.size,
+              downloadUrl: `/artifacts/${a.artifactId}/download`,
               createdAt: a.createdAt,
             })),
           }),
@@ -109,7 +115,7 @@ export function makeArtifactListTool(artifacts: ArtifactService): AITool {
 
 export function makeArtifactReadTool(artifacts: ArtifactService): AITool {
   return {
-    name: "artifact_read",
+    name: "artifact_get",
     description: "Read an ORVYN artifact by id. Text is returned as UTF-8; binary files report size and media type.",
     parameters: {
       type: "object",
@@ -120,19 +126,19 @@ export function makeArtifactReadTool(artifacts: ArtifactService): AITool {
     async execute(args): Promise<ToolResult> {
       try {
         const { record, bytes } = await artifacts.read(String(args.id ?? ""));
-        const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html|svg)$/i.test(record.name);
+        const textish = record.mimeType.startsWith("text/") || /\.(md|txt|json|csv|html|svg)$/i.test(record.name);
         return {
           ok: true,
           output: json({
-            id: record.id,
+            artifactId: record.artifactId,
             name: record.name,
-            path: record.path,
             kind: record.kind,
-            mediaType: record.mediaType,
-            bytes: bytes.length,
-            downloadPath: `/artifacts/${record.id}/download`,
+            mimeType: record.mimeType,
+            size: bytes.length,
+            sha256: record.sha256,
+            downloadUrl: `/artifacts/${record.artifactId}/download`,
             content: textish ? bytes.toString("utf-8").slice(0, 20_000) : undefined,
-            note: textish ? undefined : "Binary artifact. Use artifact_get_download or the Files pane.",
+            note: textish ? undefined : "Binary artifact. Use artifact_download or the Files pane.",
           }),
         };
       } catch (e: any) {
@@ -145,7 +151,7 @@ export function makeArtifactReadTool(artifacts: ArtifactService): AITool {
 export function makeArtifactDeleteTool(artifacts: ArtifactService): AITool {
   return {
     name: "artifact_delete",
-    description: "Delete an ORVYN artifact by id.",
+    description: "Delete an ORVYN artifact by id. Requires confirmation from the user.",
     parameters: {
       type: "object",
       properties: { id: { type: "string" } },
@@ -154,7 +160,7 @@ export function makeArtifactDeleteTool(artifacts: ArtifactService): AITool {
     defaultPermission: "ask",
     async execute(args): Promise<ToolResult> {
       try {
-        await artifacts.delete(String(args.id ?? ""));
+        await artifacts.deleteArtifact(String(args.id ?? ""));
         return { ok: true, output: json({ deleted: String(args.id ?? "") }) };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -165,8 +171,8 @@ export function makeArtifactDeleteTool(artifacts: ArtifactService): AITool {
 
 export function makeArtifactDownloadTool(artifacts: ArtifactService): AITool {
   return {
-    name: "artifact_get_download",
-    description: "Return a download URL and metadata for an ORVYN artifact so the user can save it.",
+    name: "artifact_download",
+    description: "Return a download URL and metadata for an ORVYN artifact so the user can save it. Does not delete the artifact.",
     parameters: {
       type: "object",
       properties: { id: { type: "string" } },
@@ -179,11 +185,12 @@ export function makeArtifactDownloadTool(artifacts: ArtifactService): AITool {
         return {
           ok: true,
           output: json({
-            id: record.id,
+            artifactId: record.artifactId,
             name: filename,
-            path: record.path,
-            mediaType: record.mediaType,
-            downloadPath: `/artifacts/${record.id}/download`,
+            mimeType: record.mimeType,
+            size: record.size,
+            sha256: record.sha256,
+            downloadUrl: `/artifacts/${record.artifactId}/download`,
           }),
         };
       } catch (e: any) {
@@ -197,7 +204,11 @@ export function registerArtifactTools(register: (tool: AITool) => void, artifact
   register(makeArtifactCreateTool(artifacts));
   register(makeArtifactWriteTool(artifacts));
   register(makeArtifactListTool(artifacts));
-  register(makeArtifactReadTool(artifacts));
+  const get = makeArtifactReadTool(artifacts);
+  register(get);
+  register({ ...get, name: "artifact_read" });
   register(makeArtifactDeleteTool(artifacts));
-  register(makeArtifactDownloadTool(artifacts));
+  const download = makeArtifactDownloadTool(artifacts);
+  register(download);
+  register({ ...download, name: "artifact_get_download" });
 }

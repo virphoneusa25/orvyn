@@ -94,6 +94,7 @@ export const PROFILES: Record<PermissionProfile, { label: string; description: s
 // Tools each profile pre-approves. SAFE pre-approves nothing.
 const BALANCED_ALLOW = new Set([
   "create_document",
+  "create_zip",
   "artifact_create",
   "artifact_write",
   "write_file",

@@ -28,7 +28,7 @@ test("document tools generate real Office/PDF files and read them back", async (
 });
 
 test("document creation remains forbidden in plan mode under autonomous profile", async () => {
-  const registry=new ToolRegistry();registry.register(makeCreateDocumentTool(os.tmpdir()));registry.register(makeReadDocumentTool(os.tmpdir()));
+  const registry=new ToolRegistry();registry.register(makeCreateDocumentTool(os.tmpdir(), undefined as any));registry.register(makeReadDocumentTool(os.tmpdir()));
   applyMode(registry,"plan");applyProfile(registry,"AUTONOMOUS");
   assert.equal(registry.getPermission("create_document"),"denied");
   assert.equal(registry.getPermission("read_document"),"allowed");

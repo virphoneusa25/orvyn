@@ -21,6 +21,7 @@ export type AgentEventType =
   | "run.queued"
   | "message.delta"
   | "message.completed"
+  | "message.grounded"
   | "thinking"
   | "tool.started"
   | "tool.input"

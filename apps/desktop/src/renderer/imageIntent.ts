@@ -46,15 +46,15 @@ export async function requestGeneratedImages(
 
 export function formatImageMarkdown(data: {
   model?: string;
-  images?: { dataUrl?: string; url?: string; relativePath?: string }[];
+  images?: { artifactId?: string; filename?: string; downloadUrl?: string; previewUrl?: string; dataUrl?: string; url?: string; relativePath?: string }[];
 }): string {
-  const blocks = (data.images ?? [])
-    .map((img) => {
-      const src = img.dataUrl || img.url;
-      const cap = img.relativePath || img.url || "image";
-      return src ? `![${cap}](${src})\n\nSaved as \`${cap}\`` : `Saved as \`${cap}\``;
-    })
+  const persisted = (data.images ?? []).filter((img) => img.artifactId);
+  if (persisted.length === 0) {
+    return "No file was saved. Image generation did not persist an artifact.";
+  }
+  const blocks = persisted
+    .map((img) => `Persisted \`${img.filename ?? "image.png"}\` as artifact ${img.artifactId}. Open Preview, Download, or Files → Generated.`)
     .join("\n\n");
-  const header = data.model ? `Here's a generated mockup (${data.model}):\n\n` : "";
-  return header + (blocks || "No image returned.");
+  const header = data.model ? `Generated with ${data.model}:\n\n` : "";
+  return header + blocks;
 }
