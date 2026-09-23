@@ -308,7 +308,7 @@ export function McpMarketplace({
       const publicFree = isPublicFreeMcp(server);
       const useLocal = publicFree && (currentBackendIsCloud() || !hasPlatformKey());
       if (useLocal) {
-        const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot);
+        const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot ?? undefined);
         if (!local.ok) throw new Error(local.error);
       } else {
         const res = await fetch(apiUrl("/mcp/marketplace/install"), {
@@ -328,7 +328,7 @@ export function McpMarketplace({
             backendIsCloud: currentBackendIsCloud(),
           })
         ) {
-          const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot);
+          const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot ?? undefined);
           if (!local.ok) throw new Error(local.error);
         } else if (!parsed.ok && shouldUseHostInstall(parsed, res.status)) {
           const host = await fetch(apiUrl("/mcp/servers"), {
