@@ -19,17 +19,17 @@ services:
     env_file:
       - ../../.env.staging
     environment:
-      - PORT=4570
-      - ORVYN_ENV=staging
-      - ORVYN_CLOUD_MODE=true
-      - ORVYN_PUBLIC_URL=https://staging.orvyn.virphoneusa.com
-      - ORVYN_STAGING_URL=https://staging.orvyn.virphoneusa.com
-      - ORVYN_DATA_DIR=/data
-      - ORVYN_PROJECTS_DIR=/projects
-      - ORVYN_PG_URL=postgres://orvyn_staging:${STAGING_PG_PASSWORD:-orvyn_staging}@postgres-staging:5432/orvyn_staging
-      - ORVYN_REDIS_URL=redis://redis-staging:6379/1
-      - ORVYN_REDIS_PREFIX=orvyn:staging:
-      - ORVYN_QDRANT_URL=http://qdrant-staging:6333
+      PORT: "4570"
+      ORVYN_ENV: staging
+      ORVYN_CLOUD_MODE: "true"
+      ORVYN_PUBLIC_URL: "https://staging.orvyn.virphoneusa.com"
+      ORVYN_STAGING_URL: "https://staging.orvyn.virphoneusa.com"
+      ORVYN_DATA_DIR: /data
+      ORVYN_PROJECTS_DIR: /projects
+      ORVYN_PG_URL: "postgres://orvyn_staging:${STAGING_PG_PASSWORD:-orvyn_staging}@postgres-staging:5432/orvyn_staging"
+      ORVYN_REDIS_URL: "redis://redis-staging:6379/1"
+      ORVYN_REDIS_PREFIX: "orvyn:staging:"
+      ORVYN_QDRANT_URL: "http://qdrant-staging:6333"
     volumes:
       - staging-data:/data
       - staging-projects:/projects
