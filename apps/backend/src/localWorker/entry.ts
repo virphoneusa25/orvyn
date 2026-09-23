@@ -61,7 +61,7 @@ async function heartbeat(): Promise<void> {
   }).catch(() => register());
 }
 
-async function serveJob(job: { runId: string; projectRoot: string; role?: string }): Promise<void> {
+async function serveJob(job: { runId: string; projectRoot: string; role?: string; tenantId?: string }): Promise<void> {
   const projectRoot = job.projectRoot || process.env.ORVYN_PROJECT_ROOT || process.cwd();
   await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {
     type: "sandbox.ready",
@@ -89,6 +89,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       tool: req.tool,
       arguments: req.arguments ?? {},
       runId: job.runId,
+      tenantId: job.tenantId,
       projectRoot,
       onOutput: (chunk) => {
         void cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {

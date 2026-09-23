@@ -135,7 +135,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
   g.register(makeBrowserEvidenceTool(projectRoot));
   registerDesktopTools((tool) => g.register(tool), projectRoot, tenant.id);
-  registerHostDesktopTools((tool) => g.register(tool));
+  registerHostDesktopTools((tool) => g.register(tool), tenant.id);
 
   // Git
   g.register(makeGitStatusTool(projectRoot));

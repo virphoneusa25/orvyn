@@ -25,20 +25,20 @@ async function powershell(script: string): Promise<{ ok: boolean; output: string
   }
 }
 
-async function runHost(action: string, win32: () => Promise<ToolResult>): Promise<ToolResult> {
-  const gate = beginHostAgentAction(action);
+async function runHost(tenantId: string, action: string, win32: () => Promise<ToolResult>): Promise<ToolResult> {
+  const gate = beginHostAgentAction(tenantId, action);
   if (!gate.ok) return gate;
   if (process.platform !== "win32") {
     const error = "Host desktop control is implemented for Windows. This machine is not Windows.";
-    failHostAction(error);
+    failHostAction(tenantId, error);
     return { ok: false, error };
   }
   const result = await win32();
-  if (!result.ok) failHostAction(result.error ?? "failed");
+  if (!result.ok) failHostAction(tenantId, result.error ?? "failed");
   return result;
 }
 
-export function makeHostDesktopStatusTool(): AITool {
+export function makeHostDesktopStatusTool(tenantId: string): AITool {
   return {
     name: "host_desktop_status",
     description: "Status of opt-in host Windows desktop control. Separate from cloud Desktop and Browser.",
@@ -46,19 +46,19 @@ export function makeHostDesktopStatusTool(): AITool {
     defaultPermission: "allowed",
     execute: async () => ({
       ok: true,
-      output: JSON.stringify({ ...getHostDesktopState(), enabled: isHostDesktopAllowed() }),
+      output: JSON.stringify({ ...getHostDesktopState(tenantId), enabled: isHostDesktopAllowed(tenantId) }),
     }),
   };
 }
 
-export function makeHostDesktopScreenshotTool(): AITool {
+export function makeHostDesktopScreenshotTool(tenantId: string): AITool {
   return {
     name: "host_desktop_screenshot",
     description: "Capture the user's actual Windows desktop. Requires Settings opt-in. Not the cloud Desktop.",
     parameters: { type: "object", properties: {} },
     defaultPermission: "ask",
     execute: async () =>
-      runHost("screenshot", async () => {
+      runHost(tenantId, "screenshot", async () => {
         const script = `
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -78,14 +78,14 @@ Write-Output $path
   };
 }
 
-export function makeHostDesktopMoveTool(): AITool {
+export function makeHostDesktopMoveTool(tenantId: string): AITool {
   return {
     name: "host_desktop_move",
     description: "Move the mouse on the host Windows desktop. Requires Settings opt-in.",
     parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] },
     defaultPermission: "ask",
     execute: async (args) =>
-      runHost("move", async () => {
+      runHost(tenantId, "move", async () => {
         const x = Number(args.x ?? 0);
         const y = Number(args.y ?? 0);
         const out = await powershell(
@@ -96,14 +96,14 @@ export function makeHostDesktopMoveTool(): AITool {
   };
 }
 
-export function makeHostDesktopClickTool(): AITool {
+export function makeHostDesktopClickTool(tenantId: string): AITool {
   return {
     name: "host_desktop_click",
     description: "Click on the host Windows desktop. Requires Settings opt-in.",
     parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, button: { type: "string" } } },
     defaultPermission: "ask",
     execute: async (args) =>
-      runHost("click", async () => {
+      runHost(tenantId, "click", async () => {
         const x = Number(args.x ?? 0);
         const y = Number(args.y ?? 0);
         const out = await powershell(
@@ -114,14 +114,14 @@ export function makeHostDesktopClickTool(): AITool {
   };
 }
 
-export function makeHostDesktopTypeTool(): AITool {
+export function makeHostDesktopTypeTool(tenantId: string): AITool {
   return {
     name: "host_desktop_type",
     description: "Type into the focused host window. Requires Settings opt-in.",
     parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
     defaultPermission: "ask",
     execute: async (args) =>
-      runHost("type", async () => {
+      runHost(tenantId, "type", async () => {
         const text = String(args.text ?? "").replace(/'/g, "''").slice(0, 400);
         const out = await powershell(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${text}')`);
         return out.ok ? { ok: true, output: `Typed ${text.length} characters` } : { ok: false, error: out.error ?? "type failed" };
@@ -129,14 +129,14 @@ export function makeHostDesktopTypeTool(): AITool {
   };
 }
 
-export function makeHostDesktopScrollTool(): AITool {
+export function makeHostDesktopScrollTool(tenantId: string): AITool {
   return {
     name: "host_desktop_scroll",
     description: "Scroll the host Windows desktop. Requires Settings opt-in.",
     parameters: { type: "object", properties: { delta: { type: "number" } } },
     defaultPermission: "ask",
     execute: async (args) =>
-      runHost("scroll", async () => {
+      runHost(tenantId, "scroll", async () => {
         const delta = Number(args.delta ?? -120);
         const out = await powershell(
           `Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class H { [DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int d,int e); }'; [H]::mouse_event(0x0800,0,0,${Math.round(delta)},0)`
@@ -146,14 +146,14 @@ export function makeHostDesktopScrollTool(): AITool {
   };
 }
 
-export function makeHostDesktopFocusTool(): AITool {
+export function makeHostDesktopFocusTool(tenantId: string): AITool {
   return {
     name: "host_desktop_focus",
     description: "Focus a host window by title. Requires Settings opt-in.",
     parameters: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
     defaultPermission: "ask",
     execute: async (args) =>
-      runHost("focus", async () => {
+      runHost(tenantId, "focus", async () => {
         const title = String(args.title ?? "").replace(/'/g, "''").slice(0, 120);
         const out = await powershell(
           `$w = Get-Process | Where-Object { $_.MainWindowTitle -like '*${title}*' } | Select-Object -First 1; if (-not $w) { throw 'Window not found' }; Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class H { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }'; [H]::SetForegroundWindow($w.MainWindowHandle)`
@@ -163,12 +163,12 @@ export function makeHostDesktopFocusTool(): AITool {
   };
 }
 
-export function registerHostDesktopTools(register: (tool: AITool) => void): void {
-  register(makeHostDesktopStatusTool());
-  register(makeHostDesktopScreenshotTool());
-  register(makeHostDesktopMoveTool());
-  register(makeHostDesktopClickTool());
-  register(makeHostDesktopTypeTool());
-  register(makeHostDesktopScrollTool());
-  register(makeHostDesktopFocusTool());
+export function registerHostDesktopTools(register: (tool: AITool) => void, tenantId: string): void {
+  register(makeHostDesktopStatusTool(tenantId));
+  register(makeHostDesktopScreenshotTool(tenantId));
+  register(makeHostDesktopMoveTool(tenantId));
+  register(makeHostDesktopClickTool(tenantId));
+  register(makeHostDesktopTypeTool(tenantId));
+  register(makeHostDesktopScrollTool(tenantId));
+  register(makeHostDesktopFocusTool(tenantId));
 }

@@ -31,6 +31,7 @@ export interface LocalToolRequest {
   tool: string;
   arguments: Record<string, unknown>;
   runId?: string;
+  tenantId?: string;
   projectRoot: string;
   timeoutMs?: number;
   onOutput?: (chunk: string) => void;
@@ -53,7 +54,7 @@ export function isSecretPath(rel: string): boolean {
 export async function executeLocalTool(req: LocalToolRequest): Promise<LocalToolResponse> {
   const root = req.projectRoot;
   const args = req.arguments ?? {};
-  const tools = bindTools(root);
+  const tools = bindTools(root, req.tenantId || "local");
 
   if (req.tool === "read_file" || req.tool === "write_file" || req.tool === "edit_file") {
     const rel = String(args.path ?? "");
@@ -138,7 +139,7 @@ export function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-function bindTools(projectRoot: string): Record<string, { execute: (args: Record<string, unknown>) => Promise<ToolResult> }> {
+function bindTools(projectRoot: string, tenantId: string): Record<string, { execute: (args: Record<string, unknown>) => Promise<ToolResult> }> {
   return {
     read_file: makeReadFileTool(projectRoot),
     write_file: makeWriteFileTool(projectRoot),
@@ -159,12 +160,12 @@ function bindTools(projectRoot: string): Record<string, { execute: (args: Record
     git_checkout: makeGitCheckoutTool(projectRoot),
     git_commit: makeGitCommitTool(projectRoot),
     search_codebase: makeSearchCodeTool(projectRoot),
-    host_desktop_status: makeHostDesktopStatusTool(),
-    host_desktop_screenshot: makeHostDesktopScreenshotTool(),
-    host_desktop_move: makeHostDesktopMoveTool(),
-    host_desktop_click: makeHostDesktopClickTool(),
-    host_desktop_type: makeHostDesktopTypeTool(),
-    host_desktop_scroll: makeHostDesktopScrollTool(),
-    host_desktop_focus: makeHostDesktopFocusTool(),
+    host_desktop_status: makeHostDesktopStatusTool(tenantId),
+    host_desktop_screenshot: makeHostDesktopScreenshotTool(tenantId),
+    host_desktop_move: makeHostDesktopMoveTool(tenantId),
+    host_desktop_click: makeHostDesktopClickTool(tenantId),
+    host_desktop_type: makeHostDesktopTypeTool(tenantId),
+    host_desktop_scroll: makeHostDesktopScrollTool(tenantId),
+    host_desktop_focus: makeHostDesktopFocusTool(tenantId),
   };
 }

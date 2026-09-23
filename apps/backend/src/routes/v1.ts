@@ -1430,20 +1430,20 @@ v1Router.get("/privacy", (_req, res) => {
   res.json({ privacy: DEFAULT_PRIVACY });
 });
 
-v1Router.get("/host-desktop", (_req, res) => {
-  res.json(getHostDesktopState());
+v1Router.get("/host-desktop", (req, res) => {
+  res.json(getHostDesktopState(requireTenant(req).id));
 });
 
 v1Router.post("/host-desktop/allow", (req, res) => {
-  res.json(setHostDesktopAllowed(req.body.allowed === true));
+  res.json(setHostDesktopAllowed(requireTenant(req).id, req.body.allowed === true));
 });
 
-v1Router.post("/host-desktop/take-control", (_req, res) => {
-  res.json(takeHostControl());
+v1Router.post("/host-desktop/take-control", (req, res) => {
+  res.json(takeHostControl(requireTenant(req).id));
 });
 
-v1Router.post("/host-desktop/return-control", (_req, res) => {
-  res.json(returnHostControl());
+v1Router.post("/host-desktop/return-control", (req, res) => {
+  res.json(returnHostControl(requireTenant(req).id));
 });
 
 v1Router.get("/agent/stream/runs/:id/replay", (req, res) => {
