@@ -154,11 +154,14 @@ export async function fetchCatalogJson(input: {
   timeoutMs: number;
   headers?: Record<string, string>;
   fetchImpl?: CatalogFetch;
+  retry?: boolean;
 }): Promise<{ status: number; body: any }> {
   const fetchImpl = input.fetchImpl ?? (fetch as CatalogFetch);
+  const started = Date.now();
   const run = async () => {
+    const leftover = Math.max(150, input.timeoutMs - (Date.now() - started));
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), input.timeoutMs);
+    const timer = setTimeout(() => ac.abort(), leftover);
     try {
       const res = await fetchImpl(input.url, {
         headers: { Accept: "application/json", ...input.headers },
@@ -209,6 +212,7 @@ export async function fetchCatalogJson(input: {
       clearTimeout(timer);
     }
   };
+  if (input.retry === false) return run();
   return retryIdempotent(run, input.provider);
 }
 

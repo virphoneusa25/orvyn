@@ -73,6 +73,7 @@ export function officialProvider(
           provider: "official",
           timeoutMs: remaining,
           fetchImpl,
+          retry: page === 0,
         });
         const rows = Array.isArray(body.servers) ? body.servers : [];
         for (const row of rows) {
@@ -92,8 +93,9 @@ export function officialProvider(
           const { body } = await fetchCatalogJson({
             url: `${baseUrl}/v0.1/servers?search=${encodeURIComponent(extra)}&version=latest&limit=16`,
             provider: "official",
-            timeoutMs: remaining,
+            timeoutMs: Math.min(remaining, 4000),
             fetchImpl,
+            retry: false,
           });
           for (const row of Array.isArray(body.servers) ? body.servers : []) {
             const server = normalizeOfficial(row);
