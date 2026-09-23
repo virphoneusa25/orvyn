@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   fileReadPlan,
   isFabricatedGeneratedPath,
+  matchArtifactId,
+  needsArtifactNameLookup,
+  previewFailureNote,
   previewKind,
   toWorkbenchFileItem,
   userFacingFileError,
@@ -60,6 +63,27 @@ test("Electron RPC errors stay out of the user-facing copy", () => {
   const msg = userFacingFileError(new Error("Error invoking remote method 'project:readFile': Error: ENOENT: no such file or directory"));
   assert.equal(msg, "Could not open this file.");
   assert.doesNotMatch(msg, /project:readFile|ENOENT/);
+});
+
+test("a generated filename resolves to the artifact id, not a disk path", () => {
+  const id = matchArtifactId(
+    [
+      { name: "notes.txt", artifactId: "art_notes" },
+      { name: "can-you-do-a-orvyn-logo.png", artifactId: "art_fb37609f728441cb" },
+    ],
+    "can-you-do-a-orvyn-logo.png"
+  );
+  assert.equal(id, "art_fb37609f728441cb");
+  assert.equal(matchArtifactId([{ name: "other.png", id: "not-an-artifact" }], "can-you-do-a-orvyn-logo.png"), null);
+  const item = { kind: "workspace-file", name: "can-you-do-a-orvyn-logo.png", path: "generated/can-you-do-a-orvyn-logo.png" };
+  assert.equal(needsArtifactNameLookup(item), true);
+  assert.equal(needsArtifactNameLookup({ kind: "workspace-file", name: "package.json", path: "package.json" }), false);
+});
+
+test("disk refusal copy is not the generic preview error", () => {
+  assert.match(previewFailureNote("disk-refused"), /not a project file/);
+  assert.match(previewFailureNote("artifact-missing"), /ArtifactService/);
+  assert.doesNotMatch(previewFailureNote("read-failed"), /not a project file/);
 });
 
 test("kind inference from artifact ids", () => {

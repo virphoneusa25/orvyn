@@ -66,6 +66,41 @@ export function fileReadPlan(item: Pick<WorkbenchFileItem, "kind" | "artifactId"
   return { via: "none" };
 }
 
+export function fileBasename(path?: string | null): string {
+  if (!path) return "";
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() || path;
+}
+
+export interface ArtifactNameRow {
+  name?: string;
+  artifactId?: string;
+  id?: string;
+}
+
+/** Match a generated filename to an ArtifactService row. Never returns a workspace path. */
+export function matchArtifactId(rows: ArtifactNameRow[], wantedName: string): string | null {
+  const want = wantedName.trim().toLowerCase();
+  if (!want) return null;
+  const hit = rows.find((row) => (row.name ?? "").trim().toLowerCase() === want);
+  if (!hit) return null;
+  const id = hit.artifactId || (looksLikeArtifactId(hit.id) ? hit.id : undefined);
+  return id ? String(id) : null;
+}
+
+export function needsArtifactNameLookup(item: { kind: string; artifactId?: string; path?: string; name: string }): boolean {
+  if (item.artifactId) return false;
+  if (item.kind === "artifact" || item.kind === "run-artifact" || item.kind === "upload") return true;
+  return isFabricatedGeneratedPath(item.path) || isFabricatedGeneratedPath(item.name);
+}
+
+export type PreviewFailure = "disk-refused" | "artifact-missing" | "read-failed";
+
+export function previewFailureNote(reason: PreviewFailure): string {
+  if (reason === "disk-refused") return "This is not a project file. ORVYN will not look it up on disk.";
+  if (reason === "artifact-missing") return "ORVYN could not find this file in ArtifactService.";
+  return "The file could not be read.";
+}
+
 export function usesProjectReadFile(item: Pick<WorkbenchFileItem, "kind" | "artifactId" | "path">): boolean {
   return fileReadPlan(item).via === "workspace";
 }

@@ -7,7 +7,12 @@ import { composeWorkbenchFileTree, resolveProjectFetchRoot } from "../../workben
 import type { WorkbenchEnvironment } from "../../workbenchEnvironment";
 import { environmentLabel } from "../../workbenchEnvironment";
 import {
+  fileBasename,
   fileReadPlan,
+  isFabricatedGeneratedPath,
+  matchArtifactId,
+  needsArtifactNameLookup,
+  previewFailureNote,
   previewKind,
   toWorkbenchFileItem,
   userFacingFileError,
@@ -38,7 +43,7 @@ export function FilesInspector({
   const [locations, setLocations] = useState<Array<{ id?: string; label?: string; files?: Record<string, unknown>[] }>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ url?: string; text?: string; error?: string } | null>(null);
+  const [preview, setPreview] = useState<{ url?: string; text?: string; error?: string; note?: string; artifactId?: string } | null>(null);
   const [query, setQuery] = useState("");
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({ project: true, generated: true, artifacts: true, uploads: true });
 
@@ -111,38 +116,71 @@ export function FilesInspector({
     const plan = fileReadPlan(selected);
     let alive = true;
     setPreview(null);
-    if (plan.via === "none") {
-      setPreview({ error: selected.kind === "workspace-file" ? "Could not open this file." : "Artifact unavailable" });
-      return;
-    }
-    const q =
-      plan.via === "artifact" && plan.artifactId
-        ? `/files/read?id=${encodeURIComponent(plan.artifactId)}`
-        : `/files/read?path=${encodeURIComponent(plan.path ?? "")}${projectRoot ? `&projectRoot=${encodeURIComponent(projectRoot)}` : ""}`;
-    fetch(apiUrl(q), { headers: authHeaders() })
-      .then(async (r) => {
-        const d = await r.json();
-        if (!alive) return;
-        if (!r.ok) {
-          setPreview({ error: userFacingFileError(d.error || "Artifact unavailable") });
-          return;
-        }
-        if (d.dataUrl) setPreview({ url: d.dataUrl });
-        else if (typeof d.content === "string") setPreview({ text: d.content.slice(0, 20_000) });
-        else if (selected.previewUrl) setPreview({ url: apiUrl(selected.previewUrl) });
-        else setPreview({ error: previewKind(selected.mimeType, selected.name) === "image" ? "Artifact unavailable" : "No preview for this file." });
-      })
-      .catch((err) => {
-        if (alive) setPreview({ error: userFacingFileError(err) });
+
+    const showRead = (body: { dataUrl?: string; content?: string; error?: string; artifact?: { artifactId?: string } }, ok: boolean, artifactId?: string) => {
+      if (!alive) return;
+      const id = artifactId || body.artifact?.artifactId;
+      if (!ok) {
+        setPreview({ error: userFacingFileError(body.error || "Artifact unavailable"), note: previewFailureNote("read-failed"), artifactId: id });
+        return;
+      }
+      if (body.dataUrl) setPreview({ url: body.dataUrl, artifactId: id });
+      else if (typeof body.content === "string") setPreview({ text: body.content.slice(0, 20_000), artifactId: id });
+      else if (selected.previewUrl) setPreview({ url: apiUrl(selected.previewUrl), artifactId: id });
+      else setPreview({ error: previewKind(selected.mimeType, selected.name) === "image" ? "Artifact unavailable" : "No preview for this file.", note: previewFailureNote("read-failed"), artifactId: id });
+    };
+
+    const readQuery = (query: string, artifactId?: string) => {
+      fetch(apiUrl(query), { headers: authHeaders() })
+        .then(async (r) => {
+          const body = await r.json();
+          showRead(body, r.ok, artifactId);
+        })
+        .catch((err) => {
+          if (alive) setPreview({ error: userFacingFileError(err), note: previewFailureNote("read-failed"), artifactId });
+        });
+    };
+
+    if (plan.via === "artifact" && plan.artifactId) {
+      readQuery(`/files/read?id=${encodeURIComponent(plan.artifactId)}`, plan.artifactId);
+    } else if (plan.via === "workspace" && plan.path) {
+      const root = projectRoot ? `&projectRoot=${encodeURIComponent(projectRoot)}` : "";
+      readQuery(`/files/read?path=${encodeURIComponent(plan.path)}${root}`);
+    } else if (needsArtifactNameLookup(selected)) {
+      const name = fileBasename(selected.path || selected.name);
+      fetch(apiUrl(`/artifacts?q=${encodeURIComponent(name)}`), { headers: authHeaders() })
+        .then((r) => r.json())
+        .then((body) => {
+          if (!alive) return;
+          const id = matchArtifactId(Array.isArray(body.artifacts) ? body.artifacts : [], name);
+          if (!id) {
+            const refusedDisk = isFabricatedGeneratedPath(selected.path) || isFabricatedGeneratedPath(selected.name);
+            setPreview({
+              error: "Could not open this file.",
+              note: previewFailureNote(refusedDisk ? "disk-refused" : "artifact-missing"),
+            });
+            return;
+          }
+          readQuery(`/files/read?id=${encodeURIComponent(id)}`, id);
+        })
+        .catch((err) => {
+          if (alive) setPreview({ error: userFacingFileError(err), note: previewFailureNote("read-failed") });
+        });
+    } else {
+      setPreview({
+        error: selected.kind === "workspace-file" ? "Could not open this file." : "Artifact unavailable",
+        note: previewFailureNote(isFabricatedGeneratedPath(selected.path) ? "disk-refused" : "artifact-missing"),
       });
+    }
     return () => {
       alive = false;
     };
-  }, [selectedKey, selected?.artifactId, selected?.path, projectRoot]);
+  }, [selectedKey, selected?.artifactId, selected?.path, selected?.name, selected?.kind, projectRoot]);
 
   async function downloadSelected() {
     if (!selected) return;
-    const url = selected.downloadUrl || (selected.artifactId ? `/artifacts/${selected.artifactId}/download` : null);
+    const artifactId = selected.artifactId || preview?.artifactId;
+    const url = selected.downloadUrl || (artifactId ? `/artifacts/${artifactId}/download` : null);
     if (!url) return;
     const r = await fetch(apiUrl(url), { headers: authHeaders() });
     if (!r.ok) return;
@@ -157,16 +195,22 @@ export function FilesInspector({
 
   function openSelected() {
     if (!selected) return;
-    if (selected.kind === "workspace-file" && selected.path) onOpenFile(selected.path);
-    else onPreviewArtifact?.(selected.name, selected.artifactId);
+    const artifactId = selected.artifactId || preview?.artifactId;
+    if (selected.kind === "workspace-file" && selected.path && !isFabricatedGeneratedPath(selected.path)) {
+      onOpenFile(selected.path);
+      return;
+    }
+    onPreviewArtifact?.(selected.name, artifactId);
   }
 
   const projectLabel =
     environment === "cloud" ? "Project · Cloud" : environment === "sandbox" ? "Project · Sandbox" : "Project · Local";
 
+  const presentedAsArtifact = Boolean(selected && (selected.kind !== "workspace-file" || preview?.artifactId || isFabricatedGeneratedPath(selected.path)));
+
   return (
-    <div data-testid="workbench-files" style={{ flex: 1, minHeight: 0, display: "flex" }}>
-      <aside style={{ width: 240, flexShrink: 0, borderRight: "1px solid var(--orvyn-border-soft)", display: "flex", flexDirection: "column", background: "var(--orvyn-surface-1)" }}>
+    <div data-testid="workbench-files" style={{ flex: 1, minHeight: 0, minWidth: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <aside style={{ flex: "0 1 46%", minHeight: 132, maxHeight: "46%", minWidth: 0, width: "100%", overflow: "hidden", display: "flex", flexDirection: "column", borderBottom: "1px solid var(--orvyn-border-soft)", background: "var(--orvyn-surface-1)" }}>
         <div style={{ padding: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 8, padding: "5px 8px" }}>
             <IconSearch size={12} />
@@ -249,7 +293,7 @@ export function FilesInspector({
           })}
         </div>
       </aside>
-      <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <main style={{ flex: 1, minWidth: 0, minHeight: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {!selected ? (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
             <div style={emptyTitle()}>Select a file</div>
@@ -259,12 +303,12 @@ export function FilesInspector({
           <ArtifactPreviewPane
             item={selected}
             preview={preview}
-            environmentLabel={selected.kind === "workspace-file" ? projectLabel : selected.kind === "upload" ? "Uploads" : "Generated"}
+            environmentLabel={presentedAsArtifact ? (selected.kind === "upload" ? "Uploads" : "Generated") : projectLabel}
             onOpen={openSelected}
             onDownload={() => void downloadSelected()}
             onReveal={() => {
-              if (selected.kind === "workspace-file") return;
-              onPreviewArtifact?.(selected.name, selected.artifactId);
+              if (!presentedAsArtifact) return;
+              onPreviewArtifact?.(selected.name, selected.artifactId || preview?.artifactId);
             }}
           />
         )}
@@ -286,7 +330,7 @@ function ArtifactPreviewPane({
   onReveal,
 }: {
   item: WorkbenchFileItem;
-  preview: { url?: string; text?: string; error?: string } | null;
+  preview: { url?: string; text?: string; error?: string; note?: string; artifactId?: string } | null;
   environmentLabel: string;
   onOpen: () => void;
   onDownload: () => void;
@@ -299,10 +343,12 @@ function ArtifactPreviewPane({
       ? `${item.bytes} B`
       : `${(item.bytes / 1024).toFixed(1)} KB`
     : null;
+  const artifactBacked = item.kind !== "workspace-file" || Boolean(preview?.artifactId);
+  const canDownload = Boolean(item.artifactId || preview?.artifactId || item.downloadUrl);
 
   return (
-    <div data-testid="workbench-file-preview" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "14px 18px 8px", display: "flex", alignItems: "center", gap: 10 }}>
+    <div data-testid="workbench-file-preview" style={{ flex: 1, minHeight: 0, minWidth: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "14px 18px 8px", display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
           <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
@@ -310,17 +356,17 @@ function ArtifactPreviewPane({
             {item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString()}` : ""}
           </div>
         </div>
-        {item.kind !== "workspace-file" && (
-          <span style={{ fontSize: 10, letterSpacing: 0.6, color: "var(--orvyn-cyan)", border: "1px solid rgba(34,211,238,0.35)", borderRadius: 999, padding: "3px 8px" }}>
+        {artifactBacked && item.kind !== "upload" && (
+          <span style={{ flexShrink: 0, fontSize: 10, letterSpacing: 0.6, color: "var(--orvyn-cyan)", border: "1px solid rgba(34,211,238,0.35)", borderRadius: 999, padding: "3px 8px" }}>
             GENERATED
           </span>
         )}
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 16 }}>
+      <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 16 }}>
         {preview?.error ? (
-          <div style={{ textAlign: "center" }}>
+          <div style={{ textAlign: "center", maxWidth: "100%", padding: "0 8px" }}>
             <div style={emptyTitle()}>{preview.error}</div>
-            <div style={emptyBody()}>This is not a project file. ORVYN will not look it up on disk.</div>
+            {preview.note ? <div style={emptyBody()}>{preview.note}</div> : null}
           </div>
         ) : kind === "image" && preview?.url ? (
           <img src={preview.url} alt={item.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
@@ -339,10 +385,10 @@ function ArtifactPreviewPane({
           </div>
         )}
       </div>
-      <div style={{ display: "flex", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--orvyn-border-soft)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--orvyn-border-soft)", minWidth: 0 }}>
         <button style={ghostBtn()} onClick={onOpen}>Open</button>
-        <button style={ghostBtn()} onClick={onDownload} disabled={!item.artifactId && !item.downloadUrl}>Download</button>
-        {item.kind !== "workspace-file" && <button style={ghostBtn()} onClick={onReveal}>Show in Files</button>}
+        <button style={ghostBtn()} onClick={onDownload} disabled={!canDownload}>Download</button>
+        {artifactBacked && <button style={ghostBtn()} onClick={onReveal}>Show in Files</button>}
         <button
           style={ghostBtn()}
           onClick={() => {
@@ -353,14 +399,14 @@ function ArtifactPreviewPane({
           Copy reference
         </button>
       </div>
-      <div style={{ padding: "8px 16px 14px", fontSize: 11, color: "var(--orvyn-text-muted)", display: "grid", gridTemplateColumns: "88px 1fr", gap: "4px 10px" }}>
+      <div style={{ padding: "8px 16px 14px", fontSize: 11, color: "var(--orvyn-text-muted)", display: "grid", gridTemplateColumns: "88px minmax(0, 1fr)", gap: "4px 10px", minWidth: 0 }}>
         <span>Reference</span>
-        <code>{item.reference || item.name}</code>
+        <code style={{ overflowWrap: "anywhere" }}>{preview?.artifactId ? `artifact:${preview.artifactId}` : item.reference || item.name}</code>
         <span>Type</span>
-        <span>{item.mimeType || typeLabel}</span>
+        <span style={{ overflowWrap: "anywhere" }}>{item.mimeType || typeLabel}</span>
         {size && <><span>Size</span><span>{size}</span></>}
         <span>Source</span>
-        <span>{item.kind === "workspace-file" ? environmentLabel : "ArtifactService"}</span>
+        <span>{artifactBacked ? "ArtifactService" : environmentLabel}</span>
       </div>
     </div>
   );

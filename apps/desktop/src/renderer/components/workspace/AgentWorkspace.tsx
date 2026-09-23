@@ -377,7 +377,7 @@ export function AgentWorkspace({
         title="Drag to resize Workbench"
         style={splitHandle(dragging)}
       />
-      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div data-testid={WORKBENCH_TABBAR_TEST_ID} style={{ display: "flex", alignItems: "center", height: 36, borderBottom: "1px solid var(--orvyn-border-soft)", padding: "0 4px", minWidth: 0, position: "relative", zIndex: WORKBENCH_Z.tabbar }}>
           <div style={{ display: "flex", alignItems: "center", overflowX: "auto", flex: 1, minWidth: 0 }}>
             <button
@@ -503,7 +503,7 @@ export function AgentWorkspace({
           </span>
         </div>
         <AgentActivityHeader line={derived.activity?.line} running={running} waitingApproval={derived.waitingApproval} />
-        <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative", zIndex: WORKBENCH_Z.content }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative", zIndex: WORKBENCH_Z.content }}>
           {emptyWorkbench && (
             <WorkbenchLauncher onOpen={(id) => {
               if (id === "browser") void openBrowserSurface("browser");

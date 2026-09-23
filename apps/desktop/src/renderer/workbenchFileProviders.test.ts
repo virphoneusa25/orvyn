@@ -42,6 +42,44 @@ test("composeWorkbenchFileTree unifies project + generated + uploads", () => {
   assert.ok(tree.sections.find((s) => s.id === "uploads")?.files.some((f) => f.name === "requirements.pdf"));
 });
 
+test("generated/ paths leave Project and keep the artifact row", () => {
+  const tree = composeWorkbenchFileTree({
+    environment: "local",
+    locations: [
+      {
+        id: "project",
+        files: [
+          { name: "package.json", path: "package.json", kind: "project" },
+          { name: "can-you-do-a-orvyn-logo.png", path: "generated/can-you-do-a-orvyn-logo.png", kind: "project" },
+        ],
+      },
+      {
+        id: "generated",
+        files: [{ id: "art_fb37609f728441cb", artifactId: "art_fb37609f728441cb", name: "can-you-do-a-orvyn-logo.png", path: "can-you-do-a-orvyn-logo.png", kind: "generated" }],
+      },
+    ],
+  });
+  const project = tree.sections.find((s) => s.id === "project")!;
+  const generated = tree.sections.find((s) => s.id === "generated")!;
+  assert.deepEqual(project.files.map((f) => f.name), ["package.json"]);
+  assert.equal(generated.files.filter((f) => f.name === "can-you-do-a-orvyn-logo.png").length, 1);
+  assert.equal(generated.files.find((f) => f.name === "can-you-do-a-orvyn-logo.png")?.artifactId, "art_fb37609f728441cb");
+});
+
+test("a generated path with no artifact row moves into Generated", () => {
+  const tree = composeWorkbenchFileTree({
+    environment: "local",
+    locations: [
+      { id: "project", files: [{ name: "logo.png", path: "generated/logo.png", kind: "project", bytes: 1200 }] },
+    ],
+  });
+  assert.equal(tree.sections.find((s) => s.id === "project")!.files.length, 0);
+  const moved = tree.sections.find((s) => s.id === "generated")!.files[0];
+  assert.equal(moved?.name, "logo.png");
+  assert.equal(moved?.kind, "generated");
+  assert.equal(moved?.source, "artifact");
+});
+
 test("cloud backend drops a Windows path it cannot see", () => {
   assert.equal(resolveProjectFetchRoot("C:\\\\Users\\\\me\\\\proj", true), null);
   assert.equal(resolveProjectFetchRoot("/workspace", false), "/workspace");
