@@ -90,6 +90,7 @@ export function DesktopView({
   const [starting, setStarting] = useState(false);
   const [quality, setQuality] = useState<"auto" | "low" | "high">("auto");
   const [interrupted, setInterrupted] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [cloudState, setCloudState] = useState<string>("local");
   const [fullscreen, setFullscreen] = useState(false);
   const [openMenu, setOpenMenu] = useState<"sendkeys" | "more" | "overflow" | null>(null);
@@ -99,6 +100,7 @@ export function DesktopView({
   const [imageRect, setImageRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const viewRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [remoteCursor, setRemoteCursor] = useState<{ x: number; y: number } | null>(null);
   const lastFrameAt = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -441,7 +443,9 @@ export function DesktopView({
         outline: "none",
       }}
       tabIndex={user ? 0 : -1}
-      onMouseMove={user ? (e) => { const p = imagePoint(e); if (p) void sendInput("move", p); } : undefined}
+      onMouseMove={user ? (e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setRemoteCursor({ x: e.clientX - r.left, y: e.clientY - r.top }); const p = imagePoint(e); if (p) void sendInput("move", p); } : undefined}
       onClick={user ? (e) => { e.currentTarget.focus(); const p = imagePoint(e); if (p) void sendInput("click", p); } : undefined}
       onContextMenu={user ? (e) => { e.preventDefault(); const p = imagePoint(e); if (p) void sendInput("rightclick", p); } : undefined}
       onDoubleClick={user ? (e) => { const p = imagePoint(e); if (p) void sendInput("dblclick", p); } : undefined}
