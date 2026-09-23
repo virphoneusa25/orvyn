@@ -40,29 +40,40 @@ test("HTML marketplace responses become a control-plane error, not JSON.parse cr
   assert.equal(fail.error, "Official registry HTTP 502");
 });
 
-test("GitHub / PostgreSQL rows resolve real product or publisher icons", () => {
+test("GitHub MCP uses github.com/github.png — same avatar source as StarHunt", () => {
   const github = sample({
+    name: "com.mcparmory/github",
+    title: "github",
+    repository: "https://github.com/mcparmory/registry",
+  });
+  const icon = resolveMarketplaceIcon(github);
+  assert.equal(icon.kind, "image");
+  assert.equal(icon.src, "https://github.com/github.png?size=160");
+  assert.equal(brandIconSrc("GitHub MCP"), "https://github.com/github.png?size=160");
+  assert.equal(brandIconSrc("GitHub Platform Changelog"), undefined);
+  const official = sample({
     name: "io.github.github/github-mcp-server",
     title: "GitHub MCP",
     repository: "https://github.com/github/github-mcp-server",
   });
-  const icon = resolveMarketplaceIcon(github);
-  assert.equal(icon.kind, "image");
-  assert.ok(icon.src?.startsWith("data:image/svg+xml") || icon.src?.includes("github.com/github.png"));
-  assert.ok(brandIconSrc("GitHub MCP"));
+  assert.equal(resolveMarketplaceIcon(official).src, "https://github.com/github.png?size=160");
+  const starhunt = sample({
+    name: "ai.starhunt/starhunt",
+    title: "StarHunt",
+    repository: "https://github.com/starhunt-ai/starhunt",
+  });
+  assert.equal(resolveMarketplaceIcon(starhunt).src, "https://github.com/starhunt-ai.png?size=160");
   const pg = sample({
     name: "io.github.musaddiq-dev/postgresql-mcp-server",
     title: "PostgreSQL MCP Server",
     repository: "https://github.com/musaddiq-dev/postgresql-mcp-server",
   });
-  const candidates = iconCandidates(pg);
-  assert.ok(candidates.some((c) => c.includes("github.com/musaddiq-dev.png")));
-  assert.ok(candidates.some((c) => c.startsWith("data:image/svg+xml")));
-  assert.ok(candidates[0].includes("github.com/musaddiq-dev.png") || candidates[0].startsWith("data:image/svg+xml"));
+  assert.equal(iconCandidates(pg)[0], "https://github.com/postgres.png?size=160");
+  assert.ok(iconCandidates(pg).includes("https://github.com/musaddiq-dev.png?size=160"));
 });
 
 test("publisher avatars and homepage favicons stay https-only", () => {
-  assert.equal(githubOwnerAvatar("https://github.com/cloudflare/mcp-server-cloudflare"), "https://github.com/cloudflare.png?size=80");
+  assert.equal(githubOwnerAvatar("https://github.com/cloudflare/mcp-server-cloudflare"), "https://github.com/cloudflare.png?size=160");
   assert.equal(githubOwnerAvatar("https://example.com/x"), undefined);
   assert.equal(homepageFavicon("https://www.postgresql.org"), "https://icons.duckduckgo.com/ip3/www.postgresql.org.ico");
   assert.equal(homepageFavicon("not-a-url"), undefined);
