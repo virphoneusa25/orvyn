@@ -60,13 +60,11 @@
         "nsis"
       ],
       "icon": "resources/icon.ico",
-      "signAndEditExecutable": false,
-      "artifactName": "ORVYN Setup 0.1.0-${env.ORVYN_SHORT_SHA}.${ext}"
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "artifactName": "ORVYN Setup 0.1.0-${env.ORVYN_SHORT_SHA}.${ext}"
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

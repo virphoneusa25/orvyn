@@ -13,7 +13,7 @@ If the status bar SHA does not match the branch HEAD you expected, you are still
 1. Wait for the `Windows installer artifact` job on `fix/core-agent-runtime`.
 2. Download the `orvyn-windows-<short-sha>` artifact from that GitHub Actions run.
 3. Close every `ORVYN.exe` / Electron process.
-4. Install `ORVYN Setup 0.1.0-<short-sha>.exe` from that artifact. Do not install a file named exactly `ORVYN Setup 0.1.0.exe`.
+4. Install `ORVYN-Setup-<short-sha>.exe` from that artifact. Do not install a file named exactly `ORVYN Setup 0.1.0.exe`.
 5. Launch and confirm the status-bar SHA.
 
 User data (chats, safeStorage session, workspace prefs) should survive an upgrade-in-place. Do not wipe `%APPDATA%` just to update the executable.

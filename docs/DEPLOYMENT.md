@@ -114,7 +114,7 @@ npm install
 npm run dist:win -w apps/desktop
 ```
 
-This produces `apps/desktop/release/ORVYN Setup 0.1.0-<short-sha>.exe`.
+This produces `apps/desktop/release/ORVYN-Setup-<short-sha>.exe`.
 Distribute that `.exe` to any Windows machine —
 double-click to install, no admin rights required beyond the standard
 Windows install prompt (`"oneClick": false` in the build config means the

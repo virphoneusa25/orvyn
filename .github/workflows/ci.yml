@@ -94,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           $root = Join-Path $env:GITHUB_WORKSPACE "apps/desktop/release"
-          $expected = Join-Path $root "ORVYN Setup 0.1.0-$env:SHORT_SHA.exe"
+          $expected = Join-Path $root "ORVYN-Setup-$env:SHORT_SHA.exe"
           if (-not (Test-Path -LiteralPath $expected)) { throw "Expected installer missing: $expected" }
           $stale = Join-Path $root "ORVYN Setup 0.1.0.exe"
           if (Test-Path -LiteralPath $stale) { throw "Unversioned installer was still produced: $stale" }
