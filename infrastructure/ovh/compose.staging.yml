@@ -1,0 +1,122 @@
+# Isolated staging control plane. Never shares volumes, DB, Redis, or
+# worker registration with production.
+#
+#   docker compose -p orvyn-staging \
+#     -f infrastructure/ovh/compose.staging.yml up -d --build
+#
+# Caddy on the production stack proxies staging.orvyn.virphoneusa.com
+# to backend-staging:4570 on the shared orvyn_default network.
+
+name: orvyn-staging
+
+services:
+  backend-staging:
+    container_name: backend-staging
+    build:
+      context: ../..
+      dockerfile: apps/backend/Dockerfile
+    restart: always
+    env_file:
+      - ../../.env.staging
+    environment:
+      - PORT=4570
+      - ORVYN_ENV=staging
+      - ORVYN_CLOUD_MODE=true
+      - ORVYN_PUBLIC_URL=https://staging.orvyn.virphoneusa.com
+      - ORVYN_STAGING_URL=https://staging.orvyn.virphoneusa.com
+      - ORVYN_DATA_DIR=/data
+      - ORVYN_PROJECTS_DIR=/projects
+      - ORVYN_PG_URL=postgres://orvyn_staging:${STAGING_PG_PASSWORD:-orvyn_staging}@postgres-staging:5432/orvyn_staging
+      - ORVYN_REDIS_URL=redis://redis-staging:6379/1
+      - ORVYN_REDIS_PREFIX=orvyn:staging:
+      - ORVYN_QDRANT_URL=http://qdrant-staging:6333
+    volumes:
+      - staging-data:/data
+      - staging-projects:/projects
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "4570"
+    depends_on:
+      postgres-staging:
+        condition: service_healthy
+      redis-staging:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4570/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      staging:
+      edge:
+        aliases:
+          - backend-staging
+
+  postgres-staging:
+    image: postgres:16-alpine
+    restart: always
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=orvyn_staging
+      - POSTGRES_PASSWORD=${STAGING_PG_PASSWORD:-orvyn_staging}
+      - POSTGRES_DB=orvyn_staging
+    volumes:
+      - staging-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orvyn_staging -d orvyn_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - staging
+
+  redis-staging:
+    image: redis:7-alpine
+    restart: always
+    expose:
+      - "6379"
+    command: redis-server --maxmemory 64mb --maxmemory-policy allkeys-lru --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - staging
+
+  qdrant-staging:
+    image: qdrant/qdrant:v1.13.6
+    restart: always
+    expose:
+      - "6333"
+    volumes:
+      - staging-qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    networks:
+      - staging
+
+volumes:
+  staging-data:
+  staging-projects:
+  staging-postgres:
+  staging-qdrant:
+
+networks:
+  staging:
+    name: orvyn-staging
+  edge:
+    name: orvyn_default
+    external: true

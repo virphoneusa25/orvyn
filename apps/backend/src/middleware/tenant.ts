@@ -2,12 +2,15 @@
 import { Request, Response, NextFunction } from "express";
 import { Tenant, tenantManager } from "../tenancy/TenantManager";
 import { authService } from "../auth/AuthService";
+import type { Principal } from "../identity/principal";
+import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       tenant?: Tenant;
+      principal?: Principal;
     }
   }
 }
@@ -49,12 +52,23 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
   }
 
   // Session tokens (per-user accounts) take precedence over shared API keys.
-  // Each user gets an isolated tenant — own models, tools, missions, store.
-  const user = authService.verify(key);
-  if (user) {
-    const tenant = tenantManager.ensureUserTenant(user.id, user.email);
+  // Tenant identity comes from the session's organization — never the client.
+  const session = authService.verifyPrincipal(key);
+  if (session) {
+    try {
+      rejectTenantOverride(session.principal.tenantId, claimedTenantId({
+        body: (req.body ?? {}) as Record<string, unknown>,
+        query: (req.query ?? {}) as Record<string, unknown>,
+        header: (name) => req.header(name),
+      }));
+    } catch (err: any) {
+      res.status(err.status ?? 403).json({ error: err.message });
+      return;
+    }
+    const tenant = tenantManager.ensureOrgTenant(session.principal);
     tenant.usage.requests++;
     req.tenant = tenant;
+    req.principal = session.principal;
     next();
     return;
   }
@@ -80,10 +94,17 @@ export function requireTenant(req: Request): Tenant {
   return req.tenant;
 }
 
+export function requirePrincipal(req: Request): Principal {
+  if (!req.principal) {
+    throw Object.assign(new Error("Authenticated session required"), { status: 401 });
+  }
+  return req.principal;
+}
+
 export function resolveTenantFromToken(token: string | null): Tenant | undefined {
   if (!token) return undefined;
-  const user = authService.verify(token);
-  if (user) return tenantManager.ensureUserTenant(user.id, user.email);
+  const session = authService.verifyPrincipal(token);
+  if (session) return tenantManager.ensureOrgTenant(session.principal);
   return tenantManager.resolveByApiKey(token);
 }
 

@@ -19,9 +19,15 @@ export function originAllowed(origin: string | undefined, cloud: boolean, public
   }
   if (url.protocol === "file:") return true;
   if (LOCAL_HOSTS.has(url.hostname.toLowerCase())) return true;
-  if (publicUrl) {
+  const extras = [publicUrl, process.env.ORVYN_STAGING_URL, process.env.ORVYN_PUBLIC_URL]
+    .filter(Boolean)
+    .join(",")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const extra of extras) {
     try {
-      const pub = new URL(publicUrl);
+      const pub = new URL(extra);
       if (url.host === pub.host) return true;
     } catch {
       /* ignore a bad public URL */

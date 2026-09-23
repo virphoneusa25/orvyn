@@ -43,6 +43,7 @@ import { persistSkillCandidates } from "../learning/skillCandidates";
 import { seedValidatedSkills } from "../learning/validatedSkills";
 import { persistDataset } from "../learning/datasetBuilder";
 import { DEFAULT_PRIVACY } from "../orgs/organization";
+import type { Principal } from "../identity/principal";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 
 export interface Tenant {
@@ -330,6 +331,12 @@ export class TenantManager {
   ensureUserTenant(userId: string, label: string): Tenant {
     const id = `user_${userId}`;
     return this.get(id) ?? this.create(label, "", id);
+  }
+
+  /** Session-resolved org tenant. Personal orgs keep user_<id> so existing stores stay valid. */
+  ensureOrgTenant(principal: Principal): Tenant {
+    const id = principal.tenantId || `user_${principal.userId}`;
+    return this.get(id) ?? this.create(principal.organizationName || principal.email, "", id);
   }
 
   revokeKey(apiKey: string): void {

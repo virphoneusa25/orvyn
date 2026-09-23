@@ -17,12 +17,18 @@ function bearerToken(req: Request): string | null {
 
 authRouter.post("/register", (req, res) => {
   try {
-    const { user, token } = authService.register(
+    const { user, token, organization } = authService.register(
       String(req.body.email ?? ""),
       String(req.body.password ?? ""),
       req.body.name ? String(req.body.name) : undefined
     );
-    res.status(201).json({ user, token });
+    const session = authService.verifyPrincipal(token);
+    res.status(201).json({
+      user,
+      token,
+      organization,
+      principal: session?.principal ?? null,
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -30,8 +36,14 @@ authRouter.post("/register", (req, res) => {
 
 authRouter.post("/login", (req, res) => {
   try {
-    const { user, token } = authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""));
-    res.json({ user, token });
+    const { user, token, organization } = authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""));
+    const session = authService.verifyPrincipal(token);
+    res.json({
+      user,
+      token,
+      organization,
+      principal: session?.principal ?? null,
+    });
   } catch (err: any) {
     // 429 for lockout, 401 for bad credentials.
     const status = err.message.startsWith("Too many") ? 429 : 401;
@@ -47,7 +59,11 @@ authRouter.post("/logout", (req, res) => {
 
 authRouter.get("/me", (req, res) => {
   const token = bearerToken(req);
-  const user = token ? authService.verify(token) : null;
-  if (!user) return res.status(401).json({ error: "Not signed in" });
-  res.json({ user });
+  const session = token ? authService.verifyPrincipal(token) : null;
+  if (!session) return res.status(401).json({ error: "Not signed in" });
+  res.json({
+    user: session.user,
+    principal: session.principal,
+    organizations: authService.listOrganizations(session.user.id),
+  });
 });

@@ -11,6 +11,9 @@ import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
+import { environmentName } from "./identity/principal";
+import { migratePostgresIdentity } from "./identity/postgres";
+import { redisHealth } from "./identity/redisNamespace";
 
 const app = express();
 app.use(cloudCors());
@@ -19,11 +22,13 @@ app.use(express.json({ limit: "10mb" }));
 // Unauthenticated: needed for container/load-balancer health probes.
 // The simple form stays fast for Docker healthchecks; /api/v1/health/detailed
 // probes the control-plane services (PostgreSQL, Redis) when configured.
+
 app.get("/api/v1/health", (_req, res) =>
   res.json({
     status: "ok",
     service: "orvyn-backend",
     version: "0.2.0",
+    environment: environmentName(),
     artifactStorage: "healthy",
     marketplaceCatalogVersion: 1,
     supportedProviders: ["official", "glama", "smithery", "local", "private"],
@@ -52,24 +57,18 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     checks.postgres = { healthy: true, detail: "not configured (local mode)" };
   }
 
-  // Redis (when ORVYN_REDIS_URL is set)
-  if (process.env.ORVYN_REDIS_URL) {
+  checks.redis = await redisHealth();
+  checks.identity = { healthy: true, detail: "session + personal organization" };
+
+  if (process.env.ORVYN_PG_URL) {
     try {
-      const net = await import("net");
-      const url = new URL(process.env.ORVYN_REDIS_URL);
-      const ok = await new Promise<boolean>((resolve) => {
-        const sock = net.connect(Number(url.port || 6379), url.hostname);
-        sock.setTimeout(2000);
-        sock.on("connect", () => { sock.destroy(); resolve(true); });
-        sock.on("error", () => resolve(false));
-        sock.on("timeout", () => { sock.destroy(); resolve(false); });
-      });
-      checks.redis = { healthy: ok, detail: ok ? undefined : "connection refused" };
+      const migrated = await migratePostgresIdentity();
+      checks.migrations = { healthy: true, detail: `${migrated.database} applied=${migrated.applied.join(",") || "none"}` };
     } catch (err: any) {
-      checks.redis = { healthy: false, detail: err.message };
+      checks.migrations = { healthy: false, detail: err.message };
     }
   } else {
-    checks.redis = { healthy: true, detail: "not configured (local mode)" };
+    checks.migrations = { healthy: true, detail: "sqlite identity (local mode)" };
   }
 
   // Workers — the real registry count (0 registered is healthy but reported
@@ -112,6 +111,7 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     status: allHealthy ? "ok" : "degraded",
     service: "orvyn-backend",
     version: "0.2.0",
+    environment: environmentName(),
     checks,
     qdrant: {
       status: qdrant.status === "not_configured" ? "not_configured" : qdrant.status,
@@ -152,8 +152,14 @@ wss.on("connection", (socket, req) => {
     return;
   }
   const tenant = admitted.tenant;
+  (socket as any).__orvynTenantId = tenant.id;
 
-  socket.send(JSON.stringify({ type: "connection.ready", service: "orvyn-backend", at: Date.now() }));
+  socket.send(JSON.stringify({
+    type: "connection.ready",
+    service: "orvyn-backend",
+    tenantId: tenant.id,
+    at: Date.now(),
+  }));
 
   socket.on("message", async (raw) => {
     let body;
@@ -166,6 +172,10 @@ wss.on("connection", (socket, req) => {
 
     if (!tenant) {
       socket.send(JSON.stringify({ delta: "", done: true, error: "No tenant context" }));
+      return;
+    }
+    if (body?.tenantId && String(body.tenantId) !== tenant.id) {
+      socket.send(JSON.stringify({ delta: "", done: true, error: "tenantId is resolved from the session, not the client" }));
       return;
     }
 
@@ -202,6 +212,11 @@ heartbeat.unref?.();
 server.on("close", () => clearInterval(heartbeat));
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
+if (process.env.ORVYN_PG_URL) {
+  void migratePostgresIdentity().catch((err) => {
+    console.error("Postgres identity migration failed:", err?.message ?? err);
+  });
+}
 bootstrapDefaultTenant();
 // Reconnect enabled MCP servers (best-effort; failures stay per-server).
 setTimeout(() => {

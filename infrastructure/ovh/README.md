@@ -10,6 +10,15 @@ Full walkthrough: **`docs/OVH_DEPLOYMENT.md`**.
 | `../../apps/backend/Dockerfile` | Multi-stage backend image (Node 20 slim, no dev deps) |
 | `../../.env.example` | Environment template — copy to `.env`, never commit the real one |
 
+Staging (isolated control plane, does not share DB/Redis/volumes with production):
+
+```bash
+bash scripts/deploy-ovh-staging.sh
+# https://staging.orvyn.virphoneusa.com/api/v1/health
+```
+
+Requires an A record `staging.orvyn.virphoneusa.com` → the OVH IP. Secrets live in server-side `.env.staging`.
+
 Launch:
 
 ```bash

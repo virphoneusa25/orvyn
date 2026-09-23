@@ -426,7 +426,10 @@ export class ArtifactService {
 
   getArtifact(id: string): ArtifactRecord | null {
     const row = this.store.getArtifact(id);
-    return row ? this.toRecord(row) : null;
+    if (!row) return null;
+    const record = this.toRecord(row);
+    if (record.tenantId && record.tenantId !== this.tenantId) return null;
+    return record;
   }
 
   listArtifacts(opts?: { kind?: string; projectRoot?: string | null; chatId?: string | null; runId?: string | null }): ArtifactRecord[] {
@@ -435,6 +438,7 @@ export class ArtifactService {
     return rows
       .map((r) => this.toRecord(r))
       .filter((a) => a.status === "ready")
+      .filter((a) => !a.tenantId || a.tenantId === this.tenantId)
       .filter((a) => (opts?.kind ? a.kind === opts.kind : true))
       .filter((a) => (opts?.projectRoot ? a.projectRoot === opts.projectRoot || !a.projectRoot : true))
       .filter((a) => (opts?.chatId ? a.chatId === opts.chatId : true))

@@ -12,15 +12,25 @@
 //   - Login is rate-limited in-memory (5 failures / 15 min per email) to
 //     slow credential stuffing.
 //
-// What this deliberately does NOT do yet (cloud tier): email verification,
-// password reset, OAuth, organizations/RBAC. Those need an email provider
-// and are documented in docs/CLOUD_ARCHITECTURE.md — not faked here.
+// Personal signup creates a Personal Organization (tenant user_<id>).
+// Session tokens resolve userId + organizationId + tenantId; client-supplied
+// tenant ids are never authoritative. Email verification / password reset
+// still need an email provider (docs/CLOUD_ARCHITECTURE.md).
 
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import * as path from "path";
 import * as fs from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
+import {
+  personalTenantId,
+  type OrganizationRecord,
+  type OrgRole,
+  type Principal,
+  type TenantChat,
+  type TenantProject,
+} from "../identity/principal";
+import { isolation404, scopedGet } from "../identity/isolation";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -37,6 +47,39 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  tenant_id TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS organization_members (
+  organization_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (organization_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS tenant_projects (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  project_root TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tenant_chats (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  organization_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  title TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_projects_tenant ON tenant_projects (tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_chats_tenant ON tenant_chats (tenant_id, created_at);
 `;
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -78,9 +121,18 @@ export class AuthService {
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    this.migrateSessionOrg();
   }
 
-  register(email: string, password: string, name?: string): { user: User; token: string } {
+  private migrateSessionOrg(): void {
+    try {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN organization_id TEXT`);
+    } catch {
+      /* already present */
+    }
+  }
+
+  register(email: string, password: string, name?: string): { user: User; token: string; organization: OrganizationRecord } {
     const normalized = email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new Error("Invalid email address");
     if (password.length < 8) throw new Error("Password must be at least 8 characters");
@@ -96,10 +148,11 @@ export class AuthService {
     this.db
       .prepare(`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(user.id, user.email, user.name, hashPassword(password), user.createdAt);
-    return { user, token: this.createSession(user.id) };
+    const org = this.ensurePersonalOrganization(user);
+    return { user, token: this.createSession(user.id, org.id), organization: org };
   }
 
-  login(email: string, password: string): { user: User; token: string } {
+  login(email: string, password: string): { user: User; token: string; organization: OrganizationRecord } {
     const normalized = email.trim().toLowerCase();
 
     const f = this.failures.get(normalized);
@@ -118,19 +171,159 @@ export class AuthService {
     this.failures.delete(normalized);
 
     const user = rowToUser(row);
-    return { user, token: this.createSession(user.id) };
+    const org = this.ensurePersonalOrganization(user);
+    return { user, token: this.createSession(user.id, org.id), organization: org };
   }
 
   /** Returns the user for a live session token, or null. */
   verify(token: string): User | null {
+    return this.verifyPrincipal(token)?.user ?? null;
+  }
+
+  verifyPrincipal(token: string): { user: User; principal: Principal } | null {
     if (!token.startsWith("orvsess_")) return null;
     const row = this.db
       .prepare(
-        `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
+        `SELECT u.*, s.organization_id AS session_org
+         FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ? AND s.expires_at > ?`
       )
       .get(hashToken(token), Date.now()) as any;
-    return row ? rowToUser(row) : null;
+    if (!row) return null;
+    const user = rowToUser(row);
+    const org = this.organizationForSession(user, row.session_org ? String(row.session_org) : undefined);
+    if (!org) return null;
+    const member = this.db
+      .prepare(`SELECT role FROM organization_members WHERE organization_id = ? AND user_id = ?`)
+      .get(org.id, user.id) as { role?: string } | undefined;
+    if (!member) return null;
+    return {
+      user,
+      principal: {
+        userId: user.id,
+        email: user.email,
+        name: user.name,
+        organizationId: org.id,
+        organizationName: org.name,
+        organizationKind: org.kind,
+        tenantId: org.tenantId,
+        role: (member.role as OrgRole) || "owner",
+      },
+    };
+  }
+
+  ensurePersonalOrganization(user: User): OrganizationRecord {
+    const existing = this.db
+      .prepare(
+        `SELECT o.* FROM organizations o
+         JOIN organization_members m ON m.organization_id = o.id
+         WHERE m.user_id = ? AND o.kind = 'personal'
+         ORDER BY o.created_at ASC LIMIT 1`
+      )
+      .get(user.id) as any;
+    if (existing) return rowToOrg(existing);
+    const org: OrganizationRecord = {
+      id: `org_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      name: "Personal",
+      kind: "personal",
+      tenantId: personalTenantId(user.id),
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(`INSERT INTO organizations (id, name, kind, tenant_id, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(org.id, org.name, org.kind, org.tenantId, org.createdAt);
+    this.db
+      .prepare(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`)
+      .run(org.id, user.id, "owner", Date.now());
+    return org;
+  }
+
+  listOrganizations(userId: string): OrganizationRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT o.* FROM organizations o
+         JOIN organization_members m ON m.organization_id = o.id
+         WHERE m.user_id = ? ORDER BY o.created_at ASC`
+      )
+      .all(userId) as any[];
+    return rows.map(rowToOrg);
+  }
+
+  private organizationForSession(user: User, organizationId?: string): OrganizationRecord | null {
+    if (organizationId) {
+      const row = this.db
+        .prepare(
+          `SELECT o.* FROM organizations o
+           JOIN organization_members m ON m.organization_id = o.id
+           WHERE o.id = ? AND m.user_id = ?`
+        )
+        .get(organizationId, user.id) as any;
+      if (row) return rowToOrg(row);
+    }
+    return this.ensurePersonalOrganization(user);
+  }
+
+  createProject(principal: Principal, name: string, projectRoot?: string | null): TenantProject {
+    const row: TenantProject = {
+      id: `prj_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      tenantId: principal.tenantId,
+      organizationId: principal.organizationId,
+      userId: principal.userId,
+      name: name.trim() || "Untitled project",
+      projectRoot: projectRoot ?? null,
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO tenant_projects (id, tenant_id, organization_id, user_id, name, project_root, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(row.id, row.tenantId, row.organizationId, row.userId, row.name, row.projectRoot ?? null, row.createdAt);
+    return row;
+  }
+
+  listProjects(tenantId: string): TenantProject[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM tenant_projects WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 80`)
+      .all(tenantId) as any[];
+    return rows.map(rowToProject);
+  }
+
+  getProject(id: string, tenantId: string): TenantProject {
+    const row = this.db.prepare(`SELECT * FROM tenant_projects WHERE id = ? AND tenant_id = ?`).get(id, tenantId) as any;
+    if (!row) isolation404();
+    return scopedGet(rowToProject(row), tenantId);
+  }
+
+  createChat(principal: Principal, title: string): TenantChat {
+    const row: TenantChat = {
+      id: `cht_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+      tenantId: principal.tenantId,
+      organizationId: principal.organizationId,
+      userId: principal.userId,
+      title: title.trim() || "New chat",
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO tenant_chats (id, tenant_id, organization_id, user_id, title, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(row.id, row.tenantId, row.organizationId, row.userId, row.title, row.createdAt);
+    return row;
+  }
+
+  listChats(tenantId: string): TenantChat[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM tenant_chats WHERE tenant_id = ? ORDER BY created_at DESC LIMIT 80`)
+      .all(tenantId) as any[];
+    return rows.map(rowToChat);
+  }
+
+  getChat(id: string, tenantId: string): TenantChat {
+    const row = this.db.prepare(`SELECT * FROM tenant_chats WHERE id = ? AND tenant_id = ?`).get(id, tenantId) as any;
+    if (!row) isolation404();
+    return scopedGet(rowToChat(row), tenantId);
   }
 
   logout(token: string): void {
@@ -142,13 +335,13 @@ export class AuthService {
     return Number(row?.n ?? 0);
   }
 
-  private createSession(userId: string): string {
+  private createSession(userId: string, organizationId?: string): string {
     // Expired-session cleanup piggybacks on session creation.
     this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(Date.now());
     const token = `orvsess_${randomBytes(32).toString("hex")}`;
     this.db
-      .prepare(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`)
-      .run(hashToken(token), userId, Date.now(), Date.now() + SESSION_TTL_MS);
+      .prepare(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at, organization_id) VALUES (?, ?, ?, ?, ?)`)
+      .run(hashToken(token), userId, Date.now(), Date.now() + SESSION_TTL_MS, organizationId ?? null);
     return token;
   }
 }
@@ -158,6 +351,39 @@ function rowToUser(row: any): User {
     id: String(row.id),
     email: String(row.email),
     name: row.name != null ? String(row.name) : null,
+    createdAt: Number(row.created_at),
+  };
+}
+
+function rowToOrg(row: any): OrganizationRecord {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    kind: row.kind === "company" ? "company" : "personal",
+    tenantId: String(row.tenant_id),
+    createdAt: Number(row.created_at),
+  };
+}
+
+function rowToProject(row: any): TenantProject {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    organizationId: String(row.organization_id),
+    userId: String(row.user_id),
+    name: String(row.name),
+    projectRoot: row.project_root != null ? String(row.project_root) : null,
+    createdAt: Number(row.created_at),
+  };
+}
+
+function rowToChat(row: any): TenantChat {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    organizationId: String(row.organization_id),
+    userId: String(row.user_id),
+    title: String(row.title ?? "Chat"),
     createdAt: Number(row.created_at),
   };
 }

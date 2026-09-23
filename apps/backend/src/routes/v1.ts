@@ -8,7 +8,8 @@ import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../exe
 import { classifyExecutionHints } from "../execution/classifyExecution";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
-import { requireTenant } from "../middleware/tenant";
+import { requirePrincipal, requireTenant } from "../middleware/tenant";
+import { authService } from "../auth/AuthService";
 import { tenantManager } from "../tenancy/TenantManager";
 import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
@@ -73,6 +74,69 @@ v1Router.get("/models/roles", (req, res) => {
     roles,
     production: roles.filter((r) => r.task !== "image").every((r) => r.production),
   });
+});
+
+v1Router.get("/session", (req, res) => {
+  const t = requireTenant(req);
+  const principal = req.principal;
+  res.json({
+    tenantId: t.id,
+    principal: principal ?? null,
+    organizations: principal ? authService.listOrganizations(principal.userId) : [],
+  });
+});
+
+v1Router.get("/organizations", (req, res) => {
+  const principal = requirePrincipal(req);
+  res.json({ organizations: authService.listOrganizations(principal.userId) });
+});
+
+v1Router.get("/projects", (req, res) => {
+  const principal = requirePrincipal(req);
+  res.json({ projects: authService.listProjects(principal.tenantId) });
+});
+
+v1Router.post("/projects", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const project = authService.createProject(principal, String(req.body.name ?? "Untitled project"), req.body.projectRoot);
+    res.status(201).json({ project });
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message });
+  }
+});
+
+v1Router.get("/projects/:id", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    res.json({ project: authService.getProject(req.params.id, principal.tenantId) });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: "Not found" });
+  }
+});
+
+v1Router.get("/chats", (req, res) => {
+  const principal = requirePrincipal(req);
+  res.json({ chats: authService.listChats(principal.tenantId) });
+});
+
+v1Router.post("/chats", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const chat = authService.createChat(principal, String(req.body.title ?? "New chat"));
+    res.status(201).json({ chat });
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message });
+  }
+});
+
+v1Router.get("/chats/:id", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    res.json({ chat: authService.getChat(req.params.id, principal.tenantId) });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: "Not found" });
+  }
 });
 
 v1Router.post("/models", (req, res) => {

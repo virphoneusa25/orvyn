@@ -326,7 +326,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     const t = requireTenant(req);
     const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
     const out = await harden.gateway.invoke({
-      tenantId: String(req.body.tenantId ?? t.id),
+      tenantId: t.id,
       expectedTenantId: t.id,
       serverId: String(req.body.serverId ?? ""),
       tool: String(req.body.tool ?? ""),

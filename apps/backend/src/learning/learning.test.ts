@@ -75,7 +75,7 @@ test("ExperienceStore captures a run and isolates tenants", async () => {
   assert.equal(exp.result, "success");
   assert.equal(exp.tests.passed, true);
   assert.equal(exp.verification.artifacts, 1);
-  assert.throws(() => bindTenantResource("tenant-a", "tenant-b"), /Tenant isolation/);
+  assert.throws(() => bindTenantResource("tenant-a", "tenant-b"), /Not found/);
 });
 
 test("skill candidates need two successful runs and stay unvalidated", async () => {

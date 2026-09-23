@@ -35,5 +35,9 @@ export const DEFAULT_PRIVACY: PrivacyPolicy = {
 };
 
 export function bindTenantResource(tenantId: string, resourceTenantId: string): void {
-  if (tenantId !== resourceTenantId) throw new Error("Tenant isolation: resource belongs to another organization.");
+  if (tenantId !== resourceTenantId) {
+    const err = new Error("Not found") as Error & { status?: number };
+    err.status = 404;
+    throw err;
+  }
 }
