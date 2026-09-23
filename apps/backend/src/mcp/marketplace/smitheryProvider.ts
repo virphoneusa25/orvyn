@@ -65,11 +65,11 @@ export function smitheryProvider(
       const results: RegistryResult[] = rows.map((n: any) => ({
         server: normalizeSmithery(n),
         score: 0,
-        matchedTools: toolsOf(n).slice(0, 6),
+        matchedTools: (toolsOf(n) ?? []).slice(0, 6),
       }));
-      const next = body.pagination?.currentPage != null && body.pagination?.totalPages > body.pagination.currentPage
-        ? String(Number(body.pagination.currentPage) + 1)
-        : undefined;
+      const page = Number(body.pagination?.currentPage);
+      const total = Number(body.pagination?.totalPages);
+      const next = Number.isFinite(page) && Number.isFinite(total) && total > page ? String(page + 1) : undefined;
       return { results, cursor: next };
     },
     async getServer(id: string) {
@@ -122,14 +122,14 @@ export function normalizeSmithery(n: any): MarketplaceMcpServer {
     trust: trustFor({ sources: ["smithery"], publisher: qualified, repository: repo }),
     compatibility: remoteUrl || npm ? "compatible" : "limited",
     compatibilityReason: "Listed on Smithery — confirm transport before install",
-    toolCount: tools.length || (typeof n.toolCount === "number" ? n.toolCount : undefined),
+    toolCount: (tools?.length || 0) || (typeof n.toolCount === "number" ? n.toolCount : undefined),
     networkRequired: Boolean(remoteUrl),
     filesystemScope: "none",
     executionLocation: remoteUrl ? "remote" : "local",
   };
 }
 
-function toolsOf(n: any): MarketplaceMcpServer["tools"] {
+function toolsOf(n: any): NonNullable<MarketplaceMcpServer["tools"]> {
   const raw = Array.isArray(n.tools) ? n.tools : Array.isArray(n.toolsList) ? n.toolsList : [];
   return raw
     .map((t: any) => ({

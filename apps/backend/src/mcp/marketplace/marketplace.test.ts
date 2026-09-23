@@ -191,13 +191,13 @@ test("official provider uses injected fetch (no live network in unit test)", asy
   const p = officialProvider(fetchImpl as any);
   const out = await p.search({ query: "github", limit: 5 });
   assert.equal(out.results.length, 1);
-  const h = await p.health();
+  const h = await p.health!();
   assert.equal(h.status, "online");
 });
 
 test("glama without API key stays needs-key and returns empty search", async () => {
   const p = glamaProvider(fetch, "");
-  const h = await p.health();
+  const h = await p.health!();
   assert.equal(h.status, "needs-key");
   const out = await p.search({ query: "postgres" });
   assert.deepEqual(out.results, []);
@@ -455,7 +455,9 @@ test("dedupe + source merge: official/glama/smithery render once", () => {
 
 test("canonical GitHub ranking beats wrappers for query github", () => {
   const github = normalizeOfficial(sampleOfficial("io.github.github/github-mcp-server", "Official GitHub MCP"));
-  const wrapper = normalizeOfficial(sampleOfficial("ai.smithery/obsidian-github-mcp", "Obsidian vault on GitHub"));
+  const wrapper = normalizeOfficial(sampleOfficial("ai.smithery/obsidian-github-mcp", "Obsidian vault on GitHub", {
+    repository: { url: "https://github.com/Hint-Services/obsidian-github-mcp", source: "github" },
+  }));
   assert.equal(isCanonicalGithub(github), true);
   assert.equal(isCanonicalGithub(wrapper), false);
   assert.ok(rankServer("github", github) > rankServer("github", wrapper));
@@ -496,7 +498,7 @@ test("partial success: official 500 does not blank glama results", async () => {
 
 test("smithery without API key is needs-key and does not fail marketplace", async () => {
   const p = smitheryProvider(fetch, "");
-  const h = await p.health();
+  const h = await p.health!();
   assert.equal(h.status, "needs-key");
   const out = await p.search({ query: "js" });
   assert.deepEqual(out.results, []);

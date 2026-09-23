@@ -117,7 +117,7 @@ export function normalizeGlama(n: any): MarketplaceMcpServer {
     transports: n.url && String(n.url).startsWith("http") && !String(n.url).includes("glama.ai/mcp/servers")
       ? [{ kind: "http", url: String(n.url) }]
       : [{ kind: "stdio", command: "npx", args: ["-y", String(n.npmPackage ?? name)] }],
-    tools: tools.map((t) => ({ ...t, origin: "declared" as const })),
+    tools: tools.map((t: { name: string; description: string; risk: ReturnType<typeof classifyMarketplaceRisk> }) => ({ ...t, origin: "declared" as const })),
     auth: [{ kind: "none", label: "See server listing" }],
     trust: trustFor({ sources: ["glama"], publisher: n.namespace, repository: n.repository?.url }),
     compatibility: "compatible",

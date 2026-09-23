@@ -127,7 +127,10 @@ export class RegistryAggregator {
     timeouts?: Partial<Record<string, number>>
   ) {
     this.cache = cache ?? new CatalogCache<AggregatorCachePayload>();
-    this.timeouts = { ...DEFAULT_TIMEOUT, ...timeouts };
+    this.timeouts = { ...DEFAULT_TIMEOUT };
+    for (const [id, ms] of Object.entries(timeouts ?? {})) {
+      if (typeof ms === "number") this.timeouts[id] = ms;
+    }
   }
 
   replaceProviders(providers: McpRegistryProvider[]): void {
