@@ -1,19 +1,119 @@
 // Desktop-side Official MCP Registry client. Used when Cloud Mode's
-// control plane returns HTML/404/empty for /mcp/marketplace so the
-// Marketplace still looks like Local Mode (real servers + logos).
+// control plane does not serve /mcp/marketplace (HTML / 404 / missing route).
+// Discovery may fall back here. Install still goes through ORVYN MCP APIs.
 
 import type { MarketServer } from "./mcpMarketplaceModel.ts";
+import { parseApiJson, type ParsedApi } from "./mcpMarketplaceIcons.ts";
 
 export const OFFICIAL_REGISTRY_URL = "https://registry.modelcontextprotocol.io";
+export const CANONICAL_GITHUB_QUERY = "github-mcp-server";
 
-export function shouldUseOfficialFallback(controlPlaneOk: boolean, catalogCount: number): boolean {
-  return !controlPlaneOk || catalogCount === 0;
+export type CatalogState = "cloud" | "official-fallback" | "degraded" | "auth-required" | "offline" | "error";
+
+export interface CatalogDecision {
+  state: CatalogState;
+  useOfficialFallback: boolean;
+  markUnsupported: boolean;
+  reason?: string;
 }
 
-export function isProductGithub(server: Pick<MarketServer, "name" | "title">): boolean {
-  if (/io\.github\.github\/github-mcp|github\/github-mcp-server/i.test(server.name)) return true;
+const unsupportedHosts = new Map<string, boolean>();
+
+export function marketplaceHostKey(backendUrl: string): string {
+  try {
+    return new URL(backendUrl).host.toLowerCase();
+  } catch {
+    return backendUrl.replace(/\/$/, "").toLowerCase();
+  }
+}
+
+export function isMarketplaceUnsupported(backendUrl: string): boolean {
+  return unsupportedHosts.get(marketplaceHostKey(backendUrl)) === true;
+}
+
+export function markMarketplaceUnsupported(backendUrl: string): void {
+  unsupportedHosts.set(marketplaceHostKey(backendUrl), true);
+}
+
+export function resetMarketplaceSupport(backendUrl?: string): void {
+  if (!backendUrl) unsupportedHosts.clear();
+  else unsupportedHosts.delete(marketplaceHostKey(backendUrl));
+}
+
+export function decideCatalogSource(input: {
+  status: number;
+  parsed: Pick<ParsedApi, "ok" | "kind" | "marketplaceRouteUnsupported">;
+  catalogCount: number;
+  cachedUnsupported?: boolean;
+}): CatalogDecision {
+  if (input.cachedUnsupported) {
+    return { state: "official-fallback", useOfficialFallback: true, markUnsupported: true, reason: "cached-unsupported" };
+  }
+  if (input.status === 401 || input.status === 403) {
+    return { state: "auth-required", useOfficialFallback: false, markUnsupported: false, reason: String(input.status) };
+  }
+  if (input.status === 0) {
+    return { state: "offline", useOfficialFallback: false, markUnsupported: false };
+  }
+  if (input.parsed.marketplaceRouteUnsupported || input.parsed.kind === "html" || input.status === 404) {
+    return { state: "official-fallback", useOfficialFallback: true, markUnsupported: true, reason: "unsupported-route" };
+  }
+  if (input.parsed.ok) {
+    return { state: "cloud", useOfficialFallback: false, markUnsupported: false };
+  }
+  return { state: "error", useOfficialFallback: false, markUnsupported: false };
+}
+
+/** @deprecated prefer decideCatalogSource — kept so 5601966 call sites stay explicit. */
+export function shouldUseOfficialFallback(
+  controlPlaneOk: boolean,
+  catalogCount: number,
+  status = 200,
+  html = false
+): boolean {
+  return decideCatalogSource({
+    status,
+    parsed: {
+      ok: controlPlaneOk,
+      kind: html ? "html" : controlPlaneOk ? "json" : "non-json",
+      marketplaceRouteUnsupported: html || status === 404,
+    },
+    catalogCount,
+  }).useOfficialFallback;
+}
+
+export function isProductGithub(server: Pick<MarketServer, "name" | "title" | "repository">): boolean {
+  if (/io\.github\.github\/github-mcp-server/i.test(server.name)) return true;
+  if (/github\.com\/github\/github-mcp-server/i.test(server.repository ?? "")) return true;
   const title = (server.title ?? "").trim();
-  return /^(github|github mcp)$/i.test(title);
+  return /^(github|github mcp)$/i.test(title) && /github\.com\/github\//i.test(server.repository ?? "");
+}
+
+export function rankOfficialServer(query: string, server: MarketServer): number {
+  const q = query.trim().toLowerCase();
+  let score = 0;
+  if (isProductGithub(server) && (!q || /github/.test(q))) score += 120;
+  if (server.name.toLowerCase() === "io.github.github/github-mcp-server") score += 80;
+  if (/github\.com\/github\/github-mcp-server/i.test(server.repository ?? "")) score += 50;
+  if ((server.publisher ?? "").toLowerCase() === "io.github.github") score += 25;
+  if (q && server.name.toLowerCase().includes(q)) score += 10;
+  if (q && (server.title ?? "").toLowerCase() === q) score += 20;
+  if (q && /postgres/.test(q) && /postgres/.test(`${server.name} ${server.title ?? ""}`)) {
+    score += /postgresql-mcp|postgres\/postgres/i.test(server.name) ? 40 : 15;
+  }
+  return score;
+}
+
+export function rankOfficialResults(query: string, servers: MarketServer[]): MarketServer[] {
+  return [...servers].sort((a, b) => rankOfficialServer(query, b) - rankOfficialServer(query, a));
+}
+
+export function supplementQueries(query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [CANONICAL_GITHUB_QUERY];
+  if (q === "github" || q === "github mcp") return [CANONICAL_GITHUB_QUERY];
+  if (q === "postgres" || q === "postgresql") return ["postgresql-mcp-server", "postgres"];
+  return [];
 }
 
 export function normalizeOfficialRow(row: any): MarketServer {
@@ -85,14 +185,7 @@ export function dedupeServers(servers: MarketServer[]): MarketServer[] {
 }
 
 export function preferKnownProducts(servers: MarketServer[]): MarketServer[] {
-  const rank = (s: MarketServer) => {
-    if (isProductGithub(s)) return 0;
-    const text = `${s.title ?? ""} ${s.name}`.toLowerCase();
-    if (/postgres/.test(text)) return 1;
-    if (/^slack|\/slack/.test(text)) return 2;
-    return 3;
-  };
-  return [...servers].sort((a, b) => rank(a) - rank(b));
+  return rankOfficialResults("", servers);
 }
 
 export function serversFromOfficialBody(body: unknown): MarketServer[] {
@@ -100,32 +193,113 @@ export function serversFromOfficialBody(body: unknown): MarketServer[] {
   return rows.map((row) => normalizeOfficialRow(row));
 }
 
+export function officialNextCursor(body: unknown): string | undefined {
+  const cursor = (body as { metadata?: { nextCursor?: unknown } })?.metadata?.nextCursor;
+  return typeof cursor === "string" && cursor.trim() ? cursor.trim() : undefined;
+}
+
+export type OfficialFetch = (
+  query: string,
+  limit: number,
+  cursor?: string
+) => Promise<{ ok: boolean; body: unknown; error?: string }>;
+
 export async function searchOfficialRegistry(
   query: string,
   limit = 24,
-  fetchOfficial?: (query: string, limit: number) => Promise<{ ok: boolean; body: unknown; error?: string }>
+  fetchOfficial?: OfficialFetch
 ): Promise<MarketServer[]> {
   const impl = fetchOfficial ?? defaultOfficialFetch;
   const res = await impl(query, limit);
   if (!res.ok) throw new Error(res.error || "Official registry unavailable");
-  return serversFromOfficialBody(res.body);
+  const first = serversFromOfficialBody(res.body);
+  const cursor = officialNextCursor(res.body);
+  if (!cursor || first.some((s) => rankOfficialServer(query, s) >= 80)) return rankOfficialResults(query, first);
+  const more = await impl(query, limit, cursor);
+  if (!more.ok) return rankOfficialResults(query, first);
+  return rankOfficialResults(query, dedupeServers([...first, ...serversFromOfficialBody(more.body)]));
 }
 
 export async function loadOfficialFallbackCatalog(
   query: string,
-  fetchOfficial?: (query: string, limit: number) => Promise<{ ok: boolean; body: unknown; error?: string }>
+  fetchOfficial?: OfficialFetch
 ): Promise<MarketServer[]> {
   const primary = await searchOfficialRegistry(query, 24, fetchOfficial);
-  if (query.trim()) return preferKnownProducts(primary);
   const extras: MarketServer[] = [];
-  for (const term of primary.some(isProductGithub) ? [] : ["github-mcp-server", "postgres"]) {
+  for (const term of supplementQueries(query)) {
+    if (term === query.trim()) continue;
     try {
       extras.push(...(await searchOfficialRegistry(term, 8, fetchOfficial)));
     } catch {
       /* keep whatever we already have */
     }
   }
-  return preferKnownProducts(dedupeServers([...extras, ...primary]));
+  return rankOfficialResults(query, dedupeServers([...extras, ...primary]));
+}
+
+export async function resolveMarketplaceCatalog(input: {
+  status: number;
+  text: string;
+  contentType?: string;
+  query: string;
+  backendUrl: string;
+  loadOfficial?: (query: string) => Promise<MarketServer[]>;
+}): Promise<{
+  state: CatalogState;
+  catalog: MarketServer[];
+  notice?: string;
+  error?: string;
+  parsed: ParsedApi;
+}> {
+  const parsed = parseApiJson(input.status, input.text, input.contentType);
+  const cloudCatalog: MarketServer[] = parsed.ok
+    ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
+    : [];
+  const decision = decideCatalogSource({
+    status: input.status,
+    parsed,
+    catalogCount: cloudCatalog.length,
+    cachedUnsupported: isMarketplaceUnsupported(input.backendUrl),
+  });
+  if (decision.markUnsupported) markMarketplaceUnsupported(input.backendUrl);
+
+  if (decision.state === "auth-required") {
+    return {
+      state: "auth-required",
+      catalog: [],
+      parsed,
+      error: parsed.error || "Marketplace needs a signed-in control plane session.",
+    };
+  }
+  if (decision.state === "offline") {
+    return { state: "offline", catalog: [], parsed, error: parsed.error || "Marketplace is offline." };
+  }
+  if (decision.state === "error") {
+    return { state: "error", catalog: cloudCatalog, parsed, error: parsed.error || `HTTP ${input.status}` };
+  }
+  if (decision.state === "cloud") {
+    return { state: "cloud", catalog: cloudCatalog, parsed };
+  }
+
+  try {
+    const official = await (input.loadOfficial ?? loadOfficialFallbackCatalog)(input.query);
+    if (official.length) {
+      return {
+        state: "official-fallback",
+        catalog: official,
+        parsed,
+        notice: "Cloud catalog unavailable · showing Official Registry results",
+      };
+    }
+    return { state: "degraded", catalog: [], parsed, error: "Official MCP Registry returned no servers." };
+  } catch (err: any) {
+    return {
+      state: "degraded",
+      catalog: [],
+      parsed,
+      error: err?.message || "Official MCP Registry unavailable",
+    };
+  }
 }
 
 export function installPayload(server: MarketServer, secrets?: Record<string, string>) {
@@ -154,15 +328,26 @@ export function installPayload(server: MarketServer, secrets?: Record<string, st
   throw new Error("This server has no supported install transport (need stdio or Streamable HTTP).");
 }
 
-async function defaultOfficialFetch(query: string, limit: number): Promise<{ ok: boolean; body: unknown; error?: string }> {
-  const ipc = (globalThis as { window?: { orvyn?: { marketplace?: { officialSearch?: (q: string, n?: number) => Promise<{ ok: boolean; body: unknown; error?: string }> } } } }).window?.orvyn
-    ?.marketplace?.officialSearch;
-  if (ipc) return ipc(query, limit);
+export function shouldUseHostInstall(parsed: Pick<ParsedApi, "marketplaceRouteUnsupported" | "ok">, status: number): boolean {
+  if (status === 401 || status === 403) return false;
+  return parsed.marketplaceRouteUnsupported || status === 404;
+}
+
+async function defaultOfficialFetch(query: string, limit: number, cursor?: string): Promise<{ ok: boolean; body: unknown; error?: string }> {
+  const ipc = (globalThis as { window?: { orvyn?: { marketplace?: { officialSearch?: (q: string, n?: number, c?: string) => Promise<{ ok: boolean; body: unknown; error?: string }> } } } }).window
+    ?.orvyn?.marketplace?.officialSearch;
+  if (ipc) return ipc(query, limit, cursor);
   const params = new URLSearchParams({ version: "latest", limit: String(limit) });
   if (query.trim()) params.set("search", query.trim());
-  const res = await fetch(`${OFFICIAL_REGISTRY_URL}/v0.1/servers?${params}`, { headers: { Accept: "application/json" } });
+  if (cursor) params.set("cursor", cursor);
+  const res = await fetch(`${OFFICIAL_REGISTRY_URL}/v0.1/servers?${params}`, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
+  });
   const text = await res.text();
-  if (text.trim().startsWith("<")) return { ok: false, body: {}, error: `Official registry returned HTML (HTTP ${res.status})` };
+  if (text.trim().startsWith("<") || /text\/html/i.test(res.headers.get("content-type") ?? "")) {
+    return { ok: false, body: {}, error: `Official registry returned HTML (HTTP ${res.status})` };
+  }
   try {
     const body = text.trim() ? JSON.parse(text) : {};
     return { ok: res.ok, body, error: res.ok ? undefined : body?.error || `Official registry HTTP ${res.status}` };

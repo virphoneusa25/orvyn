@@ -26,18 +26,22 @@ function sample(partial: Partial<MarketServer> & { name: string }): MarketServer
 }
 
 test("HTML marketplace responses become a control-plane error, not JSON.parse crash", () => {
-  const html = parseApiJson(200, "<!DOCTYPE html><html><body>nginx</body></html>");
+  const html = parseApiJson(200, "<!DOCTYPE html><html><body>nginx</body></html>", "text/html");
   assert.equal(html.ok, false);
+  assert.equal(html.kind, "html");
+  assert.equal(html.marketplaceRouteUnsupported, true);
   assert.match(html.error ?? "", /HTML/);
-  assert.match(html.error ?? "", /control plane|Local Mode/);
   const unauthorized = parseApiJson(401, "<!DOCTYPE html>");
   assert.match(unauthorized.error ?? "", /signed-in|HTML/);
-  const ok = parseApiJson(200, JSON.stringify({ results: [] }));
+  assert.equal(unauthorized.marketplaceRouteUnsupported, false);
+  const ok = parseApiJson(200, JSON.stringify({ results: [] }), "application/json");
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.body.results, []);
+  assert.equal(ok.marketplaceRouteUnsupported, false);
   const fail = parseApiJson(502, JSON.stringify({ error: "Official registry HTTP 502" }));
   assert.equal(fail.ok, false);
   assert.equal(fail.error, "Official registry HTTP 502");
+  assert.equal(fail.marketplaceRouteUnsupported, false);
 });
 
 test("GitHub MCP uses github.com/github.png — same avatar source as StarHunt", () => {

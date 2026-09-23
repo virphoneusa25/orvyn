@@ -482,8 +482,13 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("config:get", () => readConfig());
-ipcMain.handle("marketplace:officialSearch", (_evt, query: unknown, limit: unknown) =>
-  fetchOfficialRegistry(typeof query === "string" ? query : "", typeof limit === "number" ? limit : 24)
+ipcMain.handle("marketplace:officialSearch", (_evt, query: unknown, limit: unknown, cursor?: unknown) =>
+  fetchOfficialRegistry(
+    typeof query === "string" ? query : "",
+    typeof limit === "number" ? limit : 24,
+    fetch,
+    typeof cursor === "string" ? cursor : undefined
+  )
 );
 
 // ── Real terminal: PowerShell through child_process pipes ────────────────

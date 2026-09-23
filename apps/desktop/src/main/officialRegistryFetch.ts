@@ -24,11 +24,12 @@ export function isOfficialRegistryUrl(url: string): boolean {
 export async function fetchOfficialRegistry(
   query = "",
   limit = 24,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  cursor?: string
 ): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
-  const url = officialRegistryRequestUrl(query, limit);
+  const url = officialRegistryRequestUrl(query, limit, cursor);
   try {
-    const res = await fetchImpl(url, { headers: { Accept: "application/json" } });
+    const res = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
     const text = await res.text();
     const trimmed = (text ?? "").trim();
     if (trimmed.startsWith("<")) {

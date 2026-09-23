@@ -6,6 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import { classifyTool, effectivePermission, toGatewayPermission } from "./McpPermissionService";
 import { McpRegistry } from "./McpRegistry";
 import { McpManager } from "./McpManager";
@@ -160,6 +162,20 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
   } finally {
     rmSync(scriptPath, { force: true });
   }
+});
+
+test("6806dbc: registerProjectToolsFor re-registers connected MCP tools after registry.clear", () => {
+  const candidates = [
+    join(__dirname, "../ai/registerProjectTools.js"),
+    join(__dirname, "../ai/registerProjectTools.ts"),
+  ];
+  const file = candidates.find((p) => existsSync(p));
+  assert.ok(file, "registerProjectTools source is present");
+  const src = readFileSync(file!, "utf8");
+  const clear = src.indexOf("registry.clear");
+  const rereg = src.indexOf("reregisterConnectedTools");
+  assert.ok(clear >= 0, "registerProjectToolsFor still clears the tool registry at run start");
+  assert.ok(rereg > clear, "reregisterConnectedTools must run after registry.clear");
 });
 
 test("failure isolation: a server that cannot start reports ERROR, never throws", async () => {

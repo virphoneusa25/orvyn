@@ -1,7 +1,7 @@
 // IDE-style MCP Marketplace: left detail + right discovery.
 // Federation search / install / McpManager stay on the existing APIs.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiUrl, authHeaders } from "../connection";
+import { apiUrl, authHeaders, getConnectionConfig } from "../connection";
 import {
   DETAIL_TABS,
   EMPTY_FILTERS,
@@ -39,7 +39,13 @@ import {
   type UpdateRow,
 } from "../mcpMarketplaceModel";
 import { iconCandidates, parseApiJson, resolveMarketplaceIcon } from "../mcpMarketplaceIcons";
-import { installPayload, loadOfficialFallbackCatalog, shouldUseOfficialFallback } from "../mcpOfficialCatalog";
+import {
+  installPayload,
+  isMarketplaceUnsupported,
+  resolveMarketplaceCatalog,
+  shouldUseHostInstall,
+  type CatalogState,
+} from "../mcpOfficialCatalog";
 
 interface Health {
   id: string;
@@ -78,6 +84,7 @@ export function McpMarketplace({
   const [degraded, setDegraded] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catalogState, setCatalogState] = useState<CatalogState>("cloud");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filters, setFilters] = useState<MarketFilters>(EMPTY_FILTERS);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -130,53 +137,47 @@ export function McpMarketplace({
   const search = useCallback(async (query: string) => {
     setLoading(true);
     setError(null);
+    const backendUrl = getConnectionConfig().backendUrl;
     try {
       const params = new URLSearchParams();
       if (query) params.set("q", query);
       params.set("limit", "24");
       if (filters.category) params.set("category", filters.category);
+      const skipMarket = isMarketplaceUnsupported(backendUrl);
       const [searchRes, healthRes, statusRes, updateRes] = await Promise.all([
-        fetch(apiUrl(`/mcp/marketplace/search?${params}`), { headers: authHeaders() }),
-        fetch(apiUrl("/mcp/marketplace/health"), { headers: authHeaders() }),
+        skipMarket
+          ? Promise.resolve(new Response("<!DOCTYPE html>", { status: 404, headers: { "content-type": "text/html" } }))
+          : fetch(apiUrl(`/mcp/marketplace/search?${params}`), { headers: authHeaders() }),
+        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetch(apiUrl("/mcp/marketplace/health"), { headers: authHeaders() }),
         fetch(apiUrl("/mcp/statuses"), { headers: authHeaders() }),
-        fetch(apiUrl("/mcp/marketplace/updates"), { headers: authHeaders() }),
+        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetch(apiUrl("/mcp/marketplace/updates"), { headers: authHeaders() }),
       ]);
       const searchText = await searchRes.text();
-      const parsed = parseApiJson(searchRes.status, searchText);
       const healthText = await healthRes.text().catch(() => "");
       const statusText = await statusRes.text().catch(() => "");
       const updateText = await updateRes.text().catch(() => "");
-      const healthParsed = parseApiJson(healthRes.status, healthText);
-      const statusParsed = parseApiJson(statusRes.status, statusText);
-      const updateParsed = parseApiJson(updateRes.status, updateText);
-      const data = parsed.body ?? {};
-      let catalog: MarketServer[] = parsed.ok ? (data.results?.map((r: { server: MarketServer }) => r.server) ?? []) : [];
+      const healthParsed = parseApiJson(healthRes.status, healthText, healthRes.headers.get("content-type") ?? undefined);
+      const statusParsed = parseApiJson(statusRes.status, statusText, statusRes.headers.get("content-type") ?? undefined);
+      const updateParsed = parseApiJson(updateRes.status, updateText, updateRes.headers.get("content-type") ?? undefined);
+      const resolved = await resolveMarketplaceCatalog({
+        status: searchRes.status,
+        text: searchText,
+        contentType: searchRes.headers.get("content-type") ?? undefined,
+        query,
+        backendUrl,
+      });
       const statuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
-      const notices = [...(data.degraded ?? providerWarning(healthParsed.body.providers ?? []))];
-      if (shouldUseOfficialFallback(parsed.ok, catalog.length)) {
-        try {
-          const official = await loadOfficialFallbackCatalog(query);
-          if (official.length) {
-            catalog = official;
-            notices.push(
-              parsed.ok
-                ? "Showing Official MCP Registry."
-                : "Showing Official MCP Registry — the connected Cloud API is not serving /mcp/marketplace."
-            );
-          } else if (!parsed.ok) {
-            setError(parsed.error || `HTTP ${searchRes.status}`);
-          }
-        } catch (err: any) {
-          if (!parsed.ok) setError(parsed.error || err.message || `HTTP ${searchRes.status}`);
-        }
-      } else {
-        setError(null);
-      }
-      setResults(mergeInstalled(catalog, statuses));
-      setHealth(data.health ?? healthParsed.body.providers ?? []);
+      const notices = [...providerWarning(healthParsed.body.providers ?? [])];
+      if (resolved.notice) notices.push(resolved.notice);
+      setCatalogState(resolved.state);
+      if (resolved.state === "official-fallback") setError(null);
+      else setError(resolved.error ?? null);
+      setResults(mergeInstalled(resolved.catalog, statuses));
+      setHealth(healthParsed.body.providers ?? []);
       setDegraded(notices);
       setUpdates(updateParsed.body.updates ?? []);
     } catch (err: any) {
+      setCatalogState("error");
       setError(err.message);
     } finally {
       setLoading(false);
@@ -250,15 +251,15 @@ export function McpMarketplace({
         body: JSON.stringify({ server, secrets, connect: true, cwd: projectRoot }),
       });
       const text = await res.text();
-      const parsed = parseApiJson(res.status, text);
-      if (!parsed.ok) {
+      const parsed = parseApiJson(res.status, text, res.headers.get("content-type") ?? undefined);
+      if (!parsed.ok && shouldUseHostInstall(parsed, res.status)) {
         const host = await fetch(apiUrl("/mcp/servers"), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify(installPayload(server, secrets)),
         });
         const hostText = await host.text();
-        const hostParsed = parseApiJson(host.status, hostText);
+        const hostParsed = parseApiJson(host.status, hostText, host.headers.get("content-type") ?? undefined);
         if (!hostParsed.ok) throw new Error(hostParsed.error || parsed.error || "Install failed");
         const createdId = hostParsed.body?.server?.id;
         if (createdId) {
@@ -267,6 +268,8 @@ export function McpMarketplace({
             headers: { "Content-Type": "application/json", ...authHeaders() },
           }).catch(() => undefined);
         }
+      } else if (!parsed.ok) {
+        throw new Error(parsed.error || "Install failed");
       }
       onInstalled?.();
       await search(debounced);
@@ -449,10 +452,17 @@ export function McpMarketplace({
             </IconBtn>
             <IconBtn title="More" onClick={() => setOverflow((v) => !v)}>⋯</IconBtn>
           </div>
-          {warnings.length > 0 && (
+          {catalogState === "official-fallback" && (
+            <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan, #22D3EE)", marginTop: 8 }}>
+              Cloud catalog unavailable · showing Official Registry results
+            </div>
+          )}
+          {warnings.length > 0 && catalogState !== "official-fallback" && (
             <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 8 }}>{warnings.join(" · ")}</div>
           )}
-          {error && <div style={{ fontSize: 11, color: "var(--orvyn-red, #F25F75)", marginTop: 6 }}>{error}</div>}
+          {error && catalogState !== "official-fallback" && (
+            <div style={{ fontSize: 11, color: "var(--orvyn-red, #F25F75)", marginTop: 6 }}>{error}</div>
+          )}
         </div>
 
         {filterOpen && (
@@ -522,6 +532,11 @@ export function McpMarketplace({
               ))}
             </Section>
           )}
+          {openSections.private && (
+            <div style={{ padding: "8px 12px 16px" }}>
+              <PrivateRegistries onSaved={() => void search(debounced)} />
+            </div>
+          )}
           {!loading && filtered.length === 0 && (
             <div style={{ padding: 18, fontSize: 12.5, color: "var(--orvyn-text-muted)" }}>
               <div style={{ fontWeight: 600, color: "var(--orvyn-text)", marginBottom: 6 }}>No MCP servers found</div>
@@ -530,7 +545,6 @@ export function McpMarketplace({
                 <button style={ghostBtn} onClick={() => document.dispatchEvent(new CustomEvent("orvyn:mcp-add-server"))}>Add Server</button>
                 <button style={ghostBtn} onClick={() => setOpenSections((s) => ({ ...s, private: true }))}>Add Registry</button>
               </div>
-              <PrivateRegistries onSaved={() => void search(debounced)} />
             </div>
           )}
         </div>

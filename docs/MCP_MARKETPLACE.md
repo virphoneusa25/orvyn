@@ -105,7 +105,7 @@ Access cannot bypass hard policy.
 
 Search still federates Official + Glama + local + private. Install reuses the Review → Permissions → Auth → Confirm drawer over the detail pane. `orvyn:marketplace-open` deep-links a capability query into the right-hand search.
 
-Server icons use published registry artwork when present, otherwise the product mark (GitHub, PostgreSQL, Slack, Docker, …) or the publisher’s GitHub avatar. Initials are only the fallback. If a Cloud backend returns HTML, 404, or an empty catalog for `/mcp/marketplace`, the desktop federates the Official MCP Registry directly (`registry.modelcontextprotocol.io`) so Discover / Recommended still show real servers and logos. Install then uses `/mcp/marketplace/install` when present, or `/mcp/servers` on older control planes.
+Server icons use published registry artwork when present, otherwise the product mark (GitHub, PostgreSQL, Slack, Docker, …) or the publisher’s GitHub avatar. Initials are only the fallback. If a Cloud backend returns HTML or 404 for `/mcp/marketplace` (route missing), the desktop federates the Official MCP Registry directly (`registry.modelcontextprotocol.io`) so Discover / Recommended still show real servers and logos. A 401/403 is treated as an auth/session problem and does not silently use the public registry. A valid 200 with zero hits is a real empty search, not a missing route. After a host is known to lack the Marketplace API, later keystrokes skip the dead route and keep using Official Registry discovery. Install uses `/mcp/marketplace/install` when present, or `/mcp/servers` only when that install route is missing — policy still runs in McpManager.
 
 Composer **+** menu: **Add MCP capability**. Built-in ORVYN tools stay on their own tab.
 

@@ -90,26 +90,71 @@ export function resolveMarketplaceIcon(server: MarketServer): ResolvedIcon {
   return { kind: src ? "image" : "initials", src, letters: initials(server), hue };
 }
 
-export function parseApiJson(status: number, text: string): { ok: boolean; body: any; error?: string } {
+export type ParsedApiKind = "json" | "html" | "empty" | "non-json";
+
+export interface ParsedApi {
+  ok: boolean;
+  body: any;
+  error?: string;
+  kind: ParsedApiKind;
+  marketplaceRouteUnsupported: boolean;
+}
+
+export function looksLikeHtml(text: string, contentType?: string): boolean {
+  if (contentType && /text\/html/i.test(contentType)) return true;
   const trimmed = (text ?? "").trim();
+  return trimmed.startsWith("<") || /^<!doctype html/i.test(trimmed);
+}
+
+function isRouteNotFound(status: number, body: any): boolean {
+  if (status === 404) return true;
+  const err = String(body?.error ?? body?.message ?? "");
+  return /cannot get|not found|unknown route|no such route|marketplace/i.test(err) && /404|not found|cannot get/i.test(`${status} ${err}`);
+}
+
+export function parseApiJson(status: number, text: string, contentType?: string): ParsedApi {
+  const trimmed = (text ?? "").trim();
+  const html = looksLikeHtml(trimmed, contentType);
+  const auth = status === 401 || status === 403;
   if (!trimmed) {
-    return { ok: status >= 200 && status < 300, body: {}, error: status >= 200 && status < 300 ? undefined : `HTTP ${status}` };
+    return {
+      ok: status >= 200 && status < 300,
+      body: {},
+      error: status >= 200 && status < 300 ? undefined : `HTTP ${status}`,
+      kind: "empty",
+      marketplaceRouteUnsupported: !auth && status === 404,
+    };
   }
-  if (trimmed.startsWith("<")) {
+  if (html) {
     return {
       ok: false,
       body: {},
-      error:
-        status === 401 || status === 403
-          ? "Marketplace needs a signed-in control plane session."
-          : `Marketplace API returned HTML (HTTP ${status}). The connected backend is not serving /mcp/marketplace — use Local Mode or deploy the current control plane.`,
+      kind: "html",
+      marketplaceRouteUnsupported: !auth,
+      error: auth
+        ? "Marketplace needs a signed-in control plane session."
+        : `Marketplace API returned HTML (HTTP ${status}). The connected backend is not serving /mcp/marketplace.`,
     };
   }
   try {
     const body = JSON.parse(trimmed);
-    if (status >= 200 && status < 300) return { ok: true, body };
-    return { ok: false, body, error: body?.error || `HTTP ${status}` };
+    if (status >= 200 && status < 300) {
+      return { ok: true, body, kind: "json", marketplaceRouteUnsupported: false };
+    }
+    return {
+      ok: false,
+      body,
+      kind: "json",
+      marketplaceRouteUnsupported: !auth && isRouteNotFound(status, body),
+      error: body?.error || `HTTP ${status}`,
+    };
   } catch {
-    return { ok: false, body: {}, error: `Marketplace API returned non-JSON (HTTP ${status}).` };
+    return {
+      ok: false,
+      body: {},
+      kind: "non-json",
+      marketplaceRouteUnsupported: !auth && status === 404,
+      error: `Marketplace API returned non-JSON (HTTP ${status}).`,
+    };
   }
 }

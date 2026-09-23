@@ -84,9 +84,10 @@ export function installPreviewBridge(): void {
       set: async (config) => config,
     },
     marketplace: {
-      officialSearch: async (query, limit = 24) => {
+      officialSearch: async (query, limit = 24, cursor) => {
         const params = new URLSearchParams({ version: "latest", limit: String(limit) });
         if (query.trim()) params.set("search", query.trim());
+        if (cursor) params.set("cursor", cursor);
         const res = await fetch(`https://registry.modelcontextprotocol.io/v0.1/servers?${params}`);
         const body = await res.json().catch(() => ({}));
         return { ok: res.ok, status: res.status, body, error: res.ok ? undefined : body?.error };
