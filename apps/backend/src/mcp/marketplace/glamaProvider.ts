@@ -16,7 +16,7 @@ export function glamaProvider(
           id: "glama",
           name: "Glama",
           status: "needs-key",
-          detail: "Set GLAMA_API_KEY to federate Glama. Official Registry still works.",
+          detail: "Set GLAMA_API_KEY or mcp.secret.glama (glm_…) for Glama discovery.",
         };
       }
       try {
@@ -46,7 +46,7 @@ export function glamaProvider(
             id: "glama",
             name: "Glama",
             status: "needs-key",
-            detail: "Set GLAMA_API_KEY to federate Glama. Official Registry still works.",
+            detail: "Set GLAMA_API_KEY or mcp.secret.glama (glm_…) for Glama discovery.",
             errorClass: "needs-key",
           },
         };

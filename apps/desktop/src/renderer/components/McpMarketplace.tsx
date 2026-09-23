@@ -1261,6 +1261,8 @@ function PrivateRegistries({ onSaved }: { onSaved: () => void }) {
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
   const [glama, setGlama] = useState("");
+  const [smithery, setSmithery] = useState("");
+  const [secretError, setSecretError] = useState("");
   const [configured, setConfigured] = useState<{ glama?: boolean; smithery?: boolean }>({});
   useEffect(() => {
     void fetch(apiUrl("/mcp/marketplace/secrets"), { headers: authHeaders() })
@@ -1277,24 +1279,38 @@ function PrivateRegistries({ onSaved }: { onSaved: () => void }) {
     setToken("");
     onSaved();
   }
-  async function saveGlama() {
+  async function saveDirectoryKey(provider: "glama" | "smithery") {
+    setSecretError("");
     const res = await fetch(apiUrl("/mcp/marketplace/secrets"), {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ glama }),
+      body: JSON.stringify(provider === "glama" ? { glama } : { smithery }),
     });
     const body = await res.json().catch(() => ({}));
     setConfigured(body.configured ?? {});
-    setGlama("");
+    if (!res.ok) {
+      setSecretError(String(body.error ?? `Could not save ${provider} key`));
+      return;
+    }
+    if (provider === "glama") setGlama("");
+    else setSmithery("");
     onSaved();
   }
   return (
     <div style={{ marginTop: 16 }}>
+      {secretError ? (
+        <div style={{ fontSize: 11, color: "var(--orvyn-danger, #f07178)", marginBottom: 8 }}>{secretError}</div>
+      ) : null}
       <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>
         Glama directory key {configured.glama ? "· configured" : "· not set"}
       </div>
       <input style={{ ...searchInput, marginBottom: 6 }} type="password" value={glama} onChange={(e) => setGlama(e.target.value)} placeholder="glm_… stored as mcp.secret.glama" />
-      <button onClick={() => void saveGlama()} style={{ ...ghostBtn, marginBottom: 14 }}>Save Glama key</button>
+      <button onClick={() => void saveDirectoryKey("glama")} style={{ ...ghostBtn, marginBottom: 14 }}>Save Glama key</button>
+      <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>
+        Smithery directory key {configured.smithery ? "· configured" : "· not set"}
+      </div>
+      <input style={{ ...searchInput, marginBottom: 6 }} type="password" value={smithery} onChange={(e) => setSmithery(e.target.value)} placeholder="UUID stored as mcp.secret.smithery" />
+      <button onClick={() => void saveDirectoryKey("smithery")} style={{ ...ghostBtn, marginBottom: 14 }}>Save Smithery key</button>
       <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>Private registry (Official API)</div>
       <input style={{ ...searchInput, marginBottom: 6 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" />
       <input style={{ ...searchInput, marginBottom: 6 }} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://registry.example.com" />

@@ -15,6 +15,24 @@ import { MARKETPLACE_CATALOG_VERSION, MARKETPLACE_INSTALL_API_VERSION, SUPPORTED
 const REGISTRIES_KEY = "mcp.marketplace.registries.v1";
 const BLOCKLIST_KEY = "mcp.marketplace.blocklist.v1";
 
+export function validateProviderSecret(provider: "glama" | "smithery", token: string): string {
+  const value = token.trim();
+  if (!value) return "";
+  if (provider === "glama") {
+    if (!value.startsWith("glm_")) {
+      throw new Error("Glama keys start with glm_. Create one at glama.ai/settings/api-keys.");
+    }
+    return value;
+  }
+  if (value.startsWith("glm_") || value.startsWith("mcp_")) {
+    throw new Error("That token is not a Smithery key. Use the UUID from smithery.ai.");
+  }
+  if (value.length < 16) {
+    throw new Error("Smithery key is too short.");
+  }
+  return value;
+}
+
 export class MarketplaceService {
   readonly index: CapabilityIndex;
   private aggregator: RegistryAggregator;
@@ -86,12 +104,8 @@ export class MarketplaceService {
 
   setProviderSecret(provider: "glama" | "smithery", token: string): { glama: boolean; smithery: boolean } {
     const key = provider === "glama" ? "mcp.secret.glama" : "mcp.secret.smithery";
-    const value = token.trim();
-    if (!value) {
-      this.store.setSetting(key, "");
-    } else {
-      this.store.setSetting(key, value);
-    }
+    const value = validateProviderSecret(provider, token);
+    this.store.setSetting(key, value);
     this.refreshProviders();
     return this.providerSecretStatus();
   }

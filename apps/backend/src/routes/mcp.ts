@@ -221,9 +221,13 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
   r.put("/marketplace/secrets", (req, res) => {
     const t = requireTenant(req);
     const market = marketplaceFor(t.mcpManager, t.localStore);
-    if (req.body?.glama !== undefined) market.setProviderSecret("glama", String(req.body.glama ?? ""));
-    if (req.body?.smithery !== undefined) market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
-    res.json({ configured: market.providerSecretStatus() });
+    try {
+      if (req.body?.glama !== undefined) market.setProviderSecret("glama", String(req.body.glama ?? ""));
+      if (req.body?.smithery !== undefined) market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
+      res.json({ configured: market.providerSecretStatus() });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message, configured: market.providerSecretStatus() });
+    }
   });
 
   r.get("/marketplace/registries", (req, res) => {
