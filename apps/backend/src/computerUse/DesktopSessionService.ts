@@ -108,11 +108,12 @@ export class DesktopSessionService {
     }
     if (isHostDesktopAllowed(identity.tenantId) && !this.getSession(identity)) {
       owner === "user" ? takeHostControl(identity.tenantId) : returnHostControl(identity.tenantId);
-      return { ok: true };
+      return { ok: true, returned: owner === "orion" };
     }
     const session = this.getSession(identity);
     if (!session) return { ok: false, error: "No Desktop session." };
-    return requestControl(session, owner);
+    const result = requestControl(session, owner);
+    return { ok: result.ok, error: result.reason, returned: result.ok && owner === "orion" };
   }
 
   async openApp(identity: ComputerUseIdentity, app: string): Promise<{ ok: boolean; error?: string; sessionId?: string }> {
