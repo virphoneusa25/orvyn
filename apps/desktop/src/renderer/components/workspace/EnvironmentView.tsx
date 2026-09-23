@@ -27,6 +27,7 @@ export function EnvironmentView({
       <Row label="Install" value={info.installScript} />
       <Row label="Start" value={info.startScript} />
       <Row label="Limits" value={info.limits} />
+      <Row label="Variables" value="Set for this environment — values are never shown" />
       <Row label="Run" value={runId || "No active run"} />
       <div>
         <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>Ports</div>

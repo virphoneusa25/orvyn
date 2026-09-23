@@ -40,7 +40,7 @@ test("ArtifactService persist/list/read/delete, hash, files tree, restart", asyn
     const tree = await svc.filesTree();
     const generated = tree.locations.find((l) => l.id === "generated");
     assert.ok(generated);
-    assert.equal(generated!.files.some((f) => f.name === "virphone-logo.png" && f.id === png.artifactId), true);
+    assert.equal(generated!.files.some((f) => f.name === "virphone-logo.png" && f.id === png.artifactId && f.source === "artifact"), true);
     const recents = tree.locations.find((l) => l.id === "recents");
     assert.ok(recents?.files.some((f) => f.name === "virphone-logo.png"));
     const collision = await svc.persistArtifact({ name: "virphone-logo.png", kind: "generated", bytes: MINIMAL_PNG, mimeType: "image/png" });

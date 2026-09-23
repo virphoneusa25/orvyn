@@ -560,6 +560,7 @@ export class ArtifactService {
 
   async listProjectFiles(projectRoot?: string | null, max = 80): Promise<FilesLocation["files"]> {
     const root = projectRoot || this.virtualRoot();
+    const source = projectFileSource(root);
     await fs.mkdir(root, { recursive: true });
     const out: FilesLocation["files"] = [];
     const skip = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);
@@ -578,7 +579,7 @@ export class ArtifactService {
         if (e.isDirectory()) await walk(path.join(dir, e.name), nextRel, depth + 1);
         else {
           const st = await fs.stat(path.join(dir, e.name)).catch(() => null);
-          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, badge: "Project", source: "local" });
+          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, badge: source === "local" ? "Project" : source.toUpperCase(), source });
         }
       }
     }
@@ -600,6 +601,7 @@ export class ArtifactService {
       bytes: a.size,
       size: a.size,
       badge,
+      source: a.kind === "upload" ? "upload" : "artifact",
       runId: a.runId,
       sha256: a.sha256,
       downloadUrl: urls.downloadUrl,
@@ -626,6 +628,15 @@ export class ArtifactService {
       ],
     };
   }
+}
+
+export function projectFileSource(root: string): "local" | "cloud" | "sandbox" | "virtual" {
+  const n = root.replace(/\\/g, "/").toLowerCase();
+  if (n.includes("/sandbox") || n.includes("/sandboxes/")) return "sandbox";
+  if (n.includes("virtual-workspace")) {
+    return process.env.ORVYN_PROJECTS_DIR || process.env.ORVYN_CLOUD_MODE === "1" ? "cloud" : "virtual";
+  }
+  return "local";
 }
 
 export const ARTIFACT_MAX_BYTES = MAX_ARTIFACT_BYTES;

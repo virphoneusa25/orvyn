@@ -37,7 +37,7 @@ export function TerminalInspector({
           }}
         >
           {active && <option value="orion">ORION process</option>}
-          <option value="local">Local</option>
+          {environment !== "cloud" && environment !== "sandbox" && <option value="local">This environment</option>}
         </select>
         {active && (
           <span style={{ fontSize: 11.5, color: "var(--orvyn-text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

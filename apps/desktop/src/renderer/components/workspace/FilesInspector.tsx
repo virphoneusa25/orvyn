@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
-import { mergeFileSections, shouldShowBadge, type WorkbenchFileSection } from "../../workbenchFiles";
+import { searchFileTree, shouldShowBadge, type WorkbenchFileSection } from "../../workbenchFiles";
+import { composeWorkbenchFileTree, resolveProjectFetchRoot } from "../../workbenchFileProviders";
 import type { WorkbenchEnvironment } from "../../workbenchEnvironment";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
@@ -66,9 +67,7 @@ export function FilesInspector({
 
   useEffect(() => {
     let alive = true;
-    const cloud = isCloudBackend(getConnectionConfig().backendUrl);
-    const foreign = Boolean(projectRoot && (/^[A-Za-z]:[\\/]/.test(projectRoot) || projectRoot.startsWith("\\\\")));
-    const usableRoot = projectRoot && !(cloud && foreign) ? projectRoot : null;
+    const usableRoot = resolveProjectFetchRoot(projectRoot, isCloudBackend(getConnectionConfig().backendUrl));
     const suffix = usableRoot ? `?projectRoot=${encodeURIComponent(usableRoot)}` : "";
     fetch(apiUrl("/files" + suffix), { headers: authHeaders() })
       .then((r) => r.json())
@@ -85,28 +84,20 @@ export function FilesInspector({
     };
   }, [projectRoot, artifacts.length, files.length]);
 
-  const tree = useMemo(() => mergeFileSections(
-    locations,
+  const tree = useMemo(() => composeWorkbenchFileTree({
     environment,
-    runTouched.map((f) => ({
+    projectRoot,
+    locations,
+    extras: runTouched.map((f) => ({
       name: f.path.split(/[\\/]/).pop() || f.path,
       path: f.path,
       source: f.kind === "artifact" ? "artifact" : "local",
       kind: f.kind,
-    }))
-  ), [locations, runTouched, environment]);
+    })),
+  }), [locations, runTouched, environment, projectRoot]);
   const merged: WorkbenchFileSection[] = tree.sections;
 
-  const allFiles = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const files = merged.flatMap((l) => l.files);
-    if (!q) return files;
-    return files.filter((f) =>
-      f.name.toLowerCase().includes(q) ||
-      (f.mediaType ?? "").toLowerCase().includes(q) ||
-      (f.kind ?? "").toLowerCase().includes(q)
-    );
-  }, [merged, query]);
+  const allFiles = useMemo(() => searchFileTree(tree, query), [tree, query]);
 
   useEffect(() => {
     if (activePath) setSelected(activePath);
@@ -198,7 +189,7 @@ export function FilesInspector({
             <div style={emptyBody()}>{loadError || "Generated artifacts, uploads, and run files still appear below."}</div>
           </div>
         )}
-        {merged.filter((l) => l.id !== "project").map((loc) => (
+        {merged.filter((l) => l.id === "generated" || l.id === "uploads" || l.id === "artifacts").map((loc) => (
           <div key={loc.id}>
             <div style={{ fontSize: 10, letterSpacing: 0.8, color: "var(--orvyn-text-muted)" }}>{loc.label.toUpperCase()}</div>
             <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "6px 0" }}>Empty</div>
