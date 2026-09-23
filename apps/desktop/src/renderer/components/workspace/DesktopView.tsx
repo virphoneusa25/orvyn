@@ -409,6 +409,13 @@ export function DesktopView({
         <MonitorIcon /> {session.width} × {session.height}
       </span>
       <span style={{ flex: 1 }} />
+      <button
+        style={ghostBtn()}
+        onClick={() => setExpanded(v => !v)}
+        title={expanded ? "Collapse Desktop to Workbench panel" : "Expand Desktop to full window"}
+      >
+        {expanded ? "⤡ Collapse" : "⤢ Expand"}
+      </button>
       {user && (
         <button style={ghostBtn()} onClick={() => void setOwner("orion")}>Return to ORION</button>
       )}
@@ -566,7 +573,14 @@ export function DesktopView({
   );
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14" }}>
+    <div style={expanded ? {
+      position: "fixed" as const,
+      inset: 0,
+      zIndex: 1000,
+      background: "#070b14",
+      display: "flex",
+      flexDirection: "column" as const,
+    } : { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14" }}>
       {!fullscreen && header}
       <div style={fullscreen
         ? { position: "fixed", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "#04060f" }
