@@ -23,7 +23,7 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
     name: "io.modelcontextprotocol/filesystem",
     title: "Filesystem",
     description:
-      "Official TypeScript MCP reference server for secure file operations with configurable directory access.",
+      "Official JavaScript / TypeScript MCP reference server for secure file operations with configurable directory access.",
     language: "typescript",
     registry: "npm",
     identifier: "@modelcontextprotocol/server-filesystem",
@@ -35,7 +35,7 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
   {
     name: "io.modelcontextprotocol/memory",
     title: "Memory",
-    description: "Official TypeScript MCP reference server that stores a knowledge graph for persistent memory.",
+    description: "Official JavaScript / TypeScript MCP reference server that stores a knowledge graph for persistent memory.",
     language: "typescript",
     registry: "npm",
     identifier: "@modelcontextprotocol/server-memory",
@@ -47,7 +47,7 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
   {
     name: "io.modelcontextprotocol/everything",
     title: "Everything",
-    description: "Official TypeScript MCP reference server that exercises prompts, resources, and tools.",
+    description: "Official JavaScript / TypeScript MCP reference server that exercises prompts, resources, and tools.",
     language: "typescript",
     registry: "npm",
     identifier: "@modelcontextprotocol/server-everything",
@@ -59,7 +59,7 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
   {
     name: "io.modelcontextprotocol/sequential-thinking",
     title: "Sequential Thinking",
-    description: "Official TypeScript MCP reference server for step-by-step problem solving.",
+    description: "Official JavaScript / TypeScript MCP reference server for step-by-step problem solving.",
     language: "typescript",
     registry: "npm",
     identifier: "@modelcontextprotocol/server-sequential-thinking",
@@ -109,6 +109,10 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
 const JS_TERMS = new Set(["js", "javascript", "typescript", "ts", "node", "nodejs"]);
 const PY_TERMS = new Set(["python", "py", "pypi", "uvx"]);
 
+const REFERENCE_PACKAGES = new Set(
+  OFFICIAL_REFERENCE_SERVERS.map((s) => s.identifier.toLowerCase())
+);
+
 export function isOfficialReferenceServer(server: {
   name?: string;
   canonicalId?: string;
@@ -118,10 +122,7 @@ export function isOfficialReferenceServer(server: {
   const id = `${server.canonicalId ?? ""} ${server.name ?? ""}`.toLowerCase();
   if (id.includes("io.modelcontextprotocol/")) return true;
   const pkgs = (server.packages ?? []).map((p) => (p.identifier ?? "").toLowerCase());
-  if (pkgs.some((p) => p.startsWith("@modelcontextprotocol/server-") || /^mcp-server-(git|fetch|time)$/.test(p))) {
-    return true;
-  }
-  return /github\.com\/modelcontextprotocol\/servers/i.test(server.repository ?? "");
+  return pkgs.some((p) => REFERENCE_PACKAGES.has(p));
 }
 
 export function officialReferenceById(id: string): MarketplaceMcpServer | null {

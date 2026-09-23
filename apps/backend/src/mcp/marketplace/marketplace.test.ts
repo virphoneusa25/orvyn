@@ -235,7 +235,12 @@ test("official javascript/python searches surface first-party reference servers"
     ok: true,
     status: 200,
     json: async () => ({
-      servers: [sampleOfficial("com.a2awire/data-npm-release-node-package-javascript-dependency", "npm Release Tracker")],
+      servers: [
+        sampleOfficial("com.a2awire/data-npm-release-node-package-javascript-dependency", "npm Release Tracker", {
+          repository: { url: "https://github.com/ee324/a2awire", source: "github" },
+          packages: [{ registryType: "npm", identifier: "a2awire-javascript-tracker", version: "1.0.0" }],
+        }),
+      ],
       metadata: {},
     }),
   });

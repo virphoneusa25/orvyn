@@ -24,6 +24,7 @@ export function catalogCacheKey(input: {
   page?: string | number;
 }): string {
   return [
+    "v2",
     (input.provider ?? "federated").toLowerCase(),
     String(input.query ?? "").trim().toLowerCase().slice(0, 200),
     String(input.filters ?? ""),
@@ -118,7 +119,7 @@ export class CatalogCache<T> {
   }
 }
 
-export function settingCacheStore(store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void }, key = "mcp.marketplace.catalogCache.v1"): CatalogCacheStore {
+export function settingCacheStore(store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void }, key = "mcp.marketplace.catalogCache.v2"): CatalogCacheStore {
   return {
     load() {
       try {
