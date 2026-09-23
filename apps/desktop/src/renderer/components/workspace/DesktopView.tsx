@@ -17,6 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
+import { imageKind, sessionCanStream } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -97,6 +98,7 @@ export function DesktopView({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [frameDrawn, setFrameDrawn] = useState(false);
+  const [streamNote, setStreamNote] = useState<string | null>(null);
   const [imageRect, setImageRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const viewRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -133,16 +135,39 @@ export function DesktopView({
     } catch { /* transient */ }
   }, [projectRoot, runId]);
 
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const projectRef = useRef(projectRoot);
+  projectRef.current = projectRoot;
+  const runRef = useRef(runId);
+  runRef.current = runId;
+  const qualityRef = useRef(quality);
+  qualityRef.current = quality;
+  const frameInFlight = useRef(false);
+
   async function pullFrame() {
-    if (!projectRoot || !session?.live) return;
+    const root = projectRef.current;
+    const current = sessionRef.current;
+    if (!root || !sessionCanStream(current) || frameInFlight.current) return;
+    frameInFlight.current = true;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
     try {
-      const q = new URLSearchParams({ projectRoot, q: quality, ...(runId ? { runId } : {}) });
-      const res = await fetch(apiUrl(`/desktop/frame?${q}&_=${Date.now()}`), { headers: authHeaders(), cache: "no-store" });
-      if (!res.ok) { setInterrupted(true); return; }
-      setInterrupted(false);
-      const blob = await res.blob();
-      if (!blob.type.startsWith("image/")) return;
-      const bitmap = await createImageBitmap(blob);
+      const q = new URLSearchParams({ projectRoot: root, q: qualityRef.current, ...(runRef.current ? { runId: runRef.current } : {}) });
+      const res = await fetch(apiUrl(`/desktop/frame?${q}&_=${Date.now()}`), { headers: authHeaders(), cache: "no-store", signal: ctrl.signal });
+      if (!res.ok) {
+        setInterrupted(true);
+        setStreamNote(res.status === 409 ? "The desktop is up, but the picture is not ready yet." : `Picture request failed (${res.status}).`);
+        return;
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const kind = imageKind(bytes);
+      if (!kind) {
+        setInterrupted(true);
+        setStreamNote("Desktop replied without a picture.");
+        return;
+      }
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: kind === "png" ? "image/png" : "image/jpeg" }));
       const canvas = canvasRef.current;
       if (canvas) {
         canvas.width = bitmap.width;
@@ -151,12 +176,18 @@ export function DesktopView({
         if (ctx) {
           ctx.drawImage(bitmap, 0, 0);
           setFrameDrawn(true);
+          setInterrupted(false);
+          setStreamNote(null);
           lastFrameAt.current = Date.now();
         }
       }
       bitmap.close();
     } catch {
       setInterrupted(true);
+      setStreamNote("The picture stream timed out.");
+    } finally {
+      clearTimeout(timer);
+      frameInFlight.current = false;
     }
   }
 
@@ -176,21 +207,24 @@ export function DesktopView({
     void startSession();
   }, [projectRoot, sandboxAvailable, session, starting]);
 
+  const refreshRef = useRef(refreshSession);
+  refreshRef.current = refreshSession;
+  // One pump for the life of the pane. It reads the latest session through
+  // refs, so a React re-render cannot stop the stream mid-frame.
   useEffect(() => {
-    if (!session?.live) return;
-    void pullFrame();
-    const ms = quality === "low" ? 220 : quality === "high" ? 55 : 90;
-    const id = setInterval(() => void pullFrame(), ms);
-    // AUTO-RECOVERY: if no frame arrives for 5s, refresh the session and
-    // restart the stream automatically — the user should never have to
-    // manually click Reconnect for a transient stream interruption.
+    let stopped = false;
+    const tick = () => { if (!stopped) void pullFrame(); };
+    tick();
+    const id = setInterval(tick, 120);
     const watchdog = setInterval(() => {
-      if (Date.now() - lastFrameAt.current > 5000) {
-        void refreshSession();
+      if (sessionCanStream(sessionRef.current) && Date.now() - lastFrameAt.current > 5000) {
+        void refreshRef.current();
       }
     }, 3000);
-    return () => { clearInterval(id); clearInterval(watchdog); };
-  }, [session?.id, session?.live, session?.controlOwner, projectRoot, runId, quality]);
+    return () => { stopped = true; clearInterval(id); clearInterval(watchdog); };
+    // pullFrame closes over refs, not render state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Letterbox: measure the viewport container, keep the canvas element at
   // the aspect-preserved image rect so input mapping is exact at any DPI.
@@ -210,8 +244,11 @@ export function DesktopView({
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [session?.width, session?.height, session?.id, fullscreen]);
+    // The Desktop tab is display:none until selected. A hidden measure
+    // stores a 0×0 canvas and the picture stays invisible after the tab opens.
+    const tick = window.setInterval(update, 400);
+    return () => { ro.disconnect(); window.clearInterval(tick); };
+  }, [session?.width, session?.height, session?.id, fullscreen, expanded]);
 
   // Esc exits fullscreen; menus close on outside click.
   useEffect(() => {
@@ -465,10 +502,11 @@ export function DesktopView({
           display: "block",
           pointerEvents: "none",
           position: "absolute",
-          left: imageRect.x,
-          top: imageRect.y,
-          width: imageRect.w,
-          height: imageRect.h,
+          left: imageRect.w > 0 ? imageRect.x : 0,
+          top: imageRect.h > 0 ? imageRect.y : 0,
+          width: imageRect.w > 0 ? imageRect.w : "100%",
+          height: imageRect.h > 0 ? imageRect.h : "100%",
+          objectFit: "contain",
           maxWidth: "100%",
           maxHeight: "100%",
         }}
@@ -476,12 +514,13 @@ export function DesktopView({
       {!frameDrawn && (
         <div style={{ ...emptyBody(), position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <div>Connecting to Desktop…</div>
-          <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>Streaming the live virtual desktop</div>
+          <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>{streamNote ?? "Streaming the live virtual desktop"}</div>
         </div>
       )}
       {interrupted && (
         <div style={{ position: "absolute", inset: 0, zIndex: 6, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(7,11,20,0.78)" }}>
           <div style={emptyTitle()}>Reconnecting to Desktop…</div>
+          {streamNote && <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", maxWidth: 280, textAlign: "center" }}>{streamNote}</div>}
           <button style={ghostBtn()} onClick={() => void reconnect()}>Reconnect now</button>
         </div>
       )}

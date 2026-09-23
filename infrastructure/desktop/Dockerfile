@@ -6,8 +6,9 @@
 #   + feh (ORVYN wallpaper) + xdotool (input) + ImageMagick (frame capture)
 #
 # The control plane drives everything from OUTSIDE the container via
-# docker exec: frames come from `import -window root jpeg:-`, input goes
-# through `xdotool`. No API server inside the sandbox.
+# docker exec: frames come from `xwd -root -silent | convert … jpeg:-`
+# (import -window root can wait forever for a click), input goes through
+# `xdotool`. No API server inside the sandbox.
 
 FROM debian:bookworm-slim
 

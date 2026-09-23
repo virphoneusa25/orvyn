@@ -63,16 +63,53 @@ const DESKTOP_MEMORY_MB = Math.max(512, Number(process.env.ORVYN_DESKTOP_MEMORY_
 const DESKTOP_IMAGE = process.env.ORVYN_DESKTOP_IMAGE || "orvyn-desktop:latest";
 const DESKTOP_NETWORK = process.env.ORVYN_DESKTOP_NETWORK ?? "bridge";
 
-function dockerExec(containerId: string, args: string[], binary = false): Promise<{ code: number; stdout: Buffer; stderr: string }> {
+function dockerExec(containerId: string, args: string[], timeoutMs = 20000): Promise<{ code: number; stdout: Buffer; stderr: string }> {
   return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (result: { code: number; stdout: Buffer; stderr: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
     const p = spawn("docker", ["exec", containerId, ...args], { windowsHide: true });
     const chunks: Buffer[] = [];
     let stderr = "";
+    timer = setTimeout(() => {
+      p.kill("SIGKILL");
+      finish({ code: -1, stdout: Buffer.concat(chunks), stderr: "timed out" });
+    }, timeoutMs);
     p.stdout.on("data", (d: Buffer) => chunks.push(d));
     p.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-    p.on("close", (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(chunks), stderr }));
-    p.on("error", () => resolve({ code: -1, stdout: Buffer.alloc(0), stderr: "docker not found" }));
+    p.on("close", (code) => finish({ code: code ?? 1, stdout: Buffer.concat(chunks), stderr }));
+    p.on("error", () => finish({ code: -1, stdout: Buffer.alloc(0), stderr: "docker not found" }));
   });
+}
+
+/** JPEG payload, even when ImageMagick prints a warning ahead of the bytes. */
+export function jpegFromOutput(buf: Buffer): Buffer | null {
+  const start = buf.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
+  if (start < 0 || buf.length - start < 100) return null;
+  return start === 0 ? buf : buf.subarray(start);
+}
+
+export function pngFromOutput(buf: Buffer): Buffer | null {
+  const start = buf.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  if (start < 0 || buf.length - start < 100) return null;
+  return start === 0 ? buf : buf.subarray(start);
+}
+
+/**
+ * Grab the X root window and encode JPEG on stdout.
+ * `import -window root` waits for a mouse click when it cannot grab the
+ * root window, so the Desktop pane stays on "Connecting…" forever.
+ * `xwd -root -silent` either returns the framebuffer or fails immediately.
+ */
+export function frameCaptureCommand(quality: FrameQuality): string {
+  const q = quality === "low" ? 45 : quality === "high" ? 92 : 72;
+  const resize = quality === "low" ? "-resize 55% " : "";
+  return `xwd -root -silent | convert ${resize}-quality ${q} xwd:- jpeg:-`;
 }
 
 export async function startSandboxDesktop(opts: {
@@ -183,29 +220,47 @@ function qualityArgs(quality: FrameQuality): string[] {
   }
 }
 
+async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality): Promise<Buffer | null> {
+  const viaXwd = await dockerExec(
+    session.containerId,
+    ["timeout", "4", "sh", "-c", frameCaptureCommand(quality)],
+    6000,
+  );
+  const jpeg = jpegFromOutput(viaXwd.stdout);
+  if (jpeg) return jpeg;
+  // Older desktop images may not have xwd. import is wrapped in timeout so
+  // a window-select hang cannot pin the HTTP request.
+  const viaImport = await dockerExec(
+    session.containerId,
+    ["timeout", "4", "import", "-silent", "-window", "root", ...qualityArgs(quality), "jpeg:-"],
+    6000,
+  );
+  return jpegFromOutput(viaImport.stdout);
+}
+
 export async function captureSandboxFrame(
   session: SandboxDesktopSession,
   quality: FrameQuality = "auto",
 ): Promise<Buffer | null> {
   if (session.status !== "ready" && session.status !== "user_control") return null;
-  const r = await dockerExec(session.containerId, [
-    "import", "-window", "root", ...qualityArgs(quality), "jpeg:-",
-  ], true);
-  if (r.code === 0 && r.stdout.length > 100 && r.stdout[0] === 0xff) {
-    session.lastFrameAt = Date.now();
-    return r.stdout; // raw JPEG bytes, binary-safe
-  }
-  return null;
+  const jpeg = await grabFrame(session, quality);
+  if (!jpeg) return null;
+  session.lastFrameAt = Date.now();
+  return jpeg;
 }
 
 /** Full-resolution PNG screenshot — for artifact/evidence capture. */
 export async function captureSandboxScreenshot(session: SandboxDesktopSession): Promise<Buffer | null> {
   if (session.status !== "ready" && session.status !== "user_control") return null;
-  const r = await dockerExec(session.containerId, ["import", "-window", "root", "png:-"], true);
-  if (r.code === 0 && r.stdout.length > 100 && r.stdout[0] === 0x89) {
-    return r.stdout;
-  }
-  return null;
+  const viaXwd = await dockerExec(
+    session.containerId,
+    ["timeout", "4", "sh", "-c", "xwd -root -silent | convert xwd:- png:-"],
+    6000,
+  );
+  const png = pngFromOutput(viaXwd.stdout) ?? pngFromOutput(
+    (await dockerExec(session.containerId, ["timeout", "4", "import", "-silent", "-window", "root", "png:-"], 6000)).stdout,
+  );
+  return png;
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────
