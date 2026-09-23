@@ -122,7 +122,7 @@ export interface CapabilityRequiredItem {
   key: string;
   query: string;
   reason: string;
-  recommendedServers: { name?: string; server?: string; canonicalId?: string }[];
+  recommendedServers: { name?: string; server?: string; canonicalId?: string; freeInstall?: boolean }[];
   settled?: boolean;
 }
 

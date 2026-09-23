@@ -1,5 +1,6 @@
 import type { McpManager } from "../McpManager";
 import type { RegistryAggregator } from "./aggregator";
+import { isPublicFreeMcp } from "./publicInstall";
 import { DEFAULT_TOOL_BUDGET } from "./types";
 
 export interface CapabilityHit {
@@ -14,6 +15,7 @@ export interface CapabilityHit {
   trust?: string;
   health?: string;
   scope?: string;
+  freeInstall?: boolean;
 }
 
 export interface RankContext {
@@ -109,6 +111,7 @@ export class CapabilityIndex {
         installed: Boolean(r.server.installed),
         canonicalId: r.server.canonicalId,
         trust: r.server.trust?.level ?? this.rankContext.trustOf?.(r.server.canonicalId),
+        freeInstall: isPublicFreeMcp(r.server),
         score: rankHit(q, r.server.name, r.server.description, {
           installed: Boolean(r.server.installed),
           trust: r.server.trust?.level,

@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld("orvyn", {
     set: (config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> =>
       ipcRenderer.invoke("config:set", config),
   },
+  engine: {
+    ensureLocal: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("engine:ensureLocal"),
+  },
   marketplace: {
     officialSearch: (query: string, limit?: number, cursor?: string) =>
       ipcRenderer.invoke("marketplace:officialSearch", query, limit, cursor),

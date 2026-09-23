@@ -20,27 +20,45 @@ let engineStarting = false;
 let quitting = false;
 let engineTimer: ReturnType<typeof setInterval> | undefined;
 
-async function ensureLocalEngine(): Promise<void> {
-  if (quitting || engineStarting || localEngine) return;
+async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
+  if (quitting || engineStarting) return false;
+  if (localEngine) {
+    try {
+      const response = await fetch("http://127.0.0.1:4570/api/v1/health", { signal: AbortSignal.timeout(1800) });
+      if (response.ok) return true;
+    } catch { /* fall through and respawn */ }
+    localEngine.kill();
+    localEngine = null;
+  }
   const config = await readConfig();
-  if (!/^http:\/\/(localhost|127\.0\.0\.1):4570\/?$/.test(config.backendUrl)) return;
+  if (!opts?.force && !/^http:\/\/(localhost|127\.0\.0\.1):4570\/?$/.test(config.backendUrl)) return false;
   engineStarting = true;
   try {
     try {
       const response = await fetch("http://127.0.0.1:4570/api/v1/health", {signal: AbortSignal.timeout(1800)});
-      if (response.ok) return;
+      if (response.ok) return true;
     } catch { /* Start the managed engine when the local service is absent. */ }
     const backend = app.isPackaged ? path.join(process.resourcesPath, "backend") : path.resolve(__dirname, "../../../backend");
     const entry = path.join(backend, "dist/index.js");
     await fs.access(entry);
     const executable = app.isPackaged ? path.join(backend, "node.exe") : "node";
     const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
-    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: {...process.env, PORT: "4570"}});
+    const env = { ...process.env, PORT: "4570" };
+    delete (env as { ORVYN_CLOUD_MODE?: string }).ORVYN_CLOUD_MODE;
+    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env});
     localEngine.stdout?.pipe(log, {end: false});
     localEngine.stderr?.pipe(log, {end: false});
     localEngine.once("error", () => {localEngine = null; log.end();});
     localEngine.once("exit", () => {localEngine = null; log.end();});
-  } catch (error) { console.error("Local engine could not start:", error); }
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const response = await fetch("http://127.0.0.1:4570/api/v1/health", { signal: AbortSignal.timeout(800) });
+        if (response.ok) return true;
+      } catch { /* wait for listen */ }
+    }
+    return false;
+  } catch (error) { console.error("Local engine could not start:", error); return false; }
   finally { engineStarting = false; }
 }
 
@@ -506,6 +524,10 @@ ipcMain.handle("localWorker:setHostDesktop", (_evt, allowed: unknown) => {
 });
 
 ipcMain.handle("config:get", () => readConfig());
+ipcMain.handle("engine:ensureLocal", async () => {
+  const ok = await ensureLocalEngine({ force: true });
+  return { ok };
+});
 ipcMain.handle("marketplace:officialSearch", (_evt, query: unknown, limit: unknown, cursor?: unknown) =>
   fetchOfficialRegistry(
     typeof query === "string" ? query : "",

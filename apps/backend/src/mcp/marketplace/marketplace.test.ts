@@ -4,6 +4,7 @@ import { canonicalKey, isCanonicalGithub, mergeServers, rankServer, RegistryAggr
 import { CatalogCache, catalogCacheKey, CATALOG_FRESH_TTL_MS } from "./catalogCache";
 import { catalogSearchQuery, classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
 import { officialReferenceResults } from "./officialReference";
+import { isPublicFreeMcp, serverRequiresUserSecret } from "./publicInstall";
 import { installPlan } from "./install";
 import { normalizeOfficial } from "./officialProvider";
 import { officialProvider } from "./officialProvider";
@@ -111,6 +112,21 @@ test("trust: official + known publisher is community; glama-only is unverified",
   assert.equal(trustFor({ sources: ["glama"] }).level, "unverified");
   assert.equal(trustFor({ sources: ["official"], verified: true }).level, "verified");
   assert.equal(trustFor({ sources: ["official"], blocked: true }).level, "blocked");
+});
+
+test("official reference servers are public free installs and do not require secrets", () => {
+  const seeded = officialReferenceResults("javascript")[0].server;
+  assert.equal(isPublicFreeMcp(seeded), true);
+  assert.equal(serverRequiresUserSecret(seeded), false);
+  const http = normalizeOfficial({
+    server: {
+      name: "ai.example/remote",
+      description: "Remote",
+      remotes: [{ type: "streamable-http", url: "https://mcp.example/mcp", headers: [{ name: "Authorization", isSecret: true, isRequired: true }] }],
+    },
+  });
+  assert.equal(serverRequiresUserSecret(http), true);
+  assert.equal(isPublicFreeMcp(http), false);
 });
 
 test("install plan pins npm version and never embeds secrets", () => {

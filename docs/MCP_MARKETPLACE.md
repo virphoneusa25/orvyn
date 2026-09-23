@@ -46,6 +46,14 @@ first-party `io.modelcontextprotocol/*` reference servers. Official Registry
 full-text search does not list those packages, so the desktop was surfacing
 community name matches instead.
 
+Official / public MCP servers install into the **local desktop tenant**
+without a platform API key, Glama key, or Smithery key. ORION asks the
+user to install from Marketplace when `search_capabilities` finds a gap;
+it never installs executables itself. Directory keys only federate extra
+catalogs. Cloud accounts stay isolated (`user_<id>` stores); a desktop
+install uses that machine’s local `default` tenant so each user’s
+connections stay on their own environment.
+
 Cache: 5 minutes fresh, 45 minutes stale-while-revalidate, persisted in
 ORVYN app data (`mcp.marketplace.catalogCache.v1`). Secrets are never stored.
 Offline / all-remote-down serves stale cache plus Installed.

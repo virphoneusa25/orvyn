@@ -63,11 +63,20 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
     /* directory is best-effort isolation, not a hard requirement */
   }
   const cwd = input.server.filesystemScope === "project" && input.cwd ? input.cwd : runtimeDir;
+  const args = [...(plan.args ?? [])];
+  if (
+    plan.transport === "stdio" &&
+    input.cwd &&
+    (input.server.filesystemScope === "selected" || input.server.filesystemScope === "project") &&
+    !args.includes(input.cwd)
+  ) {
+    args.push(input.cwd);
+  }
   const cfg = manager.addServer({
     name: input.server.title || input.server.name.split("/").pop() || input.server.name,
     transport: plan.transport,
     command: plan.command,
-    args: plan.args,
+    args: plan.transport === "stdio" ? args : plan.args,
     env: input.env,
     cwd: plan.transport === "stdio" ? cwd : input.cwd,
     url: plan.url,

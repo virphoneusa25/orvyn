@@ -278,6 +278,7 @@ export function AgentActivityList({
 function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
   const [settled, setSettled] = useState(Boolean(item.settled));
   const primary = item.recommendedServers[0]?.name || item.recommendedServers[0]?.server || "this integration";
+  const free = Boolean((item.recommendedServers[0] as { freeInstall?: boolean } | undefined)?.freeInstall) || /no API key/i.test(item.reason);
   const openMarket = (query: string) => {
     document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail: { query, reason: item.reason } }));
   };
@@ -286,13 +287,16 @@ function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
       <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
         ORION needs {primary} to {item.query || "continue"}.
       </div>
-      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10, lineHeight: 1.45 }}>{item.reason}</div>
+      <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10, lineHeight: 1.45 }}>
+        {item.reason}
+        {free ? " Official public MCP tools install on this desktop with no API key." : ""}
+      </div>
       {settled ? (
         <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Cancelled — ORION will not install this itself.</span>
       ) : (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => openMarket(primary)} style={btn("var(--accent)")}>
-            Connect {primary}
+            {free ? `Install ${primary}` : `Connect ${primary}`}
           </button>
           <button onClick={() => openMarket(item.query || primary)} style={btn("var(--border)")}>
             View MCP options

@@ -50,6 +50,15 @@ import {
   type CatalogState,
 } from "../mcpOfficialCatalog";
 import {
+  currentBackendIsCloud,
+  hasPlatformKey,
+  installPublicMcpOnLocalHost,
+  isPublicFreeMcp,
+  publicInstallSteps,
+  serverRequiresUserSecret,
+  shouldUseLocalPublicInstall,
+} from "../mcpPublicInstall";
+import {
   MARKETPLACE_DEBOUNCE_MS,
   degradedBanner,
   emptyKindFor,
@@ -296,31 +305,50 @@ export function McpMarketplace({
   async function install(server: MarketServer, secrets?: Record<string, string>) {
     setBusy(true);
     try {
-      const res = await fetch(apiUrl("/mcp/marketplace/install"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify({ server, secrets, connect: true, cwd: projectRoot }),
-      });
-      const text = await res.text();
-      const parsed = parseApiJson(res.status, text, res.headers.get("content-type") ?? undefined);
-      if (!parsed.ok && shouldUseHostInstall(parsed, res.status)) {
-        const host = await fetch(apiUrl("/mcp/servers"), {
+      const publicFree = isPublicFreeMcp(server);
+      const useLocal = publicFree && (currentBackendIsCloud() || !hasPlatformKey());
+      if (useLocal) {
+        const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot);
+        if (!local.ok) throw new Error(local.error);
+      } else {
+        const res = await fetch(apiUrl("/mcp/marketplace/install"), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify(installPayload(server, secrets)),
+          body: JSON.stringify({ server, secrets: publicFree ? undefined : secrets, connect: true, cwd: projectRoot }),
         });
-        const hostText = await host.text();
-        const hostParsed = parseApiJson(host.status, hostText, host.headers.get("content-type") ?? undefined);
-        if (!hostParsed.ok) throw new Error(hostParsed.error || parsed.error || "Install failed");
-        const createdId = hostParsed.body?.server?.id;
-        if (createdId) {
-          await fetch(apiUrl(`/mcp/servers/${createdId}/connect`), {
+        const text = await res.text();
+        const parsed = parseApiJson(res.status, text, res.headers.get("content-type") ?? undefined);
+        if (
+          !parsed.ok &&
+          shouldUseLocalPublicInstall({
+            status: res.status,
+            parsed,
+            server,
+            hasPlatformKey: hasPlatformKey(),
+            backendIsCloud: currentBackendIsCloud(),
+          })
+        ) {
+          const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot);
+          if (!local.ok) throw new Error(local.error);
+        } else if (!parsed.ok && shouldUseHostInstall(parsed, res.status)) {
+          const host = await fetch(apiUrl("/mcp/servers"), {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeaders() },
-          }).catch(() => undefined);
+            body: JSON.stringify(installPayload(server, secrets)),
+          });
+          const hostText = await host.text();
+          const hostParsed = parseApiJson(host.status, hostText, host.headers.get("content-type") ?? undefined);
+          if (!hostParsed.ok) throw new Error(hostParsed.error || parsed.error || "Install failed");
+          const createdId = hostParsed.body?.server?.id;
+          if (createdId) {
+            await fetch(apiUrl(`/mcp/servers/${createdId}/connect`), {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...authHeaders() },
+            }).catch(() => undefined);
+          }
+        } else if (!parsed.ok) {
+          throw new Error(parsed.error || "Install failed");
         }
-      } else if (!parsed.ok) {
-        throw new Error(parsed.error || "Install failed");
       }
       onInstalled?.();
       await search(debounced);
@@ -526,6 +554,9 @@ export function McpMarketplace({
             <IconBtn title="More" onClick={() => setOverflow((v) => !v)}>⋯</IconBtn>
           </div>
           <ProviderDots providers={providers} />
+          <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 8 }}>
+            Official MCP servers install on this desktop with no API key. Glama and Smithery keys are optional extras.
+          </div>
           {catalogState === "official-fallback" && (
             <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan, #22D3EE)", marginTop: 8 }}>
               Cloud catalog unavailable · showing Official Registry results
@@ -1153,33 +1184,52 @@ function OverflowMenu({ onAddServer, onAddRegistry, onClose }: { onAddServer: ()
 function InstallDrawer({ server, busy, onClose, onInstall }: { server: MarketServer; busy: boolean; onClose: () => void; onInstall: (secrets?: Record<string, string>) => void }) {
   const [step, setStep] = useState(0);
   const [token, setToken] = useState("");
-  const steps = ["Review", "Permissions", "Authentication", "Confirm", "Done"];
+  const needsSecret = serverRequiresUserSecret(server);
+  const steps = publicInstallSteps(server);
+  const confirmStep = needsSecret ? 3 : 2;
+  const doneStep = confirmStep + 1;
   const p = permissionSummary(server);
+  const review = step === 0;
+  const permissions = step === 1;
+  const auth = needsSecret && step === 2;
+  const confirm = step === confirmStep;
+  const done = step === doneStep;
   return (
     <div style={drawerScrim} onClick={onClose}>
       <aside onClick={(e) => e.stopPropagation()} style={drawer}>
         <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>{steps[step]}</div>
         <div style={{ fontSize: 18, fontWeight: 650, margin: "6px 0 12px" }}>{serverLabel(server)}</div>
-        {step === 0 && <p style={body}>{server.description}</p>}
-        {step === 1 && (
+        {review && (
+          <div>
+            <p style={body}>{server.description}</p>
+            {isPublicFreeMcp(server) ? (
+              <p style={body}>No API key required. This public MCP server installs into your local ORVYN environment.</p>
+            ) : null}
+          </div>
+        )}
+        {permissions && (
           <div>
             {p.can.map((x) => <div key={x} style={body}>✓ {x}</div>)}
             {p.may.map((x) => <div key={x} style={body}>⚠ {x}</div>)}
           </div>
         )}
-        {step === 2 && (
+        {auth && (
           server.auth.some((a) => a.kind === "oauth") ? (
             <p style={body}>OAuth runs after install. Tokens stay in the secret store.</p>
           ) : (
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="API token (secret ref only)" style={searchInput} />
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Server token (only if this MCP requires one)" style={searchInput} />
           )
         )}
-        {step === 3 && <p style={body}>Pin {server.version ?? "the advertised version"} and install into McpManager. Executable servers start only after this confirmation.</p>}
-        {step === 4 && <p style={body}>Installed. ORION will not load the catalog — only search_capabilities plus activated tools.</p>}
+        {confirm && (
+          <p style={body}>
+            Pin {server.version ?? "the advertised version"} and install into this desktop. Official public servers do not use a platform API key.
+          </p>
+        )}
+        {done && <p style={body}>Installed in your local environment. ORION sees search_capabilities plus activated tools — not the catalog.</p>}
         <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
           <button style={ghostBtn} onClick={onClose}>Close</button>
-          {step < 3 && <button style={primaryBtn} onClick={() => setStep(step + 1)}>Continue</button>}
-          {step === 3 && <button disabled={busy} style={primaryBtn} onClick={() => { onInstall(token ? { token } : undefined); setStep(4); }}>{busy ? "Working…" : "Confirm"}</button>}
+          {step < confirmStep && <button style={primaryBtn} onClick={() => setStep(step + 1)}>Continue</button>}
+          {confirm && <button disabled={busy} style={primaryBtn} onClick={() => { onInstall(needsSecret && token ? { token } : undefined); setStep(doneStep); }}>{busy ? "Working…" : "Confirm"}</button>}
         </div>
       </aside>
     </div>
@@ -1302,12 +1352,12 @@ function PrivateRegistries({ onSaved }: { onSaved: () => void }) {
         <div style={{ fontSize: 11, color: "var(--orvyn-danger, #f07178)", marginBottom: 8 }}>{secretError}</div>
       ) : null}
       <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>
-        Glama directory key {configured.glama ? "· configured" : "· not set"}
+        Optional Glama directory key {configured.glama ? "· configured" : "· not needed for Official installs"}
       </div>
       <input style={{ ...searchInput, marginBottom: 6 }} type="password" value={glama} onChange={(e) => setGlama(e.target.value)} placeholder="glm_… stored as mcp.secret.glama" />
       <button onClick={() => void saveDirectoryKey("glama")} style={{ ...ghostBtn, marginBottom: 14 }}>Save Glama key</button>
       <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginBottom: 6 }}>
-        Smithery directory key {configured.smithery ? "· configured" : "· not set"}
+        Optional Smithery directory key {configured.smithery ? "· configured" : "· not needed for Official installs"}
       </div>
       <input style={{ ...searchInput, marginBottom: 6 }} type="password" value={smithery} onChange={(e) => setSmithery(e.target.value)} placeholder="UUID stored as mcp.secret.smithery" />
       <button onClick={() => void saveDirectoryKey("smithery")} style={{ ...ghostBtn, marginBottom: 14 }}>Save Smithery key</button>

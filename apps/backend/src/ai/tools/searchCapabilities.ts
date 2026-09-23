@@ -6,8 +6,9 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
     name: "search_capabilities",
     description:
       "Discover MCP tools and servers by capability without loading the catalog into context. " +
-      "Use when you need GitHub, Postgres, Slack, email, DNS, etc. and do not already have a matching mcp.* tool. " +
-      "Returns a small ranked list. If a server is not installed, tell the user why it is needed and ask them to install it from Tools & MCP → Marketplace — never install executable servers yourself.",
+      "Use when you need GitHub, Postgres, Slack, email, DNS, JavaScript, Python, filesystem, etc. and do not already have a matching mcp.* tool. " +
+      "Returns a small ranked list. If a server is not installed, tell the user why it is needed and ask them to install it from Tools & MCP → Marketplace. " +
+      "Official public MCP servers install into the user's local desktop without a platform API key. Never install executable servers yourself.",
     parameters: {
       type: "object",
       properties: {
@@ -30,11 +31,15 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
         server: h.server,
         canonicalId: h.canonicalId,
         description: h.description,
+        freeInstall: Boolean(h.freeInstall),
       }));
       if (askInstall.length) {
         const primary = askInstall[0].name;
+        const free = recommended[0]?.freeInstall;
         lines.push(
-          `ORION needs ${primary} to complete “${query}”. Ask the user to Connect or open Tools & MCP → Marketplace. Do not install executable servers yourself. Options: ` +
+          `ORION needs ${primary} to complete “${query}”. Ask the user to install it from Tools & MCP → Marketplace` +
+            (free ? " — official public servers do not need an API key" : "") +
+            `. Do not install executable servers yourself. Options: ` +
             askInstall.map((h) => h.name).join(", ")
         );
       }
@@ -48,7 +53,9 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
             ? {
                 capabilityRequired: {
                   query,
-                  reason: `ORION needs ${askInstall[0].name} to ${query}.`,
+                  reason: recommended[0]?.freeInstall
+                    ? `ORION needs ${askInstall[0].name} to ${query}. Official public MCP servers install on this desktop with no API key.`
+                    : `ORION needs ${askInstall[0].name} to ${query}.`,
                   recommendedServers: recommended,
                 },
               }
