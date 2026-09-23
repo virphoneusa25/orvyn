@@ -98,14 +98,14 @@ Access cannot bypass hard policy.
 
 ## UI
 
-**Tools & MCP → Marketplace**
+**Tools & MCP → Marketplace** is a two-pane IDE workspace (not a modal):
 
-Search, categories, Installed, Updates, Private registries, import/export
-(Cursor / Claude Desktop / VS Code JSON, secrets stripped).
+- **Left (~65–72%)** — selected server: icon, publisher, install/connect/disable/uninstall, then Details / Tools / Permissions / Configuration / Security / Source.
+- **Right (~320–420px, resizable)** — sticky search, filters, then collapsible Installed / Recommended / Discover / Updates. Discover is used instead of Popular because registries do not expose trustworthy ratings.
 
-Composer **+** menu: **Add MCP capability**.
+Search still federates Official + Glama + local + private. Install reuses the Review → Permissions → Auth → Confirm drawer over the detail pane. `orvyn:marketplace-open` deep-links a capability query into the right-hand search.
 
-Context popover reports MCP tool schema tokens separately from native tools.
+Composer **+** menu: **Add MCP capability**. Built-in ORVYN tools stay on their own tab.
 
 ## API
 

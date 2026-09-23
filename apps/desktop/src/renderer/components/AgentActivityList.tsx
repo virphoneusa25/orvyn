@@ -279,7 +279,7 @@ function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
   const [settled, setSettled] = useState(Boolean(item.settled));
   const primary = item.recommendedServers[0]?.name || item.recommendedServers[0]?.server || "this integration";
   const openMarket = (query: string) => {
-    document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail: { query } }));
+    document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail: { query, reason: item.reason } }));
   };
   return (
     <div style={card("var(--accent)")}>
@@ -295,7 +295,7 @@ function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
             Connect {primary}
           </button>
           <button onClick={() => openMarket(item.query || primary)} style={btn("var(--border)")}>
-            View options
+            View MCP options
           </button>
           <button onClick={() => setSettled(true)} style={btn("var(--border)")}>
             Cancel

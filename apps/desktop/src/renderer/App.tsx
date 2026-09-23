@@ -750,7 +750,7 @@ export function App() {
         )}
 
         {view === "tools" && (
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <ToolsMcpWorkspace projectRoot={workspaceRoot} />
           </div>
         )}

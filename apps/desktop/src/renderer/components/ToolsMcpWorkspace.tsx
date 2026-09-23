@@ -88,6 +88,7 @@ function relTime(ts?: number): string {
 export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null }) {
   const [page, setPage] = useState<"marketplace" | "installed" | "builtin">("marketplace");
   const [marketQuery, setMarketQuery] = useState("");
+  const [capabilityBanner, setCapabilityBanner] = useState("");
   const [native, setNative] = useState<NativeTool[]>([]);
   const [servers, setServers] = useState<McpServerStatus[]>([]);
   const [adding, setAdding] = useState(false);
@@ -121,12 +122,22 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
 
   useEffect(() => {
     const open = (e: Event) => {
-      const q = (e as CustomEvent<{ query?: string }>).detail?.query ?? "";
+      const q = (e as CustomEvent<{ query?: string; reason?: string }>).detail?.query ?? "";
+      const reason = (e as CustomEvent<{ query?: string; reason?: string }>).detail?.reason ?? "";
       setPage("marketplace");
       setMarketQuery(q);
+      setCapabilityBanner(reason || (q ? `ORION needs ${q}.` : ""));
+    };
+    const add = () => {
+      setPage("installed");
+      setAdding(true);
     };
     document.addEventListener("orvyn:marketplace-open", open as EventListener);
-    return () => document.removeEventListener("orvyn:marketplace-open", open as EventListener);
+    document.addEventListener("orvyn:mcp-add-server", add);
+    return () => {
+      document.removeEventListener("orvyn:marketplace-open", open as EventListener);
+      document.removeEventListener("orvyn:mcp-add-server", add);
+    };
   }, []);
 
   async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect") {
@@ -199,8 +210,8 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
   }
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: "20px 24px", minWidth: 0 }}>
-      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 14px 8px", flexShrink: 0, borderBottom: "1px solid var(--orvyn-border-soft)" }}>
         {([
           ["marketplace", "Marketplace"],
           ["installed", "Installed"],
@@ -225,10 +236,13 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       </div>
 
       {page === "marketplace" && (
-        <McpMarketplace projectRoot={projectRoot} initialQuery={marketQuery} onInstalled={() => { setPage("installed"); void refresh(); }} />
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <McpMarketplace projectRoot={projectRoot} initialQuery={marketQuery} capabilityBanner={capabilityBanner} onInstalled={() => void refresh()} />
+        </div>
       )}
 
       {page === "builtin" && (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 20px" }}>
         <>
       <h2 style={{ fontSize: 13, letterSpacing: 1.2, color: "var(--orvyn-text-muted)", margin: "0 0 10px" }}>BUILT-IN TOOLS</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginBottom: 28 }}>
@@ -257,9 +271,11 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
         {native.length === 0 && <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)" }}>No native tools registered.</div>}
       </div>
         </>
+        </div>
       )}
 
       {page === "installed" && (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "16px 20px" }}>
         <>
       {/* ── MCP SERVERS ────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
@@ -363,6 +379,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
 
       {adding && <AddServerDialog onClose={() => setAdding(false)} onDone={() => { setAdding(false); void refresh(); }} />}
         </>
+        </div>
       )}
     </div>
   );
