@@ -9,7 +9,8 @@
 // chain-of-thought. Detail lives in the Workbench.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, type ChatMessage } from "../chatSession";
+import { partitionStreamMessages } from "../streamOrder";
 import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import { ContextUsageMenu } from "./ContextUsageMenu";
 import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "./ComposerControls";
@@ -157,6 +158,9 @@ export function WorkStream({
   }, [projectRoot]);
   useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
   const messages = getChatMessages();
+  // Follow-ups stamped after run.started render under the run. Painting
+  // them above the activity is what made a new message appear at the top.
+  const { earlier: earlierMessages, later: laterMessages } = partitionStreamMessages(messages, run.events);
 
   // Follow the stream while the user is at the bottom; once they scroll up to
   // read, stop forcing scroll (a stream that yanks the view is unreadable).
@@ -282,6 +286,7 @@ export function WorkStream({
     }
     setBusy(true);
     setError(null);
+    setFollow(true);
     try {
       const outcome = await submitOrvynCommand({
         prompt: outgoing,
@@ -556,7 +561,8 @@ export function WorkStream({
         );
       })()}
 
-      {/* The stream: conversation + activity, top to bottom. */}
+      {/* The stream: older turns, then this run's activity, then follow-ups.
+          Newest text is always the last block so it sits at the bottom. */}
       <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div
           ref={scroller}
@@ -576,53 +582,9 @@ export function WorkStream({
             </div>
           )}
 
-        {messages.map((m, i) =>
-          m.role === "user" ? (
-            <div key={i} style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 10px" }}>
-              <div className="user-pill">
-                {m.content}
-                {m.attachments && m.attachments.length > 0 && (
-                  <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan)", marginTop: 4 }}>
-                    {m.attachments.length} attachment{m.attachments.length === 1 ? "" : "s"}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div key={i} style={{ display: "flex", gap: 10, margin: "12px 0", minWidth: 0 }}>
-              <img src={appIcon} alt="ORION" width={26} height={26} style={{ borderRadius: 7, flexShrink: 0, marginTop: 2 }} />
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700 }}>ORION</span>
-                  <span
-                    style={{
-                      fontSize: 8,
-                      fontWeight: 700,
-                      letterSpacing: 1,
-                      color: "var(--orvyn-purple-hi)",
-                      border: "1px solid rgba(124,92,255,0.45)",
-                      borderRadius: 4,
-                      padding: "1px 5px",
-                    }}
-                  >
-                    ASSISTANT
-                  </span>
-                </div>
-                <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
-                  {/* The immediate working state — never an empty screen while
-                      the model is on the wire. */}
-                  {!m.content && i === messages.length - 1 && streaming ? (
-                    <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
-                      Thinking…
-                    </span>
-                  ) : (
-                    <MessageContent content={m.content} streaming={streaming && i === messages.length - 1} />
-                  )}
-                </div>
-              </div>
-            </div>
-          )
-        )}
+        {earlierMessages.map((m, i) => (
+          <ChatTurn key={`earlier-${i}`} message={m} live={streaming && m === messages[messages.length - 1]} />
+        ))}
 
         {/* The run instruction is already represented by the canonical chat
             message. Never render it again here: duplicate user bubbles make
@@ -695,6 +657,10 @@ export function WorkStream({
             <div>last event: {run.events.length > 0 ? `${run.events[run.events.length - 1].type} @ ${new Date(run.lastEventAt || run.events[run.events.length - 1].timestamp).toLocaleTimeString()}` : "—"}</div>
           </div>
         )}
+
+        {laterMessages.map((m, i) => (
+          <ChatTurn key={`later-${i}`} message={m} live={streaming && m === messages[messages.length - 1]} />
+        ))}
         </div>
         </div>
         {!follow && (
@@ -1013,5 +979,54 @@ function WorkTimer({ startedAt }: { startedAt: number }) {
       <span className="activity-pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-purple)", display: "inline-block" }} />
       Working for {label}
     </span>
+  );
+}
+
+function ChatTurn({ message, live }: { message: ChatMessage; live: boolean }) {
+  if (message.role === "user") {
+    return (
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 10px" }}>
+        <div className="user-pill">
+          {message.content}
+          {message.attachments && message.attachments.length > 0 && (
+            <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan)", marginTop: 4 }}>
+              {message.attachments.length} attachment{message.attachments.length === 1 ? "" : "s"}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", gap: 10, margin: "12px 0", minWidth: 0 }}>
+      <img src={appIcon} alt="ORION" width={26} height={26} style={{ borderRadius: 7, flexShrink: 0, marginTop: 2 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>ORION</span>
+          <span
+            style={{
+              fontSize: 8,
+              fontWeight: 700,
+              letterSpacing: 1,
+              color: "var(--orvyn-purple-hi)",
+              border: "1px solid rgba(124,92,255,0.45)",
+              borderRadius: 4,
+              padding: "1px 5px",
+            }}
+          >
+            ASSISTANT
+          </span>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
+          {!message.content && live ? (
+            <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
+              Thinking…
+            </span>
+          ) : (
+            <MessageContent content={message.content} streaming={live} />
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
