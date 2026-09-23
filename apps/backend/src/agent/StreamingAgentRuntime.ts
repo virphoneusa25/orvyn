@@ -210,13 +210,43 @@ export class StreamingAgentRuntime {
     projectRoot: string;
   }) => Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
   private onRunSettled?: (runId: string) => void;
+  private artifacts?: import("../artifacts/ArtifactService").ArtifactService;
 
   setHardeningHooks(hooks: {
     cloudMcpInvoke?: StreamingAgentRuntime["cloudMcpInvoke"];
     onRunSettled?: (runId: string) => void;
+    artifacts?: import("../artifacts/ArtifactService").ArtifactService;
   }): void {
     this.cloudMcpInvoke = hooks.cloudMcpInvoke;
     this.onRunSettled = hooks.onRunSettled;
+    this.artifacts = hooks.artifacts;
+  }
+
+  private async verifiedPersisted(result: import("../ai/ToolTypes").ToolResult): Promise<import("../artifacts/artifactContract").ToolArtifactResult[]> {
+    const parsed = parsePersistedArtifacts(result.output, result.artifacts);
+    if (!this.artifacts) return [];
+    const ready: import("../artifacts/artifactContract").ToolArtifactResult[] = [];
+    for (const art of parsed) {
+      const rec = this.artifacts.getArtifact(art.artifactId);
+      if (!rec || rec.status !== "ready") continue;
+      try {
+        const { bytes, record } = await this.artifacts.read(art.artifactId);
+        if (!bytes.length || (record.sha256 && record.sha256 !== rec.sha256)) continue;
+        ready.push({
+          artifactId: rec.artifactId,
+          name: rec.name,
+          mimeType: rec.mimeType,
+          size: rec.size,
+          sha256: rec.sha256,
+          previewUrl: art.previewUrl ?? `/artifacts/${rec.artifactId}/preview`,
+          downloadUrl: art.downloadUrl ?? `/artifacts/${rec.artifactId}/download`,
+          kind: rec.kind,
+        });
+      } catch {
+        /* not ready */
+      }
+    }
+    return ready;
   }
 
   private toolDefinitions(): ToolDefinition[] {
@@ -246,7 +276,8 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "terminal.started", { callId: call.id, command: args.command });
         break;
       case "generate_image":
-        this.store.emit(runId, "image.generated", { prompt: args.prompt, filename: args.filename });
+        // Never emit image.generated here. That event is only valid after
+        // ArtifactService read-back (artifact.created carries the artifactId).
         break;
       case "browser_open":
       case "browser_navigate":
@@ -1116,7 +1147,7 @@ export class StreamingAgentRuntime {
           if (artifactPath && call.name !== "delete_file") this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
         }
         const raw = result.output ?? "";
-        const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? parsePersistedArtifacts(raw, result.artifacts) : [];
+        const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? await this.verifiedPersisted(result) : [];
         if (FILE_PRODUCING_TOOLS.has(call.name) && persisted.length === 0) {
           state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
           anySucceeded = false;

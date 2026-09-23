@@ -47,6 +47,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
       { id: "models", label: "Models", icon: "cpu" },
       { id: "tools", label: "Tools & MCP", icon: "plug" },
       { id: "memory", label: "Memory", icon: "database" },
+      { id: "learning", label: "Learning", icon: "cpu" },
     ],
   },
 ];

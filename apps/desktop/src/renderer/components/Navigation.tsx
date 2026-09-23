@@ -50,6 +50,7 @@ export type ViewId =
   | "models"
   | "tools"
   | "memory"
+  | "learning"
   | "chats"
   | "search"
   | "scm"
@@ -103,6 +104,7 @@ const SECTIONS: NavSection[] = [
       { id: "models", label: "Models", Icon: IconSparkles },
       { id: "tools", label: "Tools & MCP", Icon: IconWrench },
       { id: "memory", label: "Memory", Icon: IconDatabase },
+      { id: "learning", label: "Learning", Icon: IconSparkles },
     ],
   },
   {

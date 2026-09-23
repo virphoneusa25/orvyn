@@ -32,6 +32,8 @@ export function ConnectionSettings() {
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [stateLine, setStateLine] = useState("Local workspace");
+  const [hostDesktop, setHostDesktop] = useState(false);
+  const [hostDesktopDetail, setHostDesktopDetail] = useState("");
 
   useEffect(() => {
     loadConnectionConfig().then((c) => {
@@ -47,6 +49,15 @@ export function ConnectionSettings() {
         setAccount(null);
       }
     });
+    window.orvyn?.localWorker?.status?.()
+      .then((s) => setHostDesktop(Boolean(s.hostDesktopAllowed)))
+      .catch(() => undefined);
+    fetch(apiUrl("/host-desktop"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.allowed === "boolean") setHostDesktop(d.allowed);
+      })
+      .catch(() => undefined);
     fetch(apiUrl("/profile"), { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => {
@@ -273,6 +284,43 @@ export function ConnectionSettings() {
         <div style={{ marginTop: 8, padding: 10, borderRadius: 6, background: "#2a1420", border: "1px solid #4a2230", fontSize: 12 }}>
           {profileError}
         </div>
+      )}
+
+      <div style={{ marginTop: 28, fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Host computer-use</div>
+      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 12 }}>
+        Off by default. When on, ORION may move the mouse, click, type, scroll, screenshot, and focus windows on this Windows desktop through ToolGateway. This is not the cloud Linux Desktop and not the Browser Workbench.
+      </div>
+      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 10px", borderRadius: 6, border: "1px solid #1c2330" }}>
+        <input
+          type="checkbox"
+          checked={hostDesktop}
+          onChange={async (e) => {
+            const allowed = e.target.checked;
+            setHostDesktop(allowed);
+            setHostDesktopDetail("");
+            try {
+              await window.orvyn?.localWorker?.setHostDesktop?.(allowed);
+              await fetch(apiUrl("/host-desktop/allow"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...authHeaders() },
+                body: JSON.stringify({ allowed }),
+              });
+              setHostDesktopDetail(allowed ? "ORION may control this computer. A banner appears when it does." : "Host desktop control is off.");
+            } catch (err: any) {
+              setHostDesktopDetail(err.message || "Could not save host desktop setting");
+            }
+          }}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Allow ORION to control this computer</span>
+          <span style={{ display: "block", fontSize: 11, opacity: 0.6, marginTop: 2 }}>
+            You can Take Control or Stop at any time. Return to ORION resumes from the current screen.
+          </span>
+        </span>
+      </label>
+      {hostDesktopDetail && (
+        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>{hostDesktopDetail}</div>
       )}
     </div>
   );

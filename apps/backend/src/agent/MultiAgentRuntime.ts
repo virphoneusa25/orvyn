@@ -39,6 +39,7 @@ import { MissionQueue } from "../queue/MissionQueue";
 import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
+import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 
 interface PendingApproval {
   resolve: (approved: boolean) => void;
@@ -824,24 +825,42 @@ export class MultiAgentRuntime {
 
         this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name, taskId: task.id });
         this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-        if (call.name === "generate_image") {
-          this.store.emit(runId, "image.generated", { prompt: (call.arguments as { prompt?: unknown }).prompt });
-        }
 
         const terminalLike = ["terminal", "run_command"].includes(call.name);
         if (terminalLike) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command, taskId: task.id });
-        const result = await this.tools.execute(call.name, call.arguments, task.agent, {
+        let result = await this.tools.execute(call.name, call.arguments, task.agent, {
           signal: this.signalFor(runId),
           onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, content: chunk, taskId: task.id }) : undefined,
         });
+        result = requirePersistedArtifacts(call.name, result);
         if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitCode: result.ok ? 0 : 1, taskId: task.id });
         if (result.ok) {
           const output = result.output ?? "";
           const isTerminal = ["terminal", "run_command", "ssh_exec"].includes(call.name);
+          const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? parsePersistedArtifacts(output, result.artifacts) : [];
+          for (const art of persisted) {
+            this.store.emit(runId, "artifact.created", {
+              artifactId: art.artifactId,
+              id: art.artifactId,
+              name: art.name,
+              mimeType: art.mimeType,
+              size: art.size,
+              sha256: art.sha256,
+              previewable: Boolean(art.previewUrl) || (art.mimeType ?? "").startsWith("image/"),
+              downloadable: true,
+              kind: art.kind ?? (call.name === "generate_image" ? "generated" : "file"),
+              downloadPath: art.downloadUrl ?? `/artifacts/${art.artifactId}/download`,
+              previewUrl: art.previewUrl,
+              runId,
+              tool: call.name,
+            });
+          }
           this.store.emit(runId, "tool.completed", {
             callId: call.id,
             tool: call.name,
             preview: output.slice(0, 300),
+            artifactId: persisted[0]?.artifactId,
+            artifactName: persisted[0]?.name,
             ...(isTerminal ? { output: output.slice(-16000), outputTruncated: output.length > 16000 } : {}),
           });
           // The transcript is the reviewer's evidence: include real output, not

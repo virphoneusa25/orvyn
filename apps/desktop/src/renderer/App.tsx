@@ -11,6 +11,9 @@ import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
+import { LearningCenter } from "./components/LearningCenter";
+import { BillingPanel } from "./components/BillingPanel";
+import { HostDesktopBanner } from "./components/HostDesktopBanner";
 import { ViewId } from "./components/Navigation";
 import { Sidebar } from "./components/redesign/Shell";
 import { submitOrvynCommand } from "./orvynCommand";
@@ -571,6 +574,7 @@ export function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
+      <HostDesktopBanner />
       <TitleBar
         menus={appMenus}
         title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}
@@ -824,10 +828,13 @@ export function App() {
 
         {view === "billing" && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <HonestState
-              title="BILLING — NEEDS THE COMMERCIAL BACKEND"
-              message="Plans, credit wallets, and Stripe checkout are designed (docs/COMMERCIAL_PLATFORM_AUDIT.md, Phases C–E) but not implemented yet. Usage metering — the data billing will be built on — is live and visible under Usage & Credits."
-            />
+            <BillingPanel />
+          </div>
+        )}
+
+        {view === "learning" && (
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <LearningCenter />
           </div>
         )}
 

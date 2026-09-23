@@ -38,6 +38,10 @@ import { sanitizeToolName } from "../mcp/McpToolAdapter";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
 import { ArtifactService } from "../artifacts/ArtifactService";
+import { ExperienceStore } from "../learning/ExperienceStore";
+import { persistSkillCandidates } from "../learning/skillCandidates";
+import { persistDataset } from "../learning/datasetBuilder";
+import { DEFAULT_PRIVACY } from "../orgs/organization";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 
 export interface Tenant {
@@ -69,6 +73,7 @@ export interface Tenant {
   localStore: LocalStore;
   /** Tenant-scoped virtual workspace + generated-file store. */
   artifactService: ArtifactService;
+  experienceStore: ExperienceStore;
 }
 
 function embedderFor(ms: ModelService) {
@@ -168,6 +173,7 @@ export class TenantManager {
       usage: { requests: 0, agentRuns: 0, indexBuilds: 0 },
       localStore,
       artifactService: new ArtifactService(id, localStore),
+      experienceStore: new ExperienceStore(id, localStore),
     };
     // MCP host gets the now-constructed tenant's gateway.
     tenant.mcpManager = new McpManager({
@@ -240,6 +246,7 @@ export class TenantManager {
       },
     };
     tenant.agentRuntime.setHardeningHooks({
+      artifacts: tenant.artifactService,
       cloudMcpInvoke: async ({ runId, tool, args, projectRoot }) => {
         const serverKey = tool.split(".")[1] ?? "";
         const cfg = tenant.mcpManager.listServers().find((s) => sanitizeToolName(s.name) === serverKey);
@@ -257,9 +264,20 @@ export class TenantManager {
         harden.appendAudit("tool invocation", { serverId: cfg.id, tool, ok: out.ok, runId, executionLocation: out.executionLocation });
         return { ok: out.ok, output: out.output, error: out.error };
       },
-      onRunSettled: () => {
+      onRunSettled: (runId) => {
         for (const s of tenant.mcpManager.listServers()) {
           if (s.scope === "run") tenant.mcpManager.setEnabled(s.id, false);
+        }
+        if (DEFAULT_PRIVACY.trainingOptOut) return;
+        try {
+          const run = tenant.runStore.get(runId);
+          if (!run) return;
+          tenant.experienceStore.captureFromRun(run);
+          const experiences = tenant.experienceStore.list("experience", 80);
+          persistSkillCandidates(tenant.localStore, experiences);
+          persistDataset(tenant.localStore, experiences);
+        } catch {
+          /* learning must never fail a run */
         }
       },
     });

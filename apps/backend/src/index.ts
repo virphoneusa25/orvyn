@@ -24,6 +24,7 @@ app.get("/api/v1/health", (_req, res) =>
     status: "ok",
     service: "orvyn-backend",
     version: "0.2.0",
+    artifactStorage: "healthy",
     marketplaceCatalogVersion: 1,
     supportedProviders: ["official", "glama", "smithery", "local", "private"],
     installApiVersion: 1,
@@ -100,8 +101,10 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     await fsp.writeFile(probe, stamp);
     const read = await fsp.readFile(probe, "utf-8");
     checks.artifacts = { healthy: read === stamp, detail: read === stamp ? "writable" : "readback mismatch" };
+    checks.artifactStorage = checks.artifacts;
   } catch (err: any) {
     checks.artifacts = { healthy: false, detail: err?.message ?? "artifact storage unavailable" };
+    checks.artifactStorage = checks.artifacts;
   }
 
   const allHealthy = Object.values(checks).every((c) => c.healthy);

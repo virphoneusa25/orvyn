@@ -364,6 +364,23 @@ test("artifact.created without artifactId is ignored", () => {
   assert.equal(items.some((i) => i.kind === "attachment"), false);
 });
 
+test("desktop verification and preview events render compact activity", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("run.execution", { executionLabel: "Local", executionTargetActual: "local_host" }),
+      ev("preview.available", { url: "http://localhost:5173" }),
+      ev("desktop.verification.started", {}),
+      ev("desktop.verification.passed", {}),
+    ],
+    "completed"
+  );
+  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
+  assert.ok(labels.some((l) => /Execution · Local/.test(l)));
+  assert.ok(labels.some((l) => /Browser · Opened/.test(l) && /5173/.test(l)));
+  assert.ok(labels.some((l) => /Desktop · Verification passed/.test(l)));
+});
+
 test("capability.required becomes a chat card, not a tool dump", () => {
   reset();
   const items = reducePresentation(

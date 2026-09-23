@@ -27,6 +27,7 @@ export class LocalWorkerManager {
   private restarts = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private quitting = false;
+  private suppressRestart = false;
   private lockFd: number | null = null;
   private status: LocalWorkerStatus = { state: "offline", restarts: 0, hostDesktopAllowed: false };
   private projectRoot: string | null = null;
@@ -38,6 +39,22 @@ export class LocalWorkerManager {
     if (opts.apiKey !== undefined) this.apiKey = opts.apiKey;
     if (opts.projectRoot !== undefined) this.projectRoot = opts.projectRoot;
     if (opts.hostDesktopAllowed !== undefined) this.status.hostDesktopAllowed = opts.hostDesktopAllowed;
+  }
+
+  /** Restart so ORVYN_HOST_DESKTOP is picked up by the worker process. */
+  restartForHostDesktop(): void {
+    if (this.child) {
+      this.suppressRestart = true;
+      const child = this.child;
+      child.once("exit", () => {
+        this.suppressRestart = false;
+        this.child = null;
+        void this.start();
+      });
+      child.kill();
+      return;
+    }
+    void this.start();
   }
 
   getStatus(): LocalWorkerStatus {
@@ -78,7 +95,7 @@ export class LocalWorkerManager {
       this.child = null;
       this.status.state = "offline";
       log.end();
-      if (!this.quitting) this.scheduleRestart();
+      if (!this.quitting && !this.suppressRestart) this.scheduleRestart();
     });
     this.child.once("error", () => {
       this.child = null;

@@ -17,6 +17,15 @@ import { resolveSafePath, resolveSafeRealpath } from "../execution/pathSafety";
 import { acquireFileLock, fileHash, releaseFileLock } from "./fileLock";
 import { processTracker } from "./processTracker";
 import type { ToolResult } from "../ai/ToolTypes";
+import {
+  makeHostDesktopClickTool,
+  makeHostDesktopFocusTool,
+  makeHostDesktopMoveTool,
+  makeHostDesktopScreenshotTool,
+  makeHostDesktopScrollTool,
+  makeHostDesktopStatusTool,
+  makeHostDesktopTypeTool,
+} from "../ai/tools/hostDesktopTools";
 
 export interface LocalToolRequest {
   tool: string;
@@ -149,5 +158,13 @@ function bindTools(projectRoot: string): Record<string, { execute: (args: Record
     git_branch: makeGitBranchTool(projectRoot),
     git_checkout: makeGitCheckoutTool(projectRoot),
     git_commit: makeGitCommitTool(projectRoot),
+    search_codebase: makeSearchCodeTool(projectRoot),
+    host_desktop_status: makeHostDesktopStatusTool(),
+    host_desktop_screenshot: makeHostDesktopScreenshotTool(),
+    host_desktop_move: makeHostDesktopMoveTool(),
+    host_desktop_click: makeHostDesktopClickTool(),
+    host_desktop_type: makeHostDesktopTypeTool(),
+    host_desktop_scroll: makeHostDesktopScrollTool(),
+    host_desktop_focus: makeHostDesktopFocusTool(),
   };
 }

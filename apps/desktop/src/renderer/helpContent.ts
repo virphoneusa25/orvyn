@@ -29,6 +29,24 @@ export const HELP_TOPICS: HelpTopic[] = [
     body: "Auto classifies the request. Code edits the workspace. Server targets hosts and remote execution. Research investigates without assuming a deploy. Deploy is for release work. Automate currently runs as a one-shot plan — a scheduler is not shipped yet.",
   },
   {
+    id: "execution",
+    title: "Local / Sandbox / Cloud execution",
+    tags: ["execution", "local", "sandbox", "cloud", "auto"],
+    body: "Run mode is what kind of task this is. Execution target is where it runs: Auto, Local, Sandbox, or Cloud. Auto picks Local for ordinary coding, Sandbox for untrusted or risky commands, and Cloud for deploy, server, or long-running missions. An explicit Local, Sandbox, or Cloud choice never silently falls back. Model inference can be remote while files stay on this machine.",
+  },
+  {
+    id: "learning",
+    title: "Learning Center",
+    tags: ["learning", "experience", "skills", "training"],
+    body: "Intelligence → Learning records sanitized completed runs, evaluations, skill candidates, and dataset candidates. Secrets are redacted. Production models are never retrained from every chat and never auto-promoted.",
+  },
+  {
+    id: "hostdesktop",
+    title: "Host desktop control",
+    tags: ["desktop", "host", "computer-use"],
+    body: "Allow ORION to control this computer is off by default in Settings. When on, ORION can drive the real Windows desktop through ToolGateway. Take Control pauses agent input immediately. This is not the cloud Linux Desktop and not the Browser Workbench.",
+  },
+  {
     id: "models",
     title: "Select a model",
     tags: ["models", "composer"],

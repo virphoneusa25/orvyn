@@ -186,6 +186,7 @@ if (!app.requestSingleInstanceLock()) {
       backendUrl: bootConfig.backendUrl,
       apiKey: bootConfig.apiKey,
       projectRoot: currentProjectRoot ?? defaultWorkspacePath(),
+      hostDesktopAllowed: await readHostDesktopAllowed(),
     });
     void localWorkerManager.start();
     createWindow();
@@ -204,6 +205,23 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+
+function hostDesktopPath(): string {
+  return path.join(app.getPath("userData"), "host-desktop.json");
+}
+
+async function readHostDesktopAllowed(): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await fs.readFile(hostDesktopPath(), "utf-8"));
+    return raw.allowed === true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeHostDesktopAllowed(allowed: boolean): Promise<void> {
+  await fs.writeFile(hostDesktopPath(), JSON.stringify({ allowed }), "utf-8");
+}
 
 function resolveInProject(relativePath: string): string {
   const root = activeRoot();
@@ -514,12 +532,11 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("localWorker:status", () => localWorkerManager.getStatus());
-ipcMain.handle("localWorker:setHostDesktop", (_evt, allowed: unknown) => {
-  localWorkerManager.configure({
-    backendUrl: "",
-    apiKey: "",
-    hostDesktopAllowed: allowed === true,
-  });
+ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
+  const on = allowed === true;
+  await writeHostDesktopAllowed(on);
+  localWorkerManager.configure({ hostDesktopAllowed: on });
+  localWorkerManager.restartForHostDesktop();
   return localWorkerManager.getStatus();
 });
 

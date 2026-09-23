@@ -14,7 +14,7 @@ import {
 import { publicUrls, type ToolArtifactResult } from "./artifactContract";
 
 export type ArtifactKind = "generated" | "document" | "download" | "upload" | "run" | "file";
-export type ArtifactStatus = "ready" | "failed" | "deleted";
+export type ArtifactStatus = "creating" | "ready" | "failed" | "deleted";
 
 export interface ArtifactRecord {
   artifactId: string;
@@ -296,12 +296,37 @@ export class ArtifactService {
         mediaType: mimeType,
         sha256,
         size: raw.length,
+        status: "creating",
+        previewable: isPreviewable(mimeType),
+        downloadable: true,
+      });
+      const onDisk = await fs.readFile(diskPath);
+      if (!onDisk.length || onDisk.length !== raw.length || sha256Hex(onDisk) !== sha256) {
+        throw new Error("Artifact read-back failed: stored bytes do not match.");
+      }
+      validateBytes(name, mimeType, onDisk);
+      this.store.saveArtifactStrict({
+        id,
+        tenantId: this.tenantId,
+        projectRoot: input.projectRoot ?? null,
+        projectId: input.projectId ?? null,
+        runId: input.runId ?? null,
+        chatId: input.chatId ?? null,
+        sourceTool: input.sourceTool ?? null,
+        userId: input.userId ?? null,
+        kind,
+        name,
+        path: diskPath,
+        mediaType: mimeType,
+        sha256,
+        size: raw.length,
         status: "ready",
         previewable: isPreviewable(mimeType),
         downloadable: true,
       });
     } catch (err) {
       await fs.rm(path.dirname(diskPath), { recursive: true, force: true }).catch(() => undefined);
+      try { this.store.deleteArtifact(id); } catch { /* partial row */ }
       throw err instanceof Error ? err : new Error("Failed to register artifact metadata.");
     }
     if (kind === "generated") {
@@ -409,7 +434,7 @@ export class ArtifactService {
     const now = Date.now();
     return rows
       .map((r) => this.toRecord(r))
-      .filter((a) => a.status !== "deleted")
+      .filter((a) => a.status === "ready")
       .filter((a) => (opts?.kind ? a.kind === opts.kind : true))
       .filter((a) => (opts?.projectRoot ? a.projectRoot === opts.projectRoot || !a.projectRoot : true))
       .filter((a) => (opts?.chatId ? a.chatId === opts.chatId : true))

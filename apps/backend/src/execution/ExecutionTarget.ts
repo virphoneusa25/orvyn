@@ -21,12 +21,17 @@ export interface ExecutionRouteInput {
   isBackground?: boolean;
   /** Explicit server / OVH / deploy that must leave the machine. */
   requiresRemote?: boolean;
+  /** Generated-file / no-repo work — never requires a live checkout. */
+  isArtifact?: boolean;
+  /** Ordinary local coding / tests. */
+  isLocalCoding?: boolean;
 }
 
 export interface ExecutionRoute {
   requested: ExecutionTarget;
   actual: ResolvedExecutionTarget;
   reason: string;
+  fallbackReason?: string;
 }
 
 /**
@@ -38,7 +43,8 @@ export interface ExecutionRoute {
  *   background / cloud mission             → ovh_worker
  *   risky / untrusted                      → local_sandbox
  *   local project + normal coding          → local_host
- *   no local project                       → ovh_worker
+ *   artifact / no-repo generation          → local_host (virtual workspace)
+ *   otherwise                              → local_host
  */
 export function routeExecutionTarget(input: ExecutionRouteInput = {}): ExecutionRoute {
   const requested = isExecutionTarget(input.requested) ? input.requested : "auto";
@@ -63,7 +69,7 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
       actual: "ovh_worker",
       reason: mode === "deploy"
         ? "Deploy mode requires remote / OVH execution"
-        : "Server mode requires a remote OVH worker",
+        : "Server / remote infrastructure requires an OVH worker",
     };
   }
   if (input.isBackground) {
@@ -72,10 +78,13 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
   if (input.isRisky) {
     return { requested, actual: "local_sandbox", reason: "Untrusted or isolation-required command" };
   }
-  if (input.hasLocalProject) {
+  if (input.hasLocalProject || input.isLocalCoding) {
     return { requested, actual: "local_host", reason: "Local project + normal coding" };
   }
-  return { requested, actual: "ovh_worker", reason: "No local project bound — remote execution" };
+  if (input.isArtifact) {
+    return { requested, actual: "local_host", reason: "Generated artifact — virtual workspace, no Cloud worker" };
+  }
+  return { requested, actual: "local_host", reason: "Auto default — Local for ordinary work" };
 }
 
 export function executionLabel(target: ResolvedExecutionTarget): string {

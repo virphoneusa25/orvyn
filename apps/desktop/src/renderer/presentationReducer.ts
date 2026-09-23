@@ -564,6 +564,44 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "summary", key: e.id, ok: false, cancelled: true, detail: "Stopped" });
         continue;
 
+      case "desktop.verification.started":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: "Desktop · Verification started", ephemeral: false, tone: "working" });
+        continue;
+      case "desktop.verification.failed":
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Desktop · Verification failed${e.data.reason ? ` — ${String(e.data.reason).slice(0, 80)}` : ""}`,
+          ephemeral: false,
+        });
+        continue;
+      case "desktop.verification.passed":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: "Desktop · Verification passed", ephemeral: false });
+        continue;
+      case "preview.available":
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Browser · Opened ${String(e.data.url ?? e.data.previewUrl ?? "localhost")}`,
+          ephemeral: false,
+          tone: "working",
+        });
+        continue;
+      case "run.execution":
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Execution · ${String(e.data.executionLabel ?? e.data.executionTargetActual ?? e.data.location ?? "Local")}${e.data.fallbackReason ? ` — ${String(e.data.fallbackReason).slice(0, 80)}` : ""}`,
+          ephemeral: false,
+          tone: "working",
+        });
+        continue;
+
       case "artifact.created":
       case "image.generated": {
         const artifactId = e.data.artifactId ? String(e.data.artifactId) : e.data.id ? String(e.data.id) : undefined;

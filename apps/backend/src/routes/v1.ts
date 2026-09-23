@@ -5,6 +5,7 @@ import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
 import { isVirtualWorkspace, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
+import { classifyExecutionHints } from "../execution/classifyExecution";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { requireTenant } from "../middleware/tenant";
@@ -442,13 +443,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const resolvedRoot = String(req.body.projectRoot ?? "").trim();
   const virtualWorkspace = Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id);
   const hasLocalProject = Boolean(resolvedRoot) && !virtualWorkspace;
+  const hints = classifyExecutionHints(String(req.body.instruction ?? req.body.goal ?? ""), String(req.body.composerMode ?? req.body.mode ?? "auto"));
   const routed = routeExecutionTarget({
     requested: requestedTarget,
     mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
     hasLocalProject,
-    isRisky: req.body.isRisky === true,
-    isBackground: req.body.isBackground === true,
-    requiresRemote: req.body.executionLocation === "OVH_WORKER" || String(req.body.composerMode ?? "") === "server",
+    isRisky: req.body.isRisky === true || hints.isRisky,
+    isBackground: req.body.isBackground === true || hints.isBackground,
+    requiresRemote: req.body.executionLocation === "OVH_WORKER" || String(req.body.composerMode ?? "") === "server" || hints.requiresRemote,
+    isArtifact: hints.isArtifact,
+    isLocalCoding: hints.isLocalCoding,
   });
 
   const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
@@ -460,15 +464,19 @@ v1Router.post("/agent/stream/runs", (req, res) => {
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
-    if (!remoteProjectRoot) {
-      return res.status(400).json({ error: "Cloud execution requires remoteProjectRoot (the worker-side project path)." });
-    }
     if (!hasOnlineWorker()) {
-      return res.status(409).json({
-        error: "No OVH worker is online — Cloud run refused. There is no silent Local fallback.",
-        executionTargetRequested: routed.requested,
-        executionTargetActual: routed.actual,
-      });
+      if (routed.requested === "auto") {
+        routed.actual = "local_host";
+        routed.fallbackReason = "Auto chose Cloud but no OVH worker is online — running Local instead";
+      } else {
+        return res.status(409).json({
+          error: "No OVH worker is online — Cloud run refused. There is no silent Local fallback.",
+          executionTargetRequested: routed.requested,
+          executionTargetActual: routed.actual,
+        });
+      }
+    } else if (!remoteProjectRoot && routed.requested !== "auto") {
+      return res.status(400).json({ error: "Cloud execution requires remoteProjectRoot (the worker-side project path)." });
     }
   } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
@@ -505,7 +513,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       tenantId: t.id,
       targetRequested: routed.requested,
       targetActual: routed.actual,
-      fallbackReason: location === "LOCAL" && routed.actual === "local_host" ? "in-process local backend (same host)" : undefined,
+      fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" ? "in-process local backend (same host)" : undefined),
     },
     {
       reasoningEffort: ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
@@ -540,6 +548,7 @@ v1Router.get("/agent/stream/runs", (req, res) => {
         projectRoot: r.projectRoot,
         eventCount: r.events.length,
         usage: r.usage,
+        execution: buildRunReplay(r),
       }))
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 50),
@@ -1161,12 +1170,168 @@ v1Router.get("/agent/modes", (_req, res) => {
 v1Router.get("/usage", (req, res) => {
   const t = requireTenant(req);
   const limit = req.query.limit ? Math.min(Number(req.query.limit), 1000) : 200;
+  const totals = t.modelService.usage.totals();
+  const cost = estimateRunCost({
+    promptTokens: totals.promptTokens,
+    completionTokens: totals.completionTokens,
+  });
   res.json({
-    totals: t.modelService.usage.totals(),
+    totals,
     quota: t.modelService.usage.quota(),
+    entitlements: entitlements.limits(),
+    billing: { provider: billing.name, ...cost },
     queue: t.multiAgentRuntime.queueStats(),
     events: t.modelService.usage.recent(limit),
   });
+});
+
+import { ModelRegistry } from "../learning/ModelRegistry";
+import { persistSkillCandidates } from "../learning/skillCandidates";
+import { persistDataset } from "../learning/datasetBuilder";
+import { buildRunReplay } from "../learning/runReplay";
+import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
+import { EntitlementService } from "../billing/EntitlementService";
+import { DEFAULT_PRIVACY, bindTenantResource } from "../orgs/organization";
+import { getHostDesktopState, setHostDesktopAllowed, takeHostControl, returnHostControl } from "../desktop/hostDesktopSession";
+
+const billing = new NullBillingProvider();
+const entitlements = new EntitlementService();
+
+v1Router.get("/learning", (req, res) => {
+  const t = requireTenant(req);
+  res.json({
+    tenantId: t.id,
+    trainingOptOut: DEFAULT_PRIVACY.trainingOptOut,
+    overview: t.experienceStore.overview(),
+  });
+});
+
+v1Router.get("/learning/experiences", (req, res) => {
+  const t = requireTenant(req);
+  const rows = t.experienceStore.list("experience", 80).filter((e) => {
+    try {
+      bindTenantResource(t.id, e.tenantId);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  res.json({ experiences: rows });
+});
+
+v1Router.get("/learning/skills", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ skills: t.localStore.listLearningRecords("skill", 80).map((r) => r.payload) });
+});
+
+v1Router.get("/learning/datasets", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ datasets: t.localStore.listLearningRecords("dataset", 40).map((r) => r.payload) });
+});
+
+v1Router.get("/learning/evaluations", (req, res) => {
+  const t = requireTenant(req);
+  res.json({
+    evaluations: t.experienceStore.list("experience", 80).map((e) => ({
+      runId: e.runId,
+      result: e.result,
+      evaluation: e.evaluation,
+    })),
+  });
+});
+
+v1Router.get("/learning/failures", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ clusters: t.experienceStore.overview().failureClusters });
+});
+
+v1Router.get("/learning/models", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ models: new ModelRegistry(t.localStore).list() });
+});
+
+v1Router.post("/learning/models", (req, res) => {
+  const t = requireTenant(req);
+  const version = String(req.body.version ?? "").trim();
+  if (!version) return res.status(400).json({ error: "version is required" });
+  const row = new ModelRegistry(t.localStore).register({
+    version,
+    datasetVersion: req.body.datasetVersion ? String(req.body.datasetVersion) : undefined,
+    benchmark: req.body.benchmark,
+  });
+  res.status(201).json(row);
+});
+
+v1Router.post("/learning/models/:id/status", (req, res) => {
+  const t = requireTenant(req);
+  try {
+    const row = new ModelRegistry(t.localStore).setStatus(req.params.id, req.body.status);
+    if (!row) return res.status(404).json({ error: "Unknown model" });
+    res.json(row);
+  } catch (err: any) {
+    res.status(409).json({ error: err.message });
+  }
+});
+
+v1Router.post("/learning/refresh", (req, res) => {
+  const t = requireTenant(req);
+  if (DEFAULT_PRIVACY.trainingOptOut) {
+    return res.json({ ok: true, skipped: true, reason: "Training opt-out is on" });
+  }
+  const experiences = t.experienceStore.list("experience", 80);
+  const skills = persistSkillCandidates(t.localStore, experiences);
+  const dataset = persistDataset(t.localStore, experiences);
+  res.json({ ok: true, skills: skills.length, dataset });
+});
+
+v1Router.get("/billing", (req, res) => {
+  const t = requireTenant(req);
+  const totals = t.modelService.usage.totals();
+  const used = {
+    tokenBudget: totals.promptTokens + totals.completionTokens,
+    cloudMinutes: 0,
+    storageBytes: 0,
+    concurrentMissions: t.multiAgentRuntime.queueStats().running,
+    artifactStorageBytes: 0,
+  };
+  res.json({
+    provider: billing.name,
+    note: "Stripe is not wired. Usage is recorded; nothing is charged here.",
+    entitlements: entitlements.limits(),
+    used,
+    check: entitlements.check(used),
+    cost: estimateRunCost({
+      promptTokens: totals.promptTokens,
+      completionTokens: totals.completionTokens,
+    }),
+  });
+});
+
+v1Router.get("/privacy", (_req, res) => {
+  res.json({ privacy: DEFAULT_PRIVACY });
+});
+
+v1Router.get("/host-desktop", (_req, res) => {
+  res.json(getHostDesktopState());
+});
+
+v1Router.post("/host-desktop/allow", (req, res) => {
+  res.json(setHostDesktopAllowed(req.body.allowed === true));
+});
+
+v1Router.post("/host-desktop/take-control", (_req, res) => {
+  res.json(takeHostControl());
+});
+
+v1Router.post("/host-desktop/return-control", (_req, res) => {
+  res.json(returnHostControl());
+});
+
+v1Router.get("/agent/stream/runs/:id/replay", (req, res) => {
+  const t = requireTenant(req);
+  const run = t.runStore.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
+  res.json(buildRunReplay(run));
 });
 
 // --- Autonomy profile (spec §47: SAFE / BALANCED / AUTONOMOUS) ---

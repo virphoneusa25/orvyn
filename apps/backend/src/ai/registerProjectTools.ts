@@ -49,6 +49,7 @@ import {
   makeBrowserEvidenceTool,
 } from "./tools/browserTools";
 import { registerDesktopTools } from "./tools/desktopTools";
+import { registerHostDesktopTools } from "./tools/hostDesktopTools";
 import {
   makeGetDiagnosticsTool,
   makeRunTypecheckTool,
@@ -134,6 +135,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
   g.register(makeBrowserEvidenceTool(projectRoot));
   registerDesktopTools((tool) => g.register(tool), projectRoot, tenant.id);
+  registerHostDesktopTools((tool) => g.register(tool));
 
   // Git
   g.register(makeGitStatusTool(projectRoot));

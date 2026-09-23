@@ -1,4 +1,5 @@
 // apps/backend/src/images/ImageService.ts
+import { promises as fs } from "fs";
 import { ModelService } from "../services/ModelService";
 import type { ArtifactService } from "../artifacts/ArtifactService";
 import { sanitizeArtifactName } from "../artifacts/ArtifactService";
@@ -37,8 +38,28 @@ function slugName(prompt: string, index: number): string {
   return `${slug}${index > 1 ? `-${index}` : ""}.png`;
 }
 
-async function bytesFromProviderItem(item: { b64?: string; url?: string }): Promise<Buffer> {
-  if (item.b64) return Buffer.from(item.b64, "base64");
+function decodeBase64Payload(raw: string): Buffer {
+  let payload = raw.trim();
+  if (payload.startsWith("data:")) {
+    const comma = payload.indexOf(",");
+    if (comma < 0) throw new Error("Image provider data URL is missing payload.");
+    payload = payload.slice(comma + 1);
+  }
+  const bytes = Buffer.from(payload, "base64");
+  if (!bytes.length) throw new Error("Image provider returned empty base64.");
+  return bytes;
+}
+
+async function bytesFromProviderItem(item: { b64?: string; url?: string; path?: string }): Promise<Buffer> {
+  if (item.b64) return decodeBase64Payload(item.b64);
+  if (item.url?.startsWith("data:")) return decodeBase64Payload(item.url);
+  if (item.path || (item.url && !/^https?:\/\//i.test(item.url))) {
+    const filePath = String(item.path ?? item.url ?? "").replace(/^file:\/\//, "");
+    if (!filePath) throw new Error("Image provider path was empty.");
+    const buf = await fs.readFile(filePath);
+    if (!buf.length) throw new Error("Image provider temp path returned zero bytes.");
+    return buf;
+  }
   if (item.url) {
     const res = await fetch(item.url);
     if (!res.ok) throw new Error(`Image provider URL returned HTTP ${res.status}.`);
@@ -46,7 +67,7 @@ async function bytesFromProviderItem(item: { b64?: string; url?: string }): Prom
     if (!buf.length) throw new Error("Image provider URL returned zero bytes.");
     return buf;
   }
-  throw new Error("Image provider returned neither image bytes nor a downloadable URL.");
+  throw new Error("Image provider returned neither image bytes nor a downloadable URL. A text description is not an image.");
 }
 
 export class ImageService {
@@ -90,7 +111,13 @@ export class ImageService {
         chatId: req.chatId ?? null,
         sourceTool: "generate_image",
       });
-      if (!rec.artifactId) throw new Error("Image bytes were produced but artifact persistence returned no artifactId.");
+      if (!rec.artifactId || rec.status !== "ready") {
+        throw new Error("Image bytes were produced but artifact persistence did not reach ready.");
+      }
+      const back = await this.artifacts.read(rec.artifactId);
+      if (!back.bytes.length || back.record.sha256 !== rec.sha256) {
+        throw new Error("Image artifact read-back failed. No file was saved.");
+      }
       const pub = this.artifacts.toToolResult(rec);
       images.push({
         filename: rec.name,

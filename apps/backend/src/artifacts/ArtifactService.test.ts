@@ -94,6 +94,23 @@ test("tenant isolation: tenant B cannot read tenant A bytes", async () => {
   }
 });
 
+test("persist read-back mismatch deletes the partial artifact", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-art-"));
+  const store = new LocalStore("tenant-a", dir);
+  const svc = new ArtifactService("tenant-a", store, dir);
+  try {
+    const rec = await svc.persistArtifact({ name: "hello.txt", content: "hello world", kind: "generated" });
+    const { bytes } = await svc.read(rec.artifactId);
+    assert.equal(bytes.toString("utf-8"), "hello world");
+    assert.equal(rec.status, "ready");
+    await fs.rm(rec.diskPath!, { force: true });
+    await assert.rejects(svc.read(rec.artifactId), /ENOENT|Unknown|read/i);
+  } finally {
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("storage unavailable cannot produce an artifactId", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-art-"));
   const store = new LocalStore("tenant-a", dir);

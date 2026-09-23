@@ -68,6 +68,10 @@ export interface OrvynBridge {
     get(): Promise<{ backendUrl: string; apiKey: string }>;
     set(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }>;
   };
+  localWorker?: {
+    status(): Promise<{ state: "ready" | "degraded" | "offline"; detail?: string; hostDesktopAllowed: boolean }>;
+    setHostDesktop(allowed: boolean): Promise<{ state: "ready" | "degraded" | "offline"; detail?: string; hostDesktopAllowed: boolean }>;
+  };
   engine?: {
     ensureLocal(): Promise<{ ok: boolean }>;
   };

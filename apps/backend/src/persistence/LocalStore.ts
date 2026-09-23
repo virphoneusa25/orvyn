@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS models (
   id TEXT PRIMARY KEY,
   config_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS learning_records (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_learning_kind ON learning_records (kind, created_at);
 `;
 
 export function defaultDataDir(): string {
@@ -148,6 +155,7 @@ export class LocalStore {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
     this.migrateArtifacts();
+    this.migrateLearning();
   }
 
   private migrateArtifacts(): void {
@@ -430,6 +438,41 @@ export class LocalStore {
 
   deleteArtifact(id: string): void {
     this.guard("deleteArtifact", () => this.db.prepare(`DELETE FROM artifacts WHERE id = ?`).run(id));
+  }
+
+  private migrateLearning(): void {
+    try {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS learning_records (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_learning_kind ON learning_records (kind, created_at)`);
+    } catch {
+      /* older sqlite */
+    }
+  }
+
+  saveLearningRecord(input: { id: string; kind: string; payload: unknown }): void {
+    this.guard("saveLearningRecord", () =>
+      this.db.prepare(
+        `INSERT INTO learning_records (id, kind, payload_json, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json`
+      ).run(input.id, input.kind, JSON.stringify(input.payload), Date.now())
+    );
+  }
+
+  listLearningRecords(kind: string, limit = 80): { id: string; kind: string; payload: unknown; createdAt: number }[] {
+    return this.guard("listLearningRecords", () => {
+      const rows = this.db.prepare(`SELECT * FROM learning_records WHERE kind = ? ORDER BY created_at DESC LIMIT ?`).all(kind, limit) as any[];
+      return rows.map((r) => ({
+        id: String(r.id),
+        kind: String(r.kind),
+        payload: JSON.parse(String(r.payload_json)),
+        createdAt: Number(r.created_at),
+      }));
+    }) ?? [];
   }
 
   // ---------- models ----------

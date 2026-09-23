@@ -33,11 +33,16 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   via `search_capabilities` instead of loading the catalog. See
   `docs/MCP_MARKETPLACE.md`.
 - **Virtual workspace + artifacts** — Generated files persist only after
-  bytes + metadata succeed. `generate_image` / `create_document` /
-  `artifact_create` return `artifactId` or an error — never a success
-  claim without a stored file. Files lists Project, Generated, Recents,
-  Run Artifacts, and Uploads without a local project. Chat cards come
-  from `artifact.created` events only.
+  bytes + metadata succeed **and read-back hash matches**. `generate_image`
+  / `create_document` / `artifact_create` return `artifactId` or an error —
+  never a success claim without a stored file. `generate_image` rejects
+  description-only / empty / non-PNG provider output. Chat cards come
+  only from `artifact.created` with a real artifactId. Files lists Project,
+  Generated, Recents, Run Artifacts, and Uploads without a local project.
+- **Execution target** is separate from run mode. Auto / Local / Sandbox /
+  Cloud choose WHERE tools run. Auto keeps ordinary coding and generated
+  artifacts on Local (virtual workspace). Explicit Local/Sandbox/Cloud
+  never silently fall back.
 - **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
   background processes, diagnostics/typecheck/tests/lint, git (status →
   commit), fetch/web-search, image generation, MCP, Playwright browser QA
