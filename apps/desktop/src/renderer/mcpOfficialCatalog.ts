@@ -85,6 +85,23 @@ export function shouldUseOfficialFallback(
   }).useOfficialFallback;
 }
 
+export function isFirstPartyOfficialMarketServer(server: Pick<MarketServer, "name" | "title" | "canonicalId" | "publisher" | "repository" | "packages" | "sources" | "installed">): boolean {
+  const id = `${server.canonicalId ?? ""} ${server.name ?? ""}`.toLowerCase();
+  const repo = `${server.repository ?? ""}`.toLowerCase();
+  const publisher = `${server.publisher ?? ""}`.toLowerCase();
+  if ((server.sources ?? []).some((s) => s === "local" || s === "private")) return true;
+  if (server.installed) return true;
+  if (id.includes("io.modelcontextprotocol/") || publisher === "io.modelcontextprotocol") return true;
+  if ((server.packages ?? []).some((p) => /^(?:@modelcontextprotocol\/server-(?:filesystem|memory|everything|sequential-thinking)|mcp-server-(?:git|fetch|time))$/.test(p.identifier))) return true;
+  if (publisher === "io.github.github" || /io\.github\.github\/github-mcp-server/i.test(id)) return true;
+  if (/github\.com\/github\/github-mcp-server/i.test(repo) || /github\.com\/modelcontextprotocol\//i.test(repo)) return true;
+  return false;
+}
+
+export function officialMarketplaceOnly(servers: MarketServer[]): MarketServer[] {
+  return servers.filter((s) => isFirstPartyOfficialMarketServer(s));
+}
+
 export function isProductGithub(server: Pick<MarketServer, "name" | "title" | "repository">): boolean {
   if (/io\.github\.github\/github-mcp-server/i.test(server.name)) return true;
   if (/github\.com\/github\/github-mcp-server/i.test(server.repository ?? "")) return true;
@@ -100,7 +117,7 @@ export function rankOfficialServer(query: string, server: MarketServer): number 
   if (/github\.com\/github\/github-mcp-server/i.test(server.repository ?? "")) score += 50;
   if ((server.publisher ?? "").toLowerCase() === "io.github.github") score += 25;
   if (/io\.modelcontextprotocol\//i.test(server.name) && (!q || /javascript|typescript|\bjs\b|python|node|filesystem|fetch|git|memory|time|official/.test(q))) {
-    score += 90;
+    score += 400;
   }
   if (q && server.name.toLowerCase().includes(q)) score += 10;
   if (q && (server.title ?? "").toLowerCase() === q) score += 20;
@@ -266,7 +283,10 @@ export function dedupeServers(servers: MarketServer[]): MarketServer[] {
   const seen = new Set<string>();
   const out: MarketServer[] = [];
   for (const s of servers) {
-    const key = (s.repository || s.canonicalId || s.name).toLowerCase();
+    const repo = (s.repository ?? "").toLowerCase().replace(/\.git$/, "").replace(/\/+$/, "");
+    const pkg = (s.packages?.[0]?.identifier ?? "").toLowerCase();
+    const monorepo = /github\.com\/modelcontextprotocol\/servers$/i.test(repo);
+    const key = (pkg && (monorepo || !repo) ? `pkg:${pkg}` : repo || s.canonicalId || s.name).toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(s);
@@ -342,7 +362,7 @@ export async function loadOfficialFallbackCatalog(
       /* keep whatever we already have */
     }
   }
-  return rankOfficialResults(query, dedupeServers([...seeds, ...extras, ...primary]));
+  return officialMarketplaceOnly(rankOfficialResults(query, dedupeServers([...seeds, ...extras, ...primary])));
 }
 
 export async function resolveMarketplaceCatalog(input: {
@@ -363,9 +383,11 @@ export async function resolveMarketplaceCatalog(input: {
   degraded?: boolean;
 }> {
   const parsed = parseApiJson(input.status, input.text, input.contentType);
-  const cloudCatalog: MarketServer[] = parsed.ok
-    ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
-    : [];
+  const cloudCatalog: MarketServer[] = officialMarketplaceOnly(
+    parsed.ok
+      ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
+      : []
+  );
   const cloudDegraded = Boolean(parsed.ok && (parsed.body?.degradedFlag || (Array.isArray(parsed.body?.degraded) && parsed.body.degraded.length)));
   const decision = decideCatalogSource({
     status: input.status,
@@ -405,8 +427,8 @@ export async function resolveMarketplaceCatalog(input: {
   }
 
   try {
-    const official = await (input.loadOfficial ?? loadOfficialFallbackCatalog)(input.query);
-    const merged = dedupeServers([...official, ...cloudCatalog]);
+    const official = officialMarketplaceOnly(await (input.loadOfficial ?? loadOfficialFallbackCatalog)(input.query));
+    const merged = officialMarketplaceOnly(dedupeServers([...official, ...cloudCatalog]));
     if (merged.length) {
       return {
         state: decision.state === "auth-required" ? "auth-required" : "official-fallback",

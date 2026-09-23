@@ -11,6 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import { fetchInstalledMcpStatuses } from "../mcpPublicInstall";
 import { McpMarketplace } from "./McpMarketplace";
 
 interface NativeTool {
@@ -101,7 +102,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       const headers = authHeaders();
       const [t, s, h] = await Promise.all([
         fetch(apiUrl(`/tools${root}`), { headers }).then((r) => r.json()).catch(() => ({ tools: [] })),
-        fetch(apiUrl("/mcp/statuses"), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
+        fetchInstalledMcpStatuses().then((servers) => ({ servers })).catch(() => ({ servers: [] })),
         fetch(apiUrl("/mcp/health"), { headers }).then((r) => r.json()).catch(() => ({ servers: [] })),
       ]);
       setNative(t.tools ?? []);
@@ -237,7 +238,15 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
 
       {page === "marketplace" && (
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-          <McpMarketplace projectRoot={projectRoot} initialQuery={marketQuery} capabilityBanner={capabilityBanner} onInstalled={() => void refresh()} />
+          <McpMarketplace
+            projectRoot={projectRoot}
+            initialQuery={marketQuery}
+            capabilityBanner={capabilityBanner}
+            onInstalled={() => {
+              void refresh();
+              setPage("installed");
+            }}
+          />
         </div>
       )}
 
@@ -372,7 +381,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
         })}
         {servers.length === 0 && (
           <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "18px 0" }}>
-            No MCP servers configured. Add one to extend ORION with external tools.
+            No MCP servers installed yet. Open Marketplace, search for an official tool, then click Search and Install.
           </div>
         )}
       </div>

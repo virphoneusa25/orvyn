@@ -36,26 +36,24 @@ activated `mcp.<server>.<tool>` schemas (default: 8 servers / 40 tools).
 `RegistryAggregator` queries providers concurrently (`Promise.allSettled`),
 each with its own AbortController/timeout. One provider timeout or 5xx does
 **not** blank the Marketplace. Results are normalized, deduplicated by
-repository → package → canonicalId → publisher/name, and ranked (exact
-identity, tools, categories, installed, trust, semantic). Official metadata
-wins for identity/packages/remotes; Glama/Smithery enrich tools.
+repository → package → canonicalId → publisher/name, and ranked so first-party
+`io.modelcontextprotocol/*` reference servers sit at the top of language
+searches (`python`, `javascript`, …).
 
-Language searches such as `javascript` / `python` (and phrases like
-`official javascript mcp tool`) strip catalog-meta tokens, then inject the
-first-party `io.modelcontextprotocol/*` reference servers. Official Registry
-full-text search does not list those packages, so the desktop was surfacing
-community name matches instead.
+The Marketplace catalog is **official-only**: first-party MCP reference
+servers and GitHub’s official MCP server. Community registry, Glama, and
+Smithery listings are not shown. Installed/local and private-registry
+servers still appear.
 
 Official / public MCP servers install into the **local desktop tenant**
-without a platform API key, Glama key, or Smithery key. ORION asks the
-user to install from Marketplace when `search_capabilities` finds a gap;
-it never installs executables itself. Directory keys only federate extra
-catalogs. Cloud accounts stay isolated (`user_<id>` stores); a desktop
-install uses that machine’s local `default` tenant so each user’s
-connections stay on their own environment.
+without a platform API key. The Installed tab reads that local engine even
+when the desktop is signed into ORVYN Cloud, so a just-installed Python
+server shows up immediately. ORION asks the user to install from
+Marketplace when `search_capabilities` finds a gap; it never installs
+executables itself.
 
 Cache: 5 minutes fresh, 45 minutes stale-while-revalidate, persisted in
-ORVYN app data (`mcp.marketplace.catalogCache.v1`). Secrets are never stored.
+ORVYN app data (`mcp.marketplace.catalogCache.v3`). Secrets are never stored.
 Offline / all-remote-down serves stale cache plus Installed.
 
 A valid empty search is **"No MCP servers found"**. A provider failure is

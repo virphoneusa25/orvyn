@@ -16,6 +16,7 @@ import {
   shouldUseOfficialFallback,
   supplementQueries,
   BROWSE_SEED_QUERIES,
+  officialMarketplaceOnly,
   officialReferenceMarketServers,
 } from "./mcpOfficialCatalog.ts";
 import { parseApiJson } from "./mcpMarketplaceIcons.ts";
@@ -145,8 +146,8 @@ test("empty Cloud browse seeds GitHub via a real Registry query, never a fabrica
   });
   assert.ok(calls.includes(""));
   assert.ok(calls.includes(CANONICAL_GITHUB_QUERY));
-  assert.equal(isProductGithub(catalog[0]), true);
-  assert.equal(catalog[0].name, "io.github.github/github-mcp-server");
+  assert.ok(catalog.some((s) => s.name === "io.github.github/github-mcp-server" && isProductGithub(s)));
+  assert.equal(catalog.some((s) => s.name === "ai.example/random" || s.name.includes("thenextgennexus")), false);
 });
 
 test("resolveMarketplaceCatalog: Cloud JSON works; 404/HTML fall back; 401 does not", async () => {
@@ -156,14 +157,14 @@ test("resolveMarketplaceCatalog: Cloud JSON works; 404/HTML fall back; 401 does 
 
   const cloud = await resolveMarketplaceCatalog({
     status: 200,
-    text: JSON.stringify({ results: [{ server: { canonicalId: "cloud-1", name: "cloud-1", title: "Cloud", description: "from control plane", sources: ["official"], categories: [], transports: [{ kind: "http" }], auth: [], trust: { level: "community", reasons: [] }, compatibility: "compatible", networkRequired: false } }] }),
+    text: JSON.stringify({ results: [{ server: { canonicalId: "io.github.github/github-mcp-server", name: "io.github.github/github-mcp-server", title: "GitHub", description: "from control plane", repository: "https://github.com/github/github-mcp-server", sources: ["official"], categories: [], transports: [{ kind: "http" }], auth: [], trust: { level: "community", reasons: [] }, compatibility: "compatible", networkRequired: false } }] }),
     contentType: "application/json",
     query: "github",
     backendUrl: "https://orvyn.virphoneusa.com",
     loadOfficial,
   });
   assert.equal(cloud.state, "cloud");
-  assert.equal(cloud.catalog[0].canonicalId, "cloud-1");
+  assert.equal(cloud.catalog[0].canonicalId, "io.github.github/github-mcp-server");
 
   resetMarketplaceSupport("https://orvyn.virphoneusa.com");
   const html = await resolveMarketplaceCatalog({
@@ -250,10 +251,17 @@ test("javascript and python searches include official reference servers even whe
   assert.ok(py.some((s) => s.name === "io.modelcontextprotocol/git"));
   const ranked = rankOfficialResults("javascript", [
     ...officialReferenceMarketServers("javascript"),
-    normalizeOfficialRow(officialRow("com.a2awire/javascript-tracker", { title: "npm Release Tracker" })),
+    normalizeOfficialRow(officialRow("com.a2awire/javascript-tracker", {
+      title: "npm Release Tracker",
+      repository: "https://github.com/ee324/a2awire",
+      packages: [{ registryType: "npm", identifier: "a2awire-javascript-tracker", version: "1.0.0" }],
+    })),
   ]);
   assert.equal(ranked[0].name.startsWith("io.modelcontextprotocol/"), true);
   assert.deepEqual(supplementQueries("javascript").includes("typescript"), true);
+  const filtered = officialMarketplaceOnly(ranked);
+  assert.equal(filtered.some((s) => s.name.includes("a2awire")), false);
+  assert.ok(filtered.every((s) => s.name.startsWith("io.modelcontextprotocol/")));
 });
 
 test("preferKnownProducts + dedupe keep one GitHub card", () => {

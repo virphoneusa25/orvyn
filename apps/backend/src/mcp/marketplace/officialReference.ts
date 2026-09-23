@@ -125,6 +125,46 @@ export function isOfficialReferenceServer(server: {
   return pkgs.some((p) => REFERENCE_PACKAGES.has(p));
 }
 
+/** First-party MCP org + GitHub's official server. Community registry listings are excluded. */
+export function isFirstPartyOfficialServer(server: {
+  name?: string;
+  title?: string;
+  canonicalId?: string;
+  publisher?: string;
+  repository?: string;
+  packages?: { identifier?: string }[];
+  sources?: string[];
+}): boolean {
+  if (isOfficialReferenceServer(server)) return true;
+  const id = `${server.canonicalId ?? ""} ${server.name ?? ""}`.toLowerCase();
+  const repo = `${server.repository ?? ""}`.toLowerCase();
+  const publisher = `${server.publisher ?? ""}`.toLowerCase();
+  if (publisher === "io.modelcontextprotocol" || /github\.com\/modelcontextprotocol\//i.test(repo)) return true;
+  if (publisher === "io.github.github" || /io\.github\.github\/github-mcp-server/i.test(id)) return true;
+  if (/github\.com\/github\/github-mcp-server/i.test(repo)) return true;
+  return false;
+}
+
+/** Marketplace catalog is official-only. Installed/local/private servers still appear. */
+export function keepMarketplaceListing(
+  server: {
+    name?: string;
+    title?: string;
+    canonicalId?: string;
+    publisher?: string;
+    repository?: string;
+    packages?: { identifier?: string }[];
+    sources?: string[];
+    installed?: unknown;
+  },
+  providerId?: string
+): boolean {
+  if (providerId === "local" || providerId === "private") return true;
+  if ((server.sources ?? []).some((s) => s === "local" || s === "private")) return true;
+  if (server.installed) return true;
+  return isFirstPartyOfficialServer(server);
+}
+
 export function officialReferenceById(id: string): MarketplaceMcpServer | null {
   const key = id.replace(/^(official|glama|smithery|local|private):/i, "").toLowerCase();
   const spec = OFFICIAL_REFERENCE_SERVERS.find(

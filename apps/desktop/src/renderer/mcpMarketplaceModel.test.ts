@@ -237,6 +237,7 @@ test("sidebar split stays within IDE marketplace bounds", () => {
   assert.equal(overlaySidebar(1280), false);
   assert.equal(sidebarForContainer(500, 380), 240);
   assert.equal(sidebarForContainer(1280, 380), 380);
+  assert.ok(sidebarForContainer(800, 520) <= 800 - 420 - 8);
 });
 
 test("catalog cards do not pretend a missing tools[] payload means zero tools", () => {

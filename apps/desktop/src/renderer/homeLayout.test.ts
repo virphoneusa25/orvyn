@@ -36,7 +36,7 @@ test("closed Workbench never reserves a third grid track", () => {
 test("open Workbench is sidebar | main | panel — overlay still two tracks", () => {
   const open = appGridTemplateColumns({ workbenchOpen: true, overlay: false, workbenchWidth: 650 });
   assert.equal(gridTrackCount(open), 3);
-  assert.ok(open.endsWith("650px"));
+  assert.ok(open.includes("minmax(0, 650px)"));
   const overlay = appGridTemplateColumns({ workbenchOpen: true, overlay: true, workbenchWidth: 650 });
   assert.equal(gridTrackCount(overlay), 2);
   assert.equal(workbenchReservesColumn(true, false), true);

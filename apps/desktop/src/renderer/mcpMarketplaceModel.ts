@@ -401,10 +401,10 @@ export function overlaySidebar(containerWidth: number): boolean {
 
 /** Keep a usable left detail pane when Tools & MCP shares the window with Desktop. */
 export function sidebarForContainer(containerWidth: number, current = SIDEBAR_DEFAULT): number {
-  if (containerWidth >= 960) return clampSidebar(current);
-  if (containerWidth >= 720) return Math.min(current, 300);
-  if (containerWidth >= 480) return Math.min(current, SIDEBAR_COMPACT);
-  return SIDEBAR_COMPACT;
+  const preferred =
+    containerWidth >= 960 ? clampSidebar(current) : containerWidth >= 720 ? Math.min(current, 300) : containerWidth >= 480 ? Math.min(current, SIDEBAR_COMPACT) : SIDEBAR_COMPACT;
+  const room = Math.max(SIDEBAR_MIN, containerWidth - DETAIL_MIN - 8);
+  return Math.min(preferred, room);
 }
 
 export function pickSelectedServer(

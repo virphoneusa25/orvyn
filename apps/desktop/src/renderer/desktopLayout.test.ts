@@ -133,7 +133,7 @@ test("app grid is two tracks when Workbench is closed", () => {
   );
   assert.equal(
     appGridTemplateColumns({ workbenchOpen: true, overlay: false, workbenchWidth: 650 }),
-    `${SIDEBAR_WIDTH}px minmax(500px, 1fr) 650px`
+    `${SIDEBAR_WIDTH}px minmax(500px, 1fr) minmax(0, 650px)`
   );
 });
 

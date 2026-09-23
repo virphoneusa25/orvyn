@@ -101,7 +101,7 @@ export function appGridTemplateColumns(opts: {
   workbenchWidth: number;
 }): string {
   if (opts.workbenchOpen && !opts.overlay) {
-    return `${SIDEBAR_WIDTH}px minmax(${CHAT_MIN}px, 1fr) ${opts.workbenchWidth}px`;
+    return `${SIDEBAR_WIDTH}px minmax(${CHAT_MIN}px, 1fr) minmax(0, ${opts.workbenchWidth}px)`;
   }
   return `${SIDEBAR_WIDTH}px minmax(0, 1fr)`;
 }

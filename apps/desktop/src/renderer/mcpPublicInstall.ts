@@ -1,4 +1,4 @@
-import { LOCAL_BACKEND_URL, getConnectionConfig, isCloudBackend } from "./connection.ts";
+import { LOCAL_BACKEND_URL, apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection.ts";
 import type { MarketServer } from "./mcpMarketplaceModel.ts";
 import { installPayload, shouldUseHostInstall } from "./mcpOfficialCatalog.ts";
 import type { ParsedApi } from "./mcpMarketplaceIcons.ts";
@@ -95,6 +95,48 @@ export async function installPublicMcpOnLocalHost(
   } catch (err: any) {
     return { ok: false, error: String(err?.message ?? err) };
   }
+}
+
+export interface McpStatusRow {
+  id: string;
+  name: string;
+  state?: string;
+  enabled?: boolean;
+  toolCount?: number;
+  lastConnectedAt?: number;
+  [key: string]: unknown;
+}
+
+export function mergeMcpStatusLists(...lists: McpStatusRow[][]): McpStatusRow[] {
+  const rank = (state?: string) => (state === "CONNECTED" ? 3 : state === "ERROR" || state === "NEEDS_AUTH" ? 2 : state === "CONNECTING" ? 1 : 0);
+  const byId = new Map<string, McpStatusRow>();
+  for (const list of lists) {
+    for (const row of list) {
+      if (!row?.id) continue;
+      const prev = byId.get(row.id);
+      if (!prev || rank(row.state) >= rank(prev.state)) byId.set(row.id, row);
+    }
+  }
+  return [...byId.values()];
+}
+
+async function readStatusList(url: string, headers?: Record<string, string>): Promise<McpStatusRow[]> {
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
+    const body = await res.json().catch(() => ({}));
+    return Array.isArray(body?.servers) ? (body.servers as McpStatusRow[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Cloud Mode installs public MCP on the local engine — Installed must read both. */
+export async function fetchInstalledMcpStatuses(controlPlane?: McpStatusRow[]): Promise<McpStatusRow[]> {
+  const control = controlPlane ?? (await readStatusList(apiUrl("/mcp/statuses"), authHeaders()));
+  if (!currentBackendIsCloud()) return control;
+  await ensureLocalMarketplaceEngine();
+  const local = await readStatusList(localMarketplaceUrl("/mcp/statuses"));
+  return mergeMcpStatusLists(control, local);
 }
 
 export function currentBackendIsCloud(): boolean {

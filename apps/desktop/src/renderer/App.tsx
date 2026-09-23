@@ -34,7 +34,6 @@ import { WorkspaceState } from "./orvyn-bridge";
 import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages } from "./chatSession";
 import { pickReattachRun } from "./appReattach";
 import {
-  AGENT_PANEL_MIN,
   appGridTemplateColumns,
   clampAgentPanelWidth,
   fitsDockedWorkbench,
@@ -899,8 +898,8 @@ export function App() {
           className="orvyn-right-panel"
           data-placement={overlayAgentPanel ? "overlay" : showRightChrome ? "dock" : "hidden"}
           style={{
-            minWidth: showRightChrome && !overlayAgentPanel ? AGENT_PANEL_MIN : 0,
-            maxWidth: showRightChrome ? "75vw" : 0,
+            minWidth: 0,
+            maxWidth: showRightChrome ? "100%" : 0,
             opacity: showRightChrome ? 1 : 0,
             overflow: "hidden",
             display: showRightChrome ? "flex" : "none",

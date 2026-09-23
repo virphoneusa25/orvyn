@@ -4,6 +4,7 @@ import { parseApiJson } from "./mcpMarketplaceIcons.ts";
 import { shouldUseHostInstall } from "./mcpOfficialCatalog.ts";
 import {
   isPublicFreeMcp,
+  mergeMcpStatusLists,
   publicInstallSteps,
   serverRequiresUserSecret,
   shouldUseLocalPublicInstall,
@@ -51,4 +52,13 @@ test("cloud 401 falls back to local public install instead of demanding a platfo
     shouldUseLocalPublicInstall({ status: 401, parsed, server: s, hasPlatformKey: false, backendIsCloud: true }),
     true
   );
+});
+
+test("Installed tab merges local desktop statuses with the cloud control plane", () => {
+  const merged = mergeMcpStatusLists(
+    [{ id: "cloud-only", name: "Remote", state: "DISCONNECTED" }],
+    [{ id: "git", name: "Git", state: "CONNECTED" }, { id: "cloud-only", name: "Remote", state: "ERROR" }]
+  );
+  assert.equal(merged.some((s) => s.id === "git" && s.state === "CONNECTED"), true);
+  assert.equal(merged.find((s) => s.id === "cloud-only")?.state, "ERROR");
 });

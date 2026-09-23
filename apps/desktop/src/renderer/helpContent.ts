@@ -104,7 +104,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "marketplace",
     title: "MCP Marketplace",
     tags: ["mcp", "marketplace", "tools", "orion"],
-    body: "Open Tools & MCP → Marketplace to search Official MCP Registry and optional directories. Install or connect a server; ORION discovers extra capabilities with search_capabilities instead of loading the whole catalog. Every MCP tool still goes through ToolGateway. Executable servers never install silently.",
+    body: "Open Tools & MCP → Marketplace and click Search to find official first-party MCP tools (no community listings). Install or connect a server on this desktop; it appears under Installed. ORION discovers extra capabilities with search_capabilities instead of loading the whole catalog. Every MCP tool still goes through ToolGateway. Executable servers never install silently.",
   },
   {
     id: "update",

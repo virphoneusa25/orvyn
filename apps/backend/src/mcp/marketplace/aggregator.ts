@@ -1,7 +1,7 @@
 import { HashingEmbedder } from "../../indexing/embeddings";
 import { CatalogCache, catalogCacheKey } from "./catalogCache";
 import { catalogSearchQuery, primarySearchTerm, searchTokens } from "./classify";
-import { isOfficialReferenceServer } from "./officialReference";
+import { isOfficialReferenceServer, keepMarketplaceListing } from "./officialReference";
 import {
   CatalogProviderError,
   classifyThrown,
@@ -35,8 +35,10 @@ const DEFAULT_TIMEOUT: Record<string, number> = { ...PROVIDER_TIMEOUTS_MS, priva
 
 export function canonicalKey(server: MarketplaceMcpServer): string {
   const repo = normalizeRepo(server.repository);
-  if (repo) return `repo:${repo}`;
   const pkg = server.packages[0]?.identifier?.toLowerCase().trim();
+  const monorepo = /github\.com\/modelcontextprotocol\/servers$/i.test(repo);
+  if (pkg && (monorepo || !repo)) return `pkg:${pkg}`;
+  if (repo) return `repo:${repo}`;
   if (pkg) return `pkg:${pkg}`;
   const id = stripProviderPrefix(server.canonicalId);
   if (id.includes("/")) return `id:${id.toLowerCase()}`;
@@ -97,7 +99,7 @@ export function rankServer(query: string, server: MarketplaceMcpServer, extraToo
   if (isCanonicalGithub(server) && (!q || /github/.test(q))) score += 90;
   if (isCanonicalPostgres(server) && /postgres|postgresql/.test(q)) score += 70;
   if (isOfficialReferenceServer(server) && (!q || /javascript|typescript|\bjs\b|python|\bpy\b|node|filesystem|fetch|git|memory|time|official/.test(q))) {
-    score += 90;
+    score += 400;
   }
   if (server.sources.includes("official")) score += 8;
   if (server.sources.includes("local") && server.installed) score += 20;
@@ -233,8 +235,10 @@ export class RegistryAggregator {
 
     const merged = new Map<string, RegistryResult>();
     let incoming = 0;
-    for (const chunk of chunks) {
+    chunks.forEach((chunk, i) => {
+      const providerId = this.providers[i]?.id;
       for (const row of chunk) {
+        if (!keepMarketplaceListing(row.server, providerId)) continue;
         incoming += 1;
         const k = canonicalKey(row.server);
         const prev = merged.get(k);
@@ -248,7 +252,7 @@ export class RegistryAggregator {
           });
         }
       }
-    }
+    });
     const qVec = await this.embedder.embed(query.query || "mcp server");
     const results: RegistryResult[] = [];
     for (const row of merged.values()) {
@@ -261,7 +265,12 @@ export class RegistryAggregator {
       const semantic = cosine(qVec, dVec) * 30;
       results.push({ ...row, score: lexical + semantic });
     }
-    results.sort((a, b) => b.score - a.score);
+    results.sort((a, b) => {
+      const ao = isOfficialReferenceServer(a.server) ? 1 : 0;
+      const bo = isOfficialReferenceServer(b.server) ? 1 : 0;
+      if (ao !== bo) return bo - ao;
+      return b.score - a.score;
+    });
     return {
       results: results.slice(0, query.limit ?? 24),
       health,

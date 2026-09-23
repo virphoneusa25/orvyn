@@ -28,7 +28,6 @@ import {
   schemaArgNames,
   selectByOffset,
   serverLabel,
-  DETAIL_MIN,
   tabAvailable,
   transportLabel,
   toolsAdvertisedLabel,
@@ -51,6 +50,7 @@ import {
 } from "../mcpOfficialCatalog";
 import {
   currentBackendIsCloud,
+  fetchInstalledMcpStatuses,
   hasPlatformKey,
   installPublicMcpOnLocalHost,
   isPublicFreeMcp,
@@ -59,7 +59,6 @@ import {
   shouldUseLocalPublicInstall,
 } from "../mcpPublicInstall";
 import {
-  MARKETPLACE_DEBOUNCE_MS,
   degradedBanner,
   emptyKindFor,
   healthToProviders,
@@ -100,7 +99,7 @@ export function McpMarketplace({
   capabilityBanner?: string;
 }) {
   const [q, setQ] = useState(initialQuery);
-  const [debounced, setDebounced] = useState(initialQuery);
+  const [submittedQuery, setSubmittedQuery] = useState(initialQuery.trim());
   const [results, setResults] = useState<MarketServer[]>([]);
   const [health, setHealth] = useState<Health[]>([]);
   const [providers, setProviders] = useState<Record<string, ProviderStatusView>>({});
@@ -140,13 +139,8 @@ export function McpMarketplace({
 
   useEffect(() => {
     setQ(initialQuery);
-    setDebounced(initialQuery.trim());
+    setSubmittedQuery(initialQuery.trim());
   }, [initialQuery]);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), MARKETPLACE_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [q]);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -209,7 +203,9 @@ export function McpMarketplace({
         previousCatalog: previous,
       });
       if (mine !== searchGen.current) return;
-      const statuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
+      const controlStatuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
+      const statuses = await fetchInstalledMcpStatuses(controlStatuses);
+      if (mine !== searchGen.current) return;
       const mergedCatalog = mergeInstalled(resolved.catalog, statuses);
       const providerMap = healthToProviders(
         (resolved.parsed.ok && resolved.parsed.body?.health) || healthParsed.body.providers || []
@@ -245,14 +241,20 @@ export function McpMarketplace({
   }, [filters.category]);
 
   useEffect(() => {
-    void search(debounced);
-  }, [debounced, search]);
+    void search(submittedQuery);
+  }, [submittedQuery, search]);
+
+  function submitSearch(next = q, opts?: { refresh?: boolean }) {
+    const query = next.trim();
+    setSubmittedQuery(query);
+    void search(query, opts);
+  }
 
   const updateIds = useMemo(() => new Set(updates.map((u) => u.serverId)), [updates]);
   const filtered = useMemo(() => applyFilters(results, filters, updateIds), [results, filters, updateIds]);
   const recommended = useMemo(
-    () => recommendServers(filtered, { query: debounced || capabilityBanner || initialQuery, projectHints: projectRoot ? [projectRoot] : [] }),
-    [filtered, debounced, capabilityBanner, initialQuery, projectRoot]
+    () => recommendServers(filtered, { query: submittedQuery || capabilityBanner || initialQuery, projectHints: projectRoot ? [projectRoot] : [] }),
+    [filtered, submittedQuery, capabilityBanner, initialQuery, projectRoot]
   );
   const groups = useMemo(() => groupMarketplace(filtered, updates, recommended), [filtered, updates, recommended]);
   const selected = pickSelectedServer(filtered, recommended, selectedId);
@@ -351,7 +353,7 @@ export function McpMarketplace({
         }
       }
       onInstalled?.();
-      await search(debounced);
+      await search(submittedQuery);
       setWizard(null);
     } catch (err: any) {
       setError(err.message);
@@ -364,7 +366,7 @@ export function McpMarketplace({
     setBusy(true);
     try {
       await fetch(apiUrl(`/mcp/servers/${id}/${action}`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
-      await search(debounced);
+      await search(submittedQuery);
       onInstalled?.();
     } finally {
       setBusy(false);
@@ -387,7 +389,7 @@ export function McpMarketplace({
       setError(err.message);
     } finally {
       setBusy(false);
-      void search(debounced);
+      void search(submittedQuery);
     }
   }
 
@@ -397,7 +399,7 @@ export function McpMarketplace({
       await fetch(apiUrl(`/mcp/servers/${id}`), { method: "DELETE", headers: authHeaders() });
       setConfirmUninstall(false);
       onInstalled?.();
-      await search(debounced);
+      await search(submittedQuery);
     } finally {
       setBusy(false);
     }
@@ -409,7 +411,7 @@ export function McpMarketplace({
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ scope, cwd: projectRoot }),
     });
-    void search(debounced);
+    void search(submittedQuery);
   }
 
   async function setToolPermission(serverId: string, tool: string, mode: "ALLOW" | "ASK" | "DENY") {
@@ -418,7 +420,7 @@ export function McpMarketplace({
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ tool, mode }),
     });
-    void search(debounced);
+    void search(submittedQuery);
   }
 
   function runPrimary(server: MarketServer) {
@@ -461,7 +463,7 @@ export function McpMarketplace({
       data-layout={overlay ? "overlay" : "split"}
       style={{
         display: overlay ? "flex" : "grid",
-        gridTemplateColumns: overlay ? undefined : `minmax(${DETAIL_MIN}px, 1fr) 5px ${listWidth}px`,
+        gridTemplateColumns: overlay ? undefined : `minmax(0, 1fr) 5px minmax(0, ${listWidth}px)`,
         height: "100%",
         minHeight: 0,
         minWidth: 0,
@@ -503,10 +505,10 @@ export function McpMarketplace({
             hasUpdate={Boolean(selected.installed && updateIds.has(selected.installed.serverId))}
             onToolMode={selected.installed ? (tool, mode) => void setToolPermission(selected.installed!.serverId, tool, mode) : undefined}
             onScope={selected.installed ? (scope) => void setScope(selected.installed!.serverId, scope) : undefined}
-            banner={capabilityBanner || (debounced && recReason(selected.canonicalId)) || undefined}
+            banner={capabilityBanner || (submittedQuery && recReason(selected.canonicalId)) || undefined}
           />
         ) : (
-          <EmptyDetail loading={loading} query={debounced} />
+          <EmptyDetail loading={loading} query={submittedQuery} />
         )}
       </section>
 
@@ -539,23 +541,44 @@ export function McpMarketplace({
               <button style={{ ...ghostBtn, marginLeft: "auto", padding: "2px 8px" }} onClick={() => setBrowseOpen(false)}>Close</button>
             )}
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
               ref={searchRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search MCP servers, tools, or capabilities..."
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitSearch();
+                }
+              }}
+              placeholder="Search official MCP tools…"
               style={searchInput}
+              aria-label="Search official MCP tools"
             />
-            <IconBtn title="Refresh" onClick={() => void search(debounced, { refresh: true })}>↻</IconBtn>
+            <button
+              type="button"
+              onClick={() => submitSearch()}
+              disabled={loading}
+              data-testid="marketplace-search-btn"
+              style={{ ...primaryBtn, opacity: loading ? 0.75 : 1, minWidth: 92 }}
+            >
+              {loading ? "Searching…" : "Search"}
+            </button>
+            <IconBtn title="Refresh" onClick={() => submitSearch(q, { refresh: true })}>↻</IconBtn>
             <IconBtn title="Filters" onClick={() => setFilterOpen((v) => !v)} active={filterActiveCount(filters) > 0}>
               ▦{filterActiveCount(filters) ? ` ${filterActiveCount(filters)}` : ""}
             </IconBtn>
             <IconBtn title="More" onClick={() => setOverflow((v) => !v)}>⋯</IconBtn>
           </div>
+          {loading && results.length > 0 && (
+            <div data-testid="marketplace-searching" style={{ fontSize: 10.5, color: "var(--orvyn-cyan, #22D3EE)", marginTop: 8 }}>
+              Searching official MCP tools…
+            </div>
+          )}
           <ProviderDots providers={providers} />
           <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", marginTop: 8 }}>
-            Official MCP servers install on this desktop with no API key. Glama and Smithery keys are optional extras.
+            Official first-party MCP tools only. They install on this desktop with no API key.
           </div>
           {catalogState === "official-fallback" && (
             <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan, #22D3EE)", marginTop: 8 }}>
@@ -642,7 +665,7 @@ export function McpMarketplace({
           )}
           {openSections.private && (
             <div style={{ padding: "8px 12px 16px" }}>
-              <PrivateRegistries onSaved={() => void search(debounced)} />
+              <PrivateRegistries onSaved={() => void search(submittedQuery)} />
             </div>
           )}
           {!loading && filtered.length === 0 && emptyKind === "true-empty" && (
@@ -662,7 +685,7 @@ export function McpMarketplace({
               </div>
               Installed MCP servers stay visible. Cached catalog results are shown when we have them.
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <button style={ghostBtn} onClick={() => void search(debounced, { refresh: true })}>Retry</button>
+                <button style={ghostBtn} onClick={() => void search(submittedQuery, { refresh: true })}>Retry</button>
                 <button style={ghostBtn} onClick={() => document.dispatchEvent(new CustomEvent("orvyn:mcp-add-server"))}>Add Server</button>
               </div>
             </div>

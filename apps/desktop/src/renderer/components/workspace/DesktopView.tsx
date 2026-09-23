@@ -396,7 +396,7 @@ export function DesktopView({
   const statusColor = user ? "#22d3ee" : "#34d399";
 
   const header = (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", flexShrink: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }}>
       <span style={{
         display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600,
         color: statusColor, background: "rgba(52,211,153,0.08)",
@@ -444,8 +444,7 @@ export function DesktopView({
     <div
       ref={viewRef}
       style={{
-        flex: 1, minHeight: 0, position: "relative", overflow: "hidden",
-        display: "flex", alignItems: "center", justifyContent: "center",
+        flex: 1, minWidth: 0, minHeight: 0, width: "100%", position: "relative", overflow: "hidden",
         background: "#04060f",
         outline: "none",
       }}
@@ -461,7 +460,17 @@ export function DesktopView({
     >
       <canvas
         ref={canvasRef}
-        style={{ display: "block", pointerEvents: "none" }}
+        style={{
+          display: "block",
+          pointerEvents: "none",
+          position: "absolute",
+          left: imageRect.x,
+          top: imageRect.y,
+          width: imageRect.w,
+          height: imageRect.h,
+          maxWidth: "100%",
+          maxHeight: "100%",
+        }}
       />
       {!frameDrawn && (
         <div style={{ ...emptyBody(), position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -524,8 +533,8 @@ export function DesktopView({
 
   const actionBar = (
     <div style={{
-      display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", flexShrink: 0,
-      borderTop: "1px solid var(--orvyn-border-soft)",
+      display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", flexShrink: 0, flexWrap: "wrap",
+      minWidth: 0, borderTop: "1px solid var(--orvyn-border-soft)",
     }}>
       <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 8 }}>
         <span style={{ marginTop: 5 }}><Dot color="#34d399" /></span>
@@ -580,7 +589,7 @@ export function DesktopView({
       background: "#070b14",
       display: "flex",
       flexDirection: "column" as const,
-    } : { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14" }}>
+    } : { flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", background: "#070b14", overflow: "hidden" }}>
       {!fullscreen && header}
       <div style={fullscreen
         ? { position: "fixed", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", background: "#04060f" }

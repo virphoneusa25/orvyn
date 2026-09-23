@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { canonicalKey, isCanonicalGithub, mergeServers, rankServer, RegistryAggregator } from "./aggregator";
 import { CatalogCache, catalogCacheKey, CATALOG_FRESH_TTL_MS } from "./catalogCache";
 import { catalogSearchQuery, classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
-import { officialReferenceResults } from "./officialReference";
+import { keepMarketplaceListing, officialReferenceResults } from "./officialReference";
 import { isPublicFreeMcp, serverRequiresUserSecret } from "./publicInstall";
 import { installPlan } from "./install";
 import { normalizeOfficial } from "./officialProvider";
@@ -369,11 +369,12 @@ test("provider parallelism: official timeout still returns glama + smithery", as
     await new Promise((r) => setTimeout(r, 80));
     throw new CatalogProviderError("official", "timeout", "Official timed out after 12s");
   });
+  const seeded = officialReferenceResults("");
   const glama = stubProvider("glama", "Glama", async () => ({
-    results: [{ server: normalizeGlama({ name: "JS tools", namespace: "acme", slug: "js-mcp", description: "JavaScript lint and test", repository: { url: "https://github.com/acme/js-mcp" } }), score: 0 }],
+    results: [{ server: seeded[0].server, score: 0 }],
   }));
   const smithery = stubProvider("smithery", "Smithery", async () => ({
-    results: [{ server: normalizeSmithery({ qualifiedName: "acme/typescript", displayName: "TypeScript", description: "JS/TS helpers" }), score: 0 }],
+    results: [{ server: seeded[seeded.length - 1].server, score: 0 }],
   }));
   const agg = new RegistryAggregator([official, glama, smithery]);
   const started = Date.now();
@@ -390,12 +391,12 @@ test("provider parallelism: official timeout still returns glama + smithery", as
 test("provider timeout isolation uses separate budgets", async () => {
   const slow = stubProvider("official", "Official", () => new Promise(() => {}));
   const fast = stubProvider("glama", "Glama", async () => ({
-    results: [{ server: normalizeGlama({ name: "Fast", namespace: "x", slug: "fast", description: "ok" }), score: 0 }],
+    results: [{ server: officialReferenceResults("javascript")[0].server, score: 0 }],
   }));
   const agg = new RegistryAggregator([slow, fast], undefined, { official: 80, glama: 1000 });
   const started = Date.now();
   const out = await agg.search({ query: "js", limit: 8 });
-  assert.ok(out.results.some((r) => /fast/i.test(r.server.name)));
+  assert.ok(out.results.some((r) => r.server.name.startsWith("io.modelcontextprotocol/")));
   assert.equal(out.providers.official.status, "slow");
   assert.ok(Date.now() - started < 1500);
 });
@@ -427,7 +428,7 @@ test("429 becomes rate-limited and does not wipe other providers", async () => {
     throw new CatalogProviderError("official", "rate-limited", "Official HTTP 429", 429, 2000);
   });
   const glama = stubProvider("glama", "Glama", async () => ({
-    results: [{ server: normalizeGlama({ name: "Cached", namespace: "x", slug: "c", description: "ok" }), score: 0 }],
+    results: [{ server: officialReferenceResults("javascript")[0].server, score: 0 }],
   }));
   const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
   assert.equal(out.providers.official.status, "rate-limited");
@@ -571,17 +572,48 @@ test("empty vs failure: timeout is degraded, not a valid empty catalog", async (
   assert.equal(out.providers.official.status, "slow");
 });
 
-test("partial success: official 500 does not blank glama results", async () => {
+test("partial success: official 500 does not blank first-party results from another provider", async () => {
   const official = stubProvider("official", "Official", async () => {
     throw new CatalogProviderError("official", "http-5xx", "Official HTTP 500", 500);
   });
   const glama = stubProvider("glama", "Glama", async () => ({
-    results: [{ server: normalizeGlama({ name: "javascript-mcp", namespace: "acme", description: "JS" }), score: 0 }],
+    results: [{ server: officialReferenceResults("javascript")[0].server, score: 0 }],
   }));
   const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
   assert.ok(out.results.length >= 1);
   assert.equal(out.providers.official.status, "offline");
   assert.equal(out.degradedFlag, true);
+});
+
+test("official reference servers in the MCP monorepo stay separate cards", () => {
+  const git = officialReferenceResults("git")[0].server;
+  const fetch = officialReferenceResults("fetch")[0].server;
+  const time = officialReferenceResults("time")[0].server;
+  assert.notEqual(canonicalKey(git), canonicalKey(fetch));
+  assert.notEqual(canonicalKey(git), canonicalKey(time));
+  assert.match(canonicalKey(git), /mcp-server-git/);
+});
+
+test("marketplace catalog is official-only: python search drops community and ranks reference servers first", async () => {
+  const official = stubProvider("official", "Official", async () => ({
+    results: [
+      {
+        server: normalizeOfficial(sampleOfficial("com.a2awire/python-tracker", "Community Python tracker", {
+          repository: { url: "https://github.com/ee324/a2awire", source: "github" },
+          packages: [{ registryType: "pypi", identifier: "a2awire-python", version: "1.0.0" }],
+        })),
+        score: 0,
+      },
+      { server: officialReferenceResults("python")[0].server, score: 0 },
+    ],
+  }));
+  const glama = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: normalizeGlama({ name: "python-mcp", namespace: "acme", description: "community python" }), score: 0 }],
+  }));
+  const out = await new RegistryAggregator([official, glama]).search({ query: "python", limit: 12 });
+  assert.ok(out.results.every((r) => keepMarketplaceListing(r.server)));
+  assert.equal(out.results.some((r) => /a2awire|acme|python-mcp/i.test(r.server.name)), false);
+  assert.equal(out.results[0].server.name.startsWith("io.modelcontextprotocol/"), true);
 });
 
 test("smithery without API key is needs-key and does not fail marketplace", async () => {

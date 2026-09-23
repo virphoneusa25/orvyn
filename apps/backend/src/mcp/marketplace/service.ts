@@ -5,6 +5,7 @@ import { glamaProvider } from "./glamaProvider";
 import { exportOrvynMcpConfig, parseImportedMcpConfig, type ImportedServerDraft } from "./importExport";
 import { installMarketplaceServer } from "./install";
 import { localProvider } from "./localProvider";
+import { keepMarketplaceListing } from "./officialReference";
 import { officialProvider } from "./officialProvider";
 import { privateProvider, type PrivateRegistryConfig } from "./privateProvider";
 import { smitheryProvider } from "./smitheryProvider";
@@ -127,7 +128,12 @@ export class MarketplaceService {
     const blocked = this.blocklist();
     return {
       ...out,
-      results: out.results.filter((r) => !blocked.has(r.server.canonicalId) && r.server.trust.level !== "blocked"),
+      results: out.results.filter(
+        (r) =>
+          !blocked.has(r.server.canonicalId) &&
+          r.server.trust.level !== "blocked" &&
+          keepMarketplaceListing(r.server)
+      ),
     };
   }
 

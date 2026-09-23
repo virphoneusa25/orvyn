@@ -325,7 +325,8 @@ export function AgentWorkspace({
         display: "flex",
         height: "100%",
         width: overlay ? width : "100%",
-        minWidth: overlay ? AGENT_PANEL_MIN : 0,
+        minWidth: 0,
+        maxWidth: "100%",
         minHeight: 0,
         position: overlay ? "absolute" : "relative",
         top: overlay ? 0 : undefined,
@@ -444,7 +445,7 @@ export function AgentWorkspace({
             />
           </div>
           {tabs.some((t) => t.kind === "desktop") && (
-            <div style={{ display: active.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
+            <div style={{ display: active.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
               <DesktopView
                 projectRoot={projectRoot}
                 runId={runId}
