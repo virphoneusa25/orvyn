@@ -65,11 +65,11 @@ export function badgeForEntry(entry: Pick<WorkspaceFileEntry, "source" | "kind" 
 }
 
 /** Show a badge only when sources are mixed or the row is not in its obvious section. */
-export function shouldShowBadge(sectionId: string, badge: FileSourceBadge | undefined, mixedSources: boolean): boolean {
+export function shouldShowBadge(sectionId: string, badge: FileSourceBadge | string | undefined, mixedSources: boolean): boolean {
   if (!badge) return false;
   if (sectionId === "generated" && badge === "GENERATED") return mixedSources;
   if (sectionId === "uploads" && badge === "UPLOAD") return false;
-  if (sectionId === "project" && (badge === "LOCAL" || badge === "CLOUD" || badge === "SANDBOX" || badge === "VIRTUAL")) {
+  if (sectionId === "project" && (badge === "LOCAL" || badge === "CLOUD" || badge === "SANDBOX" || badge === "VIRTUAL" || badge === "PROJECT")) {
     return mixedSources;
   }
   return true;

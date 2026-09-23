@@ -24,16 +24,22 @@ export function ArtifactView({
     }
     if (!name) return;
     let cancelled = false;
-    void fetch(apiUrl(`/files/read?path=${encodeURIComponent(name)}`), { headers: authHeaders() })
+    const base = name.replace(/\\/g, "/").split("/").pop() || name;
+    void fetch(apiUrl("/files"), { headers: authHeaders() })
       .then((r) => r.json())
-      .then((d) => {
+      .then(async (tree) => {
+        const files = (tree.locations ?? []).flatMap((l: { files?: Array<{ id?: string; name?: string; path?: string }> }) => l.files ?? []);
+        const hit = files.find((f: { id?: string; name?: string; path?: string }) => f.path === name || f.name === name || f.name === base);
+        const q = hit?.id
+          ? `/files/read?id=${encodeURIComponent(hit.id)}`
+          : `/files/read?path=${encodeURIComponent(name)}`;
+        const d = await fetch(apiUrl(q), { headers: authHeaders() }).then((r) => r.json());
         if (cancelled) return;
         if (d.dataUrl) setLoaded(d.dataUrl);
         else if (d.content) setLoaded(String(d.content));
         else if (window.orvyn?.project?.readFile) {
-          return window.orvyn.project.readFile(name).then((text) => {
-            if (!cancelled) setLoaded(text);
-          });
+          const text = await window.orvyn.project.readFile(name);
+          if (!cancelled) setLoaded(text);
         }
       })
       .catch(() => {

@@ -230,8 +230,6 @@ export function FilesInspector({
                     onClick={() => {
                       setSelected(f.path);
                       setSelectedId(f.id ?? null);
-                      if (f.kind === "artifact" || f.id) onPreviewArtifact?.(f.path);
-                      else onOpenFile(f.path);
                     }}
                     style={{
                       width: "100%",
@@ -269,7 +267,10 @@ export function FilesInspector({
               </button>
             )}
             <button style={ghostBtn()} onClick={() => void downloadSelected()}>Download</button>
-            <button style={ghostBtn()} onClick={() => onOpenFile(selected)}>Open</button>
+            <button style={ghostBtn()} onClick={() => {
+              if (selectedFile?.id || selectedFile?.source === "artifact") onPreviewArtifact?.(selected);
+              else onOpenFile(selected);
+            }}>Open</button>
             {selectedFile?.id && (
               <button style={ghostBtn()} onClick={() => void deleteSelected()}>{confirmDelete ? "Confirm delete" : "Delete"}</button>
             )}

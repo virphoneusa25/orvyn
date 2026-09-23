@@ -579,7 +579,7 @@ export class ArtifactService {
         if (e.isDirectory()) await walk(path.join(dir, e.name), nextRel, depth + 1);
         else {
           const st = await fs.stat(path.join(dir, e.name)).catch(() => null);
-          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, badge: source === "local" ? "Project" : source.toUpperCase(), source });
+          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, source });
         }
       }
     }
