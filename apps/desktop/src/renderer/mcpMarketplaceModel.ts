@@ -47,6 +47,7 @@ export interface MarketServer {
   filesystemScope?: "none" | "project" | "selected" | "full";
   packages?: { registry: string; identifier: string; version?: string; integrity?: string }[];
   provenance?: { integrity?: string; scripts?: string[]; registry?: string };
+  iconUrl?: string;
 }
 
 export interface MarketFilters {

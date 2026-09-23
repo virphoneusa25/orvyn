@@ -34,6 +34,7 @@ test("official normalize: npm package becomes pinned npx stdio", () => {
   assert.equal(s.version, "1.2.3");
   assert.ok(s.categories.includes("Version Control"));
   assert.equal(s.compatibility, "compatible");
+  assert.equal(s.iconUrl, "https://github.com/github.png?size=80");
 });
 
 test("official normalize: remote HTTP keeps secret header refs", () => {

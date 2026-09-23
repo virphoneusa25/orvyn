@@ -14,7 +14,6 @@ import {
   filterActiveCount,
   formatRisk,
   groupMarketplace,
-  initials,
   isConnected,
   isNeedsAuth,
   mergeInstalled,
@@ -37,6 +36,7 @@ import {
   type Recommendation,
   type UpdateRow,
 } from "../mcpMarketplaceModel";
+import { parseApiJson, resolveMarketplaceIcon } from "../mcpMarketplaceIcons";
 
 interface Health {
   id: string;
@@ -130,17 +130,23 @@ export function McpMarketplace({
         fetch(apiUrl("/mcp/statuses"), { headers: authHeaders() }),
         fetch(apiUrl("/mcp/marketplace/updates"), { headers: authHeaders() }),
       ]);
-      const data = await searchRes.json();
-      const healthBody = await healthRes.json().catch(() => ({}));
-      const statusBody = await statusRes.json().catch(() => ({ servers: [] }));
-      const updateBody = await updateRes.json().catch(() => ({ updates: [] }));
-      const catalog: MarketServer[] = searchRes.ok ? (data.results?.map((r: { server: MarketServer }) => r.server) ?? []) : [];
-      if (!searchRes.ok) setError(data.error || `HTTP ${searchRes.status}`);
+      const searchText = await searchRes.text();
+      const parsed = parseApiJson(searchRes.status, searchText);
+      const healthText = await healthRes.text().catch(() => "");
+      const statusText = await statusRes.text().catch(() => "");
+      const updateText = await updateRes.text().catch(() => "");
+      const healthParsed = parseApiJson(healthRes.status, healthText);
+      const statusParsed = parseApiJson(statusRes.status, statusText);
+      const updateParsed = parseApiJson(updateRes.status, updateText);
+      const data = parsed.body ?? {};
+      const catalog: MarketServer[] = parsed.ok ? (data.results?.map((r: { server: MarketServer }) => r.server) ?? []) : [];
+      const statuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
+      if (!parsed.ok) setError(parsed.error || `HTTP ${searchRes.status}`);
       else setError(null);
-      setResults(mergeInstalled(catalog, statusBody.servers ?? []));
-      setHealth(data.health ?? healthBody.providers ?? []);
-      setDegraded(data.degraded ?? providerWarning(healthBody.providers ?? []));
-      setUpdates(updateBody.updates ?? []);
+      setResults(mergeInstalled(catalog, statuses));
+      setHealth(data.health ?? healthParsed.body.providers ?? []);
+      setDegraded(data.degraded ?? providerWarning(healthParsed.body.providers ?? []));
+      setUpdates(updateParsed.body.updates ?? []);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -875,25 +881,40 @@ function ServerRow({
 }
 
 function ServerGlyph({ server, size }: { server: MarketServer; size: number }) {
-  const hue = server.sources.includes("official") ? "#4DA3FF" : server.sources.includes("private") ? "#22D3EE" : "#6C5CFF";
+  const icon = resolveMarketplaceIcon(server);
+  const [broken, setBroken] = useState(false);
+  const showImage = icon.kind === "image" && icon.src && !broken;
   return (
     <div
       style={{
         width: size,
         height: size,
         borderRadius: 10,
-        background: `linear-gradient(145deg, ${hue}33, #10141E)`,
-        border: `1px solid ${hue}66`,
+        background: showImage ? "#10141E" : `linear-gradient(145deg, ${icon.hue}33, #10141E)`,
+        border: `1px solid ${icon.hue}66`,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontSize: size > 40 ? 16 : 12,
         fontWeight: 700,
-        color: hue,
+        color: icon.hue,
         flexShrink: 0,
+        overflow: "hidden",
       }}
     >
-      {initials(server)}
+      {showImage ? (
+        <img
+          src={icon.src}
+          alt=""
+          width={size}
+          height={size}
+          referrerPolicy="no-referrer"
+          onError={() => setBroken(true)}
+          style={{ width: size, height: size, objectFit: "cover" }}
+        />
+      ) : (
+        icon.letters
+      )}
     </div>
   );
 }

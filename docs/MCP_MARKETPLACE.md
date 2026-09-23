@@ -105,6 +105,8 @@ Access cannot bypass hard policy.
 
 Search still federates Official + Glama + local + private. Install reuses the Review → Permissions → Auth → Confirm drawer over the detail pane. `orvyn:marketplace-open` deep-links a capability query into the right-hand search.
 
+Server icons use published registry artwork when present, otherwise the product mark (GitHub, PostgreSQL, Slack, Docker, …) or the publisher’s GitHub avatar. Initials are only the fallback. If a Cloud backend returns HTML instead of JSON, Marketplace shows a control-plane warning and still lists any local/installed servers.
+
 Composer **+** menu: **Add MCP capability**. Built-in ORVYN tools stay on their own tab.
 
 ## API

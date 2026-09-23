@@ -29,6 +29,7 @@ export function mergeServers(a: MarketplaceMcpServer, b: MarketplaceMcpServer): 
     tools: (a.tools?.length ? a.tools : b.tools) ?? [],
     auth: a.auth.length ? a.auth : b.auth,
     qualityNote: a.qualityNote ?? b.qualityNote,
+    iconUrl: a.iconUrl ?? b.iconUrl,
     installed: a.installed ?? b.installed,
     toolCount: a.toolCount ?? b.toolCount,
     version: a.version ?? b.version,

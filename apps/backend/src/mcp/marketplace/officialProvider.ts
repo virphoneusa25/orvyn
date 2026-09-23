@@ -107,6 +107,7 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
     sources: ["official"],
     repository: server.repository?.url,
     homepage: server.websiteUrl ?? server.repository?.url,
+    iconUrl: firstPublishedIcon(server) ?? githubOwnerAvatar(server.repository?.url ?? server.websiteUrl),
     categories: inferCategories(name, description),
     packages,
     transports,
@@ -132,6 +133,24 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
     verified: meta.status === "active" && /modelcontextprotocol|github\.com\/github/i.test(`${draft.publisher} ${draft.repository}`),
   });
   return draft;
+}
+
+function firstPublishedIcon(server: any): string | undefined {
+  const icons = Array.isArray(server?.icons) ? server.icons : [];
+  for (const icon of icons) {
+    const src = String(icon?.src ?? icon?.url ?? "");
+    if (/^https?:\/\//i.test(src)) return src;
+  }
+  return undefined;
+}
+
+function githubOwnerAvatar(url?: string): string | undefined {
+  if (!url) return undefined;
+  const m = String(url).match(/github\.com\/+([^/?#]+)\/+([^/?#]+)/i);
+  if (!m) return undefined;
+  const owner = m[1];
+  if (!owner || /^(topics|orgs|settings|marketplace)$/i.test(owner)) return undefined;
+  return `https://github.com/${owner}.png?size=80`;
 }
 
 function mapRegistry(raw: string | undefined): McpPackage["registry"] {

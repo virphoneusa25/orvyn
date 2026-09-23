@@ -82,6 +82,7 @@ export function normalizeGlama(n: any): MarketplaceMcpServer {
     sources: ["glama"],
     repository: n.repository?.url,
     homepage: n.url,
+    iconUrl: n.iconUrl || n.image || n.logo || undefined,
     categories: inferCategories(name, description),
     packages: n.npmPackage ? [{ registry: "npm", identifier: String(n.npmPackage) }] : [],
     transports: n.url && String(n.url).startsWith("http") && !String(n.url).includes("glama.ai/mcp/servers")

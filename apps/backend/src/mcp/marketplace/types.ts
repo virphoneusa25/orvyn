@@ -101,6 +101,7 @@ export interface MarketplaceMcpServer {
   qualityNote?: string;
   networkRequired: boolean;
   filesystemScope: "none" | "project" | "selected" | "full";
+  iconUrl?: string;
 }
 
 export interface MarketplaceTool {
