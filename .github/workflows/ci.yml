@@ -40,7 +40,16 @@ jobs:
         run: npm run build
 
       - name: Run test suite
-        run: npm test
+        run: |
+          set +e
+          npm test > test-out.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            grep -E "not ok |^# (fail|tests|pass|skipped)|AssertionError|ERR_|Error:" test-out.txt | head -60 | while IFS= read -r line; do
+              echo "::error title=test-suite::$line"
+            done
+          fi
+          exit "$code"
 
   windows-installer:
     name: Windows installer artifact
