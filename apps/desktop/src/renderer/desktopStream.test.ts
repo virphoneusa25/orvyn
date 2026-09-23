@@ -1,6 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { gatePointerMove, imageKind, releasePointerMove, sessionCanStream, shouldCoverFrame } from "./desktopStream.ts";
+import { desktopMayAutoStart, gatePointerMove, imageKind, releasePointerMove, sessionCanStream, shouldCoverFrame } from "./desktopStream.ts";
+
+test("ending a session does not auto-start another one", () => {
+  const open = {
+    userStopped: false,
+    alreadyStarted: false,
+    hasProject: true,
+    sandboxAvailable: true,
+    hasSession: false,
+    starting: false,
+  };
+  assert.equal(desktopMayAutoStart(open), true);
+  assert.equal(desktopMayAutoStart({ ...open, userStopped: true }), false);
+  assert.equal(desktopMayAutoStart({ ...open, hasSession: true }), false);
+  assert.equal(desktopMayAutoStart({ ...open, starting: true }), false);
+});
 
 test("a ready ORION session streams even if live was omitted", () => {
   assert.equal(sessionCanStream({ status: "ready", controlOwner: "orion" } as { status: string }), true);

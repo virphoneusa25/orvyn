@@ -11,6 +11,20 @@ export interface StreamSession {
 
 const STREAM_STATUSES = new Set(["ready", "user_control", "agent_control", "running"]);
 
+export function desktopMayAutoStart(opts: {
+  userStopped: boolean;
+  alreadyStarted: boolean;
+  hasProject: boolean;
+  sandboxAvailable: boolean;
+  hasSession: boolean;
+  starting: boolean;
+}): boolean {
+  if (opts.userStopped || opts.alreadyStarted) return false;
+  if (!opts.hasProject || !opts.sandboxAvailable) return false;
+  if (opts.hasSession || opts.starting) return false;
+  return true;
+}
+
 export function sessionCanStream(session: StreamSession | null | undefined): boolean {
   if (!session) return false;
   if (session.status === "starting" || session.status === "error" || session.status === "ended") return false;

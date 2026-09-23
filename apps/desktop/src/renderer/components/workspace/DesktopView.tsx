@@ -17,7 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
-import { FRAME_REQUEST_MS, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
+import { FRAME_REQUEST_MS, desktopMayAutoStart, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -86,6 +86,7 @@ export function DesktopView({
   const viewRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastFrameAt = useRef(0);
+  const userStopped = useRef(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   function showToast(msg: string) {
     setToast(msg);
@@ -112,6 +113,7 @@ export function DesktopView({
       if (!res.ok) return;
       const data = await res.json();
       setSandboxAvailable(data.sandbox === true);
+      if (userStopped.current) return;
       setSession(data.session ?? null);
     } catch { /* transient */ }
   }, [projectRoot, runId]);
@@ -127,6 +129,7 @@ export function DesktopView({
   const frameInFlight = useRef(false);
 
   async function pullFrame() {
+    if (userStopped.current) return;
     const root = projectRef.current;
     const current = sessionRef.current;
     if (!root || !sessionCanStream(current) || frameInFlight.current) return;
@@ -134,6 +137,7 @@ export function DesktopView({
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FRAME_REQUEST_MS);
     const noteProblem = (message: string) => {
+      if (userStopped.current) return;
       if (!shouldCoverFrame(lastFrameAt.current, Date.now())) return;
       setInterrupted(true);
       setStreamNote(message);
@@ -184,8 +188,14 @@ export function DesktopView({
   // session — the user never needs a separate Start button.
   const autoStarted = useRef(false);
   useEffect(() => {
-    if (autoStarted.current || !projectRoot || sandboxAvailable !== true) return;
-    if (session || starting) return;
+    if (!desktopMayAutoStart({
+      userStopped: userStopped.current,
+      alreadyStarted: autoStarted.current,
+      hasProject: Boolean(projectRoot),
+      sandboxAvailable: sandboxAvailable === true,
+      hasSession: Boolean(session),
+      starting,
+    })) return;
     autoStarted.current = true;
     void startSession();
   }, [projectRoot, sandboxAvailable, session, starting]);
@@ -200,6 +210,7 @@ export function DesktopView({
     tick();
     const id = setInterval(tick, 120);
     const watchdog = setInterval(() => {
+      if (userStopped.current) return;
       if (sessionCanStream(sessionRef.current) && Date.now() - lastFrameAt.current > 5000) {
         void refreshRef.current();
       }
@@ -256,9 +267,15 @@ export function DesktopView({
 
   async function startSession() {
     if (!projectRoot) return;
+    userStopped.current = false;
     setStarting(true);
     setError(null);
     const { ok, data } = await post("/desktop/session");
+    if (userStopped.current) {
+      setStarting(false);
+      if (ok) void post("/desktop/stop");
+      return;
+    }
     if (!ok) setError(data.error ?? "Desktop could not start.");
     else setSession(data.session);
     setStarting(false);
@@ -280,10 +297,13 @@ export function DesktopView({
 
   async function endSession() {
     if (!window.confirm("End this Desktop session? The virtual machine will be stopped.")) return;
-    await post("/desktop/stop");
+    userStopped.current = true;
+    setInterrupted(false);
+    setStreamNote(null);
     setSession(null);
     setFrameDrawn(false);
-    autoStarted.current = false;
+    setStarting(false);
+    await post("/desktop/stop");
   }
 
   async function sendInput(type: string, extra: Record<string, unknown>) {
@@ -319,6 +339,7 @@ export function DesktopView({
   }
 
   async function restart() {
+    userStopped.current = false;
     setOpenMenu(null);
     setError(null);
     const { ok, data } = await post("/desktop/restart");
@@ -327,6 +348,7 @@ export function DesktopView({
   }
 
   async function reconnect() {
+    userStopped.current = false;
     setOpenMenu(null);
     setInterrupted(false);
     setSession(null);
