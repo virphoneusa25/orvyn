@@ -478,10 +478,10 @@ export function AgentWorkspace({
           )}
           <div style={{ display: browserish ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
             <BrowserWorkbench
-              kind={active.kind === "preview" ? "preview" : "browser"}
+              kind={active?.kind === "preview" ? "preview" : "browser"}
               projectName={projectName}
               orionStatus={derived.activity?.tab === "browser" || derived.activity?.tab === "preview" ? derived.activity.line : null}
-              requestedUrl={active.url}
+              requestedUrl={active?.url}
               sessionId={activeNative?.id}
               surfaceActive={browserish}
               onTabs={setBrowserState}

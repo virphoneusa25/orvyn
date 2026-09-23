@@ -18,7 +18,7 @@ test("classifies web, internal, and unknown ports", () => {
 });
 
 test("detects listening preview ports from process output", () => {
-  const ports = detectPortsFromText("  ➜  Local:   http://localhost:5173/\nready", "cloud");
+  const ports = detectPortsFromText("  ➜  Local:   http://localhost:5173/\nvite ready", "cloud");
   assert.equal(ports.length, 1);
   assert.equal(ports[0]!.port, 5173);
   assert.equal(ports[0]!.classification, "development_server");

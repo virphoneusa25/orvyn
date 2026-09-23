@@ -182,7 +182,7 @@ export function FilesInspector({
     }
     const r = await fetch(apiUrl(`/artifacts/${file.id}`), { method: "DELETE", headers: authHeaders() });
     if (r.ok || r.status === 204) {
-      setLocations((prev) => prev.map((loc) => ({ ...loc, files: loc.files.filter((f) => f.id !== file.id) })));
+      setLocations((prev) => prev.map((loc) => ({ ...loc, files: (loc.files ?? []).filter((f) => f.id !== file.id) })));
       setSelected(null);
       setSelectedId(null);
     }
