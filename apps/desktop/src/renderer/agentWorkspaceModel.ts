@@ -374,12 +374,13 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "artifact.created" || type === "files.ready" || (type === "tool.completed" && (tool === "generate_image" || data.artifactId))) {
       const name = String(data.name ?? data.filename ?? data.artifactName ?? data.path ?? "");
       if (name) {
+        const prev = artifacts.get(name);
         artifacts.set(name, {
           path: name,
           kind: "artifact",
-          status: data.kind === "generated" || tool === "generate_image" ? "Generated" : "Artifact",
-          artifactId: typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : undefined,
-          mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+          status: data.kind === "generated" || tool === "generate_image" ? "Generated" : prev?.status ?? "Artifact",
+          artifactId: typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : prev?.artifactId,
+          mimeType: typeof data.mimeType === "string" ? data.mimeType : prev?.mimeType,
         });
       }
     }
@@ -423,6 +424,7 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
         priority: 90,
         tab: "files",
         file: first.path,
+        artifactId: first.artifactId,
         switchTab: true,
       };
     }

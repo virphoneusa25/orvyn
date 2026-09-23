@@ -42,7 +42,8 @@ export function workbenchItemKind(input: {
 
 export function looksLikeArtifactId(value?: string | null): boolean {
   if (!value) return false;
-  return /^(art_|artifact_)?[a-f0-9-]{8,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{4,}$/i.test(value);
+  if (/^(art_|artifact_)[a-z0-9_-]+$/i.test(value)) return true;
+  return /^[a-f0-9]{8,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{4,}$/i.test(value);
 }
 
 export function isFabricatedGeneratedPath(path?: string | null): boolean {
