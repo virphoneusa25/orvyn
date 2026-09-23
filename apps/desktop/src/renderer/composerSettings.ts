@@ -62,12 +62,13 @@ export function toRunPayloadSettings(settings?: {
   executionTarget?: ExecutionTargetSetting;
 }): { requestedModelId?: string; reasoningEffort?: ReasoningEffort; permissionMode?: AccessMode; executionTarget?: ExecutionTargetSetting } {
   if (!settings) return {};
-  return {
+  const payload: { requestedModelId?: string; reasoningEffort?: ReasoningEffort; permissionMode?: AccessMode; executionTarget?: ExecutionTargetSetting } = {
     requestedModelId: settings.modelId?.trim() || undefined,
     reasoningEffort: settings.reasoningEffort || undefined,
     permissionMode: settings.permissionMode || undefined,
-    executionTarget: settings.executionTarget,
   };
+  if (settings.executionTarget) payload.executionTarget = settings.executionTarget;
+  return payload;
 }
 
 export const EXECUTION_TARGETS: { id: ExecutionTargetSetting; label: string; title: string }[] = [

@@ -46,6 +46,10 @@ test("payload: composer selections map 1:1 onto the run payload fields", () => {
     toRunPayloadSettings({ modelId: "ci:glm-5.3", reasoningEffort: "deep", permissionMode: "auto_workspace" }),
     { requestedModelId: "ci:glm-5.3", reasoningEffort: "deep", permissionMode: "auto_workspace" }
   );
+  assert.deepEqual(
+    toRunPayloadSettings({ modelId: "ci:glm-5.3", executionTarget: "local_host" }),
+    { requestedModelId: "ci:glm-5.3", reasoningEffort: undefined, permissionMode: undefined, executionTarget: "local_host" }
+  );
 });
 
 test("payload: empty settings carry nothing (backend defaults apply)", () => {
