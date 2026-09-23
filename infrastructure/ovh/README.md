@@ -17,7 +17,7 @@ bash scripts/deploy-ovh-staging.sh
 # https://staging.orvyn.virphoneusa.com/api/v1/health
 ```
 
-Requires an A record `staging.orvyn.virphoneusa.com` → the OVH IP. Secrets live in server-side `.env.staging`.
+DNS A record `staging.orvyn.virphoneusa.com` → `40.160.11.123` is live; Caddy terminates TLS with Let's Encrypt. Secrets live in server-side `.env.staging`.
 
 Launch:
 

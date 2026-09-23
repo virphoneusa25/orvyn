@@ -15,13 +15,13 @@
 	}
 }
 
-# Public TLS now (sslip.io resolves to the OVH IP without a registrar record).
+# Fallback hostname used before the registrar A record existed.
 staging.orvyn.40.160.11.123.sslip.io {
 	reverse_proxy backend-staging:4570
 	encode gzip
 }
 
-# Canonical staging hostname. ACME succeeds after the A record exists.
+# Canonical staging hostname. DNS A record → 40.160.11.123; Caddy holds the LE cert.
 {$STAGING_DOMAIN:staging.orvyn.virphoneusa.com} {
 	reverse_proxy backend-staging:4570
 	encode gzip

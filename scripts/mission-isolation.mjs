@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Shared-worker multi-tenant mission isolation probe.
-const base = process.argv[2] || process.env.ORVYN_STAGING_URL || "https://staging.orvyn.40.160.11.123.sslip.io";
+const base = process.argv[2] || process.env.ORVYN_STAGING_URL || "https://staging.orvyn.virphoneusa.com";
 const workerKey = process.argv[3] || process.env.ORVYN_API_KEY || "";
 const suffix = Date.now().toString(36);
 const password = "Isolation1!";
