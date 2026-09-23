@@ -3,17 +3,27 @@ import { TerminalView, useTerminalSession } from "../BottomWorkPanel";
 import { extractOrionCommands, type WorkspaceEvent } from "../../agentWorkspaceModel";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
-export function TerminalInspector({ events }: { events: WorkspaceEvent[] }) {
+export function TerminalInspector({
+  events,
+  environmentLabel,
+  environment,
+}: {
+  events: WorkspaceEvent[];
+  environmentLabel?: string;
+  environment?: "local" | "sandbox" | "cloud";
+}) {
   const term = useTerminalSession();
   const commands = useMemo(() => extractOrionCommands(events), [events]);
   const [session, setSession] = useState<"orion" | "local">("orion");
   const active = commands[commands.length - 1];
+  const title = environmentLabel || (environment === "cloud" ? "Terminal · Cloud Worker" : environment === "sandbox" ? "Terminal · Sandbox" : "Terminal · Local");
 
   const showLocal = session === "local" || (!active && term.sessionId);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+        <span style={{ fontSize: 11.5, fontWeight: 650, color: "var(--orvyn-text-secondary)" }}>{title}</span>
         <select
           value={showLocal && !active ? "local" : session}
           onChange={(e) => setSession(e.target.value as "orion" | "local")}
@@ -26,7 +36,7 @@ export function TerminalInspector({ events }: { events: WorkspaceEvent[] }) {
             padding: "3px 6px",
           }}
         >
-          {active && <option value="orion">ORION</option>}
+          {active && <option value="orion">ORION process</option>}
           <option value="local">Local</option>
         </select>
         {active && (
@@ -57,9 +67,12 @@ export function TerminalInspector({ events }: { events: WorkspaceEvent[] }) {
       ) : term.sessionId || term.busy ? (
         <TerminalView term={term} />
       ) : (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", gap: 8 }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", gap: 10 }}>
           <div style={emptyTitle()}>No active command</div>
-          <div style={emptyBody()}>Commands ORION runs will appear here. Local shell uses the same PTY as the bottom terminal.</div>
+          <div style={emptyBody()}>ORION’s process output for this environment appears here. Start a shell only for the current execution target.</div>
+          <button style={ghostBtn()} onClick={() => void term.start()}>
+            {environment === "cloud" ? "Start Cloud Session" : environment === "sandbox" ? "Start Sandbox" : "Start Local Terminal"}
+          </button>
         </div>
       )}
     </div>

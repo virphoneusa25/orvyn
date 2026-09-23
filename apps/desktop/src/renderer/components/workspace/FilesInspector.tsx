@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
+import { mergeFileSections, shouldShowBadge, type WorkbenchFileSection } from "../../workbenchFiles";
+import type { WorkbenchEnvironment } from "../../workbenchEnvironment";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
-
-type LocationId = "project" | "generated" | "downloads" | "artifacts" | "uploads" | "run" | "recents";
 
 interface TreeFile {
   id?: string;
@@ -15,22 +15,8 @@ interface TreeFile {
   createdAt?: number;
   bytes?: number;
   downloadUrl?: string;
+  badge?: string;
 }
-
-interface Location {
-  id: LocationId | string;
-  label: string;
-  files: TreeFile[];
-}
-
-const LOCATION_ORDER: { id: string; label: string }[] = [
-  { id: "project", label: "Project" },
-  { id: "generated", label: "Generated" },
-  { id: "recents", label: "Recents" },
-  { id: "downloads", label: "Downloads" },
-  { id: "artifacts", label: "Run Artifacts" },
-  { id: "uploads", label: "Uploads" },
-];
 
 function kindMark(kind: string): { glyph: string; color: string } {
   if (kind === "created" || kind === "generated") return { glyph: "＋", color: "var(--orvyn-green)" };
@@ -48,6 +34,7 @@ export function FilesInspector({
   projectRoot,
   focus,
   activePath,
+  environment = "local",
   onOpenFile,
   onPreviewArtifact,
 }: {
@@ -56,10 +43,11 @@ export function FilesInspector({
   projectRoot: string | null;
   focus?: { path?: string; fileName?: string } | null;
   activePath?: string | null;
+  environment?: WorkbenchEnvironment;
   onOpenFile: (path: string) => void;
   onPreviewArtifact?: (path: string) => void;
 }) {
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [locations, setLocations] = useState<Array<{ id?: string; label?: string; files?: Record<string, unknown>[] }>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(activePath ?? null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,30 +85,17 @@ export function FilesInspector({
     };
   }, [projectRoot, artifacts.length, files.length]);
 
-  const merged = useMemo(() => {
-    const byId = new Map<string, Location>();
-    for (const loc of LOCATION_ORDER) byId.set(loc.id, { id: loc.id, label: loc.label, files: [] });
-    for (const loc of locations) {
-      const id = loc.id === "run" ? "artifacts" : loc.id;
-      const existing = byId.get(id) ?? { id, label: loc.label, files: [] };
-      existing.files = [...existing.files, ...loc.files];
-      existing.label = loc.label || existing.label;
-      byId.set(id, existing);
-    }
-    const project = byId.get("project");
-    if (project) {
-      for (const f of runTouched) {
-        if (project.files.some((p) => p.path === f.path)) continue;
-        if (f.kind === "artifact") {
-          const arts = byId.get("artifacts")!;
-          if (!arts.files.some((p) => p.path === f.path)) arts.files.push({ name: f.path.split(/[\\/]/).pop() || f.path, path: f.path, kind: "artifact" });
-        } else {
-          project.files.push({ name: f.path.split(/[\\/]/).pop() || f.path, path: f.path, kind: f.kind });
-        }
-      }
-    }
-    return LOCATION_ORDER.map((l) => byId.get(l.id)!).filter(Boolean);
-  }, [locations, runTouched]);
+  const tree = useMemo(() => mergeFileSections(
+    locations,
+    environment,
+    runTouched.map((f) => ({
+      name: f.path.split(/[\\/]/).pop() || f.path,
+      path: f.path,
+      source: f.kind === "artifact" ? "artifact" : "local",
+      kind: f.kind,
+    }))
+  ), [locations, runTouched, environment]);
+  const merged: WorkbenchFileSection[] = tree.sections;
 
   const allFiles = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -216,11 +191,19 @@ export function FilesInspector({
 
   if (total === 0 && !query) {
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", gap: 8 }}>
-        <div style={emptyTitle()}>No files yet</div>
-        <div style={emptyBody()}>
-          {loadError || "Ask ORION to generate a logo, write a document, or open a project folder. Files appear here in Project, Generated, Downloads, and Run Artifacts — no local folder required."}
-        </div>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 16, gap: 12 }}>
+        {!tree.hasProject && (
+          <div style={{ padding: "10px 12px", border: "1px dashed var(--orvyn-border-soft)", borderRadius: 8 }}>
+            <div style={emptyTitle()}>No project workspace attached</div>
+            <div style={emptyBody()}>{loadError || "Generated artifacts, uploads, and run files still appear below."}</div>
+          </div>
+        )}
+        {merged.filter((l) => l.id !== "project").map((loc) => (
+          <div key={loc.id}>
+            <div style={{ fontSize: 10, letterSpacing: 0.8, color: "var(--orvyn-text-muted)" }}>{loc.label.toUpperCase()}</div>
+            <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "6px 0" }}>Empty</div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -275,7 +258,9 @@ export function FilesInspector({
                   >
                     <span style={{ color: mark.color, width: 12 }}>{mark.glyph}</span>
                     <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</code>
-                    <span style={{ fontSize: 9, color: "var(--orvyn-text-muted)", letterSpacing: 0.3 }}>{f.kind === "project" ? "Project" : loc.id === "generated" || f.kind === "generated" ? "Generated" : loc.label}</span>
+                    {shouldShowBadge(loc.id, f.badge, tree.environment !== "local") && (
+                      <span style={{ fontSize: 9, color: "var(--orvyn-text-muted)", letterSpacing: 0.4 }}>{f.badge}</span>
+                    )}
                   </button>
                 );
               })

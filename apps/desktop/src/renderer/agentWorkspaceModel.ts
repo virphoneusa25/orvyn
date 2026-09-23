@@ -13,6 +13,7 @@ export const AGENT_WORKSPACE_TABS = [
   "plan",
   "docs",
   "desktop",
+  "environment",
 ] as const;
 
 export type AgentWorkspaceTab = (typeof AGENT_WORKSPACE_TABS)[number];

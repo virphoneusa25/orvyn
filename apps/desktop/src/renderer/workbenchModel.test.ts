@@ -5,12 +5,15 @@ import {
   diffTabId,
   fileTabId,
   followWorkbenchTab,
+  nextTerminalTabId,
   parseWorkbenchTab,
   previewTabId,
   rememberUrl,
   truncateTabTitle,
   upsertTab,
   workbenchMarkupContract,
+  WORKBENCH_LAUNCHERS,
+  WORKBENCH_PLUS_ITEMS,
 } from "./workbenchModel.ts";
 
 test("dynamic preview and file tabs are closable and unique", () => {
@@ -57,6 +60,19 @@ test("recent URLs are real, newest first, no duplicates", () => {
   const recents = rememberUrl(rememberUrl(["http://a"], "http://b"), "http://a");
   assert.deepEqual(recents, ["http://a", "http://b"]);
   assert.deepEqual(rememberUrl([], "javascript:alert(1)"), []);
+});
+
+test("plus menu lists supported surfaces and launcher has four cards", () => {
+  assert.deepEqual(WORKBENCH_LAUNCHERS.map((l) => l.label), ["Changes", "Browser", "Terminal", "File"]);
+  assert.deepEqual(WORKBENCH_PLUS_ITEMS.map((i) => i.label), ["File", "Terminal", "Browser", "Changes", "Desktop", "Environment"]);
+  assert.equal(nextTerminalTabId([]), "terminal");
+  assert.equal(nextTerminalTabId([parseWorkbenchTab("terminal")]), "terminal:2");
+});
+
+test("closing the last tab returns the empty launcher state", () => {
+  const next = closeTab([parseWorkbenchTab("files")], "files", "files");
+  assert.deepEqual(next.tabs, []);
+  assert.equal(next.activeId, "");
 });
 
 test("DOM contract: one workbench, one tab bar, no inspector", () => {

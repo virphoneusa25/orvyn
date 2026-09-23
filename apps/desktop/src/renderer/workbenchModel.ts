@@ -12,7 +12,24 @@ export type WorkbenchTabKind =
   | "artifact"
   | "file"
   | "plan"
-  | "docs";
+  | "docs"
+  | "environment";
+
+export const WORKBENCH_LAUNCHERS: { id: "changes" | "browser" | "terminal" | "files"; label: string; hint: string }[] = [
+  { id: "changes", label: "Changes", hint: "Modified, added, and deleted project files" },
+  { id: "browser", label: "Browser", hint: "Local and forwarded previews" },
+  { id: "terminal", label: "Terminal", hint: "Shell for the current environment" },
+  { id: "files", label: "File", hint: "Project, generated artifacts, and uploads" },
+];
+
+export const WORKBENCH_PLUS_ITEMS: { id: string; label: string; kind: WorkbenchTabKind }[] = [
+  { id: "files", label: "File", kind: "files" },
+  { id: "terminal", label: "Terminal", kind: "terminal" },
+  { id: "browser", label: "Browser", kind: "browser" },
+  { id: "changes", label: "Changes", kind: "changes" },
+  { id: "desktop", label: "Desktop", kind: "desktop" },
+  { id: "environment", label: "Environment", kind: "environment" },
+];
 
 export interface WorkbenchTab {
   id: string;
@@ -83,17 +100,23 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
   if (id.startsWith("browser:")) {
     return { id, kind: "browser", title: "Browser", closable: true };
   }
+  if (id.startsWith("terminal:")) {
+    const n = id.slice("terminal:".length);
+    return { id, kind: "terminal", title: `Terminal ${n}`, closable: true };
+  }
   const pinned: Record<string, WorkbenchTab> = {
-    changes: { id: "changes", kind: "changes", title: "Changes", closable: false },
+    changes: { id: "changes", kind: "changes", title: "Changes", closable: true },
     desktop: { id: "desktop", kind: "desktop", title: "Desktop", closable: true },
-    browser: { id: "browser", kind: "browser", title: "Browser", closable: false },
+    browser: { id: "browser", kind: "browser", title: "Browser", closable: true },
     files: { id: "files", kind: "files", title: "Files", closable: true },
     terminal: { id: "terminal", kind: "terminal", title: "Terminal", closable: true },
     review: { id: "review", kind: "review", title: "Review", closable: true },
+    environment: { id: "environment", kind: "environment", title: "Environment", closable: true },
     plan: { id: "plan", kind: "plan", title: "Plan", closable: true },
     docs: { id: "docs", kind: "docs", title: "Docs", closable: true },
   };
-  return pinned[id] ?? { id: "changes", kind: "changes", title: "Changes", closable: false };
+  if (!id) return { id: "", kind: "changes", title: "Workbench", closable: false };
+  return pinned[id] ?? { id: "changes", kind: "changes", title: "Changes", closable: true };
 }
 
 export function upsertTab(tabs: WorkbenchTab[], tab: WorkbenchTab): WorkbenchTab[] {
@@ -107,7 +130,12 @@ export function closeTab(tabs: WorkbenchTab[], id: string, activeId: string): { 
   if (activeId !== id) return { tabs: next, activeId };
   const idx = tabs.findIndex((t) => t.id === id);
   const fallback = next[Math.max(0, idx - 1)] ?? next[0];
-  return { tabs: next, activeId: fallback?.id ?? "changes" };
+  return { tabs: next, activeId: fallback?.id ?? "" };
+}
+
+export function nextTerminalTabId(tabs: WorkbenchTab[]): string {
+  const n = tabs.filter((t) => t.kind === "terminal").length;
+  return n === 0 ? "terminal" : `terminal:${n + 1}`;
 }
 
 export function rememberUrl(recents: string[], url: string, limit = 8): string[] {

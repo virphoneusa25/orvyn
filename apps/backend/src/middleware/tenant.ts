@@ -37,6 +37,10 @@ function extractKey(req: Request): string | undefined {
 // reads its services off req.tenant instead of module globals, which is what
 // actually enforces isolation.
 export function resolveTenant(req: Request, res: Response, next: NextFunction): void {
+  if (/\/ports\/[^/]+\/proxy$/.test(req.path) && typeof req.query.fwd === "string") {
+    next();
+    return;
+  }
   const key = extractKey(req);
 
   if (!key) {

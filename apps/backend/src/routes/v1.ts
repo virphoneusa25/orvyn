@@ -6,6 +6,7 @@ import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorker
 import { isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
+import { portForwardingService } from "../ports/PortForwardingService";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { requirePrincipal, requireTenant } from "../middleware/tenant";
@@ -1462,6 +1463,93 @@ v1Router.get("/profile", (req, res) => {
     profile: t.toolGateway.profile,
     profiles: Object.entries(PROFILES).map(([id, p]) => ({ id, ...p })),
   });
+});
+
+function requestPublicBase(req: { protocol?: string; get?: (h: string) => string | undefined; headers?: Record<string, unknown> }): string {
+  const env = process.env.ORVYN_PUBLIC_URL || process.env.ORVYN_STAGING_URL;
+  if (env) return env.replace(/\/$/, "");
+  const host = req.get?.("host") || String(req.headers?.host ?? "127.0.0.1:4570");
+  const proto = req.protocol === "https" ? "https" : "http";
+  return `${proto}://${host}`;
+}
+
+function portEnv(raw: unknown): "local" | "sandbox" | "cloud" {
+  const v = String(raw ?? "local").toLowerCase();
+  if (v === "sandbox" || v === "local_sandbox") return "sandbox";
+  if (v === "cloud" || v === "ovh_worker") return "cloud";
+  return "local";
+}
+
+v1Router.get("/ports", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
+    res.json({ ports: portForwardingService.list(principal.tenantId, runId) });
+  } catch (err: any) {
+    res.status(err.status ?? 401).json({ error: err.message });
+  }
+});
+
+v1Router.post("/ports/detect", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const ports = Array.isArray(req.body?.ports) ? req.body.ports : [];
+    res.json({
+      ports: portForwardingService.detect({
+        tenantId: principal.tenantId,
+        userId: principal.userId,
+        runId: req.body?.runId,
+        workspace: req.body?.workspace,
+        environment: portEnv(req.body?.environment),
+        ports: ports.map((p: any) => ({ port: Number(p.port), command: p.command })),
+        autoForward: req.body?.autoForward !== false,
+        publicBase: requestPublicBase(req),
+      }),
+    });
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message });
+  }
+});
+
+v1Router.post("/ports/forward", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const port = Number(req.body?.port);
+    if (!port) return res.status(400).json({ error: "port is required" });
+    res.json({
+      port: portForwardingService.forward({
+        tenantId: principal.tenantId,
+        userId: principal.userId,
+        runId: req.body?.runId,
+        workspace: req.body?.workspace,
+        environment: portEnv(req.body?.environment),
+        port,
+        command: req.body?.command,
+        publicBase: requestPublicBase(req),
+      }),
+    });
+  } catch (err: any) {
+    res.status(err.status ?? 400).json({ error: err.message });
+  }
+});
+
+v1Router.post("/ports/:id/stop", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    res.json({ port: portForwardingService.stop(principal.tenantId, req.params.id) });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: err.message });
+  }
+});
+
+v1Router.all("/ports/:id/proxy", (req, res) => {
+  try {
+    const token = typeof req.query.fwd === "string" ? req.query.fwd : "";
+    const rec = portForwardingService.authorizeByToken(req.params.id, token);
+    portForwardingService.proxy(rec, req, res);
+  } catch (err: any) {
+    if (!res.headersSent) res.status(err.status ?? 404).json({ error: "Not found" });
+  }
 });
 
 v1Router.post("/profile", (req, res) => {

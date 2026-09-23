@@ -329,3 +329,18 @@ export const IconExternal = (p: IconProps) => (
     <path d="M17 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h4.5" />
   </Svg>
 );
+
+export const IconPlug = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 7V3M15 7V3" />
+    <path d="M7 7h10v5a5 5 0 0 1-10 0V7z" />
+    <path d="M12 17v4" />
+  </Svg>
+);
+
+export const IconLayout = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <path d="M12 4.5v15" />
+  </Svg>
+);

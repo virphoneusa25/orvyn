@@ -44,8 +44,8 @@ export const DEFAULT_DESKTOP_LAYOUT: DesktopLayoutState = {
   helpOpen: false,
   agentPanelWidth: AGENT_PANEL_DEFAULT,
   activeTab: "changes",
-  activeTabId: "changes",
-  openTabIds: ["changes", "browser"],
+  activeTabId: "",
+  openTabIds: [],
   previewUrl: "",
   browserUrl: "",
   recentUrls: [],
@@ -111,13 +111,13 @@ function safeUrl(value: unknown): string {
 }
 
 function safeTabId(value: unknown, fallback: string): string {
+  if (value === "") return "";
   return typeof value === "string" && value.length > 0 && value.length < 400 ? value : fallback;
 }
 
 function safeTabIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [...DEFAULT_DESKTOP_LAYOUT.openTabIds];
-  const ids = value.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length < 400).slice(0, 24);
-  return ids.includes("changes") ? ids : ["changes", ...ids];
+  return value.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length < 400).slice(0, 24);
 }
 
 function migrateActiveTab(rec: Record<string, unknown>): AgentWorkspaceTab {

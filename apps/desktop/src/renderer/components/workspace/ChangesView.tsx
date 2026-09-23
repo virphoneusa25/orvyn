@@ -30,11 +30,13 @@ export function ChangesView({
         deletions: f.deletions ?? 0,
       }));
 
-  if (rows.length === 0) {
+  const projectRows = rows.filter((row) => row.kind !== "artifact");
+
+  if (projectRows.length === 0) {
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", gap: 8 }}>
-        <div style={emptyTitle()}>ORVYN Workbench</div>
-        <div style={emptyBody()}>Files, previews, browser sessions, terminal output, and artifacts will appear here as ORION works.</div>
+      <div data-testid="workbench-changes-empty" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", gap: 8 }}>
+        <div style={emptyTitle()}>No changes</div>
+        <div style={emptyBody()}>Project files ORION edits appear here. Generated artifacts stay in Files → Generated.</div>
       </div>
     );
   }
@@ -47,7 +49,7 @@ export function ChangesView({
         <span style={{ color: "var(--orvyn-red)", fontSize: 12 }}>−{summary.deletions}</span>
       </div>
       <div style={{ flex: 1, overflowY: "auto", padding: "6px 8px" }}>
-        {rows.map((row) => {
+        {projectRows.map((row) => {
           const active = selected === row.path;
           return (
             <button

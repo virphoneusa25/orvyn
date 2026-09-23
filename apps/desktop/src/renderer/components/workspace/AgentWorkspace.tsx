@@ -26,18 +26,23 @@ import {
   diffTabId,
   fileTabId,
   followWorkbenchTab,
+  nextTerminalTabId,
   parseWorkbenchTab,
   previewTabId,
   previewTitle,
   truncateTabTitle,
   upsertTab,
+  WORKBENCH_PLUS_ITEMS,
   WORKBENCH_TABBAR_TEST_ID,
   WORKBENCH_TEST_ID,
   type WorkbenchTab,
 } from "../../workbenchModel";
+import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle } from "../../workbenchEnvironment";
+import { readComposerDefaults } from "../../composerSettings";
+import { isCloudBackend, getConnectionConfig } from "../../connection";
 import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
-import { IconClose, IconCrosshair, IconGlobe, IconMore, IconPlus } from "../Icons";
+import { IconClose, IconCrosshair, IconExpand, IconGlobe, IconLayout, IconPlug, IconPlus } from "../Icons";
 import type { WorkbenchBrowserState } from "../../orvyn-bridge";
 import { AgentActivityHeader } from "./AgentActivityHeader";
 import { ArtifactView } from "./ArtifactView";
@@ -46,9 +51,13 @@ import { ChangesView } from "./ChangesView";
 import { DesktopView } from "./DesktopView";
 import { DiffInspector } from "./DiffInspector";
 import { FileEditorView } from "./FileEditorView";
+import { EnvironmentView } from "./EnvironmentView";
 import { FilesInspector } from "./FilesInspector";
+import { PortsPanel } from "./PortsPanel";
 import { ReviewInspector } from "./ReviewInspector";
 import { TerminalInspector } from "./TerminalInspector";
+import { useWorkbenchPorts } from "./useWorkbenchPorts";
+import { WorkbenchLauncher } from "./WorkbenchLauncher";
 import { iconBtn, splitHandle, tabBtn } from "./workspaceChrome";
 
 export function AgentWorkspacePanel(props: Parameters<typeof AgentWorkspace>[0]) {
@@ -79,6 +88,7 @@ export function AgentWorkspace({
   const running = runStatus === "running" || runStatus === "streaming" || runStatus === "working";
   const [follow, setFollow] = useState<FollowController>(() => initialFollowState(running && layout.followOrion !== false));
   const [plusOpen, setPlusOpen] = useState(false);
+  const [portsOpen, setPortsOpen] = useState(false);
   const [browserState, setBrowserState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
   const [addressFocus, setAddressFocus] = useState(0);
   const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1440));
@@ -87,13 +97,19 @@ export function AgentWorkspace({
   const previewSeeded = useRef(new Set<string>());
   const desktopLive = events.some((e) => String(e.type).startsWith("desktop.") && e.type !== "desktop.completed" && e.type !== "desktop.failed");
 
+  const executionActual = [...events].reverse().find((e) => e.type === "run.execution")?.data?.executionTargetActual
+    ?? [...events].reverse().find((e) => e.type === "run.execution")?.data?.executionTargetRequested;
+  const environment = resolveWorkbenchEnvironment({
+    executionActual: executionActual != null ? String(executionActual) : undefined,
+    executionTarget: readComposerDefaults().executionTarget,
+    cloudBackend: isCloudBackend(getConnectionConfig().backendUrl),
+  });
+  const eventText = events.map((e) => String(e.data?.output ?? e.data?.preview ?? e.data?.chunk ?? "")).join("\n");
+  const ports = useWorkbenchPorts({ environment, runId, projectRoot, eventText });
+
   const tabs = useMemo(() => {
-    const ids = layout.openTabIds.length ? layout.openTabIds : ["changes", "browser", "desktop"];
+    const ids = layout.openTabIds;
     let list = ids.map(parseWorkbenchTab);
-    // The Desktop tab is ALWAYS available when a project is open — the user
-    // can start or watch a session without waiting for desktop.* run events.
-    // desktopLive only controls the cyan "live" indicator on the tab.
-    if (projectRoot && !list.some((t) => t.id === "desktop")) list = upsertTab(list, parseWorkbenchTab("desktop"));
 
     const nativeBrowser = browserState.tabs.filter((t) => t.kind === "browser");
     if (nativeBrowser.length) {
@@ -125,11 +141,12 @@ export function AgentWorkspace({
     return list;
   }, [layout.openTabIds, derived.previews, desktopLive, browserState.tabs, projectName]);
 
-  const activeId = tabs.some((t) => t.id === layout.activeTabId) ? layout.activeTabId : tabs[0]?.id ?? "changes";
-  const active = tabs.find((t) => t.id === activeId) ?? tabs[0]!;
+  const activeId = tabs.some((t) => t.id === layout.activeTabId) ? layout.activeTabId : tabs[0]?.id ?? "";
+  const active = tabs.find((t) => t.id === activeId);
+  const emptyWorkbench = !active;
   const overlay = shouldOverlayAgentPanel(viewportWidth);
-  const browserish = active.kind === "browser" || active.kind === "preview";
-  const activeNative = matchingNativeTab(browserState, active);
+  const browserish = active?.kind === "browser" || active?.kind === "preview";
+  const activeNative = active ? matchingNativeTab(browserState, active) : undefined;
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -180,7 +197,7 @@ export function AgentWorkspace({
     const activity = derived.activity;
     if (!activity || activity.switchTab === false) return;
     const currentKind: AgentWorkspaceTab =
-      active.kind === "file" || active.kind === "artifact" ? "files" : (active.kind as AgentWorkspaceTab);
+      !active ? "changes" : active.kind === "file" || active.kind === "artifact" ? "files" : (active.kind as AgentWorkspaceTab);
     const nextKind = followActiveTab(activity, currentKind);
     const native = activity.previewUrl
       ? browserState.tabs.find((t) => urlsMatch(t.url, activity.previewUrl!))
@@ -242,7 +259,7 @@ export function AgentWorkspace({
         const id = activeNative?.id ?? browserState.activeId;
         if (id) void window.orvyn.browser?.reload(id);
       }
-      if (e.ctrlKey && e.key.toLowerCase() === "w" && active.closable) {
+      if (e.ctrlKey && e.key.toLowerCase() === "w" && active?.closable) {
         e.preventDefault();
         close(active.id);
       }
@@ -268,7 +285,7 @@ export function AgentWorkspace({
   function activate(tab: WorkbenchTab, manual = false) {
     if (manual) setFollow((s) => applyManualTab(s));
     setPlusOpen(false);
-    if (tab.id === "browser" && !browserState.tabs.some((t) => t.kind === "browser")) {
+      if (tab.id === "browser" && !browserState.tabs.some((t) => t.kind === "browser")) {
       void openBrowserSurface("browser");
       return;
     }
@@ -348,6 +365,29 @@ export function AgentWorkspace({
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div data-testid={WORKBENCH_TABBAR_TEST_ID} style={{ display: "flex", alignItems: "center", height: 36, borderBottom: "1px solid var(--orvyn-border-soft)", padding: "0 4px", minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", overflowX: "auto", flex: 1, minWidth: 0 }}>
+            <div style={{ position: "relative" }}>
+              <button data-testid="workbench-plus" title="Open in Workbench" style={iconBtn(plusOpen)} onClick={() => { setPlusOpen((v) => !v); setPortsOpen(false); }}>
+                <IconPlus size={13} />
+              </button>
+              {plusOpen && (
+                <div data-testid="workbench-plus-menu" style={{ position: "absolute", left: 0, top: 32, zIndex: 20, minWidth: 180, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
+                  {WORKBENCH_PLUS_ITEMS.map((item) => (
+                    <PlusItem
+                      key={item.id}
+                      label={item.label}
+                      onClick={() => {
+                        if (item.kind === "browser") void openBrowserSurface("browser");
+                        else if (item.kind === "terminal" && tabs.some((t) => t.kind === "terminal")) {
+                          const next = parseWorkbenchTab(nextTerminalTabId(tabs));
+                          next.title = terminalTitle(environment, tabs.filter((t) => t.kind === "terminal").length + 1);
+                          activate(next, true);
+                        } else activate(parseWorkbenchTab(item.id), true);
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
             {tabs.map((t) => {
               const native = matchingNativeTab(browserState, t);
               return (
@@ -386,29 +426,6 @@ export function AgentWorkspace({
                 </button>
               );
             })}
-            <div style={{ position: "relative" }}>
-              <button title="Open in Workbench" style={iconBtn(plusOpen)} onClick={() => setPlusOpen((v) => !v)}>
-                <IconPlus size={13} />
-              </button>
-              {plusOpen && (
-                <div style={{ position: "absolute", left: 0, top: 32, zIndex: 20, minWidth: 160, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
-                  <PlusItem label="Open file" onClick={() => activate(parseWorkbenchTab("files"), true)} />
-                  <PlusItem label="Open terminal" onClick={() => activate(parseWorkbenchTab("terminal"), true)} />
-                  <PlusItem label="New Browser" onClick={() => void openBrowserSurface("browser")} />
-                  <PlusItem label="Open browser" onClick={() => void openBrowserSurface("browser")} />
-                  <PlusItem
-                    label="Open URL"
-                    onClick={() => {
-                      const raw = window.prompt("Open URL");
-                      if (!raw) return;
-                      void openBrowserSurface("browser", raw);
-                    }}
-                  />
-                  <PlusItem label="Open Desktop" onClick={() => activate(parseWorkbenchTab("desktop"), true)} />
-                  <PlusItem label="Open review" onClick={() => activate(parseWorkbenchTab("review"), true)} />
-                </div>
-              )}
-            </div>
           </div>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
             {follow.paused && follow.followOrion && <span style={{ fontSize: 10, color: "var(--orvyn-yellow)" }}>Follow paused</span>}
@@ -419,8 +436,14 @@ export function AgentWorkspace({
             }}>
               <IconCrosshair size={14} />
             </button>
+            <button data-testid="workbench-ports-btn" title="Ports" style={iconBtn(portsOpen)} onClick={() => { setPortsOpen((v) => !v); setPlusOpen(false); }}>
+              <IconPlug size={14} />
+            </button>
             <button title={layout.expandedPreview ? "Restore chat + Workbench" : "Expand Workbench"} style={iconBtn(layout.expandedPreview)} onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}>
-              <IconMore size={14} />
+              <IconExpand size={14} />
+            </button>
+            <button title="Split layout" style={iconBtn()} onClick={() => onLayout({ agentPanelWidth: layout.agentPanelWidth >= 780 ? 520 : 780 })}>
+              <IconLayout size={14} />
             </button>
             <button title="Close Workbench" style={iconBtn()} onClick={() => {
               void window.orvyn.browser?.setVisible(false);
@@ -432,6 +455,27 @@ export function AgentWorkspace({
         </div>
         <AgentActivityHeader line={derived.activity?.line} running={running} waitingApproval={derived.waitingApproval} />
         <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
+          {portsOpen && (
+            <PortsPanel
+              ports={ports.ports}
+              autoForward={ports.autoForward}
+              environment={environmentLabel(environment)}
+              onAutoForward={ports.setAutoForward}
+              onOpen={(p) => {
+                const url = p.previewUrl || p.localUrl;
+                if (url) void openBrowserSurface("preview", url);
+                setPortsOpen(false);
+              }}
+              onStop={(id) => void ports.stop(id)}
+              onClose={() => setPortsOpen(false)}
+            />
+          )}
+          {emptyWorkbench && (
+            <WorkbenchLauncher onOpen={(id) => {
+              if (id === "browser") void openBrowserSurface("browser");
+              else activate(parseWorkbenchTab(id), true);
+            }} />
+          )}
           <div style={{ display: browserish ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
             <BrowserWorkbench
               kind={active.kind === "preview" ? "preview" : "browser"}
@@ -445,7 +489,7 @@ export function AgentWorkspace({
             />
           </div>
           {tabs.some((t) => t.kind === "desktop") && (
-            <div style={{ display: active.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
+            <div style={{ display: active?.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
               <DesktopView
                 projectRoot={projectRoot}
                 runId={runId}
@@ -454,7 +498,7 @@ export function AgentWorkspace({
               />
             </div>
           )}
-          {!browserish && active.kind !== "desktop" && (
+          {!emptyWorkbench && !browserish && active?.kind !== "desktop" && active && (
             <WorkbenchBody
               tab={active}
               derived={derived}
@@ -463,6 +507,8 @@ export function AgentWorkspace({
               runStatus={runStatus}
               runId={runId}
               projectRoot={projectRoot}
+              environment={environment}
+              ports={ports.ports}
               onOpenDiff={(path) => activate(parseWorkbenchTab(diffTabId(path)), true)}
               onOpenFile={(path) => {
                 onOpenFile(path);
@@ -499,6 +545,8 @@ function WorkbenchBody({
   runStatus,
   runId,
   projectRoot,
+  environment,
+  ports,
   onOpenDiff,
   onOpenFile,
   onOpenArtifact,
@@ -511,6 +559,8 @@ function WorkbenchBody({
   runStatus: string;
   runId?: string | null;
   projectRoot: string | null;
+  environment: ReturnType<typeof resolveWorkbenchEnvironment>;
+  ports: { port: number; command?: string; status: string }[];
   onOpenDiff: (path: string) => void;
   onOpenFile: (path: string) => void;
   onOpenArtifact: (name: string) => void;
@@ -533,6 +583,7 @@ function WorkbenchBody({
         files={derived.files}
         artifacts={derived.artifacts}
         projectRoot={projectRoot}
+        environment={environment}
         activePath={derived.activity?.file}
         onOpenFile={onOpenFile}
         onPreviewArtifact={onOpenArtifact}
@@ -545,7 +596,10 @@ function WorkbenchBody({
     );
   }
   if (tab.kind === "file") return <FileEditorView path={tab.path} />;
-  if (tab.kind === "terminal") return <TerminalInspector events={events} />;
+  if (tab.kind === "terminal") return <TerminalInspector events={events} environment={environment} environmentLabel={tab.title.startsWith("Terminal") ? tab.title : terminalTitle(environment)} />;
+  if (tab.kind === "environment") {
+    return <EnvironmentView environment={environment} projectRoot={projectRoot} runId={runId} ports={ports} />;
+  }
   if (tab.kind === "review") {
     return (
       <ReviewInspector

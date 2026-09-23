@@ -65,6 +65,7 @@ export interface FilesLocation {
     downloadUrl?: string;
     previewUrl?: string;
     badge?: string;
+    source?: string;
     runId?: string | null;
     sha256?: string;
   }>;
@@ -577,7 +578,7 @@ export class ArtifactService {
         if (e.isDirectory()) await walk(path.join(dir, e.name), nextRel, depth + 1);
         else {
           const st = await fs.stat(path.join(dir, e.name)).catch(() => null);
-          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, badge: "Project" });
+          out.push({ name: e.name, path: nextRel, kind: "project", bytes: st?.size, createdAt: st ? Number(st.mtimeMs) : undefined, badge: "Project", source: "local" });
         }
       }
     }

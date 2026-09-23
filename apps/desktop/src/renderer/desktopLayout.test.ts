@@ -26,6 +26,8 @@ test("right panel / terminal / help parse with safe defaults", () => {
   assert.equal(empty.helpOpen, false);
   assert.equal(empty.bottomTerminalHeight, TERMINAL_DEFAULT_HEIGHT);
   assert.equal(empty.activeTab, "changes");
+  assert.deepEqual(empty.openTabIds, []);
+  assert.equal(empty.activeTabId, "");
   assert.equal(empty.agentPanelWidth, AGENT_PANEL_DEFAULT);
   assert.equal(empty.followOrion, true);
 
