@@ -28,6 +28,13 @@ function wsUrl(token) {
   return u.toString();
 }
 
+function decodeWs(raw) {
+  if (typeof raw === "string") return raw;
+  if (raw instanceof ArrayBuffer) return new TextDecoder().decode(raw);
+  if (ArrayBuffer.isView(raw)) return new TextDecoder().decode(raw);
+  return String(raw);
+}
+
 function openSocket(token, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl(token));
@@ -35,17 +42,17 @@ function openSocket(token, timeoutMs = 8000) {
       try { ws.close(); } catch { /* ignore */ }
       reject(new Error("ws timeout"));
     }, timeoutMs);
-    ws.on("message", (raw) => {
+    ws.addEventListener("message", (event) => {
       let msg;
-      try { msg = JSON.parse(String(raw)); } catch { msg = { raw: String(raw) }; }
+      try { msg = JSON.parse(decodeWs(event.data)); } catch { msg = { raw: decodeWs(event.data) }; }
       if (msg.type === "connection.ready" || msg.error || msg.done) {
         clearTimeout(timer);
         resolve({ ws, msg });
       }
     });
-    ws.on("error", (err) => {
+    ws.addEventListener("error", () => {
       clearTimeout(timer);
-      reject(err);
+      reject(new Error("ws error"));
     });
   });
 }
@@ -53,15 +60,15 @@ function openSocket(token, timeoutMs = 8000) {
 function sendAndWait(ws, body, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("ws reply timeout")), timeoutMs);
-    const onMsg = (raw) => {
+    const onMsg = (event) => {
       let msg;
-      try { msg = JSON.parse(String(raw)); } catch { msg = { raw: String(raw) }; }
+      try { msg = JSON.parse(decodeWs(event.data)); } catch { msg = { raw: decodeWs(event.data) }; }
       if (msg.type === "connection.ready") return;
       clearTimeout(timer);
-      ws.off("message", onMsg);
+      ws.removeEventListener("message", onMsg);
       resolve(msg);
     };
-    ws.on("message", onMsg);
+    ws.addEventListener("message", onMsg);
     ws.send(JSON.stringify(body));
   });
 }

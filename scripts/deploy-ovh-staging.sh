@@ -80,23 +80,38 @@ docker compose \\
   ps caddy backend
 "
 
-echo "Waiting for $STAGING_HEALTH"
+INTERNAL_HEALTH="http://127.0.0.1:4570/api/v1/health"
+echo "Waiting for staging backend (internal, then public)"
 ok=0
-for _ in $(seq 1 50); do
-  if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q '"status":"ok"'; then
+for _ in $(seq 1 40); do
+  if "${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(t=>process.exit(t.includes('\\\"status\\\":\\\"ok\\\"')?0:1)).catch(()=>process.exit(1))\""; then
     ok=1
     break
   fi
   sleep 3
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "Staging health check failed after deploy (DNS/TLS may still be pending)" >&2
-  curl -sS -m 8 "$STAGING_HEALTH" || true
-  echo
+  echo "Staging backend did not become healthy" >&2
+  "${SSH[@]}" "$HOST" "docker logs backend-staging --tail 80" || true
   exit 1
 fi
-echo "Staging healthy: $STAGING_HEALTH"
-curl -sS -m 8 "$STAGING_HEALTH"
+echo "Staging backend healthy (internal)"
+"${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(console.log)\""
 echo
-curl -sS -m 12 "${STAGING_HEALTH}/detailed" || true
-echo
+SSLIP_HEALTH="https://staging.orvyn.40.160.11.123.sslip.io/api/v1/health"
+for _ in $(seq 1 30); do
+  if curl -fsS -m 8 "$SSLIP_HEALTH" | grep -q '"status":"ok"'; then
+    echo "Staging public TLS healthy: $SSLIP_HEALTH"
+    curl -sS -m 8 "$SSLIP_HEALTH"; echo
+    curl -sS -m 12 "https://staging.orvyn.40.160.11.123.sslip.io/api/v1/health/detailed" || true
+    echo
+    break
+  fi
+  sleep 3
+done
+if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q '"status":"ok"'; then
+  echo "Canonical staging hostname healthy: $STAGING_HEALTH"
+  curl -sS -m 8 "$STAGING_HEALTH"; echo
+else
+  echo "Canonical $STAGING_HEALTH is waiting on DNS A record staging.orvyn.virphoneusa.com → 40.160.11.123"
+fi
