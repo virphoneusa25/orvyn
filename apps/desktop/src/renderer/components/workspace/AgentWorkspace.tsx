@@ -517,7 +517,7 @@ export function AgentWorkspace({
               orionStatus={derived.activity?.tab === "browser" || derived.activity?.tab === "preview" ? derived.activity.line : null}
               requestedUrl={active?.url}
               sessionId={activeNative?.id}
-              surfaceActive={browserish}
+              surfaceActive={browserish && !plusOpen && !portsOpen}
               onTabs={setBrowserState}
               addressFocusToken={addressFocus}
             />

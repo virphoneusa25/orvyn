@@ -294,9 +294,7 @@ export class WorkbenchBrowserManager {
   setBounds(bounds: BrowserBounds): BrowserPublic {
     const next = clampBrowserBounds(bounds);
     if (next) this.lastBounds = next;
-    const guest = this.activeId ? this.guests.get(this.activeId) : undefined;
-    if (!next || !guest || !this.visible) return this.snapshot();
-    guest.view.setBounds(next);
+    if (this.visible) this.attachActive();
     return this.snapshot();
   }
 
@@ -432,10 +430,17 @@ export class WorkbenchBrowserManager {
     if (!win) return;
     for (const guest of this.guests.values()) {
       const show = this.visible && guest.tab.id === this.activeId && !!guest.tab.url && !guest.tab.error;
-      if (show) {
-        if (!win.contentView.children.includes(guest.view)) win.contentView.addChildView(guest.view, 0);
+      if (show && this.lastBounds) {
+        // Index 0 sits under the window page, so the site never appears and a
+        // full-size view covers the Workbench menus. Keep the guest on top,
+        // clipped to the surface rectangle measured by the renderer.
+        const kids = win.contentView.children;
+        if (!kids.includes(guest.view) || kids[kids.length - 1] !== guest.view) {
+          try { win.contentView.removeChildView(guest.view); } catch { /* not attached */ }
+          win.contentView.addChildView(guest.view);
+        }
+        guest.view.setBounds(this.lastBounds);
         guest.view.setVisible(true);
-        if (this.lastBounds) guest.view.setBounds(this.lastBounds);
       } else {
         this.detach(guest);
       }

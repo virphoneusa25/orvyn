@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { DirEntry, WorkspaceState } from "../orvyn-bridge";
 import { apiUrl, authHeaders } from "../connection";
+import { isFabricatedGeneratedPath } from "../workbenchFileAccess";
 
 type TreeFile = { id?: string; name: string; path: string; kind: string };
 
@@ -80,8 +81,8 @@ export function FileExplorer({
         </div>
       )}
 
-      <Section title="Generated" files={generated} onOpen={onOpenFile} />
-      <Section title="Run Artifacts" files={artifacts} onOpen={onOpenFile} />
+      <Section title="Generated" files={generated} onOpen={onOpenFile} generated />
+      <Section title="Run Artifacts" files={artifacts} onOpen={onOpenFile} generated />
 
       {!isFolder && (workspace?.recents.length ?? 0) > 0 && (
         <div style={{ marginTop: 16, padding: "0 8px" }}>
@@ -104,7 +105,7 @@ export function FileExplorer({
   );
 }
 
-function Section({ title, files, onOpen }: { title: string; files: TreeFile[]; onOpen: (path: string) => void }) {
+function Section({ title, files, onOpen, generated = false }: { title: string; files: TreeFile[]; onOpen: (path: string) => void; generated?: boolean }) {
   return (
     <div style={{ marginTop: 14, padding: "0 8px" }}>
       <div style={{ opacity: 0.5, textTransform: "uppercase", fontSize: 11, marginBottom: 6 }}>
@@ -117,7 +118,7 @@ function Section({ title, files, onOpen }: { title: string; files: TreeFile[]; o
         files.map((f) => (
           <div
             key={f.id ?? f.path}
-            onClick={() => onOpen(f.path)}
+            onClick={() => onOpen(generated || isFabricatedGeneratedPath(f.path) || f.kind === "generated" || f.kind === "artifact" ? `generated/${f.name}` : f.path)}
             style={{ padding: "3px 4px", cursor: "pointer", borderRadius: 4, fontSize: 12 }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "#161b26")}
             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}

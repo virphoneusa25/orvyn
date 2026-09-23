@@ -17,6 +17,7 @@ import { HostDesktopBanner } from "./components/HostDesktopBanner";
 import { ViewId } from "./components/Navigation";
 import { Sidebar } from "./components/redesign/Shell";
 import { submitOrvynCommand } from "./orvynCommand";
+import { isFabricatedGeneratedPath } from "./workbenchFileAccess";
 import { WorkStream } from "./components/WorkStream";
 import { AgentWorkspace } from "./components/workspace/AgentWorkspace";
 import { useAgentRun } from "./useAgentRun";
@@ -455,6 +456,11 @@ export function App() {
   }
 
   async function handleOpenFile(relativePath: string) {
+    if (isFabricatedGeneratedPath(relativePath)) {
+      const open = chrome.layout.openTabIds.includes("files") ? chrome.layout.openTabIds : [...chrome.layout.openTabIds, "files"];
+      chrome.setWorkspaceLayout({ rightPanelOpen: true, activeTab: "files", activeTabId: "files", openTabIds: open });
+      return;
+    }
     const existing = tabs.find((t) => t.path === relativePath);
     if (existing) {
       setActivePath(relativePath);

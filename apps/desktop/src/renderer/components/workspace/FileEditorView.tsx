@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
+import { apiUrl, authHeaders } from "../../connection";
 import { isFabricatedGeneratedPath, userFacingFileError } from "../../workbenchFileAccess";
+import { ArtifactView } from "./ArtifactView";
 import { emptyBody, emptyTitle } from "./workspaceChrome";
 
 function guessLanguage(path: string): string {
@@ -53,6 +55,10 @@ export function FileEditorView({ path }: { path?: string | null }) {
     };
   }, [path]);
 
+  if (path && isFabricatedGeneratedPath(path)) {
+    return <GeneratedArtifactPane path={path} />;
+  }
+
   if (!path) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
@@ -90,4 +96,44 @@ export function FileEditorView({ path }: { path?: string | null }) {
       )}
     </div>
   );
+}
+
+function GeneratedArtifactPane({ path }: { path: string }) {
+  const name = path.replace(/\\/g, "/").split("/").pop() || path;
+  const [artifactId, setArtifactId] = useState<string | undefined>();
+  const [missing, setMissing] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setArtifactId(undefined);
+    setMissing(false);
+    fetch(apiUrl(`/artifacts?q=${encodeURIComponent(name)}`), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        const rows = Array.isArray(d.artifacts) ? d.artifacts : [];
+        const hit = rows.find((a: { name?: string; artifactId?: string }) => a.name === name) ?? rows[0];
+        if (hit?.artifactId) setArtifactId(String(hit.artifactId));
+        else setMissing(true);
+      })
+      .catch(() => {
+        if (!cancelled) setMissing(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+
+  if (missing) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
+        <div style={emptyTitle()}>Artifact unavailable</div>
+        <div style={emptyBody()}>{name} is a generated file. ORVYN will not open it as a project file.</div>
+      </div>
+    );
+  }
+  if (!artifactId) {
+    return <div style={{ padding: 16, color: "var(--orvyn-text-muted)" }}>Loading {name}…</div>;
+  }
+  return <ArtifactView name={name} artifactId={artifactId} />;
 }

@@ -71,14 +71,14 @@ export function BrowserWorkbench({
 
   useEffect(() => {
     const tab = activeTab(state);
-    const show = Boolean(surfaceActive && hasNative && tab?.url && !tab.error);
+    const show = Boolean(surfaceActive && hasNative && tab?.url && !tab.error && !menu);
     void api?.setVisible(show);
     if (surfaceActive && tab?.id) void api?.activate(tab.id);
     if (!surfaceActive) void api?.setVisible(false);
     return () => {
       void api?.setVisible(false);
     };
-  }, [state.activeId, state.tabs, hasNative, surfaceActive]);
+  }, [state.activeId, state.tabs, hasNative, surfaceActive, menu]);
 
   function apply(next: WorkbenchBrowserState) {
     setState(next);
