@@ -57,6 +57,68 @@ export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[
   };
 }
 
+export interface ClaimEvent {
+  type: string;
+  data?: Record<string, unknown>;
+}
+
+function toolName(event: ClaimEvent): string {
+  return String(event.data?.tool ?? event.data?.name ?? "");
+}
+
+function testsPassed(events: ClaimEvent[]): boolean {
+  return events.some((event) => {
+    if (event.type === "test.completed") return event.data?.ok !== false && event.data?.passed !== false;
+    if (event.type === "terminal.completed" && /\b(npm test|vitest|jest|pytest)\b/i.test(String(event.data?.command ?? ""))) {
+      return event.data?.exitCode === 0 || event.data?.ok === true;
+    }
+    return event.type === "tool.completed" && /^(run_tests|test)$/i.test(toolName(event)) && event.data?.ok !== false;
+  });
+}
+
+function visualEvidence(events: ClaimEvent[]): boolean {
+  return events.some((event) =>
+    event.type === "desktop.verification.passed" ||
+    event.type === "browser.verification.passed" ||
+    event.type === "browser.completed" ||
+    (event.type === "tool.completed" && /screenshot|browser_|desktop_/i.test(toolName(event)))
+  );
+}
+
+function changeEvidence(events: ClaimEvent[]): boolean {
+  return events.some((event) =>
+    event.type === "file.edit" ||
+    event.type === "file.changed" ||
+    (event.type === "tool.completed" && /edit_file|write_file|deploy/i.test(toolName(event)))
+  );
+}
+
+/**
+ * Drop success sentences that this run's events do not support.
+ * Artifact filenames are handled by groundAssistantClaims.
+ */
+export function groundSuccessClaims(text: string, events: ClaimEvent[]): { text: string; blocked: boolean } {
+  const sentences = String(text || "").split(/(?<=[.!?])\s+/).filter(Boolean);
+  const kept: string[] = [];
+  let blocked = false;
+  for (const sentence of sentences) {
+    const claimsTests = /\b(tests?\s+(passed|pass|are green|succeeded)|all tests pass)\b/i.test(sentence);
+    const claimsVisual = /\b(verified (the )?(ui|page|screen|visually)|visual verification|checked (it )?in the browser|desktop verification passed)\b/i.test(sentence);
+    const claimsFix = /\b(i fixed|the bug is fixed|i deployed|deployed the app)\b/i.test(sentence);
+    if ((claimsTests && !testsPassed(events)) || (claimsVisual && !visualEvidence(events)) || (claimsFix && !changeEvidence(events))) {
+      blocked = true;
+      continue;
+    }
+    kept.push(sentence);
+  }
+  if (!blocked) return { text, blocked: false };
+  const remainder = kept.join(" ").trim();
+  return {
+    text: remainder || "This run has no tool evidence for that success claim, so it is not reported as done.",
+    blocked: true,
+  };
+}
+
 export function availableArtifactsPrompt(artifacts: GroundedArtifact[]): string {
   if (artifacts.length === 0) {
     return "PERSISTED ARTIFACTS: none. You must not say a file was generated, saved, attached, or is in Files → Generated. Do not invent a filename.";

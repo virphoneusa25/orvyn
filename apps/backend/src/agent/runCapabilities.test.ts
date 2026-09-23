@@ -23,6 +23,12 @@ const FULL = [
   "search_capabilities",
 ].map((name) => ({ name, permission: "allowed" }));
 
+test("ssh_exec counts as terminal even without a local shell tool", () => {
+  const caps = summarizeCapabilities([{ name: "ssh_exec", permission: "allowed" }], { modelTools: true, executionLabel: "Cloud" });
+  assert.equal(caps.terminal, true);
+  assert.match(renderCapabilityPrompt(caps), /SSH: available/);
+});
+
 test("allowed and ask tools count as available; denied terminal does not", () => {
   const caps = summarizeCapabilities(
     [
@@ -41,7 +47,7 @@ test("allowed and ask tools count as available; denied terminal does not", () =>
   const prompt = renderCapabilityPrompt(caps);
   assert.match(prompt, /execution: Local/);
   assert.match(prompt, /Edit and create files: available/);
-  assert.match(prompt, /Terminal, tests, builds, and dev servers: not available/);
+  assert.match(prompt, /Terminal, tests, builds, dev servers, and SSH: not available/);
   assert.doesNotMatch(prompt, /let the user/i);
   assert.doesNotMatch(prompt, /turn by turn/i);
 });
@@ -50,7 +56,7 @@ test("a run with a terminal does not instruct a global denial", () => {
   const prompt = renderCapabilityPrompt(
     summarizeCapabilities(FULL, { modelTools: true, executionLabel: "Cloud" })
   );
-  assert.match(prompt, /Terminal, tests, builds, and dev servers: available/);
+  assert.match(prompt, /Terminal, tests, builds, dev servers, and SSH: available/);
   assert.match(prompt, /Desktop and computer-use in this session: available/);
   assert.match(prompt, /Browser: available/);
   assert.doesNotMatch(prompt, /cannot execute/i);
@@ -75,6 +81,7 @@ test("action detection nudges engineering work and leaves capability questions a
   assert.equal(looksLikeActionRequest("Fix the login bug and run the tests"), true);
   assert.equal(looksLikeActionRequest("Generate a virphone logo png"), true);
   assert.equal(looksLikeActionRequest("Inspect the authentication system"), true);
+  assert.equal(looksLikeActionRequest("CAN YOU LOGIN TO MY SERVER?"), true);
 });
 
 test("desktop gap is specific and does not cancel the rest of the task", () => {

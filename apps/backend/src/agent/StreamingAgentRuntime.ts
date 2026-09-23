@@ -1,5 +1,5 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
-import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
+import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
 import { skillsPromptFor } from "../learning/validatedSkills";
@@ -1191,7 +1191,7 @@ export class StreamingAgentRuntime {
             reasons: gates.reasons,
             retries: state.gateRetries,
           });
-          if (state.gateRetries < 1) {
+          if (state.gateRetries < 3) {
             state.gateRetries += 1;
             messages.push({ role: "user", content: gates.retryPrompt });
             continue;
@@ -1200,7 +1200,9 @@ export class StreamingAgentRuntime {
           this.store.setStatus(runId, "error");
           return;
         }
-        const grounded = groundAssistantClaims(content, state.createdArtifacts);
+        const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
+        const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts);
+        if (claimCheck.blocked) grounded.blocked = true;
         const wantedFile = looksLikeFileDeliverableRequest(state.instruction);
         if (wantedFile && state.createdArtifacts.length === 0) {
           const rewrite = grounded.blocked

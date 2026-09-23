@@ -48,7 +48,8 @@ export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent
   if (GREETING_ONLY.test(trimmed)) return "chat";
 
   // Polite action requests still need tools, even when phrased as a question.
-  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
+  // "Can you log in to my server?" is work, not a capability question.
+  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add|log\s*in|login|ssh|connect|install|test|start|stop|restart|debug|verify|launch|browse|tail|diagnose|commit|screenshot)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
 
   if (mode === "research") return "research";
   if (mode === "automate") return "automate";

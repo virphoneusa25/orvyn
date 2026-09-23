@@ -61,3 +61,10 @@ test("polite requests to create or inspect artifacts use tools", () => {
     assert.equal(classifyIntent(prompt,"auto"),"code");
   }
 });
+
+test("a login or SSH request is an engineering run, not a chat refusal", () => {
+  assert.equal(classifyIntent("CAN YOU LOGIN TO MY SERVER?", "auto"), "code");
+  assert.equal(classifyIntent("Can you ssh into the box and check the logs?", "auto"), "code");
+  assert.equal(classifyIntent("what can you actually do?", "auto"), "chat");
+  assert.equal(classifyIntent("hi, what can you actually do? Can you co-work yet?", "auto"), "chat");
+});

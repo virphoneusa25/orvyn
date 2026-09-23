@@ -6,6 +6,7 @@ export type ToolPermissionView = { name: string; permission: string };
 export interface RunCapabilities {
   filesystemRead: boolean;
   filesystemWrite: boolean;
+  searchCode: boolean;
   terminal: boolean;
   git: boolean;
   browser: boolean;
@@ -31,6 +32,7 @@ const READ = new Set([
   "get_project_outline",
 ]);
 const WRITE = new Set(["write_file", "edit_file", "delete_file", "move_file", "create_document"]);
+const SEARCH = new Set(["search_files", "search_code", "search_codebase", "find_symbol", "find_file"]);
 const TERMINAL = new Set([
   "terminal",
   "run_command",
@@ -39,6 +41,7 @@ const TERMINAL = new Set([
   "run_linter",
   "start_process",
   "stop_process",
+  "ssh_exec",
 ]);
 const GIT = new Set(["git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit"]);
 const ARTIFACTS = new Set(["generate_image", "artifact_create", "artifact_write", "create_document", "create_zip"]);
@@ -59,6 +62,7 @@ export function summarizeCapabilities(
   return {
     filesystemRead: anyUsable(tools, READ),
     filesystemWrite: anyUsable(tools, WRITE),
+    searchCode: anyUsable(tools, SEARCH),
     terminal: anyUsable(tools, TERMINAL),
     git: anyUsable(tools, GIT),
     browser: anyUsable(tools, new Set(), "browser_"),
@@ -90,7 +94,8 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
     const present = [
       caps.filesystemRead ? "read files" : "",
       caps.filesystemWrite ? "edit and create files" : "",
-      caps.terminal ? "run a terminal, tests, builds, and dev servers" : "",
+      caps.searchCode ? "search the codebase" : "",
+      caps.terminal ? "run a terminal, tests, builds, dev servers, and SSH" : "",
       caps.git ? "use git" : "",
       caps.browser ? "drive the browser" : "",
       caps.desktop ? "use the desktop session the user is looking at" : "",
@@ -102,7 +107,8 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
       "This chat reply does not execute tools and must not claim that it ran, edited, tested, or verified anything.",
       `Engineering tasks on this runtime can: ${present.join("; ")}.`,
       "Answer a question about what you can do from that list.",
-      "Do not deny co-working, a terminal, or screen inspection when that capability is in the list.",
+      "Do not deny co-working, a terminal, SSH, login, or screen inspection when that capability is in the list.",
+      "Never answer 'I can't log in' or 'I can't execute commands' when terminal or SSH is listed.",
       "Do not describe the session as passive chat, and do not tell the user to apply edits themselves when the engineering runtime can do the work.",
       "Research and Plan runs stay read-only. Auto, Code, Server, Deploy, and Automate use the tools.",
     ].join("\n");
@@ -111,7 +117,8 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
   const gaps = [
     line("Read files", caps.filesystemRead, "Do not claim a file was read."),
     line("Edit and create files", caps.filesystemWrite, "Do not claim a file was edited."),
-    line("Terminal, tests, builds, and dev servers", caps.terminal, "Do not claim a command ran."),
+    line("Search code", caps.searchCode, "Do not claim a search ran."),
+    line("Terminal, tests, builds, dev servers, and SSH", caps.terminal, "Do not claim a command ran."),
     line("Git", caps.git, "Do not claim a commit or branch change."),
     line("Browser", caps.browser, "Do not claim a page was opened or checked."),
     line("Desktop and computer-use in this session", caps.desktop, "Do not claim the screen was inspected."),
@@ -158,7 +165,7 @@ export function composerModeOverlay(composerMode: string | undefined, agentMode:
 }
 
 const ACTION =
-  /\b(create|fix|generate|edit|update|implement|refactor|deploy|install|build|run|start|stop|commit|delete|add|write|inspect|verify|debug|modify|screenshot|npm|compile|lint|tests?)\b/i;
+  /\b(create|fix|generate|edit|update|implement|refactor|deploy|install|build|run|start|stop|commit|delete|add|write|inspect|verify|debug|modify|screenshot|npm|compile|lint|tests?|log\s*in|login|ssh|connect)\b/i;
 
 /** Engineering work that should not finish as a prose-only first reply. */
 export function looksLikeActionRequest(instruction: string): boolean {

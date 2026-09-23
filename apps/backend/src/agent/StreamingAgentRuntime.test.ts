@@ -471,7 +471,7 @@ test("the run prompt is built from live permissions", async () => {
   assert.match(system, /Read files: available/);
   assert.match(system, /Edit and create files: available/);
   assert.match(system, /Desktop and computer-use in this session: available/);
-  assert.match(system, /Terminal, tests, builds, and dev servers: not available/);
+  assert.match(system, /Terminal, tests, builds, dev servers, and SSH: not available/);
   assert.match(system, /not a read-only/);
   assert.doesNotMatch(system, /let the user/i);
 });
@@ -481,7 +481,7 @@ test("plan mode tells the model the terminal is unavailable", async () => {
   const runId = h.runtime.start("/tmp/project", "say hello", undefined, "plan");
   await waitForStatus(h.store, runId);
   const system = String(h.provider.requests[0].messages[0].content);
-  assert.match(system, /Terminal, tests, builds, and dev servers: not available/);
+  assert.match(system, /Terminal, tests, builds, dev servers, and SSH: not available/);
   assert.match(system, /This run is read-only/);
 });
 
