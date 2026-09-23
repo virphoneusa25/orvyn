@@ -99,6 +99,7 @@ export function DesktopView({
   const [imageRect, setImageRect] = useState<Rect>({ x: 0, y: 0, w: 0, h: 0 });
   const viewRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastFrameAt = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function showToast(msg: string) {
@@ -148,6 +149,7 @@ export function DesktopView({
         if (ctx) {
           ctx.drawImage(bitmap, 0, 0);
           setFrameDrawn(true);
+          lastFrameAt.current = Date.now();
         }
       }
       bitmap.close();
@@ -177,7 +179,15 @@ export function DesktopView({
     void pullFrame();
     const ms = quality === "low" ? 220 : quality === "high" ? 55 : 90;
     const id = setInterval(() => void pullFrame(), ms);
-    return () => clearInterval(id);
+    // AUTO-RECOVERY: if no frame arrives for 5s, refresh the session and
+    // restart the stream automatically — the user should never have to
+    // manually click Reconnect for a transient stream interruption.
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastFrameAt.current > 5000) {
+        void refreshSession();
+      }
+    }, 3000);
+    return () => { clearInterval(id); clearInterval(watchdog); };
   }, [session?.id, session?.live, session?.controlOwner, projectRoot, runId, quality]);
 
   // Letterbox: measure the viewport container, keep the canvas element at
@@ -289,9 +299,16 @@ export function DesktopView({
   async function reconnect() {
     setOpenMenu(null);
     setInterrupted(false);
-    setSession(null); // force the pump useEffect to restart on re-find
+    setSession(null);
+    setFrameDrawn(false);
+    // Check if the backend session is still alive; restart if dead
     await refreshSession();
-    void pullFrame();
+    // If no session after refresh, start a fresh one
+    if (!session) {
+      await startSession();
+    } else {
+      void pullFrame();
+    }
   }
 
   // ── Honest states, in truth order ──────────────────────────────────────
