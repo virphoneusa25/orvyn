@@ -5,7 +5,8 @@ import {
   networkRequired,
   trustFor,
 } from "./classify";
-import { fetchCatalogJson, PROVIDER_TIMEOUTS_MS } from "./providerRuntime";
+import { officialReferenceById, officialReferenceResults } from "./officialReference";
+import { fetchCatalogJson, healthFromErrorClass, PROVIDER_TIMEOUTS_MS } from "./providerRuntime";
 import type {
   MarketplaceMcpServer,
   McpPackage,
@@ -54,62 +55,80 @@ export function officialProvider(
       }
     },
     async search(query: RegistrySearch) {
+      const seeded = officialReferenceResults(query.query);
+      const results: RegistryResult[] = [...seeded];
+      const seen = new Set(results.map((r) => r.server.canonicalId));
       const term = encodeURIComponent(query.query.trim());
       const limit = Math.min(Math.max(query.limit ?? 48, 1), 100);
       const search = query.query.trim() ? `search=${term}&` : "";
       const pages = query.cursor || query.query.trim() ? 1 : 3;
-      const results: RegistryResult[] = [];
       let cursor = query.cursor ? String(query.cursor) : "";
       let lastCursor: string | undefined;
       const started = Date.now();
-      const seen = new Set<string>();
-      for (let page = 0; page < pages; page++) {
-        const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
-        if (remaining < 250) break;
-        const cursorQs = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-        const url = `${baseUrl}/v0.1/servers?${search}version=latest&limit=${limit}${cursorQs}`;
-        const { body } = await fetchCatalogJson({
-          url,
-          provider: "official",
-          timeoutMs: remaining,
-          fetchImpl,
-          retry: page === 0,
-        });
-        const rows = Array.isArray(body.servers) ? body.servers : [];
-        for (const row of rows) {
-          const server = normalizeOfficial(row);
-          if (seen.has(server.canonicalId)) continue;
-          seen.add(server.canonicalId);
-          results.push({ server, score: 0 });
-        }
-        lastCursor = body.metadata?.nextCursor;
-        if (!lastCursor) break;
-        cursor = String(lastCursor);
-      }
-      for (const extra of supplementOfficialQueries(query.query)) {
-        const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
-        if (remaining < 250) break;
-        try {
+      try {
+        for (let page = 0; page < pages; page++) {
+          const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
+          if (remaining < 250) break;
+          const cursorQs = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+          const url = `${baseUrl}/v0.1/servers?${search}version=latest&limit=${limit}${cursorQs}`;
           const { body } = await fetchCatalogJson({
-            url: `${baseUrl}/v0.1/servers?search=${encodeURIComponent(extra)}&version=latest&limit=16`,
+            url,
             provider: "official",
-            timeoutMs: Math.min(remaining, 4000),
+            timeoutMs: remaining,
             fetchImpl,
-            retry: false,
+            retry: page === 0,
           });
-          for (const row of Array.isArray(body.servers) ? body.servers : []) {
+          const rows = Array.isArray(body.servers) ? body.servers : [];
+          for (const row of rows) {
             const server = normalizeOfficial(row);
             if (seen.has(server.canonicalId)) continue;
             seen.add(server.canonicalId);
             results.push({ server, score: 0 });
           }
-        } catch {
-          /* supplement is best-effort; primary page already counts */
+          lastCursor = body.metadata?.nextCursor;
+          if (!lastCursor) break;
+          cursor = String(lastCursor);
         }
+        for (const extra of supplementOfficialQueries(query.query)) {
+          const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
+          if (remaining < 250) break;
+          try {
+            const { body } = await fetchCatalogJson({
+              url: `${baseUrl}/v0.1/servers?search=${encodeURIComponent(extra)}&version=latest&limit=16`,
+              provider: "official",
+              timeoutMs: Math.min(remaining, 4000),
+              fetchImpl,
+              retry: false,
+            });
+            for (const row of Array.isArray(body.servers) ? body.servers : []) {
+              const server = normalizeOfficial(row);
+              if (seen.has(server.canonicalId)) continue;
+              seen.add(server.canonicalId);
+              results.push({ server, score: 0 });
+            }
+          } catch {
+            /* supplement is best-effort; primary page and seeds already count */
+          }
+        }
+        return { results, cursor: lastCursor };
+      } catch (err: any) {
+        if (!seeded.length) throw err;
+        return {
+          results: seeded,
+          health: {
+            id: "official",
+            name: "Official MCP Registry",
+            status: healthFromErrorClass(err?.errorClass ?? "network"),
+            detail: String(err?.message ?? err).slice(0, 160),
+            errorClass: err?.errorClass,
+            resultCount: seeded.length,
+          },
+        };
       }
-      return { results, cursor: lastCursor };
     },
     async getServer(id: string) {
+      const seeded = officialReferenceById(id);
+      if (seeded) return seeded;
       try {
         const encoded = encodeURIComponent(id);
         const { body } = await fetchCatalogJson({
@@ -242,7 +261,10 @@ export function supplementOfficialQueries(query: string): string[] {
   if (!q) return ["github-mcp-server", "filesystem", "postgres", "slack"];
   if (q === "github" || q === "github mcp") return ["github-mcp-server"];
   if (q === "postgres" || q === "postgresql") return ["postgresql-mcp-server"];
-  if (q === "js" || q === "javascript") return ["javascript", "nodejs"];
+  if (q === "js" || q === "javascript" || q === "typescript" || q === "node" || q === "nodejs") {
+    return ["javascript", "typescript", "nodejs"];
+  }
+  if (q === "python" || q === "py") return ["python", "mcp-server-git", "mcp-server-fetch"];
   return [];
 }
 

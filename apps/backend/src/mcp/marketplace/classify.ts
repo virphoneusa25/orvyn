@@ -100,8 +100,15 @@ export function searchTokens(query: string): string[] {
 
 const STOP = new Set(["the", "and", "for", "with", "from", "that", "this", "into", "your", "our", "a", "an", "to", "of", "on", "in", "is", "it"]);
 
+const SEARCH_META = new Set(["official", "mcp", "server", "servers", "tool", "tools", "registry", "catalog", "marketplace"]);
+
+export function catalogSearchQuery(query: string): string {
+  const tokens = searchTokens(query).filter((t) => !SEARCH_META.has(t));
+  return tokens.join(" ") || query.trim();
+}
+
 export function primarySearchTerm(query: string): string {
-  const tokens = searchTokens(query);
+  const tokens = searchTokens(catalogSearchQuery(query));
   const brands = tokens.find((t) =>
     /github|gitlab|postgres|postgresql|slack|stripe|aws|cloudflare|docker|kubernetes|jira|notion|twilio|redis|mongo|linear|sentry/.test(t)
   );

@@ -99,6 +99,9 @@ export function rankOfficialServer(query: string, server: MarketServer): number 
   if (server.name.toLowerCase() === "io.github.github/github-mcp-server") score += 80;
   if (/github\.com\/github\/github-mcp-server/i.test(server.repository ?? "")) score += 50;
   if ((server.publisher ?? "").toLowerCase() === "io.github.github") score += 25;
+  if (/io\.modelcontextprotocol\//i.test(server.name) && (!q || /javascript|typescript|\bjs\b|python|node|filesystem|fetch|git|memory|time|official/.test(q))) {
+    score += 90;
+  }
   if (q && server.name.toLowerCase().includes(q)) score += 10;
   if (q && (server.title ?? "").toLowerCase() === q) score += 20;
   if (q && /postgres/.test(q) && /postgres/.test(`${server.name} ${server.title ?? ""}`)) {
@@ -136,7 +139,69 @@ export function supplementQueries(query: string): string[] {
   if (q === "postgres" || q === "postgresql") return ["postgresql-mcp-server", "postgres"];
   if (q === "file" || q === "files" || q === "fs") return ["filesystem"];
   if (q === "browser" || q === "chrome") return ["playwright", "browser"];
+  if (q === "js" || q === "javascript" || q === "typescript" || q === "node" || q === "nodejs") {
+    return ["javascript", "typescript", "nodejs"];
+  }
+  if (q === "python" || q === "py") return ["python", "mcp-server-git", "mcp-server-fetch"];
   return [];
+}
+
+const JS_TERMS = new Set(["js", "javascript", "typescript", "ts", "node", "nodejs"]);
+const PY_TERMS = new Set(["python", "py", "pypi", "uvx"]);
+const SEARCH_META = new Set(["official", "mcp", "server", "servers", "tool", "tools", "registry", "catalog", "marketplace"]);
+
+export const OFFICIAL_REFERENCE_SEEDS: Array<{
+  name: string;
+  title: string;
+  description: string;
+  language: "typescript" | "python";
+  identifier: string;
+  version: string;
+  registry: "npm" | "pypi";
+}> = [
+  { name: "io.modelcontextprotocol/filesystem", title: "Filesystem", description: "Official TypeScript MCP reference server for secure file operations.", language: "typescript", identifier: "@modelcontextprotocol/server-filesystem", version: "2026.8.31", registry: "npm" },
+  { name: "io.modelcontextprotocol/memory", title: "Memory", description: "Official TypeScript MCP reference server that stores a knowledge graph.", language: "typescript", identifier: "@modelcontextprotocol/server-memory", version: "2026.8.31", registry: "npm" },
+  { name: "io.modelcontextprotocol/everything", title: "Everything", description: "Official TypeScript MCP reference server that exercises prompts, resources, and tools.", language: "typescript", identifier: "@modelcontextprotocol/server-everything", version: "2026.8.31", registry: "npm" },
+  { name: "io.modelcontextprotocol/sequential-thinking", title: "Sequential Thinking", description: "Official TypeScript MCP reference server for step-by-step problem solving.", language: "typescript", identifier: "@modelcontextprotocol/server-sequential-thinking", version: "2026.8.31", registry: "npm" },
+  { name: "io.modelcontextprotocol/git", title: "Git", description: "Official Python MCP reference server for Git repositories.", language: "python", identifier: "mcp-server-git", version: "2026.8.18", registry: "pypi" },
+  { name: "io.modelcontextprotocol/fetch", title: "Fetch", description: "Official Python MCP reference server for fetching web content.", language: "python", identifier: "mcp-server-fetch", version: "2026.8.18", registry: "pypi" },
+  { name: "io.modelcontextprotocol/time", title: "Time", description: "Official Python MCP reference server for time and timezones.", language: "python", identifier: "mcp-server-time", version: "2026.8.18", registry: "pypi" },
+];
+
+export function officialReferenceMarketServers(query: string): MarketServer[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 1 && !SEARCH_META.has(t));
+  const specs = !tokens.length
+    ? OFFICIAL_REFERENCE_SEEDS
+    : OFFICIAL_REFERENCE_SEEDS.filter((spec) => {
+        if (tokens.some((t) => JS_TERMS.has(t)) && spec.language === "typescript") return true;
+        if (tokens.some((t) => PY_TERMS.has(t)) && spec.language === "python") return true;
+        return tokens.some((t) => `${spec.name} ${spec.title} ${spec.identifier}`.toLowerCase().includes(t));
+      });
+  return specs.map((spec) => {
+    const npm = spec.registry === "npm";
+    return {
+      canonicalId: spec.name,
+      name: spec.name,
+      title: spec.title,
+      description: spec.description,
+      publisher: "io.modelcontextprotocol",
+      sources: ["official"],
+      repository: "https://github.com/modelcontextprotocol/servers",
+      homepage: "https://modelcontextprotocol.io/examples",
+      categories: spec.language === "python" ? ["Version Control", "Developer Tools"] : ["Developer Tools"],
+      packages: [{ registry: spec.registry, identifier: spec.identifier, version: spec.version }],
+      transports: [{ kind: "stdio", command: npm ? "npx" : "uvx", args: npm ? ["-y", `${spec.identifier}@${spec.version}`] : [spec.identifier] }],
+      tools: [],
+      auth: [{ kind: "none", label: "No auth advertised" }],
+      trust: { level: "verified", reasons: ["Official MCP reference server"] },
+      compatibility: "compatible",
+      version: spec.version,
+      networkRequired: spec.name.endsWith("/fetch"),
+    } satisfies MarketServer;
+  });
 }
 
 export function normalizeOfficialRow(row: any): MarketServer {
@@ -261,7 +326,13 @@ export async function loadOfficialFallbackCatalog(
   query: string,
   fetchOfficial?: OfficialFetch
 ): Promise<MarketServer[]> {
-  const primary = await searchOfficialRegistry(query, 48, fetchOfficial, query.trim() ? 1 : 3);
+  const seeds = officialReferenceMarketServers(query);
+  let primary: MarketServer[] = [];
+  try {
+    primary = await searchOfficialRegistry(query, 48, fetchOfficial, query.trim() ? 1 : 3);
+  } catch {
+    if (!seeds.length) throw new Error("Official registry unavailable");
+  }
   const extras: MarketServer[] = [];
   for (const term of supplementQueries(query)) {
     if (term === query.trim()) continue;
@@ -271,7 +342,7 @@ export async function loadOfficialFallbackCatalog(
       /* keep whatever we already have */
     }
   }
-  return rankOfficialResults(query, dedupeServers([...extras, ...primary]));
+  return rankOfficialResults(query, dedupeServers([...seeds, ...extras, ...primary]));
 }
 
 export async function resolveMarketplaceCatalog(input: {

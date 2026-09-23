@@ -16,6 +16,7 @@ import {
   shouldUseOfficialFallback,
   supplementQueries,
   BROWSE_SEED_QUERIES,
+  officialReferenceMarketServers,
 } from "./mcpOfficialCatalog.ts";
 import { parseApiJson } from "./mcpMarketplaceIcons.ts";
 
@@ -238,6 +239,21 @@ test("official timeout keeps previous/cloud results instead of fake zeros", asyn
   assert.equal(out.catalog.length, 1);
   assert.match(out.notice ?? "", /slowly|available sources|cached|offline/i);
   assert.equal(out.error, undefined);
+});
+
+test("javascript and python searches include official reference servers even when Registry is empty", async () => {
+  const empty = async () => ({ ok: true, body: { servers: [] } });
+  const js = await loadOfficialFallbackCatalog("official javascript mcp tool", empty);
+  assert.ok(js.some((s) => s.name === "io.modelcontextprotocol/filesystem"));
+  assert.ok(js.some((s) => (s.packages ?? []).some((p) => p.identifier === "@modelcontextprotocol/server-filesystem")));
+  const py = await loadOfficialFallbackCatalog("python", empty);
+  assert.ok(py.some((s) => s.name === "io.modelcontextprotocol/git"));
+  const ranked = rankOfficialResults("javascript", [
+    ...officialReferenceMarketServers("javascript"),
+    normalizeOfficialRow(officialRow("com.a2awire/javascript-tracker", { title: "npm Release Tracker" })),
+  ]);
+  assert.equal(ranked[0].name.startsWith("io.modelcontextprotocol/"), true);
+  assert.deepEqual(supplementQueries("javascript").includes("typescript"), true);
 });
 
 test("preferKnownProducts + dedupe keep one GitHub card", () => {

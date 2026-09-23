@@ -17,6 +17,55 @@ export const VERIFIED_CATALOG: VerifiedEntry[] = [
     checks: ["publisher identity", "official registry listing", "known source repository"],
     notes: "GitHub-published official MCP server",
   },
+  {
+    canonicalId: "io.modelcontextprotocol/filesystem",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["@modelcontextprotocol/server-filesystem"],
+    checks: ["publisher identity", "npm package", "known source repository"],
+    notes: "Official TypeScript MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/memory",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["@modelcontextprotocol/server-memory"],
+    checks: ["publisher identity", "npm package", "known source repository"],
+    notes: "Official TypeScript MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/everything",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["@modelcontextprotocol/server-everything"],
+    checks: ["publisher identity", "npm package", "known source repository"],
+    notes: "Official TypeScript MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/sequential-thinking",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["@modelcontextprotocol/server-sequential-thinking"],
+    checks: ["publisher identity", "npm package", "known source repository"],
+    notes: "Official TypeScript MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/git",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["mcp-server-git"],
+    checks: ["publisher identity", "PyPI package", "known source repository"],
+    notes: "Official Python MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/fetch",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["mcp-server-fetch"],
+    checks: ["publisher identity", "PyPI package", "known source repository"],
+    notes: "Official Python MCP reference server",
+  },
+  {
+    canonicalId: "io.modelcontextprotocol/time",
+    repositories: ["https://github.com/modelcontextprotocol/servers"],
+    packages: ["mcp-server-time"],
+    checks: ["publisher identity", "PyPI package", "known source repository"],
+    notes: "Official Python MCP reference server",
+  },
 ];
 
 function normRepo(url?: string): string {

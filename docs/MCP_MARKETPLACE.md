@@ -27,7 +27,7 @@ activated `mcp.<server>.<tool>` schemas (default: 8 servers / 40 tools).
 
 | id | Source | Required? | Timeout |
 |---|---|---|---|
-| `official` | Official MCP Registry (`registry.modelcontextprotocol.io`) | No — cached/local results remain if it is down | 12s |
+| `official` | Official MCP Registry (`registry.modelcontextprotocol.io`) plus first-party `io.modelcontextprotocol/*` reference servers (npm/PyPI) when Registry search omits them | No — cached/local/reference results remain if it is down | 12s |
 | `glama` | Glama directory (`GLAMA_API_KEY` or `mcp.secret.glama` via PUT `/mcp/marketplace/secrets`) | No — returns `needs-key` without a key | 10s |
 | `smithery` | Smithery directory (`SMITHERY_API_KEY` or `mcp.secret.smithery`) | No — returns `needs-key` without a key | 10s |
 | `local` | Servers already in McpManager | Always | in-process |
@@ -39,6 +39,12 @@ each with its own AbortController/timeout. One provider timeout or 5xx does
 repository → package → canonicalId → publisher/name, and ranked (exact
 identity, tools, categories, installed, trust, semantic). Official metadata
 wins for identity/packages/remotes; Glama/Smithery enrich tools.
+
+Language searches such as `javascript` / `python` (and phrases like
+`official javascript mcp tool`) strip catalog-meta tokens, then inject the
+first-party `io.modelcontextprotocol/*` reference servers. Official Registry
+full-text search does not list those packages, so the desktop was surfacing
+community name matches instead.
 
 Cache: 5 minutes fresh, 45 minutes stale-while-revalidate, persisted in
 ORVYN app data (`mcp.marketplace.catalogCache.v1`). Secrets are never stored.

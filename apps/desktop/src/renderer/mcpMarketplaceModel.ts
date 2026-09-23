@@ -257,6 +257,20 @@ export function recommendServers(
       "Recommended because ORION asked for GitHub / pull-request capabilities."
     );
   }
+  if (/javascript|typescript|\bjs\b|\bnode\b/.test(q)) {
+    push(
+      servers.find((s) => /io\.modelcontextprotocol\/(filesystem|memory|everything|sequential-thinking)/i.test(s.name)) ??
+        servers.find((s) => /@modelcontextprotocol\/server-/.test((s.packages ?? []).map((p) => p.identifier).join(" "))),
+      "Official TypeScript MCP reference server from modelcontextprotocol."
+    );
+  }
+  if (/\bpython\b|\bpy\b/.test(q)) {
+    push(
+      servers.find((s) => /io\.modelcontextprotocol\/(git|fetch|time)/i.test(s.name)) ??
+        servers.find((s) => /mcp-server-(git|fetch|time)/.test((s.packages ?? []).map((p) => p.identifier).join(" "))),
+      "Official Python MCP reference server from modelcontextprotocol."
+    );
+  }
   if (/postgres|postgresql|\bsql\b|database/.test(q)) {
     push(
       servers.find((s) => /postgres/i.test(s.name)),

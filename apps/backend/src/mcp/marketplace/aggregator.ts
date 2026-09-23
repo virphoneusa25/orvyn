@@ -1,6 +1,7 @@
 import { HashingEmbedder } from "../../indexing/embeddings";
 import { CatalogCache, catalogCacheKey } from "./catalogCache";
-import { primarySearchTerm, searchTokens } from "./classify";
+import { catalogSearchQuery, primarySearchTerm, searchTokens } from "./classify";
+import { isOfficialReferenceServer } from "./officialReference";
 import {
   CatalogProviderError,
   classifyThrown,
@@ -95,6 +96,9 @@ export function rankServer(query: string, server: MarketplaceMcpServer, extraToo
   }
   if (isCanonicalGithub(server) && (!q || /github/.test(q))) score += 90;
   if (isCanonicalPostgres(server) && /postgres|postgresql/.test(q)) score += 70;
+  if (isOfficialReferenceServer(server) && (!q || /javascript|typescript|\bjs\b|python|\bpy\b|node|filesystem|fetch|git|memory|time|official/.test(q))) {
+    score += 90;
+  }
   if (server.sources.includes("official")) score += 8;
   if (server.sources.includes("local") && server.installed) score += 20;
   if (server.trust.level === "verified") score += 10;
@@ -190,9 +194,12 @@ export class RegistryAggregator {
   }
 
   private async federate(query: RegistrySearch): Promise<AggregatorCachePayload> {
-    const term = primarySearchTerm(query.query);
+    const cleaned = catalogSearchQuery(query.query);
+    const term = primarySearchTerm(cleaned);
     const settled = await Promise.allSettled(
-      this.providers.map((p) => this.searchProvider(p, p.id === "official" ? { ...query, query: term } : query))
+      this.providers.map((p) =>
+        this.searchProvider(p, p.id === "official" ? { ...query, query: term } : { ...query, query: cleaned || query.query })
+      )
     );
     const health: RegistryHealth[] = [];
     const providers: Record<string, RegistryHealth> = {};

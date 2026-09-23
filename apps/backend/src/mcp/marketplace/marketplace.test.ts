@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { canonicalKey, isCanonicalGithub, mergeServers, rankServer, RegistryAggregator } from "./aggregator";
 import { CatalogCache, catalogCacheKey, CATALOG_FRESH_TTL_MS } from "./catalogCache";
-import { classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
+import { catalogSearchQuery, classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
+import { officialReferenceResults } from "./officialReference";
 import { installPlan } from "./install";
 import { normalizeOfficial } from "./officialProvider";
 import { officialProvider } from "./officialProvider";
@@ -93,6 +94,9 @@ test("ranking: tool description beats unused official listing", () => {
 test("primary search term extracts brand tokens", () => {
   assert.equal(primarySearchTerm("create GitHub pull request"), "github");
   assert.equal(primarySearchTerm("postgres database"), "postgres");
+  assert.equal(catalogSearchQuery("official javascript mcp tool"), "javascript");
+  assert.equal(primarySearchTerm("official javascript mcp tool"), "javascript");
+  assert.equal(primarySearchTerm("official python"), "python");
 });
 
 test("risk classification is ORVYN policy, not server annotations alone", () => {
@@ -224,6 +228,38 @@ test("provider secrets persist under mcp.secret.* and are never returned", () =>
   assert.throws(() => validateProviderSecret("glama", "mcp_not_a_glama_key"), /glm_/);
   assert.throws(() => validateProviderSecret("smithery", "glm_wrong_provider"), /Smithery/);
   assert.equal(validateProviderSecret("glama", ""), "");
+});
+
+test("official javascript/python searches surface first-party reference servers", async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      servers: [sampleOfficial("com.a2awire/data-npm-release-node-package-javascript-dependency", "npm Release Tracker")],
+      metadata: {},
+    }),
+  });
+  const p = officialProvider(fetchImpl as any);
+  const js = await p.search({ query: "javascript", limit: 12 });
+  assert.ok(js.results.some((r) => r.server.name === "io.modelcontextprotocol/filesystem"));
+  assert.ok(js.results.some((r) => r.server.packages.some((pkg) => pkg.identifier === "@modelcontextprotocol/server-filesystem")));
+  const py = await p.search({ query: "python", limit: 12 });
+  assert.ok(py.results.some((r) => r.server.name === "io.modelcontextprotocol/git"));
+  assert.ok(py.results.some((r) => r.server.packages.some((pkg) => pkg.identifier === "mcp-server-git")));
+  const rankedJs = rankServer("javascript", js.results.find((r) => r.server.name === "io.modelcontextprotocol/filesystem")!.server);
+  const rankedJunk = rankServer("javascript", js.results.find((r) => r.server.name.includes("a2awire"))!.server);
+  assert.ok(rankedJs > rankedJunk);
+});
+
+test("official timeout still returns reference servers instead of blanking javascript", async () => {
+  const fetchImpl = async () => {
+    throw new CatalogProviderError("official", "timeout", "Official MCP Registry timed out", 0);
+  };
+  const p = officialProvider(fetchImpl as any);
+  const out = await p.search({ query: "javascript" });
+  assert.ok(out.results.some((r) => r.server.name === "io.modelcontextprotocol/memory"));
+  assert.equal(out.health?.status, "slow");
+  assert.deepEqual(officialReferenceResults("official javascript mcp tool").map((r) => r.server.name).includes("io.modelcontextprotocol/filesystem"), true);
 });
 
 test("glama without API key stays needs-key and returns empty search", async () => {

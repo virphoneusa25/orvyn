@@ -192,6 +192,26 @@ test("ORION capability query deep-links GitHub recommendations first", () => {
   assert.match(rec[0].reason, /pull-request|GitHub/);
 });
 
+test("javascript and python queries recommend official reference servers", () => {
+  const filesystem = sample({
+    name: "io.modelcontextprotocol/filesystem",
+    title: "Filesystem",
+    sources: ["official"],
+    packages: [{ registry: "npm", identifier: "@modelcontextprotocol/server-filesystem" }],
+  });
+  const git = sample({
+    name: "io.modelcontextprotocol/git",
+    title: "Git",
+    sources: ["official"],
+    packages: [{ registry: "pypi", identifier: "mcp-server-git" }],
+  });
+  const junk = sample({ name: "com.a2awire/javascript-tracker", title: "npm Release Tracker", sources: ["official"] });
+  const js = recommendServers([junk, filesystem, git], { query: "official javascript mcp tool" });
+  assert.equal(js[0].server.name, "io.modelcontextprotocol/filesystem");
+  const py = recommendServers([junk, filesystem, git], { query: "python" });
+  assert.equal(py[0].server.name, "io.modelcontextprotocol/git");
+});
+
 test("empty browse still recommends official GitHub so Cloud Mode is not a blank form", () => {
   const servers = [
     sample({ name: "ai.example/random", title: "Random" }),
