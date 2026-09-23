@@ -35,11 +35,14 @@ import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
  *  remote execution with NO local fallback — if the worker cannot serve the
  *  run, the run fails truthfully. */
 export interface ExecutionSpec {
-  location: "LOCAL" | "OVH_WORKER";
+  location: "LOCAL" | "LOCAL_HOST" | "LOCAL_SANDBOX" | "OVH_WORKER";
   /** Worker-side path of the project to stage into the mission container. */
   remoteProjectRoot?: string;
   /** Tenant that owns the run. Worker events must land here, never the default tenant. */
   tenantId?: string;
+  targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
+  targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
+  fallbackReason?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -349,13 +352,35 @@ export class StreamingAgentRuntime {
     // serves tool RPCs; the model loop stays HERE (credentials never leave
     // the control plane). No local fallback — if the worker never reports
     // readiness, the run fails truthfully in awaitRemoteReady below.
-    if (execution?.location === "OVH_WORKER") {
+    if (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX") {
+      const actual = execution.targetActual
+        ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
+      const label = actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";
       this.store.emit(runId, "run.execution", {
-        location: "OVH_WORKER",
+        location: execution.location === "OVH_WORKER" ? "OVH_WORKER" : actual === "local_sandbox" ? "LOCAL_SANDBOX" : "LOCAL",
+        executionTargetRequested: execution.targetRequested ?? "auto",
+        executionTargetActual: actual,
+        executionLabel: label,
+        fallbackReason: execution.fallbackReason,
         remoteProjectRoot: execution.remoteProjectRoot ?? "",
-        note: "Tools execute on a remote worker inside an isolated mission container. No local fallback.",
+        note: actual === "ovh_worker"
+          ? "Tools execute on a remote worker inside an isolated mission container. No local fallback."
+          : actual === "local_sandbox"
+            ? "Tools execute in a local Docker sandbox. Project stays on this machine."
+            : "Tools execute on this machine. Project files are not uploaded to OVH.",
       });
-      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", execution.tenantId);
+      if (execution.location === "OVH_WORKER") {
+        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", execution.tenantId);
+      }
+    } else if (execution?.targetActual === "local_host") {
+      this.store.emit(runId, "run.execution", {
+        location: "LOCAL",
+        executionTargetRequested: execution.targetRequested ?? "auto",
+        executionTargetActual: "local_host",
+        executionLabel: "Local",
+        fallbackReason: execution.fallbackReason,
+        note: "Tools execute on this machine. Model inference may still be remote.",
+      });
     }
 
     // Snapshot the dirty tree before the agent touches anything, so a
@@ -428,7 +453,7 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
-        if (state?.execution?.location === "OVH_WORKER") {
+        if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
           await this.awaitRemoteReady(runId);
           this.mountRemoteTools(runId);
         }
@@ -468,21 +493,26 @@ export class StreamingAgentRuntime {
    */
   private async awaitRemoteReady(runId: string): Promise<void> {
     const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
-    this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: "Waiting for the OVH worker to prepare the mission container" });
+    const state = this.runs.get(runId);
+    const local = state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
+    this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: local ? "Waiting for the Local Worker" : "Waiting for the OVH worker to prepare the mission container" });
     while (Date.now() < deadline) {
       const run = this.store.get(runId);
       const types = new Set(run?.events.map((e) => e.type));
-      if (types.has("sandbox.ready")) return;
+      if (types.has("sandbox.ready") || types.has("local.ready" as any)) return;
       if (types.has("sandbox.stopped")) {
         const reason = run?.events.filter((e) => e.type === "sandbox.stopped").pop()?.data?.reason;
-        throw new Error(`The OVH worker failed to prepare the mission container: ${reason ?? "unknown reason"}. The run failed — there is no local fallback for remote runs.`);
+        throw new Error(local
+          ? `The Local Worker failed to start: ${reason ?? "unknown reason"}. The run failed — the project was not sent to OVH.`
+          : `The OVH worker failed to prepare the mission container: ${reason ?? "unknown reason"}. The run failed — there is no local fallback for remote runs.`);
       }
       const state = this.runs.get(runId);
       if (state?.cancelled) throw new Error("run cancelled before the worker was ready");
       await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(
-      `The OVH worker did not prepare the mission container within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. There is no local fallback for remote runs.`
+    throw new Error(local
+      ? `The Local Worker did not become ready within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. The project was not sent to OVH.`
+      : `The OVH worker did not prepare the mission container within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. There is no local fallback for remote runs.`
     );
   }
 
@@ -497,6 +527,9 @@ export class StreamingAgentRuntime {
     const remoteNames = new Set([
       "read_file", "write_file", "edit_file", "list_directory", "search_code", "search_files",
       "terminal", "run_command", "run_tests", "run_typecheck",
+      "git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit",
+      "start_process", "stop_process", "read_process_logs", "list_processes",
+      "delete_file",
     ]);
     state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
     state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));
@@ -510,13 +543,15 @@ export class StreamingAgentRuntime {
     // forced-remote runs — otherwise the model could unknowingly mutate the
     // CONTROL PLANE while believing it works on the mission container.
     // Pure info-plane tools (web search, fetch, MCP listing) stay available.
-    const localOnlyStateful = new Set([
-      "start_process", "stop_process", "read_process_logs", "list_processes",
-      "git_status", "git_diff", "git_commit", "git_log", "git_branch", "git_checkout",
-      "delete_file", "move_file", "create_document", "ssh_exec", "generate_image",
-    ]);
-    for (const t of this.tools.list()) {
-      if (localOnlyStateful.has(t.name)) this.tools.setPermission(t.name, "denied");
+    if (state.execution.location === "OVH_WORKER") {
+      const localOnlyStateful = new Set([
+        "start_process", "stop_process", "read_process_logs", "list_processes",
+        "git_status", "git_diff", "git_commit", "git_log", "git_branch", "git_checkout",
+        "delete_file", "move_file", "create_document", "ssh_exec", "generate_image",
+      ]);
+      for (const t of this.tools.list()) {
+        if (localOnlyStateful.has(t.name)) this.tools.setPermission(t.name, "denied");
+      }
     }
   }
 

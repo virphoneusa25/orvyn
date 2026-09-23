@@ -24,27 +24,23 @@ test("routing: explicit LOCAL always returns LOCAL", async () => {
   assert.equal(d.location, "LOCAL");
 });
 
-test("routing: DOCKER_LOCAL falls back to LOCAL truthfully when Docker is down", async () => {
+test("routing: explicit DOCKER_LOCAL does not silently become LOCAL when Docker is down", async () => {
   const router = new ExecutionRouter();
-  const d = await router.select({ preference: "DOCKER_LOCAL" });
-  // On this test machine Docker may or may not be running — both outcomes
-  // are valid; what must hold: the reason records the truth.
-  if (d.location === "LOCAL") {
-    assert.ok(d.reason.includes("Docker unavailable") || d.reason.includes("unavailable"), `reason mentions unavailability: ${d.reason}`);
-    assert.ok(d.provider instanceof LocalExecutionProvider);
-  } else {
+  const dockerHealth = await router.docker.health();
+  if (dockerHealth.healthy) {
+    const d = await router.select({ preference: "DOCKER_LOCAL" });
     assert.equal(d.location, "DOCKER_LOCAL");
+  } else {
+    await assert.rejects(() => router.select({ preference: "DOCKER_LOCAL" }), /no silent Local fallback/i);
   }
 });
 
-test("routing: OVH_WORKER always falls back (not deployed)", async () => {
+test("routing: explicit OVH_WORKER does not silently become LOCAL", async () => {
   const router = new ExecutionRouter();
-  const d = await router.select({ preference: "OVH_WORKER" });
-  assert.equal(d.location, "LOCAL", "OVH not deployed → falls back to LOCAL");
-  assert.ok(d.reason.includes("OVH") && d.reason.includes("unavailable"), `truthful reason: ${d.reason}`);
+  await assert.rejects(() => router.select({ preference: "OVH_WORKER" }), /no silent Local fallback/i);
 });
 
-test("routing: remote-flagged task falls back honestly when OVH unavailable", async () => {
+test("routing: Auto + remote-flagged task is honest when OVH is down", async () => {
   const router = new ExecutionRouter();
   const d = await router.select({ isRemote: true });
   assert.notEqual(d.location, "OVH_WORKER", "must not claim OVH");

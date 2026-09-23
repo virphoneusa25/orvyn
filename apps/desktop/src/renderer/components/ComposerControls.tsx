@@ -19,13 +19,15 @@ import {
   toRunPayloadSettings,
   COMPOSER_MODES,
   compactModelLabel,
+  EXECUTION_TARGETS,
   type ComposerDefaults,
   type ReasoningEffort,
   type AccessMode,
+  type ExecutionTargetSetting,
 } from "../composerSettings";
 
-export { readComposerDefaults, writeComposerDefault, toRunPayloadSettings, COMPOSER_MODES, compactModelLabel };
-export type { ComposerDefaults, ReasoningEffort, AccessMode };
+export { readComposerDefaults, writeComposerDefault, toRunPayloadSettings, COMPOSER_MODES, compactModelLabel, EXECUTION_TARGETS };
+export type { ComposerDefaults, ReasoningEffort, AccessMode, ExecutionTargetSetting };
 
 
 
@@ -543,6 +545,50 @@ export function AccessMenu({ value, onChange }: { value: AccessMode; onChange: (
           <div style={{ padding: "6px 10px 8px", fontSize: 10, color: "var(--orvyn-text-muted)", borderTop: "1px solid var(--orvyn-border-soft)", marginTop: 4 }}>
             Applies to the next run; destructive actions still require approval.
           </div>
+        </div>
+      )}
+    </Dropdown>
+  );
+}
+
+/** Compact execution target — lives with mode/access, not as a sixth mode pill. */
+export function ExecutionTargetMenu({
+  value,
+  onChange,
+}: {
+  value: ExecutionTargetSetting;
+  onChange: (v: ExecutionTargetSetting) => void;
+}) {
+  const current = EXECUTION_TARGETS.find((m) => m.id === value) ?? EXECUTION_TARGETS[0];
+  return (
+    <Dropdown
+      title="Where tools run — separate from Auto/Code/Server mode. Model inference may still be remote."
+      width={280}
+      label={
+        <>
+          <span>⌘</span>
+          <span>{current.label}</span>
+        </>
+      }
+    >
+      {(close) => (
+        <div>
+          {EXECUTION_TARGETS.map((m) => (
+            <button
+              key={m.id}
+              style={menuItem(value === m.id)}
+              onClick={() => {
+                onChange(m.id);
+                close();
+              }}
+            >
+              <Check on={value === m.id} />
+              <span>
+                <span style={{ fontWeight: 600 }}>{m.label}</span>
+                <span style={{ display: "block", fontSize: 10, color: "var(--orvyn-text-muted)" }}>{m.title}</span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
     </Dropdown>

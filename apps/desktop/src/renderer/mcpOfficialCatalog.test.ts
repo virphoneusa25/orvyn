@@ -15,6 +15,7 @@ import {
   shouldUseHostInstall,
   shouldUseOfficialFallback,
   supplementQueries,
+  BROWSE_SEED_QUERIES,
 } from "./mcpOfficialCatalog.ts";
 import { parseApiJson } from "./mcpMarketplaceIcons.ts";
 
@@ -92,6 +93,15 @@ test("normalize Official Registry GitHub row for the two-pane marketplace", () =
   assert.ok(s.categories.includes("Version Control"));
   assert.equal(isProductGithub(s), true);
   assert.equal(isProductGithub({ name: "ai.smithery/obsidian-github-mcp", title: "Obsidian GitHub" }), false);
+});
+
+test("empty browse seeds more than GitHub so the catalog is not a handful of wrappers", () => {
+  const seeds = supplementQueries("");
+  assert.ok(seeds.includes(CANONICAL_GITHUB_QUERY));
+  assert.ok(seeds.includes("filesystem"));
+  assert.ok(seeds.includes("postgres"));
+  assert.ok(seeds.includes("slack"));
+  assert.ok(BROWSE_SEED_QUERIES.length >= 8);
 });
 
 test("github search ranks the canonical Official Registry server first when present", async () => {

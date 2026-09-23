@@ -6,7 +6,7 @@ export const OFFICIAL_REGISTRY_ORIGIN = "https://registry.modelcontextprotocol.i
 export function officialRegistryRequestUrl(query = "", limit = 24, cursor?: string): string {
   const url = new URL("/v0.1/servers", OFFICIAL_REGISTRY_ORIGIN);
   url.searchParams.set("version", "latest");
-  url.searchParams.set("limit", String(Math.min(Math.max(Number(limit) || 24, 1), 50)));
+  url.searchParams.set("limit", String(Math.min(Math.max(Number(limit) || 48, 1), 100)));
   if (query.trim()) url.searchParams.set("search", query.trim().slice(0, 200));
   if (cursor?.trim()) url.searchParams.set("cursor", cursor.trim().slice(0, 400));
   return url.toString();

@@ -2,7 +2,9 @@ import { documentRouter } from "./documents";
 import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
+import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
 import { resolveWorkspace } from "../documents/workspace";
+import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { requireTenant } from "../middleware/tenant";
@@ -17,6 +19,11 @@ export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
 v1Router.use("/desktop", desktopRouter());
 v1Router.use("/mcp", mcpRouter(requireTenant));
+v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string) => {
+  const tenant = tenantManager.get(tenantId) ?? (tenantId === "default" ? tenantManager.ensureLocalDefault() : undefined);
+  if (!tenant) throw new Error(`Unknown tenant ${tenantId}`);
+  return tenant.runStore;
+}));
 v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
   if (!tenantId) {
     if (process.env.ORVYN_CLOUD_MODE === "true") throw new Error("tenant required");
@@ -33,7 +40,10 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
 // truthfully at project transfer, and a missing project fails the run there.
 v1Router.use(async (req, res, next) => {
   try {
-    const forcedRemote = req.body?.executionLocation === "OVH_WORKER";
+    const forcedRemote = req.body?.executionLocation === "OVH_WORKER"
+      || req.body?.executionTarget === "ovh_worker"
+      || req.body?.executionTarget === "local_host"
+      || req.body?.executionTarget === "local_sandbox";
     if (!forcedRemote && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
     if (req.method === "POST" && ["/agent/stream/runs", "/agent/orchestrate"].includes(req.path)) {
@@ -418,33 +428,72 @@ import { loadSshHosts } from "../ai/tools/sshTools";
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
 
-  // Remote execution is EXPLICIT and has NO local fallback: if no worker is
-  // online, the run is refused rather than silently executed locally.
-  const requestedLocation = req.body.executionLocation === "OVH_WORKER" ? "OVH_WORKER" : "LOCAL";
-  let remoteProjectRoot: string | undefined;
-  if (requestedLocation === "OVH_WORKER") {
-    remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+  const requestedTarget = isExecutionTarget(req.body.executionTarget)
+    ? req.body.executionTarget
+    : req.body.executionLocation === "OVH_WORKER"
+      ? "ovh_worker"
+      : "auto";
+  const hasLocalProject = Boolean(String(req.body.projectRoot ?? req.body.remoteProjectRoot ?? "").trim());
+  const routed = routeExecutionTarget({
+    requested: requestedTarget,
+    mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
+    hasLocalProject,
+    isRisky: req.body.isRisky === true,
+    isBackground: req.body.isBackground === true,
+    requiresRemote: req.body.executionLocation === "OVH_WORKER" || String(req.body.composerMode ?? "") === "server",
+  });
+
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
+  const localWorkerOnline = hasOnlineLocalWorker(t.id);
+  const inProcessLocal = !cloudHost;
+
+  if (routed.actual === "ovh_worker") {
+    const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
     if (!remoteProjectRoot) {
-      return res.status(400).json({ error: "executionLocation=OVH_WORKER requires remoteProjectRoot (the worker-side project path)." });
+      return res.status(400).json({ error: "Cloud execution requires remoteProjectRoot (the worker-side project path)." });
     }
     if (!hasOnlineWorker()) {
-      return res.status(409).json({ error: "No OVH worker is online — remote run refused. There is no local fallback for forced remote execution." });
+      return res.status(409).json({
+        error: "No OVH worker is online — Cloud run refused. There is no silent Local fallback.",
+        executionTargetRequested: routed.requested,
+        executionTargetActual: routed.actual,
+      });
+    }
+  } else if (routed.actual === "local_host" || routed.actual === "local_sandbox") {
+    if (cloudHost && !localWorkerOnline && !inProcessLocal) {
+      return res.status(409).json({
+        error: routed.actual === "local_sandbox"
+          ? "Local Sandbox requires the desktop Local Worker (and Docker). It is offline — the project was not sent to OVH."
+          : "Local execution requires the desktop Local Worker. It is offline — the project was not sent to OVH.",
+        executionTargetRequested: routed.requested,
+        executionTargetActual: routed.actual,
+      });
     }
   }
 
-  _regTools(t, req.body.projectRoot);
+  const location = runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
+  const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+
+  _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
   t.usage.agentRuns++;
   const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
   const history: {role: "user" | "assistant";content:string}[] = previous ? [{role:"user",content:String(previous.events.find(e=>e.type === "run.started")?.data.instruction ?? "").slice(0,4000)}, {role:"assistant",content:previous.events.filter(e=>e.type === "message.delta").map(e=>String(e.data.content ?? "")).join("").slice(-16000)}] : [];
   const runId = t.agentRuntime.start(
-    req.body.projectRoot,
+    req.body.projectRoot || remoteProjectRoot || t.currentProjectRoot || "",
     req.body.instruction,
     req.body.rules,
     req.body.mode ?? "agent",
     req.body.attachments,
     history,
     typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
-    requestedLocation === "OVH_WORKER" ? { location: "OVH_WORKER", remoteProjectRoot, tenantId: t.id } : undefined,
+    {
+      location,
+      remoteProjectRoot,
+      tenantId: t.id,
+      targetRequested: routed.requested,
+      targetActual: routed.actual,
+      fallbackReason: location === "LOCAL" && routed.actual === "local_host" ? "in-process local backend (same host)" : undefined,
+    },
     {
       reasoningEffort: ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
         ? req.body.reasoningEffort
@@ -452,7 +501,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
     }
   );
-  res.status(201).json({ runId, executionLocation: requestedLocation });
+  if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {
+    queueLocalHostJob(runId, remoteProjectRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
+  }
+  res.status(201).json({
+    runId,
+    executionLocation: location,
+    executionTargetRequested: routed.requested,
+    executionTargetActual: routed.actual,
+    executionLabel: routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker",
+  });
 });
 
 // List runs (newest first) so panels like Agent Activity and Review can find
@@ -903,8 +961,10 @@ v1Router.get("/runtime/capabilities", async (req, res) => {
   }
   let dockerAvailable = false;
   try { dockerAvailable = await (await import("../sandbox/DockerSandbox")).DockerSandbox.available(); } catch {}
+  const local = localWorkerHealth(t.id);
   res.json({
-    engineReady: true,
+    engineReady: process.env.ORVYN_CLOUD_MODE === "true" ? local.state !== "offline" : true,
+    localEngineState: local.state,
     dockerAvailable,
     sshHostCount,
     // These integrations do not yet expose authoritative connection probes.

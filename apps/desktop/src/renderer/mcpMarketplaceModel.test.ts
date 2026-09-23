@@ -21,6 +21,7 @@ import {
   selectByOffset,
   serverLabel,
   tabAvailable,
+  toolsAdvertisedLabel,
   uninstallCopy,
   type MarketServer,
 } from "./mcpMarketplaceModel.ts";
@@ -98,6 +99,10 @@ test("Installed / Discover / Recommended / Updates grouping", () => {
 test("server row facts: label, location, initials — no invented ratings", () => {
   const s = sample({ name: "io.github.github/github-mcp-server", title: "GitHub MCP", transports: [{ kind: "http", url: "https://x" }] });
   assert.equal(serverLabel(s), "GitHub MCP");
+  assert.equal(
+    serverLabel(sample({ name: "ai.smithery/python-dev-pro-egw-writings", title: "python-dev-pro-egw-writings" })),
+    "Python Dev Pro Egw Writings"
+  );
   assert.equal(executionLocation(s), "remote");
   assert.equal(initials(s), "GH");
   assert.equal(initials(sample({ name: "pg", title: "PostgreSQL" })), "PS");
@@ -204,8 +209,17 @@ test("sidebar split stays within IDE marketplace bounds", () => {
   assert.equal(clampSidebar(380), 380);
   assert.equal(clampSidebar(900), 520);
   assert.equal(overlaySidebar(400), true);
+  assert.equal(overlaySidebar(639), true);
+  assert.equal(overlaySidebar(640), false);
   assert.equal(overlaySidebar(800), false);
   assert.equal(overlaySidebar(1280), false);
   assert.equal(sidebarForContainer(500, 380), 240);
   assert.equal(sidebarForContainer(1280, 380), 380);
+});
+
+test("catalog cards do not pretend a missing tools[] payload means zero tools", () => {
+  const listing = sample({ name: "io.github.github/github-mcp-server", title: "GitHub MCP" });
+  assert.equal(toolsAdvertisedLabel(listing), "tools listed after connect");
+  const live = sample({ name: "GitHub", toolCount: 12, tools: [{ name: "create_pull_request", description: "PR", risk: "write" }] });
+  assert.equal(toolsAdvertisedLabel(live), "12 tools");
 });

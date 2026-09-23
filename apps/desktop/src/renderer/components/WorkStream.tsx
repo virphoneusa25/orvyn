@@ -10,9 +10,9 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting } from "../chatSession";
-import { ModelMenu, ReasoningMenu, AccessMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
+import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import { ContextUsageMenu } from "./ContextUsageMenu";
-import type { ReasoningEffort, AccessMode } from "./ComposerControls";
+import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
 import { MessageContent } from "./MessageContent";
@@ -83,6 +83,9 @@ export function WorkStream({
   );
   const [accessMode, setAccessMode] = useState<AccessMode>(
     () => ((localStorage.getItem("orvyn:access") as AccessMode) || "auto_read")
+  );
+  const [executionTarget, setExecutionTarget] = useState<ExecutionTargetSetting>(
+    () => ((localStorage.getItem("orvyn:execution-target") as ExecutionTargetSetting) || "auto")
   );
   const composerModels = useComposerModels();
   /** Conversation-scoped controls: switching chats re-applies that chat's
@@ -290,6 +293,7 @@ export function WorkStream({
         requestedModelId,
         reasoningEffort,
         permissionMode: accessMode,
+        executionTarget,
       });
       if (outcome.kind === "error") throw new Error(outcome.error);
       setPrompt("");
@@ -545,7 +549,9 @@ export function WorkStream({
             <span>● {modelLine}{fallback}</span>
             {reasoning && <span>🧠 {reasoning}</span>}
             {started.permissionMode && <span>🛡 {started.permissionMode}</span>}
-            {exec?.location && <span>⬈ {String(exec.location).replace("_", " ")}</span>}
+            {(exec?.executionLabel || exec?.location) && (
+              <span>Execution: {String(exec.executionLabel || (String(exec.location).includes("OVH") ? "OVH Worker" : "Local"))}</span>
+            )}
           </div>
         );
       })()}
@@ -918,6 +924,13 @@ export function WorkStream({
                 setAccessMode(v);
                 writeComposerDefault("permissionMode", v);
                 setActiveChatSetting("permissionMode", v);
+              }}
+            />
+            <ExecutionTargetMenu
+              value={executionTarget}
+              onChange={(v) => {
+                setExecutionTarget(v);
+                writeComposerDefault("executionTarget", v);
               }}
             />
             <ModelMenu

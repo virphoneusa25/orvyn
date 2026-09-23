@@ -33,6 +33,8 @@ export interface OrvynCommand {
   reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
   /** Composer access mode — run-scoped ToolGateway permission mapping. */
   permissionMode?: "ask" | "auto_read" | "auto_workspace" | "full_access";
+  /** Where tools run. Separate from mode. */
+  executionTarget?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
 }
 
 export type CommandOutcome =
@@ -107,15 +109,20 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
 }
 
 async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"): Promise<CommandOutcome> {
-  const cloudWorker = cmd.mode === "server" && isCloudBackend(getConnectionConfig().backendUrl);
+  const forcedCloud = cmd.executionTarget === "ovh_worker" || (cmd.mode === "server" && cmd.executionTarget !== "local_host" && cmd.executionTarget !== "local_sandbox");
+  const cloudBackend = isCloudBackend(getConnectionConfig().backendUrl);
   const remoteRoot = cmd.projectRoot || "/opt/orvyn/workspaces";
+  const executionTarget = cmd.executionTarget
+    ?? (forcedCloud && cloudBackend ? "ovh_worker" : "auto");
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({
-      projectRoot: cloudWorker ? remoteRoot : cmd.projectRoot,
-      remoteProjectRoot: cloudWorker ? remoteRoot : undefined,
-      executionLocation: cloudWorker ? "OVH_WORKER" : undefined,
+      projectRoot: cmd.projectRoot,
+      remoteProjectRoot: cmd.projectRoot ?? remoteRoot,
+      executionTarget,
+      composerMode: cmd.mode,
+      executionLocation: executionTarget === "ovh_worker" ? "OVH_WORKER" : undefined,
       instruction: cmd.prompt,
       mode,
       attachments: cmd.attachments,

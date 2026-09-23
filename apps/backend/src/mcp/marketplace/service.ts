@@ -97,8 +97,8 @@ export class MarketplaceService {
   }
 
   async featured() {
-    const out = await this.search({ query: "", limit: 16 });
-    return { ...out, results: out.results.slice(0, 12) };
+    const out = await this.search({ query: "", limit: 48 });
+    return { ...out, results: out.results.slice(0, 48) };
   }
 
   updates() {

@@ -20,6 +20,7 @@ import {
   overlaySidebar,
   permissionSummary,
   pickSelectedServer,
+  prettifyMarketName,
   primaryAction,
   sidebarForContainer,
   providerWarning,
@@ -27,9 +28,10 @@ import {
   schemaArgNames,
   selectByOffset,
   serverLabel,
+  DETAIL_MIN,
   tabAvailable,
   transportLabel,
-  toolCount,
+  toolsAdvertisedLabel,
   uninstallCopy,
   type DetailTab,
   type MarketFilters,
@@ -141,7 +143,7 @@ export function McpMarketplace({
     try {
       const params = new URLSearchParams();
       if (query) params.set("q", query);
-      params.set("limit", "24");
+      params.set("limit", "48");
       if (filters.category) params.set("category", filters.category);
       const skipMarket = isMarketplaceUnsupported(backendUrl);
       const [searchRes, healthRes, statusRes, updateRes] = await Promise.all([
@@ -379,9 +381,29 @@ export function McpMarketplace({
     <div
       ref={rootRef}
       data-testid="mcp-marketplace"
-      style={{ display: "flex", height: "100%", minHeight: 0, background: "var(--orvyn-bg, #0B0E14)", position: "relative" }}
+      data-layout={overlay ? "overlay" : "split"}
+      style={{
+        display: overlay ? "flex" : "grid",
+        gridTemplateColumns: overlay ? undefined : `minmax(${DETAIL_MIN}px, 1fr) 5px ${listWidth}px`,
+        height: "100%",
+        minHeight: 0,
+        minWidth: 0,
+        background: "var(--orvyn-bg, #0B0E14)",
+        position: "relative",
+        overflow: "hidden",
+      }}
     >
-      <section style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", borderRight: overlay ? "none" : "1px solid var(--orvyn-border-soft)" }}>
+      <section
+        style={{
+          flex: overlay ? 1 : undefined,
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          borderRight: overlay ? "none" : "1px solid var(--orvyn-border-soft)",
+        }}
+      >
         {overlay && (
           <div style={{ position: "absolute", right: 16, top: 16, zIndex: 5 }}>
             <button style={ghostBtn} onClick={() => setBrowseOpen(true)}>Browse marketplace</button>
@@ -417,17 +439,19 @@ export function McpMarketplace({
 
       <aside
         style={{
-          width: overlay ? "min(92vw, 420px)" : listWidth,
-          minWidth: overlay ? undefined : Math.min(listWidth ?? 240, 240),
+          width: overlay ? "min(92vw, 420px)" : "100%",
+          minWidth: 0,
+          minHeight: 0,
           position: overlay ? "absolute" : "relative",
           right: 0,
           top: 0,
-          bottom: 0,
+          bottom: overlay ? 0 : undefined,
           zIndex: overlay ? 20 : 1,
           display: overlay && !browseOpen ? "none" : "flex",
           flexDirection: "column",
+          overflow: "hidden",
           background: "var(--orvyn-surface-1, #10141E)",
-          borderLeft: "1px solid var(--orvyn-border-soft)",
+          borderLeft: overlay ? "1px solid var(--orvyn-border-soft)" : "none",
           boxShadow: overlay ? "var(--orvyn-shadow)" : "none",
         }}
       >
@@ -625,15 +649,32 @@ function DetailPane({
         <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
           <ServerGlyph key={server.canonicalId} server={server} size={56} />
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontSize: 28, fontWeight: 650, letterSpacing: "-0.03em", lineHeight: 1.1 }}>{serverLabel(server)}</div>
+            <div
+              title={server.title || server.name}
+              style={{
+                fontSize: 22,
+                fontWeight: 650,
+                letterSpacing: "-0.02em",
+                lineHeight: 1.25,
+                overflow: "hidden",
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflowWrap: "break-word",
+                wordBreak: "normal",
+                hyphens: "none",
+              }}
+            >
+              {serverLabel(server)}
+            </div>
             <div style={{ fontSize: 13, color: "var(--orvyn-text-muted)", marginTop: 6 }}>
-              {server.publisher ?? server.name}
+              {server.publisher ?? prettifyMarketName(server.name.split("/").pop() ?? server.name)}
               {" · "}
               {server.sources.map((s) => SOURCE_LABEL[s]).join(" · ")}
               {server.sources.includes("private") ? " · Organization Approved" : ""}
             </div>
             <div style={{ fontSize: 12.5, color: "var(--orvyn-text-secondary)", marginTop: 6, fontFamily: "var(--font-mono)" }}>
-              {toolCount(server)} tools · {transportLabel(server)} · {loc === "local" ? "Local Only" : "Remote"}
+              {toolsAdvertisedLabel(server)} · {transportLabel(server)} · {loc === "local" ? "Local Only" : "Remote"}
               {server.installed ? ` · ${server.installed.state}` : ""}
             </div>
           </div>
@@ -653,7 +694,7 @@ function DetailPane({
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 18, marginTop: 18, borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+        <div style={{ display: "flex", gap: 18, marginTop: 18, borderBottom: "1px solid var(--orvyn-border-soft)", overflowX: "auto", flexWrap: "nowrap" }}>
           {DETAIL_TABS.filter((t) => tabAvailable(t.id, server, update?.changelog)).map((t) => (
             <button
               key={t.id}
@@ -668,6 +709,8 @@ function DetailPane({
                 textTransform: "uppercase",
                 padding: "8px 0",
                 cursor: "pointer",
+                flexShrink: 0,
+                whiteSpace: "nowrap",
               }}
             >
               {t.label}
@@ -703,7 +746,7 @@ function DetailsTab({ server }: { server: MarketServer }) {
       <p style={body}>{server.description}</p>
       <h3 style={h3}>Overview</h3>
       <p style={body}>
-        {toolCount(server)} tools advertised · {transportLabel(server)} · {executionLocation(server) === "local" ? "runs on this desktop (Local Only from OVH)" : "cloud-reachable Streamable HTTP"}.
+        {toolsAdvertisedLabel(server)} · {transportLabel(server)} · {executionLocation(server) === "local" ? "runs on this desktop (Local Only from OVH)" : "cloud-reachable Streamable HTTP"}.
         ORION discovers tools with search_capabilities and activates at most {TOOL_BUDGET.maxServers} servers / {TOOL_BUDGET.maxTools} tools.
       </p>
       {!!server.categories.length && (
@@ -737,7 +780,7 @@ function ToolsTab({
   return (
     <div>
       <div style={{ fontSize: 12.5, color: "var(--orvyn-text-muted)", marginBottom: 12 }}>
-        {toolCount(server)} tools available
+        {toolsAdvertisedLabel(server)}
         {server.installed ? ` · ${activeCount} currently active in ORION` : " · none active until connected"}
         {` · budget ${TOOL_BUDGET.maxServers}/${TOOL_BUDGET.maxTools}`}
       </div>
@@ -927,7 +970,7 @@ function ServerRow({
         </div>
         <div style={{ fontSize: 10, color: "var(--orvyn-text-muted)", marginTop: 2 }}>
           {server.sources.map((s) => SOURCE_LABEL[s]).join(" · ")}
-          {toolCount(server) ? ` · ${toolCount(server)} tools` : ""}
+          {` · ${toolsAdvertisedLabel(server)}`}
           {` · ${server.trust.level}`}
         </div>
       </div>
@@ -1160,7 +1203,7 @@ function Meta({ row, value }: { row: string; value: string }) {
   return (
     <div style={{ display: "flex", gap: 10, fontSize: 13, padding: "7px 0", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
       <span style={{ width: 120, color: "var(--orvyn-text-muted)", flexShrink: 0 }}>{row}</span>
-      <span style={{ wordBreak: "break-all" }}>{value}</span>
+      <span style={{ overflowWrap: "break-word", wordBreak: "normal", minWidth: 0 }}>{value}</span>
     </div>
   );
 }

@@ -193,4 +193,17 @@ export function registerRemoteTools(
     "ask",
     rpc, runId
   ));
+
+  const gitRead = { type: "object", properties: {} };
+  gateway.register(makeRemoteTool("git_status", "git status in the execution workspace", gitRead, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("git_diff", "git diff in the execution workspace", gitRead, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("git_log", "git log in the execution workspace", { type: "object", properties: { limit: { type: "number" }, path: { type: "string" } } }, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("git_branch", "git branch in the execution workspace", gitRead, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("git_checkout", "Switch branch in the execution workspace", { type: "object", properties: { branch: { type: "string" }, create: { type: "boolean" } }, required: ["branch"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("git_commit", "Commit in the execution workspace (never automatic)", { type: "object", properties: { message: { type: "string" } }, required: ["message"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("delete_file", "Delete a file in the execution workspace", { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("start_process", "Start a long-running local process / dev server", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("stop_process", "Stop a process this run started", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("read_process_logs", "Read logs from a tracked process", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("list_processes", "List processes ORION started for this project", gitRead, "allowed", rpc, runId));
 }

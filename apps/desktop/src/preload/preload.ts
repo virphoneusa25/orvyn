@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld("orvyn", {
     load: () => ipcRenderer.invoke("chats:load"),
     save: (data: unknown) => ipcRenderer.invoke("chats:save", data),
   },
+  localWorker: {
+    status: (): Promise<{ state: "ready" | "degraded" | "offline"; detail?: string; hostDesktopAllowed: boolean }> =>
+      ipcRenderer.invoke("localWorker:status"),
+    setHostDesktop: (allowed: boolean) => ipcRenderer.invoke("localWorker:setHostDesktop", allowed),
+  },
   config: {
     get: (): Promise<{ backendUrl: string; apiKey: string }> => ipcRenderer.invoke("config:get"),
     set: (config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }> =>

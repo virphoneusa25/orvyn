@@ -3,14 +3,12 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
 
+import { resolveSafePath } from "../../execution/pathSafety";
+
 // Every file tool resolves paths against a project root and refuses to
 // escape it — this is the project-isolation boundary for Agent mode.
 export function resolveSafe(projectRoot: string, relativePath: string): string {
-  const resolved = path.resolve(projectRoot, relativePath);
-  if (!resolved.startsWith(path.resolve(projectRoot))) {
-    throw new Error(`Path "${relativePath}" escapes the project root — refused`);
-  }
-  return resolved;
+  return resolveSafePath(projectRoot, relativePath);
 }
 
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);

@@ -9,6 +9,7 @@ import {
   parseDesktopLayout,
   persistableLayout,
   shouldOverlayAgentPanel,
+  workbenchAllowedForView,
   SIDEBAR_WIDTH,
   TERMINAL_DEFAULT_HEIGHT,
   TERMINAL_MIN_HEIGHT,
@@ -146,4 +147,13 @@ test("stored activeTab and agentPanelWidth win over legacy keys", () => {
   });
   assert.equal(parsed.activeTab, "review");
   assert.equal(parsed.agentPanelWidth, 480);
+});
+
+test("Tools & MCP and other full-page views do not keep the Workbench docked", () => {
+  assert.equal(workbenchAllowedForView("newtask"), true);
+  assert.equal(workbenchAllowedForView("home"), true);
+  assert.equal(workbenchAllowedForView("editor"), true);
+  assert.equal(workbenchAllowedForView("tools"), false);
+  assert.equal(workbenchAllowedForView("models"), false);
+  assert.equal(workbenchAllowedForView("settings"), false);
 });

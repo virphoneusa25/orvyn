@@ -5,7 +5,7 @@
 export type AccountState = "signed-out" | "signed-in" | "expired";
 export type BackendState = "offline" | "connecting" | "online";
 export type SyncState = "idle" | "syncing" | "synced" | "error";
-export type LocalEngineState = "ready" | "offline";
+export type LocalEngineState = "ready" | "degraded" | "offline";
 
 export type CloudConnectionState =
   | "signed-out"
@@ -238,9 +238,9 @@ function workspaceLabel(facts: ConnectionFacts): string {
 }
 
 function engineIndicator(facts: ConnectionFacts): StatusIndicator {
-  return facts.localEngineState === "ready"
-    ? { label: "Local Engine Ready", tone: "on" }
-    : { label: "Local Engine Offline", tone: "off" };
+  if (facts.localEngineState === "ready") return { label: "Local Engine Ready", tone: "on" };
+  if (facts.localEngineState === "degraded") return { label: "Local Engine Degraded", tone: "pending" };
+  return { label: "Local Engine Offline", tone: "off" };
 }
 
 function statusFacts(facts: ConnectionFacts): ConnectionPresentation["statusFacts"] {

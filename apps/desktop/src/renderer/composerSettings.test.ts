@@ -14,7 +14,7 @@ function storeOf(entries: Record<string, string>): Pick<Storage, "getItem"> {
 
 test("defaults: nothing stored → Auto model/reasoning, Auto Read access, auto mode", () => {
   const d = readComposerDefaults(storeOf({}));
-  assert.deepEqual(d, { modelId: "auto", reasoningEffort: "auto", permissionMode: "auto_read", mode: "auto" });
+  assert.deepEqual(d, { modelId: "auto", reasoningEffort: "auto", permissionMode: "auto_read", mode: "auto", executionTarget: "auto" });
 });
 
 test("defaults: stored user defaults are honored (same keys as chat)", () => {

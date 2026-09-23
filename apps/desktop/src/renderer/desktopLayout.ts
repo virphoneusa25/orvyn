@@ -86,6 +86,15 @@ export function fitsDockedWorkbench(viewportWidth: number): boolean {
 
 /** Root desktop grid. Closed Workbench is sidebar | main — never a
  *  phantom third track. Open Workbench adds the panel column. */
+/** Full-page tools (Marketplace, Models, Settings, …) own the main column.
+ *  Leaving the Workbench docked there is what crushed MCP Marketplace into
+ *  a sliver beside Desktop/Review. Work surfaces keep the panel. */
+export const WORKBENCH_VIEWS = new Set(["home", "newtask", "editor", "terminal"]);
+
+export function workbenchAllowedForView(view: string): boolean {
+  return WORKBENCH_VIEWS.has(view);
+}
+
 export function appGridTemplateColumns(opts: {
   workbenchOpen: boolean;
   overlay?: boolean;

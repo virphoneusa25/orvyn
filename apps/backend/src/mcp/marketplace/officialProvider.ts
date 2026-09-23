@@ -42,19 +42,25 @@ export function officialProvider(
     },
     async search(query: RegistrySearch) {
       const term = encodeURIComponent(query.query.trim());
-      const limit = Math.min(Math.max(query.limit ?? 20, 1), 50);
-      const cursor = query.cursor ? `&cursor=${encodeURIComponent(query.cursor)}` : "";
+      const limit = Math.min(Math.max(query.limit ?? 48, 1), 100);
       const search = query.query.trim() ? `search=${term}&` : "";
-      const url = `${baseUrl}/v0.1/servers?${search}version=latest&limit=${limit}${cursor}`;
-      const res = await fetchImpl(url);
-      if (!res.ok) throw new Error(`Official registry HTTP ${res.status}`);
-      const body = await res.json();
-      const rows = Array.isArray(body.servers) ? body.servers : [];
-      const results: RegistryResult[] = rows.map((row: any) => ({
-        server: normalizeOfficial(row),
-        score: 0,
-      }));
-      return { results, cursor: body.metadata?.nextCursor };
+      const pages = query.cursor || query.query.trim() ? 1 : 3;
+      const results: RegistryResult[] = [];
+      let cursor = query.cursor ? String(query.cursor) : "";
+      let lastCursor: string | undefined;
+      for (let page = 0; page < pages; page++) {
+        const cursorQs = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+        const url = `${baseUrl}/v0.1/servers?${search}version=latest&limit=${limit}${cursorQs}`;
+        const res = await fetchImpl(url);
+        if (!res.ok) throw new Error(`Official registry HTTP ${res.status}`);
+        const body = await res.json();
+        const rows = Array.isArray(body.servers) ? body.servers : [];
+        for (const row of rows) results.push({ server: normalizeOfficial(row), score: 0 });
+        lastCursor = body.metadata?.nextCursor;
+        if (!lastCursor) break;
+        cursor = String(lastCursor);
+      }
+      return { results, cursor: lastCursor };
     },
     async getServer(id: string) {
       const encoded = encodeURIComponent(id);
@@ -98,6 +104,7 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
       args: registry === "pypi" || registry === "uvx" ? [ident] : ["-y", p.version ? `${ident}@${p.version}` : ident],
     });
   }
+  const officialTools = extractOfficialTools(server) ?? [];
   const draft: MarketplaceMcpServer = {
     canonicalId: name,
     name,
@@ -111,7 +118,8 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
     categories: inferCategories(name, description),
     packages,
     transports,
-    tools: [],
+    tools: officialTools,
+    toolCount: officialTools.length || undefined,
     auth: transports.some((t) => t.headers?.some((h) => h.secret))
       ? [{ kind: "bearer", label: "Bearer token" }]
       : [{ kind: "none", label: "No auth advertised" }],
@@ -133,6 +141,25 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
     verified: meta.status === "active" && /modelcontextprotocol|github\.com\/github/i.test(`${draft.publisher} ${draft.repository}`),
   });
   return draft;
+}
+
+function extractOfficialTools(server: any): MarketplaceMcpServer["tools"] {
+  const raw = Array.isArray(server?.tools)
+    ? server.tools
+    : Array.isArray(server?._meta?.tools)
+      ? server._meta.tools
+      : [];
+  const out: NonNullable<MarketplaceMcpServer["tools"]> = [];
+  for (const t of raw) {
+    const name = String(t?.name ?? "").trim();
+    if (!name) continue;
+    out.push({
+      name,
+      description: String(t?.description ?? ""),
+      risk: t?.annotations?.destructiveHint ? "destructive" : t?.annotations?.readOnlyHint ? "read" : "external-side-effect",
+    });
+  }
+  return out;
 }
 
 function firstPublishedIcon(server: any): string | undefined {

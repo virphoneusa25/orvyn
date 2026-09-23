@@ -108,11 +108,31 @@ export function rankOfficialResults(query: string, servers: MarketServer[]): Mar
   return [...servers].sort((a, b) => rankOfficialServer(query, b) - rankOfficialServer(query, a));
 }
 
+/** Extra Official Registry queries that fill a sparse first page. Empty
+ *  browse must not collapse to GitHub-only — users were seeing a handful of
+ *  wrappers and thinking the catalog was the whole MCP ecosystem. */
+export const BROWSE_SEED_QUERIES = [
+  CANONICAL_GITHUB_QUERY,
+  "filesystem",
+  "postgres",
+  "sqlite",
+  "slack",
+  "fetch",
+  "playwright",
+  "browser",
+  "memory",
+  "git",
+  "docker",
+  "sentry",
+] as const;
+
 export function supplementQueries(query: string): string[] {
   const q = query.trim().toLowerCase();
-  if (!q) return [CANONICAL_GITHUB_QUERY];
+  if (!q) return [...BROWSE_SEED_QUERIES];
   if (q === "github" || q === "github mcp") return [CANONICAL_GITHUB_QUERY];
   if (q === "postgres" || q === "postgresql") return ["postgresql-mcp-server", "postgres"];
+  if (q === "file" || q === "files" || q === "fs") return ["filesystem"];
+  if (q === "browser" || q === "chrome") return ["playwright", "browser"];
   return [];
 }
 
@@ -141,6 +161,7 @@ export function normalizeOfficialRow(row: any): MarketServer {
   }
   const repository = server.repository?.url ? String(server.repository.url) : undefined;
   const homepage = server.websiteUrl ? String(server.websiteUrl) : repository;
+  const officialTools = extractOfficialTools(server);
   return {
     canonicalId: name,
     name,
@@ -154,7 +175,8 @@ export function normalizeOfficialRow(row: any): MarketServer {
     categories: inferCategories(name, description),
     packages,
     transports,
-    tools: [],
+    tools: officialTools,
+    toolCount: officialTools.length || undefined,
     auth: transports.some((t) => t.kind === "http")
       ? [{ kind: "bearer", label: "Bearer token" }]
       : [{ kind: "none", label: "No auth advertised" }],
@@ -206,30 +228,38 @@ export type OfficialFetch = (
 
 export async function searchOfficialRegistry(
   query: string,
-  limit = 24,
-  fetchOfficial?: OfficialFetch
+  limit = 48,
+  fetchOfficial?: OfficialFetch,
+  pages = 1
 ): Promise<MarketServer[]> {
   const impl = fetchOfficial ?? defaultOfficialFetch;
-  const res = await impl(query, limit);
-  if (!res.ok) throw new Error(res.error || "Official registry unavailable");
-  const first = serversFromOfficialBody(res.body);
-  const cursor = officialNextCursor(res.body);
-  if (!cursor || first.some((s) => rankOfficialServer(query, s) >= 80)) return rankOfficialResults(query, first);
-  const more = await impl(query, limit, cursor);
-  if (!more.ok) return rankOfficialResults(query, first);
-  return rankOfficialResults(query, dedupeServers([...first, ...serversFromOfficialBody(more.body)]));
+  const collected: MarketServer[] = [];
+  let cursor: string | undefined;
+  const maxPages = query.trim() ? Math.max(1, pages) : Math.max(2, pages);
+  for (let page = 0; page < maxPages; page++) {
+    const res = await impl(query, limit, cursor);
+    if (!res.ok) {
+      if (page === 0) throw new Error(res.error || "Official registry unavailable");
+      break;
+    }
+    collected.push(...serversFromOfficialBody(res.body));
+    cursor = officialNextCursor(res.body);
+    const foundCanonical = query.trim() && collected.some((s) => rankOfficialServer(query, s) >= 80);
+    if (!cursor || foundCanonical) break;
+  }
+  return rankOfficialResults(query, dedupeServers(collected));
 }
 
 export async function loadOfficialFallbackCatalog(
   query: string,
   fetchOfficial?: OfficialFetch
 ): Promise<MarketServer[]> {
-  const primary = await searchOfficialRegistry(query, 24, fetchOfficial);
+  const primary = await searchOfficialRegistry(query, 48, fetchOfficial, query.trim() ? 1 : 3);
   const extras: MarketServer[] = [];
   for (const term of supplementQueries(query)) {
     if (term === query.trim()) continue;
     try {
-      extras.push(...(await searchOfficialRegistry(term, 8, fetchOfficial)));
+      extras.push(...(await searchOfficialRegistry(term, 16, fetchOfficial)));
     } catch {
       /* keep whatever we already have */
     }
@@ -371,6 +401,25 @@ function mapRegistry(raw: string | undefined): NonNullable<MarketServer["package
   if (v.includes("docker") || v.includes("oci")) return "docker";
   if (v.includes("nuget") || v.includes("binary")) return "binary";
   return "npm";
+}
+
+function extractOfficialTools(server: any): NonNullable<MarketServer["tools"]> {
+  const raw = Array.isArray(server?.tools)
+    ? server.tools
+    : Array.isArray(server?._meta?.tools)
+      ? server._meta.tools
+      : [];
+  const out: NonNullable<MarketServer["tools"]> = [];
+  for (const t of raw) {
+    const name = String(t?.name ?? "").trim();
+    if (!name) continue;
+    out.push({
+      name,
+      description: String(t?.description ?? ""),
+      risk: String(t?.annotations?.destructiveHint ? "destructive" : t?.annotations?.readOnlyHint ? "read" : "external-side-effect"),
+    });
+  }
+  return out;
 }
 
 function inferCategories(name: string, description: string): string[] {

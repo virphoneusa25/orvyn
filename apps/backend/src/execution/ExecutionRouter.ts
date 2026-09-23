@@ -58,14 +58,14 @@ export class ExecutionRouter {
       if (dockerHealth.healthy) {
         return { provider: this.docker, location: "DOCKER_LOCAL", reason: "explicitly requested Docker sandbox" };
       }
-      return { provider: this.local, location: "LOCAL", reason: `Docker unavailable (${dockerHealth.detail}) — falling back to local execution` };
+      throw new Error(`Local Sandbox unavailable (${dockerHealth.detail ?? "Docker is not running"}). Explicit Sandbox was requested — there is no silent Local fallback.`);
     }
     if (pref === "OVH_WORKER") {
       const ovhHealth = await this.ovh.health();
       if (ovhHealth.healthy) {
         return { provider: this.ovh, location: "OVH_WORKER", reason: "explicitly requested OVH worker" };
       }
-      return { provider: this.local, location: "LOCAL", reason: `OVH worker unavailable (${ovhHealth.detail}) — falling back to local execution` };
+      throw new Error(`OVH worker unavailable (${ovhHealth.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
     }
 
     // auto routing

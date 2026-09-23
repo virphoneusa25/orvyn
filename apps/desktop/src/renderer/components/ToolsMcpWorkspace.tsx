@@ -210,8 +210,8 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
   }
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 14px 8px", flexShrink: 0, borderBottom: "1px solid var(--orvyn-border-soft)" }}>
+    <div data-testid="tools-mcp-workspace" style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, background: "var(--orvyn-bg, #0B0E14)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 16px", flexShrink: 0, borderBottom: "1px solid var(--orvyn-border-soft)" }}>
         {([
           ["marketplace", "Marketplace"],
           ["installed", "Installed"],
@@ -236,7 +236,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       </div>
 
       {page === "marketplace" && (
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
           <McpMarketplace projectRoot={projectRoot} initialQuery={marketQuery} capabilityBanner={capabilityBanner} onInstalled={() => void refresh()} />
         </div>
       )}

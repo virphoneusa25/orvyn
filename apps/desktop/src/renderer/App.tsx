@@ -33,7 +33,14 @@ import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFac
 import { WorkspaceState } from "./orvyn-bridge";
 import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages } from "./chatSession";
 import { pickReattachRun } from "./appReattach";
-import { fitsDockedWorkbench } from "./desktopLayout";
+import {
+  AGENT_PANEL_MIN,
+  appGridTemplateColumns,
+  clampAgentPanelWidth,
+  fitsDockedWorkbench,
+  shouldOverlayAgentPanel,
+  workbenchAllowedForView,
+} from "./desktopLayout";
 import { useInlineEdit } from "./useInlineEdit";
 import { InlineEdit } from "./components/InlineEdit";
 import { CommandPalette, PaletteCommand, PaletteMode } from "./components/CommandPalette";
@@ -46,12 +53,6 @@ import { GitScmPanel } from "./components/GitScmPanel";
 import { HelpDrawer } from "./components/HelpDrawer";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { useDesktopLayout } from "./useDesktopLayout";
-import {
-  AGENT_PANEL_MIN,
-  appGridTemplateColumns,
-  clampAgentPanelWidth,
-  shouldOverlayAgentPanel,
-} from "./desktopLayout";
 import { registerSelectionReader, setWorkspaceSnapshot } from "./workspaceSnapshot";
 import type { Attachment } from "./components/AttachmentBar";
 import type { ComposerMode } from "./components/redesign/types";
@@ -181,7 +182,8 @@ export function App() {
   // the last tab they were viewing was Desktop (they came back for it).
   const lastTabWasDesktop = chrome.layout.activeTabId === "desktop";
   const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents || lastTabWasDesktop;
-  const showRightChrome = effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
+  const showRightChrome =
+    workbenchAllowedForView(view) && effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
   const runView = {
@@ -235,9 +237,16 @@ export function App() {
     const load = () => fetch(apiUrl(`/runtime/capabilities${suffix}`), { headers: authHeaders() }).then(r => {
       noteProtectedStatus(r.status, apiUrl(`/runtime/capabilities${suffix}`));
       return r.ok ? r.json() : Promise.reject();
-    }).then((caps) => {
+    }).then(async (caps) => {
       setRuntimeCaps(caps);
-      if (typeof caps.engineReady === "boolean") noteLocalEngine(caps.engineReady ? "ready" : "offline");
+      const health = typeof (window as any).orvyn?.localWorker?.status === "function"
+        ? await (window as any).orvyn.localWorker.status()
+        : null;
+      if (health?.state === "ready" || health?.state === "degraded" || health?.state === "offline") {
+        noteLocalEngine(health.state);
+      } else if (typeof caps.engineReady === "boolean") {
+        noteLocalEngine(caps.engineReady ? "ready" : "offline");
+      }
     }).catch(() => setRuntimeCaps(v => ({ ...v, dockerAvailable: false })));
     void load(); const t = setInterval(load, 10000); return () => clearInterval(t);
   }, [workspaceRoot]);
@@ -573,8 +582,10 @@ export function App() {
         onOpenSettings={() => setView("settings")}
         onSwitchWorkspace={() => setView("projects")}
         workspaceName={projectName}
-        rightPanelOpen={chrome.layout.rightPanelOpen}
-        onToggleRightPanel={() => chrome.toggleRightPanel()}
+        rightPanelOpen={showRightChrome}
+        onToggleRightPanel={() => {
+          if (workbenchAllowedForView(view)) chrome.toggleRightPanel();
+        }}
         terminalOpen={chrome.layout.bottomTerminalOpen}
         onToggleTerminal={() => chrome.toggleBottomTerminal()}
         helpOpen={chrome.layout.helpOpen}
@@ -729,7 +740,7 @@ export function App() {
                 active run/chat is only hidden, never destroyed. */}
             {view === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>
-<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             ) : view === "newtask" && missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
@@ -737,7 +748,7 @@ export function App() {
               <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} />
             ) : (
               <div className="ov-app" style={{ height: "100%" }}>
-<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "mission" || outcome.kind === "run") { newChat(); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ newChat(); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             )}
           </div>

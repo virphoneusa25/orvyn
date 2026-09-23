@@ -219,7 +219,7 @@ export function noteLocalIdentity(name: string): void {
   apply({ type: "identity", name });
 }
 
-export function noteLocalEngine(state: "ready" | "offline"): void {
+export function noteLocalEngine(state: "ready" | "degraded" | "offline"): void {
   apply({ type: "local-engine", state });
 }
 

@@ -14,10 +14,11 @@ import {
   ModelMenu,
   ReasoningMenu,
   AccessMenu,
+  ExecutionTargetMenu,
   readComposerDefaults,
   writeComposerDefault,
 } from "../ComposerControls";
-import type { ReasoningEffort, AccessMode } from "../ComposerControls";
+import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "../ComposerControls";
 import { IconRocket } from "../Icons";
 import { ContextUsageMenu } from "../ContextUsageMenu";
 import type {
@@ -62,6 +63,7 @@ export interface HomeScreenProps {
       modelId?: string;
       reasoningEffort?: ReasoningEffort;
       permissionMode?: AccessMode;
+      executionTarget?: ExecutionTargetSetting;
     }
   ) => void;
   onAttach?: () => void;
@@ -133,6 +135,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const [modelId, setModelId] = useState(defaults.modelId);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(defaults.reasoningEffort);
   const [accessMode, setAccessMode] = useState<AccessMode>(defaults.permissionMode);
+  const [executionTarget, setExecutionTarget] = useState<ExecutionTargetSetting>(defaults.executionTarget);
   const composerModels = useComposerModels();
   const [addOpen, setAddOpen] = useState(false);
   const [chips, setChips] = useState<ComposerChip[]>([]);
@@ -148,7 +151,9 @@ export function HomeScreen(props: HomeScreenProps) {
       contextNote: contextNoteFromChips(chips) || undefined,
       modelId,
       reasoningEffort,
-      permissionMode: accessMode,    });
+      permissionMode: accessMode,
+      executionTarget,
+    });
     setPrompt("");
     setChips([]);
   };
@@ -239,6 +244,13 @@ export function HomeScreen(props: HomeScreenProps) {
                     onChange={(v) => {
                       setAccessMode(v);
                       writeComposerDefault("permissionMode", v);
+                    }}
+                  />
+                  <ExecutionTargetMenu
+                    value={executionTarget}
+                    onChange={(v) => {
+                      setExecutionTarget(v);
+                      writeComposerDefault("executionTarget", v);
                     }}
                   />
                   <ModelMenu

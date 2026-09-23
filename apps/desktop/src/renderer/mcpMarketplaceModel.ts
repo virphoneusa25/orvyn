@@ -102,10 +102,29 @@ export const SIDEBAR_MIN = 320;
 export const SIDEBAR_COMPACT = 240;
 export const SIDEBAR_DEFAULT = 380;
 export const SIDEBAR_MAX = 520;
+/** Detail + list need this much or the list becomes a drawer. */
+export const MARKETPLACE_SPLIT_MIN = 640;
+export const DETAIL_MIN = 420;
 export const TOOL_BUDGET = { maxServers: 8, maxTools: 40 };
 
+export function prettifyMarketName(raw: string): string {
+  const s = String(raw ?? "")
+    .trim()
+    .replace(/^io\.[^/]+\//, "")
+    .replace(/^@[^/]+\//, "");
+  if (!s) return "MCP server";
+  if (!/[-_]/.test(s) || s.length < 16) return s;
+  return s
+    .replace(/[-_]+/g, " ")
+    .replace(/\bmcp\b/gi, "MCP")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function serverLabel(server: MarketServer): string {
-  return server.title || server.name.split("/").pop() || server.name;
+  const titled = (server.title ?? "").trim();
+  if (titled && !/^[-_.a-z0-9]+$/i.test(titled.replace(/\s+/g, ""))) return titled;
+  if (titled && !/[-_]/.test(titled)) return titled;
+  return prettifyMarketName(titled || server.name.split("/").pop() || server.name);
 }
 
 export function executionLocation(server: MarketServer): "local" | "remote" {
@@ -119,6 +138,15 @@ export function transportLabel(server: MarketServer): string {
 
 export function toolCount(server: MarketServer): number {
   return server.toolCount ?? server.tools?.length ?? 0;
+}
+
+/** Catalog listings almost never advertise a tools[] payload. Showing "0 tools"
+ *  made every Official Registry server look empty. Tell the truth instead. */
+export function toolsAdvertisedLabel(server: MarketServer): string {
+  const n = toolCount(server);
+  if (n > 0) return `${n} tool${n === 1 ? "" : "s"}`;
+  if (server.installed) return "tools discovered after connect";
+  return "tools listed after connect";
 }
 
 export function isNeedsAuth(server: MarketServer): boolean {
@@ -346,9 +374,11 @@ export function clampSidebar(width: number): number {
   return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(width)));
 }
 
-/** Overlay only when the marketplace pane itself cannot fit detail + list. */
+/** Overlay only when the marketplace pane itself cannot fit detail + list.
+ *  480 was too late — both columns stayed visible and the title wrapped
+ *  character-by-character beside Desktop/Review. */
 export function overlaySidebar(containerWidth: number): boolean {
-  return containerWidth > 0 && containerWidth < 480;
+  return containerWidth > 0 && containerWidth < MARKETPLACE_SPLIT_MIN;
 }
 
 /** Keep a usable left detail pane when Tools & MCP shares the window with Desktop. */

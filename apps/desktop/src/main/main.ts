@@ -9,6 +9,7 @@ import { createWriteStream } from "fs";
 import { connectionFileRecord } from "./connectionRecord";
 import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowserManager } from "./workbenchBrowser";
 import { fetchOfficialRegistry } from "./officialRegistryFetch";
+import { localWorkerManager } from "./localWorkerManager";
 
 let browserManager: WorkbenchBrowserManager | null = null;
 
@@ -47,6 +48,7 @@ app.on("before-quit", () => {
   quitting = true;
   if (engineTimer) clearInterval(engineTimer);
   localEngine?.kill();
+  localWorkerManager.stop();
   browserManager?.dispose();
 });
 
@@ -158,8 +160,16 @@ if (!app.requestSingleInstanceLock()) {
     await ensureDefaultWorkspace();
     const recent = (await loadRecents())[0];
     if (recent) { try { if ((await fs.stat(recent)).isDirectory()) currentProjectRoot = recent; } catch { /* missing folder falls back to workspace */ } }
+    (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot = currentProjectRoot ?? defaultWorkspacePath();
     await ensureLocalEngine();
     engineTimer = setInterval(() => void ensureLocalEngine(), 15000);
+    const bootConfig = await readConfig();
+    localWorkerManager.configure({
+      backendUrl: bootConfig.backendUrl,
+      apiKey: bootConfig.apiKey,
+      projectRoot: currentProjectRoot ?? defaultWorkspacePath(),
+    });
+    void localWorkerManager.start();
     createWindow();
     browserManager = createWorkbenchBrowserManager(() => mainWindow);
     await browserManager.start();
@@ -201,6 +211,8 @@ ipcMain.handle("project:open", async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   currentProjectRoot = result.filePaths[0];
+  (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot = currentProjectRoot;
+  localWorkerManager.configure({ backendUrl: (await readConfig()).backendUrl, apiKey: (await readConfig()).apiKey, projectRoot: currentProjectRoot });
   const recents = await pushRecent(currentProjectRoot);
   return { root: currentProjectRoot, kind: "folder" as const, recents };
 });
@@ -214,6 +226,8 @@ ipcMain.handle("project:openPath", async (_evt, folder: string) => {
     return null;
   }
   currentProjectRoot = resolved;
+  (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot = currentProjectRoot;
+  localWorkerManager.configure({ backendUrl: (await readConfig()).backendUrl, apiKey: (await readConfig()).apiKey, projectRoot: currentProjectRoot });
   const recents = await pushRecent(resolved);
   return { root: currentProjectRoot, kind: "folder" as const, recents };
 });
@@ -481,6 +495,16 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
   return true;
 });
 
+ipcMain.handle("localWorker:status", () => localWorkerManager.getStatus());
+ipcMain.handle("localWorker:setHostDesktop", (_evt, allowed: unknown) => {
+  localWorkerManager.configure({
+    backendUrl: "",
+    apiKey: "",
+    hostDesktopAllowed: allowed === true,
+  });
+  return localWorkerManager.getStatus();
+});
+
 ipcMain.handle("config:get", () => readConfig());
 ipcMain.handle("marketplace:officialSearch", (_evt, query: unknown, limit: unknown, cursor?: unknown) =>
   fetchOfficialRegistry(
@@ -509,7 +533,7 @@ ipcMain.handle("terminal:start", async () => {
   // Project the user's real shell: PowerShell 7 when present, Windows
   // PowerShell otherwise (pwsh isn't guaranteed on Windows hosts).
   const shell = process.platform === "win32" ? "powershell.exe" : process.env.SHELL || "bash";
-  const cwd = (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot || os.homedir();
+  const cwd = (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot || currentProjectRoot || os.homedir();
   const proc = spawn(shell, process.platform === "win32" ? ["-NoLogo", "-NoExit", "-Command", "-"] : ["-i"], {
     cwd,
     env: { ...process.env, TERM: "dumb", NO_COLOR: "1" },

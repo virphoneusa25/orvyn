@@ -12,19 +12,23 @@ export type AccessMode = "ask" | "auto_read" | "auto_workspace" | "full_access";
 // ONE defaults model for both composer contexts (chat + Home "new mission"):
 // conversation setting (chat only) → user default (these keys) → Auto.
 
+export type ExecutionTargetSetting = "auto" | "local_host" | "local_sandbox" | "ovh_worker";
+
 export interface ComposerDefaults {
   modelId: string;
   reasoningEffort: ReasoningEffort;
   permissionMode: AccessMode;
   mode: string;
+  executionTarget: ExecutionTargetSetting;
 }
 
-const DEFAULTS: ComposerDefaults = { modelId: "auto", reasoningEffort: "auto", permissionMode: "auto_read", mode: "auto" };
+const DEFAULTS: ComposerDefaults = { modelId: "auto", reasoningEffort: "auto", permissionMode: "auto_read", mode: "auto", executionTarget: "auto" };
 const KEYS = {
   modelId: "orvyn:run-model",
   reasoningEffort: "orvyn:reasoning",
   permissionMode: "orvyn:access",
   mode: "orvyn:composer-mode",
+  executionTarget: "orvyn:execution-target",
 } as const;
 
 /** Reads the shared user defaults (storage injectable for tests). */
@@ -33,11 +37,15 @@ export function readComposerDefaults(storage: Pick<Storage, "getItem"> = localSt
   const reasoning = storage.getItem(KEYS.reasoningEffort)?.trim();
   const access = storage.getItem(KEYS.permissionMode)?.trim();
   const mode = storage.getItem(KEYS.mode)?.trim();
+  const executionTarget = storage.getItem(KEYS.executionTarget)?.trim();
   return {
     modelId: modelId || DEFAULTS.modelId,
     reasoningEffort: (["auto", "fast", "standard", "deep", "max"].includes(reasoning ?? "") ? reasoning : DEFAULTS.reasoningEffort) as ReasoningEffort,
     permissionMode: (["ask", "auto_read", "auto_workspace", "full_access"].includes(access ?? "") ? access : DEFAULTS.permissionMode) as AccessMode,
     mode: mode || DEFAULTS.mode,
+    executionTarget: (["auto", "local_host", "local_sandbox", "ovh_worker"].includes(executionTarget ?? "")
+      ? executionTarget
+      : DEFAULTS.executionTarget) as ExecutionTargetSetting,
   };
 }
 
@@ -51,14 +59,23 @@ export function toRunPayloadSettings(settings?: {
   modelId?: string;
   reasoningEffort?: ReasoningEffort;
   permissionMode?: AccessMode;
-}): { requestedModelId?: string; reasoningEffort?: ReasoningEffort; permissionMode?: AccessMode } {
+  executionTarget?: ExecutionTargetSetting;
+}): { requestedModelId?: string; reasoningEffort?: ReasoningEffort; permissionMode?: AccessMode; executionTarget?: ExecutionTargetSetting } {
   if (!settings) return {};
   return {
     requestedModelId: settings.modelId?.trim() || undefined,
     reasoningEffort: settings.reasoningEffort || undefined,
     permissionMode: settings.permissionMode || undefined,
+    executionTarget: settings.executionTarget,
   };
 }
+
+export const EXECUTION_TARGETS: { id: ExecutionTargetSetting; label: string; title: string }[] = [
+  { id: "auto", label: "Auto", title: "Auto — Local for normal coding, Sandbox for risky commands, Cloud for Server/Deploy" },
+  { id: "local_host", label: "Local", title: "Local — tools run on this machine, no OVH upload" },
+  { id: "local_sandbox", label: "Sandbox", title: "Sandbox — isolated Docker on this machine" },
+  { id: "ovh_worker", label: "Cloud", title: "Cloud — OVH worker. Never silently switched to Local." },
+];
 
 export interface ComposerModeId {
   id: string;
