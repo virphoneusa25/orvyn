@@ -24,6 +24,14 @@ import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
+import {
+  capabilityGapNotes,
+  composerModeOverlay,
+  executionLabelFor,
+  looksLikeActionRequest,
+  renderCapabilityPrompt,
+  summarizeCapabilities,
+} from "./runCapabilities";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
@@ -126,12 +134,16 @@ interface RunState {
   createdArtifacts: GroundedArtifact[];
   instruction: string;
   gateRetries: number;
+  /** One extra model turn when an action request returns prose and no tools. */
+  actionNudges: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
 export interface RunOptions {
   reasoningEffort?: ReasoningEffort;
   accessMode?: AccessMode;
+  /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
+  composerMode?: string;
 }
 
 /**
@@ -413,7 +425,7 @@ export class StreamingAgentRuntime {
     options?: RunOptions
   ): string {
     const runId = randomUUID();
-    const provider = requestedModelId && requestedModelId !== "auto"
+    let provider = requestedModelId && requestedModelId !== "auto"
       ? (() => {
           const p = this.modelService.registry.get(requestedModelId);
           if (!p) throw new Error(`Requested model "${requestedModelId}" is not configured.`);
@@ -436,6 +448,33 @@ export class StreamingAgentRuntime {
     const previousProfile = this.tools.profile;
     if (accessMode) applyAccessMode(this.tools.registry, accessMode);
     else this.tools.applyProfile();
+
+    let toolModelError: string | undefined;
+    let toolFallbackReason: string | undefined;
+    if (def.toolsEnabled && !provider.supportsTools()) {
+      const pinned = Boolean(requestedModelId && requestedModelId !== "auto");
+      if (pinned) {
+        toolModelError = `Pinned model "${provider.config.id}" cannot call tools. This run was not completed as chat. Choose Auto or a model with tool calling.`;
+      } else {
+        const next = this.modelService.registry
+          .list()
+          .find((p) => p.config.id !== provider.config.id && p.config.capabilities.agent && p.supportsTools());
+        if (!next) {
+          toolModelError = `No configured model can call tools. "${provider.config.id}" is chat-only, so this run was not completed as a chat reply.`;
+        } else {
+          toolFallbackReason = `${provider.config.id} cannot call tools; switched to ${next.config.id}`;
+          provider = next;
+        }
+      }
+    }
+
+    const runCaps = summarizeCapabilities(
+      this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
+      { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
+    );
+    const capabilityPrompt = renderCapabilityPrompt(runCaps);
+    const modeOverlay = composerModeOverlay(options?.composerMode, mode);
+    const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     this.runs.set(runId, {
       controller: new AbortController(),
@@ -461,13 +500,15 @@ export class StreamingAgentRuntime {
       createdArtifacts: [],
       instruction,
       gateRetries: 0,
+      actionNudges: 0,
+      ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
     // Remote runs: the worker prepares an isolated mission container and
     // serves tool RPCs; the model loop stays HERE (credentials never leave
     // the control plane). No local fallback — if the worker never reports
     // readiness, the run fails truthfully in awaitRemoteReady below.
-    if (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX") {
+    if (!toolModelError && (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX")) {
       const actual = execution.targetActual
         ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
       const label = execution.executionLabel
@@ -496,7 +537,7 @@ export class StreamingAgentRuntime {
           runId,
         });
       }
-    } else if (execution?.targetActual === "local_host") {
+    } else if (!toolModelError && execution?.targetActual === "local_host") {
       this.store.emit(runId, "run.execution", {
         location: "LOCAL",
         executionTargetRequested: execution.targetRequested ?? "auto",
@@ -537,6 +578,9 @@ export class StreamingAgentRuntime {
       state0.contextParts = {
         systemPrompt: estimateTokens([
           def.systemPrompt,
+          capabilityPrompt,
+          modeOverlay,
+          gapNotes.join("\n"),
           CONVERSATION_STYLE,
           mcpCapabilities(this.mcpSummary),
           `Project root (absolute): ${projectRoot}`,
@@ -552,6 +596,9 @@ export class StreamingAgentRuntime {
         role: "system",
         content: [
           def.systemPrompt,
+          capabilityPrompt,
+          modeOverlay,
+          gapNotes.join("\n"),
           CONVERSATION_STYLE,
           skillsPromptFor(instruction, this.memoryStore),
           mcpCapabilities(this.mcpSummary),
@@ -579,6 +626,21 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
+        if (toolModelError) {
+          this.store.emit(runId, "run.error", { message: toolModelError });
+          this.store.setStatus(runId, "error");
+          return;
+        }
+        if (toolFallbackReason && state) {
+          this.store.emit(runId, "model.fallback", {
+            requestedModel: "auto",
+            actualModel: provider.config.id,
+            previousModel: toolFallbackReason.split(" cannot")[0],
+            fallbackReason: toolFallbackReason,
+            extraProviderUsage: true,
+            runId,
+          });
+        }
         if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
           await this.awaitRemoteReady(runId);
           this.mountRemoteTools(runId);
@@ -1059,6 +1121,23 @@ export class StreamingAgentRuntime {
           });
           this.store.setStatus(runId, "error");
           return;
+        }
+
+        if (
+          calls.length === 0 &&
+          state.toolsEnabled &&
+          state.toolCalls === 0 &&
+          state.actionNudges < 1 &&
+          (mode === "agent" || mode === "multitask") &&
+          looksLikeActionRequest(state.instruction)
+        ) {
+          state.actionNudges += 1;
+          messages.push({
+            role: "user",
+            content:
+              "You answered without calling a tool. This is an action task. Use the available tools now — search, read, edit, terminal, browser, or desktop as the capability list allows. Do not hand the commands back. Do not claim work that has no tool result.",
+          });
+          continue;
         }
 
         if (calls.length > 0) {

@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyFileRequest, classifyIntent, looksLikeGeneratedFileRequest } from "./orvynIntent.ts";
+import { backendModeForIntent, classifyFileRequest, classifyIntent, looksLikeGeneratedFileRequest } from "./orvynIntent.ts";
 
 test("greetings are CHAT in every mode — even CODE", () => {
   for (const mode of ["auto", "code", "server", "research", "deploy", "automate"] as const) {
@@ -41,6 +41,10 @@ test("explicit executable modes stay executable for real work", () => {
 test("research and automate modes route to their lanes", () => {
   assert.equal(classifyIntent("Research the architecture used by this project.", "research"), "research");
   assert.equal(classifyIntent("Check the server every morning.", "automate"), "automate");
+  assert.equal(backendModeForIntent("research"), "research");
+  assert.equal(backendModeForIntent("automate"), "agent");
+  assert.equal(backendModeForIntent("code"), "agent");
+  assert.equal(backendModeForIntent("chat"), null);
 });
 
 

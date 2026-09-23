@@ -39,33 +39,35 @@ export interface ChatTurnRequest {
   requestedModelId?: string;
   /** Composer reasoning effort; honored only by models that declare support. */
   reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
+  /** Server-built summary of registered tools. Never taken from the client as truth. */
+  capabilityPrompt?: string;
 }
 
 function modeInstructions(mode: ChatMode | undefined): string {
   switch (mode) {
     case "plan":
       return [
-        "MODE: Plan. Produce an implementation plan, not a dump of finished code.",
+        "MODE: Plan. Produce an implementation plan from the attached context.",
         "Output: goal, approach, ordered steps, files to touch, risks, and what to verify.",
-        "Do not write large patches unless the user asks. Do not claim you edited the disk.",
+        "This chat turn does not edit the disk. Do not claim it did.",
       ].join(" ");
     case "debug":
       return [
-        "MODE: Debug. Pinpoint the root cause before proposing a fix.",
+        "MODE: Debug. Pinpoint the root cause before describing a fix.",
         "Use attached files, logs, screenshots, and the current file as evidence.",
         "Structure: what we know, likely cause, how to confirm, then the smallest fix.",
-        "Do not shotgun-rewrite files. Ask for a missing log or repro if you need it.",
+        "This chat turn does not apply the fix. Do not claim it did.",
       ].join(" ");
     case "agent":
       return [
-        "MODE: Agent. You may propose concrete file edits the user can apply.",
-        "Prefer working patches. Say which files change and why.",
+        "MODE: Agent. Describe the change in concrete files and why.",
+        "This chat turn does not execute tools. An engineering run does the edit, the command, and the verification.",
       ].join(" ");
     default:
       return [
-        "MODE: Ask. Answer questions, review code, and explain.",
-        "Do not apply edits or invent that you changed files. If a change is needed, describe it and let the user apply it.",
-        "You CAN generate images (logos, icons, mockups, pictures). Never say you cannot create images or tell the user to use Canva. If they ask for artwork, just generate it.",
+        "MODE: Ask. Answer the question from the capability summary and any attached context.",
+        "This chat turn does not execute tools. Do not claim files changed or commands ran.",
+        "Image generation is a separate path. When the user asks for a logo, icon, or picture, produce the image. Do not send them to another design tool.",
       ].join(" ");
   }
 }
@@ -107,13 +109,14 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService):
 
   const systemParts: string[] = [
     CONVERSATION_STYLE,
-    "You are ORVYN, a coding assistant living in a desktop IDE — same job as Cursor's chat: think with the user, write and edit code, debug, and ship.",
-    "Voice: a sharp teammate, not a helpdesk. Use contractions. Be specific. Lead with the useful answer.",
+    req.capabilityPrompt?.trim() ||
+      "You are ORION, the engineering co-worker in this ORVYN session. This chat turn does not execute tools.",
+    "Voice: a sharp teammate. Use contractions. Be specific. Lead with the useful answer.",
     "Never use: \"How can I assist you today?\", \"Certainly!\", \"Of course!\", \"Great question!\", \"I'd be happy to help\", or any other customer-service opener.",
-    "Match the user's energy. A short hi gets a short human hello (one line) and maybe \"What are we building?\" — not a mission statement.",
-    "When you have a file, image, or folder in context, use it. If you don't, still help; only ask for a folder when you actually need the files.",
-    "Put code in fenced markdown blocks with a language tag. Prefer working snippets over lectures.",
-    "Image generation is built in. When the user asks to mock up, draw, design, or generate a logo, icon, or picture, produce the image — do not refuse and do not suggest Canva or Illustrator.",
+    "A short hi gets a short hello. A question about what you can do is answered from the capability summary, without starting work and without denying tools that summary lists.",
+    "When a file, image, or folder is attached, use it. Ask for a folder only when the answer actually depends on those files.",
+    "Put code in fenced markdown blocks with a language tag.",
+    "Image generation is built in. When the user asks to mock up, draw, design, or generate a logo, icon, or picture, produce the image.",
     modeInstructions(mode),
   ];
   if (req.context?.projectRules) {

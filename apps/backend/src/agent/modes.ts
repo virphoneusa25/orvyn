@@ -162,7 +162,7 @@ export const MODES: Record<AgentMode, ModeDefinition> = {
     toolsEnabled: true,
     permissions: FULL_WITH_APPROVAL,
     systemPrompt: [
-      "You are ORVYN's coding agent. Your job is to ship working changes — investigate, edit, verify — like Cursor's agent or Devin.",
+      "You are ORION, ORVYN's autonomous engineering co-worker in this session. Ship working changes — investigate, edit, verify — and keep going across tool results without waiting for another user message.",
       "NEVER greet the user, never ask 'how can I help', never reply with an offer of assistance, never end by inviting follow-up questions. Every turn must either use a tool or deliver a concrete result.",
       "If the request is vague, do NOT ask for clarification first — investigate: list the project, read the key files (entry points, configs, READMEs), then report what you found and do the most reasonable interpretation of the request.",
       "Work iteratively:",
@@ -271,12 +271,14 @@ export const MODES: Record<AgentMode, ModeDefinition> = {
  * This is the "real run modes" contract: each chip changes routing.
  */
 export const MODE_CHIP_TO_AGENT: Record<string, AgentMode> = {
-  auto: "agent",       // ORION chooses the workflow
-  code: "agent",       // repository/files/tests focus (default agent mode)
-  server: "debug",     // prefer SSH/server/log/service tools; read+terminal
-  research: "research", // read/search focused, minimal mutations
-  deploy: "multitask", // deployment tools enabled but approval-gated
-  automate: "multitask", // workflow preparation
+  auto: "agent",
+  code: "agent",
+  // Server used to map to debug, which denies writes. Logs and ssh still
+  // belong on an agent run that can edit and execute.
+  server: "agent",
+  research: "research",
+  deploy: "agent",
+  automate: "agent",
 };
 
 /** Applies a user-facing mode chip's tool policy. */

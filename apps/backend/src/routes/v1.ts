@@ -17,6 +17,7 @@ import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
+import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
 import { promises as fsp } from "fs";
 
@@ -508,6 +509,7 @@ v1Router.post("/chat/completions", async (req, res) => {
       userMessage: req.body.message,
       context: req.body.context,
       reasoningEffort: req.body.reasoningEffort,
+      capabilityPrompt: chatCapabilityPrompt(tc.toolGateway.list().map((t) => t.name)),
     });
     res.json(response);
   } catch (err: any) {
@@ -624,6 +626,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
         ? req.body.reasoningEffort
         : undefined,
       accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
+      composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
     }
   );
   if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {

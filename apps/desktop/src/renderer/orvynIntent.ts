@@ -64,3 +64,10 @@ export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent
 
   return "code";
 }
+
+/** Backend agent mode for an intent. Research stays read-only. Automate executes. */
+export function backendModeForIntent(intent: CommandIntent): "agent" | "research" | null {
+  if (intent === "chat") return null;
+  if (intent === "research") return "research";
+  return "agent";
+}

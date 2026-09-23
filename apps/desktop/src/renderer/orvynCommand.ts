@@ -14,7 +14,7 @@ import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./conn
 import { noteActiveRunId } from "./connectionRuntime";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
-import { classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
+import { backendModeForIntent, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
 import type { Attachment } from "./components/AttachmentBar";
 
 export type { CommandMode } from "./orvynIntent";
@@ -108,7 +108,7 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   return { kind: "mission", runId: data.runId };
 }
 
-async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" = "plan"): Promise<CommandOutcome> {
+async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "research" = "agent"): Promise<CommandOutcome> {
   const forcedCloud = cmd.executionTarget === "ovh_worker" || (cmd.mode === "server" && cmd.executionTarget !== "local_host" && cmd.executionTarget !== "local_sandbox");
   const cloudBackend = isCloudBackend(getConnectionConfig().backendUrl);
   const remoteRoot = cmd.projectRoot || "/opt/orvyn/workspaces";
@@ -161,11 +161,9 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
     case "chat":
       return runChat(cmd);
     case "research":
-      return startPlanRun(cmd);
+      return startPlanRun(cmd, "research");
     case "automate":
-      // No scheduler yet — run as a plan so the user gets a real, truthful
-      // result instead of a dead button.
-      return startPlanRun(cmd);
+      return startPlanRun(cmd, backendModeForIntent("automate") ?? "agent");
     default: {
       // Generated files use virtual workspace + artifact storage — a local
       // repo is an execution option, not a prerequisite.

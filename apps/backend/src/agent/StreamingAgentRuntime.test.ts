@@ -38,11 +38,17 @@ const CONFIG: ModelConfig = {
 
 /** A provider that replays a scripted sequence of turns and records requests. */
 class FakeProvider {
-  readonly config = CONFIG;
+  readonly config: ModelConfig;
   /** Deep copies, because the runtime mutates its messages array in place. */
   readonly requests: AIRequest[] = [];
 
-  constructor(private turns: AIChunk[][], private onStream?: () => void) {}
+  constructor(private turns: AIChunk[][], private onStream?: () => void, config?: Partial<ModelConfig>) {
+    this.config = {
+      ...CONFIG,
+      ...config,
+      capabilities: { ...CONFIG.capabilities, ...config?.capabilities },
+    };
+  }
 
   async *stream(request: AIRequest): AsyncIterable<AIChunk> {
     this.requests.push(JSON.parse(JSON.stringify({ messages: request.messages, reasoningEffort: request.reasoningEffort })));
@@ -75,7 +81,10 @@ class FakeProvider {
   }
 }
 
-function harness(turns: AIChunk[][], opts: { onStream?: () => void } = {}) {
+function harness(
+  turns: AIChunk[][],
+  opts: { onStream?: () => void; provider?: FakeProvider; registryModels?: FakeProvider[] } = {}
+) {
   const registry = new ToolRegistry();
   const executionOrder: string[] = [];
   let concurrent = 0;
@@ -105,8 +114,15 @@ function harness(turns: AIChunk[][], opts: { onStream?: () => void } = {}) {
 
   const gateway = new ToolGateway(registry, new PermissionEngine());
   const store = new RunStore();
-  const provider = new FakeProvider(turns, opts.onStream);
-  const modelService = { router: { resolve: () => provider } } as any;
+  const provider = opts.provider ?? new FakeProvider(turns, opts.onStream);
+  const models = opts.registryModels ?? [provider];
+  const modelService = {
+    router: { resolve: () => provider },
+    registry: {
+      get: (id: string) => models.find((p) => p.config.id === id),
+      list: () => models,
+    },
+  } as any;
   const runtime = new StreamingAgentRuntime(modelService, gateway, store);
 
   return { runtime, store, provider, registry, gateway, executionOrder, stats: () => ({ maxConcurrent }) };
@@ -429,4 +445,67 @@ test("desktop tools emit the desktop.* lifecycle the Workbench derives its tab a
   const action = h.store.get(runId)!.events.find((e) => e.type === "desktop.action");
   assert.ok(action, "desktop.action for clicks");
   assert.equal((action!.data as any).kind, "click");
+});
+
+test("action tasks with no tool call get one nudge", async () => {
+  const h = harness([
+    [{ delta: "I would edit the file like this.", done: true }],
+    [{ delta: "Described the limit after the nudge.", done: true }],
+  ]);
+  const runId = h.runtime.start("/tmp/project", "Fix the login bug");
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+  assert.equal(h.provider.requests.length, 2);
+  const nudge = h.provider.requests[1].messages.find(
+    (m) => m.role === "user" && /without calling a tool/.test(String(m.content))
+  );
+  assert.ok(nudge, "the follow-up turn must demand a real tool call");
+});
+
+test("the run prompt is built from live permissions", async () => {
+  const h = harness([[{ delta: "hello", done: true }]]);
+  const runId = h.runtime.start("/tmp/project", "say hello", undefined, "agent", undefined, [], undefined, undefined, {
+    composerMode: "server",
+  });
+  await waitForStatus(h.store, runId);
+  const system = String(h.provider.requests[0].messages[0].content);
+  assert.match(system, /Read files: available/);
+  assert.match(system, /Edit and create files: available/);
+  assert.match(system, /Desktop and computer-use in this session: available/);
+  assert.match(system, /Terminal, tests, builds, and dev servers: not available/);
+  assert.match(system, /not a read-only/);
+  assert.doesNotMatch(system, /let the user/i);
+});
+
+test("plan mode tells the model the terminal is unavailable", async () => {
+  const h = harness([[{ delta: "plan", done: true }]]);
+  const runId = h.runtime.start("/tmp/project", "say hello", undefined, "plan");
+  await waitForStatus(h.store, runId);
+  const system = String(h.provider.requests[0].messages[0].content);
+  assert.match(system, /Terminal, tests, builds, and dev servers: not available/);
+  assert.match(system, /This run is read-only/);
+});
+
+test("a pinned model that cannot call tools fails instead of chatting", async () => {
+  const chatOnly = new FakeProvider([[{ delta: "I can only chat.", done: true }]], undefined, { id: "chat-only" });
+  chatOnly.supportsTools = () => false;
+  const h = harness([], { provider: chatOnly, registryModels: [chatOnly] });
+  const runId = h.runtime.start("/tmp/project", "Fix the login bug", undefined, "agent", undefined, [], "chat-only");
+  assert.equal(await waitForStatus(h.store, runId), "error");
+  assert.equal(chatOnly.requests.length, 0, "a chat-only pinned model must not be asked to finish the task");
+  const err = h.store.get(runId)!.events.find((e) => e.type === "run.error");
+  assert.match(String(err?.data.message), /cannot call tools/);
+});
+
+test("auto switches off a chat-only model onto one that can call tools", async () => {
+  const chatOnly = new FakeProvider([[{ delta: "nope", done: true }]], undefined, { id: "chat-only" });
+  chatOnly.supportsTools = () => false;
+  const toolful = new FakeProvider([[{ delta: "Done.", done: true }]], undefined, { id: "tool-model" });
+  const h = harness([], { provider: chatOnly, registryModels: [chatOnly, toolful] });
+  const runId = h.runtime.start("/tmp/project", "say hello");
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+  assert.equal(chatOnly.requests.length, 0);
+  assert.equal(toolful.requests.length, 1);
+  const started = h.store.get(runId)!.events.find((e) => e.type === "run.started");
+  assert.equal(started?.data.actualModelId, "tool-model");
+  assert.ok(h.store.get(runId)!.events.some((e) => e.type === "model.fallback"));
 });

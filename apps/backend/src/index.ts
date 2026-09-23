@@ -11,6 +11,7 @@ import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
+import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
@@ -183,7 +184,8 @@ wss.on("connection", (socket, req) => {
       const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService);
       const rawSocket = (socket as any)._socket;
       if (rawSocket?.setNoDelay) rawSocket.setNoDelay(true);
-      for await (const chunk of orchestrator.streamChat(body)) {
+      const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
+      for await (const chunk of orchestrator.streamChat({ ...body, capabilityPrompt })) {
         socket.send(JSON.stringify(chunk));
         if (chunk.done) break;
         // Yield so each token can leave the process and paint in the UI
