@@ -182,15 +182,26 @@ test("categories include Telecom without inventing tools", () => {
 test("official provider uses injected fetch (no live network in unit test)", async () => {
   const fetchImpl = async (url: string) => {
     assert.ok(String(url).includes("/v0.1/servers"));
+    const q = String(url);
+    const name = q.includes("github-mcp-server")
+      ? "io.github.github/github-mcp-server"
+      : "ai.smithery/Hint-Services-obsidian-github-mcp";
+    const repo = name.includes("io.github.github")
+      ? "https://github.com/github/github-mcp-server"
+      : "https://github.com/Hint-Services/obsidian-github-mcp";
     return {
       ok: true,
       status: 200,
-      json: async () => ({ servers: [sampleOfficial("io.github.github/github-mcp-server", "GitHub")], metadata: {} }),
+      json: async () => ({
+        servers: [sampleOfficial(name, "GitHub", { repository: { url: repo, source: "github" } })],
+        metadata: {},
+      }),
     };
   };
   const p = officialProvider(fetchImpl as any);
   const out = await p.search({ query: "github", limit: 5 });
-  assert.equal(out.results.length, 1);
+  assert.ok(out.results.some((r) => r.server.name === "io.github.github/github-mcp-server"));
+  assert.ok(out.results.some((r) => r.server.name.includes("obsidian")));
   const h = await p.health!();
   assert.equal(h.status, "online");
 });

@@ -62,6 +62,7 @@ export function officialProvider(
       let cursor = query.cursor ? String(query.cursor) : "";
       let lastCursor: string | undefined;
       const started = Date.now();
+      const seen = new Set<string>();
       for (let page = 0; page < pages; page++) {
         const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
         if (remaining < 250) break;
@@ -74,10 +75,35 @@ export function officialProvider(
           fetchImpl,
         });
         const rows = Array.isArray(body.servers) ? body.servers : [];
-        for (const row of rows) results.push({ server: normalizeOfficial(row), score: 0 });
+        for (const row of rows) {
+          const server = normalizeOfficial(row);
+          if (seen.has(server.canonicalId)) continue;
+          seen.add(server.canonicalId);
+          results.push({ server, score: 0 });
+        }
         lastCursor = body.metadata?.nextCursor;
         if (!lastCursor) break;
         cursor = String(lastCursor);
+      }
+      for (const extra of supplementOfficialQueries(query.query)) {
+        const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
+        if (remaining < 250) break;
+        try {
+          const { body } = await fetchCatalogJson({
+            url: `${baseUrl}/v0.1/servers?search=${encodeURIComponent(extra)}&version=latest&limit=16`,
+            provider: "official",
+            timeoutMs: remaining,
+            fetchImpl,
+          });
+          for (const row of Array.isArray(body.servers) ? body.servers : []) {
+            const server = normalizeOfficial(row);
+            if (seen.has(server.canonicalId)) continue;
+            seen.add(server.canonicalId);
+            results.push({ server, score: 0 });
+          }
+        } catch {
+          /* supplement is best-effort; primary page already counts */
+        }
       }
       return { results, cursor: lastCursor };
     },
@@ -207,6 +233,15 @@ function githubOwnerAvatar(url?: string): string | undefined {
   const owner = m[1];
   if (!owner || /^(topics|orgs|settings|marketplace)$/i.test(owner)) return undefined;
   return `https://github.com/${owner}.png?size=80`;
+}
+
+export function supplementOfficialQueries(query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return ["github-mcp-server", "filesystem", "postgres", "slack"];
+  if (q === "github" || q === "github mcp") return ["github-mcp-server"];
+  if (q === "postgres" || q === "postgresql") return ["postgresql-mcp-server"];
+  if (q === "js" || q === "javascript") return ["javascript", "nodejs"];
+  return [];
 }
 
 function mapRegistry(raw: string | undefined): McpPackage["registry"] {

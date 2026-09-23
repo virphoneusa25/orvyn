@@ -25,16 +25,27 @@ activated `mcp.<server>.<tool>` schemas (default: 8 servers / 40 tools).
 
 ## Providers
 
-| id | Source | Required? |
-|---|---|---|
-| `official` | Official MCP Registry (`registry.modelcontextprotocol.io`) | No — cached/local results remain if it is down |
-| `glama` | Glama directory (`GLAMA_API_KEY`) | No — returns `needs-key` without a key |
-| `local` | Servers already in McpManager | Always |
-| `private` | User-added Official-API-compatible registries | Optional |
+| id | Source | Required? | Timeout |
+|---|---|---|---|
+| `official` | Official MCP Registry (`registry.modelcontextprotocol.io`) | No — cached/local results remain if it is down | 12s |
+| `glama` | Glama directory (`GLAMA_API_KEY` or `mcp.secret.glama`) | No — returns `needs-key` without a key | 10s |
+| `smithery` | Smithery directory (`SMITHERY_API_KEY` or `mcp.secret.smithery`) | No — returns `needs-key` without a key | 10s |
+| `local` | Servers already in McpManager | Always | in-process |
+| `private` | User-added Official-API-compatible registries | Optional | 10s (configurable) |
 
-`RegistryAggregator` queries providers in parallel, normalizes, deduplicates
-by repository / package / name, ranks (keyword + hashing-embedder semantic),
-and caches results for 5 minutes.
+`RegistryAggregator` queries providers concurrently (`Promise.allSettled`),
+each with its own AbortController/timeout. One provider timeout or 5xx does
+**not** blank the Marketplace. Results are normalized, deduplicated by
+repository → package → canonicalId → publisher/name, and ranked (exact
+identity, tools, categories, installed, trust, semantic). Official metadata
+wins for identity/packages/remotes; Glama/Smithery enrich tools.
+
+Cache: 5 minutes fresh, 45 minutes stale-while-revalidate, persisted in
+ORVYN app data (`mcp.marketplace.catalogCache.v1`). Secrets are never stored.
+Offline / all-remote-down serves stale cache plus Installed.
+
+A valid empty search is **"No MCP servers found"**. A provider failure is
+**"Some registries are unavailable"** — those are different UI states.
 
 Air-gapped / enterprise: disable public providers and keep only `private` +
 `local`. There is no hard dependency on any public API.
