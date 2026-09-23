@@ -317,6 +317,28 @@ export class LocalStore {
     ) ?? [];
   }
 
+  getArtifact(id: string): any | null {
+    return this.guard("getArtifact", () => {
+      const r: any = this.db.prepare(`SELECT * FROM artifacts WHERE id = ?`).get(id);
+      return r
+        ? {
+            id: String(r.id),
+            projectRoot: r.project_root,
+            runId: r.run_id,
+            kind: r.kind,
+            name: r.name,
+            path: r.path,
+            mediaType: r.media_type,
+            createdAt: Number(r.created_at),
+          }
+        : null;
+    }) ?? null;
+  }
+
+  deleteArtifact(id: string): void {
+    this.guard("deleteArtifact", () => this.db.prepare(`DELETE FROM artifacts WHERE id = ?`).run(id));
+  }
+
   // ---------- models ----------
 
   saveModel(config: ModelConfig): void {

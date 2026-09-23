@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyIntent } from "./orvynIntent.ts";
+import { classifyIntent, looksLikeGeneratedFileRequest } from "./orvynIntent.ts";
 
 test("greetings are CHAT in every mode — even CODE", () => {
   for (const mode of ["auto", "code", "server", "research", "deploy", "automate"] as const) {
@@ -43,6 +43,12 @@ test("research and automate modes route to their lanes", () => {
   assert.equal(classifyIntent("Check the server every morning.", "automate"), "automate");
 });
 
+
+test("logo and PNG requests are generated-file work, not a local-folder prerequisite", () => {
+  assert.equal(looksLikeGeneratedFileRequest("generate a virphone logo .png"), true);
+  assert.equal(looksLikeGeneratedFileRequest("Create a logo for Virphone"), true);
+  assert.equal(looksLikeGeneratedFileRequest("fix the login bug"), false);
+});
 
 test("polite requests to create or inspect artifacts use tools", () => {
   for (const prompt of ["Can you create a Word document?", "Please write a report", "Could you review this PDF?", "Make a spreadsheet"]) {

@@ -3,7 +3,7 @@ import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
-import { resolveWorkspace } from "../documents/workspace";
+import { isVirtualWorkspace, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
@@ -14,6 +14,8 @@ import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
+import path from "path";
+import { promises as fsp } from "fs";
 
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
@@ -390,7 +392,11 @@ v1Router.post("/complete", async (req, res) => {
 
 v1Router.post("/images/generate", async (req, res) => {
   try {
-    const result = await new ImageService(requireTenant(req).modelService).generate(req.body);
+    const t = requireTenant(req);
+    const result = await new ImageService(t.modelService, t.artifactService).generate({
+      ...req.body,
+      projectRoot: req.body.projectRoot ?? t.currentProjectRoot ?? undefined,
+    });
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -433,7 +439,9 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     : req.body.executionLocation === "OVH_WORKER"
       ? "ovh_worker"
       : "auto";
-  const hasLocalProject = Boolean(String(req.body.projectRoot ?? req.body.remoteProjectRoot ?? "").trim());
+  const resolvedRoot = String(req.body.projectRoot ?? "").trim();
+  const virtualWorkspace = Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id);
+  const hasLocalProject = Boolean(resolvedRoot) && !virtualWorkspace;
   const routed = routeExecutionTarget({
     requested: requestedTarget,
     mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
@@ -446,8 +454,11 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
   const inProcessLocal = !cloudHost;
+  // Virtual workspace lives on the control plane. Auto / remapped Windows
+  // paths must not demand the desktop Local Worker or an OVH worker.
+  const controlPlaneVirtual = virtualWorkspace && requestedTarget === "auto";
 
-  if (routed.actual === "ovh_worker") {
+  if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
     if (!remoteProjectRoot) {
       return res.status(400).json({ error: "Cloud execution requires remoteProjectRoot (the worker-side project path)." });
@@ -459,7 +470,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
         executionTargetActual: routed.actual,
       });
     }
-  } else if (routed.actual === "local_host" || routed.actual === "local_sandbox") {
+  } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
       return res.status(409).json({
         error: routed.actual === "local_sandbox"
@@ -471,7 +482,9 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     }
   }
 
-  const location = runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
+  const location = controlPlaneVirtual
+    ? "LOCAL"
+    : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
   const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
 
   _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
@@ -856,8 +869,119 @@ v1Router.delete("/memory/:id", (req, res) => {
 
 v1Router.get("/artifacts", (req, res) => {
   const t = requireTenant(req);
-  const root = String(req.query.projectRoot ?? "").trim() || null;
-  res.json({ artifacts: t.localStore.listArtifacts(root) });
+  const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
+  const artifacts = t.artifactService.list({ kind }).map((a) => ({
+    id: a.id,
+    name: a.name,
+    path: a.path,
+    kind: a.kind,
+    mediaType: a.mediaType,
+    createdAt: a.createdAt,
+    projectRoot: a.projectRoot,
+    runId: a.runId,
+    downloadUrl: `/artifacts/${a.id}/download`,
+  }));
+  res.json({ artifacts });
+});
+
+v1Router.get("/files", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    const root = typeof req.query.projectRoot === "string" && req.query.projectRoot
+      ? String(req.query.projectRoot)
+      : t.currentProjectRoot;
+    res.json(await t.artifactService.filesTree(root));
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+v1Router.get("/files/read", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    const id = typeof req.query.id === "string" ? req.query.id : "";
+    if (id) {
+      const { record, bytes } = await t.artifactService.read(id);
+      const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html|svg)$/i.test(record.name);
+      return res.json({
+        artifact: { ...record, downloadUrl: `/artifacts/${record.id}/download` },
+        content: textish ? bytes.toString("utf-8") : undefined,
+        dataUrl: !textish && (record.mediaType ?? "").startsWith("image/")
+          ? `data:${record.mediaType};base64,${bytes.toString("base64")}`
+          : undefined,
+      });
+    }
+    const rel = String(req.query.path ?? "").replace(/^\/+/, "");
+    const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? t.artifactService.virtualRoot());
+    const abs = path.resolve(root, rel);
+    const base = path.resolve(root);
+    const relSafe = path.relative(base, abs);
+    if (relSafe.startsWith("..") || path.isAbsolute(relSafe)) {
+      return res.status(400).json({ error: "Path is outside the workspace." });
+    }
+    const bytes = await fsp.readFile(abs);
+    const ext = rel.split(".").pop()?.toLowerCase() ?? "";
+    const image = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
+    res.json({
+      path: rel,
+      content: image ? undefined : bytes.toString("utf-8").slice(0, 40_000),
+      dataUrl: image ? `data:image/${ext === "jpg" ? "jpeg" : ext};base64,${bytes.toString("base64")}` : undefined,
+    });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+v1Router.post("/artifacts", async (req, res) => {
+  try {
+    const t = requireTenant(req);
+    const rec = await t.artifactService.create({
+      name: String(req.body.name ?? "file.txt"),
+      kind: req.body.kind,
+      content: req.body.content != null ? String(req.body.content) : undefined,
+      bytes: typeof req.body.base64 === "string" ? Buffer.from(req.body.base64, "base64") : undefined,
+      mediaType: req.body.mediaType,
+      runId: req.body.runId,
+      projectRoot: req.body.projectRoot ?? t.currentProjectRoot,
+    });
+    res.status(201).json({ artifact: { ...rec, downloadUrl: `/artifacts/${rec.id}/download` } });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+v1Router.get("/artifacts/:id", async (req, res) => {
+  try {
+    const { record, bytes } = await requireTenant(req).artifactService.read(req.params.id);
+    const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html)$/i.test(record.name);
+    res.json({
+      artifact: { ...record, downloadUrl: `/artifacts/${record.id}/download` },
+      content: textish ? bytes.toString("utf-8") : undefined,
+      dataUrl: (record.mediaType ?? "").startsWith("image/") ? `data:${record.mediaType};base64,${bytes.toString("base64")}` : undefined,
+    });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+v1Router.get("/artifacts/:id/download", async (req, res) => {
+  try {
+    const { record, bytes, filename } = await requireTenant(req).artifactService.getDownload(req.params.id);
+    res.setHeader("Content-Type", record.mediaType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "")}"`);
+    res.send(bytes);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+v1Router.delete("/artifacts/:id", async (req, res) => {
+  try {
+    await requireTenant(req).artifactService.delete(req.params.id);
+    res.status(204).end();
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
 });
 
 // --- Checkpoints (snapshot/restore/compare of dirty files) ---

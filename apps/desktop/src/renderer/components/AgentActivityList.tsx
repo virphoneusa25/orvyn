@@ -4,7 +4,8 @@ import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
-import { reducePresentation, fmtDuration, type ApprovalItem, type CapabilityRequiredItem } from "../presentationReducer";
+import { reducePresentation, fmtDuration, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
+import { openArtifactInContext } from "../contextOpen";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 
 export interface AgentEvent {
@@ -267,11 +268,53 @@ export function AgentActivityList({
             return <ApprovalCard key={item.key} item={item} onApprove={onApprove} />;
           case "capability":
             return <CapabilityCard key={item.key} item={item} />;
+          case "attachment":
+            return <ArtifactCard key={item.key} item={item} />;
           default:
             return null;
         }
       })}
     </>
+  );
+}
+
+function ArtifactCard({ item }: { item: AttachmentItem }) {
+  const [busy, setBusy] = useState(false);
+  const image = (item.mediaType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(item.name);
+  async function download() {
+    if (!item.artifactId && !item.downloadPath) return;
+    setBusy(true);
+    try {
+      const r = await fetch(apiUrl(item.downloadPath || `/artifacts/${item.artifactId}/download`), { headers: authHeaders() });
+      if (!r.ok) throw new Error("Download failed");
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = item.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* keep the card; user can retry from Files */
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div style={{ ...card("var(--orvyn-cyan, #22d3ee)"), display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <IconFile />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{item.kindLabel === "generated" ? "Generated image" : item.kindLabel === "document" ? "Document" : "Artifact"} ready</div>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: image ? "files" : "documents", path: item.path, fileName: item.name, op: "create" })}>Open</button>
+        <button style={ghostBtn()} disabled={busy || (!item.artifactId && !item.downloadPath)} onClick={() => void download()}>{busy ? "Downloading…" : "Download"}</button>
+        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, op: "create" })}>Show in Files</button>
+      </div>
+    </div>
   );
 }
 

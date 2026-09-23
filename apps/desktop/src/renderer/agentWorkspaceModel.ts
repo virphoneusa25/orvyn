@@ -260,6 +260,10 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   if (type === "tool.completed" && tool === "create_document") {
     return { line: "Created artifact", priority: 65, tab: "docs" };
   }
+  if (type === "artifact.created" || (type === "tool.completed" && (tool === "generate_image" || tool.startsWith("artifact_")))) {
+    const name = String(data.name ?? data.filename ?? data.path ?? "file");
+    return { line: `Created ${name}`, priority: 65, tab: "files", file: name };
+  }
   return null;
 }
 
@@ -354,6 +358,10 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "tool.completed" && tool === "create_document") {
       const name = String(data.name ?? data.path ?? data.preview ?? "document");
       artifacts.set(name, { path: name, kind: "artifact", status: "Artifact" });
+    }
+    if (type === "artifact.created" || (type === "tool.completed" && tool === "generate_image")) {
+      const name = String(data.name ?? data.filename ?? data.path ?? "");
+      if (name) artifacts.set(name, { path: name, kind: "artifact", status: data.kind === "generated" ? "Generated" : "Artifact" });
     }
 
     if (type.startsWith("browser.") || tool.startsWith("browser_") || type.startsWith("desktop.") || tool.startsWith("desktop_")) {

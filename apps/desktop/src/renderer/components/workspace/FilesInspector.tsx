@@ -4,18 +4,39 @@ import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
-const GROUPS: { key: WorkspaceFile["kind"][]; label: string }[] = [
-  { key: ["modified"], label: "Touched" },
-  { key: ["created"], label: "Created" },
-  { key: ["deleted"], label: "Deleted" },
-  { key: ["read"], label: "Read" },
-  { key: ["artifact"], label: "Artifacts" },
+type LocationId = "project" | "generated" | "downloads" | "artifacts" | "uploads" | "run";
+
+interface TreeFile {
+  id?: string;
+  name: string;
+  path: string;
+  kind: string;
+  mediaType?: string | null;
+  createdAt?: number;
+  bytes?: number;
+  downloadUrl?: string;
+}
+
+interface Location {
+  id: LocationId | string;
+  label: string;
+  files: TreeFile[];
+}
+
+const LOCATION_ORDER: { id: string; label: string }[] = [
+  { id: "project", label: "Project" },
+  { id: "generated", label: "Generated" },
+  { id: "downloads", label: "Downloads" },
+  { id: "artifacts", label: "Run Artifacts" },
+  { id: "uploads", label: "Uploads" },
 ];
 
-function kindMark(kind: WorkspaceFile["kind"]): { glyph: string; color: string } {
-  if (kind === "created") return { glyph: "＋", color: "var(--orvyn-green)" };
+function kindMark(kind: string): { glyph: string; color: string } {
+  if (kind === "created" || kind === "generated") return { glyph: "＋", color: "var(--orvyn-green)" };
   if (kind === "deleted") return { glyph: "−", color: "var(--orvyn-red)" };
-  if (kind === "artifact") return { glyph: "▣", color: "var(--orvyn-cyan)" };
+  if (kind === "artifact" || kind === "document" || kind === "run") return { glyph: "▣", color: "var(--orvyn-cyan)" };
+  if (kind === "download") return { glyph: "↓", color: "var(--orvyn-cyan)" };
+  if (kind === "upload") return { glyph: "↑", color: "var(--orvyn-purple-hi, #6C5CFF)" };
   if (kind === "read") return { glyph: "○", color: "var(--orvyn-text-muted)" };
   return { glyph: "●", color: "var(--orvyn-cyan)" };
 }
@@ -37,16 +58,65 @@ export function FilesInspector({
   onOpenFile: (path: string) => void;
   onPreviewArtifact?: (path: string) => void;
 }) {
-  const all = useMemo(() => {
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(activePath ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [mode, setMode] = useState<"raw" | "render">("raw");
+
+  const runTouched = useMemo(() => {
     const map = new Map<string, WorkspaceFile>();
     for (const f of files) map.set(f.path, f);
     for (const a of artifacts) map.set(a.path, a);
     return [...map.values()];
   }, [files, artifacts]);
 
-  const [selected, setSelected] = useState<string | null>(activePath ?? all[0]?.path ?? null);
-  const [content, setContent] = useState<string | null>(null);
-  const [mode, setMode] = useState<"raw" | "render">("raw");
+  useEffect(() => {
+    let alive = true;
+    const suffix = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : "";
+    fetch(apiUrl("/files" + suffix), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        setLocations(Array.isArray(d.locations) ? d.locations : []);
+        setLoadError(null);
+      })
+      .catch(() => {
+        if (alive) setLoadError("Could not load files. Generated artifacts still appear after a run.");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectRoot, artifacts.length, files.length]);
+
+  const merged = useMemo(() => {
+    const byId = new Map<string, Location>();
+    for (const loc of LOCATION_ORDER) byId.set(loc.id, { id: loc.id, label: loc.label, files: [] });
+    for (const loc of locations) {
+      const id = loc.id === "run" ? "artifacts" : loc.id;
+      const existing = byId.get(id) ?? { id, label: loc.label, files: [] };
+      existing.files = [...existing.files, ...loc.files];
+      existing.label = loc.label || existing.label;
+      byId.set(id, existing);
+    }
+    const project = byId.get("project");
+    if (project) {
+      for (const f of runTouched) {
+        if (project.files.some((p) => p.path === f.path)) continue;
+        if (f.kind === "artifact") {
+          const arts = byId.get("artifacts")!;
+          if (!arts.files.some((p) => p.path === f.path)) arts.files.push({ name: f.path.split(/[\\/]/).pop() || f.path, path: f.path, kind: "artifact" });
+        } else {
+          project.files.push({ name: f.path.split(/[\\/]/).pop() || f.path, path: f.path, kind: f.kind });
+        }
+      }
+    }
+    return LOCATION_ORDER.map((l) => byId.get(l.id)!).filter(Boolean);
+  }, [locations, runTouched]);
+
+  const allFiles = useMemo(() => merged.flatMap((l) => l.files), [merged]);
 
   useEffect(() => {
     if (activePath) setSelected(activePath);
@@ -54,65 +124,100 @@ export function FilesInspector({
 
   useEffect(() => {
     if (!focus) return;
-    const hit = all.find((f) => matchesFile(f.path, focus));
-    if (hit) setSelected(hit.path);
-  }, [focus, all]);
+    const hit = allFiles.find((f) => matchesFile(f.path, focus) || matchesFile(f.name, focus));
+    if (hit) {
+      setSelected(hit.path);
+      setSelectedId(hit.id ?? null);
+    }
+  }, [focus, allFiles]);
 
   useEffect(() => {
-    if (!selected || !projectRoot) return;
-    const ext = selected.split(".").pop()?.toLowerCase() ?? "";
-    if (["png", "jpg", "jpeg", "gif", "webp", "pdf"].includes(ext)) {
-      setContent(null);
-      return;
-    }
+    if (!selected) return;
+    const file = allFiles.find((f) => f.path === selected);
+    const ext = (file?.name || selected).split(".").pop()?.toLowerCase() ?? "";
+    const image = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
+    setPreviewUrl(null);
+    setContent(null);
     let alive = true;
-    fetch(apiUrl("/tools/read_file/execute"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ args: { path: selected }, approved: true }),
-    })
+    const q = file?.id
+      ? `/files/read?id=${encodeURIComponent(file.id)}`
+      : `/files/read?path=${encodeURIComponent(selected)}${projectRoot ? `&projectRoot=${encodeURIComponent(projectRoot)}` : ""}`;
+    fetch(apiUrl(q), { headers: authHeaders() })
       .then((r) => r.json())
       .then((d) => {
-        if (alive) setContent(d.ok ? String(d.output).slice(0, 20000) : `Could not read: ${d.error ?? ""}`);
+        if (!alive) return;
+        if (d.dataUrl) setPreviewUrl(d.dataUrl);
+        else if (d.content) setContent(String(d.content).slice(0, 20_000));
+        else if (image) setContent(null);
+        else setContent(d.error ? `Could not read: ${d.error}` : "File listed. Open or download to inspect.");
       })
-      .catch(() => alive && setContent(null));
+      .catch(() => alive && setContent("Could not read this file."));
     return () => {
       alive = false;
     };
-  }, [selected, projectRoot]);
+  }, [selected, selectedId, projectRoot, allFiles]);
 
-  if (all.length === 0) {
+  const total = allFiles.length;
+  const selectedFile = allFiles.find((f) => f.path === selected);
+  const ext = (selectedFile?.name || selected || "").split(".").pop()?.toLowerCase() ?? "";
+  const isMd = ext === "md" || ext === "markdown";
+  const isHtml = ext === "html" || ext === "htm";
+  const isImage = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
+
+  async function downloadSelected() {
+    const file = selectedFile;
+    if (!file) return;
+    const url = file.downloadUrl || (file.id ? `/artifacts/${file.id}/download` : null);
+    if (!url) {
+      onOpenFile(file.path);
+      return;
+    }
+    const r = await fetch(apiUrl(url), { headers: authHeaders() });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = file.name;
+    a.click();
+    URL.revokeObjectURL(href);
+  }
+
+  if (total === 0) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 20, textAlign: "center", gap: 8 }}>
-        <div style={emptyTitle()}>No files touched yet</div>
-        <div style={emptyBody()}>Files ORION reads, creates, or changes will appear here.</div>
+        <div style={emptyTitle()}>No files yet</div>
+        <div style={emptyBody()}>
+          {loadError || "Ask ORION to generate a logo, write a document, or open a project folder. Files appear here in Project, Generated, Downloads, and Run Artifacts — no local folder required."}
+        </div>
       </div>
     );
   }
 
-  const selectedFile = all.find((f) => f.path === selected);
-  const ext = selected?.split(".").pop()?.toLowerCase() ?? "";
-  const isMd = ext === "md" || ext === "markdown";
-  const isHtml = ext === "html" || ext === "htm";
-
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ flex: "0 0 42%", minHeight: 120, overflowY: "auto", borderBottom: "1px solid var(--orvyn-border-soft)", padding: "6px 8px" }}>
-        {GROUPS.map((g) => {
-          const rows = all.filter((f) => g.key.includes(f.kind));
-          if (!rows.length) return null;
-          return (
-            <div key={g.label} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: 10, letterSpacing: 0.8, color: "var(--orvyn-text-muted)", padding: "4px 4px 6px" }}>{g.label.toUpperCase()}</div>
-              {rows.map((f) => {
+        {merged.map((loc) => (
+          <div key={loc.id} style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, letterSpacing: 0.8, color: "var(--orvyn-text-muted)", padding: "4px 4px 6px" }}>
+              {loc.label.toUpperCase()}
+              <span style={{ marginLeft: 6, opacity: 0.7 }}>{loc.files.length}</span>
+            </div>
+            {loc.files.length === 0 ? (
+              <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "2px 6px 8px" }}>
+                {loc.id === "project" ? "No project files. Open a folder or work in the virtual workspace." : "Empty"}
+              </div>
+            ) : (
+              loc.files.map((f) => {
                 const mark = kindMark(f.kind);
                 const live = f.path === selected;
                 return (
                   <button
-                    key={f.path}
+                    key={`${loc.id}:${f.id ?? f.path}`}
                     onClick={() => {
                       setSelected(f.path);
-                      if (f.kind === "artifact") onPreviewArtifact?.(f.path);
+                      setSelectedId(f.id ?? null);
+                      if (f.kind === "artifact" || f.id) onPreviewArtifact?.(f.path);
                       else onOpenFile(f.path);
                     }}
                     style={{
@@ -130,31 +235,31 @@ export function FilesInspector({
                     }}
                   >
                     <span style={{ color: mark.color, width: 12 }}>{mark.glyph}</span>
-                    <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{f.path}</code>
-                    {typeof f.additions === "number" && (
-                      <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>
-                        {f.status ?? "Modified"} · +{f.additions} −{f.deletions ?? 0}
-                      </span>
-                    )}
+                    <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</code>
                   </button>
                 );
-              })}
-            </div>
-          );
-        })}
+              })
+            )}
+          </div>
+        ))}
       </div>
       {selected && (
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
-            <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{selected}</code>
+            <code style={{ flex: 1, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{selectedFile?.name ?? selected}</code>
             {(isMd || isHtml) && (
               <button style={ghostBtn()} onClick={() => setMode(mode === "raw" ? "render" : "raw")}>
                 {mode === "raw" ? (isMd ? "Rendered" : "Preview") : isMd ? "Raw" : "Source"}
               </button>
             )}
+            <button style={ghostBtn()} onClick={() => void downloadSelected()}>Download</button>
             <button style={ghostBtn()} onClick={() => onOpenFile(selected)}>Open</button>
           </div>
-          {mode === "render" && isHtml && content ? (
+          {isImage && previewUrl ? (
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 12 }}>
+              <img src={previewUrl} alt={selectedFile?.name ?? selected} style={{ maxWidth: "100%", maxHeight: "100%" }} />
+            </div>
+          ) : mode === "render" && isHtml && content ? (
             <iframe title="HTML preview" sandbox="allow-scripts" srcDoc={content} style={{ flex: 1, border: "none", background: "#fff" }} />
           ) : mode === "render" && isMd && content ? (
             <pre style={{ flex: 1, overflow: "auto", margin: 0, padding: 10, fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{content}</pre>
@@ -172,7 +277,7 @@ export function FilesInspector({
                 whiteSpace: "pre-wrap",
               }}
             >
-              {content ?? (selectedFile?.kind === "artifact" ? "Artifact listed. Open to inspect." : "…")}
+              {content ?? (isImage ? "Image listed. Download or open to inspect." : "…")}
             </pre>
           )}
         </div>

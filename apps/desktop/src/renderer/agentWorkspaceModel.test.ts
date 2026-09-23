@@ -120,6 +120,7 @@ test("derive aggregates files, diffs, previews, cursor, and artifacts", () => {
     ev("preview.available", { url: "http://127.0.0.1:5173/", label: "Dashboard" }, 5),
     ev("browser.action", { tool: "browser_click", url: "http://127.0.0.1:5173/", x: 120, y: 40, target: "Nav" }, 6),
     ev("tool.completed", { tool: "create_document", name: "report.md" }, 7),
+    ev("artifact.created", { name: "virphone-logo.png", kind: "generated", id: "art_1" }, 7.5),
     ev("approval.required", { tool: "terminal" }, 8),
   ];
   const ws = deriveAgentWorkspace(events, { projectName: "ORVYN" });
@@ -132,6 +133,7 @@ test("derive aggregates files, diffs, previews, cursor, and artifacts", () => {
   assert.equal(ws.browser.cursor?.x, 120);
   assert.equal(ws.browser.cursor?.kind, "click");
   assert.equal(ws.artifacts.some((a) => a.path === "report.md"), true);
+  assert.equal(ws.artifacts.some((a) => a.path === "virphone-logo.png"), true);
   assert.equal(ws.waitingApproval, true);
   assert.notEqual(ws.suggestedTab, "review");
   assert.equal(followActiveTab(ws.activity, "changes"), "changes");

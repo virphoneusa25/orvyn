@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { apiUrl, authHeaders } from "../../connection";
 import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
 
 export function ArtifactView({
@@ -21,16 +22,29 @@ export function ArtifactView({
       setLoaded(provided);
       return;
     }
-    if (!name || !window.orvyn?.project?.readFile) return;
+    if (!name) return;
     let cancelled = false;
-    void window.orvyn.project.readFile(name).then(
-      (text) => {
-        if (!cancelled) setLoaded(text);
-      },
-      () => {
-        if (!cancelled) setLoaded(null);
-      }
-    );
+    void fetch(apiUrl(`/files/read?path=${encodeURIComponent(name)}`), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return;
+        if (d.dataUrl) setLoaded(d.dataUrl);
+        else if (d.content) setLoaded(String(d.content));
+        else if (window.orvyn?.project?.readFile) {
+          return window.orvyn.project.readFile(name).then((text) => {
+            if (!cancelled) setLoaded(text);
+          });
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (window.orvyn?.project?.readFile) {
+          void window.orvyn.project.readFile(name).then(
+            (text) => { if (!cancelled) setLoaded(text); },
+            () => { if (!cancelled) setLoaded(null); }
+          );
+        }
+      });
     return () => {
       cancelled = true;
     };

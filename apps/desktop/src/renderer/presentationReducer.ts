@@ -126,6 +126,17 @@ export interface CapabilityRequiredItem {
   settled?: boolean;
 }
 
+export interface AttachmentItem {
+  kind: "attachment";
+  key: string;
+  name: string;
+  artifactId?: string;
+  path?: string;
+  mediaType?: string;
+  downloadPath?: string;
+  kindLabel: string;
+}
+
 export type PresentationItem =
   | ToolItem
   | GroupItem
@@ -134,7 +145,8 @@ export type PresentationItem =
   | StatusItem
   | ApprovalItem
   | SummaryItem
-  | CapabilityRequiredItem;
+  | CapabilityRequiredItem
+  | AttachmentItem;
 
 // ---- helpers -------------------------------------------------------------
 
@@ -206,6 +218,17 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       return { op: "git", label: "git branch", ctx: "files" };
     case "git_commit":
       return { op: "git", label: "git commit", ctx: "files" };
+    case "generate_image":
+      return { op: "create", fileName: String(args?.filename ?? "image.png"), ctx: "files" };
+    case "artifact_create":
+    case "artifact_write":
+      return { op: "create", ...fileArg("name"), ctx: "files" };
+    case "artifact_list":
+    case "artifact_read":
+    case "artifact_get_download":
+      return { op: "read", label: String(args?.id ?? args?.kind ?? "artifacts"), ctx: "files" };
+    case "artifact_delete":
+      return { op: "delete", label: String(args?.id ?? "artifact"), ctx: "files" };
     default:
       if (name.startsWith("desktop_")) {
         return { op: "browser", label: String(args?.url ?? name.replace(/^desktop_/, "desktop ")), ctx: "desktop" };
@@ -521,6 +544,27 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         closeThought(e.timestamp);
         items.push({ kind: "summary", key: e.id, ok: false, cancelled: true, detail: "Stopped" });
         continue;
+
+      case "artifact.created":
+      case "image.generated": {
+        const artifactId = e.data.id ? String(e.data.id) : undefined;
+        const name = String(e.data.name ?? e.data.filename ?? "").trim();
+        if (!artifactId && !name) continue;
+        if (e.type === "image.generated" && !artifactId) continue;
+        if (artifactId && items.some((it) => it.kind === "attachment" && it.artifactId === artifactId)) continue;
+        flushAssistant(false);
+        items.push({
+          kind: "attachment",
+          key: `att-${e.id}`,
+          name: name || "file",
+          artifactId,
+          path: e.data.path ? String(e.data.path) : undefined,
+          mediaType: e.data.mediaType ? String(e.data.mediaType) : undefined,
+          downloadPath: e.data.downloadPath ? String(e.data.downloadPath) : artifactId ? `/artifacts/${artifactId}/download` : undefined,
+          kindLabel: String(e.data.kind ?? (e.type === "image.generated" ? "generated" : "file")),
+        });
+        continue;
+      }
 
       default:
         // mission.*, task.*, agent.*, usage.*, context.*, file.* domain

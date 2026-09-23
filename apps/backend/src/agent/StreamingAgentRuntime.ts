@@ -160,6 +160,26 @@ function mcpCapabilities(summary: () => string[]): string {
   return lines.length ? `MCP servers connected: ${lines.join("; ")}` : "";
 }
 
+function parseToolArtifacts(raw: string, tool: string, args: Record<string, unknown>): Record<string, unknown>[] {
+  try {
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed?.artifacts) ? parsed.artifacts : parsed?.id ? [parsed] : [];
+    return list
+      .filter((a: unknown) => a && typeof a === "object")
+      .map((a: any) => ({
+        id: a.id,
+        name: a.name ?? args.name ?? args.filename ?? "file",
+        path: a.path ?? a.downloadPath,
+        kind: a.kind ?? (tool === "generate_image" ? "generated" : tool === "create_document" ? "document" : "file"),
+        mediaType: a.mediaType,
+        downloadPath: a.downloadPath ?? (a.id ? `/artifacts/${a.id}/download` : undefined),
+        tool,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
   private runs = new Map<string, RunState>();
@@ -221,7 +241,7 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "terminal.started", { callId: call.id, command: args.command });
         break;
       case "generate_image":
-        this.store.emit(runId, "image.generated", { prompt: args.prompt });
+        this.store.emit(runId, "image.generated", { prompt: args.prompt, filename: args.filename });
         break;
       case "browser_open":
       case "browser_navigate":
@@ -547,7 +567,7 @@ export class StreamingAgentRuntime {
       const localOnlyStateful = new Set([
         "start_process", "stop_process", "read_process_logs", "list_processes",
         "git_status", "git_diff", "git_commit", "git_log", "git_branch", "git_checkout",
-        "delete_file", "move_file", "create_document", "ssh_exec", "generate_image",
+        "delete_file", "move_file", "ssh_exec",
       ]);
       for (const t of this.tools.list()) {
         if (localOnlyStateful.has(t.name)) this.tools.setPermission(t.name, "denied");
@@ -1070,6 +1090,20 @@ export class StreamingAgentRuntime {
           if (artifactPath && call.name !== "delete_file") this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
         }
         const raw = result.output ?? "";
+        if (["generate_image", "create_document", "artifact_create", "artifact_write"].includes(call.name)) {
+          for (const art of parseToolArtifacts(raw, call.name, call.arguments as Record<string, unknown>)) {
+            this.store.emit(runId, "artifact.created", art);
+            if (art.id) this.memoryStore?.saveArtifact({
+              id: String(art.id),
+              projectRoot: state.projectRoot,
+              runId,
+              kind: String(art.kind ?? "file"),
+              name: String(art.name ?? "file"),
+              path: String(art.path ?? art.downloadPath ?? ""),
+              mediaType: art.mediaType ? String(art.mediaType) : null,
+            });
+          }
+        }
         // The model gets the clamped text, not the raw output: one oversized
         // result would otherwise consume the whole window.
         const { text, truncated } = clampToolOutput(raw, MAX_TOOL_OUTPUT_CHARS);

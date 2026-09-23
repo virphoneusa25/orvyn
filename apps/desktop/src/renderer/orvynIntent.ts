@@ -7,6 +7,16 @@
 export type CommandMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
 export type CommandIntent = "chat" | "code" | "research" | "automate";
 
+/** Logos, PNGs, PDFs and other deliverables do not need a local project folder. */
+export function looksLikeGeneratedFileRequest(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/\.(png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|pptx)\b/i.test(t)) return true;
+  const artNoun = /\b(images?|pictures?|photos?|icons?|logos?|illustrations?|artwork|mock-?ups?|banners?|thumbnails?|pdf|docx|document|report)\b/i;
+  const artVerb = /\b(generate|draw|render|paint|sketch|imagine|design|make|create|export|save)\b/i;
+  return artVerb.test(t) && artNoun.test(t);
+}
+
 const CONVERSATIONAL =
   /^(hi|hello|hey|thanks|thank you|yo|sup|good (morning|afternoon|evening)|explain|what|why|how|who|when|where|can you|could you|tell me|summar|describe)\b/i;
 

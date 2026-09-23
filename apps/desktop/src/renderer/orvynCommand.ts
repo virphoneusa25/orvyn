@@ -14,7 +14,7 @@ import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./conn
 import { noteActiveRunId } from "./connectionRuntime";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
-import { classifyIntent, CommandMode } from "./orvynIntent";
+import { classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
 import type { Attachment } from "./components/AttachmentBar";
 
 export type { CommandMode } from "./orvynIntent";
@@ -151,7 +151,10 @@ export function isBuiltInWorkspace(root: string | null): boolean {
 export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutcome> {
   const prompt = cmd.prompt.trim();
   const host = new URL(getConnectionConfig().backendUrl).hostname;
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(prompt)) cmd = {...cmd, projectRoot: null};
+  const generatedFile = looksLikeGeneratedFileRequest(prompt);
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && (generatedFile || /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(prompt))) {
+    cmd = { ...cmd, projectRoot: null };
+  }
   if (!prompt) return { kind: "error", error: "Empty command" };
 
   switch (classifyIntent(cmd.prompt, cmd.mode)) {
@@ -164,8 +167,9 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
       // result instead of a dead button.
       return startPlanRun(cmd);
     default: {
-      // No fake workspace (Phase 0 Part B): execution needs a real project.
-      if (isBuiltInWorkspace(cmd.projectRoot)) {
+      // Generated files use virtual workspace + artifact storage — a local
+      // repo is an execution option, not a prerequisite.
+      if (isBuiltInWorkspace(cmd.projectRoot) && !generatedFile) {
         return {
           kind: "error",
           error:

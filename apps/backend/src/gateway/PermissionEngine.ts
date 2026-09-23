@@ -81,6 +81,12 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
   git_checkout: ["GIT", "WRITE"],
   git_commit: ["GIT", "WRITE"],
   generate_image: ["NETWORK"],
+  artifact_create: ["WRITE"],
+  artifact_write: ["WRITE"],
+  artifact_list: ["READ"],
+  artifact_read: ["READ"],
+  artifact_delete: ["DELETE"],
+  artifact_get_download: ["READ"],
   mcp_list: ["NETWORK"],
   mcp_call: ["NETWORK"],
 };

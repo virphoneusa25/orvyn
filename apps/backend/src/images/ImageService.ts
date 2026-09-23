@@ -2,6 +2,8 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import { ModelService } from "../services/ModelService";
+import type { ArtifactService } from "../artifacts/ArtifactService";
+import { sanitizeArtifactName } from "../artifacts/ArtifactService";
 
 export interface GenerateImageRequest {
   prompt: string;
@@ -11,13 +13,18 @@ export interface GenerateImageRequest {
   quality?: string;
   projectRoot?: string;
   modelId?: string;
+  filename?: string;
+  runId?: string;
 }
 
 export interface GeneratedImage {
   relativePath?: string;
+  path?: string;
+  filename?: string;
   dataUrl?: string;
   url?: string;
   revisedPrompt?: string;
+  artifactId?: string;
 }
 
 function safeProjectDir(projectRoot: string): string {
@@ -27,8 +34,20 @@ function safeProjectDir(projectRoot: string): string {
   return resolved;
 }
 
+function slugName(prompt: string, index: number): string {
+  const slug = prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40) || "image";
+  return `${slug}${index > 1 ? `-${index}` : ""}.png`;
+}
+
 export class ImageService {
-  constructor(private modelService: ModelService) {}
+  constructor(
+    private modelService: ModelService,
+    private artifacts?: ArtifactService
+  ) {}
 
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
@@ -58,15 +77,32 @@ export class ImageService {
           // Keep the remote URL if we cannot download it.
         }
       }
-      const out: GeneratedImage = { url: item.url, revisedPrompt: item.revisedPrompt };
+      const filename = req.filename
+        ? sanitizeArtifactName(req.filename.endsWith(".png") ? req.filename : `${req.filename}.png`)
+        : slugName(req.prompt, images.length + 1);
+      const out: GeneratedImage = { url: item.url, revisedPrompt: item.revisedPrompt, filename };
       if (b64) {
+        const bytes = Buffer.from(b64, "base64");
         out.dataUrl = `data:image/png;base64,${b64}`;
-        if (req.projectRoot) {
+        if (this.artifacts) {
+          const rec = await this.artifacts.create({
+            name: filename,
+            kind: "generated",
+            bytes,
+            mediaType: "image/png",
+            projectRoot: req.projectRoot ?? null,
+            runId: req.runId ?? null,
+          });
+          out.artifactId = rec.id;
+          out.relativePath = rec.path;
+          out.path = rec.path;
+        } else if (req.projectRoot) {
           const dir = safeProjectDir(req.projectRoot);
           await fs.mkdir(dir, { recursive: true });
-          const file = `img-${Date.now()}-${images.length + 1}.png`;
-          await fs.writeFile(path.join(dir, file), Buffer.from(b64, "base64"));
+          const file = filename;
+          await fs.writeFile(path.join(dir, file), bytes);
           out.relativePath = `.orvyn/generated/${file}`;
+          out.path = out.relativePath;
         }
       }
       images.push(out);

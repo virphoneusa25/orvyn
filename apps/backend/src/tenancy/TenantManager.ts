@@ -37,6 +37,7 @@ import { hardeningFor } from "../mcp/hardening/hardening";
 import { sanitizeToolName } from "../mcp/McpToolAdapter";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
+import { ArtifactService } from "../artifacts/ArtifactService";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 
 export interface Tenant {
@@ -66,6 +67,8 @@ export interface Tenant {
   usage: { requests: number; agentRuns: number; indexBuilds: number };
   /** Durable local storage (missions, usage, settings, models). */
   localStore: LocalStore;
+  /** Tenant-scoped virtual workspace + generated-file store. */
+  artifactService: ArtifactService;
 }
 
 function embedderFor(ms: ModelService) {
@@ -164,6 +167,7 @@ export class TenantManager {
       currentProjectRoot: null,
       usage: { requests: 0, agentRuns: 0, indexBuilds: 0 },
       localStore,
+      artifactService: new ArtifactService(id, localStore),
     };
     // MCP host gets the now-constructed tenant's gateway.
     tenant.mcpManager = new McpManager({

@@ -31,6 +31,7 @@ import {
   makeGitCheckoutTool,
 } from "./tools/gitTools";
 import { makeGenerateImageTool } from "./tools/imageTool";
+import { registerArtifactTools } from "./tools/artifactTools";
 import { makeFetchUrlTool, makeWebSearchTool } from "./tools/netTools";
 import { makeSshExecTool } from "./tools/sshTools";
 import { makeMcpListTool, makeMcpCallTool } from "./tools/mcpTools";
@@ -78,7 +79,8 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.registry.clear();
 
   g.register(makeReadDocumentTool(projectRoot));
-  g.register(makeCreateDocumentTool(projectRoot));
+  g.register(makeCreateDocumentTool(projectRoot, tenant.artifactService));
+  registerArtifactTools((tool) => g.register(tool), tenant.artifactService);
 
   // Filesystem
   g.register(makeReadFileTool(projectRoot));
@@ -141,7 +143,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeGitCommitTool(projectRoot));
 
   // Media
-  g.register(makeGenerateImageTool(projectRoot, tenant.modelService));
+  g.register(makeGenerateImageTool(projectRoot, tenant.modelService, tenant.artifactService));
 
   // MCP (servers from .orvyn/mcp.json — the hub is the only MCP speaker)
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));

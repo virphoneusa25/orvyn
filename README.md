@@ -32,6 +32,11 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
   problem, not a public-catalog fallback. ORION discovers capabilities
   via `search_capabilities` instead of loading the catalog. See
   `docs/MCP_MARKETPLACE.md`.
+- **Virtual workspace + artifacts** — Cloud Mode no longer rejects a
+  Windows folder path. Generated files (logos, PNG, PDF, documents) land
+  in tenant artifact storage (`/artifacts`) and a virtual `/workspace`.
+  The Files pane always lists Project, Generated, Downloads, Run Artifacts,
+  and Uploads. Chat shows Open / Download / Show in Files after a create.
 - **36 gateway tools** — filesystem, ripgrep search, symbols, terminal,
   background processes, diagnostics/typecheck/tests/lint, git (status →
   commit), fetch/web-search, image generation, MCP, Playwright browser QA

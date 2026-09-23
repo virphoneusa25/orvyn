@@ -32,6 +32,7 @@ export type AgentEventType =
   | "terminal.output"
   | "terminal.completed"
   | "image.generated"
+  | "artifact.created"
   | "context.updated"
   | "approval.required"
   | "approval.resolved"

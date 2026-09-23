@@ -325,6 +325,27 @@ test("diff counts attach to exact paths when basenames collide", () => {
   assert.equal(b.detail, undefined);
 });
 
+test("artifact.created becomes a downloadable attachment card", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("artifact.created", {
+        id: "art_logo1",
+        name: "virphone-logo.png",
+        kind: "generated",
+        mediaType: "image/png",
+        downloadPath: "/artifacts/art_logo1/download",
+      }),
+    ],
+    "completed"
+  );
+  const card = items.find((i) => i.kind === "attachment") as { name: string; artifactId?: string; downloadPath?: string };
+  assert.ok(card);
+  assert.equal(card.name, "virphone-logo.png");
+  assert.equal(card.artifactId, "art_logo1");
+  assert.equal(card.downloadPath, "/artifacts/art_logo1/download");
+});
+
 test("capability.required becomes a chat card, not a tool dump", () => {
   reset();
   const items = reducePresentation(

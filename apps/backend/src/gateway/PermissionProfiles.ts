@@ -94,6 +94,8 @@ export const PROFILES: Record<PermissionProfile, { label: string; description: s
 // Tools each profile pre-approves. SAFE pre-approves nothing.
 const BALANCED_ALLOW = new Set([
   "create_document",
+  "artifact_create",
+  "artifact_write",
   "write_file",
   "edit_file",
   "move_file",
@@ -114,6 +116,7 @@ const AUTONOMOUS_ALLOW = new Set([
   "git_checkout",
   "git_commit",
   "generate_image",
+  "artifact_delete",
   "browser_open",
   "browser_navigate",
   "browser_click",
