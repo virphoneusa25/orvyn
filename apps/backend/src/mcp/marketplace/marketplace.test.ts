@@ -1,11 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalKey, mergeServers, rankServer, RegistryAggregator } from "./aggregator";
+import { canonicalKey, isCanonicalGithub, mergeServers, rankServer, RegistryAggregator } from "./aggregator";
+import { CatalogCache, catalogCacheKey, CATALOG_FRESH_TTL_MS } from "./catalogCache";
 import { classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
 import { installPlan } from "./install";
 import { normalizeOfficial } from "./officialProvider";
 import { officialProvider } from "./officialProvider";
 import { glamaProvider, normalizeGlama } from "./glamaProvider";
+import { smitheryProvider, normalizeSmithery } from "./smitheryProvider";
+import {
+  CatalogProviderError,
+  classifyHttpStatus,
+  fetchCatalogJson,
+  healthFromErrorClass,
+  retryIdempotent,
+  shouldRetry,
+  withProviderTimeout,
+} from "./providerRuntime";
 import { CapabilityIndex } from "./searchCapabilities";
 import { parseImportedMcpConfig, exportOrvynMcpConfig } from "./importExport";
 import { verificationFor } from "./verifiedCatalog";
@@ -253,4 +264,259 @@ test("tool budget refuses to activate more than maxTools", () => {
   assert.equal(index.activated.size, 2);
   assert.equal(index.exposeToModel("mcp.a.one"), true);
   assert.equal(index.exposeToModel("mcp.b.one"), false);
+});
+
+function stubProvider(id: McpRegistryProvider["id"], name: string, search: McpRegistryProvider["search"], healthStatus: "online" | "offline" = "online"): McpRegistryProvider {
+  return {
+    id,
+    name,
+    health: async () => ({ id, name, status: healthStatus }),
+    search,
+    getServer: async () => null,
+  };
+}
+
+test("provider parallelism: official timeout still returns glama + smithery", async () => {
+  const official = stubProvider("official", "Official", async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    throw new CatalogProviderError("official", "timeout", "Official timed out after 12s");
+  });
+  const glama = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: normalizeGlama({ name: "JS tools", namespace: "acme", slug: "js-mcp", description: "JavaScript lint and test", repository: { url: "https://github.com/acme/js-mcp" } }), score: 0 }],
+  }));
+  const smithery = stubProvider("smithery", "Smithery", async () => ({
+    results: [{ server: normalizeSmithery({ qualifiedName: "acme/typescript", displayName: "TypeScript", description: "JS/TS helpers" }), score: 0 }],
+  }));
+  const agg = new RegistryAggregator([official, glama, smithery]);
+  const started = Date.now();
+  const out = await agg.search({ query: "js", limit: 20 });
+  assert.ok(Date.now() - started < 2000, "federation must not wait on a hung official call beyond isolation");
+  assert.ok(out.results.length >= 2, "partial results must render");
+  assert.equal(out.providers.official.status, "slow");
+  assert.equal(out.providers.glama.status, "online");
+  assert.equal(out.providers.smithery.status, "online");
+  assert.equal(out.degradedFlag, true);
+  assert.equal(out.results.length > 0, true);
+});
+
+test("provider timeout isolation uses separate budgets", async () => {
+  const slow = stubProvider("official", "Official", () => new Promise(() => {}));
+  const fast = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: normalizeGlama({ name: "Fast", namespace: "x", slug: "fast", description: "ok" }), score: 0 }],
+  }));
+  const agg = new RegistryAggregator([slow, fast], undefined, { official: 80, glama: 1000 });
+  const started = Date.now();
+  const out = await agg.search({ query: "js", limit: 8 });
+  assert.ok(out.results.some((r) => /fast/i.test(r.server.name)));
+  assert.equal(out.providers.official.status, "slow");
+  assert.ok(Date.now() - started < 1500);
+});
+
+test("retry: timeout/5xx retry once; 401/403 do not", async () => {
+  let n = 0;
+  const ok = await retryIdempotent(async () => {
+    n += 1;
+    if (n === 1) throw new CatalogProviderError("official", "http-5xx", "500", 500);
+    return "ok";
+  }, "official");
+  assert.equal(ok, "ok");
+  assert.equal(n, 2);
+  let auth = 0;
+  await assert.rejects(
+    () => retryIdempotent(async () => {
+      auth += 1;
+      throw new CatalogProviderError("glama", "auth-required", "401", 401);
+    }, "glama"),
+    (err: any) => err.errorClass === "auth-required"
+  );
+  assert.equal(auth, 1);
+  assert.equal(shouldRetry("timeout"), true);
+  assert.equal(shouldRetry("permission-denied"), false);
+});
+
+test("429 becomes rate-limited and does not wipe other providers", async () => {
+  const official = stubProvider("official", "Official", async () => {
+    throw new CatalogProviderError("official", "rate-limited", "Official HTTP 429", 429, 2000);
+  });
+  const glama = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: normalizeGlama({ name: "Cached", namespace: "x", slug: "c", description: "ok" }), score: 0 }],
+  }));
+  const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
+  assert.equal(out.providers.official.status, "rate-limited");
+  assert.ok(out.results.length >= 1);
+});
+
+test("401/403 classify as auth, not timeout", async () => {
+  assert.equal(classifyHttpStatus(401), "auth-required");
+  assert.equal(classifyHttpStatus(403), "permission-denied");
+  assert.equal(healthFromErrorClass("auth-required"), "auth-required");
+  const official = stubProvider("official", "Official", async () => {
+    throw new CatalogProviderError("official", "auth-required", "401", 401);
+  });
+  const local = stubProvider("local", "Installed / manual", async () => ({
+    results: [{ server: normalizeOfficial(sampleOfficial("local/echo", "Installed echo")), score: 0 }],
+  }));
+  local.id = "local";
+  const out = await new RegistryAggregator([official, local]).search({ query: "echo" });
+  assert.equal(out.providers.official.status, "auth-required");
+  assert.ok(out.results.length >= 1);
+  assert.notEqual(out.providers.official.status, "slow");
+});
+
+test("HTML response is route-incompatible, never Unexpected token", async () => {
+  const err = await fetchCatalogJson({
+    url: "https://example.test/mcp",
+    provider: "official",
+    timeoutMs: 1000,
+    fetchImpl: async () =>
+      ({
+        ok: false,
+        status: 404,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+        text: async () => "<!DOCTYPE html><html>",
+        headers: { get: () => "text/html" },
+      }) as any,
+  }).catch((e) => e);
+  assert.equal(err.errorClass, "route-incompatible");
+  assert.match(String(err.message), /HTML/i);
+  assert.equal(/Unexpected token/.test(String(err.message)), false);
+});
+
+test("404 catalog route is not-found / route-incompatible", async () => {
+  assert.equal(classifyHttpStatus(404), "not-found");
+  assert.equal(classifyHttpStatus(404, true), "route-incompatible");
+});
+
+test("stale-while-revalidate cache returns immediately then refreshes", async () => {
+  let calls = 0;
+  const p = stubProvider("official", "Official", async () => {
+    calls += 1;
+    return { results: [{ server: normalizeOfficial(sampleOfficial("io.github.github/github-mcp-server", `v${calls}`)), score: 0 }] };
+  });
+  const cache = new CatalogCache<any>();
+  const agg = new RegistryAggregator([p], cache);
+  const first = await agg.search({ query: "github" });
+  assert.equal(first.fromCache, false);
+  assert.equal(calls, 1);
+  const key = catalogCacheKey({ query: "github", filters: "", page: "24:" });
+  const stored = cache.get(key)!;
+  cache.set(key, stored.payload, Date.now() - (CATALOG_FRESH_TTL_MS + 1000));
+  const stale = await agg.search({ query: "github" });
+  assert.equal(stale.fromCache, true);
+  assert.equal(stale.stale, true);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(calls >= 1);
+});
+
+test("offline federation serves stale cache instead of blank", async () => {
+  let live = true;
+  const p = stubProvider("official", "Official", async () => {
+    if (!live) throw new CatalogProviderError("official", "network", "offline");
+    return { results: [{ server: normalizeOfficial(sampleOfficial("io.github.github/github-mcp-server", "GitHub")), score: 0 }] };
+  });
+  const cache = new CatalogCache<any>();
+  const agg = new RegistryAggregator([p], cache);
+  await agg.search({ query: "github" });
+  const key = catalogCacheKey({ query: "github", filters: "", page: "24:" });
+  const stored = cache.get(key)!;
+  cache.set(key, stored.payload, Date.now() - (CATALOG_FRESH_TTL_MS + 1000));
+  live = false;
+  const stale = await agg.search({ query: "github" });
+  assert.ok(stale.results.length >= 1);
+  assert.equal(stale.fromCache, true);
+});
+
+test("dedupe + source merge: official/glama/smithery render once", () => {
+  const a = normalizeOfficial(sampleOfficial("io.github.github/github-mcp-server", "Official GitHub MCP"));
+  const b = normalizeGlama({
+    name: "GitHub MCP",
+    namespace: "github",
+    slug: "github-mcp-server",
+    description: "PRs plus tools",
+    repository: { url: "https://github.com/github/github-mcp-server.git" },
+    tools: [{ name: "create_pull_request", description: "Open a PR" }],
+  });
+  const c = normalizeSmithery({
+    qualifiedName: "github/github-mcp-server",
+    displayName: "GitHub",
+    description: "Smithery listing",
+    repository: "https://github.com/github/github-mcp-server",
+    tools: [{ name: "list_issues", description: "List issues" }],
+  });
+  assert.equal(canonicalKey(a), canonicalKey(b));
+  assert.equal(canonicalKey(a), canonicalKey(c));
+  const merged = mergeServers(mergeServers(b, c), a);
+  assert.deepEqual(merged.sources.sort(), ["glama", "official", "smithery"]);
+  assert.equal(merged.canonicalId, a.canonicalId);
+  assert.ok(merged.tools?.some((t) => t.name === "create_pull_request") || merged.packages[0]?.identifier.includes("server-github"));
+});
+
+test("canonical GitHub ranking beats wrappers for query github", () => {
+  const github = normalizeOfficial(sampleOfficial("io.github.github/github-mcp-server", "Official GitHub MCP"));
+  const wrapper = normalizeOfficial(sampleOfficial("ai.smithery/obsidian-github-mcp", "Obsidian vault on GitHub"));
+  assert.equal(isCanonicalGithub(github), true);
+  assert.equal(isCanonicalGithub(wrapper), false);
+  assert.ok(rankServer("github", github) > rankServer("github", wrapper));
+});
+
+test("query cancellation helper keeps only the latest generation", () => {
+  let gen = 0;
+  const apply = (mine: number, items: string[]) => (mine === gen ? items : null);
+  const first = ++gen;
+  const second = ++gen;
+  assert.equal(apply(first, ["old"]), null);
+  assert.deepEqual(apply(second, ["js"]), ["js"]);
+});
+
+test("empty vs failure: timeout is degraded, not a valid empty catalog", async () => {
+  const official = stubProvider("official", "Official", async () => {
+    throw new CatalogProviderError("official", "timeout", "Official timed out after 12s");
+  });
+  const glama = stubProvider("glama", "Glama", async () => ({ results: [] }));
+  const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
+  assert.equal(out.results.length, 0);
+  assert.equal(out.degradedFlag, true);
+  assert.equal(out.providers.official.status, "slow");
+});
+
+test("partial success: official 500 does not blank glama results", async () => {
+  const official = stubProvider("official", "Official", async () => {
+    throw new CatalogProviderError("official", "http-5xx", "Official HTTP 500", 500);
+  });
+  const glama = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: normalizeGlama({ name: "javascript-mcp", namespace: "acme", description: "JS" }), score: 0 }],
+  }));
+  const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
+  assert.ok(out.results.length >= 1);
+  assert.equal(out.providers.official.status, "offline");
+  assert.equal(out.degradedFlag, true);
+});
+
+test("smithery without API key is needs-key and does not fail marketplace", async () => {
+  const p = smitheryProvider(fetch, "");
+  const h = await p.health();
+  assert.equal(h.status, "needs-key");
+  const out = await p.search({ query: "js" });
+  assert.deepEqual(out.results, []);
+  assert.equal(out.health?.status, "needs-key");
+});
+
+test("fetchCatalogJson classifies 429 with Retry-After", async () => {
+  const err = await fetchCatalogJson({
+    url: "https://example.test/x",
+    provider: "official",
+    timeoutMs: 500,
+    fetchImpl: async () =>
+      ({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: "slow down" }),
+        text: async () => JSON.stringify({ error: "slow down" }),
+        headers: { get: (n: string) => (n.toLowerCase() === "retry-after" ? "2" : "application/json") },
+      }) as any,
+  }).catch((e) => e);
+  assert.equal(err.errorClass, "rate-limited");
+  assert.equal(err.retryAfterMs, 2000);
 });

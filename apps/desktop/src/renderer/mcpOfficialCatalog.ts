@@ -50,10 +50,10 @@ export function decideCatalogSource(input: {
     return { state: "official-fallback", useOfficialFallback: true, markUnsupported: true, reason: "cached-unsupported" };
   }
   if (input.status === 401 || input.status === 403) {
-    return { state: "auth-required", useOfficialFallback: false, markUnsupported: false, reason: String(input.status) };
+    return { state: "auth-required", useOfficialFallback: true, markUnsupported: false, reason: String(input.status) };
   }
   if (input.status === 0) {
-    return { state: "offline", useOfficialFallback: false, markUnsupported: false };
+    return { state: "offline", useOfficialFallback: true, markUnsupported: false };
   }
   if (input.parsed.marketplaceRouteUnsupported || input.parsed.kind === "html" || input.status === 404) {
     return { state: "official-fallback", useOfficialFallback: true, markUnsupported: true, reason: "unsupported-route" };
@@ -61,7 +61,10 @@ export function decideCatalogSource(input: {
   if (input.parsed.ok) {
     return { state: "cloud", useOfficialFallback: false, markUnsupported: false };
   }
-  return { state: "error", useOfficialFallback: false, markUnsupported: false };
+  if (input.status >= 500) {
+    return { state: "degraded", useOfficialFallback: true, markUnsupported: false, reason: `HTTP ${input.status}` };
+  }
+  return { state: "error", useOfficialFallback: true, markUnsupported: false };
 }
 
 /** @deprecated prefer decideCatalogSource — kept so 5601966 call sites stay explicit. */
@@ -239,7 +242,11 @@ export async function searchOfficialRegistry(
   for (let page = 0; page < maxPages; page++) {
     const res = await impl(query, limit, cursor);
     if (!res.ok) {
-      if (page === 0) throw new Error(res.error || "Official registry unavailable");
+      if (page === 0 && !collected.length) {
+        const err = new Error(res.error || "Official registry unavailable");
+        (err as Error & { catalogPartial?: boolean }).catalogPartial = true;
+        throw err;
+      }
       break;
     }
     collected.push(...serversFromOfficialBody(res.body));
@@ -274,17 +281,21 @@ export async function resolveMarketplaceCatalog(input: {
   query: string;
   backendUrl: string;
   loadOfficial?: (query: string) => Promise<MarketServer[]>;
+  previousCatalog?: MarketServer[];
 }): Promise<{
   state: CatalogState;
   catalog: MarketServer[];
   notice?: string;
   error?: string;
   parsed: ParsedApi;
+  fromCache?: boolean;
+  degraded?: boolean;
 }> {
   const parsed = parseApiJson(input.status, input.text, input.contentType);
   const cloudCatalog: MarketServer[] = parsed.ok
     ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
     : [];
+  const cloudDegraded = Boolean(parsed.ok && (parsed.body?.degradedFlag || (Array.isArray(parsed.body?.degraded) && parsed.body.degraded.length)));
   const decision = decideCatalogSource({
     status: input.status,
     parsed,
@@ -293,41 +304,78 @@ export async function resolveMarketplaceCatalog(input: {
   });
   if (decision.markUnsupported) markMarketplaceUnsupported(input.backendUrl);
 
-  if (decision.state === "auth-required") {
+  if (decision.state === "cloud") {
     return {
-      state: "auth-required",
-      catalog: [],
+      state: "cloud",
+      catalog: cloudCatalog,
       parsed,
-      error: parsed.error || "Marketplace needs a signed-in control plane session.",
+      degraded: cloudDegraded,
+      notice: cloudDegraded
+        ? Array.isArray(parsed.body?.degraded) && parsed.body.degraded.length
+          ? parsed.body.degraded[0]
+          : "Some registries are unavailable"
+        : undefined,
     };
   }
-  if (decision.state === "offline") {
-    return { state: "offline", catalog: [], parsed, error: parsed.error || "Marketplace is offline." };
-  }
-  if (decision.state === "error") {
-    return { state: "error", catalog: cloudCatalog, parsed, error: parsed.error || `HTTP ${input.status}` };
-  }
-  if (decision.state === "cloud") {
-    return { state: "cloud", catalog: cloudCatalog, parsed };
+
+  const authNotice =
+    decision.state === "auth-required"
+      ? parsed.error || "Cloud account/session requires attention"
+      : undefined;
+
+  if (!decision.useOfficialFallback) {
+    return {
+      state: decision.state,
+      catalog: cloudCatalog.length ? cloudCatalog : input.previousCatalog ?? [],
+      parsed,
+      error: authNotice || parsed.error || `HTTP ${input.status}`,
+      degraded: true,
+    };
   }
 
   try {
     const official = await (input.loadOfficial ?? loadOfficialFallbackCatalog)(input.query);
-    if (official.length) {
+    const merged = dedupeServers([...official, ...cloudCatalog]);
+    if (merged.length) {
       return {
-        state: "official-fallback",
-        catalog: official,
+        state: decision.state === "auth-required" ? "auth-required" : "official-fallback",
+        catalog: merged,
         parsed,
-        notice: "Cloud catalog unavailable · showing Official Registry results",
+        notice:
+          decision.state === "auth-required"
+            ? "Cloud account/session requires attention. Showing public registry discovery."
+            : decision.state === "offline"
+              ? "Offline · showing cached catalog"
+              : "Cloud catalog unavailable · showing Official Registry results",
+        error: authNotice,
+        degraded: true,
       };
     }
-    return { state: "degraded", catalog: [], parsed, error: "Official MCP Registry returned no servers." };
-  } catch (err: any) {
+    const kept = input.previousCatalog ?? [];
     return {
-      state: "degraded",
-      catalog: [],
+      state: kept.length ? "degraded" : "degraded",
+      catalog: kept,
       parsed,
-      error: err?.message || "Official MCP Registry unavailable",
+      fromCache: kept.length > 0,
+      degraded: true,
+      notice: kept.length ? "Some registries are unavailable" : undefined,
+      error: kept.length ? undefined : "Official MCP Registry returned no servers.",
+    };
+  } catch (err: any) {
+    const message = /aborted|timeout/i.test(String(err?.message))
+      ? "Official Registry is responding slowly."
+      : /Unexpected token/.test(String(err?.message))
+        ? "A registry returned an incompatible response."
+        : err?.message || "Official MCP Registry unavailable";
+    const kept = cloudCatalog.length ? cloudCatalog : input.previousCatalog ?? [];
+    return {
+      state: kept.length ? "degraded" : "degraded",
+      catalog: kept,
+      parsed,
+      fromCache: !cloudCatalog.length && kept.length > 0,
+      degraded: true,
+      notice: kept.length ? `${message} Showing results from available sources.` : "Marketplace is temporarily offline.",
+      error: kept.length ? undefined : message,
     };
   }
 }
@@ -372,7 +420,7 @@ async function defaultOfficialFetch(query: string, limit: number, cursor?: strin
   if (cursor) params.set("cursor", cursor);
   const res = await fetch(`${OFFICIAL_REGISTRY_URL}/v0.1/servers?${params}`, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(12_000),
   });
   const text = await res.text();
   if (text.trim().startsWith("<") || /text\/html/i.test(res.headers.get("content-type") ?? "")) {

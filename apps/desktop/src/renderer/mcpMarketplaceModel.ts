@@ -1,7 +1,7 @@
 // Pure marketplace presentation model. Keeps Tools & MCP → Marketplace
 // logic testable without rewriting McpManager / federation search.
 
-export type MarketSource = "official" | "glama" | "local" | "private";
+export type MarketSource = "official" | "glama" | "smithery" | "local" | "private";
 
 export type DetailTab = "details" | "tools" | "permissions" | "configuration" | "security" | "source" | "changelog";
 
@@ -12,6 +12,7 @@ export interface MarketTool {
   permission?: "ALLOW" | "ASK" | "DENY";
   active?: boolean;
   inputSchema?: Record<string, unknown>;
+  origin?: "declared" | "live";
 }
 
 export interface MarketServer {
@@ -94,6 +95,7 @@ export const DETAIL_TABS: { id: DetailTab; label: string }[] = [
 export const SOURCE_LABEL: Record<MarketSource, string> = {
   official: "Official",
   glama: "Glama",
+  smithery: "Smithery",
   local: "Local",
   private: "Private",
 };
@@ -333,7 +335,9 @@ export function mergeInstalled(
         lastConnectedAt: st.lastConnectedAt,
       },
       toolCount: st.toolCount ?? s.toolCount,
-      tools: st.tools?.length ? st.tools : s.tools,
+      tools: st.tools?.length
+        ? st.tools.map((t) => ({ ...t, origin: "live" as const, active: true }))
+        : (s.tools ?? []).map((t) => ({ ...t, origin: t.origin ?? "declared" })),
     };
   });
   const seen = new Set(merged.filter((s) => s.installed).map((s) => s.installed!.serverId));
@@ -431,6 +435,16 @@ export function schemaArgNames(schema?: Record<string, unknown>): string[] {
 
 export function providerWarning(health: { id: string; name: string; status: string; detail?: string }[]): string[] {
   return health
-    .filter((h) => h.status !== "online" && h.status !== "disabled")
-    .map((h) => (h.status === "needs-key" ? `${h.name} needs a key` : `${h.name} unavailable`));
+    .filter((h) => !["online", "disabled", "needs-key"].includes(h.status))
+    .map((h) => {
+      if (h.status === "slow") return `${h.name} is responding slowly`;
+      if (h.status === "auth-required") return `${h.name} needs a signed-in session`;
+      if (h.status === "rate-limited") return `${h.name} is rate-limited`;
+      return `${h.name} unavailable`;
+    });
+}
+
+export function toolOriginLabel(tool: MarketTool, connected: boolean): string {
+  if (tool.origin === "live" || (connected && tool.active)) return "Live connected tool";
+  return "Declared tool";
 }

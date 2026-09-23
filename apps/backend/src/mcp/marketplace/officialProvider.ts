@@ -5,6 +5,7 @@ import {
   networkRequired,
   trustFor,
 } from "./classify";
+import { fetchCatalogJson, PROVIDER_TIMEOUTS_MS } from "./providerRuntime";
 import type {
   MarketplaceMcpServer,
   McpPackage,
@@ -17,7 +18,13 @@ import type {
 import { OFFICIAL_REGISTRY_URL } from "./types";
 
 export interface OfficialFetch {
-  (url: string): Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
+  (url: string, init?: { headers?: Record<string, string>; signal?: AbortSignal }): Promise<{
+    ok: boolean;
+    status: number;
+    json: () => Promise<any>;
+    text?: () => Promise<string>;
+    headers?: { get(name: string): string | null };
+  }>;
 }
 
 export function officialProvider(
@@ -29,15 +36,21 @@ export function officialProvider(
     name: "Official MCP Registry",
     async health(): Promise<RegistryHealth> {
       try {
-        const res = await fetchImpl(`${baseUrl}/v0.1/servers?limit=1&version=latest`);
+        await fetchCatalogJson({
+          url: `${baseUrl}/v0.1/servers?limit=1&version=latest`,
+          provider: "official",
+          timeoutMs: PROVIDER_TIMEOUTS_MS.official,
+          fetchImpl,
+        });
+        return { id: "official", name: "Official MCP Registry", status: "online", detail: "registry.modelcontextprotocol.io" };
+      } catch (err: any) {
         return {
           id: "official",
           name: "Official MCP Registry",
-          status: res.ok ? "online" : "offline",
-          detail: res.ok ? "registry.modelcontextprotocol.io" : `HTTP ${res.status}`,
+          status: err?.errorClass === "timeout" ? "slow" : "offline",
+          detail: String(err?.message ?? err).slice(0, 160),
+          errorClass: err?.errorClass,
         };
-      } catch (err: any) {
-        return { id: "official", name: "Official MCP Registry", status: "offline", detail: String(err?.message ?? err).slice(0, 160) };
       }
     },
     async search(query: RegistrySearch) {
@@ -48,12 +61,18 @@ export function officialProvider(
       const results: RegistryResult[] = [];
       let cursor = query.cursor ? String(query.cursor) : "";
       let lastCursor: string | undefined;
+      const started = Date.now();
       for (let page = 0; page < pages; page++) {
+        const remaining = PROVIDER_TIMEOUTS_MS.official - (Date.now() - started);
+        if (remaining < 250) break;
         const cursorQs = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
         const url = `${baseUrl}/v0.1/servers?${search}version=latest&limit=${limit}${cursorQs}`;
-        const res = await fetchImpl(url);
-        if (!res.ok) throw new Error(`Official registry HTTP ${res.status}`);
-        const body = await res.json();
+        const { body } = await fetchCatalogJson({
+          url,
+          provider: "official",
+          timeoutMs: remaining,
+          fetchImpl,
+        });
         const rows = Array.isArray(body.servers) ? body.servers : [];
         for (const row of rows) results.push({ server: normalizeOfficial(row), score: 0 });
         lastCursor = body.metadata?.nextCursor;
@@ -63,10 +82,18 @@ export function officialProvider(
       return { results, cursor: lastCursor };
     },
     async getServer(id: string) {
-      const encoded = encodeURIComponent(id);
-      const res = await fetchImpl(`${baseUrl}/v0.1/servers/${encoded}/versions/latest`);
-      if (!res.ok) return null;
-      return normalizeOfficial(await res.json());
+      try {
+        const encoded = encodeURIComponent(id);
+        const { body } = await fetchCatalogJson({
+          url: `${baseUrl}/v0.1/servers/${encoded}/versions/latest`,
+          provider: "official",
+          timeoutMs: PROVIDER_TIMEOUTS_MS.official,
+          fetchImpl,
+        });
+        return normalizeOfficial(body);
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -118,7 +145,9 @@ export function normalizeOfficial(row: any): MarketplaceMcpServer {
     categories: inferCategories(name, description),
     packages,
     transports,
-    tools: officialTools,
+    remotes: transports.filter((t) => t.kind === "http" && t.url).map((t) => ({ url: t.url! })),
+    tools: officialTools.map((t) => ({ ...t, origin: "declared" as const })),
+    executionLocation: transports.some((t) => t.kind === "http") ? "remote" : "local",
     toolCount: officialTools.length || undefined,
     auth: transports.some((t) => t.headers?.some((h) => h.secret))
       ? [{ kind: "bearer", label: "Bearer token" }]

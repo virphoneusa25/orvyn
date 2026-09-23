@@ -9,6 +9,7 @@ const CATEGORY_HINTS: Array<[string, RegExp]> = [
   ["Browser", /browser|playwright|puppeteer|chrome/i],
   ["Communication", /slack|discord|teams|chat/i],
   ["Email", /email|smtp|imap|gmail/i],
+  ["CRM", /salesforce|hubspot|crm|zendesk/i],
   ["Project Management", /jira|linear|asana|notion|trello/i],
   ["Observability", /grafana|prometheus|datadog|sentry|log/i],
   ["Security", /vault|secret|snyk|osv|auth/i],

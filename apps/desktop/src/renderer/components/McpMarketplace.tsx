@@ -33,6 +33,7 @@ import {
   transportLabel,
   toolsAdvertisedLabel,
   uninstallCopy,
+  toolOriginLabel,
   type DetailTab,
   type MarketFilters,
   type MarketServer,
@@ -48,6 +49,16 @@ import {
   shouldUseHostInstall,
   type CatalogState,
 } from "../mcpOfficialCatalog";
+import {
+  MARKETPLACE_DEBOUNCE_MS,
+  degradedBanner,
+  emptyKindFor,
+  healthToProviders,
+  mergeCatalogPreferIncoming,
+  providerDots,
+  shouldKeepPreviousResults,
+  type ProviderStatusView,
+} from "../mcpCatalogClient";
 
 interface Health {
   id: string;
@@ -83,10 +94,15 @@ export function McpMarketplace({
   const [debounced, setDebounced] = useState(initialQuery);
   const [results, setResults] = useState<MarketServer[]>([]);
   const [health, setHealth] = useState<Health[]>([]);
+  const [providers, setProviders] = useState<Record<string, ProviderStatusView>>({});
   const [degraded, setDegraded] = useState<string[]>([]);
+  const [fromCache, setFromCache] = useState(false);
+  const [emptyKind, setEmptyKind] = useState<"results" | "true-empty" | "provider-failure" | "offline" | "auth-required">("results");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [catalogState, setCatalogState] = useState<CatalogState>("cloud");
+  const searchGen = useRef(0);
+  const resultsRef = useRef<MarketServer[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filters, setFilters] = useState<MarketFilters>(EMPTY_FILTERS);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -119,7 +135,7 @@ export function McpMarketplace({
   }, [initialQuery]);
 
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(q.trim()), 280);
+    const t = setTimeout(() => setDebounced(q.trim()), MARKETPLACE_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [q]);
 
@@ -136,28 +152,42 @@ export function McpMarketplace({
     return () => ro.disconnect();
   }, []);
 
-  const search = useCallback(async (query: string) => {
+  const search = useCallback(async (query: string, opts?: { refresh?: boolean }) => {
+    const mine = ++searchGen.current;
     setLoading(true);
-    setError(null);
     const backendUrl = getConnectionConfig().backendUrl;
+    const previous = resultsRef.current;
     try {
       const params = new URLSearchParams();
       if (query) params.set("q", query);
       params.set("limit", "48");
       if (filters.category) params.set("category", filters.category);
+      if (opts?.refresh) params.set("refresh", "1");
       const skipMarket = isMarketplaceUnsupported(backendUrl);
+      const fetchOne = async (url: string, timeoutMs: number) => {
+        try {
+          return await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(timeoutMs) });
+        } catch (err: any) {
+          return new Response(JSON.stringify({ error: /aborted|timeout/i.test(String(err?.message)) ? "timeout" : String(err?.message ?? err) }), {
+            status: 599,
+            headers: { "content-type": "application/json" },
+          });
+        }
+      };
       const [searchRes, healthRes, statusRes, updateRes] = await Promise.all([
         skipMarket
           ? Promise.resolve(new Response("<!DOCTYPE html>", { status: 404, headers: { "content-type": "text/html" } }))
-          : fetch(apiUrl(`/mcp/marketplace/search?${params}`), { headers: authHeaders() }),
-        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetch(apiUrl("/mcp/marketplace/health"), { headers: authHeaders() }),
-        fetch(apiUrl("/mcp/statuses"), { headers: authHeaders() }),
-        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetch(apiUrl("/mcp/marketplace/updates"), { headers: authHeaders() }),
+          : fetchOne(apiUrl(`/mcp/marketplace/search?${params}`), 16_000),
+        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetchOne(apiUrl("/mcp/marketplace/health"), 8_000),
+        fetchOne(apiUrl("/mcp/statuses"), 8_000),
+        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetchOne(apiUrl("/mcp/marketplace/updates"), 8_000),
       ]);
+      if (mine !== searchGen.current) return;
       const searchText = await searchRes.text();
       const healthText = await healthRes.text().catch(() => "");
       const statusText = await statusRes.text().catch(() => "");
       const updateText = await updateRes.text().catch(() => "");
+      if (mine !== searchGen.current) return;
       const healthParsed = parseApiJson(healthRes.status, healthText, healthRes.headers.get("content-type") ?? undefined);
       const statusParsed = parseApiJson(statusRes.status, statusText, statusRes.headers.get("content-type") ?? undefined);
       const updateParsed = parseApiJson(updateRes.status, updateText, updateRes.headers.get("content-type") ?? undefined);
@@ -167,22 +197,41 @@ export function McpMarketplace({
         contentType: searchRes.headers.get("content-type") ?? undefined,
         query,
         backendUrl,
+        previousCatalog: previous,
       });
+      if (mine !== searchGen.current) return;
       const statuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
-      const notices = [...providerWarning(healthParsed.body.providers ?? [])];
-      if (resolved.notice) notices.push(resolved.notice);
+      const mergedCatalog = mergeInstalled(resolved.catalog, statuses);
+      const providerMap = healthToProviders(
+        (resolved.parsed.ok && resolved.parsed.body?.health) || healthParsed.body.providers || []
+      );
+      const kind = emptyKindFor({
+        resultCount: mergedCatalog.length,
+        fromCache: Boolean(resolved.fromCache || resolved.parsed.body?.fromCache),
+        providers: Object.keys(providerMap).length ? providerMap : { official: { status: resolved.state === "degraded" ? "slow" : "online" } },
+        catalogState: resolved.state,
+      });
+      const keep = shouldKeepPreviousResults({ incomingCount: mergedCatalog.length, emptyKind: kind, hadResults: previous.length > 0 });
+      const next = mergeCatalogPreferIncoming(previous, mergedCatalog, keep);
+      const banner = resolved.notice || degradedBanner(providerMap, Boolean(resolved.fromCache));
       setCatalogState(resolved.state);
-      if (resolved.state === "official-fallback") setError(null);
-      else setError(resolved.error ?? null);
-      setResults(mergeInstalled(resolved.catalog, statuses));
+      setFromCache(Boolean(resolved.fromCache || resolved.parsed.body?.fromCache));
+      setEmptyKind(kind);
+      setProviders(providerMap);
+      setError(resolved.state === "auth-required" ? (resolved.error ?? "Cloud account/session requires attention") : null);
+      resultsRef.current = next;
+      setResults(next);
       setHealth(healthParsed.body.providers ?? []);
-      setDegraded(notices);
+      setDegraded(banner ? [banner] : providerWarning(healthParsed.body.providers ?? []));
       setUpdates(updateParsed.body.updates ?? []);
     } catch (err: any) {
-      setCatalogState("error");
-      setError(err.message);
+      if (mine !== searchGen.current) return;
+      setCatalogState("degraded");
+      setEmptyKind(previous.length ? "provider-failure" : "offline");
+      setDegraded(["Some registries are unavailable"]);
+      setError(null);
     } finally {
-      setLoading(false);
+      if (mine === searchGen.current) setLoading(false);
     }
   }, [filters.category]);
 
@@ -470,22 +519,26 @@ export function McpMarketplace({
               placeholder="Search MCP servers, tools, or capabilities..."
               style={searchInput}
             />
-            <IconBtn title="Refresh" onClick={() => void search(debounced)}>↻</IconBtn>
+            <IconBtn title="Refresh" onClick={() => void search(debounced, { refresh: true })}>↻</IconBtn>
             <IconBtn title="Filters" onClick={() => setFilterOpen((v) => !v)} active={filterActiveCount(filters) > 0}>
               ▦{filterActiveCount(filters) ? ` ${filterActiveCount(filters)}` : ""}
             </IconBtn>
             <IconBtn title="More" onClick={() => setOverflow((v) => !v)}>⋯</IconBtn>
           </div>
+          <ProviderDots providers={providers} />
           {catalogState === "official-fallback" && (
             <div style={{ fontSize: 10.5, color: "var(--orvyn-cyan, #22D3EE)", marginTop: 8 }}>
               Cloud catalog unavailable · showing Official Registry results
             </div>
           )}
           {warnings.length > 0 && catalogState !== "official-fallback" && (
-            <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 8 }}>{warnings.join(" · ")}</div>
+            <div data-testid="marketplace-degraded" style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 8 }}>{warnings[0]}</div>
           )}
-          {error && catalogState !== "official-fallback" && (
-            <div style={{ fontSize: 11, color: "var(--orvyn-red, #F25F75)", marginTop: 6 }}>{error}</div>
+          {error && catalogState === "auth-required" && (
+            <div style={{ fontSize: 11, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>{error}</div>
+          )}
+          {fromCache && emptyKind === "offline" && (
+            <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>Offline · showing cached catalog</div>
           )}
         </div>
 
@@ -561,13 +614,25 @@ export function McpMarketplace({
               <PrivateRegistries onSaved={() => void search(debounced)} />
             </div>
           )}
-          {!loading && filtered.length === 0 && (
+          {!loading && filtered.length === 0 && emptyKind === "true-empty" && (
             <div style={{ padding: 18, fontSize: 12.5, color: "var(--orvyn-text-muted)" }}>
               <div style={{ fontWeight: 600, color: "var(--orvyn-text)", marginBottom: 6 }}>No MCP servers found</div>
               Try another search or add a custom server.
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button style={ghostBtn} onClick={() => document.dispatchEvent(new CustomEvent("orvyn:mcp-add-server"))}>Add Server</button>
                 <button style={ghostBtn} onClick={() => setOpenSections((s) => ({ ...s, private: true }))}>Add Registry</button>
+              </div>
+            </div>
+          )}
+          {!loading && filtered.length === 0 && emptyKind !== "true-empty" && emptyKind !== "results" && (
+            <div style={{ padding: 18, fontSize: 12.5, color: "var(--orvyn-text-muted)" }}>
+              <div style={{ fontWeight: 600, color: "var(--orvyn-text)", marginBottom: 6 }}>
+                {emptyKind === "offline" ? "Marketplace is temporarily offline." : "Some registries are unavailable"}
+              </div>
+              Installed MCP servers stay visible. Cached catalog results are shown when we have them.
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button style={ghostBtn} onClick={() => void search(debounced, { refresh: true })}>Retry</button>
+                <button style={ghostBtn} onClick={() => document.dispatchEvent(new CustomEvent("orvyn:mcp-add-server"))}>Add Server</button>
               </div>
             </div>
           )}
@@ -793,6 +858,7 @@ function ToolsTab({
           >
             <code style={{ fontSize: 13, minWidth: 180 }}>{t.name}</code>
             <span style={{ flex: 1, fontSize: 13, color: "var(--orvyn-text-secondary)" }}>{t.description}</span>
+            <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)" }}>{toolOriginLabel(t, Boolean(server.installed))}</span>
             <span style={{ fontSize: 10, letterSpacing: 0.4, color: /read/i.test(t.risk) ? "var(--orvyn-cyan)" : /destruc/i.test(t.risk) ? "var(--orvyn-red)" : "var(--orvyn-yellow)" }}>{formatRisk(t.risk)}</span>
             {t.active && <span style={{ ...badge, color: "var(--orvyn-green, #20D89B)" }}>Active</span>}
           </button>
@@ -915,6 +981,7 @@ function SourceTab({ server }: { server: MarketServer }) {
     <div style={{ maxWidth: 640 }}>
       <Meta row="Official" value={server.sources.includes("official") ? "Listed on the Official MCP Registry" : "Not from Official"} />
       <Meta row="Glama" value={server.sources.includes("glama") ? "Also listed on Glama" : "—"} />
+      <Meta row="Smithery" value={server.sources.includes("smithery") ? "Also listed on Smithery" : "—"} />
       <Meta row="Repository" value={server.repository ?? "—"} />
       <Meta row="Homepage" value={server.homepage ?? "—"} />
       <Meta row="Package" value={server.packages?.[0]?.identifier ?? "—"} />
@@ -1046,7 +1113,7 @@ function FilterPopover({ filters, onChange, onClose }: { filters: MarketFilters;
   return (
     <div style={{ ...menuBox, position: "absolute", right: 12, top: 78, width: 260, zIndex: 30 }}>
       <div style={filterHead}>Source</div>
-      {(["official", "glama", "private", "local"] as MarketSource[]).map((s) => (
+      {(["official", "glama", "smithery", "private", "local"] as MarketSource[]).map((s) => (
         <label key={s} style={menuItem}><input type="checkbox" checked={filters.sources.includes(s)} onChange={() => toggleSrc(s)} /> {SOURCE_LABEL[s]}</label>
       ))}
       <div style={filterHead}>Status</div>
@@ -1145,6 +1212,28 @@ function ConfirmDialog({ title, body, confirm, onCancel, onConfirm }: { title: s
           <button style={{ ...primaryBtn, background: "var(--orvyn-red, #F25F75)" }} onClick={onConfirm}>{confirm}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProviderDots({ providers }: { providers: Record<string, ProviderStatusView> }) {
+  const dots = providerDots(providers);
+  return (
+    <div style={{ display: "flex", gap: 10, marginTop: 8, fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>
+      {dots.map((d) => (
+        <span key={d.id} title={d.title} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          {d.label}
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: d.filled ? "var(--orvyn-green, #20D89B)" : "transparent",
+              border: d.filled ? "none" : "1px solid var(--orvyn-text-muted)",
+            }}
+          />
+        </span>
+      ))}
     </div>
   );
 }

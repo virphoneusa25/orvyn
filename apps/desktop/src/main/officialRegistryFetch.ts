@@ -29,7 +29,7 @@ export async function fetchOfficialRegistry(
 ): Promise<{ ok: boolean; status: number; body: unknown; error?: string }> {
   const url = officialRegistryRequestUrl(query, limit, cursor);
   try {
-    const res = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+    const res = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(12_000) });
     const text = await res.text();
     const trimmed = (text ?? "").trim();
     if (trimmed.startsWith("<")) {

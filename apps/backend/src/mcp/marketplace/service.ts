@@ -1,13 +1,16 @@
 import type { McpManager } from "../McpManager";
 import { RegistryAggregator } from "./aggregator";
+import { CatalogCache, settingCacheStore } from "./catalogCache";
 import { glamaProvider } from "./glamaProvider";
 import { exportOrvynMcpConfig, parseImportedMcpConfig, type ImportedServerDraft } from "./importExport";
 import { installMarketplaceServer } from "./install";
 import { localProvider } from "./localProvider";
 import { officialProvider } from "./officialProvider";
 import { privateProvider, type PrivateRegistryConfig } from "./privateProvider";
+import { smitheryProvider } from "./smitheryProvider";
 import { CapabilityIndex } from "./searchCapabilities";
 import type { MarketplaceMcpServer, RegistrySearch } from "./types";
+import { MARKETPLACE_CATALOG_VERSION, MARKETPLACE_INSTALL_API_VERSION, SUPPORTED_MARKETPLACE_PROVIDERS } from "./types";
 
 const REGISTRIES_KEY = "mcp.marketplace.registries.v1";
 const BLOCKLIST_KEY = "mcp.marketplace.blocklist.v1";
@@ -15,11 +18,13 @@ const BLOCKLIST_KEY = "mcp.marketplace.blocklist.v1";
 export class MarketplaceService {
   readonly index: CapabilityIndex;
   private aggregator: RegistryAggregator;
+  private cache: CatalogCache<any>;
 
   constructor(
     private manager: McpManager,
     private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void }
   ) {
+    this.cache = new CatalogCache(settingCacheStore(this.store));
     this.aggregator = this.buildAggregator();
     this.index = new CapabilityIndex(manager, this.aggregator);
   }
@@ -42,8 +47,20 @@ export class MarketplaceService {
     }
   }
 
+  private secret(key: string): string {
+    const stored = this.store.getSetting(key);
+    return typeof stored === "string" && stored.trim() ? stored.trim() : "";
+  }
+
   private buildAggregator(): RegistryAggregator {
-    const providers = [officialProvider(), glamaProvider(), localProvider(this.manager)];
+    const glamaKey = this.secret("mcp.secret.glama") || process.env.GLAMA_API_KEY || "";
+    const smitheryKey = this.secret("mcp.secret.smithery") || process.env.SMITHERY_API_KEY || "";
+    const providers = [
+      officialProvider(),
+      glamaProvider(fetch, glamaKey),
+      smitheryProvider(fetch, smitheryKey),
+      localProvider(this.manager),
+    ];
     for (const reg of this.readRegistries()) {
       providers.push(
         privateProvider(reg, fetch, () => {
@@ -52,12 +69,24 @@ export class MarketplaceService {
         })
       );
     }
-    return new RegistryAggregator(providers);
+    return new RegistryAggregator(providers, this.cache);
   }
 
   refreshProviders(): void {
     this.aggregator = this.buildAggregator();
     this.index.aggregator = this.aggregator;
+  }
+
+  invalidateCatalog(query?: string): void {
+    this.aggregator.invalidate(query);
+  }
+
+  capabilities() {
+    return {
+      marketplaceCatalogVersion: MARKETPLACE_CATALOG_VERSION,
+      supportedProviders: [...SUPPORTED_MARKETPLACE_PROVIDERS],
+      installApiVersion: MARKETPLACE_INSTALL_API_VERSION,
+    };
   }
 
   async search(query: RegistrySearch) {
@@ -96,8 +125,8 @@ export class MarketplaceService {
     return installMarketplaceServer(this.manager, { server, secrets: opts.secrets, cwd: opts.cwd, connect: opts.connect });
   }
 
-  async featured() {
-    const out = await this.search({ query: "", limit: 48 });
+  async featured(opts?: { refresh?: boolean }) {
+    const out = await this.search({ query: "", limit: 48, refresh: opts?.refresh });
     return { ...out, results: out.results.slice(0, 48) };
   }
 

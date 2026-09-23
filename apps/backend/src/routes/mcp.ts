@@ -135,28 +135,50 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/marketplace/search", async (req, res) => {
     const t = requireTenant(req);
+    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const q = String(req.query.q ?? "");
+    const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    if (refresh) market.invalidateCatalog();
     try {
-      const market = marketplaceFor(t.mcpManager, t.localStore);
-      const q = String(req.query.q ?? "");
-      if (!q.trim()) {
-        const featured = await market.featured();
-        return res.json(featured);
-      }
-      const out = await market.search({
-        query: q,
-        limit: Number(req.query.limit ?? 24) || 24,
-        cursor: req.query.cursor ? String(req.query.cursor) : undefined,
-        category: req.query.category ? String(req.query.category) : undefined,
-      });
+      const out = q.trim()
+        ? await market.search({
+            query: q,
+            limit: Number(req.query.limit ?? 24) || 24,
+            cursor: req.query.cursor ? String(req.query.cursor) : undefined,
+            category: req.query.category ? String(req.query.category) : undefined,
+            refresh,
+          })
+        : await market.featured({ refresh });
       res.json(out);
     } catch (err: any) {
-      res.status(502).json({ error: err.message });
+      res.status(200).json({
+        results: [],
+        health: [],
+        providers: {},
+        degraded: [String(err?.message ?? "Marketplace is temporarily offline.").slice(0, 160)],
+        degradedFlag: true,
+        fromCache: false,
+        error: "Marketplace is temporarily offline.",
+      });
     }
+  });
+
+  r.post("/marketplace/refresh", async (req, res) => {
+    const t = requireTenant(req);
+    const market = marketplaceFor(t.mcpManager, t.localStore);
+    market.invalidateCatalog(req.body?.query ? String(req.body.query) : undefined);
+    res.json({ ok: true });
+  });
+
+  r.get("/marketplace/capabilities", (req, res) => {
+    const t = requireTenant(req);
+    res.json(marketplaceFor(t.mcpManager, t.localStore).capabilities());
   });
 
   r.get("/marketplace/health", async (req, res) => {
     const t = requireTenant(req);
-    res.json({ providers: await marketplaceFor(t.mcpManager, t.localStore).health() });
+    const market = marketplaceFor(t.mcpManager, t.localStore);
+    res.json({ providers: await market.health(), ...market.capabilities() });
   });
 
   r.get("/marketplace/categories", (_req, res) => {
@@ -217,7 +239,15 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     try {
       res.json(await marketplaceFor(t.mcpManager, t.localStore).featured());
     } catch (err: any) {
-      res.status(502).json({ error: err.message });
+      res.status(200).json({
+        results: [],
+        health: [],
+        providers: {},
+        degraded: [String(err?.message ?? "Marketplace is temporarily offline.").slice(0, 160)],
+        degradedFlag: true,
+        fromCache: false,
+        error: "Marketplace is temporarily offline.",
+      });
     }
   });
 

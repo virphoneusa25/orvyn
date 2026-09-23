@@ -20,7 +20,14 @@ app.use(express.json({ limit: "10mb" }));
 // The simple form stays fast for Docker healthchecks; /api/v1/health/detailed
 // probes the control-plane services (PostgreSQL, Redis) when configured.
 app.get("/api/v1/health", (_req, res) =>
-  res.json({ status: "ok", service: "orvyn-backend", version: "0.2.0" })
+  res.json({
+    status: "ok",
+    service: "orvyn-backend",
+    version: "0.2.0",
+    marketplaceCatalogVersion: 1,
+    supportedProviders: ["official", "glama", "smithery", "local", "private"],
+    installApiVersion: 1,
+  })
 );
 
 app.get("/api/v1/health/detailed", async (_req, res) => {

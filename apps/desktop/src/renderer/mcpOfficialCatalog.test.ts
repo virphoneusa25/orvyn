@@ -42,21 +42,21 @@ test("Cloud HTML/empty catalog must fall back to Official Registry", () => {
   assert.equal(shouldUseOfficialFallback(true, 4, 200, false), false);
 });
 
-test("401 and 403 stay auth/permission failures — no public registry fallback", () => {
+test("401 and 403 stay auth/permission failures — public discovery may still run", () => {
   const unauth = decideCatalogSource({
     status: 401,
     parsed: parseApiJson(401, JSON.stringify({ error: "Unauthorized — missing API key" })),
     catalogCount: 0,
   });
   assert.equal(unauth.state, "auth-required");
-  assert.equal(unauth.useOfficialFallback, false);
+  assert.equal(unauth.useOfficialFallback, true);
   const forbidden = decideCatalogSource({
     status: 403,
     parsed: parseApiJson(403, "<html>", "text/html"),
     catalogCount: 0,
   });
   assert.equal(forbidden.state, "auth-required");
-  assert.equal(forbidden.useOfficialFallback, false);
+  assert.equal(forbidden.useOfficialFallback, true);
 });
 
 test("valid 200 with zero results is an empty catalog, not an unsupported route", () => {
@@ -69,14 +69,21 @@ test("valid 200 with zero results is an empty catalog, not an unsupported route"
   assert.equal(empty.useOfficialFallback, false);
 });
 
-test("Cloud 500 stays an error and does not hide behind Official Registry", () => {
+test("Cloud 500/timeout falls back to public federation instead of a blank catalog", () => {
   const boom = decideCatalogSource({
     status: 500,
     parsed: parseApiJson(500, JSON.stringify({ error: "boom" })),
     catalogCount: 0,
   });
-  assert.equal(boom.state, "error");
-  assert.equal(boom.useOfficialFallback, false);
+  assert.equal(boom.state, "degraded");
+  assert.equal(boom.useOfficialFallback, true);
+  const offline = decideCatalogSource({
+    status: 0,
+    parsed: parseApiJson(0, ""),
+    catalogCount: 0,
+  });
+  assert.equal(offline.state, "offline");
+  assert.equal(offline.useOfficialFallback, true);
 });
 
 test("normalize Official Registry GitHub row for the two-pane marketplace", () => {
@@ -179,8 +186,8 @@ test("resolveMarketplaceCatalog: Cloud JSON works; 404/HTML fall back; 401 does 
     loadOfficial,
   });
   assert.equal(auth.state, "auth-required");
-  assert.equal(auth.catalog.length, 0);
-  assert.match(auth.error ?? "", /signed-in|Unauthorized|401/i);
+  assert.equal(auth.catalog[0].name, "io.github.github/github-mcp-server");
+  assert.match(`${auth.error ?? ""} ${auth.notice ?? ""}`, /attention|Unauthorized|401|signed-in/i);
 });
 
 test("cached unsupported host skips inventing Cloud support and uses Official fallback", async () => {
@@ -211,7 +218,26 @@ test("Official Registry unavailable becomes degraded, not a fake GitHub card", a
   });
   assert.equal(out.state, "degraded");
   assert.equal(out.catalog.length, 0);
-  assert.match(out.error ?? "", /502|unavailable/i);
+  assert.match(`${out.error ?? ""} ${out.notice ?? ""}`, /502|unavailable|offline/i);
+});
+
+test("official timeout keeps previous/cloud results instead of fake zeros", async () => {
+  resetMarketplaceSupport();
+  const previous = [normalizeOfficialRow(officialRow("io.github.github/github-mcp-server", { title: "GitHub", repository: "https://github.com/github/github-mcp-server" }))];
+  const out = await resolveMarketplaceCatalog({
+    status: 0,
+    text: "",
+    query: "js",
+    backendUrl: "https://orvyn.virphoneusa.com",
+    previousCatalog: previous,
+    loadOfficial: async () => {
+      throw new Error("The operation was aborted due to timeout");
+    },
+  });
+  assert.equal(out.state, "degraded");
+  assert.equal(out.catalog.length, 1);
+  assert.match(out.notice ?? "", /slowly|available sources|cached|offline/i);
+  assert.equal(out.error, undefined);
 });
 
 test("preferKnownProducts + dedupe keep one GitHub card", () => {

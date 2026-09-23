@@ -1,4 +1,5 @@
 import { classifyMarketplaceRisk, inferCategories, trustFor } from "./classify";
+import { fetchCatalogJson, PROVIDER_TIMEOUTS_MS } from "./providerRuntime";
 import type { MarketplaceMcpServer, McpRegistryProvider, RegistryHealth, RegistryResult, RegistrySearch } from "./types";
 import { GLAMA_API_URL } from "./types";
 
@@ -19,28 +20,48 @@ export function glamaProvider(
         };
       }
       try {
-        const res = await fetchImpl(`${GLAMA_API_URL}/v1/servers?first=1`, {
+        await fetchCatalogJson({
+          url: `${GLAMA_API_URL}/v1/servers?first=1`,
+          provider: "glama",
+          timeoutMs: PROVIDER_TIMEOUTS_MS.glama,
           headers: { Authorization: `Bearer ${apiKey}` },
+          fetchImpl: fetchImpl as any,
         });
+        return { id: "glama", name: "Glama", status: "online", detail: "glama.ai · attribution required" };
+      } catch (err: any) {
         return {
           id: "glama",
           name: "Glama",
-          status: res.ok ? "online" : "offline",
-          detail: res.ok ? "glama.ai · attribution required" : `HTTP ${res.status}`,
+          status: err?.errorClass === "timeout" ? "slow" : err?.errorClass === "auth-required" ? "auth-required" : "offline",
+          detail: String(err?.message ?? err).slice(0, 160),
+          errorClass: err?.errorClass,
         };
-      } catch (err: any) {
-        return { id: "glama", name: "Glama", status: "offline", detail: String(err?.message ?? err).slice(0, 160) };
       }
     },
     async search(query: RegistrySearch) {
-      if (!apiKey) return { results: [] };
+      if (!apiKey) {
+        return {
+          results: [],
+          health: {
+            id: "glama",
+            name: "Glama",
+            status: "needs-key",
+            detail: "Set GLAMA_API_KEY to federate Glama. Official Registry still works.",
+            errorClass: "needs-key",
+          },
+        };
+      }
       const url = new URL(`${GLAMA_API_URL}/v1/servers`);
       if (query.query) url.searchParams.set("query", query.query);
       url.searchParams.set("first", String(Math.min(query.limit ?? 20, 50)));
       if (query.cursor) url.searchParams.set("after", query.cursor);
-      const res = await fetchImpl(url.toString(), { headers: { Authorization: `Bearer ${apiKey}` } });
-      if (!res.ok) throw new Error(`Glama HTTP ${res.status}`);
-      const body = await res.json();
+      const { body } = await fetchCatalogJson({
+        url: url.toString(),
+        provider: "glama",
+        timeoutMs: PROVIDER_TIMEOUTS_MS.glama,
+        headers: { Authorization: `Bearer ${apiKey}` },
+        fetchImpl: fetchImpl as any,
+      });
       const nodes = body.servers ?? body.data ?? body.edges?.map((e: any) => e.node) ?? [];
       const results: RegistryResult[] = (Array.isArray(nodes) ? nodes : []).map((n: any) => ({
         server: normalizeGlama(n),
@@ -49,17 +70,25 @@ export function glamaProvider(
           name: String(t.name ?? ""),
           description: String(t.description ?? ""),
           risk: classifyMarketplaceRisk(t.name ?? "", t.description ?? ""),
+          origin: "declared" as const,
         })),
       }));
       return { results, cursor: body.pageInfo?.endCursor ?? body.endCursor };
     },
     async getServer(id: string) {
       if (!apiKey) return null;
-      const res = await fetchImpl(`${GLAMA_API_URL}/v1/servers/${id}`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
-      if (!res.ok) return null;
-      return normalizeGlama(await res.json());
+      try {
+        const { body } = await fetchCatalogJson({
+          url: `${GLAMA_API_URL}/v1/servers/${id}`,
+          provider: "glama",
+          timeoutMs: PROVIDER_TIMEOUTS_MS.glama,
+          headers: { Authorization: `Bearer ${apiKey}` },
+          fetchImpl: fetchImpl as any,
+        });
+        return normalizeGlama(body);
+      } catch {
+        return null;
+      }
     },
   };
 }
@@ -88,7 +117,7 @@ export function normalizeGlama(n: any): MarketplaceMcpServer {
     transports: n.url && String(n.url).startsWith("http") && !String(n.url).includes("glama.ai/mcp/servers")
       ? [{ kind: "http", url: String(n.url) }]
       : [{ kind: "stdio", command: "npx", args: ["-y", String(n.npmPackage ?? name)] }],
-    tools,
+    tools: tools.map((t) => ({ ...t, origin: "declared" as const })),
     auth: [{ kind: "none", label: "See server listing" }],
     trust: trustFor({ sources: ["glama"], publisher: n.namespace, repository: n.repository?.url }),
     compatibility: "compatible",

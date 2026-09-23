@@ -2,7 +2,9 @@
 // these types; ORION never sees the raw catalog — only search_capabilities
 // results and activated tool schemas.
 
-export type RegistrySource = "official" | "glama" | "local" | "private";
+import type { ProviderHealthStatus } from "./providerRuntime";
+
+export type RegistrySource = "official" | "glama" | "smithery" | "local" | "private";
 
 export type TrustLevel = "verified" | "community" | "unverified" | "blocked";
 
@@ -27,13 +29,17 @@ export interface RegistrySearch {
   cursor?: string;
   limit?: number;
   category?: string;
+  refresh?: boolean;
 }
 
 export interface RegistryHealth {
   id: string;
   name: string;
-  status: "online" | "offline" | "needs-key" | "disabled";
+  status: ProviderHealthStatus;
   detail?: string;
+  latencyMs?: number;
+  resultCount?: number;
+  errorClass?: string;
 }
 
 export interface McpPackage {
@@ -75,6 +81,7 @@ export interface MarketplaceToolSummary {
   name: string;
   description: string;
   risk: ToolRiskTag;
+  origin?: "declared" | "live";
 }
 
 export interface MarketplaceMcpServer {
@@ -88,6 +95,7 @@ export interface MarketplaceMcpServer {
   homepage?: string;
   categories: string[];
   packages: McpPackage[];
+  remotes?: { url: string }[];
   transports: McpTransportDescriptor[];
   tools?: MarketplaceToolSummary[];
   auth: AuthRequirement[];
@@ -102,6 +110,8 @@ export interface MarketplaceMcpServer {
   networkRequired: boolean;
   filesystemScope: "none" | "project" | "selected" | "full";
   iconUrl?: string;
+  executionLocation?: "local" | "remote";
+  health?: string;
 }
 
 export interface MarketplaceTool {
@@ -119,12 +129,35 @@ export interface RegistryResult {
   matchedTools?: MarketplaceToolSummary[];
 }
 
+export interface RegistrySearchChunk {
+  results: RegistryResult[];
+  cursor?: string;
+  health?: RegistryHealth;
+}
+
 export interface McpRegistryProvider {
   id: RegistrySource;
   name: string;
-  search(query: RegistrySearch): Promise<{ results: RegistryResult[]; cursor?: string }>;
-  getServer(id: string): Promise<MarketplaceMcpServer | null>;
-  health(): Promise<RegistryHealth>;
+  search(query: RegistrySearch): Promise<RegistrySearchChunk>;
+  getServer?(id: string): Promise<MarketplaceMcpServer | null>;
+  health?(): Promise<RegistryHealth>;
+}
+
+export interface MarketplaceSearchResponse {
+  results: RegistryResult[];
+  health: RegistryHealth[];
+  providers: Record<string, RegistryHealth>;
+  degraded: string[];
+  degradedFlag: boolean;
+  fromCache: boolean;
+  stale?: boolean;
+  cursor?: string;
+  diagnostics?: {
+    cache: "hit" | "stale" | "miss";
+    resultCount: number;
+    dedupeCount: number;
+    providerLatency: Record<string, number>;
+  };
 }
 
 export const MARKETPLACE_CATEGORIES = [
@@ -154,5 +187,10 @@ export const MARKETPLACE_CATEGORIES = [
 
 export const DEFAULT_TOOL_BUDGET = { maxServers: 8, maxTools: 40 };
 
+export const MARKETPLACE_CATALOG_VERSION = 1;
+export const MARKETPLACE_INSTALL_API_VERSION = 1;
+export const SUPPORTED_MARKETPLACE_PROVIDERS = ["official", "glama", "smithery", "local", "private"] as const;
+
 export const OFFICIAL_REGISTRY_URL = "https://registry.modelcontextprotocol.io";
 export const GLAMA_API_URL = "https://glama.ai/api/mcp";
+export const SMITHERY_API_URL = "https://api.smithery.ai";

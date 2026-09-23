@@ -55,6 +55,7 @@ test("search/filter: source, trust, installed, transport, category", () => {
   const local = sample({ name: "echo", sources: ["local"], transports: [{ kind: "stdio" }], trust: { level: "unverified", reasons: [] } });
   const all = [github, local];
   assert.equal(applyFilters(all, { ...EMPTY_FILTERS, sources: ["official"] }).length, 1);
+  assert.equal(applyFilters([github, sample({ name: "smithery-js", sources: ["smithery"] })], { ...EMPTY_FILTERS, sources: ["smithery"] }).length, 1);
   assert.equal(applyFilters(all, { ...EMPTY_FILTERS, status: "installed" })[0].name, github.name);
   assert.equal(applyFilters(all, { ...EMPTY_FILTERS, status: "not-installed" })[0].name, "echo");
   assert.equal(applyFilters(all, { ...EMPTY_FILTERS, trust: "verified" }).length, 1);
@@ -149,12 +150,13 @@ test("provider degradation lists Glama without failing Official", () => {
 });
 
 test("tools/list merge: installed status tools replace catalog stubs", () => {
-  const catalog = [sample({ name: "github", title: "GitHub", tools: [{ name: "stub", description: "catalog", risk: "read" }] })];
+  const catalog = [sample({ name: "github", title: "GitHub", tools: [{ name: "stub", description: "catalog", risk: "read", origin: "declared" }] })];
   const merged = mergeInstalled(catalog, [
     { id: "mcp_1", name: "GitHub", state: "CONNECTED", enabled: true, toolCount: 2, tools: [{ name: "create_pull_request", description: "Open a PR", risk: "WRITE" }] },
   ]);
   assert.equal(merged[0].installed?.state, "CONNECTED");
   assert.equal(merged[0].tools?.[0].name, "create_pull_request");
+  assert.equal(merged[0].tools?.[0].origin, "live");
   assert.equal(merged[0].toolCount, 2);
   const withLocal = mergeInstalled(catalog, [
     { id: "mcp_1", name: "GitHub", state: "CONNECTED", enabled: true, toolCount: 2, tools: [{ name: "create_pull_request", description: "Open a PR", risk: "WRITE" }] },
