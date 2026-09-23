@@ -309,6 +309,9 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "file.read", { path: args.path });
         break;
       case "write_file":
+        this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
+        this.store.emit(runId, "file.edit", { path: args.path, preview });
+        break;
       case "edit_file":
       case "delete_file":
       case "move_file":
@@ -604,8 +607,9 @@ export class StreamingAgentRuntime {
           mcpCapabilities(this.mcpSummary),
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
-          `Project root (absolute): ${projectRoot}`,
-          "File tools take paths relative to the project root.",
+          execution?.location === "OVH_WORKER"
+            ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
+            : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
@@ -725,20 +729,15 @@ export class StreamingAgentRuntime {
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(this.tools.registry, state.mode);
-    this.tools.applyProfile();
-    // NO SILENT LOCAL EXECUTION: tools with no remote variant that touch
-    // machine state (processes, git, the local FS) are flatly denied for
-    // forced-remote runs — otherwise the model could unknowingly mutate the
-    // CONTROL PLANE while believing it works on the mission container.
-    // Pure info-plane tools (web search, fetch, MCP listing) stay available.
+    if (state.accessMode) applyAccessMode(this.tools.registry, state.accessMode);
+    else this.tools.applyProfile();
+    // Tools with no remote variant must not run on the control plane while
+    // the model believes it is inside the mission container. Remote variants
+    // (write_file, terminal, git, start_process) keep the run's access mode.
     if (state.execution.location === "OVH_WORKER") {
-      const localOnlyStateful = new Set([
-        "start_process", "stop_process", "read_process_logs", "list_processes",
-        "git_status", "git_diff", "git_commit", "git_log", "git_branch", "git_checkout",
-        "delete_file", "move_file", "ssh_exec",
-      ]);
+      const localOnlyStateful = new Set(["move_file", "ssh_exec"]);
       for (const t of this.tools.list()) {
-        if (localOnlyStateful.has(t.name)) this.tools.setPermission(t.name, "denied");
+        if (localOnlyStateful.has(t.name) && !remoteNames.has(t.name)) this.tools.setPermission(t.name, "denied");
       }
     }
   }
@@ -921,10 +920,28 @@ export class StreamingAgentRuntime {
       provider: provider.config.provider,
       reasoningEffortRequested: state.reasoningEffort,
       reasoningEffortApplied: reasoningApplied,
-      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label } : {}),
+      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode } : {}),
+      tenantId: state.execution?.tenantId ?? "",
+      projectId: state.execution?.projectId ?? null,
+      executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
+      selectedModel: provider.config.id,
       ...(state.requestedModelId && state.requestedModelId !== provider.config.id
         ? { fallbackReason: `requested model "${state.requestedModelId}" resolved to "${provider.config.id}"` }
         : {}),
+    });
+
+    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions() : [];
+    this.store.emit(runId, "run.diagnostics", {
+      runId,
+      tenantId: state.execution?.tenantId ?? "",
+      projectId: state.execution?.projectId ?? null,
+      mode,
+      executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
+      permissionMode: state.accessMode ?? "",
+      selectedModel: provider.config.id,
+      toolCount: toolDefs.length,
+      toolNames: toolDefs.map((tool) => tool.name),
+      chatRuns: 1,
     });
 
     let steps = 0;

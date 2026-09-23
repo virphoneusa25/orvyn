@@ -23,6 +23,34 @@ test("artifact gate passes when a ready artifactId exists", () => {
   assert.equal(r.ok, true);
 });
 
+test("a workspace file create completes on write_file and read_file, not an artifact", () => {
+  const instruction = "Create a file named hello.txt containing exactly hello world, read the file back, and tell me what it contains.";
+  const blocked = evaluateCompletionGates({ instruction, artifacts: [], events: [] });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.retryPrompt, /write_file/);
+  assert.match(blocked.retryPrompt, /Do not use generate_image/);
+
+  const wrote = evaluateCompletionGates({
+    instruction,
+    artifacts: [],
+    events: [{ type: "tool.completed", data: { tool: "write_file" } }, { type: "file.created", data: { path: "hello.txt" } }],
+  });
+  assert.equal(wrote.ok, false);
+  assert.match(wrote.retryPrompt, /read_file/);
+
+  const done = evaluateCompletionGates({
+    instruction,
+    artifacts: [],
+    events: [
+      { type: "tool.completed", data: { tool: "write_file" } },
+      { type: "file.created", data: { path: "hello.txt" } },
+      { type: "tool.completed", data: { tool: "read_file" } },
+      { type: "file.read", data: { path: "hello.txt" } },
+    ],
+  });
+  assert.equal(done.ok, true);
+});
+
 test("code gate requires tests when the user asked to verify", () => {
   const blocked = evaluateCompletionGates({
     instruction: "Fix the failing tests in src/calc.ts",

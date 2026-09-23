@@ -14,6 +14,8 @@ export interface RunCapabilities {
   artifacts: boolean;
   mcp: boolean;
   modelTools: boolean;
+  /** True when this run's tools execute on the OVH worker. */
+  cloudExecution: boolean;
   /** Human label: Local, Local Sandbox, Cloud, or unspecified. */
   executionLabel: string;
   /** False when the registry has no tools mounted. */
@@ -72,6 +74,7 @@ export function summarizeCapabilities(
     artifacts: anyUsable(tools, ARTIFACTS),
     mcp: anyUsable(tools, MCP) || tools.some((t) => usable(t.permission) && t.name.startsWith("mcp.")),
     modelTools: opts.modelTools,
+    cloudExecution: (opts.executionLabel?.trim() || "") === "Cloud",
     executionLabel: opts.executionLabel?.trim() || "unspecified",
     mounted: tools.length > 0,
   };
@@ -125,6 +128,7 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
     line("Generated files and artifacts", caps.artifacts, "Do not claim a file was saved."),
     line("MCP", caps.mcp, "Do not claim an external tool was called."),
     line("Model tool calling", caps.modelTools, "Do not pretend tools were invoked."),
+    line("Cloud execution", caps.cloudExecution, "Do not claim this run is executing on the OVH worker."),
   ];
   return [
     `Capabilities for this run (execution: ${caps.executionLabel}):`,

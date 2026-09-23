@@ -26,7 +26,9 @@ const FULL = [
 test("ssh_exec counts as terminal even without a local shell tool", () => {
   const caps = summarizeCapabilities([{ name: "ssh_exec", permission: "allowed" }], { modelTools: true, executionLabel: "Cloud" });
   assert.equal(caps.terminal, true);
+  assert.equal(caps.cloudExecution, true);
   assert.match(renderCapabilityPrompt(caps), /SSH: available/);
+  assert.match(renderCapabilityPrompt(caps), /Cloud execution: available/);
 });
 
 test("allowed and ask tools count as available; denied terminal does not", () => {
@@ -43,6 +45,7 @@ test("allowed and ask tools count as available; denied terminal does not", () =>
   assert.equal(caps.filesystemRead, true);
   assert.equal(caps.filesystemWrite, true);
   assert.equal(caps.terminal, false);
+  assert.equal(caps.cloudExecution, false);
   assert.equal(caps.desktop, false);
   const prompt = renderCapabilityPrompt(caps);
   assert.match(prompt, /execution: Local/);

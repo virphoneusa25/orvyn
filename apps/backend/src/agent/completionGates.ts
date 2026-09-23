@@ -1,5 +1,5 @@
 import { classifyExecutionHints } from "../execution/classifyExecution";
-import { looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
+import { asksToReadFileBack, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
 
 export type CompletionGateId = "artifact" | "code" | "visual";
 
@@ -35,6 +35,21 @@ function testsRan(events: CompletionGateInput["events"]): { ran: boolean; passed
   return { ran, passed: ran && !failed };
 }
 
+function toolName(event: CompletionGateInput["events"][number]): string {
+  return String(event.data?.tool ?? event.data?.name ?? "");
+}
+
+function workspaceWriteSucceeded(events: CompletionGateInput["events"]): boolean {
+  return events.some((event) => {
+    if (event.type === "file.created" || event.type === "file.edit") return true;
+    return event.type === "tool.completed" && /^(write_file|edit_file)$/i.test(toolName(event));
+  });
+}
+
+function workspaceReadSucceeded(events: CompletionGateInput["events"]): boolean {
+  return events.some((event) => event.type === "file.read" || (event.type === "tool.completed" && /^read_file$/i.test(toolName(event))));
+}
+
 function visualVerified(events: CompletionGateInput["events"]): boolean {
   return events.some((e) =>
     e.type === "desktop.verification.passed" ||
@@ -53,7 +68,20 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
   const reasons: string[] = [];
   let failedGate: CompletionGateId | undefined;
 
-  if (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact) {
+  const workspaceFile = looksLikeWorkspaceFileTask(input.instruction);
+  if (workspaceFile) {
+    const wrote = workspaceWriteSucceeded(input.events);
+    const needsRead = asksToReadFileBack(input.instruction);
+    const read = workspaceReadSucceeded(input.events);
+    if (!wrote || (needsRead && !read)) {
+      failedGate = "code";
+      reasons.push(!wrote
+        ? "The workspace file was not written."
+        : "The file was not read back.");
+    }
+  }
+
+  if (!failedGate && (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact)) {
     const ready = input.artifacts.filter((a) => a.artifactId && a.name);
     if (ready.length === 0) {
       failedGate = "artifact";
@@ -80,12 +108,20 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     return { ok: true, reasons: [], retryPrompt: "", failMessage: "" };
   }
 
+  const fileIncomplete = workspaceFile && (
+    !workspaceWriteSucceeded(input.events) ||
+    (asksToReadFileBack(input.instruction) && !workspaceReadSucceeded(input.events))
+  );
   const retry =
     failedGate === "artifact"
       ? "COMPLETION GATE — ARTIFACT: Do not say the file exists. Call generate_image, create_document, or artifact_create and wait for a tool result that includes artifactId. Then tell the user the file is in Files → Generated (virtual file storage). Never cite a sandbox path."
-      : failedGate === "code"
-        ? "COMPLETION GATE — CODE: Run the tests (or typecheck) and only finish if they pass. Do not claim the fix is done without that result."
-        : "COMPLETION GATE — VISUAL: Take a browser or desktop screenshot and verify the visible result before finishing.";
+      : fileIncomplete
+        ? workspaceWriteSucceeded(input.events)
+          ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."
+          : "COMPLETION GATE — FILE: This is a workspace file. Call write_file with the requested path and exact contents, then read_file and report that result. Do not use generate_image or create_document for a plain text file."
+        : failedGate === "code"
+          ? "COMPLETION GATE — CODE: Run the tests (or typecheck) and only finish if they pass. Do not claim the fix is done without that result."
+          : "COMPLETION GATE — VISUAL: Take a browser or desktop screenshot and verify the visible result before finishing.";
 
   return {
     ok: false,

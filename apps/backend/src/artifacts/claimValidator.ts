@@ -5,16 +5,29 @@ export interface GroundedArtifact {
 }
 
 const CLAIM =
-  /\b(generated|created file|download(?:able)?|attached|saved|files\s*→\s*generated|you'll find it|card above)\b/i;
-const FILENAME = /\b[\w.-]+\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|csv|zip|txt|md|html|json)\b/gi;
+  /\b(generated|download(?:able)?|attached|files\s*→\s*generated|you'll find it|card above)\b/i;
+const FILENAME = /\b[\w.-]+\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|zip)\b/gi;
 const SANDBOX_PATH = /\b(?:sandbox|\/opt\/orvyn|worker-local)\/\S+/i;
 
+/** Logos, images, and office deliverables that must come back with an artifactId.
+ *  A workspace write (hello.txt, source edits) is not one of these. */
 export function looksLikeFileDeliverableRequest(text: string): boolean {
   const t = String(text || "").trim();
   if (!t) return false;
-  if (/\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|csv|zip|txt|md|html)\b/i.test(t)) return true;
+  if (/\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|zip)\b/i.test(t)) return true;
   return /\b(generate|create|make|draw|export|save)\b/i.test(t) &&
-    /\b(logo|image|png|pdf|document|report|zip|spreadsheet|artifact|file)\b/i.test(t);
+    /\b(logo|image|png|pdf|docx|document|report|zip|spreadsheet|artifact)\b/i.test(t);
+}
+
+/** Create/edit a normal workspace file, then optionally read it back. */
+export function looksLikeWorkspaceFileTask(text: string): boolean {
+  const t = String(text || "").trim();
+  if (!t || looksLikeFileDeliverableRequest(t)) return false;
+  return /\b(create|write|add|save|edit|update|modify)\b/i.test(t) && /\b(file|files)\b/i.test(t);
+}
+
+export function asksToReadFileBack(text: string): boolean {
+  return /\b(read(?:\s+it|\s+the\s+file)?\s+back|what it contains|read the file|tell me (?:exactly )?what)\b/i.test(String(text || ""));
 }
 
 export function claimsGeneratedFile(text: string): boolean {

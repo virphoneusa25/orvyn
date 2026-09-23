@@ -276,7 +276,12 @@ async function remoteWriteFile(runId: string, filePath: string, content: string)
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content, "utf8");
-    return { ok: true, output: "Wrote " + filePath + " (" + content.length + " bytes)", exitCode: 0 };
+    const bytesWritten = Buffer.byteLength(content, "utf8");
+    return {
+      ok: true,
+      output: JSON.stringify({ ok: true, path: filePath, bytesWritten }),
+      exitCode: 0,
+    };
   } catch (e: any) {
     return { ok: false, output: "", exitCode: 1, stderr: e.message };
   }
@@ -507,22 +512,31 @@ async function executeJob(raw: JobAssignment): Promise<void> {
       capDrop: "ALL", memory: "1g", cpus: "1", pidsLimit: 256,
     });
 
-    // Transfer project if provided. Only a SUCCESSFUL transfer makes the
-    // sandbox ready — sandbox.ready is what unblocks the control-plane model
-    // loop, so it must never precede the workspace being staged.
-    if (job.projectRoot) {
+    // Transfer a checkout that actually exists on this machine. A Windows
+    // path from the desktop, or a missing folder, is not a failure: the
+    // mission workspace is the Cloud workspace and tool calls still run.
+    const source = String(job.projectRoot ?? "");
+    const foreign = /^[A-Za-z]:[\\/]/.test(source) || source.startsWith("\\\\");
+    const workspaceRoot = path.resolve(WORKSPACE_DIR);
+    const isParentWorkspace = Boolean(source) && path.resolve(source) === workspaceRoot;
+    if (source && !foreign && !isParentWorkspace) {
       await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Transferring project to remote workspace" });
-      const transferred = await transferProject(containerId, job.projectRoot);
+      const transferred = await transferProject(containerId, source);
       await emitEvent(runId, "tool.completed", {
         tool: "project_transfer",
         preview: transferred === "ok"
-          ? `Project copied to remote workspace from ${job.projectRoot}`
+          ? `Project copied to remote workspace from ${source}`
           : transferred === "missing"
-            ? `No project at ${job.projectRoot}`
-            : `Project transfer from ${job.projectRoot} failed`,
+            ? `No project at ${source}. Using the Cloud workspace.`
+            : `Project transfer from ${source} failed`,
         ok: transferred === "ok",
       });
-      if (transferred !== "ok") throw new Error(`Project transfer ${transferred === "missing" ? "source not found" : "failed"}: ${job.projectRoot}`);
+      if (transferred === "failed") throw new Error(`Project transfer failed: ${source}`);
+    } else {
+      await emitEvent(runId, "agent.phase", {
+        phase: "PREPARE",
+        note: "No local checkout on this worker. Using the Cloud workspace.",
+      });
     }
 
     // ENTER THE TOOL RPC LOOP — the control-plane ORION model drives all

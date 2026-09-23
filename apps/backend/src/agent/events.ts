@@ -28,6 +28,7 @@ export type AgentEventType =
   | "tool.completed"
   | "tool.failed"
   | "file.read"
+  | "file.created"
   | "file.edit"
   | "terminal.started"
   | "terminal.output"
@@ -79,6 +80,7 @@ export type AgentEventType =
   | "steer.delivered"
   // --- Remote execution: where a run's tools execute (no local fallback) ---
   | "run.execution"
+  | "run.diagnostics"
   // --- Durable ordered queue: follow-up instructions queued during a run ---
   | "queue.item.created"
   | "queue.item.updated"

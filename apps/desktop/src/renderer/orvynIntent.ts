@@ -14,6 +14,7 @@ export function classifyFileRequest(text: string): FileRequestClass | null {
   const t = text.trim();
   if (!t) return null;
   if (looksLikeGeneratedFileRequest(t) && !/\b(src\/|apps\/|\.orvyn\/|[A-Za-z]:\\)/.test(t)) return "generate-artifact";
+  if (/\b(create|add|write|new)\b/i.test(t) && /\.(txt|md|json|html|csv|ts|tsx|js|jsx|py)\b/i.test(t)) return "create-workspace";
   if (/\b(edit|update|fix|change|modify|rewrite)\b/i.test(t) && /\b(file|folder|src|code)\b/i.test(t)) return "modify-workspace";
   if (/\b(create|add|write|new)\b/i.test(t) && /\b(file|folder|component|module)\b/i.test(t)) return "create-workspace";
   return null;
@@ -23,7 +24,7 @@ export function classifyFileRequest(text: string): FileRequestClass | null {
 export function looksLikeGeneratedFileRequest(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-  if (/\.(png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|pptx|csv|zip|txt|md|html|json)\b/i.test(t)) return true;
+  if (/\.(png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|pptx|zip)\b/i.test(t)) return true;
   const artNoun = /\b(images?|pictures?|photos?|icons?|logos?|illustrations?|artwork|mock-?ups?|banners?|thumbnails?|pdf|docx|document|report|zip|artifact|spreadsheet)\b/i;
   const artVerb = /\b(generate|draw|render|paint|sketch|imagine|design|make|create|export|save)\b/i;
   return artVerb.test(t) && artNoun.test(t);

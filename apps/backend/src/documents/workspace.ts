@@ -21,6 +21,13 @@ export function isVirtualWorkspace(root: string, tenantId: string, dataDir: stri
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** Path the OVH worker can actually copy. A Windows path from the desktop is not on the worker. */
+export function cloudWorkerSourcePath(projectRoot: string): string {
+  const root = String(projectRoot ?? "").trim();
+  if (!root || looksLikeForeignAbsolutePath(root)) return "";
+  return root;
+}
+
 /** A path that belongs to the other OS — never treat a real local folder as foreign. */
 export function looksLikeForeignAbsolutePath(p: string): boolean {
   if (process.platform === "win32") {

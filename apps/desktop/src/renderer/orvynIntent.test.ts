@@ -53,7 +53,7 @@ test("logo and PNG requests are generated-file work, not a local-folder prerequi
   assert.equal(looksLikeGeneratedFileRequest("Create a logo for Virphone"), true);
   assert.equal(looksLikeGeneratedFileRequest("fix the login bug"), false);
   assert.equal(classifyFileRequest("Generate a simple VirPhone logo and provide it as a PNG."), "generate-artifact");
-  assert.equal(classifyFileRequest("create test-output.txt containing hello"), "generate-artifact");
+  assert.equal(classifyFileRequest("create test-output.txt containing hello"), "create-workspace");
 });
 
 test("polite requests to create or inspect artifacts use tools", () => {
@@ -63,6 +63,9 @@ test("polite requests to create or inspect artifacts use tools", () => {
 });
 
 test("a login or SSH request is an engineering run, not a chat refusal", () => {
+  assert.equal(classifyIntent("Create a file named hello.txt containing exactly hello world, read the file back, and tell me what it contains.", "auto"), "code");
+  assert.equal(looksLikeGeneratedFileRequest("Create a file named hello.txt containing exactly hello world, read the file back, and tell me what it contains."), false);
+  assert.equal(classifyIntent("Run node --version and tell me the exact version returned.", "auto"), "code");
   assert.equal(classifyIntent("CAN YOU LOGIN TO MY SERVER?", "auto"), "code");
   assert.equal(classifyIntent("Can you ssh into the box and check the logs?", "auto"), "code");
   assert.equal(classifyIntent("what can you actually do?", "auto"), "chat");

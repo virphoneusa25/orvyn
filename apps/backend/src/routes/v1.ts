@@ -3,7 +3,7 @@ import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
-import { isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
+import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { portForwardingService } from "../ports/PortForwardingService";
@@ -562,7 +562,6 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     (virtualWorkspace || (cloudHost && (hints.isArtifact || !hasLocalProject) && !hints.isLocalCoding));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
-    const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
     if (!hasOnlineWorker()) {
       if (routed.requested === "auto") {
         routed.actual = "local_host";
@@ -574,8 +573,6 @@ v1Router.post("/agent/stream/runs", (req, res) => {
           executionTargetActual: routed.actual,
         });
       }
-    } else if (!remoteProjectRoot && routed.requested !== "auto") {
-      return res.status(400).json({ error: "Cloud execution requires remoteProjectRoot (the worker-side project path)." });
     }
   } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
@@ -592,7 +589,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const location = controlPlaneVirtual
     ? "LOCAL"
     : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
-  const remoteProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+  const clientProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
+  const remoteProjectRoot = location === "OVH_WORKER" ? cloudWorkerSourcePath(clientProjectRoot) : clientProjectRoot;
   const executionLabel = controlPlaneVirtual && cloudHost
     ? "Cloud"
     : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";

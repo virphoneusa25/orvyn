@@ -21,7 +21,7 @@ const TOOL_LABEL: Record<string, string> = {
   list_directory: "Listing directory",
   search_files: "Searching codebase",
   read_file: "Reading",
-  write_file: "Editing",
+  write_file: "Writing",
   edit_file: "Editing",
   delete_file: "Deleting",
   move_file: "Moving",

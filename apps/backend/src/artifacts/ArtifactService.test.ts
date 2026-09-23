@@ -159,6 +159,10 @@ test("claim validator blocks generated claims without artifactId", () => {
   assert.match(sandbox.text, /Files → Generated/);
   assert.doesNotMatch(sandbox.text, /sandbox\/artifacts/);
   assert.equal(looksLikeFileDeliverableRequest("Generate a simple VirPhone logo and provide it as a PNG."), true);
+  assert.equal(looksLikeFileDeliverableRequest("Create a file named hello.txt containing exactly hello world, read the file back, and tell me what it contains."), false);
+  const workspace = groundAssistantClaims("Wrote hello.txt. It contains hello world.", []);
+  assert.equal(workspace.blocked, false);
+  assert.match(workspace.text, /hello world/);
 });
 
 test("file-producing tools cannot return ok without artifactId", () => {

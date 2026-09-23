@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
-import { looksLikeForeignAbsolutePath, resolveWorkspace, virtualWorkspaceRoot } from "./workspace";
+import { cloudWorkerSourcePath, looksLikeForeignAbsolutePath, resolveWorkspace, virtualWorkspaceRoot } from "./workspace";
 
 test("Windows drive paths are foreign on POSIX hosts", () => {
   if (process.platform === "win32") return;
   assert.equal(looksLikeForeignAbsolutePath("C:\\\\Users\\\\rmckn\\\\viride"), true);
   assert.equal(looksLikeForeignAbsolutePath("D:/Projects/app"), true);
   assert.equal(looksLikeForeignAbsolutePath("/opt/orvyn/workspaces"), false);
+  assert.equal(cloudWorkerSourcePath("C:\\\\Users\\\\rmckn\\\\viride"), "");
+  assert.equal(cloudWorkerSourcePath("/opt/orvyn/workspaces/tenant/run"), "/opt/orvyn/workspaces/tenant/run");
 });
 
 test("cloud mode remaps a client-local folder to the tenant virtual workspace", async () => {
