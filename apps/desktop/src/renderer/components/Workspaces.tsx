@@ -230,15 +230,60 @@ export function AgentsWorkspace() {
   );
 }
 
-export function ProjectsWorkspace({ onOpenFolder }: { onOpenFolder: () => void }) {
+/** Project switcher: recent folders one click away, plus Open Folder. */
+export function ProjectsWorkspace({
+  onOpenFolder,
+  recents = [],
+  currentRoot = null,
+  onOpenRecent,
+  onUseCloud,
+}: {
+  onOpenFolder: () => void;
+  recents?: string[];
+  currentRoot?: string | null;
+  onOpenRecent?: (folder: string) => void;
+  onUseCloud?: () => void;
+}) {
+  const norm = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
+  const list = recents.filter((r) => r && !/@orvyn[\\/]+desktop[\\/]+workspace$/i.test(r) && !/[\\/]@orvyn[\\/].*workspace$/i.test(r));
+  const row: React.CSSProperties = {
+    display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "11px 14px", textAlign: "left", cursor: "pointer",
+    background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 10, color: "var(--orvyn-text)",
+  };
   return (
-    <Shell title="Projects" subtitle="Open a local project — ORVYN indexes it and the agents work against it.">
-      <HonestState
-        title="OPEN A PROJECT TO BEGIN"
-        message="Recent-project history and Git/clone flows arrive with the Projects service. Today: open a local folder and every workspace (Code, Servers, Missions) binds to it."
-        actionLabel="Open Folder…"
-        onAction={onOpenFolder}
-      />
+    <Shell title="Projects" subtitle="Pick the folder ORION should work in. Files stay on your computer.">
+      <div style={{ display: "grid", gap: 8, maxWidth: 720 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <button onClick={onOpenFolder} style={{ height: 34, padding: "0 14px", borderRadius: 8, border: "1px solid var(--accent, #6C5CFF)", background: "var(--accent, #6C5CFF)", color: "#fff", fontSize: 13, cursor: "pointer" }}>
+            Open folder…
+          </button>
+          {onUseCloud && (
+            <button onClick={onUseCloud} title="Work without a folder on this computer. Files are kept in ORVYN Cloud." style={{ height: 34, padding: "0 14px", borderRadius: 8, border: "1px solid var(--orvyn-border)", background: "var(--orvyn-surface-2)", color: "var(--orvyn-text-secondary)", fontSize: 13, cursor: "pointer" }}>
+              Work in ORVYN Cloud instead
+            </button>
+          )}
+        </div>
+        <div style={{ fontSize: 10, letterSpacing: 0.8, textTransform: "uppercase", color: "var(--orvyn-text-muted)", margin: "6px 2px 2px" }}>Recent projects</div>
+        {list.length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "4px 2px" }}>No recent projects yet. Open a folder and it will appear here.</div>
+        )}
+        {list.map((folder) => {
+          const name = folder.split(/[\\/]/).filter(Boolean).pop() || folder;
+          const current = currentRoot != null && norm(currentRoot) === norm(folder);
+          return (
+            <button key={folder} onClick={() => onOpenRecent?.(folder)} style={{ ...row, borderColor: current ? "rgba(95,212,208,0.45)" : row.border as string }} title={folder}>
+              <span style={{ width: 30, height: 30, borderRadius: 8, display: "grid", placeItems: "center", background: "rgba(95,212,208,0.1)", color: "#5FD4D0", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                {name.slice(0, 1).toUpperCase()}
+              </span>
+              <span style={{ display: "grid", minWidth: 0, flex: 1 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{name}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--orvyn-text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{folder}</span>
+              </span>
+              <span style={{ fontSize: 11, color: current ? "#5FD4D0" : "var(--orvyn-text-muted)", whiteSpace: "nowrap" }}>{current ? "Open now" : "Open →"}</span>
+            </button>
+          );
+        })}
+      </div>
     </Shell>
   );
 }

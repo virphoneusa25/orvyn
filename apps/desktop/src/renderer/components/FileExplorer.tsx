@@ -11,13 +11,17 @@ export function FileExplorer({
   onOpenFolder,
   onOpenRecent,
   onCloseFolder,
+  onBackToChat,
 }: {
   workspace: WorkspaceState | null;
   onOpenFile: (relativePath: string) => void;
   onOpenFolder: () => void;
   onOpenRecent: (folder: string) => void;
   onCloseFolder: () => void;
+  /** Leaves the Code view and returns to the current conversation. */
+  onBackToChat?: () => void;
 }) {
+  const [confirmClose, setConfirmClose] = useState(false);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [generated, setGenerated] = useState<TreeFile[]>([]);
   const [artifacts, setArtifacts] = useState<TreeFile[]>([]);
@@ -46,16 +50,39 @@ export function FileExplorer({
 
   return (
     <div style={{ padding: 8, fontSize: 13, color: "#c9d1e0" }}>
-      <div style={{ padding: "4px 8px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ opacity: 0.6, textTransform: "uppercase", fontSize: 11 }}>
+      {onBackToChat && (
+        <button
+          onClick={onBackToChat}
+          style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", margin: "0 0 8px", padding: "7px 10px", borderRadius: 8, border: "1px solid var(--border-strong, #202A3C)", background: "var(--bg-elevated, #0E1421)", color: "var(--text, #F5F7FF)", fontSize: 12, cursor: "pointer" }}
+        >
+          <span aria-hidden="true">←</span> Back to chat
+        </button>
+      )}
+      <div style={{ padding: "4px 8px 8px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <span style={{ opacity: 0.6, textTransform: "uppercase", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {isFolder ? workspace.root.split(/[\\/]/).pop() : "Project"}
         </span>
-        <button
-          onClick={isFolder ? onCloseFolder : onOpenFolder}
-          style={{ background: "transparent", border: "none", color: "#8b93a7", fontSize: 11, cursor: "pointer" }}
-        >
-          {isFolder ? "Close" : "Open folder"}
-        </button>
+        {isFolder ? (
+          confirmClose ? (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center", fontSize: 11, color: "#c9d1e0", whiteSpace: "nowrap" }}>
+              Close this folder?
+              <button onClick={() => { setConfirmClose(false); onCloseFolder(); }} style={{ background: "transparent", border: "none", color: "#F25F75", fontSize: 11, cursor: "pointer", padding: 0 }}>Close</button>
+              <button onClick={() => setConfirmClose(false)} style={{ background: "transparent", border: "none", color: "#8b93a7", fontSize: 11, cursor: "pointer", padding: 0 }}>Cancel</button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmClose(true)}
+              title="Closes this project folder in ORVYN. Nothing is deleted."
+              style={{ background: "transparent", border: "none", color: "#8b93a7", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Close folder
+            </button>
+          )
+        ) : (
+          <button onClick={onOpenFolder} style={{ background: "transparent", border: "none", color: "#8b93a7", fontSize: 11, cursor: "pointer" }}>
+            Open folder
+          </button>
+        )}
       </div>
 
       {isFolder ? (

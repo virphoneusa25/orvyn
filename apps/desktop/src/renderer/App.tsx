@@ -665,6 +665,7 @@ export function App() {
                   onOpenFolder={handleOpenProject}
                   onOpenRecent={handleOpenRecent}
                   onCloseFolder={handleCloseFolder}
+                  onBackToChat={() => { setCenterMode("work"); setView("newtask"); }}
                 />
               </div>
             </ResizablePanel>
@@ -783,7 +784,16 @@ export function App() {
 
         {view === "projects" && (
           <div style={{ flex: 1, minWidth: 0 }}>
-            <ProjectsWorkspace onOpenFolder={() => void handleOpenProject()} />
+            <ProjectsWorkspace
+              recents={workspace?.recents ?? []}
+              currentRoot={workspace?.kind === "folder" ? workspace.root : null}
+              onOpenFolder={async () => {
+                const before = workspace?.root;
+                await handleOpenProject();
+                if ((await window.orvyn.project.getWorkspace())?.root !== before) { setCenterMode("work"); setView("newtask"); }
+              }}
+              onOpenRecent={async (folder) => { await handleOpenRecent(folder); setCenterMode("work"); setView("newtask"); }}
+            />
           </div>
         )}
 
