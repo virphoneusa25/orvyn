@@ -743,7 +743,7 @@ export class StreamingAgentRuntime {
             ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
             : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
           intent.requiresFrontend
-            ? "This run is a website. Call write_file for index.html and its stylesheet. Do not run python, http.server, or a shell server. python3 is not installed. The preview opens from the index page you write."
+            ? "This run is a website. Call write_file for index.html and its stylesheet. Do not open the sandbox desktop and do not start a shell server. The preview URL is the rendered site."
             : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
@@ -1611,6 +1611,13 @@ export class StreamingAgentRuntime {
       if ((call.name === "terminal" || call.name === "run_command") && shellRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal });
         replies.set(call.id, shellRefusal);
+        continue;
+      }
+
+      if (state.intent.requiresFrontend && (call.name.startsWith("desktop_") || call.name.startsWith("computer."))) {
+        const message = "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message });
+        replies.set(call.id, message);
         continue;
       }
 
