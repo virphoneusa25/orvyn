@@ -89,3 +89,11 @@
 .ofp-foot { margin: 0; padding: 8px 14px 12px; display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--orvyn-text-muted); }
 .ofp-foot i { width: 6px; height: 6px; border-radius: 50%; background: var(--ofp-acc); flex: none; }
 @media (prefers-reduced-motion: reduce) { .ofp-caret { transition: none; } }
+.ofp-switch { margin: 0 12px 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border-radius: 9px; border: 1px solid var(--orvyn-border-soft); background: var(--orvyn-bg); }
+.ofp-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 28px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--orvyn-text-muted); font-size: 12px; cursor: pointer; }
+.ofp-switch button:hover { color: var(--orvyn-text); }
+.ofp-switch button.is-local[aria-selected="true"] { color: #5FD4D0; background: rgba(95, 212, 208, 0.1); border-color: rgba(95, 212, 208, 0.34); }
+.ofp-switch button.is-cloud[aria-selected="true"] { color: #98A4FF; background: rgba(152, 164, 255, 0.1); border-color: rgba(152, 164, 255, 0.38); }
+.ofp-cloudcopy { margin: 0 14px 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(152, 164, 255, 0.38); background: rgba(152, 164, 255, 0.08); font-size: 11.5px; color: var(--orvyn-text-secondary); }
+.ofp-cloudcopy b { color: #98A4FF; font-weight: 600; }
+.ofp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
