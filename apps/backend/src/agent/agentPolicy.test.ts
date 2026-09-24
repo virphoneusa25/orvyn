@@ -149,12 +149,22 @@ test("a website run is not finished until the agent writes a page", () => {
   });
   assert.equal(filesOnly.ok, false);
   assert.match(filesOnly.retryPrompt, /localhost|preview/i);
+  const previewOnly = evaluateCompletionGates({
+    instruction: "Build a Joomla website",
+    artifacts: [],
+    events: [
+      { type: "file.created", data: { path: "site/index.html" } },
+      { type: "preview.available", data: { url: "https://preview.example/sites/1/" } },
+    ],
+  });
+  assert.equal(previewOnly.ok, false);
   const passed = evaluateCompletionGates({
     instruction: "Build a Joomla website",
     artifacts: [],
     events: [
       { type: "file.created", data: { path: "site/index.html" } },
       { type: "preview.available", data: { url: "https://preview.example/sites/1/" } },
+      { type: "browser.verification.passed", data: {} },
     ],
   });
   assert.equal(passed.ok, true);

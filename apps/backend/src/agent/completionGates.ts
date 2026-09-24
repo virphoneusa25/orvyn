@@ -1,4 +1,5 @@
 import { classifyExecutionHints } from "../execution/classifyExecution";
+import { decideCompletion } from "./agentRunState";
 import { asksToReadFileBack, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
 
 export type CompletionGateId = "artifact" | "code" | "visual";
@@ -111,12 +112,16 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
       const url = String(e.data?.url ?? "");
       return /^https?:\/\//i.test(url) && !/localhost|127\.0\.0\.1/i.test(url);
     });
+    const decision = decideCompletion({ instruction: input.instruction, events: input.events });
     if (!wrotePage) {
       failedGate = "code";
       reasons.push("The site files were not written.");
     } else if (!preview) {
       failedGate = "visual";
       reasons.push("The site has no reachable preview. A localhost server on the worker is not the browser on this machine.");
+    } else if (decision !== "completed") {
+      failedGate = "visual";
+      reasons.push("The rendered page has not been checked in the Browser.");
     }
   }
 

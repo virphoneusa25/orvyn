@@ -18,6 +18,7 @@ import { detectDevServerUrls } from "../desktop/previewDetect";
 
 export type AgentEventType =
   | "run.started"
+  | "run.phase.changed"
   | "run.queued"
   | "message.delta"
   | "message.completed"

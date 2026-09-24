@@ -3,6 +3,7 @@ import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, gr
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
 import { collectRunEvidence, introductionFor, progressFor, type RunEvidence } from "./conversationCoordinator";
+import { canEnterPhase, type RunPhase } from "./agentRunState";
 import { skillsPromptFor } from "../learning/validatedSkills";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
 //
@@ -158,6 +159,7 @@ interface RunState {
   introSpoken?: boolean;
   previewSpoken?: boolean;
   spokenEvidence?: RunEvidence;
+  phase: RunPhase;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -621,6 +623,7 @@ export class StreamingAgentRuntime {
       ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission() } : {}),
       composerMode: options?.composerMode,
       actionNudges: 0,
+      phase: "preflight",
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1078,8 +1081,10 @@ export class StreamingAgentRuntime {
     if (!state.introSpoken) {
       state.introSpoken = true;
       state.spokenEvidence = collectRunEvidence([]);
+      this.enterPhase(runId, "introducing");
       const intro = introductionFor(state.instruction);
       if (intro) this.speak(runId, intro);
+      this.enterPhase(runId, "acting");
     }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
@@ -1369,6 +1374,7 @@ export class StreamingAgentRuntime {
             }
             state.handoffModelId = undefined;
           }
+          this.enterPhase(runId, "observing");
           this.speakProgress(runId);
           if (outcome === "cancelled") return this.finishCancelled(runId, steps);
           if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
@@ -1380,6 +1386,7 @@ export class StreamingAgentRuntime {
         }
 
         // No tool call: token deltas were already emitted while streaming.
+        this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         const gates = evaluateCompletionGates({
           instruction: state.instruction,
@@ -1409,6 +1416,7 @@ export class StreamingAgentRuntime {
                 this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
               }
             }
+            this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
             messages.push({ role: "user", content: gates.retryPrompt });
             continue;
@@ -1802,6 +1810,14 @@ export class StreamingAgentRuntime {
       });
       if (escalated.registryId) state.handoffModelId = escalated.registryId;
     }
+  }
+
+  private enterPhase(runId: string, phase: RunPhase): void {
+    const state = this.runs.get(runId);
+    if (!state || !canEnterPhase(state.phase, phase)) return;
+    if (state.phase === phase) return;
+    state.phase = phase;
+    this.store.emit(runId, "run.phase.changed", { phase });
   }
 
   private speak(runId: string, text: string): void {
