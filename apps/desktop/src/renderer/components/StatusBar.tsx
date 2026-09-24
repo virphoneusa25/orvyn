@@ -119,7 +119,7 @@ export function StatusBar() {
           </>
         )}
         <span>
-          {state.runningRuns} agent{state.runningRuns === 1 ? "" : "s"}
+          {state.runningRuns} running
         </span>
         <span>
           {state.activeMissions} mission{state.activeMissions === 1 ? "" : "s"}

@@ -35,6 +35,8 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
+import { inspectWorkspace } from "./workspaceContext";
+import { evaluatePreflight } from "./runPreflight";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
 import { selectToolNames, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
@@ -511,6 +513,8 @@ export class StreamingAgentRuntime {
       projectId: execution?.projectId ?? null,
     };
     const catalog = resourcesFromProject(projectRoot, scope);
+    const workspace = inspectWorkspace(projectRoot);
+    const preflight = evaluatePreflight({ intent, workspace, servers: catalog });
     const resolution = resolveResources({
       intent,
       instruction,
@@ -520,7 +524,7 @@ export class StreamingAgentRuntime {
       resources: catalog,
     });
     const exposed = def.toolsEnabled
-      ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent))
+      ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent, { repositoryDetected: workspace.repositoryDetected }))
       : null;
 
     this.runs.set(runId, {
@@ -561,7 +565,7 @@ export class StreamingAgentRuntime {
     // serves tool RPCs; the model loop stays HERE (credentials never leave
     // the control plane). No local fallback — if the worker never reports
     // readiness, the run fails truthfully in awaitRemoteReady below.
-    if (resolution.status === "ok" && !toolModelError && (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX")) {
+    if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX")) {
       const actual = execution.targetActual
         ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
       const label = execution.executionLabel
@@ -590,7 +594,7 @@ export class StreamingAgentRuntime {
           runId,
         });
       }
-    } else if (resolution.status === "ok" && !toolModelError && execution?.targetActual === "local_host") {
+    } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.targetActual === "local_host") {
       this.store.emit(runId, "run.execution", {
         location: "LOCAL",
         executionTargetRequested: execution.targetRequested ?? "auto",
@@ -698,6 +702,18 @@ export class StreamingAgentRuntime {
           toolNames,
           completionReason: resolution.status === "blocked" ? resolution.code : undefined,
         });
+        if (preflight.status === "blocked") {
+          this.store.emit(runId, "resource.required", {
+            code: "RESOURCE_REQUIRED",
+            resourceType: "workspace",
+            message: preflight.message,
+            choices: preflight.actions ?? [],
+          });
+          this.store.emit(runId, "message.delta", { content: preflight.message ?? "" });
+          this.store.emit(runId, "run.blocked", { message: preflight.message, code: "RESOURCE_REQUIRED", actions: preflight.actions ?? [] });
+          this.store.setStatus(runId, "blocked");
+          return;
+        }
         if (resolution.status === "blocked") {
           this.store.emit(runId, "resource.required", {
             code: resolution.code,

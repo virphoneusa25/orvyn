@@ -8,10 +8,17 @@ const SERVER = /^(ssh_exec|remote_exec|start_process|stop_process|read_process_l
 const BROWSER = /^browser_/;
 const DESKTOP = /^(desktop_|computer[._])/;
 const ARTIFACT = /^(generate_image|artifact_|create_document|create_zip)$/;
-const MCP = /^(mcp[._]|search_capabilities$)/;
+const MCP = /mcp|search_capabilities/i;
+const GIT = /^git_/;
 
-export function selectToolNames(names: string[], intent: TaskIntent): string[] {
+export function selectToolNames(
+  names: string[],
+  intent: TaskIntent,
+  options?: { repositoryDetected?: boolean }
+): string[] {
+  const gitAllowed = options?.repositoryDetected !== false;
   return names.filter((name) => {
+    if (GIT.test(name) && !gitAllowed) return false;
     if (SERVER.test(name) && !intent.requiresRemoteResource && intent.category !== "server" && intent.category !== "deploy") {
       return false;
     }

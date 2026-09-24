@@ -510,6 +510,22 @@ test("auto switches off a chat-only model onto one that can call tools", async (
   assert.ok(h.store.get(runId)!.events.some((e) => e.type === "model.fallback"));
 });
 
+test("a service diagnosis with no workspace or server is blocked before git or MCP", async () => {
+  const h = harness([[{ delta: "I will run git status.", done: true }]]);
+  const runId = h.runtime.start("/tmp/orvyn-not-a-workspace", "Diagnose a failing service");
+  assert.equal(await waitForStatus(h.store, runId), "blocked");
+  assert.equal(h.provider.requests.length, 0);
+  const events = h.store.get(runId)!.events;
+  assert.equal(events.some((e) => e.type === "run.completed"), false);
+  assert.equal(events.some((e) => e.type === "run.execution"), false);
+  assert.equal(events.some((e) => e.type === "tool.started"), false);
+  const text = events.map((e) => JSON.stringify(e.data)).join("\n");
+  assert.match(text, /project, server, or environment/i);
+  const diag = events.find((e) => e.type === "run.diagnostics");
+  const names = (diag?.data.toolNames as string[] | undefined) ?? [];
+  assert.equal(names.some((n) => /git_|mcp/i.test(n)), false);
+});
+
 test("a server task with no configured server is blocked and does not call the model", async () => {
   const h = harness([[{ delta: "I will ssh somewhere.", done: true }]]);
   const runId = h.runtime.start("/tmp/orvyn-no-such-project", "Log into my configured test server and tell me its hostname and uptime.");
