@@ -20,6 +20,7 @@ test("signup creates a Personal Organization and session principal", async () =>
   assert.equal(session.principal.userId, user.id);
   assert.equal(session.principal.tenantId, organization.tenantId);
   assert.equal(session.principal.role, "owner");
+  auth.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -59,6 +60,7 @@ test("tenant A cannot read tenant B project, chat, or guessed ids", async () => 
     else process.env.ORVYN_DATA_DIR = prevData;
   }
 
+  auth.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -78,6 +80,7 @@ test("company organization members share tenant; outsiders cannot join themselve
   assert.equal(switched.principal.tenantId, company.tenantId);
   assert.equal(switched.principal.role, "member");
   assert.throws(() => auth.switchOrganization(b1.token, company.id), /Not found/);
+  auth.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -91,6 +94,7 @@ test("organization switch refreshes tenant context and rejects foreign orgs", as
   assert.equal(again.principal.organizationId, a.organization.id);
   assert.notEqual(again.token, a.token);
   assert.equal(auth.verifyPrincipal(a.token), null);
+  auth.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
 

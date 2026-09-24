@@ -98,7 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_learning_kind ON learning_records (kind, created_
 `;
 
 export function defaultDataDir(): string {
-  return process.env.ORVYN_DATA_DIR?.trim() || path.join(os.homedir(), ".orvyn", "data");
+  const explicit = process.env.ORVYN_DATA_DIR?.trim();
+  if (explicit) return explicit;
+  // Each test process gets its own directory. Sharing ~/.orvyn/data/auth.db
+  // across parallel test files is what produced SQLITE_BUSY.
+  if (process.env.NODE_TEST_CONTEXT) {
+    return path.join(os.tmpdir(), "orvyn-test-data", String(process.pid));
+  }
+  return path.join(os.homedir(), ".orvyn", "data");
 }
 
 export interface ArtifactRowInput {
@@ -153,6 +160,7 @@ export class LocalStore {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
     this.migrateArtifacts();
     this.migrateLearning();

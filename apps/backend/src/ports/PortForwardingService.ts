@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "crypto";
 import http from "http";
 import https from "https";
 import type { IncomingMessage, ServerResponse } from "http";
+import type { Duplex } from "stream";
 
 export type PortClass = "web_preview" | "development_server" | "internal_service" | "unknown";
 export type WorkbenchEnvironment = "local" | "sandbox" | "cloud";
@@ -211,6 +212,29 @@ export class PortForwardingService {
     if (req.readable && req.method !== "GET" && req.method !== "HEAD") req.pipe(upstream);
     else upstream.end();
     void https;
+  }
+
+  /** Bidirectional WebSocket upgrade for Vite/Next HMR. The public URL stays on the gateway. */
+  proxyUpgrade(rec: PortForwardRecord, req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const targetHost = rec.targetHost || "127.0.0.1";
+    const path = req.url?.replace(/^\/api\/v1\/ports\/[^/]+\/proxy/, "") || "/";
+    const headers = { ...req.headers, host: `${targetHost}:${rec.port}` };
+    const upstream = http.request({ hostname: targetHost, port: rec.port, path, method: "GET", headers });
+    upstream.on("upgrade", (upRes, upSocket, upHead) => {
+      const lines = [`HTTP/1.1 ${upRes.statusCode ?? 101} ${upRes.statusMessage ?? "Switching Protocols"}`];
+      for (const [key, value] of Object.entries(upRes.headers)) {
+        if (value == null) continue;
+        const joined = Array.isArray(value) ? value.join(", ") : value;
+        lines.push(`${key}: ${joined}`);
+      }
+      socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+      if (upHead.length) socket.write(upHead);
+      if (head.length) upSocket.write(head);
+      upSocket.pipe(socket);
+      socket.pipe(upSocket);
+    });
+    upstream.on("error", () => socket.destroy());
+    upstream.end();
   }
 
   private createRecord(

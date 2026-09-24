@@ -120,8 +120,13 @@ export class AuthService {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
     this.migrateSessionOrg();
+  }
+
+  close(): void {
+    this.db.close();
   }
 
   private migrateSessionOrg(): void {

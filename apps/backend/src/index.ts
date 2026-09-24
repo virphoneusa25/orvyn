@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
 import { siteRouter } from "./routes/sites";
+import { portForwardingService } from "./ports/PortForwardingService";
 import { workerStats } from "./routes/worker";
 import { probeQdrant } from "./indexing/qdrantHealth";
 import { authRouter } from "./routes/auth";
@@ -144,6 +145,18 @@ app.use("/api/v1", resolveTenant, (req, res, next) => {
   }, v1Router);
 
 const server = createServer(app);
+server.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "", "http://internal");
+  const match = url.pathname.match(/^\/api\/v1\/ports\/([^/]+)\/proxy\/?$/);
+  if (!match) return;
+  try {
+    const rec = portForwardingService.authorizeByToken(match[1], url.searchParams.get("fwd") ?? "");
+    portForwardingService.proxyUpgrade(rec, req, socket, head);
+  } catch {
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  }
+});
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
 wss.on("connection", (socket, req) => {
