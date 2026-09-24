@@ -38,7 +38,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
-import { composeSiteDocument, publishRememberedSite, rememberSiteFile } from "./sitePreview";
+import { publishRememberedSite, rememberSiteFile } from "./sitePreview";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
@@ -365,9 +365,6 @@ export class StreamingAgentRuntime {
       location: "workspace",
       message: `Created ${rel} (+${lines})`,
     });
-    if (!/\.html$/i.test(rel)) return;
-    const composed = composeSiteDocument(runId);
-    if (composed) rememberSiteFile(runId, rel, composed);
     const published = publishRememberedSite(runId);
     if (published) {
       this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
@@ -375,7 +372,6 @@ export class StreamingAgentRuntime {
       this.speakProgress(runId);
       void this.verifyPublishedPreview(runId, published.url);
     }
-    void this.showSiteOnDesktop(runId);
   }
 
   private async verifyPublishedPreview(runId: string, url: string): Promise<void> {
@@ -394,15 +390,6 @@ export class StreamingAgentRuntime {
     } catch {
       this.store.emit(runId, "browser.verification.failed", { url, issues: ["The preview URL did not load."] });
     }
-  }
-
-  private async showSiteOnDesktop(runId: string): Promise<void> {
-    const html = composeSiteDocument(runId);
-    if (!html) return;
-    const opened = await openSiteOnDesktop(html);
-    if (!opened) return;
-    this.store.emit(runId, "desktop.action", { url: opened.url, label: "Live site on the sandbox desktop" });
-    this.store.emit(runId, "message.delta", { content: `\n\nThe full site, with its styles, is open on the sandbox desktop.\n` });
   }
 
   // Maps a tool call onto the richer domain events the UI renders as cards,
@@ -1560,7 +1547,10 @@ export class StreamingAgentRuntime {
         } else {
           this.emitNarration(runId, content, streamedText);
         }
-        if (state.intent.requiresFrontend) await this.showSiteOnDesktop(runId);
+        if (state.intent.requiresFrontend) {
+          const published = publishRememberedSite(runId);
+          if (published) this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+        }
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
         this.store.setStatus(runId, "completed");
         return;

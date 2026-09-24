@@ -36,4 +36,8 @@ test("remembered pages publish without reading the project disk", () => {
   assert.ok(site);
   assert.match(site!.url, /\/api\/v1\/sites\//);
   assert.deepEqual(site!.files.sort(), ["index.html", "styles.css"]);
+  assert.match(readPublishedFile(site!.id, "index.html")?.body.toString() ?? "", /body\{\}/);
+  assert.equal(readPublishedFile(site!.id, "styles.css")?.contentType, "text/css; charset=utf-8");
+  const again = publishRememberedSite("run-1");
+  assert.equal(again?.url, site!.url);
 });

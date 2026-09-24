@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
 const roots = new Map<string, string>();
+const publishedIds = new Map<string, string>();
 const remembered = new Map<string, Map<string, string>>();
 let publicOrigin = (process.env.ORVYN_PUBLIC_ORIGIN || "").replace(/\/$/, "");
 
@@ -65,21 +66,25 @@ export function composeSiteDocument(runId: string): string | null {
   return html;
 }
 
-/** Write the remembered pages to a temp folder and publish them. */
+/** Write the remembered pages to one stable folder. Later files update that same URL. */
 export function publishRememberedSite(runId: string): { id: string; url: string; files: string[] } | null {
   const bag = remembered.get(runId);
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
+  const composed = composeSiteDocument(runId);
+  const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
+  if (composed && pageKey) bag.set(pageKey, composed);
   const dir = join(tmpdir(), "orvyn-preview", runId);
   for (const [rel, content] of bag) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });
     writeFileSync(abs, content);
   }
-  const pageDir = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
-  const root = pageDir && pageDir.includes("/") ? join(dir, pageDir.slice(0, pageDir.lastIndexOf("/"))) : dir;
-  const published = publishAgentSite(root);
-  if (!published) return null;
-  return { ...published, files: [...bag.keys()] };
+  const pageDir = pageKey && pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/")) : "";
+  const root = pageDir ? join(dir, pageDir) : dir;
+  const id = publishedIds.get(runId) ?? randomUUID();
+  publishedIds.set(runId, id);
+  roots.set(id, root);
+  return { id, url: previewUrl(id), files: [...bag.keys()] };
 }
 
 /** Publish a folder the agent wrote. Returns a URL only when that folder has a page. */
