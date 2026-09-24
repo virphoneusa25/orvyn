@@ -141,6 +141,9 @@ interface RunState {
   exposedTools: Set<string> | null;
   resolvedResources: RegisteredResource[];
   gateRetries: number;
+  /** Lane pins (fast/code/premium) are not model pins. */
+  modelPinned: boolean;
+  composerMode?: string;
   /** One extra model turn when an action request returns prose and no tools. */
   actionNudges: number;
 }
@@ -543,6 +546,8 @@ export class StreamingAgentRuntime {
       exposedTools: exposed,
       resolvedResources: resolution.status === "ok" ? resolution.resources : [],
       gateRetries: 0,
+      modelPinned: choice.pinned,
+      composerMode: options?.composerMode,
       actionNudges: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
@@ -1282,6 +1287,20 @@ export class StreamingAgentRuntime {
           });
           if (state.gateRetries < 3) {
             state.gateRetries += 1;
+            if (!state.modelPinned) {
+              const escalated = selectAgentModel({
+                intent: state.intent,
+                composerMode: state.composerMode,
+                requestedModelId: state.requestedModelId,
+                availableIds: this.modelService.registry.list().map((p) => p.config.id),
+                escalate: Math.min(state.gateRetries, 2),
+              });
+              const next = escalated.registryId ? this.modelService.registry.get(escalated.registryId) : undefined;
+              if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
+                provider = next;
+                this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
+              }
+            }
             this.store.setStatus(runId, "running");
             messages.push({ role: "user", content: gates.retryPrompt });
             continue;

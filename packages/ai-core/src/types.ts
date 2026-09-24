@@ -161,6 +161,8 @@ export interface AIModelProvider {
     n?: number;
     /** "high" | "medium" | "low"; adapters fall back if the server rejects it. */
     quality?: string;
+    /** Base64 or URL of an image to edit. Ignored by text-to-image-only adapters. */
+    inputImage?: string;
   }): Promise<{ b64?: string; url?: string; revisedPrompt?: string }[]>;
   healthCheck(): Promise<{ status: ModelStatus; latencyMs?: number; error?: string }>;
   supportsTools(): boolean;

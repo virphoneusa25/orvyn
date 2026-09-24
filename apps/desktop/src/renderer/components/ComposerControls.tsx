@@ -325,7 +325,14 @@ export function ModelMenu({
   onChange: (id: string) => void;
 }) {
   const [filter, setFilter] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const agentModels = models.filter((m) => m.capabilities?.agent && m.capabilities?.tools);
+  const lanes: { id: string; name: string; hint: string }[] = [
+    { id: "auto", name: "Auto", hint: "ORVYN routing chooses the model" },
+    { id: "fast", name: "Fast", hint: "Short questions and internal work" },
+    { id: "code", name: "Code", hint: "Coding, server, and deploy work" },
+    { id: "premium", name: "Premium", hint: "Hard problems only" },
+  ];
   const q = filter.trim().toLowerCase();
   const visible = q
     ? agentModels.filter((m) => `${m.name} ${m.id} ${m.provider}`.toLowerCase().includes(q))
@@ -336,7 +343,8 @@ export function ModelMenu({
     groups.set(key, [...(groups.get(key) ?? []), m]);
   }
   const selected = models.find((m) => m.id === value);
-  const trigger = value === "auto" ? "Auto" : compactModelLabel(selected?.name, value);
+  const lane = lanes.find((l) => l.id === value);
+  const trigger = lane ? lane.name : value === "auto" ? "Auto" : compactModelLabel(selected?.name, value);
   const fullName = selected?.name ?? value;
   return (
     <Dropdown
@@ -374,20 +382,29 @@ export function ModelMenu({
               }}
             />
           )}
+          {lanes.map((lane) => (
+            <button
+              key={lane.id}
+              style={menuItem(value === lane.id)}
+              onClick={() => {
+                onChange(lane.id);
+                close();
+              }}
+            >
+              <Check on={value === lane.id} />
+              <span>
+                <span style={{ fontWeight: 600 }}>{lane.name}</span>
+                <span style={{ display: "block", fontSize: 10, color: "var(--orvyn-text-muted)" }}>{lane.hint}</span>
+              </span>
+            </button>
+          ))}
           <button
-            style={menuItem(value === "auto")}
-            onClick={() => {
-              onChange("auto");
-              close();
-            }}
+            style={{ ...menuItem(false), color: "var(--orvyn-text-muted)" }}
+            onClick={() => setAdvanced((on) => !on)}
           >
-            <Check on={value === "auto"} />
-            <span>
-              <span style={{ fontWeight: 600 }}>Auto</span>
-              <span style={{ display: "block", fontSize: 10, color: "var(--orvyn-text-muted)" }}>ORVYN routing chooses the model</span>
-            </span>
+            {advanced ? "Hide models" : "Show models"}
           </button>
-          {[...groups.entries()].map(([provider, list]) => (
+          {advanced && [...groups.entries()].map(([provider, list]) => (
             <div key={provider}>
               <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.8, color: "var(--orvyn-text-muted)", padding: "6px 8px 2px" }}>
                 {provider.toUpperCase()}

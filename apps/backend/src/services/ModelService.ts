@@ -13,6 +13,7 @@ import {
 } from "@orvyn/ai-core";
 import { UsageService } from "./UsageService";
 import { CERTIFIED_MODELS } from "../models/certifiedModels";
+import { fireworksKontextImage } from "../images/fireworksKontext";
 
 function openaiDisplayName(id: string): string {
   if (id === "gpt-4o") return "OpenAI GPT-4o";
@@ -55,15 +56,6 @@ function cheaperInferenceConfig(
 
 function cheaperInferenceEndpoint(): string {
   return (process.env.CHEAPER_INFERENCE_BASE_URL?.trim() || "https://api.cheaperinference.com").replace(/\/v1\/?$/, "");
-}
-
-function cheaperInferenceImageModels(): string[] {
-  const primary = process.env.CHEAPER_INFERENCE_IMAGE_MODEL?.trim() || "nano-banana";
-  const extra = (process.env.CHEAPER_INFERENCE_IMAGE_MODELS ?? "nano-banana-2,gpt-image-2")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return [...new Set([primary, ...extra])];
 }
 
 function cheaperInferenceModels(): string[] {
@@ -248,9 +240,6 @@ export class ModelService {
       for (const id of ciModels) {
         this.addModel(cheaperInferenceConfig(id, ciKey, id === codeId && id !== chatId ? 0.2 : 0.7, ciEndpoint, "text"));
       }
-      for (const id of cheaperInferenceImageModels()) {
-        this.addModel(cheaperInferenceConfig(id, ciKey, 0.7, ciEndpoint, "image"));
-      }
       void this.refreshCheaperInferenceCatalog();
     }
 
@@ -421,6 +410,20 @@ export class ModelService {
     }
     // Metering proxy: every generate/stream/image call on any registered
     // model produces a usage event, regardless of which code path calls it.
+    if (config.id.startsWith("fw:") && config.capabilities.image && config.apiModelId && config.apiKey) {
+      const modelId = config.apiModelId;
+      const endpoint = config.endpoint;
+      const apiKey = config.apiKey;
+      provider.generateImage = (request) =>
+        fireworksKontextImage({
+          endpoint,
+          apiKey,
+          modelId,
+          prompt: request.prompt,
+          inputImage: request.inputImage,
+          aspectRatio: request.size,
+        }).then((out) => [{ url: out.url }]);
+    }
     const metered = this.usage.wrap(provider);
     this.registry.register(metered);
     return metered;
@@ -480,10 +483,13 @@ export class ModelService {
       for (const item of items) {
         const id = typeof item.id === "string" ? item.id : "";
         if (!id) continue;
-        const provider = this.registry.get(`ci:${id}`);
-        if (!provider) continue;
         const caps = item.capabilities ?? {};
         const isImage = item.type === "image" || Boolean(caps.image_generation);
+        let provider = this.registry.get(`ci:${id}`);
+        if (!provider && isImage) {
+          provider = this.addModel(cheaperInferenceConfig(id, key, 0.7, cheaperInferenceEndpoint(), "image"));
+        }
+        if (!provider) continue;
         const isText = item.type === "text" || (!isImage && item.type !== "video");
         provider.config.capabilities.chat = isText;
         provider.config.capabilities.code = isText;

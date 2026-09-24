@@ -15,6 +15,8 @@ export interface GenerateImageRequest {
   projectRoot?: string;
   modelId?: string;
   editing?: boolean;
+  /** Base64 or URL of the image being edited. */
+  inputImage?: string;
   filename?: string;
   runId?: string;
   chatId?: string;
@@ -81,7 +83,8 @@ export class ImageService {
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
     if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
-    const imageModels = this.modelService.registry.list().filter((p) => p.config.capabilities.image);
+    const listed = typeof this.modelService.registry.list === "function" ? this.modelService.registry.list() : [];
+    const imageModels = listed.filter((p) => p.config.capabilities.image);
     const imageChoice = selectImageModel({
       quality: req.quality,
       editing: req.editing,
@@ -109,6 +112,7 @@ export class ImageService {
       size: req.size,
       n: Math.min(Math.max(req.n ?? 1, 1), 4),
       quality: req.quality ?? "high",
+      inputImage: req.inputImage,
     });
 
     const images: GeneratedImage[] = [];
