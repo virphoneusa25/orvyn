@@ -22,6 +22,7 @@ export type AgentEventType =
   | "message.delta"
   | "message.completed"
   | "message.grounded"
+  | "conversation.message"
   | "thinking"
   | "tool.started"
   | "tool.input"
