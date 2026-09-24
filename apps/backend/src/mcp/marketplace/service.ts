@@ -10,6 +10,7 @@ import { officialProvider } from "./officialProvider";
 import { privateProvider, type PrivateRegistryConfig } from "./privateProvider";
 import { smitheryProvider } from "./smitheryProvider";
 import { CapabilityIndex } from "./searchCapabilities";
+import { openSecret, sealSecret } from "../../secrets/vault";
 import type { MarketplaceMcpServer, RegistrySearch } from "./types";
 import { MARKETPLACE_CATALOG_VERSION, MARKETPLACE_INSTALL_API_VERSION, SUPPORTED_MARKETPLACE_PROVIDERS } from "./types";
 
@@ -41,7 +42,8 @@ export class MarketplaceService {
 
   constructor(
     private manager: McpManager,
-    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void }
+    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void },
+    private tenantId = "local",
   ) {
     this.cache = new CatalogCache(settingCacheStore(this.store));
     this.aggregator = this.buildAggregator();
@@ -68,7 +70,13 @@ export class MarketplaceService {
 
   private secret(key: string): string {
     const stored = this.store.getSetting(key);
-    return typeof stored === "string" && stored.trim() ? stored.trim() : "";
+    if (typeof stored !== "string" || !stored.trim()) return "";
+    const opened = openSecret(stored, this.tenantId, key);
+    return opened?.trim() ? opened.trim() : "";
+  }
+
+  private writeSecret(key: string, value: string): void {
+    this.store.setSetting(key, value ? sealSecret(value, this.tenantId, key) : "");
   }
 
   private buildAggregator(): RegistryAggregator {
@@ -83,8 +91,10 @@ export class MarketplaceService {
     for (const reg of this.readRegistries()) {
       providers.push(
         privateProvider(reg, fetch, () => {
-          const v = this.store.getSetting(`mcp.secret.registry.${reg.id}`);
-          return typeof v === "string" ? v : null;
+          const name = `mcp.secret.registry.${reg.id}`;
+          const v = this.store.getSetting(name);
+          if (typeof v !== "string" || !v) return null;
+          return openSecret(v, this.tenantId, name);
         })
       );
     }
@@ -106,7 +116,7 @@ export class MarketplaceService {
   setProviderSecret(provider: "glama" | "smithery", token: string): { glama: boolean; smithery: boolean } {
     const key = provider === "glama" ? "mcp.secret.glama" : "mcp.secret.smithery";
     const value = validateProviderSecret(provider, token);
-    this.store.setSetting(key, value);
+    this.writeSecret(key, value);
     this.refreshProviders();
     return this.providerSecretStatus();
   }
@@ -149,7 +159,7 @@ export class MarketplaceService {
     const list = this.readRegistries().filter((r) => r.id !== cfg.id);
     list.push(cfg);
     this.store.setSetting(REGISTRIES_KEY, JSON.stringify(list));
-    if (token) this.store.setSetting(`mcp.secret.registry.${cfg.id}`, token);
+    if (token) this.writeSecret(`mcp.secret.registry.${cfg.id}`, token);
     this.refreshProviders();
     return cfg;
   }
@@ -218,11 +228,12 @@ const services = new WeakMap<McpManager, MarketplaceService>();
 
 export function marketplaceFor(
   manager: McpManager,
-  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void }
+  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void },
+  tenantId = "local",
 ): MarketplaceService {
   let s = services.get(manager);
   if (!s) {
-    s = new MarketplaceService(manager, store);
+    s = new MarketplaceService(manager, store, tenantId);
     services.set(manager, s);
   }
   return s;

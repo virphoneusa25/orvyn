@@ -182,6 +182,7 @@ export class TenantManager {
     tenant.mcpManager = new McpManager({
       gateway: tenant.toolGateway,
       engine: tenant.permissionEngine as unknown as { declareCapabilities(name: string, caps: string[]): void; forgetCapabilities(name: string): void },
+      tenantId: id,
       store: localStore as unknown as { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
     });
     const harden = hardeningFor(tenant.mcpManager, localStore, id);
@@ -223,9 +224,9 @@ export class TenantManager {
       tenant.localStore,
       tenant.indexService,
       () => tenant.mcpManager.capabilitySummary(),
-      (name) => marketplaceFor(tenant.mcpManager, localStore).index.exposeToModel(name)
+      (name) => marketplaceFor(tenant.mcpManager, localStore, id).index.exposeToModel(name)
     );
-    const market = marketplaceFor(tenant.mcpManager, localStore);
+    const market = marketplaceFor(tenant.mcpManager, localStore, id);
     market.index.rankContext = {
       get projectRoot() {
         return tenant.currentProjectRoot;

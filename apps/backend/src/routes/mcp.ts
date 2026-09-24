@@ -135,7 +135,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/marketplace/search", async (req, res) => {
     const t = requireTenant(req);
-    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     const q = String(req.query.q ?? "");
     const refresh = req.query.refresh === "1" || req.query.refresh === "true";
     if (refresh) market.invalidateCatalog();
@@ -165,19 +165,19 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.post("/marketplace/refresh", async (req, res) => {
     const t = requireTenant(req);
-    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     market.invalidateCatalog(req.body?.query ? String(req.body.query) : undefined);
     res.json({ ok: true });
   });
 
   r.get("/marketplace/capabilities", (req, res) => {
     const t = requireTenant(req);
-    res.json(marketplaceFor(t.mcpManager, t.localStore).capabilities());
+    res.json(marketplaceFor(t.mcpManager, t.localStore, t.id).capabilities());
   });
 
   r.get("/marketplace/health", async (req, res) => {
     const t = requireTenant(req);
-    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     res.json({ providers: await market.health(), ...market.capabilities() });
   });
 
@@ -188,7 +188,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
   r.post("/marketplace/install", async (req, res) => {
     const t = requireTenant(req);
     try {
-      const out = await marketplaceFor(t.mcpManager, t.localStore).install(req.body.server, {
+      const out = await marketplaceFor(t.mcpManager, t.localStore, t.id).install(req.body.server, {
         secrets: req.body.secrets,
         connect: req.body.connect !== false,
         cwd: req.body.cwd,
@@ -215,12 +215,12 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/marketplace/secrets", (req, res) => {
     const t = requireTenant(req);
-    res.json({ configured: marketplaceFor(t.mcpManager, t.localStore).providerSecretStatus() });
+    res.json({ configured: marketplaceFor(t.mcpManager, t.localStore, t.id).providerSecretStatus() });
   });
 
   r.put("/marketplace/secrets", (req, res) => {
     const t = requireTenant(req);
-    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     try {
       if (req.body?.glama !== undefined) market.setProviderSecret("glama", String(req.body.glama ?? ""));
       if (req.body?.smithery !== undefined) market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
@@ -232,13 +232,13 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/marketplace/registries", (req, res) => {
     const t = requireTenant(req);
-    res.json({ registries: marketplaceFor(t.mcpManager, t.localStore).listPrivateRegistries() });
+    res.json({ registries: marketplaceFor(t.mcpManager, t.localStore, t.id).listPrivateRegistries() });
   });
 
   r.post("/marketplace/registries", (req, res) => {
     const t = requireTenant(req);
     const id = String(req.body.id ?? `reg_${Date.now()}`);
-    const cfg = marketplaceFor(t.mcpManager, t.localStore).upsertPrivateRegistry(
+    const cfg = marketplaceFor(t.mcpManager, t.localStore, t.id).upsertPrivateRegistry(
       {
         id,
         name: String(req.body.name ?? "Private registry"),
@@ -254,7 +254,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
   r.get("/marketplace/featured", async (req, res) => {
     const t = requireTenant(req);
     try {
-      res.json(await marketplaceFor(t.mcpManager, t.localStore).featured());
+      res.json(await marketplaceFor(t.mcpManager, t.localStore, t.id).featured());
     } catch (err: any) {
       res.status(200).json({
         results: [],
@@ -270,17 +270,17 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/marketplace/updates", (req, res) => {
     const t = requireTenant(req);
-    res.json({ updates: marketplaceFor(t.mcpManager, t.localStore).updates() });
+    res.json({ updates: marketplaceFor(t.mcpManager, t.localStore, t.id).updates() });
   });
 
   r.get("/marketplace/export", (req, res) => {
     const t = requireTenant(req);
-    res.json(marketplaceFor(t.mcpManager, t.localStore).exportConfig());
+    res.json(marketplaceFor(t.mcpManager, t.localStore, t.id).exportConfig());
   });
 
   r.post("/marketplace/import", (req, res) => {
     const t = requireTenant(req);
-    const market = marketplaceFor(t.mcpManager, t.localStore);
+    const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     const drafts = market.previewImport(req.body.config ?? req.body);
     if (!req.body.confirm) return res.json({ drafts, imported: 0, needsConfirm: true });
     res.json(market.importDrafts(drafts, true));
@@ -387,7 +387,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     );
     res.json({
       servers,
-      diagnostics: marketplaceFor(t.mcpManager, t.localStore).index.diagnostics(),
+      diagnostics: marketplaceFor(t.mcpManager, t.localStore, t.id).index.diagnostics(),
     });
   });
 
@@ -442,7 +442,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
 
   r.get("/capabilities/diagnostics", (req, res) => {
     const t = requireTenant(req);
-    res.json(marketplaceFor(t.mcpManager, t.localStore).index.diagnostics());
+    res.json(marketplaceFor(t.mcpManager, t.localStore, t.id).index.diagnostics());
   });
 
   return r;

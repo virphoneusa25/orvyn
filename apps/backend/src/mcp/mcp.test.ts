@@ -48,7 +48,7 @@ function fakeStore() {
 
 test("registry: secrets live in a separate namespace, config JSON never contains them", () => {
   const store = fakeStore();
-  const reg = new McpRegistry(store);
+  const reg = new McpRegistry(store, "tenant-a");
   const cfg = {
     id: "srv1", name: "github", enabled: false, transport: "http" as const,
     url: "https://mcp.example", headers: { Authorization: "Bearer {{token}}" },

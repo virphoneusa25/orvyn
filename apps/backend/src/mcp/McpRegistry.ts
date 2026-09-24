@@ -6,6 +6,7 @@
 // response. The store is the seam a future OS-keychain/Electron
 // safeStorage backend plugs into.
 
+import { openSecret, sealSecret } from "../secrets/vault";
 import type { McpPermissionPolicy, McpServerConfig } from "./McpTypes";
 
 const CONFIG_KEY = "mcp.servers.v1";
@@ -19,13 +20,21 @@ export interface SecretStore {
 }
 
 /** LocalStore-backed secret storage — the credential seam. */
-export function makeSecretStore(store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void }): SecretStore {
+export function makeSecretStore(
+  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
+  tenantId: string,
+): SecretStore {
   return {
     get: (k) => {
-      const v = store.getSetting(SECRET_PREFIX + k);
-      return typeof v === "string" ? v : null;
+      const name = SECRET_PREFIX + k;
+      const v = store.getSetting(name);
+      if (typeof v !== "string" || !v) return null;
+      return openSecret(v, tenantId, name);
     },
-    set: (k, v) => store.setSetting(SECRET_PREFIX + k, v),
+    set: (k, v) => {
+      const name = SECRET_PREFIX + k;
+      store.setSetting(name, sealSecret(v, tenantId, name));
+    },
     delete: (k) => store.deleteSetting?.(SECRET_PREFIX + k),
   };
 }
@@ -35,8 +44,11 @@ export class McpRegistry {
   private policies = new Map<string, McpPermissionPolicy>();
   private secrets: SecretStore;
 
-  constructor(store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void }) {
-    this.secrets = makeSecretStore(store);
+  constructor(
+    store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
+    tenantId = "local",
+  ) {
+    this.secrets = makeSecretStore(store, tenantId);
     try {
       const raw = store.getSetting(CONFIG_KEY);
       const list = raw ? (JSON.parse(String(raw)) as McpServerConfig[]) : [];

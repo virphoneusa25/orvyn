@@ -43,6 +43,8 @@ export interface McpManagerDeps {
   /** Capability declarations for MCP tools (risk → capability classes). */
   engine?: { declareCapabilities(name: string, caps: string[]): void; forgetCapabilities(name: string): void };
   store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void };
+  /** Customer scope. Ciphertext from one tenant cannot be opened as another's. */
+  tenantId?: string;
   /** Emits MCP lifecycle events into the app's event surface (no secrets). */
   onEvent?: McpEventSink;
 }
@@ -76,7 +78,7 @@ export class McpManager {
     this.engine = deps.engine;
     this.store = deps.store;
     this.sink = deps.onEvent;
-    this.registry = new McpRegistry(deps.store);
+    this.registry = new McpRegistry(deps.store, deps.tenantId ?? "local");
   }
 
   // ---- CRUD ---------------------------------------------------------------

@@ -13,6 +13,7 @@ import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
+import { loadVaultKey } from "./secrets/vault";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
 
@@ -212,6 +213,13 @@ const heartbeat = setInterval(() => {
 }, 15_000);
 heartbeat.unref?.();
 server.on("close", () => clearInterval(heartbeat));
+
+try {
+  loadVaultKey();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : err);
+  process.exit(1);
+}
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
 if (process.env.ORVYN_PG_URL) {

@@ -96,7 +96,7 @@ test("secure token refs: parsed tokens never written as config plaintext", () =>
   (harden as any).storeTokens(id, { access_token: "AT_LIVE", refresh_token: "RT_LIVE", expires_at: Date.now() + 1000 });
   const dumped = [...store.dump().entries()];
   assert.ok(!JSON.stringify(mgr.listServers()).includes("AT_LIVE"));
-  assert.ok(dumped.some(([k, v]) => k.includes("mcp.secret.") && v.includes("AT_LIVE")));
+  assert.ok(dumped.some(([k, v]) => k.includes("mcp.secret.") && v.startsWith("orvyn:v1:") && !v.includes("AT_LIVE")));
   const stored = parseStoredTokens(mgr.secret(id, "oauth"));
   assert.equal(stored?.access_token, "AT_LIVE");
   assert.equal(stored?.refresh_token, "RT_LIVE");

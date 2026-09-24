@@ -153,7 +153,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   // MCP (servers from .orvyn/mcp.json — the hub is the only MCP speaker)
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
   g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
-  g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore)));
+  g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
   // registry.clear() above dropped namespaced mcp.* tools. Re-bind any
   // servers that are still CONNECTED so marketplace installs survive a run.
   tenant.mcpManager.reregisterConnectedTools();
