@@ -2,6 +2,7 @@ import { CONVERSATION_STYLE } from "./conversationStyle";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
+import { collectRunEvidence, introductionFor, progressFor, type RunEvidence } from "./conversationCoordinator";
 import { skillsPromptFor } from "../learning/validatedSkills";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
 //
@@ -156,6 +157,7 @@ interface RunState {
   actionNudges: number;
   introSpoken?: boolean;
   previewSpoken?: boolean;
+  spokenEvidence?: RunEvidence;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -363,13 +365,7 @@ export class StreamingAgentRuntime {
     if (published) {
       this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
       const st = this.runs.get(runId);
-      if (st && !st.previewSpoken) {
-        st.previewSpoken = true;
-        this.store.emit(runId, "message.delta", {
-          content: `\n\nThe page is written. The live preview is ${published.url}. I'm checking that this is the rendered site, not a dead local server.\n`,
-        });
-        this.store.emit(runId, "message.completed", {});
-      }
+      this.speakProgress(runId);
     }
     void this.showSiteOnDesktop(runId);
   }
@@ -1079,12 +1075,11 @@ export class StreamingAgentRuntime {
       : reasoningControl?.levels[state.reasoningEffort] !== undefined
         ? String(reasoningControl.levels[state.reasoningEffort])
         : "not supported by this model";
-    if (state.intent.requiresFrontend && !state.introSpoken) {
+    if (!state.introSpoken) {
       state.introSpoken = true;
-      this.store.emit(runId, "message.delta", {
-        content: "I'll build this as a working page in the ORVYN workspace, write the files, and open the rendered site in the Browser. I won't call it finished until that preview is actually up.",
-      });
-      this.store.emit(runId, "message.completed", {});
+      state.spokenEvidence = collectRunEvidence([]);
+      const intro = introductionFor(state.instruction);
+      if (intro) this.speak(runId, intro);
     }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
@@ -1374,6 +1369,7 @@ export class StreamingAgentRuntime {
             }
             state.handoffModelId = undefined;
           }
+          this.speakProgress(runId);
           if (outcome === "cancelled") return this.finishCancelled(runId, steps);
           if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
             const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -1806,6 +1802,23 @@ export class StreamingAgentRuntime {
       });
       if (escalated.registryId) state.handoffModelId = escalated.registryId;
     }
+  }
+
+  private speak(runId: string, text: string): void {
+    this.store.emit(runId, "conversation.message", { content: text });
+    this.emitNarration(runId, text, false);
+  }
+
+  private speakProgress(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) return;
+    const before = state.spokenEvidence ?? collectRunEvidence([]);
+    const after = collectRunEvidence(this.store.get(runId)?.events ?? []);
+    const line = progressFor(before, after);
+    state.spokenEvidence = after;
+    if (!line) return;
+    state.previewSpoken = true;
+    this.speak(runId, line);
   }
 
   private emitNarration(runId: string, text: string, alreadyStreamed: boolean): void {
