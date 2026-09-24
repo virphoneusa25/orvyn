@@ -13,5 +13,7 @@ function send(id: string, rel: string, res: import("express").Response): void {
   res.send(file.body);
 }
 
-siteRouter.get("/:id", (req, res) => send(req.params.id, "index.html", res));
-siteRouter.get("/:id/*", (req, res) => send(req.params.id, req.params[0] || "index.html", res));
+siteRouter.use("/:id", (req, res) => {
+  const rel = req.path.replace(/^\/+/, "") || "index.html";
+  send(req.params.id, rel, res);
+});
