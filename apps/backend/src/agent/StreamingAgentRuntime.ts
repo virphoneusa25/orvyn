@@ -14,7 +14,6 @@ import { skillsPromptFor } from "../learning/validatedSkills";
 // resume without disturbing the run.
 
 import { randomUUID } from "crypto";
-import { dirname, isAbsolute, join } from "path";
 import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
@@ -36,7 +35,8 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
-import { publishAgentSite, publishRememberedSite, rememberSiteFile } from "./sitePreview";
+import { composeSiteDocument, rememberSiteFile } from "./sitePreview";
+import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
@@ -334,9 +334,8 @@ export class StreamingAgentRuntime {
           mimeType: rec.mimeType,
           size: rec.size,
           downloadable: true,
-          previewable: /\.html?$/i.test(rec.name),
+          previewable: false,
           downloadPath: `/artifacts/${rec.artifactId}/download`,
-          previewUrl: `/artifacts/${rec.artifactId}/preview`,
         });
         this.store.emit(runId, "files.ready", {
           artifactId: rec.artifactId,
@@ -355,13 +354,17 @@ export class StreamingAgentRuntime {
       location: "workspace",
       message: `Created ${rel} (+${lines})`,
     });
-    if (!/\.(html|php)$/i.test(rel)) return;
-    const state = this.runs.get(runId);
-    const abs = state?.projectRoot && !isAbsolute(rel) ? join(state.projectRoot, rel) : rel;
-    const fromDisk = abs ? publishAgentSite(dirname(abs)) : null;
-    const published = fromDisk ?? publishRememberedSite(runId);
-    if (!published) return;
-    this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+    if (!/\.html$/i.test(rel)) return;
+    void this.showSiteOnDesktop(runId);
+  }
+
+  private async showSiteOnDesktop(runId: string): Promise<void> {
+    const html = composeSiteDocument(runId);
+    if (!html) return;
+    const opened = await openSiteOnDesktop(html);
+    if (!opened) return;
+    this.store.emit(runId, "desktop.action", { url: opened.url, label: "Live site on the sandbox desktop" });
+    this.store.emit(runId, "message.delta", { content: `\n\nThe full site, with its styles, is open on the sandbox desktop.\n` });
   }
 
   // Maps a tool call onto the richer domain events the UI renders as cards,
@@ -1415,14 +1418,7 @@ export class StreamingAgentRuntime {
         } else {
           this.emitNarration(runId, content, streamedText);
         }
-        const site = state.intent.requiresFrontend ? publishRememberedSite(runId) : null;
-        if (site) {
-          this.store.emit(runId, "preview.available", { url: site.url, label: "Live preview" });
-          const listed = site.files.map((f) => `- ${f}`).join("\n");
-          this.store.emit(runId, "message.delta", {
-            content: `\n\nLive preview: ${site.url}\n\nFiles:\n${listed}\n`,
-          });
-        }
+        if (state.intent.requiresFrontend) await this.showSiteOnDesktop(runId);
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
         this.store.setStatus(runId, "completed");
         return;

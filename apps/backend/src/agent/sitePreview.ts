@@ -45,6 +45,26 @@ export function rememberSiteFile(runId: string, relPath: string, content: string
   remembered.set(runId, bag);
 }
 
+/** One document: the page plus every stylesheet and script the agent wrote. */
+export function composeSiteDocument(runId: string): string | null {
+  const bag = remembered.get(runId);
+  if (!bag) return null;
+  const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
+  if (!pageKey) return null;
+  let html = bag.get(pageKey) ?? "";
+  const css = [...bag.entries()].filter(([name]) => name.endsWith(".css")).map(([, body]) => body).join("\n");
+  const js = [...bag.entries()].filter(([name]) => name.endsWith(".js")).map(([, body]) => body).join("\n");
+  if (css && !html.includes(css.slice(0, 40))) {
+    const style = `<style>\n${css}\n</style>`;
+    html = html.includes("</head>") ? html.replace("</head>", `${style}\n</head>`) : style + html;
+  }
+  if (js && !html.includes(js.slice(0, 40))) {
+    const script = `<script>\n${js}\n</script>`;
+    html = html.includes("</body>") ? html.replace("</body>", `${script}\n</body>`) : html + script;
+  }
+  return html;
+}
+
 /** Write the remembered pages to a temp folder and publish them. */
 export function publishRememberedSite(runId: string): { id: string; url: string; files: string[] } | null {
   const bag = remembered.get(runId);

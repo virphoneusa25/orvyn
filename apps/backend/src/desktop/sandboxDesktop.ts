@@ -599,6 +599,33 @@ export async function sandboxNavigate(session: SandboxDesktopSession, url: strin
   return r.code === 0;
 }
 
+function runningDesktopContainer(): Promise<string | null> {
+  return new Promise((resolve) => {
+    exec("docker ps --filter name=orvyn-desktop --format {{.ID}}", { windowsHide: true }, (err, stdout) => {
+      if (err) return resolve(null);
+      const id = stdout.split("\n").map((l) => l.trim()).find(Boolean) ?? null;
+      resolve(id);
+    });
+  });
+}
+
+/** Put the finished page on the sandbox desktop and open it in that desktop's browser. */
+export async function openSiteOnDesktop(html: string): Promise<{ url: string } | null> {
+  const containerId = await runningDesktopContainer();
+  if (!containerId || !html.trim()) return null;
+  const b64 = Buffer.from(html, "utf8").toString("base64");
+  const setup = await dockerExec(containerId, ["sh", "-c", `mkdir -p /tmp/orvyn-site && printf %s '${b64}' | base64 -d > /tmp/orvyn-site/index.html`]);
+  if (setup.code !== 0) return null;
+  const url = "file:///tmp/orvyn-site/index.html";
+  const session = [...sessions.values()].find((s) => s.containerId.startsWith(containerId) || containerId.startsWith(s.containerId));
+  if (session && session.status === "ready") {
+    await sandboxNavigate(session, url);
+  } else {
+    await dockerExec(containerId, ["sh", "-c", `nohup firefox-esr --new-window '${url}' >/dev/null 2>&1 &`]);
+  }
+  return { url };
+}
+
 export function getSandboxSession(id: string): SandboxDesktopSession | undefined {
   return sessions.get(id);
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
+import { composeSiteDocument, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
 
 test("a preview is only the directory the agent wrote", () => {
   const empty = mkdtempSync(join(tmpdir(), "orvyn-empty-"));
@@ -17,6 +17,16 @@ test("a preview is only the directory the agent wrote", () => {
   const page = readPublishedFile(published!.id, "index.html");
   assert.equal(page?.body.toString(), "<h1>from the agent</h1>");
   assert.equal(readPublishedFile(published!.id, "../secret.txt"), undefined);
+});
+
+test("the preview document includes the stylesheet and script", () => {
+  rememberSiteFile("run-styled", "index.html", "<html><head></head><body><h1>Site</h1></body></html>");
+  rememberSiteFile("run-styled", "styles.css", "h1{color:white}");
+  rememberSiteFile("run-styled", "script.js", "console.log(1)");
+  const html = composeSiteDocument("run-styled");
+  assert.ok(html);
+  assert.match(html!, /h1\{color:white\}/);
+  assert.match(html!, /console\.log\(1\)/);
 });
 
 test("remembered pages publish without reading the project disk", () => {
