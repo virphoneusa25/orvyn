@@ -581,6 +581,8 @@ export class RunStore {
   private emitPreviewFromText(runId: string, type: AgentEventType, data: Record<string, unknown>): void {
     if (type !== "terminal.output" && type !== "tool.completed") return;
     if (data.ok === false || /not found|command failed/i.test(String(data.output ?? data.error ?? ""))) return;
+    // A server bound on the worker is not the Windows machine. Never hand that localhost to the desktop browser.
+    if (data.clientLocal !== true) return;
     const text = String(data.data ?? data.chunk ?? data.output ?? data.preview ?? data.command ?? data.content ?? "");
     const seen = this.previewSeen.get(runId) ?? new Set<string>();
     this.previewSeen.set(runId, seen);

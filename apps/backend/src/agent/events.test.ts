@@ -200,11 +200,13 @@ test("queue: survives a backend restart — replay rebuilds items, edits, order,
   }
 });
 
-test("terminal output emits a normalized preview.available event once", () => {
+test("a worker localhost is not forwarded to the desktop browser", () => {
   const store = new RunStore();
   store.create("run-prev", "C:/proj");
-  store.emit("run-prev", "terminal.output", { data: "VITE ready\n  Local: http://127.0.0.1:43191/\n" });
-  store.emit("run-prev", "terminal.output", { data: "Local: http://127.0.0.1:43191/\n" });
+  store.emit("run-prev", "terminal.output", { data: "Server running on http://localhost:8080\n" });
+  assert.equal(store.get("run-prev")!.events.some((e) => e.type === "preview.available"), false);
+  store.emit("run-prev", "terminal.output", { data: "VITE ready\n  Local: http://127.0.0.1:43191/\n", clientLocal: true });
+  store.emit("run-prev", "terminal.output", { data: "Local: http://127.0.0.1:43191/\n", clientLocal: true });
   const previews = store.get("run-prev")!.events.filter((e) => e.type === "preview.available");
   assert.equal(previews.length, 1);
   assert.equal(previews[0]!.data.url, "http://127.0.0.1:43191/");

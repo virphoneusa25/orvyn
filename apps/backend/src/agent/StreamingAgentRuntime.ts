@@ -35,7 +35,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
-import { composeSiteDocument, rememberSiteFile } from "./sitePreview";
+import { composeSiteDocument, publishRememberedSite, rememberSiteFile } from "./sitePreview";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
@@ -154,6 +154,8 @@ interface RunState {
   composerMode?: string;
   /** One extra model turn when an action request returns prose and no tools. */
   actionNudges: number;
+  introSpoken?: boolean;
+  previewSpoken?: boolean;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -355,6 +357,20 @@ export class StreamingAgentRuntime {
       message: `Created ${rel} (+${lines})`,
     });
     if (!/\.html$/i.test(rel)) return;
+    const composed = composeSiteDocument(runId);
+    if (composed) rememberSiteFile(runId, rel, composed);
+    const published = publishRememberedSite(runId);
+    if (published) {
+      this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+      const st = this.runs.get(runId);
+      if (st && !st.previewSpoken) {
+        st.previewSpoken = true;
+        this.store.emit(runId, "message.delta", {
+          content: `\n\nThe page is written. The live preview is ${published.url}. I'm checking that this is the rendered site, not a dead local server.\n`,
+        });
+        this.store.emit(runId, "message.completed", {});
+      }
+    }
     void this.showSiteOnDesktop(runId);
   }
 
@@ -1063,6 +1079,13 @@ export class StreamingAgentRuntime {
       : reasoningControl?.levels[state.reasoningEffort] !== undefined
         ? String(reasoningControl.levels[state.reasoningEffort])
         : "not supported by this model";
+    if (state.intent.requiresFrontend && !state.introSpoken) {
+      state.introSpoken = true;
+      this.store.emit(runId, "message.delta", {
+        content: "I'll build this as a working page in the ORVYN workspace, write the files, and open the rendered site in the Browser. I won't call it finished until that preview is actually up.",
+      });
+      this.store.emit(runId, "message.completed", {});
+    }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
       requestedModelId: state.requestedModelId ?? "auto",

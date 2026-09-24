@@ -106,9 +106,17 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
       if (e.type !== "file.created" && e.type !== "file.edit") return false;
       return /\.(html|php|css|js|xml)$/i.test(String(e.data?.path ?? ""));
     });
+    const preview = input.events.some((e) => {
+      if (e.type !== "preview.available") return false;
+      const url = String(e.data?.url ?? "");
+      return /^https?:\/\//i.test(url) && !/localhost|127\.0\.0\.1/i.test(url);
+    });
     if (!wrotePage) {
       failedGate = "code";
       reasons.push("The site files were not written.");
+    } else if (!preview) {
+      failedGate = "visual";
+      reasons.push("The site has no reachable preview. A localhost server on the worker is not the browser on this machine.");
     }
   }
 
@@ -146,8 +154,10 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
         ? workspaceWriteSucceeded(input.events)
           ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."
           : "COMPLETION GATE — FILE: This is a workspace file. Call write_file with the requested path and exact contents, then read_file and report that result. Do not use generate_image or create_document for a plain text file."
-        : website && failedGate === "code"
-          ? "COMPLETION GATE — WEBSITE: You build this site. Call write_file for every page, style, and template file. Do not describe the site instead of writing it. Do not stop until the files exist in the workspace."
+        : website && !input.events.some((e) => (e.type === "file.created" || e.type === "file.edit") && /\.(html|css|js|php)$/i.test(String(e.data?.path ?? "")))
+          ? "COMPLETION GATE — WEBSITE: Call write_file for index.html and its stylesheet. Do not claim the site is built or verified. A one-shot node server on localhost is not a preview."
+        : website
+          ? "COMPLETION GATE — WEBSITE: The pages exist. Do not start localhost for the user. Finish the files with write_file so the workspace preview can open. Do not say verified until that preview exists."
         : input.category === "server"
           ? "COMPLETION GATE — SERVER: Call ssh_exec or remote_exec on the resolved server and report that command's output. Do not claim the server was checked."
           : failedGate === "code"

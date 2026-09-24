@@ -142,12 +142,31 @@ test("a website run is not finished until the agent writes a page", () => {
   });
   assert.equal(blocked.ok, false);
   assert.match(blocked.retryPrompt, /write_file/);
-  const passed = evaluateCompletionGates({
+  const filesOnly = evaluateCompletionGates({
     instruction: "Build a Joomla website",
     artifacts: [],
     events: [{ type: "file.created", data: { path: "site/index.html" } }],
   });
+  assert.equal(filesOnly.ok, false);
+  assert.match(filesOnly.retryPrompt, /localhost|preview/i);
+  const passed = evaluateCompletionGates({
+    instruction: "Build a Joomla website",
+    artifacts: [],
+    events: [
+      { type: "file.created", data: { path: "site/index.html" } },
+      { type: "preview.available", data: { url: "https://preview.example/sites/1/" } },
+    ],
+  });
   assert.equal(passed.ok, true);
+  const localhost = evaluateCompletionGates({
+    instruction: "Build a Joomla website",
+    artifacts: [],
+    events: [
+      { type: "file.created", data: { path: "index.html" } },
+      { type: "preview.available", data: { url: "http://localhost:8080/index.html" } },
+    ],
+  });
+  assert.equal(localhost.ok, false);
 });
 
 test("a server run cannot complete without a remote result", () => {

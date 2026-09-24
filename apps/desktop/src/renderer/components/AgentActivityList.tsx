@@ -211,6 +211,7 @@ export function AgentActivityList({
                     ? `${Math.round(durMs / 1000)} seconds`
                     : `${Math.round(durMs / 60_000)} minutes`
                 : undefined;
+              if (!live && !item.thought.summary) return null;
               if (live) {
                 return (
                   <div key={item.key} className="activity-thinking" role="status" title={item.thought.summary ?? "Working"}>
@@ -226,8 +227,8 @@ export function AgentActivityList({
                   title={item.thought.summary ?? "Worked"}
                 >
                   <span aria-hidden="true">✦</span>
-                  <span className="stream-thought-label">Thought</span>
-                  <span>· {dur ?? "a few seconds"}</span>
+                  <span className="stream-thought-label">{item.thought.summary || "Working"}</span>
+                  {dur ? <span>· {dur}</span> : null}
                 </div>
               );
             }

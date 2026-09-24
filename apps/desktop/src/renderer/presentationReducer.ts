@@ -309,7 +309,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({
           kind: "status",
           key: e.id,
-          label: "Thought",
+          label: note.slice(0, 90) || "Working",
           ephemeral: false,
           tone: "thought",
           thought: { ts: e.timestamp, summary: note.slice(0, 90) },
@@ -332,7 +332,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({
           kind: "status",
           key: e.id,
-          label: "Thought",
+          label: e.data.text ? String(e.data.text).slice(0, 90) : "Working",
           ephemeral: false,
           tone: "thought",
           thought: {
