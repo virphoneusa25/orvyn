@@ -114,7 +114,9 @@ export type AgentEventType =
   | "capability.required"
   | "mcp.activation"
   | "model.capability.blocked"
-  | "model.fallback";
+  | "model.fallback"
+  | "resource.required"
+  | "run.blocked";
 
 export interface AgentEvent {
   id: string;
@@ -125,7 +127,15 @@ export interface AgentEvent {
   data: Record<string, unknown>;
 }
 
-export type RunStatus = "queued" | "running" | "awaiting_approval" | "completed" | "error" | "cancelled";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "awaiting_approval"
+  | "verifying"
+  | "blocked"
+  | "completed"
+  | "error"
+  | "cancelled";
 
 /** A durable, ordered follow-up instruction queued during a run. */
 export interface QueueItem {
@@ -140,7 +150,7 @@ export interface QueueItem {
 
 /** A run is finished when no further events can arrive for it. */
 export function isTerminal(status: RunStatus): boolean {
-  return status === "completed" || status === "error" || status === "cancelled";
+  return status === "completed" || status === "error" || status === "cancelled" || status === "blocked";
 }
 
 export interface Run {

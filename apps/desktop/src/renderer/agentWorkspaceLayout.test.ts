@@ -49,7 +49,7 @@ test("legacy inspectorOpen / pin / width cannot recreate a second column", () =>
 test("Changes → Review switches the same panel tab, never a second column", () => {
   let layout = nextWorkspaceLayout(
     { open: true, width: 520, activeTab: "changes", followOrion: true },
-    routeEvent(ev("run.completed"))
+    routeEvent(ev("review.passed"))
   );
   assert.equal(layout.activeTab, "review");
   assert.equal(layout.columns, 1);

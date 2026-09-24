@@ -7,6 +7,8 @@ export interface CompletionGateInput {
   instruction: string;
   artifacts: GroundedArtifact[];
   events: Array<{ type: string; data?: Record<string, unknown> }>;
+  /** When set, only that task's evidence gate applies. */
+  category?: string;
 }
 
 export interface CompletionGateResult {
@@ -97,7 +99,19 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && hints.isVisual && !hints.isArtifact) {
+  if (!failedGate && input.category === "server") {
+    const remote = input.events.some((e) => e.type === "tool.completed" && /^(ssh_exec|remote_exec)$/i.test(toolName(e)));
+    if (!remote) {
+      failedGate = "code";
+      reasons.push("No remote command result from the resolved server.");
+    }
+  }
+
+  const visualTask =
+    (!input.category && hints.isVisual && !hints.isArtifact) ||
+    ((input.category === "browser" || input.category === "desktop") &&
+      /\b(verify|screenshot|homepage|dialog)\b/i.test(input.instruction));
+  if (!failedGate && visualTask) {
     if (!visualVerified(input.events)) {
       failedGate = "visual";
       reasons.push("UI work has no screenshot or desktop verification.");
@@ -119,8 +133,10 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
         ? workspaceWriteSucceeded(input.events)
           ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."
           : "COMPLETION GATE — FILE: This is a workspace file. Call write_file with the requested path and exact contents, then read_file and report that result. Do not use generate_image or create_document for a plain text file."
-        : failedGate === "code"
-          ? "COMPLETION GATE — CODE: Run the tests (or typecheck) and only finish if they pass. Do not claim the fix is done without that result."
+        : input.category === "server"
+          ? "COMPLETION GATE — SERVER: Call ssh_exec or remote_exec on the resolved server and report that command's output. Do not claim the server was checked."
+          : failedGate === "code"
+            ? "COMPLETION GATE — CODE: Run the tests (or typecheck) and only finish if they pass. Do not claim the fix is done without that result."
           : "COMPLETION GATE — VISUAL: Take a browser or desktop screenshot and verify the visible result before finishing.";
 
   return {

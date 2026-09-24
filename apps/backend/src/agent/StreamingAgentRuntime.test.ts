@@ -509,3 +509,17 @@ test("auto switches off a chat-only model onto one that can call tools", async (
   assert.equal(started?.data.actualModelId, "tool-model");
   assert.ok(h.store.get(runId)!.events.some((e) => e.type === "model.fallback"));
 });
+
+test("a server task with no configured server is blocked and does not call the model", async () => {
+  const h = harness([[{ delta: "I will ssh somewhere.", done: true }]]);
+  const runId = h.runtime.start("/tmp/orvyn-no-such-project", "Log into my configured test server and tell me its hostname and uptime.");
+  assert.equal(await waitForStatus(h.store, runId), "blocked");
+  assert.equal(h.provider.requests.length, 0);
+  const events = h.store.get(runId)!.events;
+  assert.ok(events.some((e) => e.type === "resource.required"));
+  assert.equal(events.some((e) => e.type === "run.completed"), false);
+  assert.equal(events.some((e) => e.type === "tool.started"), false);
+  const diag = events.find((e) => e.type === "run.diagnostics");
+  assert.equal((diag?.data.taskIntent as { category?: string })?.category, "server");
+  assert.equal(JSON.stringify(diag?.data).includes("password"), false);
+});

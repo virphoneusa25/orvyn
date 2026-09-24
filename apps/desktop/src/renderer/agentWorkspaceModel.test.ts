@@ -209,6 +209,9 @@ test("review summary and ORION terminal sessions derive from events", () => {
   assert.equal(review.filesChanged, 1);
   assert.equal(review.testsPassed, 1);
   assert.equal(review.completed, true);
+  const empty = deriveReviewSummary([ev("run.completed", {}, 1)], deriveAgentWorkspace([ev("run.completed", {}, 1)]));
+  assert.equal(empty.completed, false);
+  assert.equal(routeEvent(ev("run.completed")) , null);
   assert.equal(derived.suggestedTab, "review");
   const cmds = extractOrionCommands(events);
   assert.equal(cmds[0]!.command, "npm test");

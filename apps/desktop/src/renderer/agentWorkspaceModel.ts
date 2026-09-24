@@ -247,8 +247,8 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
     const url = String(data.url ?? "");
     return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, tab: "preview", previewUrl: url || undefined };
   }
-  if (type.startsWith("review.") || type === "run.completed" || type === "mission.completed") {
-    const complete = type === "review.passed" || type === "review.approved" || type === "run.completed" || type === "mission.completed";
+  if (type.startsWith("review.")) {
+    const complete = type === "review.passed" || type === "review.approved";
     const rejected = type === "review.rejected" || type === "review.failed";
     return {
       line: complete ? "Review ready" : rejected ? "Review failed" : "Review in progress",
@@ -434,6 +434,13 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     }
   }
 
+  const finished = events.some((e) => e.type === "run.completed" || e.type === "mission.completed");
+  const blocked = events.some((e) => e.type === "run.blocked" || e.type === "resource.required");
+  const reviewable = diffs.length > 0 && artifacts.size === 0;
+  if (finished && reviewable && !blocked) {
+    latest = { line: "Review ready", priority: 75, tab: "review", switchTab: true };
+  }
+
   const fileList = [...files.values()].reverse();
   const diffList = diffs.slice().reverse();
   const previewList = [...previews.values()];
@@ -539,6 +546,7 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
   let warnings = 0;
   let buildPassed: boolean | null = null;
   let completed = false;
+  let blockedRun = false;
   for (const e of events) {
     const data = e.data ?? {};
     if (e.type === "test.completed") {
@@ -555,6 +563,7 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
       buildPassed = false;
     }
     if (e.type === "review.rejected" || e.type === "tool.failed") warnings += 1;
+    if (e.type === "run.blocked" || e.type === "resource.required" || e.type === "run.error") blockedRun = true;
     if (e.type === "run.completed" || e.type === "mission.completed" || e.type === "review.approved" || e.type === "review.passed") {
       completed = true;
     }
@@ -568,7 +577,7 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
     buildPassed,
     warnings,
     artifacts: derived.artifacts.length,
-    completed,
+    completed: completed && !blockedRun && (derived.changeSummary.files > 0 || derived.artifacts.length > 0 || testsPassed > 0 || testsFailed > 0),
   };
 }
 

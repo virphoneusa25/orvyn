@@ -503,6 +503,18 @@ v1Router.post("/images/generate", async (req, res) => {
 v1Router.post("/chat/completions", async (req, res) => {
   try {
     const tc = requireTenant(req);
+    const message = String(req.body.message ?? "");
+    const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
+    const intent = inferTaskIntent(message, composerMode);
+    const chip = composerMode.toLowerCase();
+    if (!intent.informational && chip !== "research" && chip !== "ask" && chip !== "plan") {
+      const projectRoot = String(req.body.projectRoot ?? tc.currentProjectRoot ?? "");
+      _regTools(tc, projectRoot);
+      const runId = tc.agentRuntime.start(projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+        composerMode: chip,
+      });
+      return res.status(201).json({ runId, routed: "agent" });
+    }
     const response = await new Orchestrator(tc.modelService, tc.indexService, tc.artifactService).chat({
       task: req.body.task ?? "chat",
       history: req.body.history ?? [],
@@ -524,6 +536,7 @@ import { registerProjectToolsFor as _regTools } from "../ai/registerProjectTools
 import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
+import { inferTaskIntent } from "../agent/taskIntent";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
@@ -700,7 +713,7 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
 
   const unsubscribe = t.runStore.subscribe(req.params.id, (e) => {
     res.write(`data: ${JSON.stringify(e)}\n\n`);
-    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled") res.end();
+    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") res.end();
   });
 
   req.on("close", () => {
@@ -716,7 +729,7 @@ v1Router.post("/agent/stream/runs/:id/queue", (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
-  if (run.status === "completed" || run.status === "error" || run.status === "cancelled") {
+  if (isTerminal(run.status)) {
     return res.status(409).json({ error: "Run is finished — queue a new run instead." });
   }
   const item = t.runStore.queueAdd(req.params.id, String(req.body.text ?? ""));
@@ -761,7 +774,7 @@ v1Router.post("/agent/stream/runs/:id/queue/:itemId/steer", (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
-  if (run.status === "completed" || run.status === "error" || run.status === "cancelled") {
+  if (isTerminal(run.status)) {
     return res.status(409).json({ error: "Run is finished — the item stays queued for delivery as a follow-up." });
   }
   const ok = t.runStore.queueSteer(req.params.id, req.params.itemId);
@@ -868,37 +881,23 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   }
   _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
-  // Multi-agent runtime still owns task decomposition. Until each worker has
-  // its own run-scoped provider parameter, honor ANY explicit composer
-  // control (model, reasoning, access mode) by routing this request through
-  // the single-agent ORION tool loop instead of silently ignoring the user's
-  // chosen settings.
+  // One agent loop. Mission requests use the same runtime as chat runs.
   const reasoningEffort = ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
     ? req.body.reasoningEffort
     : undefined;
   const accessMode = isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined;
-  const explicitModel = typeof req.body.requestedModelId === "string" && req.body.requestedModelId !== "auto";
-  if (explicitModel || (reasoningEffort && reasoningEffort !== "auto") || accessMode) {
-    const runId = t.agentRuntime.start(
-      req.body.projectRoot,
-      req.body.goal,
-      req.body.rules,
-      "agent",
-      req.body.attachments,
-      [],
-      typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
-      undefined,
-      { reasoningEffort, accessMode }
-    );
-    return res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
-  }
-  const runId = t.multiAgentRuntime.start(
+  const runId = t.agentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
     req.body.rules,
-    req.body.attachments
+    "agent",
+    req.body.attachments,
+    [],
+    typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
+    undefined,
+    { reasoningEffort, accessMode, composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined }
   );
-  res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats() });
+  res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
 });
 
 v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {

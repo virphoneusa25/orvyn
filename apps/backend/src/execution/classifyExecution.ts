@@ -10,7 +10,7 @@ export interface ExecutionHints {
 }
 
 const REMOTE =
-  /\b(deploy|production|ovh|remote server|ssh|vps|cloud worker|background mission)\b/i;
+  /\b(deploy|production|remote server|ssh|cloud worker|background mission)\b/i;
 const RISKY =
   /\b(untrusted|sandbox|isolate|crash|malware|unknown repo|random repo|don't trust|do not trust)\b/i;
 const BACKGROUND =
@@ -22,7 +22,7 @@ const ARTIFACT =
 const LOCAL_CODE =
   /\b(test|tests|typecheck|lint|build|fix|edit|refactor|commit|git|calculator|file|src\/)\b/i;
 const FORCE_LOCAL = /\b(do not use cloud|don't use cloud|do not use Cloud|locally|on this machine|no ovh)\b/i;
-const FORCE_CLOUD = /\b(force cloud|on ovh|ovh worker|(?<!\bdo not )(?<!\bdon't )(?<!\bno )\buse cloud)\b/i;
+const FORCE_CLOUD = /\b(force cloud|cloud worker|(?<!\bdo not )(?<!\bdon't )(?<!\bno )\buse cloud)\b/i;
 const FORCE_SANDBOX = /\b(in sandbox|use sandbox|isolated container)\b/i;
 
 export function classifyExecutionHints(prompt: string, mode?: string): ExecutionHints {

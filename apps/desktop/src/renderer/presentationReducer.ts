@@ -576,6 +576,16 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             : "Completed",
         });
         continue;
+      case "run.blocked":
+        closeThought(e.timestamp);
+        items.push({
+          kind: "summary",
+          key: e.id,
+          ok: false,
+          cancelled: false,
+          detail: String(e.data.message ?? "Blocked — a resource is required"),
+        });
+        continue;
       case "run.error":
         closeThought(e.timestamp);
         items.push({
