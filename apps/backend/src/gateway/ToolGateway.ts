@@ -8,6 +8,7 @@
 import { AITool, ToolExecutionContext, ToolPermission, ToolRegistry, ToolResult } from "../ai/ToolTypes";
 import { AgentRole, PermissionEngine } from "./PermissionEngine";
 import { applyProfile, PermissionProfile } from "./PermissionProfiles";
+import { cloudFilesystemDecision } from "./executionBoundary";
 
 export class ToolGateway {
   /** User-selected autonomy profile (spec §47). SAFE = ask for everything risky. */
@@ -69,6 +70,14 @@ export class ToolGateway {
     const verdict = this.permissions.checkRole(toolName, role);
     if (!verdict.allowed) {
       return { ok: false, error: verdict.reason ?? "Denied by capability policy" };
+    }
+    if (/^(write_file|read_file|edit_file|delete_file)$/.test(toolName)) {
+      const decision = cloudFilesystemDecision(
+        context?.executionTarget,
+        String(args.path ?? args.file ?? ""),
+        context?.workspaceRoot ?? ""
+      );
+      if (!decision.ok) return { ok: false, error: `${decision.code}: ${decision.error}` };
     }
     return this.registry.execute(toolName, args, context);
   }

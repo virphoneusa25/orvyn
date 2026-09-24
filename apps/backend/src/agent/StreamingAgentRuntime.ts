@@ -162,6 +162,8 @@ interface RunState {
   spokenEvidence?: RunEvidence;
   phase: RunPhase;
   repositoryDetected: boolean;
+  resumeMessages?: AIMessage[];
+  resumeMode?: AgentMode;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -784,6 +786,10 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "message.delta", { content: preflight.message ?? "" });
           this.store.emit(runId, "run.blocked", { message: preflight.message, code: "RESOURCE_REQUIRED", actions: preflight.actions ?? [] });
           this.store.setStatus(runId, "blocked");
+          if (state) {
+            state.resumeMessages = messages;
+            state.resumeMode = mode;
+          }
           return;
         }
         if (resolution.status === "blocked" && !intent.requiresFrontend) {
@@ -796,6 +802,10 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "message.delta", { content: resolution.message });
           this.store.emit(runId, "run.blocked", { message: resolution.message, code: resolution.code });
           this.store.setStatus(runId, "blocked");
+          if (state) {
+            state.resumeMessages = messages;
+            state.resumeMode = mode;
+          }
           return;
         }
         if (toolModelError) {
@@ -850,6 +860,10 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "message.completed", {});
           this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT" });
           this.store.setStatus(runId, "blocked");
+          if (state) {
+            state.resumeMessages = messages;
+            state.resumeMode = mode;
+          }
           return;
         }
         if (state) state.exposedTools = new Set(prepared.relevantTools);
@@ -869,7 +883,7 @@ export class StreamingAgentRuntime {
         } catch {
           /* run-scope cleanup must not fail the settle */
         }
-        this.runs.delete(runId);
+        if (this.store.get(runId)?.status !== "blocked") this.runs.delete(runId);
       }
     })();
     return runId;
@@ -1090,6 +1104,51 @@ export class StreamingAgentRuntime {
   private finishCancelled(runId: string, steps: number): void {
     this.store.emit(runId, "run.cancelled", { steps, reason: "Stopped by user" });
     this.store.setStatus(runId, "cancelled");
+  }
+
+  /** Same run, after the user connects the resource preflight asked for. */
+  resume(runId: string, resources: RegisteredResource[]): boolean {
+    const state = this.runs.get(runId);
+    const run = this.store.get(runId);
+    if (!state || run?.status !== "blocked" || !state.resumeMessages) return false;
+    const prepared = prepareRunPreflight({
+      instruction: state.instruction,
+      projectRoot: state.projectRoot,
+      tenantId: state.execution?.tenantId || "local",
+      organizationId: state.execution?.organizationId || "",
+      projectId: state.execution?.projectId ?? null,
+      resources,
+      toolNames: this.tools.list().map((t) => t.name),
+      hasLocalProject: inspectWorkspace(state.projectRoot).available,
+      cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
+      cloudWorkspaceAvailable: state.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
+      composerMode: state.composerMode ?? state.resumeMode,
+    });
+    this.store.emit(runId, "preflight.completed", {
+      canExecute: prepared.canExecute,
+      executionTarget: prepared.executionTarget,
+      repositoryDetected: prepared.workspace.repositoryDetected,
+      toolCount: prepared.relevantTools.length,
+      blockers: prepared.blockers,
+      resumed: true,
+    });
+    if (!prepared.canExecute) {
+      const message = prepared.blockers[0] ?? "That connection does not satisfy this run.";
+      this.store.emit(runId, "message.delta", { content: message });
+      this.store.emit(runId, "message.completed", {});
+      return false;
+    }
+    state.exposedTools = new Set(prepared.relevantTools);
+    state.introSpoken = true;
+    state.phase = "acting";
+    this.store.setStatus(runId, "running");
+    this.speak(runId, "Connection is ready. I'll continue from where I stopped.");
+    const messages = state.resumeMessages;
+    const mode = state.resumeMode ?? "agent";
+    void this.loop(runId, messages, state.instruction, mode).finally(() => {
+      if (this.store.get(runId)?.status !== "blocked") this.runs.delete(runId);
+    });
+    return true;
   }
 
   private async loop(
@@ -1662,6 +1721,8 @@ export class StreamingAgentRuntime {
           () =>
             this.tools.execute(call.name, call.arguments, "coder", {
               signal: state.controller.signal,
+              executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+              workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
               onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
             })
         );

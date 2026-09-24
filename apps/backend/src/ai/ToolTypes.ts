@@ -41,6 +41,8 @@ export interface ToolResult {
 export interface ToolExecutionContext {
   signal?: AbortSignal;
   onOutput?: (chunk: string) => void;
+  executionTarget?: string;
+  workspaceRoot?: string;
 }
 
 export interface AITool {
