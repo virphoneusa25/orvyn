@@ -1258,8 +1258,6 @@ export class StreamingAgentRuntime {
         }
         state.modelCalls++;
 
-        this.store.emit(runId, "thinking", { step: steps, maxSteps: MAX_STEPS });
-
         // Keep the conversation inside the window before asking, not after
         // the server rejects it.
         const compaction = compactConversation(messages, this.contextBudget(provider));
@@ -1278,8 +1276,7 @@ export class StreamingAgentRuntime {
         let streamedText = false;
         const streamedCalls: ToolCall[] = [];
 
-        this.store.emit(runId, "agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" });
-    // Safe boundary: steering instructions ride the next model turn.
+        // Safe boundary: steering instructions ride the next model turn.
         const steerList = this.store.takeSteer(runId);
         if (steerList.length > 0) {
           messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${steerList.join(" | ")}` });
@@ -1614,7 +1611,7 @@ export class StreamingAgentRuntime {
         continue;
       }
 
-      if (state.intent.requiresFrontend && (call.name.startsWith("desktop_") || call.name.startsWith("computer."))) {
+      if (state.intent.requiresFrontend && !state.intent.requiresDesktop && (call.name.startsWith("desktop_") || call.name.startsWith("computer."))) {
         const message = "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message });
         replies.set(call.id, message);
