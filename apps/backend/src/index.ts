@@ -4,6 +4,7 @@ import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router } from "./routes/v1";
+import { siteRouter } from "./routes/sites";
 import { workerStats } from "./routes/worker";
 import { probeQdrant } from "./indexing/qdrantHealth";
 import { authRouter } from "./routes/auth";
@@ -128,6 +129,7 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
 // Accounts: register/login are reachable without credentials by design;
 // me/logout validate their own bearer token against the session store.
 // Per-IP rate limit so the open endpoints can't be hammered.
+app.use("/api/v1/sites", siteRouter);
 app.use("/api/v1/auth", ipRateLimit(), authRouter);
 
 // Everything else resolves a tenant first — from a user session token or an

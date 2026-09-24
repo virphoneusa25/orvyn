@@ -24,6 +24,22 @@ function server(alias: string, tenantId = "tenant-a"): RegisteredResource {
   };
 }
 
+test("a greeting is not a server mission", () => {
+  const intent = inferTaskIntent("HI");
+  assert.equal(intent.informational, true);
+  assert.equal(intent.requiresRemoteResource, false);
+  const result = resolveResources({ intent, instruction: "HI", ...scope, resources: [] });
+  assert.equal(result.status, "ok");
+});
+
+test("a website build is not blocked for a missing server", () => {
+  const intent = inferTaskIntent("Build a Joomla website for ORVYN and use the screenshots as reference");
+  assert.equal(intent.requiresFrontend, true);
+  assert.equal(intent.requiresRemoteResource, false);
+  const result = resolveResources({ intent, instruction: intent.goal, ...scope, resources: [] });
+  assert.equal(result.status, "ok");
+});
+
 test("a conceptual question stays informational", () => {
   const intent = inferTaskIntent("What is a closure in JavaScript?");
   assert.equal(intent.informational, true);
@@ -116,6 +132,22 @@ test("server tasks do not see image tools, and code tasks do not see ssh", () =>
   assert.equal(codeTools.includes("ssh_exec"), false);
   assert.ok(codeTools.includes("terminal"));
   assert.ok(codeTools.includes("read_file"));
+});
+
+test("a website run is not finished until the agent writes a page", () => {
+  const blocked = evaluateCompletionGates({
+    instruction: "Build a Joomla website",
+    artifacts: [],
+    events: [],
+  });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.retryPrompt, /write_file/);
+  const passed = evaluateCompletionGates({
+    instruction: "Build a Joomla website",
+    artifacts: [],
+    events: [{ type: "file.created", data: { path: "site/index.html" } }],
+  });
+  assert.equal(passed.ok, true);
 });
 
 test("a server run cannot complete without a remote result", () => {

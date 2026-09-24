@@ -52,7 +52,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
-  const frontend = has(goal, /\b(website|landing page|dashboard|frontend|react|next\.?js|vue|html|css|responsive|component)\b/i);
+  const frontend = has(goal, /\b(website|web site|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|html|css|responsive|component)\b/i);
   const code =
     mode === "code" ||
     has(goal, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|file)\b/i);
@@ -75,7 +75,8 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     goal,
     /\b(create|fix|generate|edit|update|implement|refactor|deploy|install|build|run|start|stop|write|inspect|verify|debug|modify|screenshot|login|log into|ssh)\b/i
   );
-  const informational = goal.length > 0 && INFO.test(goal) && !action && category === "general";
+  const greeting = /^(hi+|hello+|hey+|yo|sup|hiya|howdy|thanks|thank you|thx)[!.?\s]*$/i.test(goal);
+  const informational = greeting || (goal.length > 0 && INFO.test(goal) && !action && category === "general");
 
   const success: string[] = [];
   if (server) success.push("Remote command output from the resolved server.");
@@ -90,8 +91,10 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     goal,
     requiresWorkspace: category === "code" || category === "deploy" || has(goal, /\b(file|repo|workspace|project)\b/i),
     requiresRemoteResource:
-      has(goal, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
-      (deploy && has(goal, /\b(server|remote|ssh)\b/i)),
+      !informational &&
+      !frontend &&
+      (has(goal, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
+        (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
     requiresTerminal: terminal && !informational,
     requiresBrowser: browser,
     requiresDesktop: desktop,

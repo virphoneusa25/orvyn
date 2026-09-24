@@ -537,6 +537,7 @@ import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
 import { inferTaskIntent } from "../agent/taskIntent";
+import { notePublicOrigin } from "../agent/sitePreview";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
@@ -608,6 +609,10 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     ? "Cloud"
     : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";
 
+  notePublicOrigin(
+    String(req.headers["x-forwarded-proto"] || req.protocol || "https"),
+    String(req.headers["x-forwarded-host"] || req.get("host") || "")
+  );
   _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
   t.usage.agentRuns++;
   const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;

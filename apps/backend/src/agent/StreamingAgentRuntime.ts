@@ -14,6 +14,7 @@ import { skillsPromptFor } from "../learning/validatedSkills";
 // resume without disturbing the run.
 
 import { randomUUID } from "crypto";
+import { dirname, isAbsolute, join } from "path";
 import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
@@ -35,6 +36,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
+import { publishAgentSite } from "./sitePreview";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
@@ -317,6 +319,18 @@ export class StreamingAgentRuntime {
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
+  /** Opens the right-hand preview for a page this run just wrote. */
+  private openAgentPreview(runId: string, filePath: unknown): void {
+    const rel = String(filePath ?? "");
+    if (!/\.(html|php)$/i.test(rel)) return;
+    const state = this.runs.get(runId);
+    if (!state?.projectRoot) return;
+    const abs = isAbsolute(rel) ? rel : join(state.projectRoot, rel);
+    const published = publishAgentSite(dirname(abs));
+    if (!published) return;
+    this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+  }
+
   // Maps a tool call onto the richer domain events the UI renders as cards,
   // so the frontend doesn't have to special-case tool names itself.
   private emitDomainEvent(runId: string, call: ToolCall, preview?: EditPreview): void {
@@ -328,6 +342,7 @@ export class StreamingAgentRuntime {
       case "write_file":
         this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
+        this.openAgentPreview(runId, args.path);
         break;
       case "edit_file":
       case "delete_file":
@@ -664,6 +679,9 @@ export class StreamingAgentRuntime {
           execution?.location === "OVH_WORKER"
             ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
             : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
+          intent.requiresFrontend
+            ? "This run is a website. You build it. Call write_file for the pages, styles, scripts, and template files. Use any attached screenshots as the visual reference. Do not hand back a plan or a description. The live preview opens from the index page you write."
+            : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
@@ -714,7 +732,7 @@ export class StreamingAgentRuntime {
           this.store.setStatus(runId, "blocked");
           return;
         }
-        if (resolution.status === "blocked") {
+        if (resolution.status === "blocked" && !intent.requiresFrontend) {
           this.store.emit(runId, "resource.required", {
             code: resolution.code,
             resourceType: resolution.resourceType,

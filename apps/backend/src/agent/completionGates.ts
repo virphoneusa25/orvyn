@@ -99,7 +99,20 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && input.category === "server") {
+  const website = /\b(website|web\s*site|landing\s*page|homepage|home\s*page|joomla)\b/i.test(input.instruction)
+    && /\b(build|create|make|design|generate)\b/i.test(input.instruction);
+  if (!failedGate && website) {
+    const wrotePage = input.events.some((e) => {
+      if (e.type !== "file.created" && e.type !== "file.edit") return false;
+      return /\.(html|php|css|js|xml)$/i.test(String(e.data?.path ?? ""));
+    });
+    if (!wrotePage) {
+      failedGate = "code";
+      reasons.push("The site files were not written.");
+    }
+  }
+
+  if (!failedGate && input.category === "server" && !website) {
     const remote = input.events.some((e) => e.type === "tool.completed" && /^(ssh_exec|remote_exec)$/i.test(toolName(e)));
     if (!remote) {
       failedGate = "code";
@@ -133,6 +146,8 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
         ? workspaceWriteSucceeded(input.events)
           ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."
           : "COMPLETION GATE — FILE: This is a workspace file. Call write_file with the requested path and exact contents, then read_file and report that result. Do not use generate_image or create_document for a plain text file."
+        : website && failedGate === "code"
+          ? "COMPLETION GATE — WEBSITE: You build this site. Call write_file for every page, style, and template file. Do not describe the site instead of writing it. Do not stop until the files exist in the workspace."
         : input.category === "server"
           ? "COMPLETION GATE — SERVER: Call ssh_exec or remote_exec on the resolved server and report that command's output. Do not claim the server was checked."
           : failedGate === "code"
