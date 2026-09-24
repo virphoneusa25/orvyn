@@ -141,7 +141,9 @@ export function selectImageModel(input: {
       reason: model.lane === "image-quality" ? "Premium image lane: FLUX.1 Kontext Max." : "Default image lane: FLUX.1 Kontext Pro.",
     };
   }
-  for (const row of input.catalog ?? []) {
+  const preferred = /gpt-image|nano-banana|grok-imagine/i;
+  const rows = [...(input.catalog ?? [])].sort((a, b) => Number(preferred.test(b.registryId)) - Number(preferred.test(a.registryId)));
+  for (const row of rows) {
     if (!available.has(row.registryId) || !row.generation) continue;
     if (input.editing && !row.editing) continue;
     return { registryId: row.registryId, reason: "Cheaper Inference image lane from the live catalog." };
