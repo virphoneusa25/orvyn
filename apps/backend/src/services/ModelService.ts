@@ -251,6 +251,7 @@ export class ModelService {
         const lane = CERTIFIED_MODELS.find((m) => m.apiModelId === id);
         this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane));
       }
+      void this.hideUndeployedFireworksImages(fireworksKey);
     }
 
     const geminiKey = (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)?.trim();
@@ -452,6 +453,25 @@ export class ModelService {
       }))
     );
     return results;
+  }
+
+  /** Kontext stays registered only when this Fireworks account actually deploys it. */
+  async hideUndeployedFireworksImages(apiKey: string): Promise<void> {
+    try {
+      const endpoint = (process.env.FIREWORKS_BASE_URL?.trim() || "https://api.fireworks.ai/inference").replace(/\/v1\/?$/, "");
+      const res = await fetch(`${endpoint}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!res.ok) return;
+      const data = await res.json();
+      const rows = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+      const ids = new Set(rows.map((row: { id?: string; name?: string } | string) => typeof row === "string" ? row : String(row?.id || row?.name || "")));
+      for (const provider of this.registry.list()) {
+        if (!provider.config.id.startsWith("fw:") || !provider.config.capabilities.image) continue;
+        const wire = provider.config.apiModelId || "";
+        if (!ids.has(wire)) provider.config.capabilities.image = false;
+      }
+    } catch {
+      // Leave the certified registration in place if the catalog cannot be read.
+    }
   }
 
   /** Stamp live Cheaper Inference catalog flags (tools/vision/image) onto seeded models. */
