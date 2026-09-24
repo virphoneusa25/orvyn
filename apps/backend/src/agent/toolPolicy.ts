@@ -46,6 +46,13 @@ const REQUIRED_BY_TOOL: Record<string, string[]> = {
   run_command: ["command"],
 };
 
+/** A website is published from the files the agent writes. A shell server is not available. */
+export function shellServerRefusal(command: string, frontend: boolean): string | null {
+  if (!frontend) return null;
+  if (!/\bpython3?\b|http\.server|which python|npx serve|live-server/i.test(command)) return null;
+  return "Do not start a shell server. python3 is not installed in this workspace. Call write_file for index.html and its stylesheet. The preview is published from those files.";
+}
+
 export function validateToolArguments(
   name: string,
   raw: unknown,

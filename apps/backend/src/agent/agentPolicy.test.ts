@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { inferTaskIntent } from "./taskIntent";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
-import { selectToolNames, validateToolArguments } from "./toolPolicy";
+import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { evaluateCompletionGates } from "./completionGates";
 
 const scope = { tenantId: "tenant-a", organizationId: "org-a", projectId: "proj-1" };
@@ -195,4 +195,9 @@ test("a server run cannot complete without a remote result", () => {
     events: [{ type: "tool.completed", data: { tool: "ssh_exec" } }],
   });
   assert.equal(passed.ok, true);
+});
+
+test("a website cannot be served with python", () => {
+  assert.match(shellServerRefusal("python3 -m http.server 8080 &", true) ?? "", /write_file/);
+  assert.equal(shellServerRefusal("python3 -m http.server 8080 &", false), null);
 });

@@ -44,7 +44,7 @@ import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
-import { selectToolNames, validateToolArguments } from "./toolPolicy";
+import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
@@ -756,7 +756,7 @@ export class StreamingAgentRuntime {
             ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
             : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
           intent.requiresFrontend
-            ? "This run is a website. You build it. Call write_file for the pages, styles, scripts, and template files. Use any attached screenshots as the visual reference. Do not hand back a plan or a description. The live preview opens from the index page you write."
+            ? "This run is a website. Call write_file for index.html and its stylesheet. Do not run python, http.server, or a shell server. python3 is not installed. The preview opens from the index page you write."
             : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
@@ -1614,6 +1614,13 @@ export class StreamingAgentRuntime {
         const message = `Blocked identical retry after ${priorFailures} prior failure${priorFailures === 1 ? "" : "s"}. Change the arguments or use a different approach.`;
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, repeated: true });
         replies.set(call.id, message);
+        continue;
+      }
+
+      const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend);
+      if ((call.name === "terminal" || call.name === "run_command") && shellRefusal) {
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal });
+        replies.set(call.id, shellRefusal);
         continue;
       }
 
