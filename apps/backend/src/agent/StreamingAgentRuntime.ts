@@ -36,7 +36,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
-import { publishAgentSite } from "./sitePreview";
+import { publishAgentSite, publishRememberedSite, rememberSiteFile } from "./sitePreview";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
@@ -319,14 +319,47 @@ export class StreamingAgentRuntime {
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
-  /** Opens the right-hand preview for a page this run just wrote. */
-  private openAgentPreview(runId: string, filePath: unknown): void {
-    const rel = String(filePath ?? "");
+  /** Opens the right-hand preview for pages this run wrote, and lists those files. */
+  private openAgentPreview(runId: string, filePath: unknown, content?: unknown): void {
+    const rel = String(filePath ?? "").replace(/\\/g, "/");
+    if (!/\.(html|css|js|php)$/i.test(rel)) return;
+    if (typeof content === "string") {
+      rememberSiteFile(runId, rel, content);
+      void this.artifacts?.persistArtifact({ name, content, kind: "file" }).then((rec) => {
+        this.store.emit(runId, "artifact.created", {
+          artifactId: rec.artifactId,
+          id: rec.artifactId,
+          name: rec.name,
+          mimeType: rec.mimeType,
+          size: rec.size,
+          downloadable: true,
+          previewable: /\.html?$/i.test(rec.name),
+          downloadPath: `/artifacts/${rec.artifactId}/download`,
+          previewUrl: `/artifacts/${rec.artifactId}/preview`,
+        });
+        this.store.emit(runId, "files.ready", {
+          artifactId: rec.artifactId,
+          name: rec.name,
+          location: "Files → Generated",
+          message: `${rec.name} is in Files → Generated.`,
+        });
+      }).catch(() => {});
+    }
+    const lines = typeof content === "string" ? content.split("\n").length : 0;
+    const name = rel.split("/").pop() || rel;
+    this.store.emit(runId, "files.ready", {
+      name,
+      path: rel,
+      additions: lines,
+      deletions: 0,
+      location: "workspace",
+      message: `Created ${rel} (+${lines})`,
+    });
     if (!/\.(html|php)$/i.test(rel)) return;
     const state = this.runs.get(runId);
-    if (!state?.projectRoot) return;
-    const abs = isAbsolute(rel) ? rel : join(state.projectRoot, rel);
-    const published = publishAgentSite(dirname(abs));
+    const abs = state?.projectRoot && !isAbsolute(rel) ? join(state.projectRoot, rel) : rel;
+    const fromDisk = abs ? publishAgentSite(dirname(abs)) : null;
+    const published = fromDisk ?? publishRememberedSite(runId);
     if (!published) return;
     this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
   }
@@ -342,7 +375,7 @@ export class StreamingAgentRuntime {
       case "write_file":
         this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
-        this.openAgentPreview(runId, args.path);
+        this.openAgentPreview(runId, args.path, args.content);
         break;
       case "edit_file":
       case "delete_file":
@@ -1381,6 +1414,14 @@ export class StreamingAgentRuntime {
           this.emitNarration(runId, copy, false);
         } else {
           this.emitNarration(runId, content, streamedText);
+        }
+        const site = state.intent.requiresFrontend ? publishRememberedSite(runId) : null;
+        if (site) {
+          this.store.emit(runId, "preview.available", { url: site.url, label: "Live preview" });
+          const listed = site.files.map((f) => `- ${f}`).join("\n");
+          this.store.emit(runId, "message.delta", {
+            content: `\n\nLive preview: ${site.url}\n\nFiles:\n${listed}\n`,
+          });
         }
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
         this.store.setStatus(runId, "completed");

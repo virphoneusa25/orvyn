@@ -579,7 +579,8 @@ export class RunStore {
   }
 
   private emitPreviewFromText(runId: string, type: AgentEventType, data: Record<string, unknown>): void {
-    if (type !== "terminal.output" && type !== "terminal.started" && type !== "tool.completed") return;
+    if (type !== "terminal.output" && type !== "tool.completed") return;
+    if (data.ok === false || /not found|command failed/i.test(String(data.output ?? data.error ?? ""))) return;
     const text = String(data.data ?? data.chunk ?? data.output ?? data.preview ?? data.command ?? data.content ?? "");
     const seen = this.previewSeen.get(runId) ?? new Set<string>();
     this.previewSeen.set(runId, seen);
