@@ -25,11 +25,16 @@ function testsRan(events: CompletionGateInput["events"]): { ran: boolean; passed
   let failed = false;
   for (const e of events) {
     const tool = String(e.data?.tool ?? e.data?.name ?? "");
+    // The LATEST check decides: a failed run followed by a passing re-run is a
+    // pass (that is the repair loop working), not a permanent failure.
     if (e.type === "test.completed") {
       ran = true;
-      if (e.data?.ok === false || e.data?.passed === false) failed = true;
+      failed = e.data?.ok === false || e.data?.passed === false;
     }
-    if (e.type === "tool.completed" && /test|typecheck|lint/i.test(tool)) ran = true;
+    if (e.type === "tool.completed" && /test|typecheck|lint/i.test(tool)) {
+      ran = true;
+      failed = false;
+    }
     if (e.type === "tool.failed" && /test|typecheck|lint/i.test(tool)) {
       ran = true;
       failed = true;

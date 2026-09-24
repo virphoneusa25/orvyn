@@ -90,3 +90,16 @@ test("visual gate requires a screenshot for UI work", () => {
   });
   assert.equal(passed.ok, true);
 });
+
+test("a passing re-run after a failed test run completes the code gate", () => {
+  const events = [
+    { type: "tool.completed", data: { tool: "edit_file" } },
+    { type: "tool.failed", data: { tool: "run_tests", error: "No test runner found" } },
+    { type: "tool.completed", data: { tool: "edit_file" } },
+    { type: "tool.completed", data: { tool: "run_tests" } },
+  ] as any;
+  const ok = evaluateCompletionGates({ instruction: "Fix the failing test in src/app.js", artifacts: [], events, category: "code" } as any);
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  const stillFailing = evaluateCompletionGates({ instruction: "Fix the failing test in src/app.js", artifacts: [], events: [...events, { type: "tool.failed", data: { tool: "run_tests" } }], category: "code" } as any);
+  assert.equal(stillFailing.ok, false);
+});
