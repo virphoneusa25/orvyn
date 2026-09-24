@@ -1,7 +1,11 @@
 #!/bin/bash
 # ORVYN virtual desktop: Xvfb + openbox + left rail + bottom dock + clock.
-# Firefox, terminal, files, and VS Code. Frames are written to
-# /tmp/orvyn-frame.jpg so Take Control does not wait on a fresh grab.
+# Firefox, terminal, files, and VS Code. The desktop starts clean: apps open
+# only when ORION or the user opens them from the dock.
+#
+# Pictures: the control plane streams the screen with ffmpeg (x11grab) while
+# someone is watching. Older control planes read /tmp/orvyn-frame.jpg, which
+# the loop below refreshes only while /tmp/orvyn-frame.want is being touched.
 
 set -e
 
@@ -48,24 +52,22 @@ if [ -d /opt/orvyn/demo ] && [ -d /workspace ] && [ -z "$(ls -A /workspace 2>/de
   cp -a /opt/orvyn/demo/. /workspace/ || true
 fi
 
-thunar /workspace &
-sleep 1.2
-
-wmctrl -r "workspace" -e "0,$((SCREEN_WIDTH*14/100)),$((SCREEN_HEIGHT*8/100)),$((SCREEN_WIDTH*50/100)),$((SCREEN_HEIGHT*68/100))" 2>/dev/null || \
-wmctrl -r "File Manager" -e "0,$((SCREEN_WIDTH*14/100)),$((SCREEN_HEIGHT*8/100)),$((SCREEN_WIDTH*50/100)),$((SCREEN_HEIGHT*68/100))" 2>/dev/null || true
-
 if [ -n "$START_URL" ]; then
   /usr/local/bin/orvyn-launch browser "$START_URL" &
 fi
 
-# Keep a JPEG ready. The control plane cats this file instead of capturing
-# inside the Take Control request.
+# Frame file for control planes that poll. Idle unless someone asked for a
+# picture in the last 10 seconds and no live ffmpeg stream is running.
 (
   while true; do
-    if nice -n 19 xwd -root -silent | nice -n 19 convert -quality 45 xwd:- /tmp/orvyn-frame.jpg.new 2>/dev/null; then
-      mv -f /tmp/orvyn-frame.jpg.new /tmp/orvyn-frame.jpg
+    if [ -n "$(find /tmp/orvyn-frame.want -newermt '-10 seconds' 2>/dev/null)" ] && ! pgrep -x ffmpeg >/dev/null 2>&1; then
+      if nice -n 19 xwd -root -silent | nice -n 19 convert -quality 45 xwd:- /tmp/orvyn-frame.jpg.new 2>/dev/null; then
+        mv -f /tmp/orvyn-frame.jpg.new /tmp/orvyn-frame.jpg
+      fi
+      sleep 0.25
+    else
+      sleep 0.5
     fi
-    sleep 0.25
   done
 ) &
 
@@ -73,7 +75,7 @@ echo "=============================================="
 echo " ORVYN Desktop sandbox ready on :99"
 echo "   Resolution: ${SCREEN_WIDTH}x${SCREEN_HEIGHT}"
 echo "   Apps: Firefox, terminal, files, code"
-echo "   Frame: /tmp/orvyn-frame.jpg"
+echo "   Pictures: ffmpeg x11grab stream (frame file fallback)"
 echo "=============================================="
 
 wait $XVFB_PID

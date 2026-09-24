@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopMayAutoStart, gatePointerMove, imageKind, releasePointerMove, sessionCanStream, shouldCoverFrame } from "./desktopStream.ts";
+import { base64ToBytes, desktopMayAutoStart, gatePointerMove, imageKind, parseSseBlock, releasePointerMove, sessionCanStream, shouldCoverFrame } from "./desktopStream.ts";
 
 test("ending a session does not auto-start another one", () => {
   const open = {
@@ -15,6 +15,21 @@ test("ending a session does not auto-start another one", () => {
   assert.equal(desktopMayAutoStart({ ...open, userStopped: true }), false);
   assert.equal(desktopMayAutoStart({ ...open, hasSession: true }), false);
   assert.equal(desktopMayAutoStart({ ...open, starting: true }), false);
+});
+
+test("a Desktop tab that is not on screen never starts a desktop", () => {
+  const open = { userStopped: false, alreadyStarted: false, hasProject: true, sandboxAvailable: true, hasSession: false, starting: false };
+  assert.equal(desktopMayAutoStart({ ...open, visible: false }), false);
+  assert.equal(desktopMayAutoStart({ ...open, visible: true }), true);
+});
+
+test("stream events parse into a frame", () => {
+  const ev = parseSseBlock("event: frame\ndata: /9j/AA==");
+  assert.equal(ev.event, "frame");
+  const bytes = base64ToBytes(ev.data);
+  assert.equal(bytes[0], 0xff);
+  assert.equal(bytes[1], 0xd8);
+  assert.equal(parseSseBlock(": heartbeat").event, "message");
 });
 
 test("a ready ORION session streams even if live was omitted", () => {

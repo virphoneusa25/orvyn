@@ -3,7 +3,8 @@
 # A true visual sandbox desktop — not just a browser viewport:
 #   Xvfb + openbox + tint2 (left rail, bottom dock, clock) + Thunar
 #   + Firefox + lxterminal + VS Code (geany fallback)
-#   + feh (ORVYN wallpaper) + xdotool (input) + ImageMagick (frame pump)
+#   + feh (ORVYN wallpaper) + xdotool (input) + ffmpeg (live picture)
+#   + ImageMagick (single screenshots)
 #
 # The control plane drives everything from OUTSIDE the container via
 # docker exec: frames come from `xwd -root -silent | convert … jpeg:-`
@@ -33,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xterm \
       xdotool \
       imagemagick \
+      ffmpeg \
       x11-utils \
       wmctrl \
       procps \

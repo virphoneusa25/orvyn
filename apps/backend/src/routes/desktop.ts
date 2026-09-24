@@ -33,6 +33,8 @@ import {
   stopSandboxDesktop,
   resolveKeyCombo,
   dockerAvailable,
+  subscribeFrames,
+  noteDesktopUse,
   type SandboxDesktopSession,
   type FrameQuality,
 } from "../desktop/sandboxDesktop";
@@ -175,6 +177,67 @@ export function desktopRouter(): Router {
 
     // Desktop frames come ONLY from the sandbox container.
     return res.status(404).json({ error: "No Desktop session. Desktop requires the Docker sandbox runtime." });
+  });
+
+  // Live picture: Server-Sent Events, one "frame" event (base64 JPEG) per
+  // changed picture. Viewers that fall behind skip to the newest picture
+  // instead of queueing old ones. "unsupported" means this desktop image
+  // cannot stream; the client keeps polling /frame.
+  router.get("/stream", (req, res) => {
+    const t = requireTenant(req);
+    const sandbox = findSandboxSession(t.id);
+    if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "user_control")) {
+      return res.status(404).json({ error: "No live Desktop session." });
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+    res.write(`event: hello\ndata: ${JSON.stringify({ id: sandbox.id, width: sandbox.width, height: sandbox.height })}\n\n`);
+
+    let closed = false;
+    let waiting: Buffer | null = null;
+    const write = (jpeg: Buffer) => {
+      if (closed) return;
+      if (res.writableNeedDrain) { waiting = jpeg; return; }
+      res.write(`event: frame\ndata: ${jpeg.toString("base64")}\n\n`);
+    };
+    const onDrain = () => { const next = waiting; waiting = null; if (next) write(next); };
+    res.on("drain", onDrain);
+
+    const heartbeat = setInterval(() => {
+      if (closed) return;
+      noteDesktopUse(sandbox.id);
+      res.write(`event: state\ndata: ${JSON.stringify({ controlOwner: sandbox.controlOwner, status: sandbox.status })}\n\n`);
+    }, 5000);
+    const finish = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      res.off("drain", onDrain);
+      unsubscribe?.();
+    };
+    const unsubscribe = subscribeFrames(sandbox, {
+      frame: write,
+      end: (reason) => {
+        if (closed) return;
+        res.write(`event: end\ndata: ${JSON.stringify({ reason })}\n\n`);
+        finish();
+        res.end();
+      },
+    });
+    if (!unsubscribe) {
+      res.write(`event: end\ndata: ${JSON.stringify({ reason: "unsupported" })}\n\n`);
+      closed = true;
+      clearInterval(heartbeat);
+      return res.end();
+    }
+    // res "close" fires when the viewer disconnects (req "close" fires as
+    // soon as the GET request itself has been read).
+    res.on("close", finish);
   });
 
   router.post("/control", async (req, res) => {

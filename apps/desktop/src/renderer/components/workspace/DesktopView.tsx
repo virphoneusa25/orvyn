@@ -17,7 +17,7 @@ import { apiUrl, authHeaders } from "../../connection";
 import { onConnectionFacts } from "../../connectionRuntime";
 import { deriveCloudConnectionState } from "../../connectionState";
 import { letterboxRect, remoteToClient, type Rect } from "../../desktopMapping";
-import { FRAME_REQUEST_MS, desktopMayAutoStart, imageKind, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
+import { FRAME_REQUEST_MS, desktopMayAutoStart, imageKind, readDesktopStream, sessionCanStream, shouldCoverFrame } from "../../desktopStream";
 import { OrionCursorOverlay } from "./OrionCursorOverlay";
 import { emptyBody, emptyTitle, ghostBtn, iconBtn } from "./workspaceChrome";
 
@@ -62,8 +62,11 @@ export function DesktopView({
   runId,
   cursor,
   status,
+  active = true,
 }: {
   projectRoot: string | null;
+  /** The Desktop tab is the one on screen. Hidden tabs do not pull pictures. */
+  active?: boolean;
   runId?: string | null;
   cursor?: { x: number; y: number; kind: "click" | "type" | "scroll" | "hover" | "navigate" | "other" } | null;
   status?: string | null;
@@ -127,12 +130,54 @@ export function DesktopView({
   const qualityRef = useRef(quality);
   qualityRef.current = quality;
   const frameInFlight = useRef(false);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  /** True while the live stream is delivering pictures; polling then pauses. */
+  const streamLive = useRef(false);
+  const onScreen = () => activeRef.current && !document.hidden;
+
+  /** Draw one JPEG/PNG. A picture still decoding is replaced, not queued. */
+  const drawBusy = useRef(false);
+  const drawNext = useRef<Uint8Array | null>(null);
+  async function drawFrame(bytes: Uint8Array): Promise<boolean> {
+    if (drawBusy.current) { drawNext.current = bytes; return true; }
+    drawBusy.current = true;
+    try {
+      let next: Uint8Array | null = bytes;
+      while (next) {
+        const kind = imageKind(next);
+        if (!kind) return false;
+        const bitmap = await createImageBitmap(new Blob([next as BlobPart], { type: kind === "png" ? "image/png" : "image/jpeg" }));
+        const canvas = canvasRef.current;
+        if (canvas) {
+          if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
+          if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(bitmap, 0, 0);
+            setFrameDrawn(true);
+            setInterrupted(false);
+            setStreamNote(null);
+            lastFrameAt.current = Date.now();
+          }
+        }
+        bitmap.close();
+        next = drawNext.current;
+        drawNext.current = null;
+      }
+      return true;
+    } finally {
+      drawBusy.current = false;
+    }
+  }
 
   async function pullFrame() {
     if (userStopped.current) return;
     const root = projectRef.current;
     const current = sessionRef.current;
     if (!root || !sessionCanStream(current) || frameInFlight.current) return;
+    // Nobody is looking, or the live stream already brings the picture.
+    if (!onScreen() || streamLive.current) return;
     frameInFlight.current = true;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FRAME_REQUEST_MS);
@@ -150,26 +195,10 @@ export function DesktopView({
         return;
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      const kind = imageKind(bytes);
-      if (!kind) {
+      if (!(await drawFrame(bytes))) {
         noteProblem("Desktop replied without a picture.");
         return;
       }
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: kind === "png" ? "image/png" : "image/jpeg" }));
-      const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(bitmap, 0, 0);
-          setFrameDrawn(true);
-          setInterrupted(false);
-          setStreamNote(null);
-          lastFrameAt.current = Date.now();
-        }
-      }
-      bitmap.close();
     } catch {
       noteProblem("The picture stream timed out.");
     } finally {
@@ -195,10 +224,49 @@ export function DesktopView({
       sandboxAvailable: sandboxAvailable === true,
       hasSession: Boolean(session),
       starting,
+      visible: active,
     })) return;
     autoStarted.current = true;
     void startSession();
-  }, [projectRoot, sandboxAvailable, session, starting]);
+  }, [projectRoot, sandboxAvailable, session, starting, active]);
+
+  // LIVE PICTURE: one long request that receives each changed picture as it
+  // happens (a few per second while things move, nothing while still). Runs
+  // only while the Desktop tab is on screen. Backends or desktops that cannot
+  // stream answer "unsupported", and the poller below takes over.
+  useEffect(() => {
+    let ctrl: AbortController | null = null;
+    let running = false;
+    let unsupportedFor: string | null = null;
+    let retryAt = 0;
+    let hiddenSince = 0;
+    const loop = window.setInterval(() => {
+      const s = sessionRef.current;
+      const root = projectRef.current;
+      const can = Boolean(root) && sessionCanStream(s) && !userStopped.current && !!s && unsupportedFor !== s.id;
+      const visible = onScreen();
+      if (!visible) hiddenSince = hiddenSince || Date.now(); else hiddenSince = 0;
+      if (running && ctrl && (!can || (hiddenSince && Date.now() - hiddenSince > 5000))) { ctrl.abort(); return; }
+      if (running || !can || !visible || Date.now() < retryAt) return;
+      running = true;
+      ctrl = new AbortController();
+      const sid = s!.id;
+      const q = new URLSearchParams({ projectRoot: root!, ...(runRef.current ? { runId: runRef.current } : {}) });
+      void readDesktopStream(apiUrl(`/desktop/stream?${q}`), authHeaders() as Record<string, string>, ctrl.signal, (jpeg) => {
+        streamLive.current = true;
+        void drawFrame(jpeg);
+      }).then((why) => {
+        running = false;
+        streamLive.current = false;
+        if (why === "unsupported") unsupportedFor = sid;
+        else retryAt = Date.now() + (why === "failed" ? 2000 : 800);
+        if (why !== "unsupported") void refreshRef.current();
+      });
+    }, 400);
+    return () => { window.clearInterval(loop); ctrl?.abort(); streamLive.current = false; };
+    // Reads refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshRef = useRef(refreshSession);
   refreshRef.current = refreshSession;

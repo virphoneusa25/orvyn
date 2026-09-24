@@ -13,7 +13,7 @@
 // isolation).
 
 import { spawn, exec } from "child_process";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 export type SandboxControlOwner = "orion" | "user" | "none";
 
@@ -53,7 +53,48 @@ export async function dockerAvailable(): Promise<boolean> {
     p.on("close", (code) => resolve(code === 0));
     p.on("error", () => resolve(false));
   });
+  if (dockerProbe) void removeOrphanDesktops();
   return dockerProbe;
+}
+
+/**
+ * Which backend started a desktop container. Staging and production share
+ * one Docker host, so each only cleans up its own containers.
+ */
+export const DESKTOP_OWNER = process.env.ORVYN_DESKTOP_OWNER || process.env.ORVYN_ENV || "production";
+
+/** Sessions live in memory. After a restart or deploy, containers this
+ *  backend started earlier are unreachable: nobody can see or stop them, yet
+ *  each keeps a browser and a frame loop running and slows every other
+ *  desktop on the host. Remove them once, at startup. Containers from before
+ *  the owner label existed are treated as ours. */
+export function orphanDesktopIds(rows: string, owner: string): string[] {
+  return rows
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => { const [id, labelOwner = ""] = l.split("\t"); return { id, labelOwner: labelOwner.trim() }; })
+    .filter((r) => r.id && (r.labelOwner === "" || r.labelOwner === "<no value>" || r.labelOwner === owner))
+    .map((r) => r.id);
+}
+
+let orphansRemoved = false;
+async function removeOrphanDesktops(): Promise<void> {
+  if (orphansRemoved) return;
+  orphansRemoved = true;
+  const rows = await new Promise<string>((resolve) => {
+    // Arguments as an array: no shell quoting around the Go template.
+    const p = spawn("docker", ["ps", "-a", "--filter", "label=orvyn.desktop.id", "--format", '{{.ID}}\t{{.Label "orvyn.desktop.owner"}}'], { windowsHide: true });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", (code) => resolve(code === 0 ? out : ""));
+    p.on("error", () => resolve(""));
+  });
+  const known = new Set([...sessions.values()].map((s) => s.containerId.slice(0, 12)));
+  const ids = orphanDesktopIds(rows, DESKTOP_OWNER).filter((id) => !known.has(id.slice(0, 12)));
+  if (!ids.length) return;
+  console.log(`[desktop] removing ${ids.length} desktop container(s) left from a previous backend run`);
+  spawn("docker", ["rm", "-f", ...ids], { windowsHide: true, stdio: "ignore" }).on("error", () => undefined);
 }
 
 // Configured resource limits — these are the ACTUAL docker run values, so
@@ -114,6 +155,8 @@ export function frameCaptureCommand(quality: FrameQuality): string {
 
 /** The desktop image refreshes this file in the background. */
 export const CACHED_FRAME_PATH = "/tmp/orvyn-frame.jpg";
+/** Touched by the control plane while someone polls for frames. */
+export const FRAME_WANT_PATH = "/tmp/orvyn-frame.want";
 
 export function usesCachedFrame(quality: FrameQuality): boolean {
   return quality !== "high";
@@ -138,6 +181,13 @@ function dropMemoryFrame(id: string): void {
   memoryFrames.delete(id);
 }
 
+const startsInFlight = new Map<string, Promise<SandboxDesktopSession>>();
+
+/**
+ * One desktop per tenant. The Desktop pane, desktop_start and
+ * computer_open_app can all ask at once; they share the session that is
+ * already running or starting instead of each creating a container.
+ */
 export async function startSandboxDesktop(opts: {
   tenantId: string;
   projectRoot?: string;
@@ -146,6 +196,25 @@ export async function startSandboxDesktop(opts: {
   width?: number;
   height?: number;
 }): Promise<SandboxDesktopSession> {
+  const existing = findSandboxSession(opts.tenantId);
+  if (existing && existing.status !== "error") return existing;
+  const pending = startsInFlight.get(opts.tenantId);
+  if (pending) return pending;
+  const job = createSandboxDesktop(opts).finally(() => startsInFlight.delete(opts.tenantId));
+  startsInFlight.set(opts.tenantId, job);
+  return job;
+}
+
+async function createSandboxDesktop(opts: {
+  tenantId: string;
+  projectRoot?: string;
+  runId?: string;
+  url?: string;
+  width?: number;
+  height?: number;
+}): Promise<SandboxDesktopSession> {
+  const stale = findSandboxSession(opts.tenantId);
+  if (stale?.status === "error") sessions.delete(stale.id);
   const id = `desk_${randomUUID().slice(0, 12)}`;
   const containerName = `orvyn-desktop-${id.slice(5)}`;
   const width = opts.width ?? 1280;
@@ -183,6 +252,7 @@ export async function startSandboxDesktop(opts: {
     "--shm-size", "512m",
     "-l", `orvyn.desktop.id=${id}`,
     "-l", `orvyn.desktop.tenant=${opts.tenantId}`,
+    "-l", `orvyn.desktop.owner=${DESKTOP_OWNER}`,
     // The synced project snapshot is the sandbox's /workspace (read-only —
     // ORION edits go through tools, the desktop is a visual surface).
     ...(opts.projectRoot ? ["-v", `${opts.projectRoot}:/workspace:ro`] : []),
@@ -234,6 +304,7 @@ export async function startSandboxDesktop(opts: {
   session.startedAt = new Date().toISOString();
   sessions.set(id, session);
   openInputPipe(session);
+  startDesktopIdleReaper();
   return session;
 }
 
@@ -250,7 +321,9 @@ function qualityArgs(quality: FrameQuality): string[] {
 const frameInFlight = new Map<string, Promise<Buffer | null>>();
 
 async function pullContainerFrame(session: SandboxDesktopSession): Promise<Buffer | null> {
-  const cached = await dockerExec(session.containerId, ["timeout", "2", "cat", CACHED_FRAME_PATH], 3000);
+  // Touching the want-file keeps the in-desktop frame loop running; with
+  // nobody watching it stops using CPU.
+  const cached = await dockerExec(session.containerId, ["sh", "-c", `touch ${FRAME_WANT_PATH}; timeout 2 cat ${CACHED_FRAME_PATH}`], 3000);
   const ready = jpegFromOutput(cached.stdout);
   const slot = memoryFrames.get(session.id) ?? { jpeg: Buffer.alloc(0), at: 0 };
   if (ready && ready.length > 1000) {
@@ -276,6 +349,12 @@ function scheduleContainerFrame(session: SandboxDesktopSession): Promise<Buffer 
 }
 
 async function grabFrame(session: SandboxDesktopSession, quality: FrameQuality): Promise<Buffer | null> {
+  const live = frameStreams.get(session.id);
+  const slotNow = memoryFrames.get(session.id);
+  if (live && !live.ended && slotNow && Date.now() - slotNow.at < 1500 && slotNow.jpeg.length > 1000) {
+    // The live stream already has this second's picture.
+    if (quality !== "high" || Date.now() - slotNow.at < 400) return slotNow.jpeg;
+  }
   if (usesCachedFrame(quality)) {
     const hit = memoryFrames.get(session.id);
     if (hit && memoryFrameIsFresh(hit.at, Date.now(), hit.jpeg.length)) return hit.jpeg;
@@ -318,6 +397,7 @@ export async function captureSandboxFrame(
   const jpeg = await job;
   if (!jpeg) return null;
   session.lastFrameAt = Date.now();
+  noteDesktopUse(session.id, session.lastFrameAt);
   return jpeg;
 }
 
@@ -505,6 +585,7 @@ async function sandboxAct(
   type: string,
   args: Record<string, unknown>,
 ): Promise<boolean> {
+  noteDesktopUse(session.id);
   const viewW = Number(args.viewWidth ?? session.width);
   const viewH = Number(args.viewHeight ?? session.height);
   const { x, y } = mapSandboxPoint(session, Number(args.x ?? 0), Number(args.y ?? 0), viewW, viewH);
@@ -574,6 +655,7 @@ export async function sandboxLaunchApp(
   };
   const cmd = cmds[app];
   if (!cmd) return false;
+  noteDesktopUse(session.id);
   const r = await dockerExec(session.containerId, ["sh", "-c", `nohup ${cmd.join(" ")} >/dev/null 2>&1 &`]);
   return r.code === 0;
 }
@@ -640,6 +722,7 @@ export function findSandboxSession(tenantId: string, projectRoot?: string): Sand
 export async function stopSandboxDesktop(session: SandboxDesktopSession): Promise<void> {
   session.status = "ended";
   session.controlOwner = "none";
+  endFrameStream(session.id, "stopped");
   dropInputPipe(session.id);
   dropMemoryFrame(session.id);
   exec(`docker rm -f ${session.containerId}`, { windowsHide: true }, () => {
@@ -669,6 +752,221 @@ export function listSandboxSessions(tenantId: string): SandboxDesktopSession[] {
 
 export function resetSandboxSessionsForTests(): void {
   for (const id of inputPipes.keys()) dropInputPipe(id);
+  for (const id of [...frameStreams.keys()]) endFrameStream(id, "stopped");
+  streamUnsupported.clear();
+  startsInFlight.clear();
   memoryFrames.clear();
   sessions.clear();
+}
+
+// ── Live picture stream ─────────────────────────────────────────────────────
+//
+// Polling a frame per HTTP request costs a docker exec plus a round trip per
+// picture, which is what made the Desktop feel slow. Instead one ffmpeg in the
+// desktop grabs the screen continuously (x11grab → MJPEG on stdout). The
+// control plane splits that into JPEGs, keeps the newest one, and pushes only
+// pictures that changed to every viewer. Images without ffmpeg fall back to
+// the frame file / per-request capture above.
+
+export const FRAME_STREAM_FPS = Math.max(2, Math.min(15, Number(process.env.ORVYN_DESKTOP_FPS) || 8));
+/** Stop grabbing this long after the last viewer leaves. */
+export const FRAME_STREAM_LINGER_MS = 15_000;
+
+export function frameStreamCommand(width: number, height: number, fps = FRAME_STREAM_FPS): string[] {
+  return [
+    "sh", "-c",
+    `command -v ffmpeg >/dev/null 2>&1 || exit 127; pkill -x ffmpeg 2>/dev/null; exec ffmpeg -loglevel error -nostdin -f x11grab -draw_mouse 1 -framerate ${fps} -video_size ${width}x${height} -i "\${DISPLAY:-:99}" -f mjpeg -q:v 5 -`,
+  ];
+}
+
+/** Splits a concatenated MJPEG byte stream into whole JPEG images. */
+export class JpegSplitter {
+  private buf: Buffer = Buffer.alloc(0);
+  push(chunk: Buffer): Buffer[] {
+    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
+    const out: Buffer[] = [];
+    for (;;) {
+      const start = this.buf.indexOf(SOI);
+      if (start < 0) { this.buf = this.buf.subarray(Math.max(0, this.buf.length - 1)); break; }
+      const end = this.buf.indexOf(EOI, start + 2);
+      if (end < 0) {
+        this.buf = this.buf.subarray(start);
+        // A runaway buffer means the stream is not JPEG. Start over.
+        if (this.buf.length > 16 * 1024 * 1024) this.buf = Buffer.alloc(0);
+        break;
+      }
+      out.push(Buffer.from(this.buf.subarray(start, end + 2)));
+      this.buf = this.buf.subarray(end + 2);
+    }
+    return out;
+  }
+}
+const SOI = Buffer.from([0xff, 0xd8]);
+const EOI = Buffer.from([0xff, 0xd9]);
+
+export interface FrameSubscriber {
+  frame(jpeg: Buffer): void;
+  end(reason: "stopped" | "unsupported" | "failed"): void;
+}
+
+interface FrameStream {
+  proc: ReturnType<typeof spawn> | null;
+  subscribers: Set<FrameSubscriber>;
+  lastHash: string;
+  frames: number;
+  startedAt: number;
+  ended: boolean;
+  linger?: ReturnType<typeof setTimeout>;
+  restarts: number;
+}
+
+const frameStreams = new Map<string, FrameStream>();
+/** Sessions whose desktop image has no ffmpeg: they keep using polling. */
+const streamUnsupported = new Set<string>();
+
+export function frameStreamSupported(session: SandboxDesktopSession): boolean {
+  return !streamUnsupported.has(session.id);
+}
+
+/** Number of viewers currently receiving the live picture. */
+export function frameStreamViewers(sessionId: string): number {
+  return frameStreams.get(sessionId)?.subscribers.size ?? 0;
+}
+
+function spawnFrameGrabber(session: SandboxDesktopSession, stream: FrameStream): void {
+  const proc = spawn("docker", ["exec", session.containerId, ...frameStreamCommand(session.width, session.height)], {
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  stream.proc = proc;
+  stream.startedAt = Date.now();
+  const splitter = new JpegSplitter();
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    for (const jpeg of splitter.push(chunk)) {
+      if (jpeg.length < 1000) continue;
+      stream.frames++;
+      const slot = memoryFrames.get(session.id) ?? { jpeg: Buffer.alloc(0), at: 0 };
+      slot.jpeg = jpeg;
+      slot.at = Date.now();
+      memoryFrames.set(session.id, slot);
+      session.lastFrameAt = slot.at;
+      // Only pictures that changed go over the network.
+      const hash = createHash("sha1").update(jpeg).digest("hex");
+      if (hash === stream.lastHash) continue;
+      stream.lastHash = hash;
+      for (const sub of stream.subscribers) {
+        try { sub.frame(jpeg); } catch { /* a closed viewer is removed on close */ }
+      }
+    }
+  });
+  proc.on("exit", (code) => {
+    if (stream.proc !== proc) return;
+    stream.proc = null;
+    if (stream.ended) return;
+    const quick = Date.now() - stream.startedAt < 4000;
+    if (code === 127 || (quick && stream.frames === 0)) {
+      streamUnsupported.add(session.id);
+      endFrameStream(session.id, "unsupported");
+      return;
+    }
+    const live = session.status === "ready" || session.status === "user_control";
+    if (!live || stream.subscribers.size === 0 || stream.restarts >= 5) {
+      endFrameStream(session.id, live ? "failed" : "stopped");
+      return;
+    }
+    stream.restarts++;
+    setTimeout(() => { if (!stream.ended && !stream.proc) spawnFrameGrabber(session, stream); }, 800);
+  });
+  proc.on("error", () => {
+    if (stream.proc !== proc) return;
+    stream.proc = null;
+    endFrameStream(session.id, "failed");
+  });
+}
+
+/**
+ * Receive every changed desktop picture as it happens. Returns null when this
+ * desktop cannot stream (no ffmpeg in the image) — the caller polls instead.
+ */
+export function subscribeFrames(session: SandboxDesktopSession, sub: FrameSubscriber): (() => void) | null {
+  if (streamUnsupported.has(session.id)) return null;
+  if (session.status !== "ready" && session.status !== "user_control") return null;
+  let stream = frameStreams.get(session.id);
+  if (!stream || stream.ended) {
+    stream = { proc: null, subscribers: new Set(), lastHash: "", frames: 0, startedAt: Date.now(), ended: false, restarts: 0 };
+    frameStreams.set(session.id, stream);
+    spawnFrameGrabber(session, stream);
+  }
+  if (stream.linger) { clearTimeout(stream.linger); stream.linger = undefined; }
+  stream.subscribers.add(sub);
+  // A new viewer gets the current picture right away, even if nothing moves.
+  const slot = memoryFrames.get(session.id);
+  if (slot && slot.jpeg.length > 1000 && Date.now() - slot.at < 5000) sub.frame(slot.jpeg);
+  const s = stream;
+  return () => {
+    s.subscribers.delete(sub);
+    if (s.subscribers.size === 0 && !s.ended && !s.linger) {
+      s.linger = setTimeout(() => {
+        s.linger = undefined;
+        if (s.subscribers.size === 0) endFrameStream(session.id, "stopped");
+      }, FRAME_STREAM_LINGER_MS);
+    }
+  };
+}
+
+function endFrameStream(sessionId: string, reason: "stopped" | "unsupported" | "failed"): void {
+  const stream = frameStreams.get(sessionId);
+  if (!stream) return;
+  frameStreams.delete(sessionId);
+  stream.ended = true;
+  if (stream.linger) clearTimeout(stream.linger);
+  const proc = stream.proc;
+  stream.proc = null;
+  if (proc && !proc.killed) proc.kill();
+  // Killing the docker exec client leaves ffmpeg running inside the desktop.
+  const session = sessions.get(sessionId);
+  if (session?.containerId && session.status !== "ended") {
+    void dockerExec(session.containerId, ["pkill", "-x", "ffmpeg"], 4000);
+  }
+  for (const sub of stream.subscribers) {
+    try { sub.end(reason); } catch { /* ignore */ }
+  }
+  stream.subscribers.clear();
+}
+
+// ── Idle desktops ──────────────────────────────────────────────────────────
+//
+// A desktop nobody watches or uses still runs a browser. Stop it after a
+// quiet period so forgotten sessions do not slow the host down.
+
+export const DESKTOP_IDLE_MS = Math.max(5, Number(process.env.ORVYN_DESKTOP_IDLE_MINUTES) || 30) * 60_000;
+const lastUse = new Map<string, number>();
+
+/** Anything that shows the desktop is in use: input, agent actions, viewers. */
+export function noteDesktopUse(sessionId: string, at = Date.now()): void {
+  lastUse.set(sessionId, at);
+}
+
+export function desktopIsIdle(session: Pick<SandboxDesktopSession, "id" | "createdAt" | "lastFrameAt" | "controlOwner">, now: number, viewers: number, lastUsed?: number): boolean {
+  if (viewers > 0) return false;
+  if (session.controlOwner === "user") return false;
+  const last = Math.max(session.createdAt, lastUsed ?? 0);
+  return now - last > DESKTOP_IDLE_MS;
+}
+
+let idleTimer: ReturnType<typeof setInterval> | null = null;
+export function startDesktopIdleReaper(): void {
+  if (idleTimer) return;
+  idleTimer = setInterval(() => {
+    const now = Date.now();
+    for (const s of sessions.values()) {
+      if (s.status === "ended" || s.status === "starting") continue;
+      if (desktopIsIdle(s, now, frameStreamViewers(s.id), lastUse.get(s.id))) {
+        console.log(`[desktop] stopping idle desktop ${s.id}`);
+        lastUse.delete(s.id);
+        void stopSandboxDesktop(s);
+      }
+    }
+  }, 60_000);
+  idleTimer.unref?.();
 }

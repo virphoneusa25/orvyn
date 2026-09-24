@@ -18,8 +18,11 @@ export function desktopMayAutoStart(opts: {
   sandboxAvailable: boolean;
   hasSession: boolean;
   starting: boolean;
+  /** The Desktop tab is on screen. A hidden tab never starts a desktop. */
+  visible?: boolean;
 }): boolean {
   if (opts.userStopped || opts.alreadyStarted) return false;
+  if (opts.visible === false) return false;
   if (!opts.hasProject || !opts.sandboxAvailable) return false;
   if (opts.hasSession || opts.starting) return false;
   return true;
@@ -73,4 +76,68 @@ export function imageKind(bytes: Uint8Array): "jpeg" | "png" | null {
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return "jpeg";
   if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "png";
   return null;
+}
+
+/**
+ * Reads the backend's live picture stream (Server-Sent Events). Calls
+ * onFrame with each JPEG. Resolves with why it ended:
+ *  - "unsupported": this backend or desktop cannot stream — poll instead;
+ *  - "ended": the desktop stopped or the stream was closed;
+ *  - "failed": network trouble — try again shortly.
+ */
+export async function readDesktopStream(
+  url: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+  onFrame: (jpeg: Uint8Array) => void,
+): Promise<"unsupported" | "ended" | "failed"> {
+  let res: Response;
+  try {
+    res = await fetch(url, { headers, cache: "no-store", signal });
+  } catch {
+    return "failed";
+  }
+  const type = res.headers.get("content-type") ?? "";
+  if (res.status === 404 && !type.includes("json")) return "unsupported"; // backend without /stream
+  if (!res.ok) return res.status === 404 ? "ended" : "failed";
+  if (!type.includes("text/event-stream") || !res.body) return "unsupported";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return "ended";
+      buf += decoder.decode(value, { stream: true });
+      let cut: number;
+      while ((cut = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut + 2);
+        const ev = parseSseBlock(block);
+        if (ev.event === "frame" && ev.data) onFrame(base64ToBytes(ev.data));
+        else if (ev.event === "end") return /unsupported/.test(ev.data) ? "unsupported" : "ended";
+      }
+    }
+  } catch {
+    return signal.aborted ? "ended" : "failed";
+  } finally {
+    try { reader.releaseLock(); } catch { /* ignore */ }
+  }
+}
+
+export function parseSseBlock(block: string): { event: string; data: string } {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+  }
+  return { event, data: data.join("\n") };
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }

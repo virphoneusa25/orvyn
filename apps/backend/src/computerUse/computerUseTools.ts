@@ -112,7 +112,7 @@ export function registerComputerUseTools(
   register(makeComputerTool("wait", "computer_wait", "Wait for the UI to settle, then take a new screenshot if needed.", {
     sessionId: { type: "string" }, ms: { type: "number" }, surface: { type: "string" },
   }, [], tenantId, projectRoot, artifacts));
-  register(makeComputerTool("open_app", "computer_open_app", "Open a dock app on the Desktop (terminal, files, chromium, editor).", {
+  register(makeComputerTool("open_app", "computer_open_app", "Open an app on the ORVYN Desktop: browser, terminal, files, editor or settings. Take a screenshot afterwards to see it.", {
     app: { type: "string" }, sessionId: { type: "string" },
   }, ["app"], tenantId, projectRoot, artifacts));
   registerAlias("computer.screenshot", "computer_screenshot");

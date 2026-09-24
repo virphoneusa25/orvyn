@@ -534,6 +534,7 @@ export function AgentWorkspace({
           {tabs.some((t) => t.kind === "desktop") && (
             <div style={{ display: active?.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
               <DesktopView
+                active={active?.kind === "desktop"}
                 projectRoot={projectRoot}
                 runId={runId}
                 cursor={derived.browser.cursor}

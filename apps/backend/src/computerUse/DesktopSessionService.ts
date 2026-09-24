@@ -129,8 +129,8 @@ export class DesktopSessionService {
         return { ok: false, error: "Desktop session could not start." };
       }
     }
-    const allowed = ["terminal", "files", "chromium", "editor", "settings"] as const;
-    const name = allowed.includes(app as (typeof allowed)[number]) ? (app as (typeof allowed)[number]) : "terminal";
+    const name = desktopAppName(app);
+    if (!name) return { ok: false, sessionId: sb.id, error: `Unknown app "${app}". Use browser, terminal, files, editor or settings.` };
     const ok = await sandboxLaunchApp(sb, name);
     return { ok, sessionId: sb.id, error: ok ? undefined : `Could not open ${app}` };
   }
@@ -171,3 +171,16 @@ export class DesktopSessionService {
 }
 
 export const desktopSessionService = new DesktopSessionService();
+
+/** Desktop dock apps by the names people and models actually use. */
+export function desktopAppName(app: string): "terminal" | "files" | "chromium" | "editor" | "settings" | null {
+  const key = String(app ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const map: Record<string, "terminal" | "files" | "chromium" | "editor" | "settings"> = {
+    terminal: "terminal", shell: "terminal", console: "terminal", lxterminal: "terminal",
+    files: "files", file: "files", filemanager: "files", fileexplorer: "files", explorer: "files", thunar: "files", folder: "files",
+    browser: "chromium", chromium: "chromium", chrome: "chromium", firefox: "chromium", web: "chromium",
+    editor: "editor", code: "editor", vscode: "editor", texteditor: "editor", geany: "editor",
+    settings: "settings", appearance: "settings",
+  };
+  return map[key] ?? null;
+}
