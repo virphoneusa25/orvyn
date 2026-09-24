@@ -50,12 +50,20 @@ v1Router.use(async (req, res, next) => {
       || req.body?.executionTarget === "ovh_worker"
       || req.body?.executionTarget === "local_host"
       || req.body?.executionTarget === "local_sandbox";
-    if (!forcedRemote && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
+    // Phase 2: a run started from the desktop with its own machine path (e.g.
+    // C:\Users\me\project) names the user's LOCAL project. It must reach the
+    // route untouched so Auto can send it to the Local Worker — rewriting it to
+    // the Cloud virtual workspace silently wrote "local" files on the server.
+    const runStart = req.method === "POST" && req.path === "/agent/stream/runs";
+    const clientMachineRoot = runStart
+      && typeof req.body?.projectRoot === "string"
+      && looksLikeForeignAbsolutePath(req.body.projectRoot.trim());
+    if (!forcedRemote && !clientMachineRoot && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
     if (req.method === "POST" && ["/agent/stream/runs", "/agent/orchestrate"].includes(req.path)) {
       const tenant = requireTenant(req);
       if (tenant.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) return res.status(409).json({error:"A task is already active. Stop it or wait before starting another."});
-      if (!forcedRemote) req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
+      if (!forcedRemote && !clientMachineRoot) req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
     }
     next();
   } catch (e: any) { res.status(400).json({error:e.message}); }

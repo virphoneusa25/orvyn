@@ -92,7 +92,10 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && hints.isLocalCoding && /\b(test|tests|typecheck|lint|verify)\b/i.test(input.instruction)) {
+  // Keyword checks read the request's words, not its file names: "Create
+  // local-test.txt" does not ask for a test run.
+  const prose = input.instruction.replace(/[\w./\\-]+\.[A-Za-z0-9]{1,8}\b/g, " ");
+  if (!failedGate && hints.isLocalCoding && /\b(test|tests|typecheck|lint|verify)\b/i.test(prose)) {
     const tests = testsRan(input.events);
     if (!tests.ran || !tests.passed) {
       failedGate = "code";

@@ -30,6 +30,9 @@ export function prepareRunPreflight(input: {
   cloudControlPlane: boolean;
   cloudWorkspaceAvailable: boolean;
   composerMode?: string;
+  /** Where this run's tools actually execute, when the route already decided.
+   *  Preflight reports it instead of re-guessing from the control plane's disk. */
+  actualTarget?: "local_host" | "local_sandbox" | "ovh_worker";
 }): RunPreflightResult {
   const intent = inferTaskIntent(input.instruction, input.composerMode);
   const workspace = inspectWorkspace(input.projectRoot);
@@ -56,9 +59,9 @@ export function prepareRunPreflight(input: {
   const executionTarget =
     intent.requiresRemoteResource && resources.status === "ok"
       ? "remote_resource"
-      : routed.actual === "ovh_worker"
+      : (input.actualTarget ?? routed.actual) === "ovh_worker"
         ? "cloud_worker"
-        : routed.actual === "local_sandbox"
+        : (input.actualTarget ?? routed.actual) === "local_sandbox"
           ? "local_sandbox"
           : "local_host";
   const relevantTools = selectToolNames(input.toolNames, intent, { repositoryDetected: workspace.repositoryDetected });

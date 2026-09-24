@@ -665,7 +665,7 @@ export class StreamingAgentRuntime {
             ? "Tools execute in a local Docker sandbox. Project stays on this machine."
             : label === "Cloud"
               ? "Generated files persist on the Cloud control plane in virtual file storage. Open Files → Generated."
-              : "Tools execute on this machine. Project files are not uploaded to OVH.",
+              : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to OVH.",
       });
       if (execution.location === "OVH_WORKER") {
         queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
@@ -676,6 +676,17 @@ export class StreamingAgentRuntime {
           runId,
         });
       }
+    } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.executionLabel === "Cloud") {
+      // Cloud workspace on the control plane (no project folder): say so, so
+      // the run is never mistaken for work on the user's computer.
+      this.store.emit(runId, "run.execution", {
+        location: "CLOUD",
+        executionTargetRequested: execution.targetRequested ?? "auto",
+        executionTargetActual: "cloud_control_plane",
+        executionLabel: "Cloud",
+        fallbackReason: execution.fallbackReason,
+        note: "Files are written to your ORVYN Cloud workspace, not to your computer. Download them from Files.",
+      });
     } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.targetActual === "local_host") {
       this.store.emit(runId, "run.execution", {
         location: "LOCAL",
@@ -691,7 +702,11 @@ export class StreamingAgentRuntime {
     // one-click Undo can put it back. Best-effort: a non-git folder simply
     // has no undo (gitHead is null there — an empty snapshot would make Undo
     // a silent no-op, so it is skipped and the button reports why).
-    if (this.checkpoints) {
+    // Phase 2: only snapshot a tree this process can actually see. A run whose
+    // tools execute on the Local Worker or an OVH worker must not make the
+    // control plane create "<client path>/.orvyn/checkpoints" on its own disk.
+    const toolsRunHere = !execution || execution.location === "LOCAL";
+    if (this.checkpoints && toolsRunHere) {
       void this.checkpoints
         .create(projectRoot, { note: `pre-run: ${instruction.slice(0, 80)}` })
         .then((cp) => {
@@ -856,6 +871,7 @@ export class StreamingAgentRuntime {
           cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
           cloudWorkspaceAvailable: state?.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
           composerMode: options?.composerMode ?? mode,
+          actualTarget: execution?.targetActual,
         });
         this.store.emit(runId, "preflight.completed", {
           canExecute: prepared.canExecute,
@@ -1134,6 +1150,7 @@ export class StreamingAgentRuntime {
       cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
       cloudWorkspaceAvailable: state.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
       composerMode: state.composerMode ?? state.resumeMode,
+      actualTarget: state.execution?.targetActual,
     });
     this.store.emit(runId, "preflight.completed", {
       canExecute: prepared.canExecute,
