@@ -20,6 +20,7 @@ export type AgentEventType =
   | "run.started"
   | "run.phase.changed"
   | "run.state"
+  | "preflight.completed"
   | "run.queued"
   | "message.delta"
   | "message.completed"

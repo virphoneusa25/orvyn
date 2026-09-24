@@ -28,11 +28,27 @@ export function collectRunEvidence(events: Array<{ type: string; data?: Record<s
   return { files, previewUrl, browserOpened, verified };
 }
 
-const WEBSITE = /\b(website|web\s*site|landing\s*page|one[- ]page)\b/i;
+export function introductionFor(instruction: string, informational = false): string | null {
+  if (informational || !instruction.trim()) return null;
+  return "I'll do this in the active environment and check the result before I call it finished.";
+}
 
-export function introductionFor(instruction: string): string | null {
-  if (!WEBSITE.test(instruction)) return null;
-  return "I'll build this as a working page in the ORVYN workspace, launch the preview, and inspect the rendered site before I call it finished.";
+export function planSteps(intent: {
+  requiresRemoteResource?: boolean;
+  requiresFrontend?: boolean;
+  requiresArtifact?: boolean;
+  requiresTerminal?: boolean;
+  requiresBrowser?: boolean;
+}): string[] {
+  const steps = ["Inspect what the task needs"];
+  if (intent.requiresRemoteResource) steps.push("Use the resolved server");
+  if (intent.requiresFrontend) steps.push("Write the files and open the preview");
+  else if (intent.requiresArtifact) steps.push("Create the file and confirm it was saved");
+  else steps.push("Make the change");
+  if (intent.requiresTerminal) steps.push("Run the check");
+  if (intent.requiresBrowser) steps.push("Inspect the rendered result");
+  steps.push("Finish only when the evidence is there");
+  return steps;
 }
 
 /** One progress line when evidence crosses a real boundary. Null if nothing new is worth saying. */
@@ -42,7 +58,7 @@ export function progressFor(before: RunEvidence, after: RunEvidence): string | n
   }
   if (before.files.length === 0 && after.files.length > 0 && !after.previewUrl) {
     const names = after.files.slice(0, 4).map((p) => p.split("/").pop()).join(", ");
-    return `I have the first files in place (${names}). Next I'll get the preview up so I can look at the page itself.`;
+    return `I have the first files in place (${names}). I'll check the result before calling this finished.`;
   }
   if (!before.verified && after.verified && after.previewUrl) {
     return "Finished. The site is running and the Browser check passed. The preview is still up.";

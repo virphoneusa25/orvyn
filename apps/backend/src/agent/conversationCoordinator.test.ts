@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectRunEvidence, introductionFor, progressFor } from "./conversationCoordinator";
 
-test("a website task is introduced before tools, and a greeting is not", () => {
-  assert.match(introductionFor("Build a simple one-page website") ?? "", /preview/);
-  assert.equal(introductionFor("hi"), null);
+test("any action task is introduced before tools, and a greeting is not", () => {
+  assert.match(introductionFor("Fix the failing test") ?? "", /check the result/);
+  assert.equal(introductionFor("hi", true), null);
 });
 
 test("progress follows evidence and never calls a localhost preview verified", () => {

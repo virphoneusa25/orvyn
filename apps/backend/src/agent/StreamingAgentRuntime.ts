@@ -2,7 +2,7 @@ import { CONVERSATION_STYLE } from "./conversationStyle";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
-import { collectRunEvidence, introductionFor, progressFor, type RunEvidence } from "./conversationCoordinator";
+import { collectRunEvidence, introductionFor, planSteps, progressFor, type RunEvidence } from "./conversationCoordinator";
 import { canEnterPhase, type RunPhase } from "./agentRunState";
 import { skillsPromptFor } from "../learning/validatedSkills";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
@@ -41,6 +41,7 @@ import { composeSiteDocument, publishRememberedSite, rememberSiteFile } from "./
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
+import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
 import { selectToolNames, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
@@ -822,6 +823,36 @@ export class StreamingAgentRuntime {
           const st = this.runs.get(runId);
           if (st) st.contextParts.projectContext = estimateTokens(codeContext);
         }
+        const prepared = prepareRunPreflight({
+          instruction,
+          projectRoot,
+          tenantId: scope.tenantId,
+          organizationId: scope.organizationId,
+          projectId: scope.projectId,
+          resources: catalog,
+          toolNames: this.tools.list().map((t) => t.name),
+          hasLocalProject: workspace.available,
+          cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
+          cloudWorkspaceAvailable: state?.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
+          composerMode: options?.composerMode ?? mode,
+        });
+        this.store.emit(runId, "preflight.completed", {
+          canExecute: prepared.canExecute,
+          executionTarget: prepared.executionTarget,
+          repositoryDetected: prepared.workspace.repositoryDetected,
+          toolCount: prepared.relevantTools.length,
+          blockers: prepared.blockers,
+        });
+        if (!prepared.canExecute) {
+          const message = prepared.blockers[0] ?? "This run cannot start.";
+          this.enterPhase(runId, "blocked");
+          this.store.emit(runId, "message.delta", { content: message });
+          this.store.emit(runId, "message.completed", {});
+          this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT" });
+          this.store.setStatus(runId, "blocked");
+          return;
+        }
+        if (state) state.exposedTools = new Set(prepared.relevantTools);
         await this.loop(runId, messages, instruction, mode, provider);
       } catch (err: any) {
         const st = this.runs.get(runId);
@@ -1084,8 +1115,11 @@ export class StreamingAgentRuntime {
       state.introSpoken = true;
       state.spokenEvidence = collectRunEvidence([]);
       this.enterPhase(runId, "introducing");
-      const intro = introductionFor(state.instruction);
-      if (intro) this.speak(runId, intro);
+      const intro = introductionFor(state.instruction, state.intent.informational);
+      if (intro) {
+        this.speak(runId, intro);
+        this.store.emit(runId, "plan.created", { steps: planSteps(state.intent) });
+      }
       this.enterPhase(runId, "acting");
     }
     this.store.emit(runId, "run.started", {

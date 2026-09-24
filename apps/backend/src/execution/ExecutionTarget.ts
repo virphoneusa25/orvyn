@@ -83,11 +83,11 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
   if (input.isRisky) {
     return { requested, actual: "local_sandbox", reason: "Untrusted or isolation-required command" };
   }
-  if (input.cloudControlPlane && input.isSite && !input.hasLocalProject) {
+  if (input.cloudControlPlane && !input.hasLocalProject && !input.isArtifact) {
     return {
       requested,
       actual: "ovh_worker",
-      reason: "No local workspace — website runs on the Cloud worker, not Windows localhost",
+      reason: "No local workspace — Auto uses the Cloud worker instead of this machine",
     };
   }
   if (input.cloudControlPlane && (input.isArtifact || !input.hasLocalProject) && !input.isLocalCoding) {

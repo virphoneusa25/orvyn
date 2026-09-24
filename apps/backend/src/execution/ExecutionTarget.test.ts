@@ -47,6 +47,18 @@ test("Auto + background mission → ovh_worker", () => {
   assert.equal(d.actual, "ovh_worker");
 });
 
+test("Auto work with no local project on Cloud uses the worker", () => {
+  const hints = classifyExecutionHints("Fix the failing test in the billing service");
+  assert.equal(hints.isSite, false);
+  const d = routeExecutionTarget({
+    requested: "auto",
+    hasLocalProject: false,
+    cloudControlPlane: true,
+    ...hints,
+  });
+  assert.equal(d.actual, "ovh_worker");
+});
+
 test("Auto website with no local project on Cloud uses the worker", () => {
   const hints = classifyExecutionHints("Build a simple one page website for VirPhone");
   assert.equal(hints.isSite, true);
