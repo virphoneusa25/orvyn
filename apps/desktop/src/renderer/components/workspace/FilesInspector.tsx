@@ -342,6 +342,8 @@ export function FilesInspector({
   }
 
   const saveRef = React.useRef<() => void>(() => undefined);
+  const codeEditorRef = React.useRef<{ focus(): void } | null>(null);
+  useEffect(() => { if (editing) window.setTimeout(() => codeEditorRef.current?.focus(), 0); }, [Boolean(editing)]); // eslint-disable-line react-hooks/exhaustive-deps
   async function saveEdits() {
     if (!selection || selection.kind !== "project" || !editing || saving) return;
     setSaving(true);
@@ -631,33 +633,35 @@ export function FilesInspector({
                   ) : preview.url ? (
                     <img src={preview.url} alt={selName} className="ofp-img" />
                   ) : (
-                    editing ? (
-                      <div className="ofp-edit">
-                        <Editor
-                          height="100%"
-                          theme="orvyn-dark"
-                          path={`orvyn-files/${selection.kind === "project" ? selection.path : selName}`}
-                          language={guessLanguage(selName)}
-                          value={editing.text}
-                          onChange={(v) => setEditing((e) => (e ? { ...e, text: v ?? "" } : e))}
-                          onMount={(ed, monaco) => {
-                            ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
-                            ed.focus();
-                          }}
-                          options={{
-                            fontSize: 13,
-                            fontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
-                            minimap: { enabled: false },
-                            padding: { top: 8 },
-                            scrollBeyondLastLine: false,
-                            automaticLayout: true,
-                            wordWrap: "off",
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
-                    )
+                    // One colored code view for reading and editing, same
+                    // colors as the Code view. Read-only until Edit.
+                    <div className="ofp-edit">
+                      <Editor
+                        height="100%"
+                        theme="orvyn-dark"
+                        path={`orvyn-files/${selection.kind === "project" ? selection.path : selName}`}
+                        language={guessLanguage(selName)}
+                        value={editing ? editing.text : preview.text ?? ""}
+                        onChange={(v) => setEditing((e) => (e ? { ...e, text: v ?? "" } : e))}
+                        onMount={(ed, monaco) => {
+                          codeEditorRef.current = ed;
+                          ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
+                        }}
+                        options={{
+                          readOnly: !editing,
+                          domReadOnly: !editing,
+                          fontSize: 13,
+                          fontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
+                          minimap: { enabled: false },
+                          padding: { top: 8 },
+                          scrollBeyondLastLine: false,
+                          automaticLayout: true,
+                          wordWrap: "off",
+                          renderLineHighlight: editing ? "line" : "none",
+                          bracketPairColorization: { enabled: true },
+                        }}
+                      />
+                    </div>
                   )}
                 </div>
                 <p className="ofp-foot"><i />{previewFooter(preview?.cloudCopy ? "cloud" : footerLoc, {
@@ -672,16 +676,6 @@ export function FilesInspector({
         center.host,
       )}
     </div>
-  );
-}
-
-function CodePreview({ text, highlight }: { text: string; highlight: boolean }) {
-  const lines = text.split(/\r?\n/);
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  return (
-    <ol className="ofp-code">
-      {lines.map((l, i) => <li key={i} className={highlight ? "is-add" : undefined}>{l || " "}</li>)}
-    </ol>
   );
 }
 
