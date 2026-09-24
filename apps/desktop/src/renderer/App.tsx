@@ -19,6 +19,7 @@ import { Sidebar } from "./components/redesign/Shell";
 import { submitOrvynCommand } from "./orvynCommand";
 import { isFabricatedGeneratedPath } from "./workbenchFileAccess";
 import { WorkStream } from "./components/WorkStream";
+import { centerFileView, useCenterFileView } from "./centerFileView";
 import { AgentWorkspace } from "./components/workspace/AgentWorkspace";
 import { useAgentRun } from "./useAgentRun";
 import { HomeScreen } from "./components/redesign/HomeScreen";
@@ -159,6 +160,10 @@ export function App() {
   const autoOpenedRoot = useRef<string | null>(null);
   const [codeChatOpen, setCodeChatOpen] = useState(true);
   const [openError, setOpenError] = useState<string | null>(null);
+  // A file picked in the Files tab is shown in the center; any navigation
+  // returns the center to what that view normally shows.
+  const centerFile = useCenterFileView();
+  useEffect(() => { centerFileView.close(); }, [view]);
   const indexedRoot = useRef<string | null>(null);
 
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
@@ -763,7 +768,10 @@ export function App() {
         )}
 
         {(view === "home" || view === "newtask") && (
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", position: "relative" }}>
+            {centerFile.open && (
+              <div ref={centerFileView.setHost} data-testid="center-file" style={{ position: "absolute", inset: 0, zIndex: 6, display: "flex", background: "var(--orvyn-bg, #070B14)" }} />
+            )}
             {/* Deterministic center routing — the nav selection (view) ALWAYS
                 wins over the remembered working mode. Home selected = the
                 animated landing screen, no stale WorkStream underneath. The

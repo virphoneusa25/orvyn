@@ -7,6 +7,8 @@
 // straight from this computer; nothing here lists a server copy as "Local".
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { centerFileView, useCenterFileView } from "../../centerFileView";
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
@@ -196,21 +198,31 @@ export function FilesInspector({
     }
   }, [localProject, loadDir]);
 
+  // A file the user picks is shown in the center of the window.
+  const center = useCenterFileView();
+  const openProject = useCallback((path: string, bytes?: number) => {
+    selectProject(path, bytes);
+    centerFileView.open();
+  }, [selectProject]);
+  // Leaving the Files tab (or closing the panel) returns the center to the chat.
+  useEffect(() => () => centerFileView.close(), []);
+  useEffect(() => { if (!selection) centerFileView.close(); }, [selection]);
+
   // Open from the chat ("Wrote hello.txt · Open") lands on that exact file.
   useEffect(() => {
     if (!focus) return;
     if (focus.artifactId) {
       const hit = generatedItems.find((i) => i.artifactId === focus.artifactId);
-      if (hit) { setSelection({ kind: "item", item: hit }); setSaved(null); }
+      if (hit) { setSelection({ kind: "item", item: hit }); setSaved(null); centerFileView.open(); }
       return;
     }
     const target = focus.path || focus.fileName;
     if (!target) return;
-    if (location === "local") return selectProject(toProjectRelative(target, projectRoot));
+    if (location === "local") return openProject(toProjectRelative(target, projectRoot));
     const hit = cloudProjectEntries.find((f) => matchesFile(String(f.path || f.name), focus));
-    if (hit) return selectProject(toProjectRelative(String(hit.path || hit.name)), hit.bytes);
+    if (hit) return openProject(toProjectRelative(String(hit.path || hit.name)), hit.bytes);
     const gen = generatedItems.find((i) => matchesFile(i.name, focus) || matchesFile(i.path ?? "", focus));
-    if (gen) setSelection({ kind: "item", item: gen });
+    if (gen) { setSelection({ kind: "item", item: gen }); centerFileView.open(); }
   }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // With nothing chosen yet, open on the newest file ORION changed.
@@ -380,7 +392,7 @@ export function FilesInspector({
           className="ofp-row"
           style={{ paddingLeft: 26 + depth * 16 }}
           aria-current={selection?.kind === "project" && selection.path === n.path}
-          onClick={() => selectProject(n.path, n.bytes)}
+          onClick={() => openProject(n.path, n.bytes)}
         >
           <FileTypeIcon path={n.name} size={14} />
           <span className="ofp-name">{n.name}</span>
@@ -406,10 +418,10 @@ export function FilesInspector({
         </div>
         {canSwitch && (
           <div className="ofp-switch" role="tablist" aria-label="Which files to show">
-            <button type="button" role="tab" aria-selected={location === "local"} className="is-local" onClick={() => { setViewOverride("local"); setSelection(null); }}>
+            <button type="button" role="tab" aria-selected={location === "local"} className="is-local" onClick={() => { setViewOverride("local"); setSelection(null); centerFileView.close(); }}>
               <IconMonitor size={13} />Your computer
             </button>
-            <button type="button" role="tab" aria-selected={location === "cloud"} className="is-cloud" onClick={() => { setViewOverride("cloud"); setSelection(null); }}>
+            <button type="button" role="tab" aria-selected={location === "cloud"} className="is-cloud" onClick={() => { setViewOverride("cloud"); setSelection(null); centerFileView.close(); }}>
               <IconCloud size={13} />ORVYN Cloud
             </button>
           </div>
@@ -435,7 +447,7 @@ export function FilesInspector({
                 key={`c:${c.path}`}
                 className="ofp-row"
                 aria-current={selection?.kind === "project" && selection.path === c.path}
-                onClick={() => selectProject(c.path)}
+                onClick={() => openProject(c.path)}
                 disabled={c.status === "deleted"}
               >
                 <FileTypeIcon path={c.name} size={14} />
@@ -471,7 +483,7 @@ export function FilesInspector({
                   key={`g:${g.artifactId ?? g.path ?? g.name}`}
                   className="ofp-tile"
                   aria-current={selection?.kind === "item" && (selection.item.artifactId ?? selection.item.name) === (g.artifactId ?? g.name)}
-                  onClick={() => { setSelection({ kind: "item", item: g }); setSaved(null); }}
+                  onClick={() => { setSelection({ kind: "item", item: g }); setSaved(null); centerFileView.open(); }}
                 >
                   <span className="ofp-tile__art">
                     {previewKind(g.mimeType, g.name) === "image" && g.previewUrl
@@ -487,84 +499,85 @@ export function FilesInspector({
         )}
       </div>
 
-      <section className="ofp-preview" aria-label="Preview" data-testid="workbench-file-preview">
-        {!selection ? (
-          <div className="ofp-preview__empty">
-            <b>Select a file</b>
-            <span>{location === "cloud" ? "Files in ORVYN Cloud preview here, with Download to my computer." : "Files on your computer preview here."}</span>
-          </div>
-        ) : (
-          <>
-            <div className="ofp-preview__head">
-              <span className="ofp-preview__name">
-                <b>{selName}</b>
-                <span title={previewPath(selection, location, projectRoot)}>{previewPath(selection, location, projectRoot)}</span>
-              </span>
-              <span className="ofp-actions">
-                {selection.kind === "project" && location === "local" && !preview?.cloudCopy && (
-                  <>
-                    <button type="button" className="ofp-btn ofp-btn--primary" disabled={Boolean(preview?.error)} onClick={() => onOpenFile(selection.path)}>Open in editor</button>
-                    <button
-                      type="button"
-                      className="ofp-btn"
-                      disabled={Boolean(preview?.error)}
-                      onClick={async () => {
-                        setSaved(null);
-                        try {
-                          const ok = await window.orvyn?.project?.showInFolder?.(selection.path);
-                          if (ok === undefined) setSaved({ error: "Show in folder needs the latest ORVYN desktop app." });
-                          else if (!ok) setSaved({ error: "Could not open the folder." });
-                        } catch (err) {
-                          setSaved({ error: userFacingFileError(err) });
-                        }
-                      }}
-                    >
-                      Show in folder
-                    </button>
-                  </>
+      {center.open && center.host && selection && createPortal(
+        <div className={`ofp ofp--${preview?.cloudCopy ? "cloud" : location} ofp-center`}>
+          <section className="ofp-preview" aria-label="File" data-testid="workbench-file-preview">
+            {selection && (
+              <>
+                <div className="ofp-preview__head">
+                  <button type="button" className="ofp-btn ofp-back" onClick={() => centerFileView.close()} title="Back to the conversation">← Back to chat</button>
+                  <span className="ofp-preview__name">
+                    <b>{selName}</b>
+                    <span title={previewPath(selection, location, projectRoot)}>{previewPath(selection, location, projectRoot)}</span>
+                  </span>
+                  <span className="ofp-actions">
+                    {selection.kind === "project" && location === "local" && !preview?.cloudCopy && (
+                      <>
+                        <button type="button" className="ofp-btn ofp-btn--primary" disabled={Boolean(preview?.error)} onClick={() => onOpenFile(selection.path)}>Open in editor</button>
+                        <button
+                          type="button"
+                          className="ofp-btn"
+                          disabled={Boolean(preview?.error)}
+                          onClick={async () => {
+                            setSaved(null);
+                            try {
+                              const ok = await window.orvyn?.project?.showInFolder?.(selection.path);
+                              if (ok === undefined) setSaved({ error: "Show in folder needs the latest ORVYN desktop app." });
+                              else if (!ok) setSaved({ error: "Could not open the folder." });
+                            } catch (err) {
+                              setSaved({ error: userFacingFileError(err) });
+                            }
+                          }}
+                        >
+                          Show in folder
+                        </button>
+                      </>
+                    )}
+                    {(location !== "local" || isGenerated || preview?.cloudCopy) && (
+                      <button type="button" className="ofp-btn ofp-btn--primary" onClick={() => void downloadToComputer()}>Download to my computer</button>
+                    )}
+                    {isGenerated && onPreviewArtifact && (
+                      <button type="button" className="ofp-btn" onClick={() => onPreviewArtifact(selection.item.name, selection.item.artifactId || preview?.artifactId)}>Open</button>
+                    )}
+                    {selectedChange && onOpenChanges && (
+                      <button type="button" className="ofp-btn" onClick={() => onOpenChanges(originalPath.get(selectedChange.path) ?? selectedChange.path)}>Changes</button>
+                    )}
+                  </span>
+                </div>
+                {preview?.cloudCopy && (
+                  <p className="ofp-cloudcopy">This file is not on your computer. ORION wrote it in <b>ORVYN Cloud</b>. Download it to keep a copy.</p>
                 )}
-                {(location !== "local" || isGenerated || preview?.cloudCopy) && (
-                  <button type="button" className="ofp-btn ofp-btn--primary" onClick={() => void downloadToComputer()}>Download to my computer</button>
+                {saved && (
+                  <p className={`ofp-saved${saved.error ? " is-error" : ""}`}>
+                    {saved.error ? saved.error : saved.info ? saved.info : <>Saved to <code>{saved.path}</code>{window.orvyn?.files?.showSaved && saved.path && (
+                      <button type="button" className="ofp-link" onClick={() => void window.orvyn.files!.showSaved(saved.path!)}>Show in folder</button>
+                    )}</>}
+                  </p>
                 )}
-                {isGenerated && onPreviewArtifact && (
-                  <button type="button" className="ofp-btn" onClick={() => onPreviewArtifact(selection.item.name, selection.item.artifactId || preview?.artifactId)}>Open</button>
-                )}
-                {selectedChange && onOpenChanges && (
-                  <button type="button" className="ofp-btn" onClick={() => onOpenChanges(originalPath.get(selectedChange.path) ?? selectedChange.path)}>Changes</button>
-                )}
-              </span>
-            </div>
-            {preview?.cloudCopy && (
-              <p className="ofp-cloudcopy">This file is not on your computer. ORION wrote it in <b>ORVYN Cloud</b>. Download it to keep a copy.</p>
+                <div className="ofp-preview__body">
+                  {preview == null ? (
+                    <span className="ofp-muted">Loading…</span>
+                  ) : preview.error ? (
+                    <div className="ofp-preview__empty"><b>{preview.error}</b>{preview.note && <span>{preview.note}</span>}</div>
+                  ) : preview.url && previewKind(selection.kind === "item" ? selection.item.mimeType : null, selName) === "pdf" ? (
+                    <iframe title={selName} src={preview.url} className="ofp-pdf" />
+                  ) : preview.url ? (
+                    <img src={preview.url} alt={selName} className="ofp-img" />
+                  ) : (
+                    <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
+                  )}
+                </div>
+                <p className="ofp-foot"><i />{previewFooter(preview?.cloudCopy ? "cloud" : footerLoc, {
+                  type: typeLabel(selName, selection.kind === "item" ? selection.item.mimeType : null),
+                  bytes: preview?.bytes ?? (selection.kind === "project" ? selection.bytes : selection.item.bytes),
+                  changed: selectedChange,
+                })}</p>
+              </>
             )}
-            {saved && (
-              <p className={`ofp-saved${saved.error ? " is-error" : ""}`}>
-                {saved.error ? saved.error : saved.info ? saved.info : <>Saved to <code>{saved.path}</code>{window.orvyn?.files?.showSaved && saved.path && (
-                  <button type="button" className="ofp-link" onClick={() => void window.orvyn.files!.showSaved(saved.path!)}>Show in folder</button>
-                )}</>}
-              </p>
-            )}
-            <div className="ofp-preview__body">
-              {preview == null ? (
-                <span className="ofp-muted">Loading…</span>
-              ) : preview.error ? (
-                <div className="ofp-preview__empty"><b>{preview.error}</b>{preview.note && <span>{preview.note}</span>}</div>
-              ) : preview.url && previewKind(selection.kind === "item" ? selection.item.mimeType : null, selName) === "pdf" ? (
-                <iframe title={selName} src={preview.url} className="ofp-pdf" />
-              ) : preview.url ? (
-                <img src={preview.url} alt={selName} className="ofp-img" />
-              ) : (
-                <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
-              )}
-            </div>
-            <p className="ofp-foot"><i />{previewFooter(preview?.cloudCopy ? "cloud" : footerLoc, {
-              type: typeLabel(selName, selection.kind === "item" ? selection.item.mimeType : null),
-              bytes: preview?.bytes ?? (selection.kind === "project" ? selection.bytes : selection.item.bytes),
-              changed: selectedChange,
-            })}</p>
-          </>
-        )}
-      </section>
+          </section>
+        </div>,
+        center.host,
+      )}
     </div>
   );
 }

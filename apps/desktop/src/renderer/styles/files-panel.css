@@ -97,3 +97,15 @@
 .ofp-cloudcopy { margin: 0 14px 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(152, 164, 255, 0.38); background: rgba(152, 164, 255, 0.08); font-size: 11.5px; color: var(--orvyn-text-secondary); }
 .ofp-cloudcopy b { color: #98A4FF; font-weight: 600; }
 .ofp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* A picked file shown in the center of the window (Files tab list stays on the right). */
+.ofp-center { height: 100%; }
+.ofp-center .ofp-preview { flex: 1; min-height: 0; border-top: 0; background: var(--orvyn-bg); }
+.ofp-center .ofp-preview__head { padding: 14px 20px 10px; }
+.ofp-center .ofp-preview__name b { font-size: 15px; }
+.ofp-center .ofp-preview__body { margin: 0 20px; }
+.ofp-center .ofp-code { font-size: 13px; }
+.ofp-center .ofp-cloudcopy, .ofp-center .ofp-saved { margin-left: 20px; margin-right: 20px; }
+.ofp-center .ofp-foot { padding: 10px 20px 14px; }
+.ofp-back { flex: none; }
+.ofp-scroll { flex: 1 1 auto; }
