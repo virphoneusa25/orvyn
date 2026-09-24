@@ -26,6 +26,9 @@
 .activity-group .activity-item { margin-top: 6px; }
 .activity-thinking { display: flex; align-items: center; gap: 9px; padding: 12px 0; color: var(--text-secondary); font-size: 12px; }
 .activity-pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: activity-breathe 1.6s ease-in-out infinite; }
+.image-sketch { position: relative; margin: 10px 0 4px; max-width: 420px; border-radius: 16px; overflow: hidden; background: #101218; border: 1px solid var(--border); }
+.image-sketch canvas { display: block; width: 100%; height: auto; filter: blur(0.3px); }
+.image-sketch-caption { position: absolute; left: 14px; bottom: 12px; color: rgba(255,255,255,0.86); font-size: 13px; font-weight: 550; text-shadow: 0 1px 8px rgba(0,0,0,0.6); }
 .conversation-reply { margin: 18px 0; font-size: 13px; line-height: 1.75; min-width: 0; color: var(--text); }
 .conversation-speaker { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; margin-bottom: 7px; color: var(--text-secondary); }
 @keyframes activity-breathe { 50% { opacity: .35; } }
