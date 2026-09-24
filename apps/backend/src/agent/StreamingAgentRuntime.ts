@@ -1831,9 +1831,7 @@ export class StreamingAgentRuntime {
         ? "cloud_worker"
         : state.execution?.targetActual === "local_sandbox" || state.execution?.location === "LOCAL_SANDBOX"
           ? "local_sandbox"
-          : state.execution?.location === "OVH_WORKER"
-            ? "cloud_worker"
-            : "local_host";
+          : "local_host";
     this.store.emit(runId, "run.phase.changed", { phase });
     this.store.emit(runId, "run.state", {
       runId,
