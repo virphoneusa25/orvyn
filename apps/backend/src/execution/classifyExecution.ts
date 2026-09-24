@@ -7,6 +7,8 @@ export interface ExecutionHints {
   isVisual: boolean;
   isArtifact: boolean;
   isLocalCoding: boolean;
+  /** A site to build and preview. Not a local coding task just because it says "build". */
+  isSite: boolean;
 }
 
 const REMOTE =
@@ -24,6 +26,7 @@ const LOCAL_CODE =
 const FORCE_LOCAL = /\b(do not use cloud|don't use cloud|do not use Cloud|locally|on this machine|no ovh)\b/i;
 const FORCE_CLOUD = /\b(force cloud|cloud worker|(?<!\bdo not )(?<!\bdon't )(?<!\bno )\buse cloud)\b/i;
 const FORCE_SANDBOX = /\b(in sandbox|use sandbox|isolated container)\b/i;
+const SITE = /\b(website|web\s*site|landing\s*page|one[- ]page|saas site)\b/i;
 
 export function classifyExecutionHints(prompt: string, mode?: string): ExecutionHints {
   const t = String(prompt ?? "");
@@ -34,6 +37,7 @@ export function classifyExecutionHints(prompt: string, mode?: string): Execution
     requiresRemote: (REMOTE.test(t) || FORCE_CLOUD.test(t) || m === "server" || m === "deploy") && !FORCE_LOCAL.test(t),
     isVisual: VISUAL.test(t),
     isArtifact: ARTIFACT.test(t) && !LOCAL_CODE.test(t),
-    isLocalCoding: LOCAL_CODE.test(t) || FORCE_LOCAL.test(t) || m === "code",
+    isLocalCoding: (LOCAL_CODE.test(t) || FORCE_LOCAL.test(t) || m === "code") && !SITE.test(t),
+    isSite: SITE.test(t) && !FORCE_LOCAL.test(t),
   };
 }

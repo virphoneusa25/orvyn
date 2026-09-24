@@ -564,6 +564,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     requiresRemote: req.body.executionLocation === "OVH_WORKER" || String(req.body.composerMode ?? "") === "server" || hints.requiresRemote,
     isArtifact: hints.isArtifact,
     isLocalCoding: hints.isLocalCoding,
+    isSite: hints.isSite,
     cloudControlPlane: cloudHost,
   });
 
@@ -573,6 +574,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   // Auto must not demand the desktop Local Worker or an OVH sandbox for a logo.
   const controlPlaneVirtual =
     requestedTarget === "auto" &&
+    !hints.isSite &&
     (virtualWorkspace || (cloudHost && (hints.isArtifact || !hasLocalProject) && !hints.isLocalCoding));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {

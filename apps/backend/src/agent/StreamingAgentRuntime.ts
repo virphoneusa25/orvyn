@@ -160,6 +160,7 @@ interface RunState {
   previewSpoken?: boolean;
   spokenEvidence?: RunEvidence;
   phase: RunPhase;
+  repositoryDetected: boolean;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -624,6 +625,7 @@ export class StreamingAgentRuntime {
       composerMode: options?.composerMode,
       actionNudges: 0,
       phase: "preflight",
+      repositoryDetected: workspace.repositoryDetected,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1502,6 +1504,13 @@ export class StreamingAgentRuntime {
         continue;
       }
 
+      if (/^git_/.test(call.name) && !state.repositoryDetected) {
+        const message = "Git tools are unavailable because preflight did not find a repository.";
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message });
+        replies.set(call.id, message);
+        continue;
+      }
+
       const spec = this.tools.list().find((t) => t.name === call.name);
       const validated = validateToolArguments(call.name, call.arguments, spec?.parameters as { required?: string[] } | undefined);
       if (!validated.ok) {
@@ -1817,7 +1826,22 @@ export class StreamingAgentRuntime {
     if (!state || !canEnterPhase(state.phase, phase)) return;
     if (state.phase === phase) return;
     state.phase = phase;
+    const executionTarget =
+      state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER"
+        ? "cloud_worker"
+        : state.execution?.targetActual === "local_sandbox" || state.execution?.location === "LOCAL_SANDBOX"
+          ? "local_sandbox"
+          : state.execution?.location === "OVH_WORKER"
+            ? "cloud_worker"
+            : "local_host";
     this.store.emit(runId, "run.phase.changed", { phase });
+    this.store.emit(runId, "run.state", {
+      runId,
+      phase,
+      executionTarget,
+      repositoryDetected: state.repositoryDetected,
+      taskIntent: state.intent.category,
+    });
   }
 
   private speak(runId: string, text: string): void {

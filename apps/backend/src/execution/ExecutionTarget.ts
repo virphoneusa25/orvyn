@@ -25,6 +25,8 @@ export interface ExecutionRouteInput {
   isArtifact?: boolean;
   /** Ordinary local coding / tests. */
   isLocalCoding?: boolean;
+  /** Website or landing page that must be served, not written only on the Windows machine. */
+  isSite?: boolean;
   /** OVH control plane (desktop is a Cloud client). Artifact work stays here. */
   cloudControlPlane?: boolean;
 }
@@ -80,6 +82,13 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
   }
   if (input.isRisky) {
     return { requested, actual: "local_sandbox", reason: "Untrusted or isolation-required command" };
+  }
+  if (input.cloudControlPlane && input.isSite && !input.hasLocalProject) {
+    return {
+      requested,
+      actual: "ovh_worker",
+      reason: "No local workspace — website runs on the Cloud worker, not Windows localhost",
+    };
   }
   if (input.cloudControlPlane && (input.isArtifact || !input.hasLocalProject) && !input.isLocalCoding) {
     return {

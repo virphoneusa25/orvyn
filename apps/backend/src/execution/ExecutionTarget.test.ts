@@ -47,6 +47,19 @@ test("Auto + background mission → ovh_worker", () => {
   assert.equal(d.actual, "ovh_worker");
 });
 
+test("Auto website with no local project on Cloud uses the worker", () => {
+  const hints = classifyExecutionHints("Build a simple one page website for VirPhone");
+  assert.equal(hints.isSite, true);
+  assert.equal(hints.isLocalCoding, false);
+  const d = routeExecutionTarget({
+    requested: "auto",
+    hasLocalProject: false,
+    cloudControlPlane: true,
+    ...hints,
+  });
+  assert.equal(d.actual, "ovh_worker");
+});
+
 test("Auto without a local project stays Local (virtual workspace / artifacts)", () => {
   const d = routeExecutionTarget({ requested: "auto", mode: "code", hasLocalProject: false });
   assert.equal(d.actual, "local_host");
