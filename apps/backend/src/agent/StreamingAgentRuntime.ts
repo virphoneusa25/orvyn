@@ -323,6 +323,7 @@ export class StreamingAgentRuntime {
   private openAgentPreview(runId: string, filePath: unknown, content?: unknown): void {
     const rel = String(filePath ?? "").replace(/\\/g, "/");
     if (!/\.(html|css|js|php)$/i.test(rel)) return;
+    const name = rel.split("/").pop() || rel;
     if (typeof content === "string") {
       rememberSiteFile(runId, rel, content);
       void this.artifacts?.persistArtifact({ name, content, kind: "file" }).then((rec) => {
@@ -346,7 +347,6 @@ export class StreamingAgentRuntime {
       }).catch(() => {});
     }
     const lines = typeof content === "string" ? content.split("\n").length : 0;
-    const name = rel.split("/").pop() || rel;
     this.store.emit(runId, "files.ready", {
       name,
       path: rel,
