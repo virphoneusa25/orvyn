@@ -1,6 +1,8 @@
 export interface DirEntry {
   name: string;
   isDirectory: boolean;
+  /** Bytes, for files (desktop builds from 2026-09 on). */
+  size?: number;
 }
 
 export interface WorkspaceState {
@@ -42,6 +44,11 @@ export interface OrvynBridge {
     readFile(relativePath: string): Promise<string>;
     writeFile(relativePath: string, content: string): Promise<boolean>;
     readBinary(relativePath: string): Promise<ChatAttachment | null>;
+    showInFolder?(relativePath: string): Promise<boolean>;
+  };
+  files?: {
+    saveAs(payload: { defaultName: string; base64: string }): Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>;
+    showSaved(savedPath: string): Promise<boolean>;
   };
   attachments: {
     pick(): Promise<ChatAttachment[]>;

@@ -1,0 +1,91 @@
+/* Workbench Files tab (components/workspace/FilesInspector.tsx).
+   One accent per location so a file can never look local when it isn't:
+   teal = your computer, indigo = ORVYN Cloud, amber = sandbox. */
+.ofp {
+  --ofp-acc: #5FD4D0; --ofp-acc-bg: rgba(95, 212, 208, 0.08); --ofp-acc-line: rgba(95, 212, 208, 0.34);
+  flex: 1; min-height: 0; min-width: 0; width: 100%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--orvyn-surface-1); color: var(--orvyn-text); font-size: 13px;
+}
+.ofp--cloud { --ofp-acc: #98A4FF; --ofp-acc-bg: rgba(152, 164, 255, 0.08); --ofp-acc-line: rgba(152, 164, 255, 0.38); }
+.ofp--sandbox { --ofp-acc: #F5B942; --ofp-acc-bg: rgba(245, 185, 66, 0.08); --ofp-acc-line: rgba(245, 185, 66, 0.36); }
+.ofp-scroll { flex: 1 1 55%; min-height: 140px; overflow-y: auto; padding-bottom: 10px; }
+
+.ofp-where {
+  margin: 12px 12px 6px; padding: 11px 12px; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 11px; align-items: center;
+  border: 1px solid var(--ofp-acc-line); background: var(--ofp-acc-bg); border-radius: 12px;
+}
+.ofp-where__icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: var(--ofp-acc); border: 1px solid var(--ofp-acc-line); background: rgba(0, 0, 0, 0.22); }
+.ofp-where__text { display: grid; min-width: 0; gap: 1px; }
+.ofp-where__text b { font-size: 13.5px; font-weight: 600; }
+.ofp-where__path { font-family: var(--font-mono); font-size: 11px; color: var(--orvyn-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ofp-where__state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; white-space: nowrap; color: var(--ofp-acc); }
+.ofp-where__state i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ofp-tone-warn { color: var(--orvyn-yellow); }
+.ofp-tone-off { color: var(--orvyn-red); }
+.ofp-note { margin: 0 14px 10px; font-size: 11.5px; line-height: 1.45; color: var(--orvyn-text-secondary); }
+
+.ofp-search {
+  margin: 0 12px 4px; height: 32px; padding: 0 10px; display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--orvyn-border-soft); border-radius: 8px; background: var(--orvyn-bg); color: var(--orvyn-text-muted);
+}
+.ofp-search:focus-within { border-color: var(--ofp-acc-line); }
+.ofp-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--orvyn-text); font-size: 12px; }
+
+.ofp-sec { display: flex; justify-content: space-between; gap: 8px; padding: 12px 16px 4px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--orvyn-text-muted); }
+.ofp-sec span:last-child { letter-spacing: 0; text-transform: none; font-size: 11px; }
+.ofp-empty { margin: 4px 16px 6px; font-size: 11.5px; color: var(--orvyn-text-muted); }
+
+.ofp-row {
+  width: calc(100% - 12px); margin: 0 6px; display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 3px 8px;
+  background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--orvyn-text-secondary); text-align: left; cursor: pointer; font-size: 12.5px;
+}
+.ofp-row:hover:not(:disabled) { background: var(--orvyn-surface-3); color: var(--orvyn-text); }
+.ofp-row[aria-current="true"] { background: var(--bg-active, #151E31); border-color: var(--orvyn-border); color: var(--orvyn-text); }
+.ofp-row:focus-visible, .ofp-btn:focus-visible, .ofp-tile:focus-visible, .ofp-link:focus-visible { outline: 2px solid var(--ofp-acc); outline-offset: 1px; }
+.ofp-row:disabled { opacity: 0.55; cursor: default; }
+.ofp-dir { color: var(--orvyn-text-muted); }
+.ofp-dir .ofp-name { color: var(--orvyn-text-secondary); }
+.ofp-caret { display: inline-flex; transition: transform 0.15s; }
+.ofp-dir[aria-expanded="true"] .ofp-caret { transform: rotate(90deg); }
+.ofp-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ofp-name small { margin-left: 7px; font-size: 11px; color: var(--orvyn-text-muted); }
+.ofp-meta { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--orvyn-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ofp-chg { padding: 0 6px; line-height: 17px; border-radius: 99px; background: rgba(32, 216, 155, 0.12); color: var(--orvyn-green); font-family: var(--font-mono); font-size: 10.5px; }
+.ofp-by { color: var(--ofp-acc); font-size: 10.5px; }
+
+.ofp-gen { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; padding: 4px 12px; }
+.ofp-tile { display: grid; gap: 2px; padding: 0 0 7px; text-align: left; background: var(--orvyn-bg); border: 1px solid var(--orvyn-border-soft); border-radius: 9px; overflow: hidden; cursor: pointer; color: var(--orvyn-text); }
+.ofp-tile[aria-current="true"] { border-color: #98A4FF; }
+.ofp-tile__art { aspect-ratio: 4 / 3; max-width: 100%; display: grid; place-items: center; background: var(--orvyn-surface-2); overflow: hidden; }
+.ofp-tile__art img { width: 100%; height: 100%; object-fit: cover; }
+.ofp-tile__ext { font-family: var(--font-mono); font-size: 11px; color: var(--orvyn-text-muted); }
+.ofp-tile__name { padding: 4px 8px 0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ofp-tile__meta { padding: 0 8px; font-size: 10.5px; color: var(--orvyn-text-muted); }
+
+.ofp-preview { flex: 1 1 45%; min-height: 180px; display: flex; flex-direction: column; border-top: 1px solid var(--orvyn-border-soft); background: var(--orvyn-bg); overflow: hidden; }
+.ofp-preview__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 12px 14px 8px; }
+.ofp-preview__name { flex: 1 1 180px; min-width: 0; display: grid; gap: 1px; }
+.ofp-preview__name b { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ofp-preview__name span { font-family: var(--font-mono); font-size: 10.5px; color: var(--orvyn-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ofp-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ofp-btn { height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--orvyn-border); background: var(--orvyn-surface-2); color: var(--orvyn-text-secondary); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.ofp-btn:hover { color: var(--orvyn-text); border-color: var(--orvyn-text-muted); }
+.ofp-btn--primary { background: var(--accent, #6C5CFF); border-color: var(--accent, #6C5CFF); color: #fff; }
+.ofp-btn--primary:hover { background: var(--accent-hover, #7C5CFF); color: #fff; }
+.ofp-saved { margin: 0 14px 8px; font-size: 11.5px; color: var(--orvyn-green); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ofp-saved.is-error { color: var(--orvyn-red); }
+.ofp-saved code { font-family: var(--font-mono); font-size: 11px; color: var(--orvyn-text-secondary); overflow-wrap: anywhere; }
+.ofp-link { background: none; border: 0; padding: 0; color: #98A4FF; font-size: 11.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.ofp-preview__body { flex: 1; min-height: 0; margin: 0 14px; border: 1px solid var(--orvyn-border-soft); border-radius: 9px; background: #060A12; overflow: auto; display: flex; }
+.ofp-preview__empty { margin: auto; display: grid; gap: 4px; text-align: center; padding: 16px; font-size: 12px; color: var(--orvyn-text-muted); }
+.ofp-preview__empty b { color: var(--orvyn-text-secondary); font-size: 13px; font-weight: 600; }
+.ofp-muted { margin: auto; font-size: 12px; color: var(--orvyn-text-muted); }
+.ofp-code { margin: 0; padding: 10px 0; list-style: none; counter-reset: ln; font-family: var(--font-mono); font-size: 12px; line-height: 1.55; flex: 1; min-width: max-content; }
+.ofp-code li { counter-increment: ln; display: flex; gap: 12px; padding: 0 12px; white-space: pre; color: var(--orvyn-text-secondary); }
+.ofp-code li::before { content: counter(ln); flex: none; width: 24px; text-align: right; color: #4E5A70; }
+.ofp-code li.is-add { background: rgba(32, 216, 155, 0.07); box-shadow: inset 2px 0 0 var(--orvyn-green); }
+.ofp-img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
+.ofp-pdf { flex: 1; border: 0; background: #fff; }
+.ofp-foot { margin: 0; padding: 8px 14px 12px; display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--orvyn-text-muted); }
+.ofp-foot i { width: 6px; height: 6px; border-radius: 50%; background: var(--ofp-acc); flex: none; }
+@media (prefers-reduced-motion: reduce) { .ofp-caret { transition: none; } }

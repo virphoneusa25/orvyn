@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld("orvyn", {
     writeFile: (relativePath: string, content: string): Promise<boolean> =>
       ipcRenderer.invoke("project:writeFile", relativePath, content),
     readBinary: (relativePath: string) => ipcRenderer.invoke("project:readBinary", relativePath),
+    showInFolder: (relativePath: string): Promise<boolean> => ipcRenderer.invoke("project:showInFolder", relativePath),
+  },
+  files: {
+    saveAs: (payload: { defaultName: string; base64: string }) => ipcRenderer.invoke("files:saveAs", payload),
+    showSaved: (savedPath: string): Promise<boolean> => ipcRenderer.invoke("files:showSaved", savedPath),
   },
   attachments: {
     pick: () => ipcRenderer.invoke("attachments:pick"),

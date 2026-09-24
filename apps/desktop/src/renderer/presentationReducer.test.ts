@@ -136,7 +136,7 @@ test("consecutive reads roll into one inspection WorkGroup; edits and checks for
   assert.equal(edits.type, "edits");
   assert.equal(edits.title, "Updated keep.ts");
   assert.match(String(edits.summary), /^\+1 −1/);
-  assert.equal(edits.ctx, "diff");
+  assert.equal(edits.ctx, "files", "one edited file opens that file; several open Changes");
   assert.equal(checks.type, "checks");
   assert.equal(checks.summary, "67 passed");
   assert.equal(checks.ctx, "terminal");

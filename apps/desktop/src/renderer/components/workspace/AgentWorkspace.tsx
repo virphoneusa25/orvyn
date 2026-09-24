@@ -645,6 +645,7 @@ function WorkbenchBody({
         activePath={derived.activity?.file}
         onOpenFile={onOpenFile}
         onPreviewArtifact={onOpenArtifact}
+        onOpenChanges={onOpenDiff}
       />
     );
   }

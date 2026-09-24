@@ -1,5 +1,6 @@
 import "./theme.css";
 import "./styles/redesign.css";
+import "./styles/files-panel.css";
 import "./monaco-setup";
 import React from "react";
 import { Component, type ErrorInfo, type ReactNode } from "react";

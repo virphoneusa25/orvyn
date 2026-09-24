@@ -293,9 +293,41 @@ ipcMain.handle("project:listDirectory", async (_evt, relativePath: string) => {
   const target = resolveInProject(relativePath || ".");
   const entries = await fs.readdir(target, { withFileTypes: true });
   const IGNORE = new Set(["node_modules", ".git", "dist", "build"]);
-  return entries
-    .filter((e) => !IGNORE.has(e.name))
-    .map((e) => ({ name: e.name, isDirectory: e.isDirectory() }));
+  const visible = entries.filter((e) => !IGNORE.has(e.name));
+  // Size lets the Files tab show "1.9 KB" beside each file without a second call.
+  return Promise.all(visible.map(async (e) => {
+    if (e.isDirectory()) return { name: e.name, isDirectory: true };
+    const size = await fs.stat(path.join(target, e.name)).then((st) => st.size).catch(() => undefined);
+    return { name: e.name, isDirectory: false, size };
+  }));
+});
+
+// Files tab: reveal a project file in File Explorer / Finder.
+ipcMain.handle("project:showInFolder", async (_evt, relativePath: string) => {
+  const target = resolveInProject(relativePath);
+  shell.showItemInFolder(target);
+  return true;
+});
+
+// Files tab: "Download to my computer" for Cloud and generated files. The user
+// picks the destination; only paths saved here can be revealed afterwards.
+const savedDownloads = new Set<string>();
+ipcMain.handle("files:saveAs", async (_evt, payload: { defaultName?: unknown; base64?: unknown }) => {
+  if (!mainWindow) return { ok: false };
+  const name = path.basename(String(payload?.defaultName ?? "download")).replace(/[<>:"|?*\x00-\x1f]/g, "_") || "download";
+  const b64 = typeof payload?.base64 === "string" ? payload.base64 : "";
+  if (!b64) return { ok: false, error: "Nothing to save" };
+  const result = await dialog.showSaveDialog(mainWindow, { defaultPath: path.join(app.getPath("downloads"), name) });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  await fs.writeFile(result.filePath, Buffer.from(b64, "base64"));
+  savedDownloads.add(path.resolve(result.filePath));
+  return { ok: true, path: result.filePath };
+});
+ipcMain.handle("files:showSaved", async (_evt, savedPath: string) => {
+  const p = path.resolve(String(savedPath ?? ""));
+  if (!savedDownloads.has(p)) return false;
+  shell.showItemInFolder(p);
+  return true;
 });
 
 ipcMain.handle("project:listFiles", async () => {

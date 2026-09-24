@@ -177,11 +177,13 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       return { op: "create", ...fileArg("name"), ctx: "documents" };
     case "read_file":
       return { op: "read", ...fileArg(), ctx: "files" };
+    // Open on a written/edited file shows the FILE (Files tab, new lines
+    // highlighted); the diff stays one click away as "Changes".
     case "write_file":
-      return { op: "create", ...fileArg(), ctx: "diff" };
+      return { op: "create", ...fileArg(), ctx: "files" };
     case "edit_file":
     case "apply_edit":
-      return { op: "edit", ...fileArg(), ctx: "diff" };
+      return { op: "edit", ...fileArg(), ctx: "files" };
     case "delete_file":
       return { op: "delete", ...fileArg(), ctx: "files" };
     case "move_file":
@@ -861,7 +863,10 @@ function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGrou
     status,
     durationMs,
     items,
-    ctx: items[0].ctx ?? ctxByType[type],
+    // One changed file opens that file; several open the combined Changes view.
+    ctx: type === "edits"
+      ? (new Set(items.map((i) => `${i.path ?? ""}${i.fileName ?? ""}`)).size > 1 ? "diff" : "files")
+      : items[0].ctx ?? ctxByType[type],
   };
 }
 

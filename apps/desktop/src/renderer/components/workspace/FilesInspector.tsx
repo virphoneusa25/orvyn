@@ -1,11 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
+// apps/desktop/src/renderer/components/workspace/FilesInspector.tsx
+//
+// Workbench Files tab. One colour-coded card says WHERE the files live —
+// your computer (teal) or ORVYN Cloud (indigo) — and everything below follows
+// from it: ORION's changes first, then a real folder tree, generated files,
+// and a preview whose buttons match the location. Local project files are read
+// straight from this computer; nothing here lists a server copy as "Local".
+
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
 import type { WorkspaceFile } from "../../agentWorkspaceModel";
-import { searchFileTree, shouldShowBadge, type WorkbenchFileSection } from "../../workbenchFiles";
 import { composeWorkbenchFileTree, resolveProjectFetchRoot } from "../../workbenchFileProviders";
 import type { WorkbenchEnvironment } from "../../workbenchEnvironment";
-import { environmentLabel } from "../../workbenchEnvironment";
+import { isBuiltInWorkspace } from "../../orvynCommand";
 import {
   fileBasename,
   fileReadPlan,
@@ -18,8 +25,39 @@ import {
   userFacingFileError,
   type WorkbenchFileItem,
 } from "../../workbenchFileAccess";
-import { IconChevronRight, IconFile, IconFolder, IconImage, IconSearch } from "../Icons";
-import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
+import {
+  baseName,
+  buildTree,
+  changedByOrion,
+  directoryNodes,
+  filterTree,
+  formatBytes,
+  locationCopy,
+  previewFooter,
+  resolveFilesLocation,
+  toProjectRelative,
+  typeLabel,
+  type ChangedFile,
+  type FilesLocation,
+  type TreeNode,
+} from "../../filesPanelModel";
+import { IconChevronRight, IconCloud, IconFolder, IconMonitor, IconSearch } from "../Icons";
+import { FileTypeIcon } from "../FileTypeIcon";
+
+type Selection =
+  | { kind: "project"; path: string; bytes?: number }
+  | { kind: "item"; item: WorkbenchFileItem };
+
+interface PreviewState {
+  url?: string;
+  text?: string;
+  error?: string;
+  note?: string;
+  artifactId?: string;
+  bytes?: number;
+}
+
+type WorkerState = "ready" | "degraded" | "offline" | null;
 
 export function FilesInspector({
   files,
@@ -30,6 +68,7 @@ export function FilesInspector({
   environment = "local",
   onOpenFile,
   onPreviewArtifact,
+  onOpenChanges,
 }: {
   files: WorkspaceFile[];
   artifacts: WorkspaceFile[];
@@ -39,375 +78,480 @@ export function FilesInspector({
   environment?: WorkbenchEnvironment;
   onOpenFile: (path: string) => void;
   onPreviewArtifact?: (name: string, artifactId?: string) => void;
+  onOpenChanges?: (path: string) => void;
 }) {
+  const cloudBackend = isCloudBackend(getConnectionConfig().backendUrl);
+  const location: FilesLocation = resolveFilesLocation({
+    environment,
+    projectRoot,
+    cloudBackend,
+    builtInWorkspace: isBuiltInWorkspace(projectRoot),
+  });
+  const localProject = location === "local" && Boolean(projectRoot);
+
+  // --- Local Worker state (only meaningful when a cloud backend drives this computer)
+  const [workerState, setWorkerState] = useState<WorkerState>(null);
+  useEffect(() => {
+    if (location !== "local" || !cloudBackend || !window.orvyn?.localWorker) return;
+    let alive = true;
+    const read = () => window.orvyn.localWorker!.status().then((s) => alive && setWorkerState(s.state)).catch(() => alive && setWorkerState(null));
+    void read();
+    const t = window.setInterval(read, 15_000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [location, cloudBackend]);
+  const copy = locationCopy(location, { projectRoot, workerState: cloudBackend ? workerState : "ready" });
+
+  // --- ORION's changes this run
+  const changed = useMemo(() => changedByOrion(files, projectRoot), [files, projectRoot]);
+  const changedByPath = useMemo(() => new Map(changed.map((c) => [c.path, c])), [changed]);
+
+  // --- Server listing: generated files and uploads always; project files only for Cloud / Sandbox
   const [locations, setLocations] = useState<Array<{ id?: string; label?: string; files?: Record<string, unknown>[] }>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ url?: string; text?: string; error?: string; note?: string; artifactId?: string } | null>(null);
-  const [query, setQuery] = useState("");
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ project: true, generated: true, artifacts: true, uploads: true });
-
-  const extras = useMemo(
-    () =>
-      [...files, ...artifacts].map((f) => ({
-        name: f.path.split(/[\\/]/).pop() || f.path,
-        path: f.path,
-        source: f.kind === "artifact" ? "artifact" as const : "local" as const,
-        kind: f.kind,
-        artifactId: f.artifactId,
-        id: f.artifactId,
-        mimeType: f.mimeType,
-      })),
-    [files, artifacts]
-  );
-
   useEffect(() => {
     let alive = true;
-    const usableRoot = resolveProjectFetchRoot(projectRoot, isCloudBackend(getConnectionConfig().backendUrl));
+    const usableRoot = location === "local" ? null : resolveProjectFetchRoot(projectRoot, cloudBackend);
     const suffix = usableRoot ? `?projectRoot=${encodeURIComponent(usableRoot)}` : "";
     fetch(apiUrl("/files" + suffix), { headers: authHeaders() })
       .then((r) => r.json())
-      .then((d) => {
-        if (!alive) return;
-        setLocations(Array.isArray(d.locations) ? d.locations : []);
-        setLoadError(null);
-      })
-      .catch(() => {
-        if (alive) setLoadError("Could not load workspace files. Generated artifacts still appear after a run.");
-      });
-    return () => {
-      alive = false;
-    };
-  }, [projectRoot, artifacts.length, files.length]);
+      .then((d) => { if (alive) { setLocations(Array.isArray(d.locations) ? d.locations : []); setLoadError(null); } })
+      .catch(() => { if (alive) setLoadError("Could not reach ORVYN Cloud to list files."); });
+    return () => { alive = false; };
+  }, [projectRoot, location, cloudBackend, artifacts.length, files.length]);
 
-  const tree = useMemo(
-    () => composeWorkbenchFileTree({ environment, projectRoot, locations, extras }),
-    [locations, extras, environment, projectRoot]
+  const extras = useMemo(
+    () => artifacts.map((f) => ({
+      name: f.path.split(/[\\/]/).pop() || f.path, path: f.path, source: "artifact" as const, kind: f.kind,
+      artifactId: f.artifactId, id: f.artifactId, mimeType: f.mimeType,
+    })),
+    [artifacts]
   );
-  const merged: WorkbenchFileSection[] = tree.sections.filter((s) => s.id !== "recents" && s.id !== "downloads");
-  const allFiles = useMemo(() => searchFileTree({ ...tree, sections: merged }, query), [tree, merged, query]);
-  const items = useMemo(() => allFiles.map((f) => toWorkbenchFileItem(f)), [allFiles]);
+  const serverTree = useMemo(
+    () => composeWorkbenchFileTree({ environment: location === "sandbox" ? "sandbox" : location === "cloud" ? "cloud" : "local", projectRoot, locations, extras }),
+    [locations, extras, location, projectRoot]
+  );
+  const generatedItems = useMemo(
+    () => serverTree.sections
+      .filter((s) => s.id === "generated" || s.id === "artifacts" || s.id === "uploads")
+      .flatMap((s) => s.files.map((f) => toWorkbenchFileItem(f))),
+    [serverTree]
+  );
+  const cloudProjectEntries = useMemo(
+    () => location === "local" ? [] : (serverTree.sections.find((s) => s.id === "project")?.files ?? []),
+    [serverTree, location]
+  );
 
-  const selected = items.find((i) => itemKey(i) === selectedKey) ?? null;
-
+  // --- Project tree: this computer's disk for Local, the server listing otherwise
+  const [dirCache, setDirCache] = useState<Record<string, TreeNode[]>>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [localError, setLocalError] = useState<string | null>(null);
+  const loadDir = useCallback(async (dir: string) => {
+    if (!localProject || !window.orvyn?.project?.listDirectory) return;
+    try {
+      const entries = await window.orvyn.project.listDirectory(dir || ".");
+      setDirCache((c) => ({ ...c, [dir]: directoryNodes(dir, entries) }));
+      setLocalError(null);
+    } catch (err: any) {
+      if (!dir) setLocalError(userFacingFileError(err));
+    }
+  }, [localProject]);
+  useEffect(() => { setDirCache({}); setExpanded(new Set()); }, [projectRoot]);
+  // Reload the open folders whenever ORION changes something.
   useEffect(() => {
-    if (focus?.artifactId) {
-      const hit = items.find((i) => i.artifactId === focus.artifactId);
-      if (hit) setSelectedKey(itemKey(hit));
+    if (!localProject) return;
+    void loadDir("");
+    expanded.forEach((d) => void loadDir(d));
+  }, [localProject, loadDir, changed.length, files.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [query, setQuery] = useState("");
+  const cloudTree = useMemo(() => buildTree(cloudProjectEntries.map((f) => ({ path: String(f.path || f.name), bytes: f.bytes }))), [cloudProjectEntries]);
+
+  // --- Selection + preview
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [saved, setSaved] = useState<{ path?: string; error?: string } | null>(null);
+
+  const selectProject = useCallback((path: string, bytes?: number) => {
+    setSelection({ kind: "project", path, bytes });
+    setSaved(null);
+    const parts = path.split("/");
+    if (parts.length > 1 && localProject) {
+      const parents = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
+      setExpanded((e) => { const n = new Set(e); parents.forEach((p) => n.add(p)); return n; });
+      parents.forEach((p) => void loadDir(p));
+    }
+  }, [localProject, loadDir]);
+
+  // Open from the chat ("Wrote hello.txt · Open") lands on that exact file.
+  useEffect(() => {
+    if (!focus) return;
+    if (focus.artifactId) {
+      const hit = generatedItems.find((i) => i.artifactId === focus.artifactId);
+      if (hit) { setSelection({ kind: "item", item: hit }); setSaved(null); }
       return;
     }
-    if (focus) {
-      const hit = items.find((i) => matchesFile(i.name, focus) || matchesFile(i.path ?? "", focus) || matchesFile(i.reference ?? "", focus));
-      if (hit) setSelectedKey(itemKey(hit));
-    }
-  }, [focus, items]);
+    const target = focus.path || focus.fileName;
+    if (!target) return;
+    if (location === "local") return selectProject(toProjectRelative(target, projectRoot));
+    const hit = cloudProjectEntries.find((f) => matchesFile(String(f.path || f.name), focus));
+    if (hit) return selectProject(toProjectRelative(String(hit.path || hit.name)), hit.bytes);
+    const gen = generatedItems.find((i) => matchesFile(i.name, focus) || matchesFile(i.path ?? "", focus));
+    if (gen) setSelection({ kind: "item", item: gen });
+  }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // With nothing chosen yet, open on the newest file ORION changed.
+  useEffect(() => {
+    if (selection) return;
+    const first = changed.find((c) => c.status !== "deleted");
+    if (first) selectProject(first.path);
+    else if (activePath) selectProject(toProjectRelative(activePath, projectRoot));
+  }, [changed, activePath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selName = selection ? (selection.kind === "project" ? baseName(selection.path) : selection.item.name) : "";
+  const selKey = selection ? (selection.kind === "project" ? `p:${selection.path}` : `i:${selection.item.artifactId ?? selection.item.path ?? selection.item.name}`) : "";
 
   useEffect(() => {
-    if (!activePath) return;
-    const hit = items.find((i) => i.path === activePath || i.name === activePath || i.reference === activePath);
-    if (hit) setSelectedKey(itemKey(hit));
-  }, [activePath, items]);
-
-  useEffect(() => {
-    if (!selected) {
-      setPreview(null);
-      return;
-    }
-    const plan = fileReadPlan(selected);
+    if (!selection) { setPreview(null); return; }
     let alive = true;
     setPreview(null);
+    const done = (p: PreviewState) => { if (alive) setPreview(p); };
+    const kind = previewKind(selection.kind === "item" ? selection.item.mimeType : null, selName);
 
-    const showRead = (body: { dataUrl?: string; content?: string; error?: string; artifact?: { artifactId?: string } }, ok: boolean, artifactId?: string) => {
-      if (!alive) return;
-      const id = artifactId || body.artifact?.artifactId;
-      if (!ok) {
-        setPreview({ error: userFacingFileError(body.error || "Artifact unavailable"), note: previewFailureNote("read-failed"), artifactId: id });
-        return;
+    if (selection.kind === "project" && location === "local") {
+      const bridge = window.orvyn?.project;
+      if (!bridge) { done({ error: "This computer's files are only available in the ORVYN desktop app." }); return () => { alive = false; }; }
+      if (kind === "image") {
+        bridge.readBinary(selection.path)
+          .then((a) => done(a?.dataUrl ? { url: a.dataUrl } : { error: "This image is too large to preview.", note: "Use Show in folder to open it." }))
+          .catch((e) => done({ error: userFacingFileError(e) }));
+      } else if (kind === "text") {
+        bridge.readFile(selection.path)
+          .then((t) => done({ text: t.slice(0, 40_000), bytes: new Blob([t]).size }))
+          .catch((e) => done({ error: /ENOENT|no such file/i.test(String(e?.message ?? e)) ? "This file is no longer on your computer." : userFacingFileError(e) }));
+      } else {
+        done({ error: `${typeLabel(selName)} file`, note: "Use Open in editor or Show in folder to view it." });
       }
-      if (body.dataUrl) setPreview({ url: body.dataUrl, artifactId: id });
-      else if (typeof body.content === "string") setPreview({ text: body.content.slice(0, 20_000), artifactId: id });
-      else if (selected.previewUrl) setPreview({ url: apiUrl(selected.previewUrl), artifactId: id });
-      else setPreview({ error: previewKind(selected.mimeType, selected.name) === "image" ? "Artifact unavailable" : "No preview for this file.", note: previewFailureNote("read-failed"), artifactId: id });
-    };
+      return () => { alive = false; };
+    }
 
-    const readQuery = (query: string, artifactId?: string) => {
-      fetch(apiUrl(query), { headers: authHeaders() })
+    const readQuery = (q: string, artifactId?: string) => {
+      fetch(apiUrl(q), { headers: authHeaders() })
         .then(async (r) => {
           const body = await r.json();
-          showRead(body, r.ok, artifactId);
+          const id = artifactId || body.artifact?.artifactId;
+          if (!r.ok) return done({ error: userFacingFileError(body.error || "File unavailable"), note: previewFailureNote("read-failed"), artifactId: id });
+          if (body.dataUrl) return done({ url: body.dataUrl, artifactId: id, bytes: body.bytes });
+          if (typeof body.content === "string") return done({ text: body.content.slice(0, 40_000), artifactId: id, bytes: body.bytes ?? new Blob([body.content]).size });
+          if (selection.kind === "item" && selection.item.previewUrl) return done({ url: apiUrl(selection.item.previewUrl), artifactId: id });
+          done({ error: "No preview for this file.", artifactId: id });
         })
-        .catch((err) => {
-          if (alive) setPreview({ error: userFacingFileError(err), note: previewFailureNote("read-failed"), artifactId });
-        });
+        .catch((err) => done({ error: userFacingFileError(err), note: previewFailureNote("read-failed"), artifactId }));
     };
 
-    if (plan.via === "artifact" && plan.artifactId) {
-      readQuery(`/files/read?id=${encodeURIComponent(plan.artifactId)}`, plan.artifactId);
-    } else if (plan.via === "workspace" && plan.path) {
-      const root = projectRoot ? `&projectRoot=${encodeURIComponent(projectRoot)}` : "";
-      readQuery(`/files/read?path=${encodeURIComponent(plan.path)}${root}`);
-    } else if (needsArtifactNameLookup(selected)) {
-      const name = fileBasename(selected.path || selected.name);
+    if (selection.kind === "project") {
+      const root = resolveProjectFetchRoot(projectRoot, cloudBackend);
+      readQuery(`/files/read?path=${encodeURIComponent(selection.path)}${root ? `&projectRoot=${encodeURIComponent(root)}` : ""}`);
+      return () => { alive = false; };
+    }
+
+    const item = selection.item;
+    const plan = fileReadPlan(item);
+    if (plan.via === "artifact" && plan.artifactId) readQuery(`/files/read?id=${encodeURIComponent(plan.artifactId)}`, plan.artifactId);
+    else if (needsArtifactNameLookup(item)) {
+      const name = fileBasename(item.path || item.name);
       fetch(apiUrl(`/artifacts?q=${encodeURIComponent(name)}`), { headers: authHeaders() })
         .then((r) => r.json())
         .then((body) => {
-          if (!alive) return;
           const id = matchArtifactId(Array.isArray(body.artifacts) ? body.artifacts : [], name);
-          if (!id) {
-            const refusedDisk = isFabricatedGeneratedPath(selected.path) || isFabricatedGeneratedPath(selected.name);
-            setPreview({
-              error: "Could not open this file.",
-              note: previewFailureNote(refusedDisk ? "disk-refused" : "artifact-missing"),
-            });
-            return;
-          }
-          readQuery(`/files/read?id=${encodeURIComponent(id)}`, id);
+          if (id) readQuery(`/files/read?id=${encodeURIComponent(id)}`, id);
+          else done({ error: "Could not open this file.", note: previewFailureNote(isFabricatedGeneratedPath(item.path) ? "disk-refused" : "artifact-missing") });
         })
-        .catch((err) => {
-          if (alive) setPreview({ error: userFacingFileError(err), note: previewFailureNote("read-failed") });
-        });
-    } else {
-      setPreview({
-        error: selected.kind === "workspace-file" ? "Could not open this file." : "Artifact unavailable",
-        note: previewFailureNote(isFabricatedGeneratedPath(selected.path) ? "disk-refused" : "artifact-missing"),
-      });
-    }
-    return () => {
-      alive = false;
-    };
-  }, [selectedKey, selected?.artifactId, selected?.path, selected?.name, selected?.kind, projectRoot]);
+        .catch((err) => done({ error: userFacingFileError(err), note: previewFailureNote("read-failed") }));
+    } else done({ error: "Could not open this file.", note: previewFailureNote("artifact-missing") });
+    return () => { alive = false; };
+  }, [selKey, location, projectRoot]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function downloadSelected() {
-    if (!selected) return;
-    const artifactId = selected.artifactId || preview?.artifactId;
-    const url = selected.downloadUrl || (artifactId ? `/artifacts/${artifactId}/download` : null);
-    if (!url) return;
-    const r = await fetch(apiUrl(url), { headers: authHeaders() });
-    if (!r.ok) return;
-    const blob = await r.blob();
-    const href = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = selected.name;
-    a.click();
-    URL.revokeObjectURL(href);
+  // --- Actions
+  const selectedChange: ChangedFile | null = selection?.kind === "project" ? changedByPath.get(selection.path) ?? null : null;
+  const isGenerated = selection?.kind === "item";
+  const footerLoc: FilesLocation | "generated" = isGenerated ? "generated" : location;
+
+  async function downloadToComputer() {
+    if (!selection) return;
+    setSaved(null);
+    try {
+      let base64 = "";
+      if (selection.kind === "item") {
+        const id = selection.item.artifactId || preview?.artifactId;
+        const url = selection.item.downloadUrl || (id ? `/artifacts/${id}/download` : null);
+        if (!url) throw new Error("This file has no download yet.");
+        const r = await fetch(apiUrl(url), { headers: authHeaders() });
+        if (!r.ok) throw new Error("ORVYN Cloud did not return the file.");
+        base64 = await blobToBase64(await r.blob());
+      } else if (preview?.url?.startsWith("data:")) {
+        base64 = preview.url.slice(preview.url.indexOf(",") + 1);
+      } else if (preview?.text != null) {
+        base64 = textToBase64(preview.text);
+      } else {
+        throw new Error("Wait for the preview to load, then try again.");
+      }
+      if (window.orvyn?.files?.saveAs) {
+        const res = await window.orvyn.files.saveAs({ defaultName: selName, base64 });
+        if (res.ok) setSaved({ path: res.path });
+        else if (!res.canceled) setSaved({ error: res.error || "The file was not saved." });
+      } else {
+        const a = document.createElement("a");
+        a.href = `data:application/octet-stream;base64,${base64}`;
+        a.download = selName;
+        a.click();
+        setSaved({ path: `Downloads\\${selName}` });
+      }
+    } catch (err: any) {
+      setSaved({ error: userFacingFileError(err) });
+    }
   }
 
-  function openSelected() {
-    if (!selected) return;
-    const artifactId = selected.artifactId || preview?.artifactId;
-    if (selected.kind === "workspace-file" && selected.path && !isFabricatedGeneratedPath(selected.path)) {
-      onOpenFile(selected.path);
-      return;
-    }
-    onPreviewArtifact?.(selected.name, artifactId);
+  function toggleDir(path: string) {
+    setExpanded((e) => {
+      const n = new Set(e);
+      if (n.has(path)) n.delete(path);
+      else { n.add(path); if (localProject && !dirCache[path]) void loadDir(path); }
+      return n;
+    });
   }
 
-  const projectLabel =
-    environment === "cloud" ? "Project · Cloud" : environment === "sandbox" ? "Project · Sandbox" : "Project · Local";
+  // --- Tree rendering
+  const rootNodes: TreeNode[] = location === "local"
+    ? withChildren(dirCache[""] ?? [], dirCache)
+    : cloudTree;
+  const visibleNodes = filterTree(rootNodes, query);
+  const searching = query.trim().length > 0;
+  const fileCount = countFiles(rootNodes);
 
-  const presentedAsArtifact = Boolean(selected && (selected.kind !== "workspace-file" || preview?.artifactId || isFabricatedGeneratedPath(selected.path)));
-
-  return (
-    <div data-testid="workbench-files" style={{ flex: 1, minHeight: 0, minWidth: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <aside style={{ flex: "0 1 46%", minHeight: 132, maxHeight: "46%", minWidth: 0, width: "100%", overflow: "hidden", display: "flex", flexDirection: "column", borderBottom: "1px solid var(--orvyn-border-soft)", background: "var(--orvyn-surface-1)" }}>
-        <div style={{ padding: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 8, padding: "5px 8px" }}>
-            <IconSearch size={12} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search files…"
-              style={{ flex: 1, background: "transparent", border: "none", color: "var(--orvyn-text)", fontSize: 11, outline: "none" }}
-            />
-          </div>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 6px 10px" }}>
-          {!tree.hasProject && (
-            <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "6px 8px 10px" }}>
-              {loadError || "No project workspace attached."}
-            </div>
-          )}
-          {merged.map((loc) => {
-            const open = openSections[loc.id] !== false;
-            return (
-              <div key={loc.id} style={{ marginBottom: 6 }}>
-                <button
-                  onClick={() => setOpenSections((s) => ({ ...s, [loc.id]: !open }))}
-                  style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "transparent", border: "none", color: "var(--orvyn-text-muted)", padding: "6px 6px", cursor: "pointer", fontSize: 10, letterSpacing: 0.7 }}
-                >
-                  <span style={{ transform: open ? "rotate(90deg)" : "none", display: "inline-flex" }}><IconChevronRight size={10} /></span>
-                  {loc.id === "project" ? projectLabel.toUpperCase() : loc.label.toUpperCase()}
-                  <span style={{ opacity: 0.7 }}>{loc.files.length}</span>
-                </button>
-                {open && loc.files.length === 0 && (
-                  <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "2px 10px 8px" }}>
-                    {loc.id === "project" ? "Open a folder to browse project files." : "Empty"}
-                  </div>
-                )}
-                {open &&
-                  loc.files.map((f) => {
-                    const item = toWorkbenchFileItem(f);
-                    const live = itemKey(item) === selectedKey;
-                    const image = previewKind(item.mimeType, item.name) === "image";
-                    return (
-                      <button
-                        key={`${loc.id}:${item.id}`}
-                        data-file-kind={item.kind}
-                        data-artifact-id={item.artifactId ?? ""}
-                        onClick={() => setSelectedKey(itemKey(item))}
-                        style={{
-                          width: "100%",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          background: live ? "rgba(77,163,255,0.12)" : "transparent",
-                          border: "none",
-                          borderRadius: 6,
-                          padding: "5px 8px",
-                          cursor: "pointer",
-                          color: "var(--orvyn-text)",
-                          textAlign: "left",
-                        }}
-                      >
-                        <span style={{ color: image ? "var(--orvyn-cyan)" : "var(--orvyn-text-muted)", display: "inline-flex" }}>
-                          {image ? <IconImage size={13} /> : loc.id === "project" ? <IconFolder size={13} /> : <IconFile size={13} />}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ display: "block", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
-                          {item.kind !== "workspace-file" && (
-                            <span style={{ display: "block", fontSize: 10, color: "var(--orvyn-text-muted)" }}>
-                              {(item.mimeType?.split("/")[1] || item.name.split(".").pop() || "file").toUpperCase()}
-                              {item.bytes ? ` · ${item.bytes < 1024 ? `${item.bytes} B` : `${(item.bytes / 1024).toFixed(1)} KB`}` : ""}
-                            </span>
-                          )}
-                        </span>
-                        {shouldShowBadge(loc.id, f.badge, tree.environment !== "local") && (
-                          <span style={{ fontSize: 9, color: "var(--orvyn-text-muted)" }}>{f.badge}</span>
-                        )}
-                      </button>
-                    );
-                  })}
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-      <main style={{ flex: 1, minWidth: 0, minHeight: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {!selected ? (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, gap: 8, textAlign: "center" }}>
-            <div style={emptyTitle()}>Select a file</div>
-            <div style={emptyBody()}>Workspace files, generated artifacts, and uploads preview here.</div>
-          </div>
-        ) : (
-          <ArtifactPreviewPane
-            item={selected}
-            preview={preview}
-            environmentLabel={presentedAsArtifact ? (selected.kind === "upload" ? "Uploads" : "Generated") : projectLabel}
-            onOpen={openSelected}
-            onDownload={() => void downloadSelected()}
-            onReveal={() => {
-              if (!presentedAsArtifact) return;
-              onPreviewArtifact?.(selected.name, selected.artifactId || preview?.artifactId);
-            }}
-          />
-        )}
-      </main>
-    </div>
-  );
-}
-
-function itemKey(item: WorkbenchFileItem): string {
-  return item.artifactId ? `art:${item.artifactId}` : `path:${item.path ?? item.name}`;
-}
-
-function ArtifactPreviewPane({
-  item,
-  preview,
-  environmentLabel,
-  onOpen,
-  onDownload,
-  onReveal,
-}: {
-  item: WorkbenchFileItem;
-  preview: { url?: string; text?: string; error?: string; note?: string; artifactId?: string } | null;
-  environmentLabel: string;
-  onOpen: () => void;
-  onDownload: () => void;
-  onReveal: () => void;
-}) {
-  const kind = previewKind(item.mimeType, item.name);
-  const typeLabel = (item.mimeType?.split("/")[1] || item.name.split(".").pop() || "file").toUpperCase();
-  const size = item.bytes
-    ? item.bytes < 1024
-      ? `${item.bytes} B`
-      : `${(item.bytes / 1024).toFixed(1)} KB`
-    : null;
-  const artifactBacked = item.kind !== "workspace-file" || Boolean(preview?.artifactId);
-  const canDownload = Boolean(item.artifactId || preview?.artifactId || item.downloadUrl);
-
-  return (
-    <div data-testid="workbench-file-preview" style={{ flex: 1, minHeight: 0, minWidth: 0, width: "100%", maxWidth: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "14px 18px 8px", display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-          <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
-            {environmentLabel}
-            {item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString()}` : ""}
-          </div>
-        </div>
-        {artifactBacked && item.kind !== "upload" && (
-          <span style={{ flexShrink: 0, fontSize: 10, letterSpacing: 0.6, color: "var(--orvyn-cyan)", border: "1px solid rgba(34,211,238,0.35)", borderRadius: 999, padding: "3px 8px" }}>
-            GENERATED
-          </span>
-        )}
-      </div>
-      <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto", padding: 16 }}>
-        {preview?.error ? (
-          <div style={{ textAlign: "center", maxWidth: "100%", padding: "0 8px" }}>
-            <div style={emptyTitle()}>{preview.error}</div>
-            {preview.note ? <div style={emptyBody()}>{preview.note}</div> : null}
-          </div>
-        ) : kind === "image" && preview?.url ? (
-          <img src={preview.url} alt={item.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-        ) : kind === "pdf" && preview?.url ? (
-          <iframe title={item.name} src={preview.url} style={{ flex: 1, width: "100%", height: "100%", border: "none", background: "#fff" }} />
-        ) : kind === "text" && preview?.text != null ? (
-          <pre style={{ margin: 0, width: "100%", height: "100%", overflow: "auto", padding: 12, fontFamily: "var(--font-mono)", fontSize: 12, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-            {preview.text}
-          </pre>
-        ) : preview == null ? (
-          <div style={{ color: "var(--orvyn-text-muted)", fontSize: 12 }}>Loading…</div>
-        ) : (
-          <div style={{ textAlign: "center" }}>
-            <div style={emptyTitle()}>{typeLabel}</div>
-            <div style={emptyBody()}>Download this file to inspect it.</div>
-          </div>
-        )}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "10px 16px", borderTop: "1px solid var(--orvyn-border-soft)", minWidth: 0 }}>
-        <button style={ghostBtn()} onClick={onOpen}>Open</button>
-        <button style={ghostBtn()} onClick={onDownload} disabled={!canDownload}>Download</button>
-        {artifactBacked && <button style={ghostBtn()} onClick={onReveal}>Show in Files</button>}
+  function renderNodes(nodes: TreeNode[], depth: number): React.ReactNode {
+    return nodes.map((n) => {
+      const open = searching || expanded.has(n.path);
+      const change = changedByPath.get(n.path);
+      if (n.dir) {
+        return (
+          <React.Fragment key={`d:${n.path}`}>
+            <button type="button" className="ofp-row ofp-dir" style={{ paddingLeft: 8 + depth * 16 }} aria-expanded={open} onClick={() => toggleDir(n.path)}>
+              <span className="ofp-caret"><IconChevronRight size={11} /></span>
+              <IconFolder size={14} />
+              <span className="ofp-name">{n.name}</span>
+            </button>
+            {open && renderNodes(n.children ?? [], depth + 1)}
+          </React.Fragment>
+        );
+      }
+      return (
         <button
-          style={ghostBtn()}
-          onClick={() => {
-            const ref = item.reference || item.name;
-            void navigator.clipboard?.writeText(ref);
-          }}
+          type="button"
+          key={`f:${n.path}`}
+          className="ofp-row"
+          style={{ paddingLeft: 26 + depth * 16 }}
+          aria-current={selection?.kind === "project" && selection.path === n.path}
+          onClick={() => selectProject(n.path, n.bytes)}
         >
-          Copy reference
+          <FileTypeIcon path={n.name} size={14} />
+          <span className="ofp-name">{n.name}</span>
+          <span className="ofp-meta">
+            {change && <span className="ofp-by">ORION</span>}
+            {formatBytes(n.bytes)}
+          </span>
         </button>
+      );
+    });
+  }
+
+  return (
+    <div data-testid="workbench-files" className={`ofp ofp--${location}`}>
+      <div className="ofp-scroll">
+        <div className="ofp-where" data-testid="files-location" data-location={location}>
+          <span className="ofp-where__icon">{location === "cloud" ? <IconCloud size={17} /> : <IconMonitor size={17} />}</span>
+          <span className="ofp-where__text">
+            <b>{copy.title}</b>
+            <span className="ofp-where__path" title={copy.detail}>{copy.detail}</span>
+          </span>
+          <span className={`ofp-where__state ofp-tone-${copy.tone}`}><i />{copy.state}</span>
+        </div>
+        <p className="ofp-note">{copy.note}</p>
+
+        <label className="ofp-search">
+          <IconSearch size={13} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={location === "cloud" ? "Search files in the cloud workspace" : "Search files in this project"}
+            aria-label="Search files"
+          />
+        </label>
+
+        {changed.length > 0 && !searching && (
+          <section aria-label="Changed by ORION">
+            <div className="ofp-sec"><span>Changed by ORION</span><span>this run</span></div>
+            {changed.map((c) => (
+              <button
+                type="button"
+                key={`c:${c.path}`}
+                className="ofp-row"
+                aria-current={selection?.kind === "project" && selection.path === c.path}
+                onClick={() => selectProject(c.path)}
+                disabled={c.status === "deleted"}
+              >
+                <FileTypeIcon path={c.name} size={14} />
+                <span className="ofp-name">{c.name}<small>{c.status === "new" ? "new" : c.status === "deleted" ? "deleted" : c.path.includes("/") ? c.path.slice(0, c.path.lastIndexOf("/")) : "edited"}</small></span>
+                <span className="ofp-meta">
+                  {(c.additions > 0 || c.deletions > 0) && (
+                    <span className="ofp-chg">{c.additions > 0 ? `+${c.additions}` : ""}{c.deletions > 0 ? ` −${c.deletions}` : ""}</span>
+                  )}
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
+
+        <section aria-label={location === "cloud" ? "Cloud workspace files" : "Project files"}>
+          <div className="ofp-sec"><span>{location === "cloud" ? "Cloud workspace" : "Project"}</span><span>{fileCount ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}</span></div>
+          {location === "local" && !projectRoot && <p className="ofp-empty">Open a project folder to see its files here.</p>}
+          {location === "local" && projectRoot && localError && <p className="ofp-empty">{localError}</p>}
+          {location !== "local" && loadError && <p className="ofp-empty">{loadError}</p>}
+          {visibleNodes.length === 0 && (location !== "local" || (projectRoot && !localError)) && !loadError && (
+            <p className="ofp-empty">{searching ? "No files match your search." : location === "cloud" ? "The cloud workspace is empty. Files ORION creates appear here." : "This folder is empty."}</p>
+          )}
+          {renderNodes(visibleNodes, 0)}
+        </section>
+
+        {generatedItems.length > 0 && !searching && (
+          <section aria-label="Generated files">
+            <div className="ofp-sec"><span>Generated</span><span>stored in ORVYN Cloud</span></div>
+            <div className="ofp-gen">
+              {generatedItems.map((g) => (
+                <button
+                  type="button"
+                  key={`g:${g.artifactId ?? g.path ?? g.name}`}
+                  className="ofp-tile"
+                  aria-current={selection?.kind === "item" && (selection.item.artifactId ?? selection.item.name) === (g.artifactId ?? g.name)}
+                  onClick={() => { setSelection({ kind: "item", item: g }); setSaved(null); }}
+                >
+                  <span className="ofp-tile__art">
+                    {previewKind(g.mimeType, g.name) === "image" && g.previewUrl
+                      ? <img src={apiUrl(g.previewUrl)} alt="" loading="lazy" />
+                      : <span className="ofp-tile__ext">{typeLabel(g.name, g.mimeType)}</span>}
+                  </span>
+                  <span className="ofp-tile__name" title={g.name}>{g.name}</span>
+                  <span className="ofp-tile__meta">{formatBytes(g.bytes) || typeLabel(g.name, g.mimeType)}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
-      <div style={{ padding: "8px 16px 14px", fontSize: 11, color: "var(--orvyn-text-muted)", display: "grid", gridTemplateColumns: "88px minmax(0, 1fr)", gap: "4px 10px", minWidth: 0 }}>
-        <span>Reference</span>
-        <code style={{ overflowWrap: "anywhere" }}>{preview?.artifactId ? `artifact:${preview.artifactId}` : item.reference || item.name}</code>
-        <span>Type</span>
-        <span style={{ overflowWrap: "anywhere" }}>{item.mimeType || typeLabel}</span>
-        {size && <><span>Size</span><span>{size}</span></>}
-        <span>Source</span>
-        <span>{artifactBacked ? "ArtifactService" : environmentLabel}</span>
-      </div>
+
+      <section className="ofp-preview" aria-label="Preview" data-testid="workbench-file-preview">
+        {!selection ? (
+          <div className="ofp-preview__empty">
+            <b>Select a file</b>
+            <span>{location === "cloud" ? "Files in ORVYN Cloud preview here, with Download to my computer." : "Files on your computer preview here."}</span>
+          </div>
+        ) : (
+          <>
+            <div className="ofp-preview__head">
+              <span className="ofp-preview__name">
+                <b>{selName}</b>
+                <span title={previewPath(selection, location, projectRoot)}>{previewPath(selection, location, projectRoot)}</span>
+              </span>
+              <span className="ofp-actions">
+                {selection.kind === "project" && location === "local" && (
+                  <>
+                    <button type="button" className="ofp-btn ofp-btn--primary" onClick={() => onOpenFile(selection.path)}>Open in editor</button>
+                    {window.orvyn?.project?.showInFolder && (
+                      <button type="button" className="ofp-btn" onClick={() => void window.orvyn.project.showInFolder!(selection.path)}>Show in folder</button>
+                    )}
+                  </>
+                )}
+                {(location !== "local" || isGenerated) && (
+                  <button type="button" className="ofp-btn ofp-btn--primary" onClick={() => void downloadToComputer()}>Download to my computer</button>
+                )}
+                {isGenerated && onPreviewArtifact && (
+                  <button type="button" className="ofp-btn" onClick={() => onPreviewArtifact(selection.item.name, selection.item.artifactId || preview?.artifactId)}>Open</button>
+                )}
+                {selectedChange && onOpenChanges && (
+                  <button type="button" className="ofp-btn" onClick={() => onOpenChanges(selectedChange.path)}>Changes</button>
+                )}
+              </span>
+            </div>
+            {saved && (
+              <p className={`ofp-saved${saved.error ? " is-error" : ""}`}>
+                {saved.error ? saved.error : <>Saved to <code>{saved.path}</code>{window.orvyn?.files?.showSaved && saved.path && (
+                  <button type="button" className="ofp-link" onClick={() => void window.orvyn.files!.showSaved(saved.path!)}>Show in folder</button>
+                )}</>}
+              </p>
+            )}
+            <div className="ofp-preview__body">
+              {preview == null ? (
+                <span className="ofp-muted">Loading…</span>
+              ) : preview.error ? (
+                <div className="ofp-preview__empty"><b>{preview.error}</b>{preview.note && <span>{preview.note}</span>}</div>
+              ) : preview.url && previewKind(selection.kind === "item" ? selection.item.mimeType : null, selName) === "pdf" ? (
+                <iframe title={selName} src={preview.url} className="ofp-pdf" />
+              ) : preview.url ? (
+                <img src={preview.url} alt={selName} className="ofp-img" />
+              ) : (
+                <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
+              )}
+            </div>
+            <p className="ofp-foot"><i />{previewFooter(footerLoc, {
+              type: typeLabel(selName, selection.kind === "item" ? selection.item.mimeType : null),
+              bytes: preview?.bytes ?? (selection.kind === "project" ? selection.bytes : selection.item.bytes),
+              changed: selectedChange,
+            })}</p>
+          </>
+        )}
+      </section>
     </div>
   );
+}
+
+function CodePreview({ text, highlight }: { text: string; highlight: boolean }) {
+  const lines = text.split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return (
+    <ol className="ofp-code">
+      {lines.map((l, i) => <li key={i} className={highlight ? "is-add" : undefined}>{l || " "}</li>)}
+    </ol>
+  );
+}
+
+function previewPath(sel: Selection, loc: FilesLocation, projectRoot: string | null): string {
+  if (sel.kind === "item") return sel.item.reference || sel.item.path || sel.item.name;
+  if (loc === "local" && projectRoot) {
+    const sep = projectRoot.includes("\\") ? "\\" : "/";
+    return `${projectRoot.replace(/[\\/]+$/, "")}${sep}${sel.path.replace(/\//g, sep)}`;
+  }
+  return `cloud://${sel.path}`;
+}
+
+function withChildren(nodes: TreeNode[], cache: Record<string, TreeNode[]>): TreeNode[] {
+  return nodes.map((n) => (n.dir ? { ...n, children: cache[n.path] ? withChildren(cache[n.path], cache) : [] } : n));
+}
+
+function countFiles(nodes: TreeNode[]): number {
+  return nodes.reduce((sum, n) => sum + (n.dir ? countFiles(n.children ?? []) : 1), 0);
+}
+
+function textToBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).slice(String(r.result).indexOf(",") + 1));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
 }
