@@ -44,6 +44,8 @@ type Listener = () => void;
 let sessions: ChatSession[] = [];
 let activeId: string | null = null;
 let streaming = false;
+/** The chat that owns the in-flight reply. Switching chats must not steal or block it. */
+let streamingChatId: string | null = null;
 let loaded = false;
 const listeners = new Set<Listener>();
 
@@ -71,29 +73,42 @@ function toWireContent(content: string): string {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+function snapshot(): { sessions: ChatSession[] } {
+  return {
+    sessions: sessions.map((s) => ({
+      ...s,
+      messages: s.messages.map((m) => ({ ...m, content: m.content.replace(DATA_URL_RE, "[image — see .orvyn/generated]") })),
+    })),
+  };
+}
+
 function persist(): void {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const slim = sessions.map((s) => ({
-      ...s,
-      messages: s.messages.map((m) => ({ ...m, content: m.content.replace(DATA_URL_RE, "[image — see .orvyn/generated]") })),
-    }));
-    void window.orvyn?.chats?.save({ sessions: slim }).catch(() => {});
+    saveTimer = null;
+    void window.orvyn?.chats?.save(snapshot()).catch(() => {});
   }, 400);
 }
 
-/** Load persisted history once at app start. Safe to call repeatedly. */
+/** Load persisted history once at app start. A chat started before load returns is kept. */
 export async function initChatHistory(): Promise<void> {
   if (loaded) return;
   loaded = true;
   try {
     const data = await window.orvyn?.chats?.load();
     const restored = Array.isArray(data?.sessions) ? (data.sessions as ChatSession[]) : [];
-    sessions = restored.filter((s) => s && Array.isArray(s.messages));
+    const disk = restored.filter((s) => s && Array.isArray(s.messages));
+    const byId = new Map(disk.map((s) => [s.id, s]));
+    for (const live of sessions) {
+      const prev = byId.get(live.id);
+      if (!prev || live.updatedAt >= prev.updatedAt) byId.set(live.id, live);
+    }
+    sessions = [...byId.values()];
   } catch {
-    sessions = [];
+    /* keep whatever is already in memory */
   }
   emit();
+  persist();
 }
 
 // ---- session API -----------------------------------------------------------
@@ -160,7 +175,6 @@ export function getActiveChat(): ChatSession | null {
 }
 
 export function openChatSession(id: string): void {
-  if (streaming) return;
   if (sessions.some((s) => s.id === id)) {
     activeId = id;
     emit();
@@ -285,23 +299,27 @@ export function startUserTurn(
   session.updatedAt = Date.now();
   session.status = "active";
   streaming = true;
+  streamingChatId = session.id;
   emit();
   persist(); // crash-safe: the user's message is on disk before the model call
   return history;
 }
 
 export function appendAssistantDelta(delta: string): void {
-  const session = active();
+  const session = sessions.find((s) => s.id === streamingChatId) ?? active();
   if (!delta || !session || session.messages.length === 0) return;
   const last = session.messages[session.messages.length - 1];
   if (last.role !== "assistant") return;
   last.content += delta;
+  session.updatedAt = Date.now();
   emit();
+  persist();
 }
 
 export function finishAssistantTurn(): void {
   streaming = false;
-  const session = active();
+  const session = sessions.find((s) => s.id === streamingChatId) ?? active();
+  streamingChatId = null;
   if (session) session.updatedAt = Date.now();
   persist();
   emit();
@@ -309,7 +327,7 @@ export function finishAssistantTurn(): void {
 
 export function newChat(): void {
   activeId = null;
-  streaming = false;
+  if (!streamingChatId) streaming = false;
   persist();
   emit();
 }

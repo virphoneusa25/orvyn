@@ -531,7 +531,9 @@ ipcMain.handle("chats:load", async () => {
 });
 
 ipcMain.handle("chats:save", async (_evt, data: unknown) => {
-  await fs.writeFile(CHATS_PATH, JSON.stringify(data), "utf-8");
+  const tmp = `${CHATS_PATH}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data), "utf-8");
+  await fs.rename(tmp, CHATS_PATH);
   return true;
 });
 
