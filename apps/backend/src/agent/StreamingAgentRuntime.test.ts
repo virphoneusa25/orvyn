@@ -13,6 +13,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { AIChunk, AIRequest, AIResponse, ModelConfig } from "@orvyn/ai-core";
 import { ToolRegistry } from "../ai/ToolTypes";
 import { ToolGateway } from "../gateway/ToolGateway";
@@ -293,7 +296,7 @@ test("stops with a clear error when the run's model-request budget is spent", as
       [{ delta: "done", done: true }],
     ]);
 
-    const runId = h.runtime.start("/tmp/project", "budget test");
+    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
     assert.equal(await waitForStatus(h.store, runId), "error");
 
     const run = h.store.get(runId)!;
@@ -317,7 +320,7 @@ test("stops with a clear error when the run's tool-call budget is spent", async 
       [{ delta: "done", done: true }],
     ]);
 
-    const runId = h.runtime.start("/tmp/project", "tool budget test");
+    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "tool budget test");
     assert.equal(await waitForStatus(h.store, runId), "error");
 
     const run = h.store.get(runId)!;
@@ -360,7 +363,7 @@ test("failed writes never emit a successful file change", async () => {
     name: "edit_file", description: "test edit", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
     async execute() { return { ok: false, error: "Read-only file" }; },
   });
-  const id = h.runtime.start("/tmp/project", "edit a file");
+  const id = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "edit a file");
   h.gateway.setPermission("edit_file", "allowed");
   await waitForStatus(h.store, id);
   const events = h.store.get(id)!.events;
@@ -452,7 +455,7 @@ test("action tasks with no tool call get one nudge", async () => {
     [{ delta: "I would edit the file like this.", done: true }],
     [{ delta: "Described the limit after the nudge.", done: true }],
   ]);
-  const runId = h.runtime.start("/tmp/project", "Fix the login bug");
+  const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "Fix the login bug");
   assert.equal(await waitForStatus(h.store, runId), "completed");
   assert.equal(h.provider.requests.length, 2);
   const nudge = h.provider.requests[1].messages.find(
