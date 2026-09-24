@@ -81,7 +81,7 @@ test("assistant deltas accumulate into one message; a preceding thought persists
   assert.equal(items.length, 2);
   const thought = items[0] as { kind: string; label: string; thought?: { endTs?: number } };
   assert.equal(thought.kind, "status");
-  assert.equal(thought.label, "Thought");
+  assert.equal(thought.label, "Working");
   assert.ok(thought.thought?.endTs, "thought duration closed by the following activity");
   const msg = items[1] as { kind: string; content: string };
   assert.equal(msg.kind, "assistant");
@@ -286,14 +286,14 @@ test("search + read collapse into Explore · N searches, N files", () => {
   assert.match(String(wg.summary), /^1 search, 1 file/);
 });
 
-test("agent.phase becomes a safe Thought row, never private reasoning", () => {
+test("agent.phase shows the phase note, never private reasoning", () => {
   reset();
   const items = reducePresentation(
     [ev("agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" })],
     "running"
   );
   const thought = items.find((i) => i.kind === "status") as { label: string; thought?: { summary?: string } };
-  assert.equal(thought.label, "Thought");
+  assert.equal(thought.label, "Gathering relevant context");
   assert.equal(thought.thought?.summary, "Gathering relevant context");
   assert.ok(!JSON.stringify(items).includes("reasoningContent"));
 });
