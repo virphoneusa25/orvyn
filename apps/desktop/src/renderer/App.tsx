@@ -157,6 +157,8 @@ export function App() {
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const autoOpenedRoot = useRef<string | null>(null);
+  const [codeChatOpen, setCodeChatOpen] = useState(true);
+  const [openError, setOpenError] = useState<string | null>(null);
   const indexedRoot = useRef<string | null>(null);
 
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
@@ -185,8 +187,14 @@ export function App() {
   // the last tab they were viewing was Desktop (they came back for it).
   const lastTabWasDesktop = chrome.layout.activeTabId === "desktop";
   const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents || lastTabWasDesktop;
-  const showRightChrome =
-    workbenchAllowedForView(view) && effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
+  // Code view: the right side is the same ORION chat as the main screen
+  // (not the Workbench launcher), so the user can read code and talk to
+  // ORION side by side, like Cursor. Open by default; the title-bar toggle
+  // hides and shows it.
+  const chatInCode = view === "editor";
+  const showRightChrome = chatInCode
+    ? codeChatOpen && fitsDockedWorkbench(viewportWidth)
+    : workbenchAllowedForView(view) && effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
   const runView = {
@@ -394,7 +402,11 @@ export function App() {
       try {
         const entries = await window.orvyn.project.listDirectory(".");
         if (cancelled) return;
-        const readme = entries.find((e) => !e.isDirectory && /^readme(\.md)?$/i.test(e.name));
+        // README first; otherwise the first file, so the Code view never
+        // opens on an empty pane when the folder has files.
+        const readme =
+          entries.find((e) => !e.isDirectory && /^readme(\.md)?$/i.test(e.name)) ??
+          entries.find((e) => !e.isDirectory && !e.name.startsWith("."));
         if (!readme) return;
         const content = await window.orvyn.project.readFile(readme.name);
         if (cancelled) return;
@@ -410,6 +422,7 @@ export function App() {
   }, [workspace?.root]);
 
   function upsertTab(path: string, content: string, dirty = false) {
+    setOpenError(null);
     setTabs((prev) => {
       const existing = prev.find((t) => t.path === path);
       if (existing) {
@@ -467,8 +480,13 @@ export function App() {
       setView("editor");
       return;
     }
-    const content = await window.orvyn.project.readFile(relativePath);
-    upsertTab(relativePath, content);
+    try {
+      const content = await window.orvyn.project.readFile(relativePath);
+      upsertTab(relativePath, content);
+    } catch {
+      setOpenError(`${relativePath} could not be opened from this folder. It may have been moved or deleted, or it only exists in ORVYN Cloud (see the Files tab).`);
+      setView("editor");
+    }
   }
 
   function handleCloseTab(path: string) {
@@ -593,7 +611,8 @@ export function App() {
         workspaceName={projectName}
         rightPanelOpen={showRightChrome}
         onToggleRightPanel={() => {
-          if (workbenchAllowedForView(view)) chrome.toggleRightPanel();
+          if (view === "editor") setCodeChatOpen((v) => !v);
+          else if (workbenchAllowedForView(view)) chrome.toggleRightPanel();
         }}
         terminalOpen={chrome.layout.bottomTerminalOpen}
         onToggleTerminal={() => chrome.toggleBottomTerminal()}
@@ -666,6 +685,7 @@ export function App() {
                   onOpenRecent={handleOpenRecent}
                   onCloseFolder={handleCloseFolder}
                   onBackToChat={() => { setCenterMode("work"); setView("newtask"); }}
+                  activePath={activePath}
                 />
               </div>
             </ResizablePanel>
@@ -726,7 +746,7 @@ export function App() {
                   }
                 />
               ) : (
-                <EmptyEditor onOpenFile={handleOpenFileDialog} />
+                <EmptyEditor onOpenFile={handleOpenFileDialog} error={openError} hasFolder={workspace?.kind === "folder"} />
               )}
               {inlineEdit.state && openFile && (
                 <InlineEdit
@@ -935,7 +955,12 @@ export function App() {
             zIndex: overlayAgentPanel ? 24 : undefined,
           }}
         >
-          {showRightChrome && (
+          {showRightChrome && chatInCode && (
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", borderLeft: "1px solid var(--border, #1A2233)" }}>
+              <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} />
+            </div>
+          )}
+          {showRightChrome && !chatInCode && (
             <AgentWorkspace
               events={agentRun.events}
               runStatus={agentRun.status}
@@ -979,7 +1004,7 @@ export function App() {
   );
 }
 
-function EmptyEditor({ onOpenFile }: { onOpenFile: () => void }) {
+function EmptyEditor({ onOpenFile, error, hasFolder }: { onOpenFile: () => void; error?: string | null; hasFolder?: boolean }) {
   return (
     <div
       style={{
@@ -993,9 +1018,12 @@ function EmptyEditor({ onOpenFile }: { onOpenFile: () => void }) {
         padding: 24,
       }}
     >
-      <div style={{ fontSize: 14, color: "var(--text-secondary)" }}>No file open</div>
-      <div style={{ fontSize: 12, maxWidth: 340, textAlign: "center", lineHeight: 1.55 }}>
-        The center pane is the file viewer. Pick a file in the explorer, or open one from File → Open File. Chat stays on the right. Select code and press Ctrl+K to rewrite it.
+      <div style={{ fontSize: 14, color: "var(--text-secondary)" }}>{error ? "This file could not be opened" : "No file open"}</div>
+      <div style={{ fontSize: 12, maxWidth: 360, textAlign: "center", lineHeight: 1.55 }}>
+        {error ??
+          (hasFolder
+            ? "Pick a file on the left to read it here. Your chat with ORION is on the right."
+            : "Open a folder on the left to see its files here. Your chat with ORION is on the right.")}
       </div>
       <button onClick={onOpenFile} style={headerBtn()}>
         Open File
