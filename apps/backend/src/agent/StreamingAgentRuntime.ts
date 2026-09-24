@@ -47,6 +47,7 @@ import { resolveResources, resourcesFromProject, type RegisteredResource } from 
 import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
+import { announcesPendingWork, CONTINUATION_PROMPT, MAX_CONTINUATION_NUDGES } from "./continuation";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
@@ -165,6 +166,8 @@ interface RunState {
   repositoryDetected: boolean;
   resumeMessages?: AIMessage[];
   resumeMode?: AgentMode;
+  /** Times the run was sent back after a reply announced work without doing it. */
+  continuationNudges: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -636,6 +639,7 @@ export class StreamingAgentRuntime {
       actionNudges: 0,
       phase: "preflight",
       repositoryDetected: workspace.repositoryDetected,
+      continuationNudges: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1481,6 +1485,27 @@ export class StreamingAgentRuntime {
             messages[0] = { ...messages[0], content: `${messages[0].content}\n${grounded}` };
           }
           consecutiveFailures = outcome === "all_failed" ? consecutiveFailures + 1 : 0;
+          continue;
+        }
+
+        // No tool call. A reply that only ANNOUNCES the next step ("Next I'll
+        // read it back…") is not a final answer — send the same agent back to
+        // work instead of completing after one tool (Phase 1 core loop).
+        if (
+          state.toolsEnabled &&
+          state.toolCalls > 0 &&
+          state.continuationNudges < MAX_CONTINUATION_NUDGES &&
+          (mode === "agent" || mode === "multitask") &&
+          announcesPendingWork(content)
+        ) {
+          state.continuationNudges += 1;
+          this.emitNarration(runId, content, streamedText);
+          messages.push({ role: "assistant", content: content || "" });
+          messages.push({ role: "user", content: CONTINUATION_PROMPT });
+          this.store.emit(runId, "agent.continue", {
+            reason: "Reply announced a next step without doing it",
+            attempt: state.continuationNudges,
+          });
           continue;
         }
 
