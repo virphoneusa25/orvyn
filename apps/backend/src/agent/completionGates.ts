@@ -100,7 +100,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
   // Keyword checks read the request's words, not its file names: "Create
   // local-test.txt" does not ask for a test run.
   const prose = input.instruction.replace(/[\w./\\-]+\.[A-Za-z0-9]{1,8}\b/g, " ");
-  if (!failedGate && hints.isLocalCoding && /\b(test|tests|typecheck|lint|verify)\b/i.test(prose)) {
+  if (!failedGate && hints.isLocalCoding && asksForVerification(prose)) {
     const tests = testsRan(input.events);
     if (!tests.ran || !tests.passed) {
       failedGate = "code";
@@ -184,4 +184,16 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     retryPrompt: retry,
     failMessage: `The run is not complete: ${reasons.join(" ")}`,
   };
+}
+
+/**
+ * Does the request ask for tests, a typecheck or lint? "Write tests", "run
+ * the tests", "make sure the tests pass" do; "a file with the word test in
+ * it" does not — the word alone blocked simple file requests.
+ */
+export function asksForVerification(prose: string): boolean {
+  return /\b(typecheck|type-check|lint|verify|verified)\b/i.test(prose)
+    || /\b(run|runs|running|rerun|re-run|add|adding|write|writing|with|failing|passing|unit|all|e2e|integration)\s+(the\s+)?tests?\b/i.test(prose)
+    || /\btests?\s+(pass|passes|passing|should|must|still|are|is)\b/i.test(prose)
+    || /\bnpm\s+(run\s+)?test\b/i.test(prose);
 }

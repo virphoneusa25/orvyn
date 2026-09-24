@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateCompletionGates } from "./completionGates";
+import { evaluateCompletionGates, asksForVerification } from "./completionGates";
 
 test("artifact gate blocks a logo request with no persisted file", () => {
   const r = evaluateCompletionGates({
@@ -102,4 +102,13 @@ test("a passing re-run after a failed test run completes the code gate", () => {
   assert.equal(ok.ok, true, JSON.stringify(ok));
   const stillFailing = evaluateCompletionGates({ instruction: "Fix the failing test in src/app.js", artifacts: [], events: [...events, { type: "tool.failed", data: { tool: "run_tests" } }], category: "code" } as any);
   assert.equal(stillFailing.ok, false);
+});
+
+test("the word test alone does not demand a test run", () => {
+  for (const p of ["Create a file with the word test in it", "Put test in it", "Create a test file with hello"]) {
+    assert.equal(asksForVerification(p), false, p);
+  }
+  for (const p of ["Fix the bug and run the tests", "Write tests for the parser", "make sure the tests pass", "fix the failing test", "run npm test", "typecheck the project", "add unit tests"]) {
+    assert.equal(asksForVerification(p), true, p);
+  }
 });
