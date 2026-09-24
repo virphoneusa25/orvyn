@@ -35,6 +35,13 @@ export interface GeneratedImage {
   revisedPrompt?: string;
 }
 
+function sniffImage(bytes: Buffer): { mime: string; ext: string } | null {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return { mime: "image/png", ext: ".png" };
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return { mime: "image/jpeg", ext: ".jpg" };
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return { mime: "image/webp", ext: ".webp" };
+  return null;
+}
+
 function slugName(prompt: string, index: number): string {
   const slug = prompt
     .toLowerCase()
@@ -99,12 +106,38 @@ export class ImageService {
       })),
     });
     if (req.editing && !imageChoice.registryId) throw new Error(imageChoice.reason);
-    const provider = imageChoice.registryId
-      ? this.modelService.registry.get(imageChoice.registryId)
-      : req.modelId
-        ? this.modelService.registry.get(req.modelId)
-        : this.modelService.router.resolve("image");
-    if (!provider) throw new Error(imageChoice.reason || `Unknown image model "${req.modelId ?? ""}"`);
+    const ordered = [
+      imageChoice.registryId,
+      ...imageModels.map((p) => p.config.id),
+    ].filter((id, index, all): id is string => Boolean(id) && all.indexOf(id) === index);
+    const attempts = ordered.length ? ordered : [""];
+    const failures: string[] = [];
+    for (const id of attempts) {
+      const provider = id
+        ? this.modelService.registry.get(id)
+        : req.modelId
+          ? this.modelService.registry.get(req.modelId)
+          : this.modelService.router.resolve("image");
+      if (!provider) {
+        failures.push(imageChoice.reason || `Unknown image model "${id || req.modelId || ""}"`);
+        continue;
+      }
+      try {
+        return await this.persistFromProvider(provider, req);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const unavailable = /HTTP 404|not deployed|not found|does not support image/i.test(message);
+        if (!unavailable || attempts.length === 1) throw err;
+        failures.push(`${provider.config.id}: ${message}`);
+      }
+    }
+    throw new Error(failures.join(" ") || "No image model could produce bytes.");
+  }
+
+  private async persistFromProvider(
+    provider: { config: { id: string; endpoint: string; apiKey?: string; apiModelId?: string; capabilities: { image?: boolean } }; generateImage?: (request: { prompt: string; size?: string; n?: number; quality?: string; inputImage?: string }) => Promise<{ b64?: string; url?: string; revisedPrompt?: string }[]> },
+    req: GenerateImageRequest
+  ): Promise<{ model: string; images: GeneratedImage[] }> {
     const fireworks = provider.config.id.startsWith("fw:") && provider.config.capabilities.image && provider.config.apiKey && provider.config.apiModelId;
     let providerRequestId: string | undefined;
     let raw: { b64?: string; url?: string; revisedPrompt?: string }[];
@@ -136,15 +169,18 @@ export class ImageService {
     const images: GeneratedImage[] = [];
     for (const item of raw) {
       const bytes = await bytesFromProviderItem(item);
-      const filename = req.filename
-        ? sanitizeArtifactName(req.filename.endsWith(".png") ? req.filename : `${req.filename}.png`)
+      const sniffed = sniffImage(bytes);
+      const requested = req.filename
+        ? sanitizeArtifactName(req.filename)
         : slugName(req.prompt, images.length + 1);
-      validateBytes(filename, "image/png", bytes);
+      const filename = sniffed ? requested.replace(/\.[a-z0-9]+$/i, "") + sniffed.ext : requested;
+      const mimeType = sniffed?.mime ?? "image/png";
+      validateBytes(filename, mimeType, bytes);
       const rec = await this.artifacts.persistArtifact({
         name: filename,
         kind: "generated",
         bytes,
-        mimeType: "image/png",
+        mimeType,
         projectRoot: req.projectRoot ?? null,
         runId: req.runId ?? null,
         chatId: req.chatId ?? null,

@@ -56,6 +56,31 @@ test("generate_image persists PNG bytes, read-back matches, tool ok only with ar
   }
 });
 
+test("a Fireworks 404 falls through to the next image model", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-img-"));
+  const store = new LocalStore("tenant-a", dir);
+  const artifacts = new ArtifactService("tenant-a", store, dir);
+  const png = MINIMAL_PNG.toString("base64");
+  const broken = {
+    config: { id: "fw:accounts/fireworks/models/flux-kontext-pro", capabilities: { image: true, imageEditing: true } },
+    generateImage: async () => { throw new Error("Fireworks image submit HTTP 404."); },
+  };
+  const backup = { config: { id: "ci:gpt-image-2", capabilities: { image: true, imageEditing: false } }, generateImage: async () => [{ b64: png }] };
+  const images = new ImageService({
+    registry: { list: () => [broken, backup], get: (id: string) => (id.startsWith("fw:") ? broken : backup) },
+    router: { resolve: () => broken },
+  } as any, artifacts);
+  try {
+    const out = await images.generate({ prompt: "ORVYN logo", filename: "orvyn-ai-logo.png" });
+    assert.equal(out.model, "ci:gpt-image-2");
+    assert.equal(out.images[0].filename.endsWith(".png"), true);
+    assert.ok(out.images[0].artifactId);
+  } finally {
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("description-only provider output cannot succeed", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-img-"));
   const store = new LocalStore("tenant-a", dir);
