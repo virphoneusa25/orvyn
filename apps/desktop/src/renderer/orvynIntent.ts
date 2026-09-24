@@ -30,6 +30,22 @@ export function looksLikeGeneratedFileRequest(text: string): boolean {
   return artVerb.test(t) && artNoun.test(t);
 }
 
+/** A text or code file named in the request ("test.txt", "notes.md", "app.js"). */
+const NAMES_TEXT_FILE =
+  /\b[\w.-]+\.(txt|md|markdown|json|jsonc|ya?ml|toml|ini|env|csv|tsv|log|html?|css|scss|less|js|mjs|cjs|jsx|ts|tsx|py|rb|php|go|rs|java|kt|cs|c|h|cpp|hpp|sh|bash|ps1|bat|sql|vue|svelte)\b/i;
+
+/**
+ * On ORVYN Cloud, is this request a generated deliverable (a logo, a PDF, a
+ * Word document) that belongs in Cloud file storage rather than in the open
+ * project folder? A request that names a text or code file is project work:
+ * "Create test.txt" must land in the folder on this computer.
+ */
+export function belongsInCloudStorage(text: string): boolean {
+  const t = text.trim();
+  if (!t || NAMES_TEXT_FILE.test(t)) return false;
+  return looksLikeGeneratedFileRequest(t) || /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(t);
+}
+
 const CONVERSATIONAL =
   /^(hi|hello|hey|thanks|thank you|yo|sup|good (morning|afternoon|evening)|explain|what|why|how|who|when|where|can you|could you|tell me|summar|describe)\b/i;
 

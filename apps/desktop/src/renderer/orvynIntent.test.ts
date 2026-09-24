@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { backendModeForIntent, classifyFileRequest, classifyIntent, looksLikeGeneratedFileRequest } from "./orvynIntent.ts";
+import { backendModeForIntent, belongsInCloudStorage, classifyFileRequest, classifyIntent, looksLikeGeneratedFileRequest } from "./orvynIntent.ts";
 
 test("greetings are CHAT in every mode — even CODE", () => {
   for (const mode of ["auto", "code", "server", "research", "deploy", "automate"] as const) {
@@ -70,4 +70,20 @@ test("a login or SSH request is an engineering run, not a chat refusal", () => {
   assert.equal(classifyIntent("Can you ssh into the box and check the logs?", "auto"), "code");
   assert.equal(classifyIntent("what can you actually do?", "auto"), "chat");
   assert.equal(classifyIntent("hi, what can you actually do? Can you co-work yet?", "auto"), "chat");
+});
+
+test("a named text or code file stays in the open folder, generated deliverables go to Cloud storage", () => {
+  for (const p of [
+    "Create a test.txt file with the word test in it",
+    "Create a test.txt document with test in it and save it",
+    "Write a report.md summarizing the project",
+    "Save the notes to notes.txt",
+    "Make an index.html page with a logo",
+  ]) assert.equal(belongsInCloudStorage(p), false, p);
+  for (const p of [
+    "Generate a VirPhone logo as a PNG",
+    "Create a Word document with my resume",
+    "Make a PDF report of last month",
+    "Create a spreadsheet of expenses",
+  ]) assert.equal(belongsInCloudStorage(p), true, p);
 });

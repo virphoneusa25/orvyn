@@ -14,7 +14,7 @@ import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./conn
 import { noteActiveRunId } from "./connectionRuntime";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
 import { wsUrl } from "./connection";
-import { backendModeForIntent, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
+import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
 import type { Attachment } from "./components/AttachmentBar";
 
 export type { CommandMode } from "./orvynIntent";
@@ -152,7 +152,10 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
   const prompt = cmd.prompt.trim();
   const host = new URL(getConnectionConfig().backendUrl).hostname;
   const generatedFile = looksLikeGeneratedFileRequest(prompt);
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && (generatedFile || /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(prompt))) {
+  // Generated deliverables (logos, PDFs, Word files) go to Cloud file storage.
+  // Everything else keeps the open folder, so "Create test.txt" is written on
+  // this computer and not silently moved to ORVYN Cloud.
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(host) && belongsInCloudStorage(prompt)) {
     cmd = { ...cmd, projectRoot: null };
   }
   if (!prompt) return { kind: "error", error: "Empty command" };
