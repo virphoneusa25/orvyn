@@ -25,6 +25,8 @@ export interface TaskIntent {
   requiresDesktop: boolean;
   requiresArtifact: boolean;
   requiresExternalIntegration: boolean;
+  requiresFrontend: boolean;
+  requiresBrowserVerification: boolean;
   successCriteria: string[];
   /** A conceptual question. The runtime may answer it without tools. */
   informational: boolean;
@@ -50,6 +52,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
+  const frontend = has(goal, /\b(website|landing page|dashboard|frontend|react|next\.?js|vue|html|css|responsive|component)\b/i);
   const code =
     mode === "code" ||
     has(goal, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|file)\b/i);
@@ -94,6 +97,8 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     requiresDesktop: desktop,
     requiresArtifact: artifact,
     requiresExternalIntegration: integration,
+    requiresFrontend: frontend,
+    requiresBrowserVerification: frontend && has(goal, /\b(show|verify|responsive|browser|preview|screenshot)\b/i),
     successCriteria: success,
     informational,
   };

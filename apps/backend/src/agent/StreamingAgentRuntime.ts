@@ -33,6 +33,7 @@ import {
   summarizeCapabilities,
 } from "./runCapabilities";
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
+import { selectAgentModel } from "../models/selectModel";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
 import { selectToolNames, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
@@ -435,14 +436,25 @@ export class StreamingAgentRuntime {
     options?: RunOptions
   ): string {
     const runId = randomUUID();
-    let provider = requestedModelId && requestedModelId !== "auto"
+    const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const choice = selectAgentModel({
+      intent: routeIntent,
+      composerMode: options?.composerMode,
+      requestedModelId,
+      availableIds: this.modelService.registry.list().map((p) => p.config.id),
+    });
+    let provider = choice.pinned
       ? (() => {
-          const p = this.modelService.registry.get(requestedModelId);
-          if (!p) throw new Error(`Requested model "${requestedModelId}" is not configured.`);
-          if (!p.config.capabilities.agent) throw new Error(`Requested model "${requestedModelId}" does not support agent runs.`);
+          const p = this.modelService.registry.get(choice.registryId ?? "");
+          if (!p) throw new Error(`Requested model "${choice.registryId}" is not configured.`);
+          if (!p.config.capabilities.agent) throw new Error(`Requested model "${choice.registryId}" does not support agent runs.`);
           return p;
         })()
-      : this.modelService.router.resolve("agent");
+      : (() => {
+          const picked = choice.registryId ? this.modelService.registry.get(choice.registryId) : undefined;
+          if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
+          return this.modelService.router.resolve("agent");
+        })();
     this.store.create(runId, projectRoot);
 
     // Mode controls tool permissions as well as prompting, so a read-only

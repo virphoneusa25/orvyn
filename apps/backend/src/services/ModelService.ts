@@ -12,6 +12,7 @@ import {
   AIModelProvider,
 } from "@orvyn/ai-core";
 import { UsageService } from "./UsageService";
+import { CERTIFIED_MODELS } from "../models/certifiedModels";
 
 function openaiDisplayName(id: string): string {
   if (id === "gpt-4o") return "OpenAI GPT-4o";
@@ -72,18 +73,42 @@ function cheaperInferenceModels(): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  return [...new Set([chatId, codeId, ...extra])];
+  const certified = CERTIFIED_MODELS.filter((m) => m.provider === "cheaper-inference" && !m.image).map((m) => m.apiModelId);
+  return [...new Set([chatId, codeId, ...extra, ...certified])];
 }
 
 // DeepSeek speaks the OpenAI wire protocol, so the existing adapter carries it.
 // The coding worker defaults to the flash tier; pro is registered alongside for
 // the user to route manually in Settings.
-function fireworksConfig(id: string, apiKey: string, temperature: number): ModelConfig {
+function fireworksConfig(
+  id: string,
+  apiKey: string,
+  temperature: number,
+  lane?: { contextWindow: number; tools: boolean; vision: boolean; agent: boolean; image: boolean }
+): ModelConfig {
+  const image = lane?.image ?? false;
   return {
-    id: `fw:${id}`, apiModelId: id, name: `Fireworks ${id}`, provider: "openai-compatible",
+    id: `fw:${id}`,
+    apiModelId: id,
+    name: `Fireworks ${id.split("/").pop() ?? id}`,
+    provider: "openai-compatible",
     endpoint: (process.env.FIREWORKS_BASE_URL?.trim() || "https://api.fireworks.ai/inference").replace(/\/v1\/?$/, ""),
-    apiKey, contextWindow: 128000, maxOutputTokens: 8192, defaultTemperature: temperature, defaultTopP: 1, streaming: true,
-    capabilities: { chat: true, code: true, agent: true, tools: true, vision: false, embeddings: false, completion: true, image: false },
+    apiKey,
+    contextWindow: lane?.contextWindow ?? 128000,
+    maxOutputTokens: image ? 1 : 8192,
+    defaultTemperature: temperature,
+    defaultTopP: 1,
+    streaming: !image,
+    capabilities: {
+      chat: !image,
+      code: !image,
+      agent: lane?.agent ?? !image,
+      tools: lane?.tools ?? !image,
+      vision: lane?.vision ?? false,
+      embeddings: false,
+      completion: !image,
+      image,
+    },
   };
 }
 
@@ -230,9 +255,13 @@ export class ModelService {
 
     const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
     if (fireworksKey) {
-      const ids = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
+      const certified = CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId);
+      const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
         .split(",").map((s) => s.trim()).filter(Boolean);
-      for (const id of [...new Set(ids)]) this.addModel(fireworksConfig(id, fireworksKey, 0.2));
+      for (const id of [...new Set([...certified, ...extra])]) {
+        const lane = CERTIFIED_MODELS.find((m) => m.apiModelId === id);
+        this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane));
+      }
     }
 
     const geminiKey = (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)?.trim();

@@ -4,6 +4,7 @@ import { ModelService } from "../services/ModelService";
 import type { ArtifactService } from "../artifacts/ArtifactService";
 import { sanitizeArtifactName } from "../artifacts/ArtifactService";
 import { validateBytes } from "../artifacts/bytes";
+import { selectImageModel } from "../models/selectModel";
 
 export interface GenerateImageRequest {
   prompt: string;
@@ -13,6 +14,7 @@ export interface GenerateImageRequest {
   quality?: string;
   projectRoot?: string;
   modelId?: string;
+  editing?: boolean;
   filename?: string;
   runId?: string;
   chatId?: string;
@@ -79,10 +81,20 @@ export class ImageService {
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
     if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
-    const provider = req.modelId
-      ? this.modelService.registry.get(req.modelId)
-      : this.modelService.router.resolve("image");
-    if (!provider) throw new Error(`Unknown image model "${req.modelId}"`);
+    const imageIds = this.modelService.registry.list().filter((p) => p.config.capabilities.image).map((p) => p.config.id);
+    const imageChoice = selectImageModel({
+      quality: req.quality,
+      editing: req.editing,
+      requestedModelId: req.modelId,
+      availableIds: imageIds,
+    });
+    if (req.editing && !imageChoice.registryId) throw new Error(imageChoice.reason);
+    const provider = imageChoice.registryId
+      ? this.modelService.registry.get(imageChoice.registryId)
+      : req.modelId
+        ? this.modelService.registry.get(req.modelId)
+        : this.modelService.router.resolve("image");
+    if (!provider) throw new Error(imageChoice.reason || `Unknown image model "${req.modelId ?? ""}"`);
     if (!provider.generateImage) {
       throw new Error(`Model "${provider.config.id}" does not support image generation`);
     }
