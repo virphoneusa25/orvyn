@@ -81,12 +81,17 @@ export class ImageService {
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
     if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
-    const imageIds = this.modelService.registry.list().filter((p) => p.config.capabilities.image).map((p) => p.config.id);
+    const imageModels = this.modelService.registry.list().filter((p) => p.config.capabilities.image);
     const imageChoice = selectImageModel({
       quality: req.quality,
       editing: req.editing,
       requestedModelId: req.modelId,
-      availableIds: imageIds,
+      availableIds: imageModels.map((p) => p.config.id),
+      catalog: imageModels.map((p) => ({
+        registryId: p.config.id,
+        generation: true,
+        editing: p.config.capabilities.imageEditing === true,
+      })),
     });
     if (req.editing && !imageChoice.registryId) throw new Error(imageChoice.reason);
     const provider = imageChoice.registryId

@@ -63,11 +63,18 @@ export function selectAgentModel(input: {
     input.intent.category === "server" ||
     input.intent.category === "deploy" ||
     LONG_HORIZON.test(input.intent.goal);
-  const frontend = input.intent.requiresFrontend && !engineering;
+  const frontend = input.intent.requiresFrontend && mode !== "server" && mode !== "deploy" && input.intent.category !== "server";
 
   let lanes: LaneModel["lane"][];
   let reason: string;
-  if (laneRequest === "premium" || escalate >= 2) {
+  if (frontend) {
+    lanes = (["frontend", "engineering", "premium"] as LaneModel["lane"][]).slice(escalate);
+    reason = escalate === 0
+      ? "Website builds start with Kimi K2.7 Code, then GLM-5.3, then GPT-5.6 Sol."
+      : escalate === 1
+        ? "Website repair escalated from Kimi K2.7 Code to GLM-5.3."
+        : "Website repair escalated to GPT-5.6 Sol.";
+  } else if (laneRequest === "premium" || escalate >= 2) {
     lanes = ["premium", "premium-alt"];
     reason = escalate >= 2 ? "Escalated to the premium lane." : "Premium lane.";
   } else if (frontend) {
@@ -93,29 +100,51 @@ export function selectAgentModel(input: {
   };
 }
 
+export interface ImageCatalogEntry {
+  registryId: string;
+  generation: boolean;
+  editing: boolean;
+}
+
 export function selectImageModel(input: {
   quality?: string;
   editing?: boolean;
   requestedModelId?: string;
   availableIds: string[];
+  /** Live provider catalog. Generation does not imply editing. */
+  catalog?: ImageCatalogEntry[];
 }): { registryId: string | null; reason: string } {
   const available = new Set(input.availableIds);
+  const catalog = new Map((input.catalog ?? []).map((row) => [row.registryId, row]));
+  const canEdit = (id: string, certifiedEditing: boolean): boolean => {
+    const row = catalog.get(id);
+    if (row) return row.editing;
+    return certifiedEditing;
+  };
   const requested = input.requestedModelId?.trim();
   if (requested && requested !== "auto") {
     const known = CERTIFIED_MODELS.find((m) => m.registryId === requested);
-    if (input.editing && known && !known.imageEditing) {
+    if (input.editing && !canEdit(requested, known?.imageEditing === true)) {
       return { registryId: null, reason: `${requested} cannot edit images.` };
     }
     if (available.has(requested)) return { registryId: requested, reason: "User selected this image model." };
     return { registryId: null, reason: `${requested} is not registered.` };
   }
-  const lane = input.quality === "high" || input.quality === "premium" ? "image-quality" : "image";
-  const primary = laneModel(lane);
-  const alt = laneModel(lane === "image" ? "image-quality" : "image");
-  for (const model of [primary, alt]) {
+  const premium = input.quality === "high" || input.quality === "premium";
+  const lanes: LaneModel["lane"][] = premium ? ["image-quality", "image"] : ["image", "image-quality"];
+  for (const lane of lanes) {
+    const model = laneModel(lane);
     if (!available.has(model.registryId)) continue;
-    if (input.editing && !model.imageEditing) continue;
-    return { registryId: model.registryId, reason: model.lane === "image-quality" ? "Premium image lane." : "Default image lane." };
+    if (input.editing && !canEdit(model.registryId, model.imageEditing)) continue;
+    return {
+      registryId: model.registryId,
+      reason: model.lane === "image-quality" ? "Premium image lane: FLUX.1 Kontext Max." : "Default image lane: FLUX.1 Kontext Pro.",
+    };
   }
-  return { registryId: null, reason: "No certified image model is registered." };
+  for (const row of input.catalog ?? []) {
+    if (!available.has(row.registryId) || !row.generation) continue;
+    if (input.editing && !row.editing) continue;
+    return { registryId: row.registryId, reason: "Cheaper Inference image lane from the live catalog." };
+  }
+  return { registryId: null, reason: input.editing ? "No registered model can edit images." : "No certified image model is registered." };
 }

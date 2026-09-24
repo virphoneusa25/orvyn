@@ -84,7 +84,7 @@ function fireworksConfig(
   id: string,
   apiKey: string,
   temperature: number,
-  lane?: { contextWindow: number; tools: boolean; vision: boolean; agent: boolean; image: boolean }
+  lane?: { contextWindow: number; tools: boolean; vision: boolean; agent: boolean; image: boolean; imageEditing: boolean }
 ): ModelConfig {
   const image = lane?.image ?? false;
   return {
@@ -108,6 +108,7 @@ function fireworksConfig(
       embeddings: false,
       completion: !image,
       image,
+      imageEditing: lane?.imageEditing ?? false,
     },
   };
 }
@@ -490,6 +491,7 @@ export class ModelService {
         provider.config.capabilities.tools = isText;
         provider.config.capabilities.vision = Boolean(caps.vision);
         provider.config.capabilities.image = isImage;
+        provider.config.capabilities.imageEditing = Boolean(caps.image_editing || caps.image_edit || caps.edit);
         provider.config.capabilities.completion = isText;
         provider.config.streaming = Boolean(caps.streaming);
         if (typeof item.context_length === "number") provider.config.contextWindow = item.context_length;

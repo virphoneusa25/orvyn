@@ -109,6 +109,8 @@ export interface ModelCapabilities {
   embeddings: boolean;
   completion: boolean;
   image: boolean;
+  /** True only when the provider catalog or a certified lane says this model accepts an input image. Generation does not imply editing. */
+  imageEditing?: boolean;
   /** Can drive ORVYN computer_* tools. Default: same as tools. Native provider CU is never required. */
   computerUseViaTools?: boolean;
   /** Optional provider-native computer-use API. ORVYN Desktop does not depend on this. */

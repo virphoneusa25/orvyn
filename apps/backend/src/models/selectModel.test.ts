@@ -72,6 +72,16 @@ test("an unhealthy Auto model is skipped", () => {
   assert.equal(choice.registryId, laneModel("engineering").registryId);
 });
 
+test("website repairs escalate Kimi, then GLM-5.3, then GPT-5.6 Sol", () => {
+  const intent = inferTaskIntent("Build a polished responsive SaaS landing page and show it to me.");
+  const first = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 0 });
+  const second = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 1 });
+  const third = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 2 });
+  assert.equal(first.registryId, laneModel("frontend").registryId);
+  assert.equal(second.registryId, laneModel("engineering").registryId);
+  assert.equal(third.registryId, laneModel("premium").registryId);
+});
+
 test("image quality and edits stay on Kontext models", () => {
   const normal = selectImageModel({ quality: "medium", availableIds: ids });
   assert.equal(normal.registryId, laneModel("image").registryId);
@@ -83,4 +93,15 @@ test("image quality and edits stay on Kontext models", () => {
     availableIds: ids,
   });
   assert.equal(textOnly.registryId, null);
+  const catalogOnly = selectImageModel({
+    availableIds: ["ci:catalog-image"],
+    catalog: [{ registryId: "ci:catalog-image", generation: true, editing: false }],
+  });
+  assert.equal(catalogOnly.registryId, "ci:catalog-image");
+  const cannotEdit = selectImageModel({
+    editing: true,
+    availableIds: ["ci:catalog-image"],
+    catalog: [{ registryId: "ci:catalog-image", generation: true, editing: false }],
+  });
+  assert.equal(cannotEdit.registryId, null);
 });
