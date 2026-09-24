@@ -81,6 +81,10 @@ export type AgentEventType =
   // --- Remote execution: where a run's tools execute (no local fallback) ---
   | "run.execution"
   | "run.diagnostics"
+  | "website.build.failed"
+  | "website.visual.failed"
+  | "website.phase"
+  | "model.escalated"
   // --- Durable ordered queue: follow-up instructions queued during a run ---
   | "queue.item.created"
   | "queue.item.updated"

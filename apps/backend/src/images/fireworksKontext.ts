@@ -31,7 +31,8 @@ export async function fireworksKontextImage(input: {
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   maxPolls?: number;
-}): Promise<{ url: string }> {
+  signal?: AbortSignal;
+}): Promise<{ bytes: Buffer; providerRequestId: string; mimeType: string }> {
   const fetchImpl = input.fetchImpl ?? fetch;
   const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const maxPolls = input.maxPolls ?? 20;
@@ -68,9 +69,38 @@ export async function fireworksKontextImage(input: {
     });
     if (!poll.ok) throw new Error(`Fireworks image poll HTTP ${poll.status}.`);
     const interpreted = interpretKontextPoll(await poll.json());
-    if (interpreted.url) return { url: interpreted.url };
+    if (interpreted.url) {
+      const file = await fetchImpl(interpreted.url);
+      if (!file.ok) throw new Error(`Fireworks image download HTTP ${file.status}.`);
+      const bytes = Buffer.from(await file.arrayBuffer());
+      if (!bytes.length) throw new Error("Fireworks image download returned zero bytes.");
+      const sig = bytes.subarray(0, 12);
+      const png = sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47;
+      const jpeg = sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff;
+      const webp = sig.subarray(0, 4).toString("ascii") === "RIFF" && sig.subarray(8, 12).toString("ascii") === "WEBP";
+      if (!png && !jpeg && !webp) throw new Error("Fireworks image bytes are not a PNG, JPEG, or WebP.");
+      return { bytes, providerRequestId: requestId, mimeType: png ? "image/png" : jpeg ? "image/jpeg" : "image/webp" };
+    }
     if (interpreted.error) throw new Error(interpreted.error);
-    await sleep(i === 0 ? 0 : 500);
+    if (input.signal?.aborted) throw new Error("Fireworks image job cancelled.");
+    await sleep(Math.min(1000 * (i + 1), 5000));
   }
   throw new Error("Fireworks image generation timed out before bytes were ready.");
+}
+
+export class FireworksKontextProvider {
+  constructor(private opts: { endpoint: string; apiKey: string; modelId: string; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {}
+
+  generateImage(prompt: string, signal?: AbortSignal) {
+    return fireworksKontextImage({ ...this.opts, prompt, signal });
+  }
+
+  editImage(prompt: string, inputImage: string, signal?: AbortSignal) {
+    if (!inputImage.trim()) throw new Error("Image edit requires a source image.");
+    return fireworksKontextImage({ ...this.opts, prompt, inputImage, signal });
+  }
+
+  cancelImageJob(controller: AbortController) {
+    controller.abort();
+  }
 }

@@ -235,6 +235,7 @@ setTimeout(() => {
 
 server.listen(PORT, () => {
   console.log(`ORVYN backend listening on http://localhost:${PORT}`);
+  console.log(`  Fireworks configured: ${process.env.FIREWORKS_API_KEY?.trim() ? "yes" : "no"}`);
   console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
   console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
   if (tenantManager.hasRegisteredKeys()) {

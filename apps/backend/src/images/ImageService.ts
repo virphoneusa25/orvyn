@@ -5,6 +5,7 @@ import type { ArtifactService } from "../artifacts/ArtifactService";
 import { sanitizeArtifactName } from "../artifacts/ArtifactService";
 import { validateBytes } from "../artifacts/bytes";
 import { selectImageModel } from "../models/selectModel";
+import { FireworksKontextProvider } from "./fireworksKontext";
 
 export interface GenerateImageRequest {
   prompt: string;
@@ -28,6 +29,7 @@ export interface GeneratedImage {
   mimeType: string;
   size: number;
   sha256: string;
+  providerRequestId?: string;
   downloadUrl: string;
   previewUrl?: string;
   revisedPrompt?: string;
@@ -103,17 +105,33 @@ export class ImageService {
         ? this.modelService.registry.get(req.modelId)
         : this.modelService.router.resolve("image");
     if (!provider) throw new Error(imageChoice.reason || `Unknown image model "${req.modelId ?? ""}"`);
-    if (!provider.generateImage) {
-      throw new Error(`Model "${provider.config.id}" does not support image generation`);
+    const fireworks = provider.config.id.startsWith("fw:") && provider.config.capabilities.image && provider.config.apiKey && provider.config.apiModelId;
+    let providerRequestId: string | undefined;
+    let raw: { b64?: string; url?: string; revisedPrompt?: string }[];
+    if (fireworks) {
+      if (req.editing && !req.inputImage) throw new Error("Image edit requires a source image.");
+      const kontext = new FireworksKontextProvider({
+        endpoint: provider.config.endpoint,
+        apiKey: provider.config.apiKey!,
+        modelId: provider.config.apiModelId!,
+      });
+      const out = req.editing
+        ? await kontext.editImage(req.prompt.trim(), req.inputImage!)
+        : await kontext.generateImage(req.prompt.trim());
+      providerRequestId = out.providerRequestId;
+      raw = [{ b64: out.bytes.toString("base64") }];
+    } else {
+      if (!provider.generateImage) {
+        throw new Error(`Model "${provider.config.id}" does not support image generation`);
+      }
+      raw = await provider.generateImage({
+        prompt: req.prompt.trim(),
+        size: req.size,
+        n: Math.min(Math.max(req.n ?? 1, 1), 4),
+        quality: req.quality ?? "high",
+        inputImage: req.inputImage,
+      });
     }
-
-    const raw = await provider.generateImage({
-      prompt: req.prompt.trim(),
-      size: req.size,
-      n: Math.min(Math.max(req.n ?? 1, 1), 4),
-      quality: req.quality ?? "high",
-      inputImage: req.inputImage,
-    });
 
     const images: GeneratedImage[] = [];
     for (const item of raw) {
@@ -130,7 +148,7 @@ export class ImageService {
         projectRoot: req.projectRoot ?? null,
         runId: req.runId ?? null,
         chatId: req.chatId ?? null,
-        sourceTool: "generate_image",
+        sourceTool: providerRequestId ? `fireworks:${provider.config.id}:${providerRequestId}` : "generate_image",
       });
       if (!rec.artifactId || rec.status !== "ready") {
         throw new Error("Image bytes were produced but artifact persistence did not reach ready.");
@@ -146,6 +164,7 @@ export class ImageService {
         mimeType: rec.mimeType,
         size: rec.size,
         sha256: rec.sha256,
+        providerRequestId,
         downloadUrl: pub.downloadUrl ?? `/artifacts/${rec.artifactId}/download`,
         previewUrl: pub.previewUrl,
         revisedPrompt: item.revisedPrompt,

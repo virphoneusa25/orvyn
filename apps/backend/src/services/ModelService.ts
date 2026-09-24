@@ -13,7 +13,6 @@ import {
 } from "@orvyn/ai-core";
 import { UsageService } from "./UsageService";
 import { CERTIFIED_MODELS } from "../models/certifiedModels";
-import { fireworksKontextImage } from "../images/fireworksKontext";
 
 function openaiDisplayName(id: string): string {
   if (id === "gpt-4o") return "OpenAI GPT-4o";
@@ -410,20 +409,6 @@ export class ModelService {
     }
     // Metering proxy: every generate/stream/image call on any registered
     // model produces a usage event, regardless of which code path calls it.
-    if (config.id.startsWith("fw:") && config.capabilities.image && config.apiModelId && config.apiKey) {
-      const modelId = config.apiModelId;
-      const endpoint = config.endpoint;
-      const apiKey = config.apiKey;
-      provider.generateImage = (request) =>
-        fireworksKontextImage({
-          endpoint,
-          apiKey,
-          modelId,
-          prompt: request.prompt,
-          inputImage: request.inputImage,
-          aspectRatio: request.size,
-        }).then((out) => [{ url: out.url }]);
-    }
     const metered = this.usage.wrap(provider);
     this.registry.register(metered);
     return metered;

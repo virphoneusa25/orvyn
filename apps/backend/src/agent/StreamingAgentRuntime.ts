@@ -34,6 +34,7 @@ import {
 } from "./runCapabilities";
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
+import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
 import { selectToolNames, validateToolArguments } from "./toolPolicy";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
@@ -143,6 +144,9 @@ interface RunState {
   gateRetries: number;
   /** Lane pins (fast/code/premium) are not model pins. */
   modelPinned: boolean;
+  website?: WebsiteMissionState;
+  handoffModelId?: string;
+  websiteBlocked?: string;
   composerMode?: string;
   /** One extra model turn when an action request returns prose and no tools. */
   actionNudges: number;
@@ -547,6 +551,7 @@ export class StreamingAgentRuntime {
       resolvedResources: resolution.status === "ok" ? resolution.resources : [],
       gateRetries: 0,
       modelPinned: choice.pinned,
+      ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission() } : {}),
       composerMode: options?.composerMode,
       actionNudges: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
@@ -1262,6 +1267,20 @@ export class StreamingAgentRuntime {
           state.toolCalls += calls.length;
 
           const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
+          if (state.websiteBlocked) {
+            this.store.emit(runId, "run.error", { message: state.websiteBlocked });
+            this.store.setStatus(runId, "error");
+            return;
+          }
+          if (state.handoffModelId && !state.modelPinned) {
+            const next = this.modelService.registry.get(state.handoffModelId);
+            if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
+              this.store.emit(runId, "model.escalated", { from: provider.config.id, to: next.config.id, runId });
+              provider = next;
+              state.actualModelId = next.config.id;
+            }
+            state.handoffModelId = undefined;
+          }
           if (outcome === "cancelled") return this.finishCancelled(runId, steps);
           if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
             const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -1376,7 +1395,9 @@ export class StreamingAgentRuntime {
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       const priorFailures = state.failedFingerprints.get(fingerprint) ?? 0;
-      if (priorFailures > 0) {
+      const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
+      const websiteBuild = Boolean(state.website) && isBuildCommand(command);
+      if (priorFailures > 0 && !websiteBuild) {
         const message = `Blocked identical retry after ${priorFailures} prior failure${priorFailures === 1 ? "" : "s"}. Change the arguments or use a different approach.`;
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, repeated: true });
         replies.set(call.id, message);
@@ -1462,6 +1483,7 @@ export class StreamingAgentRuntime {
     let anySucceeded = false;
 
     const runOne = async (call: ToolCall): Promise<void> => {
+      const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
       if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
@@ -1605,6 +1627,7 @@ export class StreamingAgentRuntime {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
         const error = result.error ?? "unknown error";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error });
+        this.noteWebsiteFailure(runId, state, call.name, command, error);
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
         replies.set(
           call.id,
@@ -1654,6 +1677,43 @@ export class StreamingAgentRuntime {
   // Tool-call turns often include a sentence of intent. If the adapter did
   // not stream it as deltas, emit it now; either way, message.completed lets
   // the UI flush that sentence before the next tool card.
+  private noteWebsiteFailure(runId: string, state: RunState, tool: string, command: string, error: string): void {
+    if (!state.website) return;
+    const build = isBuildCommand(command);
+    const visual = isVisualTool(tool);
+    if (!build && !visual) return;
+    const fp = failureFingerprint(error);
+    const decision = build ? decideBuildRepair(state.website, fp) : decideVisualRepair(state.website, fp);
+    if (build) state.website.buildAttempts += 1;
+    else state.website.visualAttempts += 1;
+    state.website.failures.push(fp);
+    state.website.phase = decision.phase;
+    state.website.lastBuildResult = build ? error.slice(0, 500) : state.website.lastBuildResult;
+    state.website.lastBrowserResult = visual ? error.slice(0, 500) : state.website.lastBrowserResult;
+    this.store.emit(runId, build ? "website.build.failed" : "website.visual.failed", {
+      phase: decision.phase,
+      attempt: build ? state.website.buildAttempts : state.website.visualAttempts,
+      model: state.actualModelId,
+      exitCode: null,
+      stderr: error.slice(0, 800),
+    });
+    this.store.emit(runId, "website.phase", { phase: decision.phase });
+    if (decision.budgetExceeded) {
+      state.websiteBlocked = decision.reason;
+      return;
+    }
+    if (decision.escalate > 0 && !state.modelPinned) {
+      const escalated = selectAgentModel({
+        intent: state.intent,
+        composerMode: state.composerMode,
+        requestedModelId: state.requestedModelId,
+        availableIds: this.modelService.registry.list().map((p) => p.config.id),
+        escalate: decision.escalate,
+      });
+      if (escalated.registryId) state.handoffModelId = escalated.registryId;
+    }
+  }
+
   private emitNarration(runId: string, text: string, alreadyStreamed: boolean): void {
     const trimmed = text.trimEnd();
     if (!trimmed) return;

@@ -11,6 +11,9 @@ test("request acceptance is not a finished image", async () => {
   const calls: string[] = [];
   const fetchImpl = (async (url: string) => {
     calls.push(url);
+    if (String(url).includes("hero.png")) {
+      return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer };
+    }
     if (url.endsWith("/get_result")) {
       return { ok: true, status: 200, json: async () => ({ status: "Ready", result: { sample: "https://cdn.example/hero.png" } }) };
     }
@@ -24,8 +27,9 @@ test("request acceptance is not a finished image", async () => {
     fetchImpl,
     sleep: async () => {},
   });
-  assert.equal(out.url, "https://cdn.example/hero.png");
-  assert.equal(calls.length, 2);
+  assert.equal(out.providerRequestId, "req-1");
+  assert.equal(out.bytes[0], 0x89);
+  assert.equal(calls.length, 3);
 });
 
 test("provider error status does not yield a url", async () => {
