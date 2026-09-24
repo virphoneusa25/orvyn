@@ -3,6 +3,7 @@ import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, gr
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
 import { collectRunEvidence, introductionFor, planSteps, progressFor, type RunEvidence } from "./conversationCoordinator";
+import { assessRenderedPage } from "./browserVerification";
 import { canEnterPhase, type RunPhase } from "./agentRunState";
 import { skillsPromptFor } from "../learning/validatedSkills";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
@@ -372,8 +373,27 @@ export class StreamingAgentRuntime {
       this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
       const st = this.runs.get(runId);
       this.speakProgress(runId);
+      void this.verifyPublishedPreview(runId, published.url);
     }
     void this.showSiteOnDesktop(runId);
+  }
+
+  private async verifyPublishedPreview(runId: string, url: string): Promise<void> {
+    if (/localhost|127\.0\.0\.1/i.test(url)) {
+      this.store.emit(runId, "browser.verification.failed", { url, issues: ["A cloud preview cannot be a localhost address."] });
+      return;
+    }
+    try {
+      const response = await fetch(url);
+      const html = await response.text();
+      const result = assessRenderedPage(url, response.status, html);
+      this.store.emit(runId, result.passed ? "browser.verification.passed" : "browser.verification.failed", { ...result });
+      if (!result.passed) {
+        this.speak(runId, `The preview is up, but the page is not ready yet. ${result.issues[0] ?? "I'm checking it again."}`);
+      }
+    } catch {
+      this.store.emit(runId, "browser.verification.failed", { url, issues: ["The preview URL did not load."] });
+    }
   }
 
   private async showSiteOnDesktop(runId: string): Promise<void> {
