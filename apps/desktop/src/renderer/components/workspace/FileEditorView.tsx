@@ -5,7 +5,7 @@ import { isFabricatedGeneratedPath, userFacingFileError } from "../../workbenchF
 import { ArtifactView } from "./ArtifactView";
 import { emptyBody, emptyTitle } from "./workspaceChrome";
 
-function guessLanguage(path: string): string {
+export function guessLanguage(path: string): string {
   const ext = (path.split(".").pop() ?? "").toLowerCase();
   const map: Record<string, string> = {
     ts: "typescript",

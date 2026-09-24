@@ -109,3 +109,5 @@
 .ofp-center .ofp-foot { padding: 10px 20px 14px; }
 .ofp-back { flex: none; }
 .ofp-scroll { flex: 1 1 auto; }
+.ofp-edit { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.ofp-edit > section, .ofp-edit > div { flex: 1; min-width: 0; }

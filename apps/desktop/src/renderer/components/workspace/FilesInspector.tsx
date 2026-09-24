@@ -8,6 +8,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import Editor from "@monaco-editor/react";
+import { guessLanguage } from "./FileEditorView";
 import { centerFileView, useCenterFileView } from "../../centerFileView";
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "../../connection";
 import { matchesFile } from "../../contextOpen";
@@ -186,6 +188,9 @@ export function FilesInspector({
   const [selection, setSelection] = useState<Selection | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [saved, setSaved] = useState<{ path?: string; error?: string; info?: string } | null>(null);
+  // Editing a file on this computer right in the center view.
+  const [editing, setEditing] = useState<{ text: string; original: string } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const selectProject = useCallback((path: string, bytes?: number) => {
     setSelection({ kind: "project", path, bytes });
@@ -235,6 +240,7 @@ export function FilesInspector({
 
   const selName = selection ? (selection.kind === "project" ? baseName(selection.path) : selection.item.name) : "";
   const selKey = selection ? (selection.kind === "project" ? `p:${selection.path}` : `i:${selection.item.artifactId ?? selection.item.path ?? selection.item.name}`) : "";
+  useEffect(() => { setEditing(null); setSaving(false); }, [selKey, location]);
 
   useEffect(() => {
     if (!selection) { setPreview(null); return; }
@@ -316,6 +322,49 @@ export function FilesInspector({
   const selectedChange: ChangedFile | null = selection?.kind === "project" ? changedByPath.get(selection.path) ?? null : null;
   const isGenerated = selection?.kind === "item";
   const footerLoc: FilesLocation | "generated" = isGenerated ? "generated" : location;
+
+  const canEdit =
+    selection?.kind === "project" && location === "local" && !preview?.cloudCopy &&
+    preview != null && !preview.error && preview.text != null && Boolean(window.orvyn?.project?.writeFile);
+  const dirty = Boolean(editing && editing.text !== editing.original);
+
+  async function startEditing() {
+    if (!selection || selection.kind !== "project") return;
+    setSaved(null);
+    try {
+      // Read the whole file again: the preview may be shortened for speed,
+      // and saving a shortened copy would cut the file.
+      const full = await window.orvyn.project.readFile(selection.path);
+      setEditing({ text: full, original: full });
+    } catch (err) {
+      setSaved({ error: userFacingFileError(err) });
+    }
+  }
+
+  const saveRef = React.useRef<() => void>(() => undefined);
+  async function saveEdits() {
+    if (!selection || selection.kind !== "project" || !editing || saving) return;
+    setSaving(true);
+    setSaved(null);
+    try {
+      const ok = await window.orvyn.project.writeFile(selection.path, editing.text);
+      if (!ok) throw new Error("The file was not saved.");
+      setPreview((p) => (p ? { ...p, text: editing.text.slice(0, 40_000), bytes: new Blob([editing.text]).size } : p));
+      setEditing(null);
+      setSaved({ info: "Saved to your computer." });
+    } catch (err) {
+      setSaved({ error: userFacingFileError(err) });
+    } finally {
+      setSaving(false);
+    }
+  }
+  saveRef.current = () => { if (dirty) void saveEdits(); };
+
+  function leaveCenter() {
+    if (dirty && !window.confirm("You have unsaved changes. Discard them?")) return;
+    setEditing(null);
+    centerFileView.close();
+  }
 
   async function downloadToComputer() {
     if (!selection) return;
@@ -505,15 +554,33 @@ export function FilesInspector({
             {selection && (
               <>
                 <div className="ofp-preview__head">
-                  <button type="button" className="ofp-btn ofp-back" onClick={() => centerFileView.close()} title="Back to the conversation">← Back to chat</button>
+                  <button type="button" className="ofp-btn ofp-back" onClick={leaveCenter} title="Back to the conversation">← Back to chat</button>
                   <span className="ofp-preview__name">
                     <b>{selName}</b>
                     <span title={previewPath(selection, location, projectRoot)}>{previewPath(selection, location, projectRoot)}</span>
                   </span>
                   <span className="ofp-actions">
-                    {selection.kind === "project" && location === "local" && !preview?.cloudCopy && (
+                    {editing && (
                       <>
-                        <button type="button" className="ofp-btn ofp-btn--primary" disabled={Boolean(preview?.error)} onClick={() => onOpenFile(selection.path)}>Open in editor</button>
+                        <button type="button" className="ofp-btn ofp-btn--primary" disabled={!dirty || saving} onClick={() => void saveEdits()} title="Save to your computer (Ctrl+S)">
+                          {saving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          className="ofp-btn"
+                          disabled={saving}
+                          onClick={() => { if (!dirty || window.confirm("Discard your changes?")) setEditing(null); }}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    )}
+                    {!editing && selection.kind === "project" && location === "local" && !preview?.cloudCopy && (
+                      <>
+                        {canEdit && (
+                          <button type="button" className="ofp-btn ofp-btn--primary" onClick={() => void startEditing()}>Edit</button>
+                        )}
+                        <button type="button" className="ofp-btn" disabled={Boolean(preview?.error)} onClick={() => onOpenFile(selection.path)}>Open in Code</button>
                         <button
                           type="button"
                           className="ofp-btn"
@@ -564,7 +631,33 @@ export function FilesInspector({
                   ) : preview.url ? (
                     <img src={preview.url} alt={selName} className="ofp-img" />
                   ) : (
-                    <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
+                    editing ? (
+                      <div className="ofp-edit">
+                        <Editor
+                          height="100%"
+                          theme="orvyn-dark"
+                          path={`orvyn-files/${selection.kind === "project" ? selection.path : selName}`}
+                          language={guessLanguage(selName)}
+                          value={editing.text}
+                          onChange={(v) => setEditing((e) => (e ? { ...e, text: v ?? "" } : e))}
+                          onMount={(ed, monaco) => {
+                            ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current());
+                            ed.focus();
+                          }}
+                          options={{
+                            fontSize: 13,
+                            fontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
+                            minimap: { enabled: false },
+                            padding: { top: 8 },
+                            scrollBeyondLastLine: false,
+                            automaticLayout: true,
+                            wordWrap: "off",
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <CodePreview text={preview.text ?? ""} highlight={selectedChange?.status === "new"} />
+                    )
                   )}
                 </div>
                 <p className="ofp-foot"><i />{previewFooter(preview?.cloudCopy ? "cloud" : footerLoc, {
