@@ -245,7 +245,7 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   }
   if (type === "preview.available") {
     const url = String(data.url ?? "");
-    return { line: url ? `Preview ${url}` : "Preview ready", priority: 85, tab: "preview", previewUrl: url || undefined };
+    return { line: url ? `Preview ${url}` : "Preview ready", priority: 96, tab: "preview", previewUrl: url || undefined, switchTab: true };
   }
   if (type.startsWith("review.")) {
     const complete = type === "review.passed" || type === "review.approved";
@@ -267,7 +267,8 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   if (type === "files.ready" || (type === "artifact.created" && (data.artifactId || data.id))) {
     const name = String(data.name ?? data.filename ?? data.path ?? "file");
     const artifactId = typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : undefined;
-    return { line: `${name} is in Files → Generated`, priority: 90, tab: "files", file: name, artifactId, switchTab: true };
+    const page = /\.(html?|php)$/i.test(name);
+    return { line: `${name} is in Files → Generated`, priority: page ? 40 : 90, tab: "files", file: name, artifactId, switchTab: !page };
   }
   if (type === "tool.completed" && (tool === "generate_image" || data.artifactId)) {
     const name = String(data.artifactName ?? data.name ?? data.filename ?? "");

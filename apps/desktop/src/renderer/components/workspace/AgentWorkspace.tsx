@@ -194,7 +194,16 @@ export function AgentWorkspace({
         continue;
       }
       previewSeeded.current.add(p.url);
-      void api.create("preview", p.url).then(setBrowserState);
+      void api.create("preview", p.url).then((state) => {
+        setBrowserState(state);
+        const native = state.tabs.find((t) => urlsMatch(t.url, p.url));
+        if (native?.url) {
+          activate(
+            { id: previewTabId(native.url), kind: "preview", title: native.title || previewTitle(native.url, projectName), closable: true, url: native.url },
+            false
+          );
+        }
+      });
     }
   }, [derived.previews, browserState.tabs]);
 
