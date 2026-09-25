@@ -865,7 +865,7 @@ function DetailsTab({ server }: { server: MarketServer }) {
       <p style={body}>{server.description}</p>
       <h3 style={h3}>Overview</h3>
       <p style={body}>
-        {toolsAdvertisedLabel(server)} · {transportLabel(server)} · {executionLocation(server) === "local" ? "runs on this desktop (Local Only from OVH)" : "cloud-reachable Streamable HTTP"}.
+        {toolsAdvertisedLabel(server)} · {transportLabel(server)} · {executionLocation(server) === "local" ? "runs on this desktop (Local Only, not reachable from ORVYN Cloud)" : "cloud-reachable Streamable HTTP"}.
         ORION discovers tools with search_capabilities and activates at most {TOOL_BUDGET.maxServers} servers / {TOOL_BUDGET.maxTools} tools.
       </p>
       {!!server.categories.length && (

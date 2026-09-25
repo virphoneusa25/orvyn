@@ -22,7 +22,7 @@ export class OvhWorkerProvider implements ExecutionProvider {
   }
 
   private async request(pathname: string, method = "GET", body?: unknown): Promise<any> {
-    if (!this.controlPlane) throw new Error("OVH control plane not configured — set ORVYN_OVH_CONTROL_PLANE");
+    if (!this.controlPlane) throw new Error("Cloud worker control plane not configured — set ORVYN_OVH_CONTROL_PLANE");
     const res = await fetch(`${this.controlPlane}${pathname}`, {
       method,
       headers: {
@@ -79,7 +79,7 @@ export class OvhWorkerProvider implements ExecutionProvider {
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
     if (!this.controlPlane) {
-      return { healthy: false, detail: "OVH control plane not configured" };
+      return { healthy: false, detail: "cloud worker control plane not configured" };
     }
     try {
       const res = await this.request("/api/v1/health");

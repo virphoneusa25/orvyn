@@ -61,7 +61,7 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
         ? "User selected Local — tools stay on this machine"
         : requested === "local_sandbox"
           ? "User selected Sandbox — isolated Docker on this machine"
-          : "User selected Cloud — OVH worker, no local fallback",
+          : "User selected Cloud — ORVYN Cloud worker, no local fallback",
     };
   }
 
@@ -73,8 +73,8 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
       requested,
       actual: "ovh_worker",
       reason: mode === "deploy"
-        ? "Deploy mode requires remote / OVH execution"
-        : "Server / remote infrastructure requires an OVH worker",
+        ? "Deploy mode requires remote / ORVYN Cloud execution"
+        : "Server / remote infrastructure requires an ORVYN Cloud worker",
     };
   }
   if (input.isBackground) {
@@ -109,7 +109,7 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
 export function executionLabel(target: ResolvedExecutionTarget): string {
   if (target === "local_host") return "Local";
   if (target === "local_sandbox") return "Local Sandbox";
-  return "OVH Worker";
+  return "ORVYN Cloud";
 }
 
 export function runtimeLocation(

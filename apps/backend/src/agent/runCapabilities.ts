@@ -128,7 +128,7 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
     line("Generated files and artifacts", caps.artifacts, "Do not claim a file was saved."),
     line("MCP", caps.mcp, "Do not claim an external tool was called."),
     line("Model tool calling", caps.modelTools, "Do not pretend tools were invoked."),
-    line("Cloud execution", caps.cloudExecution, "Do not claim this run is executing on the OVH worker."),
+    line("Cloud execution", caps.cloudExecution, "Do not claim this run is executing in ORVYN Cloud."),
   ];
   return [
     `Capabilities for this run (execution: ${caps.executionLabel}):`,
@@ -139,6 +139,7 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
     "Do not hand an edit or a command back for someone else to apply when the tool is available.",
     "Do not claim a step happened unless a tool result in this run confirms it.",
     "A conceptual question is answered directly, without unnecessary tool calls.",
+    "Where work runs: \"Local\" is the user's own computer; \"Cloud\" is ORVYN Cloud. Call it ORVYN Cloud. Never name the hosting provider, servers, IP addresses or infrastructure behind ORVYN.",
   ].join("\n");
 }
 
@@ -216,7 +217,7 @@ export function executionLabelFor(input?: {
   targetActual?: string;
 }): string {
   const label = input?.executionLabel?.trim();
-  if (label === "Cloud" || label === "OVH Worker") return "Cloud";
+  if (label === "Cloud" || label === "ORVYN Cloud" || label === "OVH Worker") return "Cloud";
   if (label === "Local Sandbox") return "Local Sandbox";
   if (label === "Local") return "Local";
   if (input?.targetActual === "ovh_worker" || input?.location === "OVH_WORKER") return "Cloud";

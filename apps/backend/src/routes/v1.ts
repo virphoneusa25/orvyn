@@ -588,10 +588,10 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     if (!hasOnlineWorker()) {
       if (routed.requested === "auto") {
         routed.actual = "local_host";
-        routed.fallbackReason = "Auto chose Cloud but no OVH worker is online — running Local instead";
+        routed.fallbackReason = "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
       } else {
         return res.status(409).json({
-          error: "No OVH worker is online — Cloud run refused. There is no silent Local fallback.",
+          error: "ORVYN Cloud has no worker available right now — the Cloud run was not started. It is never moved to your computer silently.",
           executionTargetRequested: routed.requested,
           executionTargetActual: routed.actual,
         });
@@ -601,8 +601,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
       return res.status(409).json({
         error: routed.actual === "local_sandbox"
-          ? "Local Sandbox requires the desktop Local Worker (and Docker). It is offline — the project was not sent to OVH."
-          : "Local execution requires the desktop Local Worker. It is offline — the project was not sent to OVH.",
+          ? "Local Sandbox requires the desktop Local Worker (and Docker). It is offline — the project was not sent to ORVYN Cloud."
+          : "Local execution requires the desktop Local Worker. It is offline — the project was not sent to ORVYN Cloud.",
         executionTargetRequested: routed.requested,
         executionTargetActual: routed.actual,
       });
@@ -616,7 +616,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const remoteProjectRoot = location === "OVH_WORKER" ? cloudWorkerSourcePath(clientProjectRoot) : clientProjectRoot;
   const executionLabel = controlPlaneVirtual && cloudHost
     ? "Cloud"
-    : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker";
+    : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud";
 
   notePublicOrigin(
     String(req.headers["x-forwarded-proto"] || req.protocol || "https"),

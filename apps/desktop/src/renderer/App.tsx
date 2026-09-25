@@ -856,8 +856,8 @@ export function App() {
         {view === "cloud" && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <HonestState
-              title="CLOUD — OVH CONNECTED"
-              message="Your ORVYN backend runs on OVH (40.160.11.123) and executes cloud missions in Docker sandboxes. A cloud resource browser (per-provider inventory) is future work; provider support beyond OVH has not been implemented."
+              title="ORVYN CLOUD — CONNECTED"
+              message="You are connected to ORVYN Cloud, which runs cloud missions in isolated sandboxes. A browser for your own cloud resources (per-provider inventory) is not available yet."
             />
           </div>
         )}

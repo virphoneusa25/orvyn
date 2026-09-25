@@ -567,7 +567,7 @@ export function WorkStream({
             {reasoning && <span>🧠 {reasoning}</span>}
             {started.permissionMode && <span>🛡 {started.permissionMode}</span>}
             {(exec?.executionLabel || exec?.location) && (
-              <span>Execution: {String(exec.executionLabel || (String(exec.location).includes("OVH") ? "OVH Worker" : "Local"))}</span>
+              <span>Execution: {String(exec.executionLabel || (String(exec.location).includes("OVH") ? "ORVYN Cloud" : "Local"))}</span>
             )}
           </div>
         );

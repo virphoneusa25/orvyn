@@ -70,7 +70,7 @@ export class McpCloudGateway {
     if (input.cloudRun && location === "local") {
       return {
         ok: false,
-        error: "Local Only — this stdio MCP runs on the desktop and is not reachable from OVH. Use a remote Streamable HTTP server or a cloud MCP runtime.",
+        error: "Local Only — this stdio MCP runs on the desktop and is not reachable from ORVYN Cloud. Use a remote Streamable HTTP server or a cloud MCP runtime.",
         durationMs: Date.now() - started,
         executionLocation: "local",
       };

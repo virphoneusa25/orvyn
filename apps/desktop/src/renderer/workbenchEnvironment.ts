@@ -48,7 +48,7 @@ export function environmentSummary(env: WorkbenchEnvironment, opts?: {
     workingDirectory: root,
     installScript: env === "cloud" ? "worker install" : "npm ci / project install",
     startScript: env === "cloud" ? "worker start" : "project start script",
-    runtime: env === "cloud" ? (opts?.workerName || "OVH worker") : env === "sandbox" ? "Docker sandbox" : "This machine",
+    runtime: env === "cloud" ? (opts?.workerName || "ORVYN Cloud") : env === "sandbox" ? "Docker sandbox" : "This machine",
     limits: env === "sandbox" ? "Network none unless allowed · dropped caps" : env === "cloud" ? "Tenant-scoped worker" : "Host process",
   };
 }

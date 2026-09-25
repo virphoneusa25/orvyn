@@ -73,9 +73,9 @@ export function toRunPayloadSettings(settings?: {
 
 export const EXECUTION_TARGETS: { id: ExecutionTargetSetting; label: string; title: string }[] = [
   { id: "auto", label: "Auto", title: "Auto — Local for normal coding, Sandbox for risky commands, Cloud for Server/Deploy" },
-  { id: "local_host", label: "Local", title: "Local — tools run on this machine, no OVH upload" },
+  { id: "local_host", label: "Local", title: "Local — tools run on this machine, nothing is uploaded" },
   { id: "local_sandbox", label: "Sandbox", title: "Sandbox — isolated Docker on this machine" },
-  { id: "ovh_worker", label: "Cloud", title: "Cloud — OVH worker. Never silently switched to Local." },
+  { id: "ovh_worker", label: "Cloud", title: "Cloud — ORVYN Cloud. Never silently switched to Local." },
 ];
 
 export interface ComposerModeId {
@@ -88,7 +88,7 @@ export interface ComposerModeId {
 export const COMPOSER_MODES: ComposerModeId[] = [
   { id: "auto", label: "Auto", title: "Auto — ORION classifies the request and picks the pipeline" },
   { id: "code", label: "Code", title: "Code — build, edit, and verify code in the workspace" },
-  { id: "server", label: "Server", title: "Server — run on a remote server / OVH worker" },
+  { id: "server", label: "Server", title: "Server — run on a remote server or ORVYN Cloud" },
   { id: "research", label: "Research", title: "Research — read-only investigation, no writes" },
   { id: "deploy", label: "Deploy", title: "Deploy — ship changes" },
   { id: "automate", label: "Automate", title: "Automate — multi-step automation" },

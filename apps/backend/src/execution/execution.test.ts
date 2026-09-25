@@ -44,7 +44,7 @@ test("routing: Auto + remote-flagged task is honest when OVH is down", async () 
   const router = new ExecutionRouter();
   const d = await router.select({ isRemote: true });
   assert.notEqual(d.location, "OVH_WORKER", "must not claim OVH");
-  assert.ok(d.reason.includes("OVH"), `reason mentions OVH: ${d.reason}`);
+  assert.ok(d.reason.includes("ORVYN Cloud unavailable"), `reason says the cloud is unavailable: ${d.reason}`);
 });
 
 // ---- Local provider --------------------------------------------------------

@@ -65,7 +65,7 @@ export class ExecutionRouter {
       if (ovhHealth.healthy) {
         return { provider: this.ovh, location: "OVH_WORKER", reason: "explicitly requested OVH worker" };
       }
-      throw new Error(`OVH worker unavailable (${ovhHealth.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
+      throw new Error(`ORVYN Cloud worker unavailable (${ovhHealth.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
     }
 
     // auto routing
@@ -76,9 +76,9 @@ export class ExecutionRouter {
       }
       const dockerHealth = await this.docker.health();
       if (opts.isIsolated && dockerHealth.healthy) {
-        return { provider: this.docker, location: "DOCKER_LOCAL", reason: "remote preferred but OVH unavailable — Docker sandbox for isolation" };
+        return { provider: this.docker, location: "DOCKER_LOCAL", reason: "remote preferred but ORVYN Cloud unavailable — Docker sandbox for isolation" };
       }
-      return { provider: this.local, location: "LOCAL", reason: `remote preferred but OVH unavailable (${ovhHealth.detail}) and isolation${opts.isIsolated ? "" : " not"} needed` };
+      return { provider: this.local, location: "LOCAL", reason: `remote preferred but ORVYN Cloud unavailable (${ovhHealth.detail}) and isolation${opts.isIsolated ? "" : " not"} needed` };
     }
     if (opts.isIsolated) {
       const dockerHealth = await this.docker.health();

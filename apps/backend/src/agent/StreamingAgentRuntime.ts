@@ -654,7 +654,7 @@ export class StreamingAgentRuntime {
       const actual = execution.targetActual
         ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
       const label = execution.executionLabel
-        ?? (actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "OVH Worker");
+        ?? (actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud");
       this.store.emit(runId, "run.execution", {
         location: execution.location === "OVH_WORKER" ? "OVH_WORKER" : actual === "local_sandbox" ? "LOCAL_SANDBOX" : "LOCAL",
         executionTargetRequested: execution.targetRequested ?? "auto",
@@ -668,7 +668,7 @@ export class StreamingAgentRuntime {
             ? "Tools execute in a local Docker sandbox. Project stays on this machine."
             : label === "Cloud"
               ? "Generated files persist on the Cloud control plane in virtual file storage. Open Files → Generated."
-              : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to OVH.",
+              : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to ORVYN Cloud.",
       });
       if (execution.location === "OVH_WORKER") {
         queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
@@ -929,7 +929,7 @@ export class StreamingAgentRuntime {
     const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
     const state = this.runs.get(runId);
     const local = state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
-    this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: local ? "Waiting for the Local Worker" : "Waiting for the OVH worker to prepare the mission container" });
+    this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: local ? "Waiting for the Local Worker" : "Waiting for the ORVYN Cloud worker to prepare the mission workspace" });
     while (Date.now() < deadline) {
       const run = this.store.get(runId);
       const types = new Set(run?.events.map((e) => e.type));
@@ -937,16 +937,16 @@ export class StreamingAgentRuntime {
       if (types.has("sandbox.stopped")) {
         const reason = run?.events.filter((e) => e.type === "sandbox.stopped").pop()?.data?.reason;
         throw new Error(local
-          ? `The Local Worker failed to start: ${reason ?? "unknown reason"}. The run failed — the project was not sent to OVH.`
-          : `The OVH worker failed to prepare the mission container: ${reason ?? "unknown reason"}. The run failed — there is no local fallback for remote runs.`);
+          ? `The Local Worker failed to start: ${reason ?? "unknown reason"}. The run failed — the project was not sent to ORVYN Cloud.`
+          : `The ORVYN Cloud worker failed to prepare the mission workspace: ${reason ?? "unknown reason"}. The run failed — there is no local fallback for remote runs.`);
       }
       const state = this.runs.get(runId);
       if (state?.cancelled) throw new Error("run cancelled before the worker was ready");
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(local
-      ? `The Local Worker did not become ready within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. The project was not sent to OVH.`
-      : `The OVH worker did not prepare the mission container within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. There is no local fallback for remote runs.`
+      ? `The Local Worker did not become ready within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. The project was not sent to ORVYN Cloud.`
+      : `The ORVYN Cloud worker did not prepare the mission workspace within ${Math.round(REMOTE_READY_TIMEOUT_MS / 1000)}s — the run failed. There is no local fallback for remote runs.`
     );
   }
 
