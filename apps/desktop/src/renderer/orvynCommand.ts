@@ -12,7 +12,8 @@
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { noteActiveRunId } from "./connectionRuntime";
-import { startUserTurn, appendAssistantDelta, finishAssistantTurn } from "./chatSession";
+import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat } from "./chatSession";
+import { createSession } from "./sessionsApi";
 import { wsUrl } from "./connection";
 import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
 import type { Attachment } from "./components/AttachmentBar";
@@ -48,6 +49,11 @@ export type CommandOutcome =
  *  from the WebSocket afterwards. Never make the caller wait on the model. */
 function runChat(cmd: OrvynCommand): CommandOutcome {
   const history = startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
+  // Every chat is a durable backend WorkSession, even before it starts a run.
+  const chat = getActiveChat();
+  if (chat && !chat.sessionId) {
+    void createSession(chat.title, cmd.projectRoot).then((s) => { if (s && !chat.sessionId) bindChatToRun(chat.id, s.sessionId, undefined); });
+  }
   try {
     const ws = new WebSocket(wsUrl("/ws/chat"));
     const giveUp = setTimeout(() => {
@@ -97,14 +103,16 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
 }
 
 async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
+  const chat = ensureActiveChat(cmd.prompt);
   const res = await fetch(apiUrl("/agent/orchestrate"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
+    body: JSON.stringify({ sessionId: chat.sessionId, projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
   if (data.runId) noteActiveRunId(String(data.runId));
+  bindChatToRun(chat.id, data.sessionId, data.runId);
   return { kind: "mission", runId: data.runId };
 }
 
@@ -114,6 +122,8 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
   const remoteRoot = cmd.projectRoot || "/opt/orvyn/workspaces";
   const executionTarget = cmd.executionTarget
     ?? (forcedCloud && cloudBackend ? "ovh_worker" : "auto");
+  // The run belongs to the active chat's durable session (a new chat gets one).
+  const chat = ensureActiveChat(cmd.prompt);
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -127,6 +137,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
       mode,
       attachments: cmd.attachments,
       previousRunId: cmd.previousRunId,
+      sessionId: chat.sessionId,
       requestedModelId: cmd.requestedModelId,
       reasoningEffort: cmd.reasoningEffort,
       permissionMode: cmd.permissionMode,
@@ -135,6 +146,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
   if (data.runId) noteActiveRunId(String(data.runId));
+  bindChatToRun(chat.id, data.sessionId, data.runId);
   return { kind: "run", runId: data.runId };
 }
 

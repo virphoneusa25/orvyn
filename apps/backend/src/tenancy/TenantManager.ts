@@ -9,6 +9,7 @@
 // Every tenant now gets its own instances. Nothing is shared except stateless
 // adapter classes.
 
+import { WorkSessionStore } from "../sessions/WorkSessionStore";
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
@@ -76,6 +77,8 @@ export interface Tenant {
   /** Tenant-scoped virtual workspace + generated-file store. */
   artifactService: ArtifactService;
   experienceStore: ExperienceStore;
+  /** Durable WorkSessions: conversation → workspace → runs. Authoritative. */
+  sessions: WorkSessionStore;
 }
 
 function embedderFor(ms: ModelService) {
@@ -176,6 +179,7 @@ export class TenantManager {
       localStore,
       artifactService: new ArtifactService(id, localStore),
       experienceStore: new ExperienceStore(id, localStore),
+      sessions: new WorkSessionStore(id),
     };
     seedValidatedSkills(localStore);
     // MCP host gets the now-constructed tenant's gateway.

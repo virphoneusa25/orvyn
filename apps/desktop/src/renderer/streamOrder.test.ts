@@ -49,3 +49,16 @@ test("messages saved before createdAt existed stay above the run", () => {
   assert.deepEqual(earlier.map((m) => m.content), ["legacy"]);
   assert.deepEqual(later.map((m) => m.content), ["new"]);
 });
+
+import { threadTimeline } from "./streamOrder.ts";
+
+test("earlier runs of the thread and chat turns interleave in the order they happened", () => {
+  const t = threadTimeline(
+    [{ role: "user", content: "hi", createdAt: 100 }, { role: "assistant", content: "hello", createdAt: 110 }],
+    [
+      { runId: "r2", createdAt: 300, instruction: "now read it", status: "completed", events: [] },
+      { runId: "r1", createdAt: 200, instruction: "create hello.txt", status: "completed", events: [] },
+    ],
+  );
+  assert.deepEqual(t.map((e) => (e.kind === "run" ? e.run.runId : (e.message as { content: string }).content)), ["hi", "hello", "r1", "r2"]);
+});

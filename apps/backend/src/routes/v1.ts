@@ -4,6 +4,7 @@ import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth, localWorkerServices, requestLocalServiceStop } from "./localWorker";
 import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
+import { summarizeRuns, threadHistory } from "../agent/runThread";
 import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
@@ -658,8 +659,20 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   );
   _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
   t.usage.agentRuns++;
-  const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
-  const history: {role: "user" | "assistant";content:string}[] = previous ? [{role:"user",content:String(previous.events.find(e=>e.type === "run.started")?.data.instruction ?? "").slice(0,4000)}, {role:"assistant",content:previous.events.filter(e=>e.type === "message.delta").map(e=>String(e.data.content ?? "")).join("").slice(-16000)}] : [];
+  const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
+  // Every run belongs to a durable WorkSession: the chat's (sessionId), the
+  // previous run's, or a new one for a new conversation.
+  let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
+  if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
+  if (!session) {
+    session = t.sessions.create({
+      title: String(req.body.instruction ?? "").split("\n")[0]!.slice(0, 80) || "New conversation",
+      userId: req.principal?.userId ?? "",
+      projectRoot: String(req.body.projectRoot ?? remoteProjectRoot ?? "") || null,
+    });
+  }
+  // A follow-up continues the conversation: the session's runs are its history.
+  const history: {role: "user" | "assistant";content:string}[] = threadHistory(t.runStore, session.runIds);
   const runId = t.agentRuntime.start(
     req.body.projectRoot || remoteProjectRoot || t.currentProjectRoot || "",
     req.body.instruction,
@@ -678,6 +691,10 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       targetRequested: routed.requested,
       targetActual: routed.actual,
       executionLabel,
+      // Local runs execute on the user's computer: tell the model its shell.
+      hostPlatform: location === "LOCAL_HOST" || location === "LOCAL_SANDBOX"
+        ? (localWorkerHealth(t.id).environment?.os ?? undefined)
+        : location === "OVH_WORKER" ? "linux" : process.platform,
       fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),
     },
     {
@@ -691,8 +708,13 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {
     queueLocalHostJob(runId, remoteProjectRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
   }
+  const attached = t.sessions.attachRun(session.sessionId, runId, String(req.body.projectRoot || remoteProjectRoot || "") || null) ?? session;
+  if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId });
   res.status(201).json({
     runId,
+    sessionId: attached.sessionId,
+    workspaceId: attached.workspaceId,
+    projectId: attached.projectId,
     executionLocation: location,
     executionTargetRequested: routed.requested,
     executionTargetActual: routed.actual,
@@ -759,10 +781,18 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
     }
   }, 15000);
 
+  // A write after the stream ended (events can follow run.completed, e.g. the
+  // session marker or a late verification row) must never crash the engine.
   const unsubscribe = t.runStore.subscribe(req.params.id, (e) => {
+    if (res.writableEnded || res.destroyed) { unsubscribe(); return; }
     res.write(`data: ${JSON.stringify(e)}\n\n`);
-    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") res.end();
+    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") {
+      clearInterval(heartbeat);
+      res.end();
+      unsubscribe();
+    }
   });
+  res.on("error", () => { clearInterval(heartbeat); unsubscribe(); });
 
   req.on("close", () => {
     clearInterval(heartbeat);
@@ -836,6 +866,41 @@ v1Router.post("/agent/stream/runs/:id/queue/:itemId/delivered", (req, res) => {
   const ok = t.runStore.queueMarkDelivered(req.params.id, req.params.itemId);
   if (!ok) return res.status(404).json({ error: "Queue item not found" });
   res.json({ ok: true });
+});
+
+// ── WorkSessions: the durable record of a conversation and its work ─────────
+v1Router.get("/sessions", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ sessions: t.sessions.list() });
+});
+
+v1Router.post("/sessions", (req, res) => {
+  const t = requireTenant(req);
+  const s = t.sessions.create({
+    title: String(req.body?.title ?? "New conversation"),
+    userId: req.principal?.userId ?? "",
+    projectRoot: typeof req.body?.projectRoot === "string" ? req.body.projectRoot : null,
+  });
+  res.status(201).json({ session: s });
+});
+
+v1Router.get("/sessions/:id", (req, res) => {
+  const t = requireTenant(req);
+  const s = t.sessions.get(String(req.params.id));
+  if (!s) return res.status(404).json({ error: "Unknown session" });
+  res.json({ session: s, runs: summarizeRuns(t.runStore, s.runIds) });
+});
+
+v1Router.patch("/sessions/:id", (req, res) => {
+  const t = requireTenant(req);
+  const s = t.sessions.update(String(req.params.id), { title: req.body?.title, status: req.body?.status, pinned: typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined });
+  if (!s) return res.status(404).json({ error: "Unknown session" });
+  res.json({ session: s });
+});
+
+v1Router.delete("/sessions/:id", (req, res) => {
+  const t = requireTenant(req);
+  res.json({ ok: t.sessions.delete(String(req.params.id)) });
 });
 
 // Polling fallback / catch-up without holding a stream open.
@@ -945,7 +1010,12 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     undefined,
     { reasoningEffort, accessMode, composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined }
   );
-  res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
+  // Missions are work sessions too: the run joins the given session or a new one.
+  const missionSession = (typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined)
+    ?? t.sessions.create({ title: String(req.body.goal ?? "Mission").split("\n")[0]!.slice(0, 80), userId: req.principal?.userId ?? "", projectRoot: req.body.projectRoot ?? null });
+  const joined = t.sessions.attachRun(missionSession.sessionId, runId, req.body.projectRoot ?? null) ?? missionSession;
+  if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId });
+  res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
 });
 
 v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {

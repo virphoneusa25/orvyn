@@ -96,6 +96,7 @@ export type AgentEventType =
   /** The agent announced a next step without doing it and was sent back to work. */
   | "agent.continue"
   | "agent.turn"
+  | "run.session"
   | "verification.started"
   | "verification.completed"
   | "agent.loop.finished"

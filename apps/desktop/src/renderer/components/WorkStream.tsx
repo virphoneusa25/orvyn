@@ -26,6 +26,8 @@ import { AddMenu, ComposerChips, attachmentsFromChips, composerTriggerKey, conte
 import appIcon from "../assets/icon.png";
 import type { CommandMode } from "../orvynIntent";
 import type { AgentEvent } from "./AgentActivityList";
+import { useRunThread } from "../useRunThread";
+import { threadTimeline } from "../streamOrder";
 
 /** The single run state (owned by App, shared with the right ContextPanel). */
 export interface RunView {
@@ -162,6 +164,13 @@ export function WorkStream({
   // Follow-ups stamped after run.started render under the run. Painting
   // them above the activity is what made a new message appear at the top.
   const { earlier: earlierMessages, later: laterMessages } = partitionStreamMessages(messages, run.events);
+  const thread = useRunThread(run.runId, run.events);
+  // Opened on an older run of a conversation: show it from its newest run,
+  // so the whole thread (and the latest answer) is on screen.
+  useEffect(() => {
+    if (thread.newestRunId) onRunStarted(thread.newestRunId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.newestRunId]);
 
   // Follow the stream while the user is at the bottom; once they scroll up to
   // read, stop forcing scroll (a stream that yanks the view is unreadable).
@@ -607,9 +616,27 @@ export function WorkStream({
             </div>
           )}
 
-        {earlierMessages.map((m, i) => (
-          <ChatTurn key={`earlier-${i}`} message={m} live={streaming && m === messages[messages.length - 1]} />
-        ))}
+        {/* The whole conversation, oldest first: earlier chat turns and the
+            earlier runs of this thread (each follow-up is a run that continues
+            the previous one), then the current run below. */}
+        {threadTimeline(earlierMessages, thread.earlier).map((entry, i) =>
+          entry.kind === "message" ? (
+            <ChatTurn key={`earlier-${i}`} message={entry.message} live={streaming && entry.message === messages[messages.length - 1]} />
+          ) : (
+            <div key={`thread-${entry.run.runId}`} data-testid="thread-run" style={{ minWidth: 0 }}>
+              {entry.run.instruction && <ChatTurn message={{ role: "user", content: entry.run.instruction }} live={false} />}
+              <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
+                <AgentActivityList events={entry.run.events} status={entry.run.status} onApprove={run.approve} />
+                <RunFooter events={entry.run.events} runId={entry.run.runId} finished />
+              </div>
+            </div>
+          )
+        )}
+
+        {/* The current run's own message, unless a chat turn already shows it. */}
+        {thread.currentInstruction && !messages.some((m) => m.role === "user" && m.content.trim() === thread.currentInstruction!.trim()) && (
+          <ChatTurn message={{ role: "user", content: thread.currentInstruction }} live={false} />
+        )}
 
         {/* The run instruction is already represented by the canonical chat
             message. Never render it again here: duplicate user bubbles make

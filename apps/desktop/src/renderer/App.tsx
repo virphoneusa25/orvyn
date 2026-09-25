@@ -37,7 +37,8 @@ import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConn
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages, ensureChatForRun, findChatByRun } from "./chatSession";
+import { newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats } from "./chatSession";
+import { syncSessions } from "./sessionsApi";
 import { pickReattachRun } from "./appReattach";
 import {
   appGridTemplateColumns,
@@ -229,6 +230,8 @@ export function App() {
 
   function handleHomeRun(prompt: string, mode: ComposerMode, extras?: { attachments?: Attachment[]; contextNote?: string }) {
     const text = extras?.contextNote ? `${prompt}\n\n${extras.contextNote}` : prompt;
+    // Home starts a new conversation; the run is bound to it as it starts.
+    newChat();
     void submitOrvynCommand({
       prompt: text,
       mode,
@@ -239,7 +242,6 @@ export function App() {
       setCenterMode("work");
       setView("newtask");
       if (outcome.kind === "mission" || outcome.kind === "run") {
-        ensureChatForRun(text, outcome.runId);
         setActiveRunId(outcome.runId);
       }
     });
@@ -324,8 +326,8 @@ export function App() {
     const onOpenRun = (e: Event) => {
       const runId = (e as CustomEvent<string>).detail;
       if (!runId) return;
-      const saved = findChatByRun(runId);
-      if (saved) openChatSession(saved.id);
+      // Re-enter the conversation that owns the run (or a fresh one).
+      openChatForRun(runId);
       setActiveRunId(runId);
       setCenterMode("work");
       setView("newtask");
@@ -353,7 +355,12 @@ export function App() {
     // these sessions. Non-blocking: the app renders immediately, chats
     // populate when the IPC load completes (initChatHistory emits).
     void initChatHistory();
-    return () => dispose.dispose();
+    // The backend's WorkSessions are authoritative: pull them into the chat list.
+    void loadConnectionConfig().then(() => syncSessions());
+    // The chat cache is written on a short debounce: never lose it on close.
+    const flush = () => flushChats();
+    window.addEventListener("beforeunload", flush);
+    return () => { dispose.dispose(); window.removeEventListener("beforeunload", flush); };
   }, []);
 
   useEffect(() => {
@@ -791,7 +798,7 @@ export function App() {
                 active run/chat is only hidden, never destroyed. */}
             {view === "home" ? (
               <div className="ov-app" style={{ height: "100%" }}>
-<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "error") { handOffToComposer({ text: prompt, error: outcome.error }); return; } if (outcome.kind === "mission" || outcome.kind === "run") { ensureChatForRun(prompt, outcome.runId); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ const saved=findChatByRun(m.runId); if(saved) openChatSession(saved.id); else ensureChatForRun(m.title, m.runId); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { newChat(); void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "error") { handOffToComposer({ text: prompt, error: outcome.error }); return; } if (outcome.kind === "mission" || outcome.kind === "run") { setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ openChatForRun(m.runId); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             ) : view === "newtask" && missionDetail && activeRunId ? (
               <div className="ov-app" style={{ height: "100%" }}><MissionDetail mission={missionDetailFromRuntime(missionDetail, agentRun.events)} onBack={() => { setActiveRunId(null); setMissionDetail(null); setCenterMode("home"); setView("home"); }} onApprove={(id, remember) => void agentRun.approve(id, true, remember ? "mission" : "once")} onDeny={(id) => void agentRun.approve(id, false)} onReply={(text) => void agentRun.steer(text)} onStop={() => void agentRun.stop()} /></div>
@@ -799,7 +806,7 @@ export function App() {
               <WorkStream projectRoot={workspaceRoot} projectName={projectName} run={runView} onRunStarted={(runId) => setActiveRunId(runId)} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} />
             ) : (
               <div className="ov-app" style={{ height: "100%" }}>
-<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "error") { handOffToComposer({ text: prompt, error: outcome.error }); return; } if (outcome.kind === "mission" || outcome.kind === "run") { ensureChatForRun(prompt, outcome.runId); setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ const saved=findChatByRun(m.runId); if(saved) openChatSession(saved.id); else ensureChatForRun(m.title, m.runId); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
+<HomeScreen userName={presentation.userName} statusLine={heroLine} workspaceName={projectName ?? "No project"} status={{ engineReady: facts.localEngineState === "ready", cloudOnline, agentsRunning: 0 }} missions={homeMissions} systems={toSystems({ engineReady: runtimeCaps.engineReady, githubConnected: runtimeCaps.githubConnected, sshHostCount: runtimeCaps.sshHostCount, postgresConnected: runtimeCaps.postgresConnected, dockerConnected: runtimeCaps.dockerAvailable, cloudSignedIn: presentation.signedIn })} agentName="ORION" agentRole="orchestrator" projectRoot={workspaceRoot} contextUsage={agentRun.usage} onOpenTerminal={() => chrome.setBottomTerminalOpen(true)} onNavigate={navigateView} onRun={(prompt, mode, settings) => { newChat(); void submitOrvynCommand({ prompt, mode, source: "HOME", projectRoot: workspaceRoot, attachments: settings?.attachments, requestedModelId: settings?.modelId, reasoningEffort: settings?.reasoningEffort, permissionMode: settings?.permissionMode, executionTarget: settings?.executionTarget }).then(outcome => { setCenterMode("work"); setView("newtask"); if (outcome.kind === "error") { handOffToComposer({ text: prompt, error: outcome.error }); return; } if (outcome.kind === "mission" || outcome.kind === "run") { setActiveRunId(outcome.runId); } }); }} onOpenMission={(id) => { const m=homeMissions.find(x=>x.id===id); if(m?.runId){ openChatForRun(m.runId); setActiveRunId(m.runId); setCenterMode("work"); setView("newtask"); } else setView("missions"); }} onConnectSystem={(id) => { if (id === "ssh") setView("servers"); else if (id === "github") setView("scm"); else if (id === "cloud") setView("settings"); else if (id === "docker") setView("containers"); else if (id === "postgres") setView("databases"); }} onViewAllMissions={() => setView("missions")} onOpenCommand={() => setPalette("commands")} />
               </div>
             )}
           </div>
@@ -911,16 +918,15 @@ export function App() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <ChatsWorkspace
               onOpenChat={(id) => {
+                // Resume: load the conversation and its newest run, enter the work stream.
                 openChatSession(id);
-                const runId = getActiveChat()?.runId;
-                if (runId) setActiveRunId(runId);
+                setActiveRunId(getChat(id)?.runId ?? null);
                 setCenterMode("work");
                 setView("newtask");
               }}
-              onOpenRun={(runId, goal) => {
-                const saved = findChatByRun(runId);
-                if (saved) openChatSession(saved.id);
-                else if (goal) ensureChatForRun(goal, runId);
+              onOpenRun={(runId) => {
+                // Re-enter the conversation that owns the run (or a fresh one).
+                openChatForRun(runId);
                 setActiveRunId(runId);
                 setCenterMode("work");
                 setView("newtask");

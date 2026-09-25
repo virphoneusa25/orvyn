@@ -17,6 +17,7 @@ import {
   subscribeChat,
   type ConversationSummary,
 } from "../chatSession";
+import { syncSessions } from "../sessionsApi";
 
 function relTime(ts: number): string {
   const s = Math.max(0, (Date.now() - ts) / 1000);
@@ -57,6 +58,8 @@ export function ChatsWorkspace({ onOpenChat, onOpenRun }: { onOpenChat: (id: str
   }, [tick]);
 
   React.useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
+  // The backend's sessions are the list; the local file is only a cache.
+  React.useEffect(() => { void syncSessions(); }, []);
 
   // Recompute on every tick (the subscription's rerender signal) — NOT on
   // listChatSummaries() (which would create a new dep-array value every
@@ -235,6 +238,10 @@ function ChatRow({
         border: "1px solid var(--ov-line, var(--orvyn-border-soft))",
         borderRadius: 10, padding: "12px 14px", cursor: "pointer", position: "relative",
       }}
+      data-testid="chat-row"
+      data-chat-id={chat.id}
+      data-session-id={chat.sessionId ?? ""}
+      data-run-id={chat.runId ?? ""}
       onClick={() => !renaming && onOpen(chat.id)}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -279,8 +286,8 @@ function ChatRow({
           <span style={{ fontSize: 10, color: "var(--orvyn-cyan)", flexShrink: 0, fontFamily: "var(--font-mono)" }}>{chat.projectName}</span>
         )}
         {chat.runId && (
-          <span style={{ fontSize: 9, color: "var(--orvyn-purple-hi)", flexShrink: 0, border: "1px solid rgba(108,92,255,0.3)", borderRadius: 3, padding: "1px 5px" }}>
-            RUN
+          <span title={`Session ${chat.sessionId ?? "—"} · run ${chat.runId}`} style={{ fontSize: 9, color: "var(--orvyn-purple-hi)", flexShrink: 0, border: "1px solid rgba(108,92,255,0.3)", borderRadius: 3, padding: "1px 5px" }}>
+            {(chat.runCount ?? 1) > 1 ? `${chat.runCount} RUNS` : "RUN"}
           </span>
         )}
         {chat.archived && (

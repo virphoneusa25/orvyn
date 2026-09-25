@@ -36,3 +36,28 @@ export function partitionStreamMessages<T extends StreamOrderMessage>(
   }
   return { earlier, later };
 }
+
+/** An earlier run of the same conversation thread, shown above the current one. */
+export interface ThreadRunView<E = unknown> {
+  runId: string;
+  createdAt: number;
+  instruction: string;
+  status: string;
+  events: E[];
+}
+
+export type TimelineEntry<T, E = unknown> =
+  | { kind: "message"; at: number; message: T }
+  | { kind: "run"; at: number; run: ThreadRunView<E> };
+
+/**
+ * Earlier chat turns and earlier runs of the thread, interleaved by time, so a
+ * conversation reads top to bottom in the order it happened.
+ */
+export function threadTimeline<T extends StreamOrderMessage, E>(messages: T[], runs: ThreadRunView<E>[]): TimelineEntry<T, E>[] {
+  const entries: TimelineEntry<T, E>[] = [
+    ...messages.map((message, i) => ({ kind: "message" as const, at: typeof message.createdAt === "number" ? message.createdAt : i - 1e15, message })),
+    ...runs.map((run) => ({ kind: "run" as const, at: run.createdAt, run })),
+  ];
+  return entries.sort((a, b) => a.at - b.at);
+}
