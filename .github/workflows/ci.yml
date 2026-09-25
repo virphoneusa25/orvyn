@@ -132,9 +132,13 @@ jobs:
             echo "::error title=OVH deploy skipped::OVH_SSH_PRIVATE_KEY is not set. Nothing was deployed. Add it under Settings → Secrets and variables → Actions."
             exit 1
           fi
+          # The runner has no ~/.ssh until something creates it; a key pasted
+          # from Windows may carry CR line endings, which ssh rejects.
+          mkdir -p -m 700 "$HOME/.ssh"
           install -m 600 /dev/null "$HOME/.ssh/ovh_deploy"
-          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" > "$HOME/.ssh/ovh_deploy"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/ovh_deploy"
           chmod 600 "$HOME/.ssh/ovh_deploy"
+          ssh-keygen -y -f "$HOME/.ssh/ovh_deploy" > /dev/null || { echo "::error title=OVH deploy key::OVH_SSH_PRIVATE_KEY is not a valid private key. Paste the whole file, including the BEGIN and END lines."; exit 1; }
           export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
           bash scripts/deploy-ovh.sh
           shred -u "$HOME/.ssh/ovh_deploy" 2>/dev/null || rm -f "$HOME/.ssh/ovh_deploy"
