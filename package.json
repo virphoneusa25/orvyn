@@ -16,7 +16,8 @@
     "smoke:agent": "npm run build -w @orvyn/backend && node scripts/smoke-agent.mjs",
     "accept:phase1": "npm run build -w @orvyn/backend && node --experimental-strip-types --no-warnings scripts/acceptance/phase1-chat-loop.mjs",
     "accept:phase2": "npm run build -w @orvyn/backend && node scripts/acceptance/phase2-agent-loop.mjs",
-    "accept:phase3": "npm run build -w @orvyn/backend && node scripts/acceptance/phase3-execution-target.mjs"
+    "accept:phase3": "npm run build -w @orvyn/backend && node scripts/acceptance/phase3-execution-target.mjs",
+    "accept:local-worker": "npm run build -w @orvyn/backend && node scripts/acceptance/local-worker-reconnect.mjs"
   },
   "engines": {
     "node": ">=18"

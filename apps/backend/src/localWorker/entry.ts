@@ -30,8 +30,12 @@ async function cp(pathname: string, method = "GET", body?: unknown): Promise<any
       let data = "";
       res.on("data", (c) => (data += c));
       res.on("end", () => {
-        try { resolve(data ? JSON.parse(data) : {}); }
-        catch { resolve({}); }
+        let body: any = {};
+        try { body = data ? JSON.parse(data) : {}; } catch { body = {}; }
+        // The HTTP status rides along so callers can tell "not registered"
+        // (after a control-plane restart) from a normal empty answer.
+        if (body && typeof body === "object") Object.defineProperty(body, "__status", { value: res.statusCode ?? 0, enumerable: false });
+        resolve(body);
       });
     });
     req.setTimeout(12_000, () => { req.destroy(); reject(new Error("timeout")); });
@@ -41,9 +45,11 @@ async function cp(pathname: string, method = "GET", body?: unknown): Promise<any
   });
 }
 
+let registered = false;
+
 async function register(): Promise<void> {
   const environment = await detectLocalEnvironment();
-  await cp("/api/v1/local-worker/register", "POST", {
+  const res = await cp("/api/v1/local-worker/register", "POST", {
     workerId: WORKER_ID,
     hostname: os.hostname(),
     projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
@@ -51,14 +57,38 @@ async function register(): Promise<void> {
     environment,
     hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
   });
+  const status = res?.__status ?? 0;
+  const ok = status >= 200 && status < 300 && res?.ok !== false;
+  if (ok !== registered || !ok) {
+    console.log(ok
+      ? `[local-worker] registered with ${CONTROL_PLANE}`
+      : `[local-worker] register refused (HTTP ${status}): ${String(res?.error ?? "").slice(0, 200)}`);
+  }
+  registered = ok;
+}
+
+/**
+ * The control plane keeps workers in memory, so every deploy or restart
+ * forgets this one. Heartbeat and poll answer 404/409 "not registered" then;
+ * register again right away instead of staying invisible until the app
+ * restarts (which is how runs ended with "Local Worker is offline").
+ */
+function needsRegister(res: any): boolean {
+  const status = res?.__status ?? 0;
+  return status === 401 || status === 404 || status === 409;
 }
 
 async function heartbeat(): Promise<void> {
-  await cp("/api/v1/local-worker/heartbeat", "POST", {
-    workerId: WORKER_ID,
-    projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
-    hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
-  }).catch(() => register());
+  try {
+    const res = await cp("/api/v1/local-worker/heartbeat", "POST", {
+      workerId: WORKER_ID,
+      projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
+      hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
+    });
+    if (needsRegister(res)) { registered = false; await register(); }
+  } catch {
+    await register().catch(() => undefined);
+  }
 }
 
 async function serveJob(job: { runId: string; projectRoot: string; role?: string; tenantId?: string }): Promise<void> {
@@ -118,7 +148,11 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
 async function poll(): Promise<void> {
   try {
     const res = await cp("/api/v1/local-worker/poll");
-    if (res.job) void serveJob(res.job);
+    if (needsRegister(res)) { registered = false; await register(); return; }
+    if (res.job) {
+      console.log(`[local-worker] job ${res.job.runId} in ${res.job.projectRoot || process.env.ORVYN_PROJECT_ROOT || "(no folder)"}`);
+      void serveJob(res.job);
+    }
   } catch {
     /* transient */
   }
@@ -126,8 +160,11 @@ async function poll(): Promise<void> {
 
 async function main(): Promise<void> {
   await register().catch((err) => console.warn("[local-worker] register failed", err?.message));
-  setInterval(() => { void heartbeat(); }, 15_000).unref();
-  setInterval(() => { void poll(); }, 1000).unref();
+  // These timers are what keeps the worker alive. With .unref() the process
+  // exited right after "ready", the desktop app restarted it, and the
+  // control plane saw it online only in short bursts after each restart.
+  setInterval(() => { void heartbeat(); }, 10_000);
+  setInterval(() => { void poll(); }, 1000);
   console.log(`[local-worker] ready ${WORKER_ID} → ${CONTROL_PLANE}`);
 }
 
