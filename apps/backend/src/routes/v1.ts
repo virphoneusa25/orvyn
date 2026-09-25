@@ -5,6 +5,7 @@ import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth, localWorkerServices, requestLocalServiceStop } from "./localWorker";
 import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
 import { summarizeRuns, threadHistory } from "../agent/runThread";
+import { recordRunAnswer, recordRunInstruction } from "../sessions/sessionMessages";
 import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
@@ -710,8 +711,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   }
   const attached = t.sessions.attachRun(session.sessionId, runId, String(req.body.projectRoot || remoteProjectRoot || "") || null) ?? session;
   if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId });
+  // The conversation is stored as it happens: the instruction now, ORION's answer when the run ends.
+  const userMessage = recordRunInstruction(t.sessions, attached.sessionId, runId, String(req.body.instruction ?? ""), {
+    messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
+    mode: String(req.body.mode ?? "agent"),
+  });
+  recordRunAnswer(t.sessions, t.runStore, attached.sessionId, runId);
   res.status(201).json({
     runId,
+    messageId: userMessage?.messageId,
+    messageSequence: userMessage?.sequence,
     sessionId: attached.sessionId,
     workspaceId: attached.workspaceId,
     projectId: attached.projectId,
@@ -871,7 +880,7 @@ v1Router.post("/agent/stream/runs/:id/queue/:itemId/delivered", (req, res) => {
 // ── WorkSessions: the durable record of a conversation and its work ─────────
 v1Router.get("/sessions", (req, res) => {
   const t = requireTenant(req);
-  res.json({ sessions: t.sessions.list() });
+  res.json({ sessions: t.sessions.list().map((x) => ({ ...x, ...t.sessions.messageSummary(x.sessionId) })) });
 });
 
 v1Router.post("/sessions", (req, res) => {
@@ -889,6 +898,45 @@ v1Router.get("/sessions/:id", (req, res) => {
   const s = t.sessions.get(String(req.params.id));
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s, runs: summarizeRuns(t.runStore, s.runIds) });
+});
+
+// ---- Durable messages of a session ------------------------------------------
+v1Router.get("/sessions/:id/messages", (req, res) => {
+  const t = requireTenant(req);
+  const s = t.sessions.get(String(req.params.id));
+  if (!s) return res.status(404).json({ error: "Unknown session" });
+  const after = Math.max(0, Number(req.query.after) || 0);
+  res.json({ sessionId: s.sessionId, messages: t.sessions.messages(s.sessionId, after) });
+});
+
+v1Router.post("/sessions/:id/messages", (req, res) => {
+  const t = requireTenant(req);
+  const role = String(req.body?.role ?? "");
+  if (!["user", "assistant", "system"].includes(role)) return res.status(400).json({ error: "role must be user, assistant or system" });
+  if (typeof req.body?.content !== "string") return res.status(400).json({ error: "content is required" });
+  const m = t.sessions.appendMessage(String(req.params.id), {
+    messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
+    role: role as "user" | "assistant" | "system",
+    content: req.body.content,
+    runId: typeof req.body.runId === "string" ? req.body.runId : null,
+    mode: typeof req.body.mode === "string" ? req.body.mode : null,
+    status: req.body.status === "streaming" ? "streaming" : "complete",
+    createdAt: Number(req.body.createdAt) || undefined,
+  });
+  if (!m) return res.status(404).json({ error: "Unknown session (or that message belongs to another session)" });
+  res.status(201).json({ message: m });
+});
+
+v1Router.patch("/sessions/:id/messages/:messageId", (req, res) => {
+  const t = requireTenant(req);
+  const existing = t.sessions.getMessage(String(req.params.messageId));
+  if (!existing || existing.sessionId !== String(req.params.id)) return res.status(404).json({ error: "Unknown message" });
+  const m = t.sessions.updateMessage(existing.messageId, {
+    content: typeof req.body?.content === "string" ? req.body.content : undefined,
+    runId: typeof req.body?.runId === "string" ? req.body.runId : undefined,
+    status: req.body?.status === "streaming" ? "streaming" : req.body?.status === "complete" ? "complete" : undefined,
+  });
+  res.json({ message: m });
 });
 
 v1Router.patch("/sessions/:id", (req, res) => {
@@ -1015,6 +1063,8 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     ?? t.sessions.create({ title: String(req.body.goal ?? "Mission").split("\n")[0]!.slice(0, 80), userId: req.principal?.userId ?? "", projectRoot: req.body.projectRoot ?? null });
   const joined = t.sessions.attachRun(missionSession.sessionId, runId, req.body.projectRoot ?? null) ?? missionSession;
   if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId });
+  recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission" });
+  recordRunAnswer(t.sessions, t.runStore, joined.sessionId, runId);
   res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
 });
 

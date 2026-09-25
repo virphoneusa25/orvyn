@@ -1,4 +1,5 @@
 import "./loadEnv";
+import { ChatTurnRecorder } from "./sessions/sessionMessages";
 import express from "express";
 import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
@@ -191,6 +192,7 @@ wss.on("connection", (socket, req) => {
     at: Date.now(),
   }));
 
+  let recorder: ChatTurnRecorder | null = null;
   socket.on("message", async (raw) => {
     let body;
     try {
@@ -214,17 +216,35 @@ wss.on("connection", (socket, req) => {
       const rawSocket = (socket as any)._socket;
       if (rawSocket?.setNoDelay) rawSocket.setNoDelay(true);
       const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
+      // The turn is stored now, and the reply as it streams: the session is
+      // the durable conversation, not the desktop's cache file.
+      const session = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      recorder = session && typeof body?.userMessage === "string"
+        ? new ChatTurnRecorder(tenant.sessions, session.sessionId, {
+            userMessage: body.userMessage,
+            userMessageId: typeof body.userMessageId === "string" ? body.userMessageId : undefined,
+            assistantMessageId: typeof body.assistantMessageId === "string" ? body.assistantMessageId : undefined,
+            userCreatedAt: Number(body.userCreatedAt) || undefined,
+          })
+        : null;
       for await (const chunk of orchestrator.streamChat({ ...body, capabilityPrompt })) {
         socket.send(JSON.stringify(chunk));
-        if (chunk.done) break;
+        const chunkError = (chunk as { error?: unknown }).error;
+        if (chunkError) recorder?.finish(String(chunkError));
+        else recorder?.delta(String(chunk.delta ?? ""));
+        if (chunk.done) { recorder?.finish(); break; }
         // Yield so each token can leave the process and paint in the UI
         // instead of arriving as one burst.
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      recorder?.finish();
     } catch (err: any) {
+      recorder?.finish(err.message);
       socket.send(JSON.stringify({ delta: "", done: true, error: err.message }));
     }
   });
+  // The app closed mid-reply: keep what arrived.
+  socket.on("close", () => recorder?.finish());
 });
 
 // Liveness heartbeat for desktop/cloud clients. A half-open socket must not

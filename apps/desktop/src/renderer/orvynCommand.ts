@@ -12,7 +12,7 @@
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { noteActiveRunId } from "./connectionRuntime";
-import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat } from "./chatSession";
+import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, type ChatMessage } from "./chatSession";
 import { createSession } from "./sessionsApi";
 import { wsUrl } from "./connection";
 import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
@@ -50,10 +50,19 @@ export type CommandOutcome =
 function runChat(cmd: OrvynCommand): CommandOutcome {
   const history = startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
   // Every chat is a durable backend WorkSession, even before it starts a run.
+  // The turn is sent with the session and message ids, and the backend stores
+  // it on arrival (and the reply as it streams).
   const chat = getActiveChat();
-  if (chat && !chat.sessionId) {
-    void createSession(chat.title, cmd.projectRoot).then((s) => { if (s && !chat.sessionId) bindChatToRun(chat.id, s.sessionId, undefined); });
-  }
+  const userMsg = chat?.messages[chat.messages.length - 2];
+  const replyMsg = chat?.messages[chat.messages.length - 1];
+  const sessionReady: Promise<string | undefined> = !chat
+    ? Promise.resolve(undefined)
+    : chat.sessionId
+      ? Promise.resolve(chat.sessionId)
+      : createSession(chat.title, cmd.projectRoot).then((s) => {
+          if (s && !chat.sessionId) bindChatToRun(chat.id, s.sessionId, undefined);
+          return chat.sessionId;
+        });
   try {
     const ws = new WebSocket(wsUrl("/ws/chat"));
     const giveUp = setTimeout(() => {
@@ -65,12 +74,17 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
         /* already closed */
       }
     }, 15000);
-    ws.onopen = () => {
+    ws.onopen = async () => {
       clearTimeout(giveUp);
+      const sessionId = await sessionReady.catch(() => undefined);
       ws.send(
         JSON.stringify({
           task: "chat",
           history,
+          sessionId,
+          userMessageId: userMsg?.id,
+          assistantMessageId: replyMsg?.id,
+          userCreatedAt: userMsg?.createdAt,
           userMessage: cmd.prompt,
           attachments: cmd.attachments ?? [],
           requestedModelId: cmd.requestedModelId,
@@ -104,15 +118,16 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
 
 async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
   const chat = ensureActiveChat(cmd.prompt);
+  const message: ChatMessage = { id: newMessageId(), role: "user", content: cmd.prompt, createdAt: Date.now(), mode: "mission" };
   const res = await fetch(apiUrl("/agent/orchestrate"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ sessionId: chat.sessionId, projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
+    body: JSON.stringify({ sessionId: chat.sessionId, messageId: message.id, projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
   });
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
   if (data.runId) noteActiveRunId(String(data.runId));
-  bindChatToRun(chat.id, data.sessionId, data.runId);
+  bindChatToRun(chat.id, data.sessionId, data.runId, { ...message, runId: data.runId });
   return { kind: "mission", runId: data.runId };
 }
 
@@ -124,6 +139,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
     ?? (forcedCloud && cloudBackend ? "ovh_worker" : "auto");
   // The run belongs to the active chat's durable session (a new chat gets one).
   const chat = ensureActiveChat(cmd.prompt);
+  const message: ChatMessage = { id: newMessageId(), role: "user", content: cmd.prompt, createdAt: Date.now(), mode };
   const res = await fetch(apiUrl("/agent/stream/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -138,6 +154,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
       attachments: cmd.attachments,
       previousRunId: cmd.previousRunId,
       sessionId: chat.sessionId,
+      messageId: message.id,
       requestedModelId: cmd.requestedModelId,
       reasoningEffort: cmd.reasoningEffort,
       permissionMode: cmd.permissionMode,
@@ -146,7 +163,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
   const data = await res.json();
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
   if (data.runId) noteActiveRunId(String(data.runId));
-  bindChatToRun(chat.id, data.sessionId, data.runId);
+  bindChatToRun(chat.id, data.sessionId, data.runId, { ...message, runId: data.runId });
   return { kind: "run", runId: data.runId };
 }
 

@@ -1,6 +1,6 @@
 // The backend's durable WorkSessions (authoritative for conversations).
 import { apiUrl, authHeaders } from "./connection";
-import { initChatHistory, mergeBackendSessions, setSessionMirror, type BackendSessionLike } from "./chatSession";
+import { applyBackendMessages, getActiveChat, initChatHistory, mergeBackendSessions, setSessionMirror, type BackendMessageLike, type BackendSessionLike } from "./chatSession";
 
 export async function fetchSessions(): Promise<BackendSessionLike[]> {
   const res = await fetch(apiUrl("/sessions"), { headers: authHeaders() });
@@ -16,6 +16,9 @@ export async function syncSessions(): Promise<number> {
     await initChatHistory();
     const list = await fetchSessions();
     mergeBackendSessions(list);
+    // The open conversation: its messages from the backend.
+    const open = getActiveChat()?.sessionId;
+    if (open) await loadSessionMessages(open);
     return list.length;
   } catch {
     return -1;
@@ -48,5 +51,23 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}`), { method: "DELETE", headers: authHeaders() }).catch(() => undefined);
 }
 
-// Renames, pins, archives and deletes in the chat list reach the backend session.
-setSessionMirror({ patch: (id, p) => void patchSession(id, p), remove: (id) => void deleteSession(id) });
+/** A session's messages, in order, merged into its chat. */
+export async function loadSessionMessages(sessionId: string): Promise<number> {
+  try {
+    const res = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/messages`), { headers: authHeaders() });
+    if (!res.ok) return -1;
+    const body = (await res.json()) as { messages?: BackendMessageLike[] };
+    applyBackendMessages(sessionId, body.messages ?? []);
+    return body.messages?.length ?? 0;
+  } catch {
+    return -1;
+  }
+}
+
+// Renames, pins, archives and deletes in the chat list reach the backend
+// session; opening a chat loads its messages from it.
+setSessionMirror({
+  patch: (id, p) => void patchSession(id, p),
+  remove: (id) => void deleteSession(id),
+  load: (id) => void loadSessionMessages(id),
+});

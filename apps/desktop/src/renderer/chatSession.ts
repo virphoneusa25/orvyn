@@ -6,8 +6,14 @@
 // mission; a mission may have a linked chat.
 
 export interface ChatMessage {
+  /** Durable id, shared with the backend session's copy of this message. */
+  id?: string;
   role: "user" | "assistant";
   content: string;
+  /** The run this message started or answered (its work is shown by the run). */
+  runId?: string;
+  /** Position in the backend session (set once the backend has it). */
+  sequence?: number;
   mode?: string;
   attachments?: { path: string; kind: string; purpose?: string }[];
   createdAt?: number;
@@ -32,6 +38,9 @@ export interface ChatSession {
   sessionId?: string;
   /** Every run of the session, oldest first. */
   runIds?: string[];
+  /** From the backend list, until the messages themselves are loaded. */
+  remoteMessageCount?: number;
+  remotePreview?: string;
   /** Conversation-scoped composer settings — explicit choices made in THIS
    *  chat never alter other chats; unset values fall back to the user-level
    *  defaults stored by the composer. */
@@ -67,6 +76,10 @@ function active(): ChatSession | null {
 // bricks the chat with context_length_exceeded. Strip it at the wire.
 const DATA_URL_RE = /data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=]{256,}/g;
 const WIRE_MESSAGE_CAP = 24_000;
+
+export function newMessageId(): string {
+  return `msg_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function toWireContent(content: string): string {
   const cleaned = content.replace(DATA_URL_RE, "[inline image omitted — saved to disk]");
@@ -170,13 +183,13 @@ export function listChatSummaries(): ConversationSummary[] {
   return sessions
     .map((s) => {
       const lastMsg = s.messages[s.messages.length - 1];
-      const preview = lastMsg?.content?.replace(DATA_URL_RE, "[image]").slice(0, 120) ?? "";
+      const preview = (lastMsg?.content ?? s.remotePreview ?? "").replace(DATA_URL_RE, "[image]").slice(0, 120);
       return {
         id: s.id,
         title: s.title,
         updatedAt: s.updatedAt,
         createdAt: s.createdAt,
-        messageCount: s.messages.length,
+        messageCount: Math.max(s.messages.length, s.remoteMessageCount ?? 0),
         pinned: s.pinned === true,
         archived: s.archived === true,
         status: (s.archived ? "archived" : s.id === activeId ? "active" : "idle") as ConversationSummary["status"],
@@ -201,14 +214,17 @@ export function getActiveChat(): ChatSession | null {
 }
 
 export function openChatSession(id: string): void {
-  if (sessions.some((s) => s.id === id)) {
+  const chat = sessions.find((s) => s.id === id);
+  if (chat) {
     activeId = id;
     emit();
+    // The backend holds the conversation; bring this chat up to date with it.
+    if (chat.sessionId) mirror?.load(chat.sessionId);
   }
 }
 
 /** Changes made here are mirrored to the backend session (which is authoritative). */
-type SessionMirror = { patch(sessionId: string, patch: { title?: string; status?: string; pinned?: boolean }): void; remove(sessionId: string): void };
+type SessionMirror = { patch(sessionId: string, patch: { title?: string; status?: string; pinned?: boolean }): void; remove(sessionId: string): void; load(sessionId: string): void };
 let mirror: SessionMirror | null = null;
 export function setSessionMirror(m: SessionMirror | null): void {
   mirror = m;
@@ -273,7 +289,7 @@ export function ensureChatForRun(prompt: string, runId: string): void {
     current.runId = runId;
     if (current.messages.length === 0) {
       current.title = title;
-      current.messages = [{ role: "user", content: prompt, createdAt: Date.now() }];
+      current.messages = [{ role: "user", content: prompt, createdAt: Date.now(), runId }];
     }
     current.updatedAt = Date.now();
     persist();
@@ -285,7 +301,7 @@ export function ensureChatForRun(prompt: string, runId: string): void {
     title,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    messages: [{ role: "user", content: prompt, createdAt: Date.now() }],
+    messages: [{ role: "user", content: prompt, createdAt: Date.now(), runId }],
     status: "idle",
     runId,
   };
@@ -373,7 +389,7 @@ export function startUserTurn(
     activeId = session.id;
   }
   const history = session.messages.map((m) => ({ role: m.role, content: toWireContent(m.content) }));
-  session.messages = [...session.messages, { role: "user", content, createdAt: Date.now(), ...extra }, { role: "assistant", content: "", createdAt: Date.now() }];
+  session.messages = [...session.messages, { id: newMessageId(), role: "user", content, createdAt: Date.now(), ...extra }, { id: newMessageId(), role: "assistant", content: "", createdAt: Date.now() }];
   session.updatedAt = Date.now();
   session.status = "active";
   streaming = true;
@@ -424,10 +440,12 @@ export function ensureActiveChat(title: string): ChatSession {
 
 /** A run started from a chat: that chat now follows the durable session and run.
  *  Bound by chat id, because the user may switch chats while the request is in flight. */
-export function bindChatToRun(chatId: string, sessionId: string | undefined, runId: string | undefined): void {
+export function bindChatToRun(chatId: string, sessionId: string | undefined, runId: string | undefined, message?: ChatMessage): void {
   const session = sessions.find((s) => s.id === chatId);
   if (!session) return;
   if (sessionId) session.sessionId = sessionId;
+  // The run's instruction is a message of the conversation (the backend stored it with the same id).
+  if (message?.id && !session.messages.some((m) => m.id === message.id)) session.messages = [...session.messages, message];
   if (runId) {
     session.runId = runId;
     session.runIds = [...(session.runIds ?? []).filter((r) => r !== runId), runId];
@@ -448,6 +466,50 @@ export interface BackendSessionLike {
   projectRoot: string | null;
   createdAt: number;
   updatedAt: number;
+  messageCount?: number;
+  lastMessage?: string;
+}
+
+export interface BackendMessageLike {
+  messageId: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  runId: string | null;
+  sequence: number;
+  mode: string | null;
+  status?: "complete" | "streaming";
+  createdAt: number;
+}
+
+/**
+ * The backend's messages are the conversation. They replace the cached ones
+ * (same ids); a local message the backend does not have yet (sent while
+ * offline, or from before messages were stored) is kept in time order.
+ */
+export function applyBackendMessages(sessionId: string, list: BackendMessageLike[]): void {
+  const chat = sessions.find((s) => s.sessionId === sessionId);
+  if (!chat || !list.length) return;
+  // Never replace a reply that is still streaming into this window.
+  if (streamingChatId === chat.id) return;
+  const backend: ChatMessage[] = [...list].sort((a, b) => a.sequence - b.sequence).map((m) => ({
+    id: m.messageId,
+    role: m.role === "user" ? "user" : "assistant",
+    content: m.content,
+    runId: m.runId ?? undefined,
+    sequence: m.sequence,
+    mode: m.mode ?? undefined,
+    createdAt: m.createdAt,
+  }));
+  const ids = new Set(backend.map((m) => m.id));
+  const same = (a: ChatMessage, b: ChatMessage) => a.role === b.role && a.content.trim() === b.content.trim();
+  const extra = chat.messages.filter((m) => (m.id ? !ids.has(m.id) : !backend.some((b) => same(b, m))) && (m.content.trim() || m.role === "user"));
+  // Backend order is the sequence. Messages from before messages were stored
+  // (no id) come first; ones the backend has not received yet come last.
+  const merged = [...extra.filter((m) => !m.id), ...backend, ...extra.filter((m) => m.id)];
+  const before = JSON.stringify(chat.messages.map((m) => [m.id, m.content]));
+  chat.messages = merged;
+  chat.remoteMessageCount = list.length;
+  if (JSON.stringify(merged.map((m) => [m.id, m.content])) !== before) { persist(); emit(); }
 }
 
 /**
@@ -478,6 +540,8 @@ export function mergeBackendSessions(list: BackendSessionLike[]): void {
     local.pinned = b.pinned;
     local.archived = b.status === "archived";
     if (b.projectRoot && !local.projectRoot) local.projectRoot = b.projectRoot;
+    if (typeof b.messageCount === "number") local.remoteMessageCount = b.messageCount;
+    if (typeof b.lastMessage === "string") local.remotePreview = b.lastMessage;
     changed = true;
   }
   if (changed) { persist(); emit(); }

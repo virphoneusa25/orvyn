@@ -160,7 +160,9 @@ export function WorkStream({
     };
   }, [projectRoot]);
   useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
-  const messages = getChatMessages();
+  // A message that started or answered a run is shown by that run's block
+  // (its instruction and its activity); only plain chat turns render here.
+  const messages = getChatMessages().filter((m) => !m.runId);
   // Follow-ups stamped after run.started render under the run. Painting
   // them above the activity is what made a new message appear at the top.
   const { earlier: earlierMessages, later: laterMessages } = partitionStreamMessages(messages, run.events);

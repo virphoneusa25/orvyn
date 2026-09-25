@@ -21,6 +21,26 @@ import { defaultDataDir } from "../persistence/LocalStore";
 
 export type WorkSessionStatus = "active" | "idle" | "archived";
 
+export type SessionMessageRole = "user" | "assistant" | "system";
+
+/** One message of a conversation, stored the moment it is sent. */
+export interface SessionMessage {
+  messageId: string;
+  sessionId: string;
+  role: SessionMessageRole;
+  content: string;
+  /** The run this message started or answered, if any. */
+  runId: string | null;
+  /** Position in the session: 1, 2, 3 … assigned by the backend, never reused. */
+  sequence: number;
+  /** "chat", "agent", "research" … as the composer sent it. */
+  mode: string | null;
+  /** "complete", or "streaming" while an assistant reply is still arriving. */
+  status: "complete" | "streaming";
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface WorkSession {
   sessionId: string;
   tenantId: string;
@@ -65,7 +85,43 @@ CREATE TABLE IF NOT EXISTS session_runs (
   run_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS session_messages (
+  message_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  run_id TEXT,
+  sequence INTEGER NOT NULL,
+  mode TEXT,
+  status TEXT NOT NULL DEFAULT 'complete',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (session_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON session_messages (session_id, sequence);
 `;
+
+const MAX_MESSAGE = 200_000;
+
+interface MessageRow {
+  message_id: string; session_id: string; role: string; content: string; run_id: string | null;
+  sequence: number; mode: string | null; status: string; created_at: number; updated_at: number;
+}
+
+function messageFromRow(r: MessageRow): SessionMessage {
+  return {
+    messageId: r.message_id,
+    sessionId: r.session_id,
+    role: (["user", "assistant", "system"].includes(r.role) ? r.role : "user") as SessionMessageRole,
+    content: r.content,
+    runId: r.run_id,
+    sequence: r.sequence,
+    mode: r.mode,
+    status: r.status === "streaming" ? "streaming" : "complete",
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
 
 const id = (prefix: string) => `${prefix}_${randomBytes(8).toString("hex")}`;
 
@@ -199,6 +255,69 @@ export class WorkSessionStore {
   delete(sessionId: string): boolean {
     const r = this.db.prepare(`DELETE FROM work_sessions WHERE session_id = ? AND tenant_id = ?`).run(sessionId, this.tenantId);
     this.db.prepare(`DELETE FROM session_runs WHERE session_id = ?`).run(sessionId);
+    this.db.prepare(`DELETE FROM session_messages WHERE session_id = ?`).run(sessionId);
     return Number(r.changes) > 0;
+  }
+
+  // ── Messages ────────────────────────────────────────────────────────────
+
+  /**
+   * Stores one message now (not on a timer). Idempotent by messageId: sending
+   * the same id again updates that message instead of adding a second one,
+   * so a client can retry safely. The sequence is assigned here, once.
+   */
+  appendMessage(sessionId: string, input: { messageId?: string; role: SessionMessageRole; content: string; runId?: string | null; mode?: string | null; status?: "complete" | "streaming"; createdAt?: number }): SessionMessage | undefined {
+    if (!this.get(sessionId)) return undefined;
+    const content = String(input.content ?? "").slice(0, MAX_MESSAGE);
+    const messageId = input.messageId?.trim() || id("msg");
+    const existing = this.getMessage(messageId);
+    if (existing) {
+      if (existing.sessionId !== sessionId) return undefined;
+      return this.updateMessage(messageId, { content, runId: input.runId ?? existing.runId, status: input.status ?? existing.status });
+    }
+    const now = Date.now();
+    const createdAt = Number.isFinite(input.createdAt) ? Number(input.createdAt) : now;
+    // Next position in this session. One statement, so two writers never share a sequence.
+    this.db.prepare(
+      `INSERT INTO session_messages (message_id, session_id, role, content, run_id, sequence, mode, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_messages WHERE session_id = ?), ?, ?, ?, ?)`
+    ).run(messageId, sessionId, input.role, content, input.runId ?? null, sessionId, input.mode ?? null, input.status ?? "complete", createdAt, now);
+    this.db.prepare(`UPDATE work_sessions SET updated_at = ? WHERE session_id = ?`).run(now, sessionId);
+    return this.getMessage(messageId);
+  }
+
+  updateMessage(messageId: string, patch: { content?: string; runId?: string | null; status?: "complete" | "streaming" }): SessionMessage | undefined {
+    const m = this.getMessage(messageId);
+    if (!m) return undefined;
+    const content = patch.content !== undefined ? String(patch.content).slice(0, MAX_MESSAGE) : m.content;
+    const now = Date.now();
+    this.db.prepare(`UPDATE session_messages SET content = ?, run_id = ?, status = ?, updated_at = ? WHERE message_id = ?`)
+      .run(content, patch.runId !== undefined ? patch.runId : m.runId, patch.status ?? m.status, now, messageId);
+    this.db.prepare(`UPDATE work_sessions SET updated_at = ? WHERE session_id = ?`).run(now, m.sessionId);
+    return this.getMessage(messageId);
+  }
+
+  getMessage(messageId: string): SessionMessage | undefined {
+    const r = this.db.prepare(`SELECT * FROM session_messages WHERE message_id = ?`).get(messageId) as MessageRow | undefined;
+    return r ? messageFromRow(r) : undefined;
+  }
+
+  /** The conversation in order. `after` returns only messages past that sequence. */
+  messages(sessionId: string, after = 0): SessionMessage[] {
+    const rows = this.db.prepare(`SELECT * FROM session_messages WHERE session_id = ? AND sequence > ? ORDER BY sequence ASC`).all(sessionId, after) as unknown as MessageRow[];
+    return rows.map(messageFromRow);
+  }
+
+  /** For the chat list: how many messages, and the newest one's text. */
+  messageSummary(sessionId: string): { messageCount: number; lastMessage: string } {
+    const c = this.db.prepare(`SELECT COUNT(*) AS n FROM session_messages WHERE session_id = ?`).get(sessionId) as { n: number };
+    const last = this.db.prepare(`SELECT content FROM session_messages WHERE session_id = ? AND content != '' ORDER BY sequence DESC LIMIT 1`).get(sessionId) as { content: string } | undefined;
+    return { messageCount: Number(c.n), lastMessage: (last?.content ?? "").slice(0, 160) };
+  }
+
+  /** The message that started a run (its instruction), if stored. */
+  messageOfRun(runId: string, role: SessionMessageRole = "user"): SessionMessage | undefined {
+    const r = this.db.prepare(`SELECT * FROM session_messages WHERE run_id = ? AND role = ? ORDER BY sequence ASC LIMIT 1`).get(runId, role) as MessageRow | undefined;
+    return r ? messageFromRow(r) : undefined;
   }
 }

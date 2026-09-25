@@ -41,3 +41,31 @@ test("the same folder is the same workspace; a session without a folder gets one
   assert.equal(store.delete(bare.sessionId), true);
   assert.equal(store.get(bare.sessionId), undefined);
 });
+
+test("messages are stored one by one, in order, and survive a restart", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-sessions-"));
+  const a = new WorkSessionStore("t1", dir);
+  const s = a.create({ title: "chat" });
+  const m1 = a.appendMessage(s.sessionId, { messageId: "msg_a", role: "user", content: "Create hello.txt", runId: "run-1", mode: "agent" })!;
+  const m2 = a.appendMessage(s.sessionId, { role: "assistant", content: "", status: "streaming" })!;
+  assert.equal(m1.sequence, 1);
+  assert.equal(m2.sequence, 2);
+  assert.match(m2.messageId, /^msg_/);
+  a.updateMessage(m2.messageId, { content: "Created hello.txt.", status: "complete" });
+  // A retry with the same id updates it; it never adds a duplicate.
+  a.appendMessage(s.sessionId, { messageId: "msg_a", role: "user", content: "Create hello.txt" });
+  const b = new WorkSessionStore("t1", dir); // "the backend restarted"
+  const all = b.messages(s.sessionId);
+  assert.deepEqual(all.map((m) => [m.messageId, m.role, m.sequence, m.runId, m.status]), [
+    ["msg_a", "user", 1, "run-1", "complete"],
+    [m2.messageId, "assistant", 2, null, "complete"],
+  ]);
+  assert.equal(all[1]!.content, "Created hello.txt.");
+  assert.equal(b.messages(s.sessionId, 1).length, 1, "after a sequence: only newer messages");
+  assert.equal(b.messageOfRun("run-1")?.messageId, "msg_a");
+  assert.equal(b.appendMessage("sess_missing", { role: "user", content: "x" }), undefined);
+  const other = b.create({ title: "other" });
+  assert.equal(b.appendMessage(other.sessionId, { messageId: "msg_a", role: "user", content: "hijack" }), undefined, "a message id belongs to one session");
+  b.delete(s.sessionId);
+  assert.equal(b.messages(s.sessionId).length, 0);
+});
