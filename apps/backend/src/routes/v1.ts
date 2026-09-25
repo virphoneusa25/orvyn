@@ -2,7 +2,8 @@ import { documentRouter } from "./documents";
 import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
-import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth } from "./localWorker";
+import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth, localWorkerServices, requestLocalServiceStop } from "./localWorker";
+import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
 import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
@@ -30,6 +31,38 @@ v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string
   if (!tenant) throw new Error(`Unknown tenant ${tenantId}`);
   return tenant.runStore;
 }));
+// ── Services (dev servers ORION started) ─────────────────────────────────
+// "local": on the user's computer, reported by the Local Worker.
+// "cloud": on this host (an ORVYN Cloud workspace, or the same-host backend).
+function hostServicesFor(t: { id: string; currentProjectRoot?: string | null }): ServiceRecord[] {
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
+  return serviceManager.list().filter((s) =>
+    s.tenantId === t.id || isVirtualWorkspace(s.projectRoot, t.id) || (!cloudHost && (!s.tenantId || s.projectRoot === t.currentProjectRoot))
+  );
+}
+
+v1Router.get("/services", (req, res) => {
+  const t = requireTenant(req);
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
+  res.json({
+    services: [
+      ...localWorkerServices(t.id).map((s) => ({ ...s, location: "local" as const })),
+      ...hostServicesFor(t).map((s) => ({ ...s, location: cloudHost ? "cloud" as const : "local" as const, cwd: undefined })),
+    ],
+  });
+});
+
+v1Router.post("/services/:id/stop", (req, res) => {
+  const t = requireTenant(req);
+  const id = String(req.params.id);
+  if (hostServicesFor(t).some((s) => s.serviceId === id)) {
+    serviceManager.stop(id, "stopped by the user");
+    return res.json({ ok: true });
+  }
+  if (requestLocalServiceStop(t.id, id)) return res.json({ ok: true, pending: true });
+  res.status(404).json({ error: "Unknown service" });
+});
+
 v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
   if (!tenantId) {
     if (process.env.ORVYN_CLOUD_MODE === "true") throw new Error("tenant required");

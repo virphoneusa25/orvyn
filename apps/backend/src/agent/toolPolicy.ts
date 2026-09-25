@@ -4,7 +4,9 @@
 
 import type { TaskIntent } from "./taskIntent";
 
-const SERVER = /^(ssh_exec|remote_exec|start_process|stop_process|read_process_logs|list_processes)$/;
+const SERVER = /^(ssh_exec|remote_exec)$/;
+/** Dev servers and watchers: any task that runs commands in a project may need one. */
+const SERVICE = /^(start_process|stop_process|read_process_logs|list_processes)$/;
 const BROWSER = /^browser_/;
 const DESKTOP = /^(desktop_|computer[._])/;
 const ARTIFACT = /^(generate_image|artifact_|create_document|create_zip)$/;
@@ -20,6 +22,9 @@ export function selectToolNames(
   return names.filter((name) => {
     if (GIT.test(name) && !gitAllowed) return false;
     if (SERVER.test(name) && !intent.requiresRemoteResource && intent.category !== "server" && intent.category !== "deploy") {
+      return false;
+    }
+    if (SERVICE.test(name) && !intent.requiresTerminal && !intent.requiresFrontend && intent.category !== "server" && intent.category !== "deploy") {
       return false;
     }
     if (BROWSER.test(name) && !intent.requiresBrowser && intent.category !== "browser") return false;

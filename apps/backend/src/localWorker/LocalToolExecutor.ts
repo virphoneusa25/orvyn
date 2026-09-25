@@ -15,7 +15,8 @@ import { isDestructiveCommand, makeTerminalTool, normalizeWindowsCommand } from 
 import { makeRunTestsTool, makeRunTypecheckTool } from "../ai/tools/diagnosticsTools";
 import { resolveSafePath, resolveSafeRealpath } from "../execution/pathSafety";
 import { acquireFileLock, fileHash, releaseFileLock } from "./fileLock";
-import { processTracker } from "./processTracker";
+import { isServiceCommand, runService, type ServiceRecord } from "../services/ServiceManager";
+import { listServices, serviceLogs, stopService } from "../ai/tools/processTools";
 import type { ToolResult } from "../ai/ToolTypes";
 import {
   makeHostDesktopClickTool,
@@ -39,6 +40,8 @@ export interface LocalToolRequest {
 
 export interface LocalToolResponse extends ToolResult {
   previews?: { url: string; port?: number; label: string }[];
+  /** Set when the call started (or found) a long-running service. */
+  service?: ServiceRecord;
 }
 
 const SECRET_NAMES = new Set([".env", ".env.local", ".env.production", "id_rsa", "id_ed25519", ".npmrc"]);
@@ -88,46 +91,44 @@ export async function executeLocalTool(req: LocalToolRequest): Promise<LocalTool
     if (isDestructiveCommand(command)) {
       return { ok: false, error: "Destructive command requires ToolGateway approval and was not executed by the worker directly." };
     }
-    const kind = /\b(dev|start|serve|watch|preview)\b/i.test(command) ? "service" as const : "command" as const;
-    if (kind === "service") {
-      const existing = processTracker.findRunningService(root, command);
-      if (existing) {
-        return { ok: true, output: `Already running ${existing.processId} on ${existing.port ? `port ${existing.port}` : "an existing port"}` };
-      }
-      const started = processTracker.start({
-        command: process.platform === "win32" ? normalizeWindowsCommand(command) : command,
-        cwd: root,
-        projectRoot: root,
-        runId: req.runId,
-        kind,
-        onOutput: req.onOutput,
-      });
-      return { ok: true, output: `Started service ${started.processId}: ${command}` };
-    }
+    // A dev server becomes a service: it outlives this run and this tool call.
+    const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
+    if (isServiceCommand(finalCommand)) return startLocalService(req, root, finalCommand);
     return tools.terminal.execute({ command }, { onOutput: req.onOutput });
   }
 
-  if (req.tool === "start_dev_server") {
-    const command = String(args.command ?? "npm run dev");
-    const existing = processTracker.findRunningService(root, command);
-    if (existing) return { ok: true, output: `Dev server already running (${existing.processId}${existing.port ? ` :${existing.port}` : ""})` };
-    const started = processTracker.start({ command, cwd: root, projectRoot: root, runId: req.runId, kind: "service", onOutput: req.onOutput });
-    return { ok: true, output: `Started ${started.processId}: ${command}` };
+  if (req.tool === "start_process" || req.tool === "start_dev_server") {
+    const command = String(args.command ?? (req.tool === "start_dev_server" ? "npm run dev" : "")).trim();
+    if (!command) return { ok: false, error: "command is required" };
+    return startLocalService(req, root, process.platform === "win32" ? normalizeWindowsCommand(command) : command);
   }
 
   if (req.tool === "stop_process") {
-    return processTracker.stop(String(args.processId ?? args.id ?? ""), { runId: req.runId });
+    return stopService(root, String(args.processId ?? args.id ?? ""));
   }
   if (req.tool === "process_status" || req.tool === "list_processes") {
-    return { ok: true, output: JSON.stringify(processTracker.list(root), null, 2) };
+    return listServices(root);
   }
   if (req.tool === "read_process_logs") {
-    return { ok: true, output: processTracker.logs(String(args.processId ?? args.id ?? "")) || "(no logs)" };
+    return serviceLogs(root, String(args.processId ?? args.id ?? ""), Number(args.tail) || 80);
   }
 
   const tool = tools[req.tool];
   if (!tool) return { ok: false, error: `Unknown local tool: ${req.tool}` };
   return tool.execute(args);
+}
+
+async function startLocalService(req: LocalToolRequest, root: string, command: string): Promise<LocalToolResponse> {
+  const { outcome, result } = await runService({
+    command,
+    cwd: root,
+    projectRoot: root,
+    runId: req.runId,
+    tenantId: req.tenantId,
+    onOutput: req.onOutput,
+    readyTimeoutMs: 90_000,
+  });
+  return { ...result, service: outcome.record };
 }
 
 export async function assertWorkspaceFile(projectRoot: string, relativePath: string): Promise<string> {

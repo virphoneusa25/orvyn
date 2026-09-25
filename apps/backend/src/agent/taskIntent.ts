@@ -42,7 +42,10 @@ function has(text: string, re: RegExp): boolean {
 export function inferTaskIntent(instruction: string, composerMode?: string): TaskIntent {
   const goal = String(instruction ?? "").trim();
   const mode = String(composerMode ?? "").toLowerCase();
-  const server = has(goal, /\b(server|ssh|hostname|uptime|remote host|log into|login to)\b/i) || mode === "server";
+  // "Start the dev server" is a local service in the project, not a remote
+  // machine to log into. Only what is left after removing those counts.
+  const remoteText = goal.replace(/\b(?:dev|development|local|vite|next(?:\.js)?|preview|web|http|static|node|express|api)\s+server\b/gi, "");
+  const server = has(remoteText, /\b(server|ssh|hostname|uptime|remote host|log into|login to)\b/i) || mode === "server";
   const database = has(goal, /\b(database|postgres|mysql|sqlite|sql query|schema)\b/i);
   const deploy = has(goal, /\b(deploy|release|rollout|ship to production)\b/i) || mode === "deploy";
   const browser = has(goal, /\b(browser|homepage|webpage|open the (app|site|page))\b/i);
@@ -52,11 +55,11 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
-  const frontend = has(goal, /\b(website|web site|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|html|css|responsive|component)\b/i);
+  const frontend = has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server)\b/i);
   const code =
     mode === "code" ||
     has(goal, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|file)\b/i);
-  const terminal = has(goal, /\b(npm |node |pytest|terminal|run the|run tests|build)\b/i) || code || server || deploy;
+  const terminal = has(goal, /\b(npm |node |pytest|terminal|run the|run tests|build|dev server|start it|keep it running|serve)\b/i) || code || server || deploy;
 
   let category: TaskCategory = "general";
   if (research && !code && !server) category = "research";

@@ -201,3 +201,15 @@ test("a website cannot be served with python", () => {
   assert.match(shellServerRefusal("python3 -m http.server 8080 &", true) ?? "", /write_file/);
   assert.equal(shellServerRefusal("python3 -m http.server 8080 &", false), null);
 });
+
+test("a local dev server is not a remote server task, and gets the service tools", () => {
+  const intent = inferTaskIntent("Create a small Vite app, install it, and start the dev server.");
+  assert.notEqual(intent.category, "server");
+  assert.equal(intent.requiresRemoteResource, false);
+  assert.equal(intent.requiresTerminal, true);
+  const names = selectToolNames(["terminal", "start_process", "read_process_logs", "ssh_exec"], intent);
+  assert.ok(names.includes("start_process"));
+  assert.ok(names.includes("read_process_logs"));
+  assert.ok(!names.includes("ssh_exec"));
+  assert.equal(inferTaskIntent("ssh into the server and check uptime").category, "server");
+});

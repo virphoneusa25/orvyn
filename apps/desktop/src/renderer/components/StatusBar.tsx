@@ -8,6 +8,7 @@ import { authHeaders, apiUrl, healthUrl, noteProtectedStatus } from "../connecti
 import { describeConnection, type ConnectionPresentation } from "../connectionState";
 import { getConnectionFacts, onConnectionFacts } from "../connectionRuntime";
 import { shortBuildSha } from "../buildInfo";
+import { ServicesIndicator } from "./ServicesIndicator";
 
 interface Health {
   status: string;
@@ -118,6 +119,7 @@ export function StatusBar() {
             {state.stats.diskPercent > 0 && <span>Disk {state.stats.diskPercent}%</span>}
           </>
         )}
+        <ServicesIndicator />
         <span>
           {state.runningRuns} running
         </span>

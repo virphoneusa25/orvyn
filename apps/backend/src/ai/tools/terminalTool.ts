@@ -1,6 +1,7 @@
 // apps/backend/src/ai/tools/terminalTool.ts
 import { spawn } from "child_process";
 import { AITool, ToolResult } from "../ToolTypes";
+import { isServiceCommand, runService } from "../../services/ServiceManager";
 
 // Per the master spec, ALL terminal access requires approval — this is not
 // configurable to "allowed". Certain patterns are additionally flagged as
@@ -36,7 +37,12 @@ export function normalizeWindowsCommand(command: string): string {
   return out;
 }
 
-const TERMINAL_TIMEOUT_MS = 30_000;
+/**
+ * One-shot commands (npm install, a scaffolder, a test suite) get minutes,
+ * not seconds: output streams to the chat while they work. Servers never hit
+ * this: they are handed to ServiceManager and return once they listen.
+ */
+const TERMINAL_TIMEOUT_MS = Number(process.env.ORVYN_TERMINAL_TIMEOUT_MS) > 0 ? Number(process.env.ORVYN_TERMINAL_TIMEOUT_MS) : 5 * 60_000;
 const MAX_CAPTURE = 1024 * 1024;
 
 /**
@@ -56,7 +62,16 @@ export function runStreaming(
     let stderr = "";
     let settled = false;
     let timedOut = false;
-    const child = spawn(command, { cwd, shell: true, windowsHide: true });
+    // No stdin: a scaffolder that would wait for an answer sees a
+    // non-interactive shell and uses its defaults instead of hanging. CI=1
+    // keeps test runners (vitest, jest) from entering watch mode.
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, CI: process.env.CI ?? "1" },
+    });
     const take = (which: "out" | "err") => (d: Buffer) => {
       const text = d.toString();
       if (which === "out") { if (stdout.length < MAX_CAPTURE) stdout += text; }
@@ -99,6 +114,11 @@ export function makeTerminalTool(projectRoot: string): AITool {
     async execute(args, context): Promise<ToolResult> {
       const command = String(args.command);
       const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
+      // A dev server never "finishes". It becomes a service that outlives the run.
+      if (isServiceCommand(finalCommand)) {
+        const { result } = await runService({ command: finalCommand, cwd: projectRoot, projectRoot, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
+        return result;
+      }
       return runStreaming(finalCommand, projectRoot, context?.onOutput, context?.signal);
     },
   };

@@ -20,7 +20,7 @@ import type { ToolRpcChannel } from "./ToolRpc";
  */
 function remoteToolTimeoutMs(): number {
   const v = Number(process.env.ORVYN_REMOTE_TOOL_TIMEOUT_MS);
-  return Number.isFinite(v) && v > 0 ? v : 120_000;
+  return Number.isFinite(v) && v > 0 ? v : 330_000;
 }
 
 /** Caps the diff sent back for huge files — same spirit as editPreview. */

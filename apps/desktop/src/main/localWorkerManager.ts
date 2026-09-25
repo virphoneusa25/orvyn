@@ -51,7 +51,7 @@ export class LocalWorkerManager {
         this.child = null;
         void this.start();
       });
-      child.kill();
+      killWorkerTree(child);
       return;
     }
     void this.start();
@@ -106,7 +106,7 @@ export class LocalWorkerManager {
   stop(): void {
     this.quitting = true;
     if (this.timer) clearTimeout(this.timer);
-    this.child?.kill();
+    if (this.child) killWorkerTree(this.child);
     this.child = null;
     this.releaseLock();
     this.status.state = "offline";
@@ -171,3 +171,19 @@ export class LocalWorkerManager {
 }
 
 export const localWorkerManager = new LocalWorkerManager();
+
+/**
+ * Services ORION started (dev servers) are children of the worker. On
+ * Windows, killing the worker alone would leave them running with nobody
+ * tracking them, so the whole tree goes. Elsewhere the worker's SIGTERM
+ * handler stops them itself.
+ */
+function killWorkerTree(child: ChildProcess): void {
+  if (process.platform === "win32" && child.pid) {
+    try {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      return;
+    } catch { /* fall through */ }
+  }
+  child.kill();
+}

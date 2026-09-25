@@ -6,7 +6,7 @@ import { Router } from "express";
 import { toolRpc } from "../execution/ToolRpc";
 import { executeLocalTool } from "../localWorker/LocalToolExecutor";
 import { detectLocalEnvironment } from "../localWorker/environmentDetect";
-import { processTracker } from "../localWorker/processTracker";
+import type { ServiceRecord } from "../services/ServiceManager";
 import type { AgentEventType } from "../agent/events";
 import type { RunStore } from "../agent/events";
 import type { Tenant } from "../tenancy/TenantManager";
@@ -23,9 +23,43 @@ interface LocalWorkerRecord {
   lastHeartbeat: number;
   status: LocalWorkerHealth;
   hostDesktopAllowed: boolean;
+  /** Services running on the user's computer, as the worker last reported them. */
+  services: ServiceRecord[];
 }
 
 const workers = new Map<string, LocalWorkerRecord>();
+/** Stop requests from the app, handed to the worker on its next poll. */
+const pendingStops = new Map<string, Set<string>>();
+
+const SERVICE_FIELDS = ["serviceId", "name", "command", "cwd", "projectRoot", "runId", "port", "url", "status", "startedAt", "readyAt", "lastHealthAt", "exitCode", "stopReason"] as const;
+
+function cleanServices(raw: unknown): ServiceRecord[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 50).flatMap((item) => {
+    if (!item || typeof item !== "object" || typeof (item as any).serviceId !== "string") return [];
+    const out: Record<string, unknown> = {};
+    for (const k of SERVICE_FIELDS) if ((item as any)[k] !== undefined) out[k] = (item as any)[k];
+    return [out as unknown as ServiceRecord];
+  });
+}
+
+/** Services on this tenant's computer (empty when the Local Worker is offline). */
+export function localWorkerServices(tenantId: string): ServiceRecord[] {
+  return hasOnlineLocalWorker(tenantId) ? workers.get(tenantId)?.services ?? [] : [];
+}
+
+/** Queues a stop for a service on the user's computer. False if it is unknown. */
+export function requestLocalServiceStop(tenantId: string, serviceId: string): boolean {
+  const w = workers.get(tenantId);
+  const svc = w?.services.find((s) => s.serviceId === serviceId);
+  if (!w || !svc) return false;
+  const set = pendingStops.get(tenantId) ?? new Set<string>();
+  set.add(serviceId);
+  pendingStops.set(tenantId, set);
+  svc.status = "stopped";
+  svc.stopReason = "stopping (requested in ORVYN)";
+  return true;
+}
 
 interface LocalJob {
   runId: string;
@@ -91,6 +125,7 @@ export function localWorkerRouter(
       lastHeartbeat: Date.now(),
       status: req.body.degraded ? "degraded" : "ready",
       hostDesktopAllowed: req.body.hostDesktopAllowed === true,
+      services: cleanServices(req.body.services),
     });
     res.json({ ok: true, workerId, secretRequired: true });
   });
@@ -103,6 +138,7 @@ export function localWorkerRouter(
     existing.status = req.body.degraded ? "degraded" : "ready";
     if (typeof req.body.projectRoot === "string") existing.projectRoot = req.body.projectRoot;
     existing.hostDesktopAllowed = req.body.hostDesktopAllowed === true;
+    if (Array.isArray(req.body.services)) existing.services = cleanServices(req.body.services);
     workers.set(t.id, existing);
     res.json({ ok: true, health: existing.status });
   });
@@ -120,7 +156,9 @@ export function localWorkerRouter(
     }
     const job = jobs.find((j) => j.tenantId === t.id && !j.assignedTo);
     if (job) job.assignedTo = worker.workerId;
-    res.json({ job: job ?? null });
+    const stops = [...(pendingStops.get(t.id) ?? [])];
+    pendingStops.delete(t.id);
+    res.json({ job: job ?? null, stopServices: stops });
   });
 
   r.get("/tools/:runId/next", (req, res) => {
@@ -173,9 +211,13 @@ export function localWorkerRouter(
     res.json({ ok: true });
   });
 
-  r.get("/processes", (req, res) => {
+  // The worker reports its services after any change, between heartbeats.
+  r.post("/services", (req, res) => {
     const t = requireTenant(req);
-    res.json({ processes: processTracker.list(typeof req.query.projectRoot === "string" ? req.query.projectRoot : t.currentProjectRoot ?? undefined) });
+    const existing = workers.get(t.id);
+    if (!existing) return res.status(404).json({ error: "Not registered — re-register" });
+    existing.services = cleanServices(req.body.services);
+    res.json({ ok: true });
   });
 
   r.post("/execute", async (req, res) => {

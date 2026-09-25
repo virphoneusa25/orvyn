@@ -6,7 +6,7 @@ import { request } from "http";
 import { request as httpsRequest } from "https";
 import { executeLocalTool } from "./LocalToolExecutor";
 import { detectLocalEnvironment } from "./environmentDetect";
-import { processTracker } from "./processTracker";
+import { serviceManager } from "../services/ServiceManager";
 
 const CONTROL_PLANE = process.env.ORVYN_CONTROL_PLANE || "http://127.0.0.1:4570";
 const API_KEY = process.env.ORVYN_API_KEY || "";
@@ -55,6 +55,7 @@ async function register(): Promise<void> {
     projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
     capabilities: ["local_host", "local_sandbox", "stdio-mcp"],
     environment,
+    services: serviceManager.list(),
     hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
   });
   const status = res?.__status ?? 0;
@@ -84,6 +85,7 @@ async function heartbeat(): Promise<void> {
       workerId: WORKER_ID,
       projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
       hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
+      services: serviceManager.list(),
     });
     if (needsRegister(res)) { registered = false; await register(); }
   } catch {
@@ -100,7 +102,11 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
   while (true) {
     const next = await cp(`/api/v1/local-worker/tools/${job.runId}/next`);
     if (next.finished) {
-      await processTracker.stopRun(job.runId);
+      // Services belong to the project, not the run: a dev server ORION
+      // started keeps running after the run ends, until someone stops it.
+      const kept = serviceManager.list({ runId: job.runId, active: true });
+      if (kept.length) console.log(`[local-worker] run ${job.runId} finished; ${kept.length} service(s) keep running: ${kept.map((s) => `${s.serviceId} ${s.url ?? s.command}`).join(", ")}`);
+      await reportServices();
       return;
     }
     if (!next.request) {
@@ -134,6 +140,17 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
         data: { exitOk: result.ok },
       });
     }
+    if (result.service) {
+      await reportServices();
+      // The worker runs on the user's computer, so this localhost is theirs.
+      const svc = result.service;
+      if (svc.url && svc.status === "running") {
+        await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {
+          type: "preview.available",
+          data: { url: svc.url, port: svc.port, label: `${svc.name} · localhost:${svc.port}`, source: "dev-server", serviceId: svc.serviceId, local: true },
+        }).catch(() => undefined);
+      }
+    }
     await cp(`/api/v1/local-worker/tools/${job.runId}/result`, "POST", {
       requestId: req.requestId,
       runId: job.runId,
@@ -145,10 +162,30 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
   }
 }
 
+let lastServicesReport = "";
+
+/** Sends the service list when it changed (and the heartbeat carries it anyway). */
+async function reportServices(force = false): Promise<void> {
+  const services = serviceManager.list();
+  const key = JSON.stringify(services.map((s) => [s.serviceId, s.status, s.url]));
+  if (!force && key === lastServicesReport) return;
+  lastServicesReport = key;
+  await cp("/api/v1/local-worker/services", "POST", { services }).catch(() => { lastServicesReport = ""; });
+}
+
 async function poll(): Promise<void> {
   try {
     const res = await cp("/api/v1/local-worker/poll");
     if (needsRegister(res)) { registered = false; await register(); return; }
+    if (Array.isArray(res.stopServices) && res.stopServices.length) {
+      for (const id of res.stopServices) {
+        const stopped = serviceManager.stop(String(id), "stopped by the user");
+        console.log(`[local-worker] ${stopped ? "stopped" : "unknown"} service ${id} (requested in ORVYN)`);
+      }
+      await reportServices(true);
+    } else {
+      await reportServices();
+    }
     if (res.job) {
       console.log(`[local-worker] job ${res.job.runId} in ${res.job.projectRoot || process.env.ORVYN_PROJECT_ROOT || "(no folder)"}`);
       void serveJob(res.job);
@@ -165,6 +202,15 @@ async function main(): Promise<void> {
   // control plane saw it online only in short bursts after each restart.
   setInterval(() => { void heartbeat(); }, 10_000);
   setInterval(() => { void poll(); }, 1000);
+  // Services live as long as this worker does. When the app closes the
+  // worker, take them down with it instead of leaving orphans on the machine.
+  const shutdown = (signal: string) => {
+    const n = serviceManager.stopAll("ORVYN closed");
+    if (n) console.log(`[local-worker] ${signal}: stopped ${n} service(s)`);
+    setTimeout(() => process.exit(0), 200);
+  };
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
   console.log(`[local-worker] ready ${WORKER_ID} → ${CONTROL_PLANE}`);
 }
 

@@ -139,6 +139,9 @@ export function renderCapabilityPrompt(caps: RunCapabilities, surface: "run" | "
     "Do not hand an edit or a command back for someone else to apply when the tool is available.",
     "Do not claim a step happened unless a tool result in this run confirms it.",
     "A conceptual question is answered directly, without unnecessary tool calls.",
+    ...(caps.terminal
+      ? ["Dev servers (npm run dev, vite, next dev, a watcher) run as services: start one with start_process or terminal and it returns once it is listening, with its URL. It keeps running after this run finishes. Do not background it with & or nohup, and do not stop it at the end unless the user asks. Report the URL it printed."]
+      : []),
     "Where work runs: \"Local\" is the user's own computer; \"Cloud\" is ORVYN Cloud. Call it ORVYN Cloud. Never name the hosting provider, servers, IP addresses or infrastructure behind ORVYN.",
   ].join("\n");
 }
