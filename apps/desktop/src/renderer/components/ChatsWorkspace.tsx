@@ -5,7 +5,8 @@
 // real metadata, overflow menu for pin/archive/rename/delete. Opening a
 // conversation resumes it in the active ORION workspace.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiUrl, authHeaders } from "../connection";
 import {
   listChatSummaries,
   searchChats,
@@ -27,7 +28,7 @@ function relTime(ts: number): string {
 
 type Filter = "recent" | "pinned" | "archived" | "all";
 
-export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => void }) {
+export function ChatsWorkspace({ onOpenChat, onOpenRun }: { onOpenChat: (id: string) => void; onOpenRun?: (runId: string, goal?: string) => void }) {
   const [tick, setTick] = useState(0);
   const [filter, setFilter] = useState<Filter>("recent");
   const [query, setQuery] = useState("");
@@ -35,6 +36,25 @@ export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => voi
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [runs, setRuns] = useState<{ id: string; goal: string; status: string; createdAt: number }[]>([]);
+
+  useEffect(() => {
+    let stop = false;
+    fetch(apiUrl("/missions"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : { missions: [] }))
+      .then((d) => {
+        if (stop) return;
+        const rows = Array.isArray(d.missions) ? d.missions : [];
+        setRuns(rows.map((m: { runId?: string; id: string; goal?: string; status?: string; createdAt?: number }) => ({
+          id: String(m.runId || m.id),
+          goal: String(m.goal || "Untitled"),
+          status: String(m.status || ""),
+          createdAt: Number(m.createdAt || 0),
+        })));
+      })
+      .catch(() => { if (!stop) setRuns([]); });
+    return () => { stop = true; };
+  }, [tick]);
 
   React.useEffect(() => subscribeChat(() => setTick((t) => t + 1)), []);
 
@@ -64,6 +84,13 @@ export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => voi
       return b.updatedAt - a.updatedAt;
     });
   }, [all, filter, query]);
+
+  const pastRuns = useMemo(() => {
+    if (filter === "pinned" || filter === "archived") return [];
+    const linked = new Set(all.map((c) => c.runId).filter((id): id is string => Boolean(id)));
+    const q = query.trim().toLowerCase();
+    return runs.filter((r) => !linked.has(r.id) && (!q || r.goal.toLowerCase().includes(q) || r.status.toLowerCase().includes(q)));
+  }, [runs, all, filter, query]);
 
   function handleOpen(id: string) {
     onOpenChat(id);
@@ -126,7 +153,7 @@ export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => voi
           </button>
         ))}
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--orvyn-text-muted)", alignSelf: "center" }}>
-          {filtered.length} conversation{filtered.length === 1 ? "" : "s"}
+          {filtered.length + pastRuns.length} conversation{filtered.length + pastRuns.length === 1 ? "" : "s"}
         </span>
       </div>
 
@@ -151,7 +178,28 @@ export function ChatsWorkspace({ onOpenChat }: { onOpenChat: (id: string) => voi
             confirmDeleteId={confirmDelete}
           />
         ))}
-        {filtered.length === 0 && (
+        {pastRuns.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => onOpenRun?.(r.id, r.goal)}
+            style={{
+              textAlign: "left",
+              background: "var(--ov-panel, var(--orvyn-surface-2))",
+              border: "1px solid var(--ov-line, var(--orvyn-border-soft))",
+              borderRadius: 10, padding: "12px 14px", cursor: "pointer",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--orvyn-text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.goal}
+              </span>
+              <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)", flexShrink: 0 }}>{relTime(r.createdAt)}</span>
+            </div>
+            <div style={{ marginTop: 4, fontSize: 10, letterSpacing: 0.4, color: "var(--orvyn-purple-hi)" }}>{r.status}</div>
+          </button>
+        ))}
+        {filtered.length === 0 && pastRuns.length === 0 && (
           <div style={{ padding: "40px 0", textAlign: "center", fontSize: 12.5, color: "var(--orvyn-text-muted)" }}>
             {query ? `No conversations matching "${query}"` : `No ${filter === "recent" ? "" : filter} conversations yet.`}
           </div>

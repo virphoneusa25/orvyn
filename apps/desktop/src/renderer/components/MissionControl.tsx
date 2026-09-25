@@ -46,6 +46,7 @@ const STATUS_COLORS: Record<string, string> = {
   REWORK: "#d9a662",
   COMPLETED: "#5fbf77",
   FAILED: "#e06c75",
+  CANCELLED: "var(--text-muted)",
   BLOCKED: "#e06c75",
 };
 
@@ -94,7 +95,7 @@ export function MissionControl({ projectRoot }: { projectRoot: string | null }) 
     <div style={{ height: "100%", overflowY: "auto", padding: 16, color: "var(--text)" }}>
       <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>Mission Control</div>
       <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-        Live state of ORVYN's agents and missions. Missions are created by Build (Multitask) runs.
+        Past runs and multitask missions. Open one to bring that conversation back.
       </div>
       {error && (
         <div style={{ color: "#e06c75", fontSize: 12, marginBottom: 12 }}>Backend unreachable: {error}</div>
@@ -172,7 +173,7 @@ export function MissionControl({ projectRoot }: { projectRoot: string | null }) 
       <SectionTitle>Missions</SectionTitle>
       {missions.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          No missions yet. Start one from the Build tab with the Multitask mode.
+          No runs yet. Start one from Home or the Build tab.
         </div>
       ) : (
         missions.map((m) => (

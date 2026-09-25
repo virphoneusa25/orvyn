@@ -17,6 +17,7 @@ import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
+import { composerRunsAsMissions } from "../agent/missionList";
 import { MODES } from "../agent/modes";
 import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
@@ -1234,7 +1235,10 @@ v1Router.delete("/checkpoints/:id", async (req, res) => {
 // --- Missions (Task Engine state for Mission Control) ---
 v1Router.get("/missions", (req, res) => {
   const t = requireTenant(req);
-  res.json({ missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)) });
+  const missions = t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m));
+  const seen = new Set(missions.map((m) => m.runId));
+  const runs = composerRunsAsMissions(t.runStore.list(), seen);
+  res.json({ missions: [...missions, ...runs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 50) });
 });
 
 v1Router.get("/missions/:id", (req, res) => {

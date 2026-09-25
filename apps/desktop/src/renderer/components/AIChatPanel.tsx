@@ -10,6 +10,7 @@ import {
   getChatMessages,
   initChatHistory,
   isChatStreaming,
+  ensureChatForRun,
   listChatSessions,
   newChat,
   openChatSession,
@@ -264,6 +265,11 @@ export function AIChatPanel({
                   openChatSession(id);
                   const runId = getActiveChat()?.runId;
                   if (runId) document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: runId }));
+                  setShowHistory(false);
+                }}
+                onOpenRun={(runId, goal) => {
+                  ensureChatForRun(goal, runId);
+                  document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: runId }));
                   setShowHistory(false);
                 }}
                 onDelete={(id) => deleteChatSession(id)}
@@ -529,16 +535,37 @@ export function AIChatPanel({
 
 function ChatHistoryDropdown({
   onOpen,
+  onOpenRun,
   onDelete,
   onClose,
 }: {
   onOpen: (id: string) => void;
+  onOpenRun: (runId: string, goal: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }) {
   const [, setTick] = useState(0);
+  const [runs, setRuns] = useState<{ id: string; goal: string; createdAt: number }[]>([]);
   useEffect(() => subscribeChat(() => setTick((n) => n + 1)), []);
+  useEffect(() => {
+    let stop = false;
+    fetch(apiUrl("/missions"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : { missions: [] }))
+      .then((d) => {
+        if (stop) return;
+        const rows = Array.isArray(d.missions) ? d.missions : [];
+        setRuns(rows.map((m: { runId?: string; id: string; goal?: string; createdAt?: number }) => ({
+          id: String(m.runId || m.id),
+          goal: String(m.goal || "Untitled"),
+          createdAt: Number(m.createdAt || 0),
+        })));
+      })
+      .catch(() => { if (!stop) setRuns([]); });
+    return () => { stop = true; };
+  }, []);
   const items = listChatSessions();
+  const linked = new Set(items.map((s) => s.runId).filter((id): id is string => Boolean(id)));
+  const past = runs.filter((r) => !linked.has(r.id));
   const activeId = getActiveChatId();
 
   return (
@@ -559,10 +586,21 @@ function ChatHistoryDropdown({
       }}
       onMouseLeave={onClose}
     >
-      {items.length === 0 ? (
+      {items.length === 0 && past.length === 0 ? (
         <div style={{ padding: 12, fontSize: 12, opacity: 0.55 }}>No previous chats yet.</div>
       ) : (
-        items.map((s) => (
+        <>
+        {past.map((r) => (
+          <div
+            key={r.id}
+            style={{ padding: "8px 10px", borderBottom: "1px solid #1a2130", cursor: "pointer" }}
+            onClick={() => onOpenRun(r.id, r.goal)}
+          >
+            <div style={{ fontSize: 12, color: "#e6e9f0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.goal}</div>
+            <div style={{ fontSize: 10.5, opacity: 0.5, marginTop: 2 }}>{r.createdAt ? new Date(r.createdAt).toLocaleString() : "Saved run"}</div>
+          </div>
+        ))}
+        {items.map((s) => (
           <div
             key={s.id}
             style={{
@@ -602,7 +640,8 @@ function ChatHistoryDropdown({
               ×
             </button>
           </div>
-        ))
+        ))}
+        </>
       )}
     </div>
   );
