@@ -91,7 +91,7 @@ export function AgentWorkspace({
   const [follow, setFollow] = useState<FollowController>(() => initialFollowState(running && layout.followOrion !== false));
   const [plusOpen, setPlusOpen] = useState(false);
   const [portsOpen, setPortsOpen] = useState(false);
-  const [filesFocus, setFilesFocus] = useState<{ path?: string; fileName?: string; artifactId?: string } | null>(null);
+  const [filesFocus, setFilesFocus] = useState<{ path?: string; fileName?: string; artifactId?: string; user?: boolean } | null>(null);
   const plusQuery = usePlusQuery();
   const plusBtnRef = useRef<HTMLButtonElement | null>(null);
   const portsBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -227,7 +227,9 @@ export function AgentWorkspace({
       artifactId: activity.artifactId,
     });
     if (nextKind === "files") {
-      setFilesFocus({ path: activity.file, fileName: activity.file, artifactId: activity.artifactId });
+      // Follow ORION: select the file in the list, but never take over the
+      // center of the window while the user is reading the chat.
+      setFilesFocus({ path: activity.file, fileName: activity.file, artifactId: activity.artifactId, user: false });
     }
     if (next.id === activeId) return;
     onLayout({
@@ -244,7 +246,7 @@ export function AgentWorkspace({
       const mapped = mapContextTab(d?.tab);
       setFollow((s) => applyManualTab(s));
       if (mapped === "files") {
-        setFilesFocus({ path: d?.path, fileName: d?.fileName, artifactId: d?.artifactId });
+        setFilesFocus({ path: d?.path, fileName: d?.fileName, artifactId: d?.artifactId, user: true });
         activate(parseWorkbenchTab("files"), true);
         return;
       }
@@ -557,7 +559,7 @@ export function AgentWorkspace({
               onOpenDiff={(path) => activate(parseWorkbenchTab(diffTabId(path)), true)}
               onOpenFile={(path) => {
                 if (isFabricatedGeneratedPath(path)) {
-                  setFilesFocus({ path, fileName: path.replace(/\\/g, "/").split("/").pop() });
+                  setFilesFocus({ path, fileName: path.replace(/\\/g, "/").split("/").pop(), user: true });
                   activate(parseWorkbenchTab("files"), true);
                   return;
                 }
@@ -567,7 +569,7 @@ export function AgentWorkspace({
               onOpenArtifact={(name, artifactId) => {
                 if (artifactId) activate(parseWorkbenchTab(artifactTabId(name, artifactId)), true);
                 else {
-                  setFilesFocus({ fileName: name });
+                  setFilesFocus({ fileName: name, user: true });
                   activate(parseWorkbenchTab("files"), true);
                 }
               }}
@@ -618,7 +620,7 @@ function WorkbenchBody({
   projectRoot: string | null;
   environment: ReturnType<typeof resolveWorkbenchEnvironment>;
   ports: { port: number; command?: string; status: string }[];
-  filesFocus?: { path?: string; fileName?: string; artifactId?: string } | null;
+  filesFocus?: { path?: string; fileName?: string; artifactId?: string; user?: boolean } | null;
   onOpenDiff: (path: string) => void;
   onOpenFile: (path: string) => void;
   onOpenArtifact: (name: string, artifactId?: string) => void;

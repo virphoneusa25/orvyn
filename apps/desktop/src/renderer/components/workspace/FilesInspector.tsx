@@ -79,7 +79,8 @@ export function FilesInspector({
   files: WorkspaceFile[];
   artifacts: WorkspaceFile[];
   projectRoot: string | null;
-  focus?: { path?: string; fileName?: string; artifactId?: string } | null;
+  /** user: the person asked for this file (Open in the chat). Following ORION only selects it. */
+  focus?: { path?: string; fileName?: string; artifactId?: string; user?: boolean } | null;
   activePath?: string | null;
   environment?: WorkbenchEnvironment;
   onOpenFile: (path: string) => void;
@@ -218,16 +219,17 @@ export function FilesInspector({
     if (!focus) return;
     if (focus.artifactId) {
       const hit = generatedItems.find((i) => i.artifactId === focus.artifactId);
-      if (hit) { setSelection({ kind: "item", item: hit }); setSaved(null); centerFileView.open(); }
+      if (hit) { setSelection({ kind: "item", item: hit }); setSaved(null); if (focus.user) centerFileView.open(); }
       return;
     }
     const target = focus.path || focus.fileName;
     if (!target) return;
-    if (location === "local") return openProject(toProjectRelative(target, projectRoot));
+    const pick = focus.user ? openProject : selectProject;
+    if (location === "local") return pick(toProjectRelative(target, projectRoot));
     const hit = cloudProjectEntries.find((f) => matchesFile(String(f.path || f.name), focus));
-    if (hit) return openProject(toProjectRelative(String(hit.path || hit.name)), hit.bytes);
+    if (hit) return pick(toProjectRelative(String(hit.path || hit.name)), hit.bytes);
     const gen = generatedItems.find((i) => matchesFile(i.name, focus) || matchesFile(i.path ?? "", focus));
-    if (gen) { setSelection({ kind: "item", item: gen }); centerFileView.open(); }
+    if (gen) { setSelection({ kind: "item", item: gen }); if (focus.user) centerFileView.open(); }
   }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // With nothing chosen yet, open on the newest file ORION changed.
