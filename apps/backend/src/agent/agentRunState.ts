@@ -56,8 +56,19 @@ function reachablePreview(events: CompletionDecisionInput["events"]): boolean {
   });
 }
 
+/**
+ * The page was checked in a real browser: the latest independent verification
+ * passed with its browser check passing (VerificationRuntime), or the desktop
+ * check passed. An HTTP fetch of the page (browser.verification.passed from
+ * the preview publisher) is not a browser check and does not count.
+ */
 function browserVerified(events: CompletionDecisionInput["events"]): boolean {
-  return events.some((e) => e.type === "browser.verification_passed" || e.type === "browser.verification.passed" || e.type === "desktop.verification.passed");
+  const last = [...events].reverse().find((e) => e.type === "verification.completed");
+  if (last) {
+    const checks = (last.data?.checks as { name: string; status: string }[] | undefined) ?? [];
+    if (last.data?.verdict === "PASS" && checks.some((c) => c.name === "browser" && c.status === "pass")) return true;
+  }
+  return events.some((e) => e.type === "desktop.verification.passed");
 }
 
 const WEBSITE = /\b(website|web\s*site|landing\s*page|homepage|home\s*page|joomla)\b/i;

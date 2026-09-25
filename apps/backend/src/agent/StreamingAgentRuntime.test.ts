@@ -70,8 +70,9 @@ class FakeProvider {
     }
   }
 
+  /** Non-streaming calls come from the independent verifier here; this double approves. */
   async generate(): Promise<AIResponse> {
-    return { content: "", finishReason: "stop" };
+    return { content: "VERDICT: PASS\n- test double", finishReason: "stop" };
   }
   async healthCheck() {
     return { status: "online" as const };
@@ -139,7 +140,7 @@ async function waitForStatus(store: RunStore, runId: string, timeoutMs = 4_000):
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const status = store.get(runId)?.status;
-    if (status && status !== "running" && status !== "awaiting_approval") return status;
+    if (status && status !== "running" && status !== "awaiting_approval" && status !== "verifying") return status;
     await new Promise((r) => setTimeout(r, 5));
   }
   return store.get(runId)?.status ?? "unknown";

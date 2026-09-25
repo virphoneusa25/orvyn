@@ -71,6 +71,8 @@ const gates = [];
 const gate = (i) => (gates[i] ??= (() => { let open; const p = new Promise((r) => (open = r)); return { p, open }; })());
 const toolResults = [];
 function nextTurn(body) {
+  // The independent verifier (VerificationRuntime) asks the same model; this stand-in approves and lets the automatic read-only checks decide.
+  if (String(body.messages?.[0]?.content ?? "").includes("ORVYN VERIFIER")) return { text: "VERDICT: PASS\n- Reviewed the automatic checks." };
   const msgs = body.messages ?? [];
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
   if (!tools.length) return { text: "OK." };

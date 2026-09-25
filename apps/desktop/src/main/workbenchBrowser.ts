@@ -26,6 +26,7 @@ import {
 type TabEvent =
   | { kind: "console"; entry: { level: "error" | "warning"; message: string; source?: string; line?: number; at: number } }
   | { kind: "network"; entry: { method: string; url: string; status: number; error?: string; at: number } }
+  | { kind: "navigated"; url: string }
   | { kind: "closed" };
 
 const MOBILE_UA =
@@ -207,6 +208,7 @@ export class WorkbenchBrowserManager {
       this.emit();
     });
     wc.on("did-navigate", (_e, next) => {
+      this.tabEvent(id, { kind: "navigated", url: String(next) });
       this.applyUrl(tab, next);
       this.syncNav(tab, wc);
       this.emit();

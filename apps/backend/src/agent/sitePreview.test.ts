@@ -41,3 +41,18 @@ test("remembered pages publish without reading the project disk", () => {
   const again = publishRememberedSite("run-1");
   assert.equal(again?.url, site!.url);
 });
+
+test("a fixed script replaces the broken one in the preview (the page is never rewritten in place)", () => {
+  const page = '<html><head><link rel="stylesheet" href="style.css"></head><body><h1>x</h1><script src="app.js"></script></body></html>';
+  rememberSiteFile("run-fix", "index.html", page);
+  rememberSiteFile("run-fix", "app.js", "document.title = 'a';\nfunction broken( {\n");
+  const first = publishRememberedSite("run-fix")!;
+  assert.equal(readPublishedFile(first.id, "index.html")?.body.toString(), page, "loaded files are served as files, not inlined");
+  rememberSiteFile("run-fix", "app.js", "document.title = 'a';\nfunction fixed() {}\n");
+  rememberSiteFile("run-fix", "style.css", "h1{color:red}");
+  const second = publishRememberedSite("run-fix")!;
+  assert.equal(second.url, first.url);
+  assert.match(readPublishedFile(second.id, "app.js")?.body.toString() ?? "", /fixed/);
+  assert.doesNotMatch(readPublishedFile(second.id, "index.html")?.body.toString() ?? "", /broken/);
+  assert.equal(readPublishedFile(second.id, "style.css")?.body.toString(), "h1{color:red}");
+});

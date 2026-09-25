@@ -46,20 +46,39 @@ export function rememberSiteFile(runId: string, relPath: string, content: string
   remembered.set(runId, bag);
 }
 
-/** One document: the page plus every stylesheet and script the agent wrote. */
+/** True when the page already loads this file with a <link href> or <script src>. */
+function pageLoads(html: string, pageKey: string, file: string): boolean {
+  const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+  const rel = file.startsWith(pageDir) ? file.slice(pageDir.length) : file;
+  const re = /<(?:link|script)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const ref = m[1]!.split(/[?#]/)[0]!.replace(/^\.\//, "").replace(/^\//, "");
+    if (ref === rel || ref === file) return true;
+  }
+  return false;
+}
+
+/**
+ * One document: the page as the agent wrote it, plus any stylesheet or
+ * script the agent wrote but the page does not load. Files the page does
+ * load are served as files, so a later fix to them is what the preview shows.
+ * Always composed from the latest files; the stored page is never rewritten.
+ */
 export function composeSiteDocument(runId: string): string | null {
   const bag = remembered.get(runId);
   if (!bag) return null;
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
   if (!pageKey) return null;
   let html = bag.get(pageKey) ?? "";
-  const css = [...bag.entries()].filter(([name]) => name.endsWith(".css")).map(([, body]) => body).join("\n");
-  const js = [...bag.entries()].filter(([name]) => name.endsWith(".js")).map(([, body]) => body).join("\n");
-  if (css && !html.includes(css.slice(0, 40))) {
+  const unloaded = (ext: string) => [...bag.entries()].filter(([name]) => name.endsWith(ext) && !pageLoads(html, pageKey, name)).map(([, body]) => body);
+  const css = unloaded(".css").join("\n");
+  const js = unloaded(".js").join("\n");
+  if (css) {
     const style = `<style>\n${css}\n</style>`;
     html = html.includes("</head>") ? html.replace("</head>", `${style}\n</head>`) : style + html;
   }
-  if (js && !html.includes(js.slice(0, 40))) {
+  if (js) {
     const script = `<script>\n${js}\n</script>`;
     html = html.includes("</body>") ? html.replace("</body>", `${script}\n</body>`) : html + script;
   }
@@ -72,12 +91,11 @@ export function publishRememberedSite(runId: string): { id: string; url: string;
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
   const composed = composeSiteDocument(runId);
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
-  if (composed && pageKey) bag.set(pageKey, composed);
   const dir = join(tmpdir(), "orvyn-preview", runId);
   for (const [rel, content] of bag) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });
-    writeFileSync(abs, content);
+    writeFileSync(abs, rel === pageKey && composed ? composed : content);
   }
   const pageDir = pageKey && pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/")) : "";
   const root = pageDir ? join(dir, pageDir) : dir;

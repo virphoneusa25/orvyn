@@ -38,6 +38,8 @@ const CONTENT = "Hello from ORION\n";
 
 // Scripted model: write hello.txt when asked to create it, read it when asked to read it.
 function nextTurn(body) {
+  // The independent verifier (VerificationRuntime) asks the same model; this stand-in approves and lets the automatic read-only checks decide.
+  if (String(body.messages?.[0]?.content ?? "").includes("ORVYN VERIFIER")) return { text: "VERDICT: PASS\n- Reviewed the automatic checks." };
   const msgs = body.messages ?? [];
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
   if (!tools.length) return { text: "OK." };

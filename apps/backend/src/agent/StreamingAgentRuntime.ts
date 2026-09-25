@@ -47,6 +47,7 @@ import { resolveResources, resourcesFromProject, type RegisteredResource } from 
 import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
+import { collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, MAX_CONTINUATION_NUDGES } from "./continuation";
@@ -153,6 +154,8 @@ interface RunState {
   exposedTools: Set<string> | null;
   resolvedResources: RegisteredResource[];
   gateRetries: number;
+  /** Independent verification rounds that did not PASS (VerificationRuntime). */
+  verifyRounds: number;
   /** Lane pins (fast/code/premium) are not model pins. */
   modelPinned: boolean;
   website?: WebsiteMissionState;
@@ -188,6 +191,8 @@ export interface RunOptions {
  */
 const MAX_STEPS = Number(process.env.ORVYN_AGENT_MAX_STEPS) || 48;
 const FAILURE_CIRCUIT_BREAKER = 5;
+/** Repair rounds after a verifier FAIL before the run fails for real. */
+const MAX_VERIFY_ROUNDS = 3;
 
 /**
  * Per-run runaway guards (spec §45), independent of the step ceiling because
@@ -640,6 +645,7 @@ export class StreamingAgentRuntime {
       exposedTools: exposed,
       resolvedResources: resolution.status === "ok" ? resolution.resources : [],
       gateRetries: 0,
+      verifyRounds: 0,
       modelPinned: choice.pinned,
       ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission() } : {}),
       composerMode: options?.composerMode,
@@ -1523,10 +1529,28 @@ export class StreamingAgentRuntime {
         return { kind: "verify" };
       },
 
-      // The completion evaluator: only its approval completes the run.
-      verify: async () => {
+      // Verification, then the completion evaluator. Implementation work is
+      // checked by an independent read-only VerificationRuntime first; only a
+      // PASS lets the completion evaluator see it. FAIL (or PARTIAL, once)
+      // goes back to this same run with the findings.
+      verify: async (_turn, reply) => {
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
+        const verification = await this.runVerification(runId, state, provider);
+        if (verification && verification.verdict !== "PASS") {
+          const blocking = verification.verdict === "FAIL" || state.verifyRounds < 1;
+          if (blocking) {
+            state.verifyRounds += 1;
+            if (state.verifyRounds > MAX_VERIFY_ROUNDS) {
+              return fail(`Verification ${verification.verdict} after ${MAX_VERIFY_ROUNDS} repair attempts: ${verification.findings.map((f) => f.message).slice(0, 3).join(" ")}`);
+            }
+            this.enterPhase(runId, "repairing");
+            this.store.setStatus(runId, "running");
+            messages.push({ role: "assistant", content: reply.content || "" });
+            messages.push({ role: "user", content: findingsPrompt(verification, state.verifyRounds) });
+            return { kind: "retry", reason: `verifier ${verification.verdict}: ${verification.findings[0]?.message ?? "no details"}` };
+          }
+        }
         const gates = evaluateCompletionGates({
           instruction: state.instruction,
           artifacts: state.createdArtifacts,
@@ -1966,6 +1990,74 @@ export class StreamingAgentRuntime {
   // Tool-call turns often include a sentence of intent. If the adapter did
   // not stream it as deltas, emit it now; either way, message.completed lets
   // the UI flush that sentence before the next tool card.
+  /**
+   * Runs the independent, read-only VerificationRuntime for implementation
+   * work. Returns null when there is nothing to verify (no files changed).
+   */
+  private async runVerification(runId: string, state: RunState, provider: AIModelProvider) {
+    const events = this.store.get(runId)?.events ?? [];
+    const evidence = collectVerificationEvidence(state.instruction, events, { website: Boolean(state.website) || undefined });
+    if (!isImplementationTask(evidence)) return null;
+    const attempt = state.verifyRounds + 1;
+    this.store.emit(runId, "verification.started", {
+      attempt,
+      changedFiles: evidence.changedFiles,
+      testBuild: evidence.testBuildEvidence.length,
+      browser: evidence.browserEvidence.length,
+    });
+    const context = {
+      signal: state.controller.signal,
+      executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+      workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
+      runId,
+      tenantId: state.execution?.tenantId || undefined,
+    };
+    let seq = 0;
+    const verifier = new VerificationRuntime({
+      provider,
+      toolDefinitions: this.toolDefinitions(VERIFIER_TOOLS),
+      signal: state.controller.signal,
+      tools: {
+        execute: async (tool, args) => {
+          // Read-only tools only (VerificationRuntime refuses the rest). A tool
+          // the project denies stays denied; running code needs full access.
+          if (this.tools.getPermission(tool) === "denied") return { ok: false, error: `${tool} is denied for this project.` };
+          if (/^run_(tests|typecheck|linter)$/.test(tool) && state.accessMode !== "full_access") {
+            return { ok: false, error: `${tool} needs approval; the verifier does not ask. Rely on the run's own test evidence.` };
+          }
+          return this.tools.execute(tool, args, "coder", { ...context, toolUseId: `verify_${attempt}_${++seq}` });
+        },
+      },
+      onToolCall: (call, result) => {
+        const callId = `verify_${attempt}_${call.id}`;
+        this.store.emit(runId, "tool.started", { callId, tool: call.tool, args: call.args, verifier: true });
+        this.store.emit(runId, result.ok ? "tool.completed" : "tool.failed", {
+          callId,
+          tool: call.tool,
+          verifier: true,
+          ...(result.ok ? { preview: String(result.output ?? "").slice(0, 400) } : { error: result.error }),
+          ...(result.envelope ? { envelope: envelopeForEvent({ ...result.envelope, toolUseId: callId }) } : {}),
+        });
+      },
+    });
+    let result;
+    try {
+      result = await verifier.verify(evidence);
+    } catch (err: any) {
+      result = { verdict: "FAIL" as const, findings: [{ severity: "blocker" as const, check: "verifier", message: `The verifier could not finish: ${err?.message ?? err}` }], checks: [], report: "", toolCalls: [] };
+    }
+    this.store.emit(runId, "verification.completed", {
+      attempt,
+      verdict: result.verdict,
+      findings: result.findings,
+      checks: result.checks,
+      modelVerdict: result.modelVerdict,
+      report: result.report.slice(0, 4000),
+      verifierTools: result.toolCalls,
+    });
+    return result;
+  }
+
   /** A call the runtime refused before any tool ran: blocked, never retryable as-is. */
   private refusalEnvelope(state: RunState, call: ToolCall, error: string) {
     return envelopeForEvent(buildToolResultEnvelope({

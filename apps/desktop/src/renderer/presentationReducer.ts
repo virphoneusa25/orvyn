@@ -372,6 +372,27 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         });
         continue;
 
+      case "verification.started":
+        items.push({ kind: "status", key: e.id, label: "Verifying the work independently…", ephemeral: true, tone: "working" });
+        continue;
+
+      case "verification.completed": {
+        const verdict = String(e.data.verdict ?? "");
+        const findings = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string }[]) : [];
+        const first = findings[0]?.message ? ` — ${String(findings[0].message).slice(0, 110)}` : "";
+        const more = findings.length > 1 ? ` (+${findings.length - 1} more)` : "";
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: verdict === "PASS"
+            ? "Verified: independent check passed"
+            : `Verification ${verdict}${first}${more}. Fixing it before finishing.`,
+          ephemeral: false,
+          tone: verdict === "PASS" ? "working" : "rework",
+        });
+        continue;
+      }
+
       case "review.rejected":
         items.push({ kind: "status", key: e.id, label: "Checking the result and making corrections…", ephemeral: false, tone: "rework" });
         continue;

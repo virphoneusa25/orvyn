@@ -96,6 +96,8 @@ export type AgentEventType =
   /** The agent announced a next step without doing it and was sent back to work. */
   | "agent.continue"
   | "agent.turn"
+  | "verification.started"
+  | "verification.completed"
   | "agent.loop.finished"
   // --- Durable ordered queue: follow-up instructions queued during a run ---
   | "queue.item.created"

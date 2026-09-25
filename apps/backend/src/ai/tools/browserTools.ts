@@ -6,6 +6,7 @@
 // roster. No tool pretends to work.
 
 import * as path from "path";
+import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
 import { workbenchBrowserCommand } from "../../desktop/electronBrowserTarget";
@@ -71,6 +72,27 @@ function sessionResult(r: Record<string, unknown>, summary: string, extraLines: 
       },
       surface: "workbench",
       ...meta,
+    },
+  };
+}
+
+/** The server-side fallback session, described like a Workbench session (surface: background). */
+function backgroundMeta(projectRoot: string): Record<string, unknown> {
+  const s = sessions.get(projectRoot);
+  const id = `bg_${createHash("sha1").update(projectRoot).digest("hex").slice(0, 10)}`;
+  const size = s?.page?.viewportSize?.() as { width: number; height: number } | null | undefined;
+  return {
+    surface: "background",
+    browserSessionId: id,
+    browserSession: {
+      sessionId: id,
+      runId: "",
+      url: s ? String(s.page.url()) : "",
+      title: "",
+      viewport: size ? { preset: "custom", width: size.width, height: size.height, mobile: false } : undefined,
+      consoleErrors: s?.consoleErrors.length ?? 0,
+      networkErrors: s?.failedRequests.length ?? 0,
+      screenshots: s?.screenshots.length ?? 0,
     },
   };
 }
@@ -313,7 +335,7 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
       const s = await openSession(projectRoot);
       if (url) await gotoWithRecovery(s.page, url);
       s.actions.push({ action: "open", url, timestamp: Date.now() });
-      return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -335,8 +357,11 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
+      const bg = sessions.get(projectRoot);
+      // Errors describe the page being looked at: a new page starts clean.
+      if (bg) { bg.consoleErrors.length = 0; bg.failedRequests.length = 0; }
       const finalUrl = await gotoWithRecovery(page, url);
-      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -370,7 +395,7 @@ export function makeBrowserViewportTool(projectRoot: string): AITool {
       const [w, h] = presets[String(args.preset ?? "")] ?? [Number(args.width) || 1280, Number(args.height) || 800];
       const page = await getPage(projectRoot);
       await page.setViewportSize({ width: w, height: h });
-      return { ok: true, output: `Viewport set to ${w}×${h}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Viewport set to ${w}×${h}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -393,7 +418,7 @@ export function makeBrowserClickTool(projectRoot: string): AITool {
       if (missing) return missing;
       const page = await getPage(projectRoot);
       await page.click(selector, { timeout: 10_000 });
-      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -423,7 +448,7 @@ export function makeBrowserTypeTool(projectRoot: string): AITool {
       const page = await getPage(projectRoot);
       await page.fill(selector, text, { timeout: 10_000 });
       if (args.submit === true) await page.press(selector, "Enter");
-      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -449,9 +474,12 @@ export function makeBrowserConsoleErrorsTool(projectRoot: string): AITool {
       if (missing) return missing;
       const s = sessions.get(projectRoot);
       if (!s) return { ok: false, error: "No browser session. Call browser_open first." };
+      const failed = s.failedRequests.map((r) => `[network] ${r.method} ${r.url} ${r.status || "failed"}`);
+      const all = [...s.consoleErrors, ...failed];
       return {
         ok: true,
-        output: s.consoleErrors.length === 0 ? "No console or page errors observed." : s.consoleErrors.join("\n"),
+        output: `${all.length === 0 ? "No console, page or network errors observed." : all.join("\n")}\n${BACKGROUND_NOTE}`,
+        meta: backgroundMeta(projectRoot),
       };
     }),
   };
@@ -495,7 +523,7 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
         s.screenshots.push(file);
         s.actions.push({ action: "screenshot", url: page.url(), timestamp: Date.now(), result: file });
       }
-      return { ok: true, output: `Screenshot saved: ${file}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Screenshot saved: ${file}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -517,7 +545,7 @@ export function makeBrowserScrollTool(projectRoot: string): AITool {
       if (missing) return missing;
       const page = await getPage(projectRoot);
       await page.mouse.wheel(0, deltaY);
-      return { ok: true, output: `Scrolled by ${deltaY}px.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+      return { ok: true, output: `Scrolled by ${deltaY}px.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -552,7 +580,7 @@ export function makeBrowserEvidenceTool(projectRoot: string): AITool {
         `Screenshots (${evidence.screenshots.length}): ${evidence.screenshots.join(", ") || "(none)"}`,
         BACKGROUND_NOTE,
       ];
-      return { ok: true, output: lines.join("\n"), meta: { surface: "background" } };
+      return { ok: true, output: lines.join("\n"), meta: backgroundMeta(projectRoot) };
     }),
   };
 }

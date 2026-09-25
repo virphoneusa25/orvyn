@@ -41,6 +41,8 @@ const repoRoot = resolve(new URL(".", import.meta.url).pathname.replace(/^\/([A-
 // ---------------------------------------------------------------------------
 const modelLog = [];
 function nextTurn(body) {
+  // The independent verifier (VerificationRuntime) asks the same model; this stand-in approves and lets the automatic read-only checks decide.
+  if (String(body.messages?.[0]?.content ?? "").includes("ORVYN VERIFIER")) return { text: "VERDICT: PASS\n- Reviewed the automatic checks." };
   const msgs = body.messages ?? [];
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
   if (tools.length === 0) {

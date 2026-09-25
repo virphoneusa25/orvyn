@@ -164,7 +164,7 @@ test("a website run is not finished until the agent writes a page", () => {
     events: [
       { type: "file.created", data: { path: "site/index.html" } },
       { type: "preview.available", data: { url: "https://preview.example/sites/1/" } },
-      { type: "browser.verification.passed", data: {} },
+      { type: "verification.completed", data: { verdict: "PASS", checks: [{ name: "browser", status: "pass" }] } },
     ],
   });
   assert.equal(passed.ok, true);

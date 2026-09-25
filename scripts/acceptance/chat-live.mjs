@@ -27,6 +27,8 @@ const INTRO = "I'll run the slow counter and report what it prints.";
 const SLOW = `node -e "let i=0;const t=setInterval(()=>{console.log('tick '+(++i));if(i===5)clearInterval(t)},600)"`;
 
 function nextTurn(body) {
+  // The independent verifier (VerificationRuntime) asks the same model; this stand-in approves and lets the automatic read-only checks decide.
+  if (String(body.messages?.[0]?.content ?? "").includes("ORVYN VERIFIER")) return { text: "VERDICT: PASS\n- Reviewed the automatic checks." };
   const msgs = body.messages ?? [];
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
   if (!tools.length) return { text: "OK." };

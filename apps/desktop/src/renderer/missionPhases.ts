@@ -57,7 +57,15 @@ export function deriveMissionPhases(events: Ev[], runStatus: string): MissionVie
       const input = inputs.get(String(e.data?.callId ?? ""));
       const tool = String(e.data?.tool ?? "");
       if ((tool === "write_file" || tool === "edit_file") && typeof input?.path === "string") wrote.add(norm(input.path));
-    } else if (/^(browser|desktop)\.verification\.passed$/.test(e.type)) {
+    } else if (e.type === "verification.started") {
+      touched.add("Verify");
+      active = "Verify";
+    } else if (e.type === "verification.completed") {
+      // Only the independent verifier's PASS (or the desktop check) counts as
+      // verified; an HTTP fetch of the preview does not.
+      verified = e.data?.verdict === "PASS";
+      if (!verified) active = "Act";
+    } else if (e.type === "desktop.verification.passed") {
       verified = true;
       touched.add("Verify");
     } else if (e.type === "preview.available") {

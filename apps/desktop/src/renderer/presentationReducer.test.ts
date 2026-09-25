@@ -487,3 +487,17 @@ test("a pause before ORION speaks shows one Thought marker; a quick reply shows 
   ] as any, "completed");
   assert.equal(quick.filter((i) => i.kind === "status").length, 0);
 });
+
+test("the verifier's verdict shows in the conversation: FAIL with its first finding, then PASS", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("verification.completed", { verdict: "FAIL", findings: [{ message: "index.html loads style.css, but style.css does not exist." }, { message: "app.js does not parse" }] }),
+      ev("verification.completed", { verdict: "PASS", findings: [] }),
+    ],
+    "completed"
+  );
+  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
+  assert.match(labels[0]!, /^Verification FAIL — index\.html loads style\.css.*\(\+1 more\)/);
+  assert.equal(labels[1], "Verified: independent check passed");
+});

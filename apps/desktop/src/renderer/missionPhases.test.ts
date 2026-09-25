@@ -38,3 +38,18 @@ test("web research is part of Inspect; a failed run marks the active step", () =
   assert.equal(v.phases.find((p) => p.name === "Act")!.state, "failed");
   assert.equal(v.status, "attention");
 });
+
+test("the verifier's FAIL sends the mission back to Act; its PASS marks it Verified", () => {
+  const base = [
+    { type: "tool.input", data: { callId: "w", input: { path: "index.html" } } },
+    { type: "tool.started", data: { callId: "w", tool: "write_file" } },
+    { type: "tool.completed", data: { callId: "w", tool: "write_file" } },
+    { type: "verification.started", data: {} },
+  ];
+  const failed = deriveMissionPhases([...base, { type: "verification.completed", data: { verdict: "FAIL" } }], "running")!;
+  assert.equal(failed.active, "Act");
+  const passed = deriveMissionPhases([...base, { type: "verification.completed", data: { verdict: "FAIL" } }, { type: "verification.started", data: {} }, { type: "verification.completed", data: { verdict: "PASS" } }], "completed")!;
+  assert.equal(passed.status, "verified");
+  const fetchOnly = deriveMissionPhases([{ type: "tool.started", data: { callId: "w", tool: "write_file" } }, { type: "browser.verification.passed", data: {} }], "completed")!;
+  assert.equal(fetchOnly.status, "completed");
+});

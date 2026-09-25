@@ -31,6 +31,23 @@ test("a website is not complete until the browser check passes", () => {
       { type: "preview.available", data: { url: "https://preview.example/s/1" } },
       { type: "browser.verification.passed", data: {} },
     ],
+  }), "continue", "an HTTP fetch of the preview is not a browser check");
+  assert.equal(decideCompletion({
+    instruction,
+    events: [
+      ...files,
+      { type: "preview.available", data: { url: "https://preview.example/s/1" } },
+      { type: "verification.completed", data: { verdict: "PASS", checks: [{ name: "browser", status: "pass" }] } },
+    ],
   }), "completed");
+  assert.equal(decideCompletion({
+    instruction,
+    events: [
+      ...files,
+      { type: "preview.available", data: { url: "https://preview.example/s/1" } },
+      { type: "verification.completed", data: { verdict: "PASS", checks: [{ name: "browser", status: "pass" }] } },
+      { type: "verification.completed", data: { verdict: "FAIL", checks: [{ name: "browser", status: "fail" }] } },
+    ],
+  }), "continue", "only the latest verification counts");
   assert.equal(decideCompletion({ instruction: "Create hello.txt", events: [] }), "completed");
 });

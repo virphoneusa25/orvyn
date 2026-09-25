@@ -244,10 +244,15 @@ export class BrowserSessionManager {
   }
 
   /** Console and network errors arrive per tab; they belong to that tab's session. */
-  private absorb(tabId: string, event: { kind: "console"; entry: BrowserConsoleError } | { kind: "network"; entry: BrowserNetworkError } | { kind: "closed" }): void {
+  private absorb(tabId: string, event: { kind: "console"; entry: BrowserConsoleError } | { kind: "network"; entry: BrowserNetworkError } | { kind: "navigated"; url: string } | { kind: "closed" }): void {
     for (const s of this.sessions.values()) {
       if (s.tabId !== tabId) continue;
       if (event.kind === "closed") s.closed = true;
+      else if (event.kind === "navigated") {
+        // Errors describe the page on screen: a new page starts clean.
+        s.consoleErrors = [];
+        s.networkErrors = [];
+      }
       else if (event.kind === "console") {
         s.consoleErrors.push(event.entry);
         if (s.consoleErrors.length > MAX_ERRORS) s.consoleErrors.shift();
