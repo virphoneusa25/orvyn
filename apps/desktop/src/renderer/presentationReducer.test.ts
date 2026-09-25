@@ -67,7 +67,7 @@ test("raw internal events never render", () => {
   assert.equal(items.length, 0);
 });
 
-test("assistant deltas accumulate into one message; a preceding thought persists as a timed row", () => {
+test("assistant deltas accumulate into one message; status notes do not stay in the chat", () => {
   reset();
   const items = reducePresentation(
     [
@@ -78,12 +78,8 @@ test("assistant deltas accumulate into one message; a preceding thought persists
     ],
     "completed"
   );
-  assert.equal(items.length, 2);
-  const thought = items[0] as { kind: string; label: string; thought?: { endTs?: number } };
-  assert.equal(thought.kind, "status");
-  assert.equal(thought.label, "Working");
-  assert.ok(thought.thought?.endTs, "thought duration closed by the following activity");
-  const msg = items[1] as { kind: string; content: string };
+  assert.equal(items.length, 1, JSON.stringify(items));
+  const msg = items[0] as { kind: string; content: string };
   assert.equal(msg.kind, "assistant");
   assert.equal(msg.content, "I'll inspect the project.");
 });
@@ -286,16 +282,41 @@ test("search + read collapse into Explore · N searches, N files", () => {
   assert.match(String(wg.summary), /^1 search, 1 file/);
 });
 
-test("agent.phase shows the phase note, never private reasoning", () => {
+test("agent.phase shows the phase note live, never private reasoning, and leaves no row behind", () => {
   reset();
-  const items = reducePresentation(
+  const live = reducePresentation(
     [ev("agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" })],
     "running"
   );
-  const thought = items.find((i) => i.kind === "status") as { label: string; thought?: { summary?: string } };
-  assert.equal(thought.label, "Gathering relevant context");
-  assert.equal(thought.thought?.summary, "Gathering relevant context");
-  assert.ok(!JSON.stringify(items).includes("reasoningContent"));
+  const status = live.find((i) => i.kind === "status") as { label: string; ephemeral?: boolean };
+  assert.equal(status.label, "Gathering relevant context");
+  assert.equal(status.ephemeral, true);
+  assert.ok(!JSON.stringify(live).includes("reasoningContent"));
+  const done = reducePresentation(
+    [ev("agent.phase", { phase: "DISCOVER", note: "Gathering relevant context" }), ev("message.delta", { content: "Done." }), ev("message.completed", {}), ev("run.completed", {})],
+    "completed"
+  );
+  assert.ok(!done.some((i) => i.kind === "status"), JSON.stringify(done));
+});
+
+test("completion checks stay out of the chat; a running command shows its output live", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("message.delta", { content: "Running the tests." }),
+      ev("message.completed", {}),
+      ev("completion.blocked", { gate: "code", reasons: ["Code change was not verified with tests."] }),
+      ev("tool.started", { callId: "t1", tool: "terminal" }),
+      ev("tool.input", { callId: "t1", tool: "terminal", input: { command: "npm test" } }),
+      ev("terminal.output", { callId: "t1", data: "ok 1 - add adds\n" }),
+    ],
+    "running"
+  );
+  assert.ok(!JSON.stringify(items).includes("Needs proof"));
+  const rows = items.flatMap((i) => (i.kind === "workgroup" ? (i as { items: unknown[] }).items : i.kind === "tool" ? [i] : [])) as Array<{ status: string; output?: string }>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "running");
+  assert.match(rows[0].output ?? "", /ok 1 - add adds/);
 });
 
 test("replay of the same sequence is idempotent — no duplicate rows", () => {

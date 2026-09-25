@@ -49,6 +49,21 @@ export function localWorkerHealth(tenantId: string): { state: LocalWorkerHealth;
   return { state: w.status, environment: w.environment };
 }
 
+const COMMAND_TOOLS = new Set(["terminal", "run_command", "run_tests", "run_build", "run_typecheck", "run_linter"]);
+
+/** The call id of the command tool that has started and not finished yet. */
+export function runningCommandCallId(events: Array<{ type: string; data?: Record<string, unknown> }>): string | undefined {
+  const finished = new Set<string>();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const callId = String(e.data?.callId ?? "");
+    if (!callId) continue;
+    if (e.type === "tool.completed" || e.type === "tool.failed") finished.add(callId);
+    if (e.type === "tool.started" && COMMAND_TOOLS.has(String(e.data?.tool ?? "")) && !finished.has(callId)) return callId;
+  }
+  return undefined;
+}
+
 export function queueLocalHostJob(runId: string, projectRoot: string, tenantId: string, role: "local_host" | "local_sandbox" = "local_host"): void {
   jobs.push({ runId, tenantId, projectRoot, role, createdAt: Date.now() });
 }
@@ -144,7 +159,14 @@ export function localWorkerRouter(
     try {
       const store = getRunStore(t.id);
       if (!store.get(req.params.runId)) store.create(req.params.runId, String(data?.projectRoot ?? t.currentProjectRoot ?? "/local"));
-      store.emit(req.params.runId, type as AgentEventType, data ?? {});
+      const payload = { ...(data ?? {}) };
+      // The worker does not know the model's call id. Attach the command that
+      // is running now, so its output streams into the right row in the chat.
+      if (String(type).startsWith("terminal.") && !payload.callId) {
+        const callId = runningCommandCallId(store.get(req.params.runId)?.events ?? []);
+        if (callId) payload.callId = callId;
+      }
+      store.emit(req.params.runId, type as AgentEventType, payload);
     } catch (err: any) {
       console.warn(`[local-worker] event persist failed: ${err.message}`);
     }

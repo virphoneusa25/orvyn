@@ -104,7 +104,7 @@ export async function executeLocalTool(req: LocalToolRequest): Promise<LocalTool
       });
       return { ok: true, output: `Started service ${started.processId}: ${command}` };
     }
-    return tools.terminal.execute({ command });
+    return tools.terminal.execute({ command }, { onOutput: req.onOutput });
   }
 
   if (req.tool === "start_dev_server") {
@@ -139,7 +139,7 @@ export function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-function bindTools(projectRoot: string, tenantId: string): Record<string, { execute: (args: Record<string, unknown>) => Promise<ToolResult> }> {
+function bindTools(projectRoot: string, tenantId: string): Record<string, { execute: (args: Record<string, unknown>, context?: { onOutput?: (chunk: string) => void }) => Promise<ToolResult> }> {
   return {
     read_file: makeReadFileTool(projectRoot),
     write_file: makeWriteFileTool(projectRoot),

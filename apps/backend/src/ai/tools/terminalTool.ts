@@ -1,5 +1,5 @@
 // apps/backend/src/ai/tools/terminalTool.ts
-import { exec } from "child_process";
+import { spawn } from "child_process";
 import { AITool, ToolResult } from "../ToolTypes";
 
 // Per the master spec, ALL terminal access requires approval — this is not
@@ -36,6 +36,56 @@ export function normalizeWindowsCommand(command: string): string {
   return out;
 }
 
+const TERMINAL_TIMEOUT_MS = 30_000;
+const MAX_CAPTURE = 1024 * 1024;
+
+/**
+ * Runs a shell command and streams its output as it is printed, so the chat
+ * can show "npm test" working instead of a silent row that jumps to Done.
+ * Same result shape as before: ok on exit 0, otherwise the error text.
+ */
+export function runStreaming(
+  command: string,
+  cwd: string,
+  onOutput?: (chunk: string) => void,
+  signal?: AbortSignal,
+  timeoutMs = TERMINAL_TIMEOUT_MS,
+): Promise<ToolResult> {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const child = spawn(command, { cwd, shell: true, windowsHide: true });
+    const take = (which: "out" | "err") => (d: Buffer) => {
+      const text = d.toString();
+      if (which === "out") { if (stdout.length < MAX_CAPTURE) stdout += text; }
+      else if (stderr.length < MAX_CAPTURE) stderr += text;
+      try { onOutput?.(text); } catch { /* a viewer must never break the command */ }
+    };
+    child.stdout?.on("data", take("out"));
+    child.stderr?.on("data", take("err"));
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
+    const onAbort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const finish = (result: ToolResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    child.on("error", (err) => finish({ ok: false, error: err.message, output: stdout }));
+    child.on("close", (code) => {
+      if (code === 0 && !timedOut) return finish({ ok: true, output: stdout || stderr });
+      const reason = timedOut
+        ? `Command timed out after ${Math.round(timeoutMs / 1000)}s: ${command}`
+        : `Command failed (exit ${code ?? "killed"}): ${command}`;
+      finish({ ok: false, error: stderr || reason, output: stdout });
+    });
+  });
+}
+
 export function makeTerminalTool(projectRoot: string): AITool {
   return {
     name: "terminal",
@@ -46,18 +96,10 @@ export function makeTerminalTool(projectRoot: string): AITool {
       required: ["command"],
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       const command = String(args.command);
       const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
-      return new Promise((resolve) => {
-        exec(finalCommand, { cwd: projectRoot, timeout: 30_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-          if (error) {
-            resolve({ ok: false, error: stderr || error.message, output: stdout });
-          } else {
-            resolve({ ok: true, output: stdout || stderr });
-          }
-        });
-      });
+      return runStreaming(finalCommand, projectRoot, context?.onOutput, context?.signal);
     },
   };
 }

@@ -300,22 +300,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
 
       case "agent.phase": {
+        // Phase notes ("Waiting for the Local Worker") are a live indicator
+        // only: shown while it is the current state, never left in the chat
+        // as "Working on the task · 2 seconds" rows (Phase 1).
         flushAssistant(false);
         const note = String(e.data.note ?? e.data.phase ?? "Working");
-        const last = items[items.length - 1];
-        if (last?.kind === "status" && last.thought) {
-          last.thought.endTs = e.timestamp;
-          last.thought.summary = note.slice(0, 90);
-          continue;
-        }
-        items.push({
-          kind: "status",
-          key: e.id,
-          label: note.slice(0, 90) || "Working",
-          ephemeral: false,
-          tone: "thought",
-          thought: { ts: e.timestamp, summary: note.slice(0, 90) },
-        });
+        items.push({ kind: "status", key: e.id, label: note.slice(0, 90) || "Working", ephemeral: true, tone: "working" });
         continue;
       }
 
@@ -324,24 +314,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         // thinking events merge into ONE "Thought" row whose duration closes
         // when the next real activity arrives (spec Part 6).
         flushAssistant(false);
-        const last = items[items.length - 1];
-        if (last?.kind === "status" && last.thought) {
-          last.thought.endTs = e.timestamp;
-          const text = e.data.text ? String(e.data.text).slice(0, 90) : "";
-          if (text) last.thought.summary = text;
-          continue;
-        }
-        items.push({
-          kind: "status",
-          key: e.id,
-          label: e.data.text ? String(e.data.text).slice(0, 90) : "Working",
-          ephemeral: false,
-          tone: "thought",
-          thought: {
-            ts: e.timestamp,
-            summary: e.data.text ? String(e.data.text).slice(0, 90) : undefined,
-          },
-        });
+        items.push({ kind: "status", key: e.id, label: e.data.text ? String(e.data.text).slice(0, 90) : "Working", ephemeral: true, tone: "working" });
         continue;
       }
 
@@ -367,7 +340,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
 
       case "checkpoint.created":
-        items.push({ kind: "status", key: e.id, label: "Checkpoint created — one-click Undo available", ephemeral: false });
+        // Bookkeeping: the Undo button under the answer already covers it.
         continue;
 
       case "file.edit": {
@@ -694,14 +667,8 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         });
         continue;
       case "completion.blocked":
-        flushAssistant(false);
-        items.push({
-          kind: "status",
-          key: e.id,
-          label: `Needs proof · ${String(Array.isArray(e.data.reasons) ? e.data.reasons[0] : e.data.gate ?? "completion gate")}`,
-          ephemeral: false,
-          tone: "rework",
-        });
+        // A completion check is runtime bookkeeping: it belongs in Activity,
+        // not in the conversation. ORION's next words explain what it does.
         continue;
 
       case "artifact.created":

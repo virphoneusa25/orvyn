@@ -1205,9 +1205,9 @@ export class StreamingAgentRuntime {
       state.introSpoken = true;
       state.spokenEvidence = collectRunEvidence([]);
       this.enterPhase(runId, "introducing");
-      const intro = introductionFor(state.instruction, state.intent.informational);
-      if (intro) {
-        this.speak(runId, intro);
+      // ORION introduces the work in its own words (see CONVERSATION_STYLE);
+      // the app no longer inserts a scripted sentence here.
+      if (introductionFor(state.instruction, state.intent.informational)) {
         this.store.emit(runId, "plan.created", { steps: planSteps(state.intent) });
       }
       this.enterPhase(runId, "acting");
@@ -2021,6 +2021,9 @@ export class StreamingAgentRuntime {
     state.spokenEvidence = after;
     if (!line) return;
     state.previewSpoken = true;
+    // Progress in the chat comes from ORION itself. Only the preview milestones
+    // (a real URL the user can open) are announced by the runtime.
+    if (!after.previewUrl) return;
     this.speak(runId, line);
   }
 

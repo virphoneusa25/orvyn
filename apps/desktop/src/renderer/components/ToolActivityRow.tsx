@@ -72,6 +72,13 @@ function iPhase(frame: number): number {
   return frame / 30;
 }
 
+/** The last lines of a running command's output. */
+export function liveTail(output: string, lines = 12): string {
+  const all = output.replace(/\r\n?/g, "\n").split("\n");
+  if (all.length && all[all.length - 1] === "") all.pop();
+  return all.slice(-lines).join("\n");
+}
+
 export function ToolActivityRow({ item }: { item: ToolItem }) {
   const [expanded, setExpanded] = useState(false);
   const command = item.op === "terminal";
@@ -102,7 +109,11 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
     {command && <pre className="activity-command"><span aria-hidden="true">$ </span>{item.label || "Preparing command…"}</pre>}
     {item.detail && <div className="activity-detail">{item.detail}</div>}
     {item.error && <div className="activity-error">{item.error}</div>}
-    {item.output && <>
+    {item.output && item.status === "running" && (
+      // While a command runs, its newest output prints live under the row.
+      <pre className="activity-output activity-output-live" aria-live="polite">{liveTail(item.output)}</pre>
+    )}
+    {item.output && item.status !== "running" && <>
       <button className="activity-link activity-output-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide output ▴" : "Show output ▾"}</button>
       {expanded && <><pre className="activity-output">{item.output}</pre>{item.outputTruncated && <div className="activity-detail">Showing the last portion of the output.</div>}</>}
     </>}
