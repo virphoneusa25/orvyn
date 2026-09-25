@@ -125,6 +125,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
       <span className="tool-line__state"><StateIcon status={item.status} warn={warn} /></span>
       <span className="tool-line__icon">{item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}</span>
       <span className="tool-line__verb">{verb}</span>
+      {item.verifier && <span className="tool-line__by" title="Independent read-only check, not ORION's own work">verifier</span>}
       {target && <code className="tool-line__target">{target}</code>}
       {meta && <em className="tool-line__meta">{meta}</em>}
       {open && <span className="tool-line__open" aria-label="Open">↗</span>}

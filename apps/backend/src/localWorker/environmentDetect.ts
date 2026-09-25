@@ -1,6 +1,8 @@
 import { execFile } from "child_process";
 
 export interface LocalEnvironment {
+  /** process.platform of the user's computer: "win32", "darwin", "linux". */
+  os?: string;
   node?: string;
   npm?: string;
   pnpm?: string;
@@ -37,6 +39,7 @@ export async function detectLocalEnvironment(): Promise<LocalEnvironment> {
     versionOf("docker", ["version", "--format", "{{.Server.Version}}"]),
   ]);
   return {
+    os: process.platform,
     node,
     npm,
     pnpm,

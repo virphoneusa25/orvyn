@@ -55,6 +55,8 @@ export interface ToolItem {
   ts: number;
   /** Which right-panel tab the row opens on click, if any. */
   ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
+  /** A read-only check by the independent verifier, not ORION's own work. */
+  verifier?: boolean;
 }
 
 export interface GroupItem {
@@ -378,7 +380,13 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
 
       case "verification.completed": {
         const verdict = String(e.data.verdict ?? "");
-        const findings = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string }[]) : [];
+        const all = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string; check?: string }[]) : [];
+        // The verifier's own trouble (no verdict) is not something ORION fixes.
+        const findings = all.filter((f) => f.check !== "verifier-unavailable");
+        if (verdict !== "PASS" && findings.length === 0) {
+          items.push({ kind: "status", key: e.id, label: "Checked by the automatic checks (the verifier model gave no verdict)", ephemeral: false, tone: "working" });
+          continue;
+        }
         const first = findings[0]?.message ? ` — ${String(findings[0].message).slice(0, 110)}` : "";
         const more = findings.length > 1 ? ` (+${findings.length - 1} more)` : "";
         items.push({
@@ -459,7 +467,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "tool.started": {
         closeThought(e.timestamp);
         const key = String(e.data.callId ?? e.id);
-        const base = toolIdentity(String(e.data.tool ?? ""));
+        const base = toolIdentity(String(e.data.tool ?? ""), (e.data.args ?? undefined) as Record<string, any> | undefined);
         items.push({
           kind: "tool",
           key,
@@ -468,6 +476,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           seq: e.sequence,
           ts: e.timestamp,
           ...base,
+          ...(e.data.verifier ? { verifier: true } : {}),
         });
         toolIndex.set(key, items.length - 1);
         continue;
@@ -798,6 +807,8 @@ function dropStaleEphemeral(items: PresentationItem[]): PresentationItem[] {
 
 /** Which phase a tool row belongs to; null keeps the row standalone. */
 function workClass(t: ToolItem): WorkGroupItem["type"] | null {
+  // The verifier's checks stay visible as its own rows, never merged into ORION's.
+  if (t.verifier) return null;
   if (t.op === "read" || t.op === "search") return "inspection";
   if (t.op === "terminal" || t.op === "test" || t.op === "git") return "checks";
   if (t.op === "edit" || t.op === "create" || t.op === "delete") return "edits";

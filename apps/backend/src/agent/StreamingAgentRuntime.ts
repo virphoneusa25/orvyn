@@ -47,7 +47,7 @@ import { resolveResources, resourcesFromProject, type RegisteredResource } from 
 import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
-import { collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
+import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, MAX_CONTINUATION_NUDGES } from "./continuation";
@@ -83,6 +83,8 @@ export interface ExecutionSpec {
   targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
   fallbackReason?: string;
   executionLabel?: string;
+  /** The OS the terminal runs on for this run ("win32" on a Windows Local run). */
+  hostPlatform?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -191,6 +193,16 @@ export interface RunOptions {
  */
 const MAX_STEPS = Number(process.env.ORVYN_AGENT_MAX_STEPS) || 48;
 const FAILURE_CIRCUIT_BREAKER = 5;
+/** Tells the model which shell its terminal commands run in. */
+function shellHint(platform?: string): string {
+  if (platform === "win32") {
+    return "Terminal commands run on the user's Windows computer in cmd.exe: use dir, type, findstr, copy, del, and && to chain. Do not use ls, cat, grep, wc, rm, or other Unix-only commands. PowerShell commands must be wrapped as: powershell -NoProfile -Command \"…\".";
+  }
+  if (platform === "darwin") return "Terminal commands run on the user's Mac (zsh).";
+  if (platform === "linux") return "Terminal commands run in a Linux shell (bash).";
+  return "";
+}
+
 /** Repair rounds after a verifier FAIL before the run fails for real. */
 const MAX_VERIFY_ROUNDS = 3;
 
@@ -594,7 +606,7 @@ export class StreamingAgentRuntime {
       this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
       { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = renderCapabilityPrompt(runCaps);
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform)].filter(Boolean).join("\n");
     const modeOverlay = composerModeOverlay(options?.composerMode, mode);
     const gapNotes = capabilityGapNotes(instruction, runCaps);
     const intent = inferTaskIntent(instruction, options?.composerMode ?? mode);
@@ -1537,7 +1549,9 @@ export class StreamingAgentRuntime {
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         const verification = await this.runVerification(runId, state, provider);
-        if (verification && verification.verdict !== "PASS") {
+        // Only findings about the work go back to the agent. If the verifier
+        // itself failed (no verdict), there is nothing for the agent to fix.
+        if (verification && verification.verdict !== "PASS" && actionableFindings(verification).length > 0) {
           const blocking = verification.verdict === "FAIL" || state.verifyRounds < 1;
           if (blocking) {
             state.verifyRounds += 1;

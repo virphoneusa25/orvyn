@@ -501,3 +501,20 @@ test("the verifier's verdict shows in the conversation: FAIL with its first find
   assert.match(labels[0]!, /^Verification FAIL — index\.html loads style\.css.*\(\+1 more\)/);
   assert.equal(labels[1], "Verified: independent check passed");
 });
+
+test("verifier checks are their own labelled rows, and a verifier with no verdict is not shown as ORION's failure", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "verify_1_a", tool: "read_file", args: { path: "hello.txt" }, verifier: true }),
+      ev("tool.completed", { callId: "verify_1_a", tool: "read_file", verifier: true }),
+      ev("verification.completed", { verdict: "PARTIAL", findings: [{ check: "verifier-unavailable", message: "The verifier model did not return a verdict" }] }),
+    ],
+    "completed"
+  );
+  const tool = items.find((i) => i.kind === "tool") as ToolItem | undefined;
+  assert.equal(tool?.verifier, true);
+  assert.equal(tool?.fileName, "hello.txt");
+  const status = items.find((i) => i.kind === "status") as { label: string } | undefined;
+  assert.match(String(status?.label), /automatic checks/);
+});

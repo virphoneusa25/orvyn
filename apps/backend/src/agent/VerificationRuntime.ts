@@ -58,6 +58,11 @@ export interface VerificationEvidence {
 }
 
 export interface VerificationFinding {
+  /**
+   * blocker: the work is wrong. unverified: part of it could not be proven.
+   * verifier-unavailable (check): the verifier itself failed; nothing for the
+   * working agent to fix, so it is never sent back to it.
+   */
   severity: "blocker" | "unverified";
   check: string;
   message: string;
@@ -306,8 +311,9 @@ async function deterministicChecks(evidence: VerificationEvidence, tools: Verifi
 
 // ── Verifier model (read-only tools) ───────────────────────────────────────────
 
+/** Finds the verdict line; real models wrap it in markdown or put a sentence first. */
 export function parseVerdict(text: string): VerificationVerdict | null {
-  const m = /^\s*(?:\*\*)?VERDICT:\s*(PASS|FAIL|PARTIAL)\b/i.exec(String(text ?? ""));
+  const m = /VERDICT\s*\**\s*[:\-–]\s*\**\s*(PASS|FAIL|PARTIAL)\b/i.exec(String(text ?? ""));
   return m ? (m[1]!.toUpperCase() as VerificationVerdict) : null;
 }
 
@@ -392,7 +398,9 @@ export class VerificationRuntime {
     const unverified = det.findings.filter((f) => f.severity === "unverified");
     let verdict: VerificationVerdict =
       blockers.length || modelVerdict === "FAIL" ? "FAIL" : unverified.length || modelVerdict === "PARTIAL" ? "PARTIAL" : "PASS";
-    if (provider?.supportsTools() && modelVerdict === undefined) verdict = "FAIL";
+    // A verifier that could not give a verdict certifies nothing, but it is not
+    // a defect in the work either: the automatic checks stand, capped at PARTIAL.
+    if (provider?.supportsTools() && modelVerdict === undefined && verdict === "PASS") verdict = "PARTIAL";
     const modelFindings = report
       .split("\n")
       .slice(1)
@@ -402,7 +410,7 @@ export class VerificationRuntime {
       .map((message): VerificationFinding => ({ severity: modelVerdict === "PARTIAL" ? "unverified" : "blocker", check: "verifier", message }));
     const findings = [...det.findings, ...(modelVerdict && modelVerdict !== "PASS" ? modelFindings : [])];
     if (provider?.supportsTools() && modelVerdict === undefined) {
-      findings.push({ severity: "blocker", check: "verifier", message: "The verifier did not return a verdict, so nothing is certified." });
+      findings.push({ severity: "unverified", check: "verifier-unavailable", message: "The verifier model did not return a verdict; only the automatic checks were applied." });
     }
     return { verdict, findings, checks: det.checks, report, modelVerdict, toolCalls };
   }
@@ -427,7 +435,10 @@ export class VerificationRuntime {
       const calls: ToolCall[] = res.toolCalls ?? [];
       if (!calls.length) {
         const report = String(res.content ?? "").trim();
-        return { report, verdict: parseVerdict(report) ?? undefined, browserObserved, browserErrors };
+        const verdict = parseVerdict(report);
+        if (verdict) return { report, verdict, browserObserved, browserErrors };
+        messages.push({ role: "assistant", content: report });
+        break; // answered without a verdict line: ask for it once below
       }
       messages.push({ role: "assistant", content: res.content ?? "", toolCalls: calls, ...(res.reasoningContent ? { reasoningContent: res.reasoningContent } : {}) });
       for (const call of calls) {
@@ -443,13 +454,26 @@ export class VerificationRuntime {
         messages.push({ role: "tool", name: call.name, toolCallId: call.id, content: text.slice(0, 12_000) });
       }
     }
-    return { report: "", verdict: undefined, browserObserved, browserErrors };
+    // Out of turns (or the model kept calling tools): ask once for the verdict, no tools.
+    try {
+      messages.push({ role: "user", content: "Stop using tools. Give your verdict now. First line exactly: VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL. Then the findings as bullets." });
+      const res = await provider.generate({ messages, signal: this.deps.signal } as never);
+      const report = String(res.content ?? "").trim();
+      return { report, verdict: parseVerdict(report) ?? undefined, browserObserved, browserErrors };
+    } catch {
+      return { report: "", verdict: undefined, browserObserved, browserErrors };
+    }
   }
+}
+
+/** Findings the working agent can act on (not problems of the verifier itself). */
+export function actionableFindings(result: VerificationResult): VerificationFinding[] {
+  return result.findings.filter((f) => f.check !== "verifier-unavailable");
 }
 
 /** The message the working agent gets when verification does not pass. */
 export function findingsPrompt(result: VerificationResult, attempt: number): string {
-  const lines = result.findings.map((f) => `- ${f.message}`);
+  const lines = actionableFindings(result).map((f) => `- ${f.message}`);
   return [
     `VERIFICATION ${result.verdict} (independent check ${attempt}). The task is NOT complete yet.`,
     "An independent read-only verifier checked your work and found:",

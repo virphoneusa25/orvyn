@@ -106,3 +106,16 @@
 .mission-phases__pill.is-verified, .mission-phases__pill.is-completed { color: var(--success); border-color: rgba(52, 211, 153, .3); background: rgba(52, 211, 153, .07); }
 .mission-phases__pill.is-attention { color: var(--warning); border-color: rgba(245, 185, 66, .3); background: rgba(245, 185, 66, .07); }
 @media (max-width: 700px) { .mission-phases { flex-direction: column; align-items: flex-start; } }
+
+/* Rows run by the independent verifier (read-only checks). */
+.tool-line__by {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--orvyn-cyan, #22d3ee);
+  border: 1px solid color-mix(in srgb, var(--orvyn-cyan, #22d3ee) 45%, transparent);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
+  flex-shrink: 0;
+}

@@ -56,6 +56,7 @@ test("helpers: references, paths, syntax", () => {
   assert.match(String(cssBalanceError("a{color:red")), /unclosed/);
   assert.equal(parseVerdict("VERDICT: partial\n- x"), "PARTIAL");
   assert.equal(parseVerdict("Looks fine"), null);
+  assert.equal(parseVerdict("Checked.\n**VERDICT: PASS**"), "PASS");
 });
 
 test("a broken site FAILS with findings naming the missing stylesheet and the script error", async () => {
@@ -108,9 +109,19 @@ test("the verifier model is read-only: a write is blocked, and no verdict means 
   assert.ok(r.toolCalls.some((c) => c.tool === "write_file" && c.blocked));
   assert.equal(r.verdict, "PASS");
 
-  const silent = { ...(provider as object), generate: async () => ({ content: "All good!", finishReason: "stop" }) } as never;
+  // A verifier that never gives a verdict certifies nothing (PARTIAL), and that
+  // is not handed to the working agent as something to fix.
+  let asked = 0;
+  const silent = { ...(provider as object), generate: async () => { asked++; return { content: "All good!", finishReason: "stop" }; } } as never;
   const r2 = await new VerificationRuntime({ tools, provider: silent, toolDefinitions: [] }).verify(ev);
-  assert.equal(r2.verdict, "FAIL");
+  assert.equal(r2.verdict, "PARTIAL");
+  assert.equal(asked, 2, "asked once more for the verdict line");
+  const { actionableFindings } = await import("./VerificationRuntime");
+  assert.equal(actionableFindings(r2).length, 0);
+  // A verdict wrapped in markdown after a sentence still counts.
+  const chatty = { ...(provider as object), generate: async () => ({ content: "I checked everything.\n\n## **Verdict: FAIL**\n- a.js is empty", finishReason: "stop" }) } as never;
+  const r3 = await new VerificationRuntime({ tools, provider: chatty, toolDefinitions: [] }).verify(ev);
+  assert.equal(r3.verdict, "FAIL");
 });
 
 test("evidence is collected from envelopes: changed files, tests, browser", () => {
