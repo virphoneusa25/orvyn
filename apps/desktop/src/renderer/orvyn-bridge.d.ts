@@ -103,6 +103,8 @@ export interface OrvynBridge {
     openDevTools(id: string): Promise<boolean>;
     inspect(id: string): Promise<{ ok: boolean; url?: string; title?: string; outline?: string; error?: string }>;
     onChange(cb: (state: WorkbenchBrowserState) => void): () => void;
+    sessions?(): Promise<unknown[]>;
+    onReveal?(cb: (detail: { tabId: string; sessionId?: string; tab: WorkbenchBrowserTab }) => void): () => void;
   };
 }
 
@@ -117,6 +119,9 @@ export interface WorkbenchBrowserTab {
   canGoForward: boolean;
   secure: boolean;
   controlOwner: "orion" | "user";
+  /** ORION's browser session on this tab (same id ORION's tools report). */
+  sessionId?: string;
+  viewport?: { preset: "desktop" | "tablet" | "mobile" | "custom"; width: number; height: number; mobile: boolean };
   error?: { code: string; description: string };
   console: string[];
   network: { method: string; url: string; status?: number }[];

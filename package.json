@@ -20,6 +20,7 @@
     "accept:phase4": "npm run build -w @orvyn/backend && node scripts/acceptance/phase4-services.mjs",
     "accept:envelope": "npm run build -w @orvyn/backend && node scripts/acceptance/envelope-hello.mjs",
     "accept:turns": "npm run build -w @orvyn/backend && node scripts/acceptance/agent-turns.mjs",
+    "accept:browser": "npm run build -w @orvyn/backend && npm run build -w @orvyn/desktop && xvfb-run -a -s \"-screen 0 1600x1000x24\" node scripts/acceptance/browser-session.mjs",
     "accept:local-worker": "npm run build -w @orvyn/backend && node scripts/acceptance/local-worker-reconnect.mjs",
     "accept:chat-live": "npm run build -w @orvyn/backend && node --experimental-strip-types --no-warnings scripts/acceptance/chat-live.mjs"
   },

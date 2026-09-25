@@ -64,6 +64,7 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
   browser_click: ["NETWORK"],
   browser_type: ["NETWORK"],
   browser_screenshot: ["NETWORK"],
+  browser_set_viewport: ["NETWORK"],
   browser_console_errors: ["NETWORK"],
   browser_scroll: ["NETWORK"],
   browser_evidence: ["NETWORK"],

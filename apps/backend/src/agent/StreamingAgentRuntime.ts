@@ -213,6 +213,7 @@ const SERIAL_ONLY_TOOLS = new Set([
   "browser_click",
   "browser_type",
   "browser_screenshot",
+  "browser_set_viewport",
   "desktop_start",
   "desktop_open_url",
   "desktop_click",
@@ -432,6 +433,7 @@ export class StreamingAgentRuntime {
       case "browser_click":
       case "browser_type":
       case "browser_scroll":
+      case "browser_set_viewport":
       case "browser_screenshot":
         this.store.emit(runId, "browser.action", {
           tool: call.name,
@@ -1791,6 +1793,8 @@ export class StreamingAgentRuntime {
               executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
               workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
               toolUseId: call.id,
+              runId,
+              tenantId: state.execution?.tenantId || undefined,
               onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
             })
         );

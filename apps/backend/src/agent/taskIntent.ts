@@ -48,7 +48,10 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const server = has(remoteText, /\b(server|ssh|hostname|uptime|remote host|log into|login to)\b/i) || mode === "server";
   const database = has(goal, /\b(database|postgres|mysql|sqlite|sql query|schema)\b/i);
   const deploy = has(goal, /\b(deploy|release|rollout|ship to production)\b/i) || mode === "deploy";
-  const browser = has(goal, /\b(browser|homepage|webpage|open the (app|site|page))\b/i);
+  const browser =
+    has(goal, /\b(browser|homepage|webpage|open the (app|site|page)|screenshot|viewport|mobile view)\b/i) ||
+    // "Open example.com", "go to https://…": a site to look at, not a file.
+    has(goal, /\b(open|visit|go to|navigate to|browse to|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
   const desktop = has(goal, /\b(desktop|on screen|settings dialog|computer-use)\b/i);
   const artifact = has(goal, /\b(logo|png|jpe?g|gif|webp|svg|pdf|docx|xlsx|zip|generate an image)\b/i);
   const integration = has(goal, /\b(mcp|external api|webhook|integration)\b/i);

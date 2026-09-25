@@ -1,6 +1,8 @@
 // Local Electron Workbench browser. When registered, browser_* tools drive
 // the visible WebContentsView instead of a hidden Playwright session.
 
+import { sendWorkbenchBrowserCommand, workbenchBrowserOnline, type BrowserBridgeCommand } from "./workbenchBrowserBridge";
+
 export interface ElectronBrowserTarget {
   tenantId: string;
   url: string;
@@ -42,6 +44,33 @@ export async function callElectronBrowser(
       signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One browser command to the user's Workbench Browser session. The Local
+ * Worker bridge works for any control plane (cloud or local); the loopback
+ * target is the same-machine shortcut. null: no Workbench Browser connected.
+ */
+export async function workbenchBrowserCommand(
+  tenantId: string,
+  command: BrowserBridgeCommand
+): Promise<Record<string, unknown> | null> {
+  if (!tenantId) return null;
+  if (workbenchBrowserOnline(tenantId)) return sendWorkbenchBrowserCommand(tenantId, command);
+  const target = targets.get(tenantId);
+  if (!target) return null;
+  try {
+    const res = await fetch(`${target.url}/v1/browser/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Orvyn-Browser-Token": target.token },
+      body: JSON.stringify(command),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 404) return null;
     return (await res.json()) as Record<string, unknown>;
   } catch {
     return null;

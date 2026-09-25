@@ -25,7 +25,7 @@ export type ToolResultEnvelopeStatus = "success" | "error" | "blocked" | "cancel
 export type FileOperation = "read" | "write" | "edit" | "delete" | "move";
 
 export interface ToolResultEvidence {
-  type: "file" | "command" | "service" | "url" | "artifact" | "runtime_log";
+  type: "file" | "command" | "service" | "url" | "artifact" | "browser" | "screenshot" | "runtime_log";
   label: string;
   /** The main identifier: a workspace-relative file, a command, a URL. */
   value: string;
@@ -197,6 +197,39 @@ function commandEnvelopeParts(p: BuildEnvelopeParams, ok: boolean) {
   return { data, summary, evidence };
 }
 
+/** Browser tools on the Workbench session: which session, where, and what was captured. */
+function browserEnvelopeParts(p: BuildEnvelopeParams, ok: boolean) {
+  const meta = p.result.meta ?? {};
+  const sessionId = str(meta.browserSessionId);
+  const session = (meta.browserSession ?? {}) as Record<string, unknown>;
+  const shot = meta.browserScreenshot as Record<string, unknown> | undefined;
+  const viewport = session.viewport as { preset?: string; width?: number; height?: number } | undefined;
+  const data: Record<string, unknown> = {
+    browserSessionId: sessionId,
+    url: session.url,
+    viewport,
+    surface: meta.surface,
+    consoleErrors: session.consoleErrors,
+    networkErrors: session.networkErrors,
+    screenshot: shot ? { screenshotId: shot.screenshotId, sessionId: shot.sessionId, width: shot.width, height: shot.height, sha256: shot.sha256 } : undefined,
+  };
+  const evidence: ToolResultEvidence[] = [];
+  if (ok && sessionId) {
+    evidence.push({ type: "browser", label: "Browser session", value: sessionId, extra: { url: session.url, viewport, surface: meta.surface } });
+    if (shot) evidence.push({ type: "screenshot", label: "Screenshot", value: str(shot.screenshotId), extra: { sessionId: shot.sessionId, width: shot.width, height: shot.height, sha256: shot.sha256, url: shot.url } });
+  }
+  const where = str(session.url).replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const vp = viewport?.preset && viewport.preset !== "desktop" ? ` · ${viewport.preset} ${viewport.width}×${viewport.height}` : "";
+  const summary = p.toolName === "browser_screenshot" && shot
+    ? `Screenshot of ${where || "the page"}${vp}`
+    : p.toolName === "browser_set_viewport"
+      ? `Viewport ${viewport?.preset ?? ""} ${viewport?.width ?? ""}×${viewport?.height ?? ""}`.replace(/\s+/g, " ").trim()
+      : p.toolName === "browser_open" || p.toolName === "browser_navigate"
+        ? `Opened ${where || "a page"}${vp}`
+        : `${p.toolName.replace("browser_", "Browser ")} · ${where}`;
+  return { data, summary, evidence };
+}
+
 export function buildToolResultEnvelope(p: BuildEnvelopeParams): ToolResultEnvelope {
   const ok = Boolean(p.result.ok);
   const status: ToolResultEnvelopeStatus = ok ? "success" : p.cancelled ? "cancelled" : p.blocked ? "blocked" : "error";
@@ -206,6 +239,7 @@ export function buildToolResultEnvelope(p: BuildEnvelopeParams): ToolResultEnvel
   const fileOp = FILE_TOOLS[p.toolName];
   if (fileOp) parts = fileEnvelopeParts(p, fileOp, ok);
   else if (COMMAND_TOOLS.has(p.toolName)) parts = commandEnvelopeParts(p, ok);
+  else if (p.toolName.startsWith("browser_") && p.result.meta?.browserSessionId) parts = browserEnvelopeParts(p, ok);
   else {
     parts = {
       data: { outputBytes: Buffer.byteLength(str(p.result.output), "utf8") },

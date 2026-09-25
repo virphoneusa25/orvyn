@@ -57,6 +57,13 @@ export class LocalWorkerManager {
     void this.start();
   }
 
+  private browserHandler: ((command: unknown) => Promise<unknown>) | null = null;
+
+  /** BrowserSessionManager.handle — answers the worker's browser commands. */
+  setBrowserHandler(handler: ((command: unknown) => Promise<unknown>) | null): void {
+    this.browserHandler = handler;
+  }
+
   getStatus(): LocalWorkerStatus {
     return { ...this.status };
   }
@@ -77,7 +84,10 @@ export class LocalWorkerManager {
     this.child = spawn(executable, [entry.script], {
       cwd: entry.cwd,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      // "ipc": the worker relays ORION's browser commands to the Workbench
+      // Browser in this process (BrowserSessionManager), so ORION and the
+      // user share one browser session even when the backend is in the cloud.
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
       env: {
         ...process.env,
         ORVYN_CONTROL_PLANE: this.backendUrl,
@@ -90,6 +100,15 @@ export class LocalWorkerManager {
     });
     this.child.stdout?.pipe(log, { end: false });
     this.child.stderr?.pipe(log, { end: false });
+    const child = this.child;
+    child.on("message", (msg: any) => {
+      if (!msg || msg.type !== "browser.command") return;
+      const reply = (result: unknown) => {
+        try { child.send({ type: "browser.result", id: msg.id, result }); } catch { /* worker gone */ }
+      };
+      if (!this.browserHandler) return reply({ ok: false, error: "The Workbench Browser is not ready yet." });
+      this.browserHandler(msg.command).then(reply, (err) => reply({ ok: false, error: String(err?.message ?? err) }));
+    });
     this.status = { state: "ready", workerId: `local_${process.pid}`, restarts: this.restarts, hostDesktopAllowed: this.status.hostDesktopAllowed };
     this.child.once("exit", () => {
       this.child = null;

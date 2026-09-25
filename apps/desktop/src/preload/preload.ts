@@ -102,5 +102,12 @@ contextBridge.exposeInMainWorld("orvyn", {
       ipcRenderer.on("browser:changed", h);
       return () => ipcRenderer.removeListener("browser:changed", h);
     },
+    sessions: () => ipcRenderer.invoke("browser:sessions"),
+    /** ORION opened or resized its browser session: show that tab. */
+    onReveal: (cb: (detail: unknown) => void) => {
+      const h = (_e: unknown, v: unknown) => cb(v);
+      ipcRenderer.on("browser:reveal", h);
+      return () => ipcRenderer.removeListener("browser:reveal", h);
+    },
   },
 });

@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import {
   clampBrowserBounds,
+  fitViewport,
   guestSecurityPrefs,
   isLocalBrowserUrl,
   isSafeBrowserUrl,
@@ -19,7 +20,16 @@ import {
   type BrowserOwner,
   type BrowserRecent,
   type BrowserTab,
+  type BrowserViewport,
 } from "./browserModel";
+
+type TabEvent =
+  | { kind: "console"; entry: { level: "error" | "warning"; message: string; source?: string; line?: number; at: number } }
+  | { kind: "network"; entry: { method: string; url: string; status: number; error?: string; at: number } }
+  | { kind: "closed" };
+
+const MOBILE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 
 const PARTITION = "persist:orvyn-browser";
 const MAX_TABS = 12;
@@ -33,6 +43,8 @@ export interface BrowserPublic {
 type Guest = {
   tab: BrowserTab;
   view: WebContentsView;
+  /** Whether the view is currently shown in the window. */
+  shown?: boolean;
 };
 
 export class WorkbenchBrowserManager {
@@ -46,6 +58,9 @@ export class WorkbenchBrowserManager {
   private readonly token = `brk_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   private projectName: string | null = null;
   private boundWindow: BrowserWindow | null = null;
+  private readonly tabListeners: Array<(tabId: string, event: TabEvent) => void> = [];
+  /** Handles /v1/browser/session commands (BrowserSessionManager). */
+  commandHandler: ((command: unknown) => Promise<unknown>) | null = null;
 
   constructor(private readonly getWindow: () => BrowserWindow | null) {}
 
@@ -73,6 +88,16 @@ export class WorkbenchBrowserManager {
           this.emit();
         }
       });
+    });
+    // One listener for the whole partition (Electron keeps only the last one
+    // registered). Failures are attributed to the tab that made the request.
+    ses.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
+      if (details.statusCode < 400) return;
+      this.networkError(details.webContentsId, { method: details.method, url: details.url.split("?")[0]!, status: details.statusCode });
+    });
+    ses.webRequest.onErrorOccurred({ urls: ["http://*/*", "https://*/*"] }, (details) => {
+      if (details.error === "net::ERR_ABORTED") return;
+      this.networkError(details.webContentsId, { method: details.method, url: details.url.split("?")[0]!, status: 0, error: details.error });
     });
     this.loopback = createServer((req, res) => void this.handleLoopback(req, res));
     await new Promise<void>((resolve) => this.loopback!.listen(0, "127.0.0.1", () => resolve()));
@@ -196,6 +221,7 @@ export class WorkbenchBrowserManager {
       tab.loading = false;
       tab.error = { code: String(code), description: String(description || "Unable to load page") };
       if (validatedURL) tab.url = validatedURL;
+      this.tabEvent(id, { kind: "network", entry: { method: "GET", url: String(validatedURL || tab.url).split("?")[0]!, status: 0, error: `${code} ${description}`, at: Date.now() } });
       this.emit();
     });
     wc.on("certificate-error", (event, nextUrl, error, _cert, callback) => {
@@ -208,15 +234,14 @@ export class WorkbenchBrowserManager {
       callback(false);
       this.emit();
     });
-    wc.on("console-message", (_e, level, message) => {
+    wc.on("console-message", (_e, level, message, line, sourceId) => {
       if (level < 2) return;
-      tab.console.push(String(message).slice(0, 240));
+      // Electron's own dev-mode warning, not the page's.
+      if (/Electron Security Warning/.test(String(message))) return;
+      const text = String(message).slice(0, 240);
+      tab.console.push(text);
       if (tab.console.length > 40) tab.console.shift();
-    });
-    wc.session.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
-      if (details.statusCode < 400) return;
-      tab.network.push({ method: details.method, url: details.url.split("?")[0]!, status: details.statusCode });
-      if (tab.network.length > 40) tab.network.shift();
+      this.tabEvent(id, { kind: "console", entry: { level: level >= 3 ? "error" : "warning", message: text, source: String(sourceId || "").slice(0, 200) || undefined, line: Number(line) || undefined, at: Date.now() } });
     });
     wc.on("before-input-event", (event) => {
       if (tab.controlOwner === "orion") event.preventDefault();
@@ -285,6 +310,7 @@ export class WorkbenchBrowserManager {
     this.detach(guest);
     guest.view.webContents.close();
     this.guests.delete(id);
+    this.tabEvent(id, { kind: "closed" });
     if (this.activeId === id) this.activeId = [...this.guests.keys()].at(-1) ?? null;
     this.attachActive();
     this.emit();
@@ -387,6 +413,133 @@ export class WorkbenchBrowserManager {
     this.loopback = null;
   }
 
+  // ── Session support (BrowserSessionManager) ─────────────────────────────
+
+  onTabEvent(fn: (tabId: string, event: TabEvent) => void): void {
+    this.tabListeners.push(fn);
+  }
+
+  hasTab(tabId: string): boolean {
+    return this.guests.has(tabId);
+  }
+
+  tabInfo(tabId: string): { url: string; title: string } | undefined {
+    const g = this.guests.get(tabId);
+    return g ? { url: g.tab.url, title: g.tab.title } : undefined;
+  }
+
+  /** A new tab owned by an ORION session: ORION controls it, the user watches it. */
+  async createSessionTab(sessionId: string, url?: string): Promise<string> {
+    await this.createTab("browser");
+    const id = this.activeId!;
+    const guest = this.guests.get(id)!;
+    guest.tab.sessionId = sessionId;
+    requestBrowserControl(guest.tab, "orion");
+    if (url) await this.navigate(id, url);
+    this.emit();
+    return id;
+  }
+
+  /** Brings a tab to the front and asks the window to show the Browser. */
+  reveal(tabId: string): void {
+    if (!this.guests.has(tabId)) return;
+    this.activeId = tabId;
+    this.guests.get(tabId)!.tab.lastActiveAt = Date.now();
+    this.attachActive();
+    this.emit();
+    const tab = publicBrowserTab(this.guests.get(tabId)!.tab);
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.send("browser:reveal", { tabId, sessionId: tab.sessionId, tab });
+  }
+
+  /**
+   * Resizes the page ORION and the user share. The visible view takes the
+   * viewport's width (centered in the surface) and CDP emulates the device
+   * metrics, so layout, screenshots and what the user sees all agree.
+   */
+  async setTabViewport(tabId: string, viewport: BrowserViewport): Promise<{ width: number; height: number; innerWidth?: number; innerHeight?: number; mobile: boolean }> {
+    const guest = this.guests.get(tabId);
+    if (!guest) throw new Error("Unknown browser tab.");
+    guest.tab.viewport = viewport.preset === "desktop" ? undefined : viewport;
+    this.attachActive();
+    const box = this.lastBounds ? fitViewport(this.lastBounds, guest.tab.viewport) : { width: viewport.width, height: viewport.height };
+    const wc = guest.view.webContents;
+    const dbg = wc.debugger;
+    try {
+      if (!dbg.isAttached()) dbg.attach("1.3");
+      if (viewport.preset === "desktop") {
+        await dbg.sendCommand("Emulation.clearDeviceMetricsOverride");
+        await dbg.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: false });
+        await dbg.sendCommand("Emulation.setUserAgentOverride", { userAgent: wc.session.getUserAgent() });
+      } else {
+        await dbg.sendCommand("Emulation.setDeviceMetricsOverride", { width: box.width, height: box.height, deviceScaleFactor: 0, mobile: viewport.mobile });
+        await dbg.sendCommand("Emulation.setTouchEmulationEnabled", { enabled: viewport.mobile, maxTouchPoints: viewport.mobile ? 5 : 1 });
+        if (viewport.mobile) await dbg.sendCommand("Emulation.setUserAgentOverride", { userAgent: MOBILE_UA, platform: "iPhone" });
+      }
+    } catch {
+      /* the view size alone still sets the layout width */
+    }
+    this.emit();
+    await new Promise((r) => setTimeout(r, 150));
+    const inner = await wc.executeJavaScript("({ w: window.innerWidth, h: window.innerHeight })", true).catch(() => null) as { w: number; h: number } | null;
+    return { width: box.width, height: box.height, innerWidth: inner?.w, innerHeight: inner?.h, mobile: viewport.mobile };
+  }
+
+  async capture(tabId: string): Promise<{ png: Buffer; width: number; height: number } | null> {
+    const guest = this.guests.get(tabId);
+    if (!guest) return null;
+    const wc = guest.view.webContents;
+    const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+    // capturePage is what the user sees; a view that is not painting (panel
+    // hidden) may never answer, so fall back to a CDP capture of the page.
+    const image = await within(wc.capturePage(), 8000).catch(() => null);
+    if (image && !image.isEmpty()) {
+      const size = image.getSize();
+      return { png: image.toPNG(), width: size.width, height: size.height };
+    }
+    try {
+      if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
+      const shot = await within(wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" }) as Promise<{ data: string }>, 8000);
+      if (!shot?.data) return null;
+      const png = Buffer.from(shot.data, "base64");
+      return { png, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Where each guest view is right now (for acceptance checks and diagnostics). */
+  surfaceReport(): { activeId: string | null; visible: boolean; surface: BrowserBounds | null; views: { tabId: string; sessionId?: string; attached: boolean; visible: boolean; bounds: BrowserBounds; url: string }[] } {
+    const win = this.boundWindow ?? this.getWindow();
+    const kids = win?.contentView.children ?? [];
+    return {
+      activeId: this.activeId,
+      visible: this.visible,
+      surface: this.lastBounds,
+      views: [...this.guests.values()].map((g) => ({
+        tabId: g.tab.id,
+        sessionId: g.tab.sessionId,
+        attached: kids.includes(g.view),
+        visible: Boolean(g.shown),
+        bounds: g.view.getBounds(),
+        url: g.tab.url,
+      })),
+    };
+  }
+
+  private tabEvent(tabId: string, event: TabEvent): void {
+    for (const fn of this.tabListeners) {
+      try { fn(tabId, event); } catch { /* a listener never breaks the browser */ }
+    }
+  }
+
+  private networkError(webContentsId: number | undefined, entry: { method: string; url: string; status: number; error?: string }): void {
+    const guest = [...this.guests.values()].find((g) => g.view.webContents.id === webContentsId);
+    if (!guest) return;
+    guest.tab.network.push({ method: entry.method, url: entry.url, status: entry.status });
+    if (guest.tab.network.length > 40) guest.tab.network.shift();
+    this.tabEvent(guest.tab.id, { kind: "network", entry: { ...entry, at: Date.now() } });
+  }
+
   private require(id: string): Guest {
     const guest = this.guests.get(id) || (this.activeId ? this.guests.get(this.activeId) : undefined);
     if (!guest) throw new Error("Unknown browser tab.");
@@ -439,8 +592,11 @@ export class WorkbenchBrowserManager {
           try { win.contentView.removeChildView(guest.view); } catch { /* not attached */ }
           win.contentView.addChildView(guest.view);
         }
-        guest.view.setBounds(this.lastBounds);
+        // An emulated viewport (mobile, tablet) is centered at its own width:
+        // the user sees exactly the page size ORION is testing.
+        guest.view.setBounds(fitViewport(this.lastBounds, guest.tab.viewport));
         guest.view.setVisible(true);
+        guest.shown = true;
       } else {
         this.detach(guest);
       }
@@ -449,6 +605,7 @@ export class WorkbenchBrowserManager {
 
   private detach(guest: Guest): void {
     const win = this.getWindow();
+    guest.shown = false;
     guest.view.setVisible(false);
     try {
       win?.contentView.removeChildView(guest.view);
@@ -479,6 +636,11 @@ export class WorkbenchBrowserManager {
     const body = await readBody(req);
     const id = String(body.tabId ?? this.activeId ?? "");
     try {
+      if (req.url === "/v1/browser/session" && req.method === "POST") {
+        if (!this.commandHandler) return json(res, { ok: false, error: "Browser sessions are not ready." }, 503);
+        json(res, await this.commandHandler(body));
+        return;
+      }
       if (req.url === "/v1/browser/open" && req.method === "POST") {
         const snap = await this.openUrl("browser", String(body.url ?? ""));
         const tab = snap.tabs.find((t) => t.id === snap.activeId);

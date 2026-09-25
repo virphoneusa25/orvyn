@@ -47,6 +47,7 @@ import {
   makeBrowserScrollTool,
   setBrowserToolTenant,
   makeBrowserEvidenceTool,
+  makeBrowserViewportTool,
 } from "./tools/browserTools";
 import { registerDesktopTools } from "./tools/desktopTools";
 import { registerHostDesktopTools } from "./tools/hostDesktopTools";
@@ -132,6 +133,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeBrowserClickTool(projectRoot));
   g.register(makeBrowserTypeTool(projectRoot));
   g.register(makeBrowserScrollTool(projectRoot));
+  g.register(makeBrowserViewportTool(projectRoot));
   g.register(makeBrowserScreenshotTool(projectRoot));
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
   g.register(makeBrowserEvidenceTool(projectRoot));

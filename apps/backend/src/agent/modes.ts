@@ -74,6 +74,7 @@ const READ_ONLY: Record<string, ToolPermission> = {
   browser_click: "denied",
   browser_type: "denied",
   browser_screenshot: "denied",
+  browser_set_viewport: "denied",
   browser_console_errors: "denied",
   desktop_start: "denied",
   desktop_open_url: "denied",
@@ -141,6 +142,7 @@ const FULL_WITH_APPROVAL: Record<string, ToolPermission> = {
   browser_click: "ask",
   browser_type: "ask",
   browser_screenshot: "ask",
+  browser_set_viewport: "ask",
   // Read-only report of already-collected errors — safe to auto-run.
   browser_console_errors: "allowed",
   desktop_start: "ask",

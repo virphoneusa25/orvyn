@@ -51,6 +51,9 @@ export interface ToolExecutionContext {
   workspaceRoot?: string;
   /** The model's tool call id, carried into the result envelope. */
   toolUseId?: string;
+  /** The run and tenant making the call (browser sessions are per run). */
+  runId?: string;
+  tenantId?: string;
 }
 
 export interface AITool {

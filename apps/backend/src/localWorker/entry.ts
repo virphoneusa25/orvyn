@@ -53,7 +53,7 @@ async function register(): Promise<void> {
     workerId: WORKER_ID,
     hostname: os.hostname(),
     projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
-    capabilities: ["local_host", "local_sandbox", "stdio-mcp"],
+    capabilities: ["local_host", "local_sandbox", "stdio-mcp", ...(typeof process.send === "function" ? ["workbench-browser"] : [])],
     environment,
     services: serviceManager.list(),
     hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
@@ -162,6 +162,34 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
   }
 }
 
+// ── Workbench Browser relay ─────────────────────────────────────────────
+// ORION's browser commands arrive on the poll and go to the desktop app's
+// BrowserSessionManager over IPC, so ORION drives the browser the user sees.
+const browserWaiters = new Map<string, (result: unknown) => void>();
+process.on("message", (msg: any) => {
+  if (msg?.type !== "browser.result") return;
+  const done = browserWaiters.get(String(msg.id));
+  if (done) { browserWaiters.delete(String(msg.id)); done(msg.result); }
+});
+
+function askDesktopBrowser(id: string, command: unknown): Promise<unknown> {
+  if (typeof process.send !== "function") return Promise.resolve({ ok: false, error: "This Local Worker is not attached to ORVYN Desktop." });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { browserWaiters.delete(id); resolve({ ok: false, error: "The Workbench Browser did not answer." }); }, 28_000);
+    browserWaiters.set(id, (r) => { clearTimeout(timer); resolve(r); });
+    process.send!({ type: "browser.command", id, command });
+  });
+}
+
+async function relayBrowserCommands(list: { id: string; command: unknown }[]): Promise<void> {
+  await Promise.all(list.map(async ({ id, command }) => {
+    const op = String((command as { op?: string })?.op ?? "?");
+    const result = await askDesktopBrowser(id, command) as { ok?: boolean; session?: { sessionId?: string }; error?: string };
+    console.log(`[local-worker] browser ${op} → ${result?.ok ? `ok ${result.session?.sessionId ?? ""}` : `failed: ${String(result?.error ?? "").slice(0, 120)}`}`);
+    await cp(`/api/v1/local-worker/browser/${encodeURIComponent(id)}/result`, "POST", { result }).catch(() => undefined);
+  }));
+}
+
 let lastServicesReport = "";
 
 /** Sends the service list when it changed (and the heartbeat carries it anyway). */
@@ -177,6 +205,7 @@ async function poll(): Promise<void> {
   try {
     const res = await cp("/api/v1/local-worker/poll");
     if (needsRegister(res)) { registered = false; await register(); return; }
+    if (Array.isArray(res.browserCommands) && res.browserCommands.length) void relayBrowserCommands(res.browserCommands);
     if (Array.isArray(res.stopServices) && res.stopServices.length) {
       for (const id of res.stopServices) {
         const stopped = serviceManager.stop(String(id), "stopped by the user");

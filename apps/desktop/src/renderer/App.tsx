@@ -203,6 +203,20 @@ export function App() {
     : workbenchAllowedForView(view) && effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
+  // ORION opened (or resized) its browser session: show that same tab in the
+  // Workbench Browser so the user watches exactly what ORION is working on.
+  const openTabIdsRef = useRef(chrome.layout.openTabIds);
+  openTabIdsRef.current = chrome.layout.openTabIds;
+  useEffect(() => {
+    const off = window.orvyn?.browser?.onReveal?.((detail) => {
+      if (!detail?.tabId) return;
+      const id = `browser:${detail.tabId}`;
+      const open = openTabIdsRef.current.includes(id) ? openTabIdsRef.current : [...openTabIdsRef.current, id];
+      chrome.setWorkspaceLayout({ rightPanelOpen: true, activeTab: "browser", activeTabId: id, openTabIds: open, expandedPreview: false });
+    });
+    return () => off?.();
+  }, []);
+
   const runView = {
     events: agentRun.events,
     status: agentRun.status,

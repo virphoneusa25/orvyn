@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   clampBrowserBounds,
+  fitViewport,
+  resolveViewport,
+  VIEWPORT_PRESETS,
   guestSecurityPrefs,
   isSafeBrowserUrl,
   looksLikeUrlOrDomain,
@@ -73,4 +76,21 @@ test("control ownership is exclusive", () => {
   assert.equal(tab.controlOwner, "user");
   assert.equal(requestBrowserControl(tab, "orion").ok, true);
   assert.equal(tab.controlOwner, "orion");
+});
+
+
+test("viewport presets and explicit sizes resolve; junk does not", () => {
+  assert.deepEqual(resolveViewport({ preset: "mobile" }), VIEWPORT_PRESETS.mobile);
+  assert.deepEqual(resolveViewport({ preset: "Tablet" }), VIEWPORT_PRESETS.tablet);
+  assert.deepEqual(resolveViewport({ width: 500, height: 900 }), { preset: "custom", width: 500, height: 900, mobile: true });
+  assert.equal(resolveViewport({ preset: "watch" }), null);
+  assert.equal(resolveViewport({ width: 10, height: 10 }), null);
+});
+
+test("a mobile viewport is centered at its own width inside the Workbench surface", () => {
+  const surface = { x: 900, y: 120, width: 520, height: 700 };
+  assert.deepEqual(fitViewport(surface, VIEWPORT_PRESETS.desktop), surface);
+  assert.deepEqual(fitViewport(surface, undefined), surface);
+  assert.deepEqual(fitViewport(surface, VIEWPORT_PRESETS.mobile), { x: 965, y: 120, width: 390, height: 700 });
+  assert.deepEqual(fitViewport({ x: 0, y: 0, width: 300, height: 400 }, VIEWPORT_PRESETS.mobile), { x: 0, y: 0, width: 300, height: 400 });
 });

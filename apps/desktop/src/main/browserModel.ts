@@ -16,10 +16,56 @@ export interface BrowserTab {
   createdAt: number;
   lastActiveAt: number;
   controlOwner: BrowserOwner;
+  /** Set when an ORION browser session owns this tab (BrowserSessionManager). */
+  sessionId?: string;
+  /** Emulated viewport; absent means the tab fills the Workbench surface. */
+  viewport?: BrowserViewport;
   error?: { code: string; description: string };
   console: string[];
   network: { method: string; url: string; status?: number }[];
   download?: { filename: string; received: number; total: number; state: string };
+}
+
+export type ViewportPreset = "desktop" | "tablet" | "mobile" | "custom";
+
+export interface BrowserViewport {
+  preset: ViewportPreset;
+  width: number;
+  height: number;
+  mobile: boolean;
+}
+
+export const VIEWPORT_PRESETS: Record<Exclude<ViewportPreset, "custom">, BrowserViewport> = {
+  desktop: { preset: "desktop", width: 1280, height: 800, mobile: false },
+  tablet: { preset: "tablet", width: 820, height: 1180, mobile: true },
+  mobile: { preset: "mobile", width: 390, height: 844, mobile: true },
+};
+
+/** A preset name or explicit size → a viewport. Unknown input → null. */
+export function resolveViewport(input: { preset?: unknown; width?: unknown; height?: unknown; mobile?: unknown }): BrowserViewport | null {
+  const preset = String(input.preset ?? "").toLowerCase();
+  if (preset in VIEWPORT_PRESETS) return { ...VIEWPORT_PRESETS[preset as keyof typeof VIEWPORT_PRESETS] };
+  const width = Math.round(Number(input.width));
+  const height = Math.round(Number(input.height));
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 240 || height < 240 || width > 3840 || height > 3840) return null;
+  return { preset: "custom", width, height, mobile: input.mobile === true || width < 600 };
+}
+
+/**
+ * Where the guest view goes inside the Workbench surface. Desktop fills the
+ * surface. A narrower viewport is centered at its own width, so the user sees
+ * the same page resize that ORION tests. Height is clipped to the surface.
+ */
+export function fitViewport(surface: BrowserBounds, viewport?: BrowserViewport): BrowserBounds {
+  if (!viewport || viewport.preset === "desktop") return surface;
+  const width = Math.min(viewport.width, surface.width);
+  const height = Math.min(viewport.height, surface.height);
+  return {
+    x: surface.x + Math.max(0, Math.round((surface.width - width) / 2)),
+    y: surface.y,
+    width,
+    height,
+  };
 }
 
 export interface BrowserRecent {
@@ -131,6 +177,8 @@ export function publicBrowserTab(tab: BrowserTab): Omit<BrowserTab, "console" | 
     createdAt: tab.createdAt,
     lastActiveAt: tab.lastActiveAt,
     controlOwner: tab.controlOwner,
+    sessionId: tab.sessionId,
+    viewport: tab.viewport,
     error: tab.error,
     console: tab.console.slice(-20),
     network: tab.network.slice(-20),

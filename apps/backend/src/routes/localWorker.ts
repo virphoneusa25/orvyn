@@ -7,6 +7,7 @@ import { toolRpc } from "../execution/ToolRpc";
 import { executeLocalTool } from "../localWorker/LocalToolExecutor";
 import { detectLocalEnvironment } from "../localWorker/environmentDetect";
 import type { ServiceRecord } from "../services/ServiceManager";
+import { noteWorkbenchBrowser, resolveWorkbenchBrowserCommand, takeWorkbenchBrowserCommands } from "../desktop/workbenchBrowserBridge";
 import type { AgentEventType } from "../agent/events";
 import type { RunStore } from "../agent/events";
 import type { Tenant } from "../tenancy/TenantManager";
@@ -127,6 +128,7 @@ export function localWorkerRouter(
       hostDesktopAllowed: req.body.hostDesktopAllowed === true,
       services: cleanServices(req.body.services),
     });
+    noteWorkbenchBrowser(t.id, Array.isArray(req.body.capabilities) && req.body.capabilities.includes("workbench-browser"));
     res.json({ ok: true, workerId, secretRequired: true });
   });
 
@@ -140,6 +142,7 @@ export function localWorkerRouter(
     existing.hostDesktopAllowed = req.body.hostDesktopAllowed === true;
     if (Array.isArray(req.body.services)) existing.services = cleanServices(req.body.services);
     workers.set(t.id, existing);
+    if (existing.capabilities.includes("workbench-browser")) noteWorkbenchBrowser(t.id, true);
     res.json({ ok: true, health: existing.status });
   });
 
@@ -158,7 +161,9 @@ export function localWorkerRouter(
     if (job) job.assignedTo = worker.workerId;
     const stops = [...(pendingStops.get(t.id) ?? [])];
     pendingStops.delete(t.id);
-    res.json({ job: job ?? null, stopServices: stops });
+    const browser = worker.capabilities.includes("workbench-browser");
+    if (browser) noteWorkbenchBrowser(t.id, true);
+    res.json({ job: job ?? null, stopServices: stops, browserCommands: browser ? takeWorkbenchBrowserCommands(t.id) : [] });
   });
 
   r.get("/tools/:runId/next", (req, res) => {
@@ -209,6 +214,12 @@ export function localWorkerRouter(
       console.warn(`[local-worker] event persist failed: ${err.message}`);
     }
     res.json({ ok: true });
+  });
+
+  // The desktop's answer to one browser command (see workbenchBrowserBridge).
+  r.post("/browser/:id/result", (req, res) => {
+    const t = requireTenant(req);
+    res.json({ ok: resolveWorkbenchBrowserCommand(t.id, String(req.params.id), req.body?.result) });
   });
 
   // The worker reports its services after any change, between heartbeats.

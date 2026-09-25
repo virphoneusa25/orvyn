@@ -7,8 +7,8 @@
 
 import * as path from "path";
 import { promises as fs } from "fs";
-import { AITool, ToolResult } from "../ToolTypes";
-import { callElectronBrowser } from "../../desktop/electronBrowserTarget";
+import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
+import { workbenchBrowserCommand } from "../../desktop/electronBrowserTarget";
 
 let browserTenantId = "";
 
@@ -16,10 +16,66 @@ export function setBrowserToolTenant(tenantId: string): void {
   browserTenantId = tenantId;
 }
 
-async function electron(path: string, body: Record<string, unknown> = {}): Promise<Record<string, unknown> | null> {
-  if (!browserTenantId) return null;
-  return callElectronBrowser(browserTenantId, path, body);
+interface WorkbenchSession {
+  sessionId: string;
+  runId: string;
+  url: string;
+  title: string;
+  viewport: { preset: string; width: number; height: number; mobile: boolean };
+  consoleErrors: { level: string; message: string; source?: string; line?: number }[];
+  networkErrors: { method: string; url: string; status: number; error?: string }[];
+  screenshots: { screenshotId: string; sessionId: string; width: number; height: number; sha256: string; url: string }[];
 }
+
+/**
+ * One command to the Workbench Browser session the user is looking at.
+ * null: no Workbench Browser is connected (the hidden Playwright fallback
+ * applies, and says so). Every visible command carries the run id, so the
+ * desktop keeps one session per run.
+ */
+async function workbench(context: ToolExecutionContext | undefined, command: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const tenantId = context?.tenantId || browserTenantId;
+  return workbenchBrowserCommand(tenantId, { ...command, op: String(command.op), runId: context?.runId });
+}
+
+function viewportLabel(v: WorkbenchSession["viewport"]): string {
+  const name = v.preset === "custom" ? "Custom" : v.preset[0]!.toUpperCase() + v.preset.slice(1);
+  return `${name} ${v.width}×${v.height}${v.mobile ? " (mobile)" : ""}`;
+}
+
+/** The tool result for a visible-session command: the session id is always in it. */
+function sessionResult(r: Record<string, unknown>, summary: string, extraLines: string[] = [], meta: Record<string, unknown> = {}): ToolResult {
+  if (r.ok !== true) return { ok: false, error: String(r.error ?? "The Workbench Browser refused the command."), meta: r.sessionId ? { browserSessionId: r.sessionId } : undefined };
+  const s = r.session as WorkbenchSession;
+  return {
+    ok: true,
+    output: [
+      summary,
+      `browserSessionId: ${s.sessionId}`,
+      `URL: ${s.url || "(blank)"}${s.title ? ` — ${s.title}` : ""}`,
+      `Viewport: ${viewportLabel(s.viewport)}`,
+      ...extraLines,
+      "Surface: ORVYN Workbench Browser (the user sees this same page)",
+    ].join("\n"),
+    meta: {
+      browserSessionId: s.sessionId,
+      browserSession: {
+        sessionId: s.sessionId,
+        runId: s.runId,
+        url: s.url,
+        title: s.title,
+        viewport: s.viewport,
+        consoleErrors: s.consoleErrors.length,
+        networkErrors: s.networkErrors.length,
+        screenshots: s.screenshots.length,
+      },
+      surface: "workbench",
+      ...meta,
+    },
+  };
+}
+
+const BACKGROUND_NOTE = "Surface: background browser on the server (no ORVYN Desktop connected), not visible to the user.";
 
 export function playwrightAvailable(): boolean {
   try {
@@ -177,12 +233,12 @@ export function browserEvidence(projectRoot: string): {
 }
 
 function guard<T extends Record<string, unknown>>(
-  fn: (args: T) => Promise<ToolResult>,
+  fn: (args: T, context?: ToolExecutionContext) => Promise<ToolResult>,
   opts?: { playwright?: boolean }
-): (args: Record<string, unknown>) => Promise<ToolResult> {
-  return async (args) => {
+): (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<ToolResult> {
+  return async (args, context) => {
     try {
-      return await fn(args as T);
+      return await fn(args as T, context);
     } catch (err: any) {
       if (opts?.playwright !== false && !playwrightAvailable() && /No browser session|playwright|chromium/i.test(String(err?.message))) {
         return { ok: false, error: PLAYWRIGHT_MISSING };
@@ -236,29 +292,28 @@ async function gotoWithRecovery(page: any, rawUrl: string): Promise<string> {
   }
 }
 
+const sessionIdParam = { type: "string", description: "browserSessionId from browser_open (optional: defaults to this run's session)" };
+
 export function makeBrowserOpenTool(projectRoot: string): AITool {
   return {
     name: "browser_open",
     description:
-      "Open a URL in the visible ORVYN Workbench browser when available, otherwise a Playwright session. Replaces any prior hidden session for this project.",
+      "Open a URL in the ORVYN Workbench Browser the user is watching. Returns the browserSessionId that every other browser tool acts on. Reuses this run's session if it has one.",
     parameters: {
       type: "object",
-      properties: { url: { type: "string", description: "URL to open (optional)" } },
+      properties: { url: { type: "string", description: "URL or domain to open" } },
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
       const url = args.url ? String(args.url) : "";
-      const visible = await electron("/v1/browser/open", { url });
-      if (visible?.ok) {
-        const tab = visible.tab as { id?: string; url?: string } | undefined;
-        return { ok: true, output: `Workbench browser ${tab?.id ?? ""} opened${tab?.url ? ` at ${tab.url}` : url ? ` at ${url}` : ""}.` };
-      }
+      const visible = await workbench(context, { op: "open", url });
+      if (visible) return sessionResult(visible, `Opened ${url || "a blank tab"} in the Workbench Browser.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const s = await openSession(projectRoot);
       if (url) await gotoWithRecovery(s.page, url);
       s.actions.push({ action: "open", url, timestamp: Date.now() });
-      return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.` };
+      return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -266,26 +321,56 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
 export function makeBrowserNavigateTool(projectRoot: string): AITool {
   return {
     name: "browser_navigate",
-    description: "Navigate the open browser session to a URL and report the page title.",
+    description: "Navigate the browser session to a URL and report the page title.",
     parameters: {
       type: "object",
-      properties: { url: { type: "string" } },
+      properties: { url: { type: "string" }, sessionId: sessionIdParam },
       required: ["url"],
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
       const url = String(args.url);
-      const visible = await electron("/v1/browser/navigate", { url });
-      if (visible && visible.tabs) {
-        const tabs = visible.tabs as { url?: string; title?: string }[];
-        const tab = tabs[tabs.length - 1];
-        return { ok: true, output: `Now at ${tab?.url ?? url} — title: ${tab?.title ?? ""}` };
-      }
+      const visible = await workbench(context, { op: "navigate", url, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Navigated to ${url}.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
       const finalUrl = await gotoWithRecovery(page, url);
-      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}` };
+      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
+    }),
+  };
+}
+
+export function makeBrowserViewportTool(projectRoot: string): AITool {
+  return {
+    name: "browser_set_viewport",
+    description:
+      'Resize the browser session to test responsive layouts: preset "desktop" (1280×800), "tablet" (820×1180) or "mobile" (390×844), or an explicit width and height. The user sees the same page resize.',
+    parameters: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["desktop", "tablet", "mobile"] },
+        width: { type: "number" },
+        height: { type: "number" },
+        mobile: { type: "boolean" },
+        sessionId: sessionIdParam,
+      },
+    },
+    defaultPermission: "ask",
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "viewport", preset: args.preset, width: args.width, height: args.height, mobile: args.mobile, sessionId: args.sessionId });
+      if (visible) {
+        const applied = visible.applied as { width?: number; height?: number; innerWidth?: number; innerHeight?: number } | undefined;
+        const line = applied ? [`Page now lays out at ${applied.innerWidth ?? applied.width}×${applied.innerHeight ?? applied.height} CSS px in the Workbench.`] : [];
+        return sessionResult(visible, "Viewport changed.", line, { viewportApplied: applied });
+      }
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const presets: Record<string, [number, number]> = { desktop: [1280, 800], tablet: [820, 1180], mobile: [390, 844] };
+      const [w, h] = presets[String(args.preset ?? "")] ?? [Number(args.width) || 1280, Number(args.height) || 800];
+      const page = await getPage(projectRoot);
+      await page.setViewportSize({ width: w, height: h });
+      return { ok: true, output: `Viewport set to ${w}×${h}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -293,22 +378,22 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
 export function makeBrowserClickTool(projectRoot: string): AITool {
   return {
     name: "browser_click",
-    description: "Click an element in the open browser session by CSS selector or visible text (text=...).",
+    description: "Click an element in the browser session by CSS selector or visible text (text=...).",
     parameters: {
       type: "object",
-      properties: { selector: { type: "string" } },
+      properties: { selector: { type: "string" }, sessionId: sessionIdParam },
       required: ["selector"],
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
       const selector = String(args.selector);
-      const visible = await electron("/v1/browser/click", { selector });
-      if (visible?.ok) return { ok: true, output: `Clicked ${selector} in the Workbench browser.` };
+      const visible = await workbench(context, { op: "click", selector, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Clicked ${selector}.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
       await page.click(selector, { timeout: 10_000 });
-      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}` };
+      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -316,28 +401,29 @@ export function makeBrowserClickTool(projectRoot: string): AITool {
 export function makeBrowserTypeTool(projectRoot: string): AITool {
   return {
     name: "browser_type",
-    description: "Type text into an input in the open browser session (CSS selector), then optionally press Enter.",
+    description: "Type text into an input in the browser session (CSS selector), then optionally press Enter.",
     parameters: {
       type: "object",
       properties: {
         selector: { type: "string" },
         text: { type: "string" },
         submit: { type: "boolean", description: "Press Enter afterwards" },
+        sessionId: sessionIdParam,
       },
       required: ["selector", "text"],
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
       const selector = String(args.selector);
       const text = String(args.text);
-      const visible = await electron("/v1/browser/type", { selector, text });
-      if (visible?.ok) return { ok: true, output: `Typed into ${selector} in the Workbench browser.` };
+      const visible = await workbench(context, { op: "type", selector, text, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Typed into ${selector}.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
       await page.fill(selector, text, { timeout: 10_000 });
       if (args.submit === true) await page.press(selector, "Enter");
-      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.` };
+      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -346,15 +432,18 @@ export function makeBrowserConsoleErrorsTool(projectRoot: string): AITool {
   return {
     name: "browser_console_errors",
     description:
-      "Report every console error and uncaught page error collected in the open browser session since browser_open. Empty output means no errors were observed.",
-    parameters: { type: "object", properties: {} },
+      "Report the console errors, uncaught page errors and failed network requests collected in the browser session. Empty means none were observed.",
+    parameters: { type: "object", properties: { sessionId: sessionIdParam } },
     defaultPermission: "allowed",
-    execute: guard(async () => {
-      const visible = await electron("/v1/browser/state");
-      const tabs = (visible?.tabs as { console?: string[] }[] | undefined) ?? [];
-      const lines = tabs.flatMap((t) => t.console ?? []);
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "state", sessionId: args.sessionId });
       if (visible) {
-        return { ok: true, output: lines.length === 0 ? "No console or page errors observed." : lines.join("\n") };
+        const s = visible.session as WorkbenchSession | undefined;
+        const lines = [
+          ...(s?.consoleErrors ?? []).map((c) => `[console.${c.level}] ${c.message}${c.source ? ` (${c.source}${c.line ? `:${c.line}` : ""})` : ""}`),
+          ...(s?.networkErrors ?? []).map((n) => `[network] ${n.method} ${n.url} ${n.status || n.error || ""}`),
+        ];
+        return sessionResult(visible, lines.length ? `${lines.length} problem(s) observed:` : "No console, page or network errors observed.", lines);
       }
       const missing = needPlaywright();
       if (missing) return missing;
@@ -372,25 +461,31 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
   return {
     name: "browser_screenshot",
     description:
-      "Screenshot the open browser session to .orvyn/screenshots/ and return the file path (usable as vision input).",
+      "Screenshot the browser session exactly as the user sees it (at its current viewport). Returns a screenshot id tied to the browserSessionId and the image for inspection.",
     parameters: {
       type: "object",
-      properties: { fullPage: { type: "boolean" } },
+      properties: { fullPage: { type: "boolean" }, sessionId: sessionIdParam },
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "screenshot", sessionId: args.sessionId });
+      if (visible) {
+        if (visible.ok !== true) return sessionResult(visible, "");
+        const shot = visible.screenshot as WorkbenchSession["screenshots"][number] & { viewport?: WorkbenchSession["viewport"] };
+        return sessionResult(
+          visible,
+          `Screenshot ${shot.screenshotId} taken.`,
+          [`Screenshot: ${shot.screenshotId} · ${shot.width}×${shot.height}px · session ${shot.sessionId} · sha256 ${shot.sha256.slice(0, 12)}…`],
+          {
+            screenshot: typeof visible.png === "string" ? { b64: visible.png, mediaType: "image/png" } : undefined,
+            browserScreenshot: shot,
+            desktopHealthy: true,
+          }
+        );
+      }
       const dir = path.join(projectRoot, ".orvyn", "screenshots");
       await fs.mkdir(dir, { recursive: true });
       const file = path.join(dir, `shot_${Date.now()}.png`);
-      const visible = await electron("/v1/browser/screenshot");
-      if (visible?.ok && typeof visible.png === "string") {
-        await fs.writeFile(file, Buffer.from(visible.png, "base64"));
-        return {
-          ok: true,
-          output: `Screenshot saved: ${file}`,
-          meta: { screenshot: { b64: visible.png, mediaType: "image/png" }, surface: "browser", desktopHealthy: true },
-        };
-      }
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
@@ -400,7 +495,7 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
         s.screenshots.push(file);
         s.actions.push({ action: "screenshot", url: page.url(), timestamp: Date.now(), result: file });
       }
-      return { ok: true, output: `Screenshot saved: ${file}` };
+      return { ok: true, output: `Screenshot saved: ${file}\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -408,21 +503,21 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
 export function makeBrowserScrollTool(projectRoot: string): AITool {
   return {
     name: "browser_scroll",
-    description: "Scroll the visible Workbench browser (or Playwright fallback) by a pixel delta.",
+    description: "Scroll the browser session by a pixel delta.",
     parameters: {
       type: "object",
-      properties: { deltaY: { type: "number", description: "Positive scrolls down" } },
+      properties: { deltaY: { type: "number", description: "Positive scrolls down" }, sessionId: sessionIdParam },
     },
     defaultPermission: "ask",
-    execute: guard(async (args) => {
+    execute: guard(async (args, context) => {
       const deltaY = Number(args.deltaY ?? 400);
-      const visible = await electron("/v1/browser/scroll", { deltaY });
-      if (visible?.ok) return { ok: true, output: `Scrolled the Workbench browser by ${deltaY}px.` };
+      const visible = await workbench(context, { op: "scroll", deltaY, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Scrolled by ${deltaY}px.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
       await page.mouse.wheel(0, deltaY);
-      return { ok: true, output: `Scrolled by ${deltaY}px.` };
+      return { ok: true, output: `Scrolled by ${deltaY}px.\n${BACKGROUND_NOTE}`, meta: { surface: "background" } };
     }),
   };
 }
@@ -431,24 +526,18 @@ export function makeBrowserEvidenceTool(projectRoot: string): AITool {
   return {
     name: "browser_evidence",
     description:
-      "Get the full browser session evidence: actions taken, console errors, failed network requests, screenshots, and current URL. Use for verification reports.",
-    parameters: { type: "object", properties: {} },
+      "Get the browser session evidence: session id, URL, viewport, console errors, failed network requests and screenshots. Use for verification reports.",
+    parameters: { type: "object", properties: { sessionId: sessionIdParam } },
     defaultPermission: "allowed",
-    execute: guard(async () => {
-      const visible = await electron("/v1/browser/state");
-      if (visible?.tabs) {
-        const tabs = visible.tabs as { url?: string; title?: string; console?: string[]; network?: { method: string; url: string; status?: number }[] }[];
-        const tab = tabs.find((t) => t.url) ?? tabs[0];
-        return {
-          ok: true,
-          output: [
-            `URL: ${tab?.url ?? "(none)"}`,
-            `Title: ${tab?.title ?? ""}`,
-            `Console errors (${tab?.console?.length ?? 0}): ${(tab?.console ?? []).slice(0, 5).join(" | ") || "(none)"}`,
-            `Failed requests (${tab?.network?.length ?? 0}): ${(tab?.network ?? []).slice(0, 5).map((n) => `${n.method} ${n.url} [${n.status ?? ""}]`).join(" | ") || "(none)"}`,
-            "Source: ORVYN Workbench WebContentsView",
-          ].join("\n"),
-        };
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "state", sessionId: args.sessionId });
+      if (visible) {
+        const s = visible.session as WorkbenchSession | undefined;
+        return sessionResult(visible, "Browser session evidence:", s ? [
+          `Console errors (${s.consoleErrors.length}): ${s.consoleErrors.slice(-5).map((c) => c.message).join(" | ") || "(none)"}`,
+          `Network errors (${s.networkErrors.length}): ${s.networkErrors.slice(-5).map((n) => `${n.method} ${n.url} [${n.status || n.error}]`).join(" | ") || "(none)"}`,
+          `Screenshots (${s.screenshots.length}): ${s.screenshots.map((x) => `${x.screenshotId} ${x.width}×${x.height}`).join(", ") || "(none)"}`,
+        ] : []);
       }
       const missing = needPlaywright();
       if (missing) return missing;
@@ -461,8 +550,9 @@ export function makeBrowserEvidenceTool(projectRoot: string): AITool {
         `Console errors (${evidence.consoleErrors.length}): ${evidence.consoleErrors.slice(0, 5).join(" | ") || "(none)"}`,
         `Failed requests (${evidence.failedRequests.length}): ${evidence.failedRequests.slice(0, 5).map((r) => `${r.method} ${r.url} [${r.status}]`).join(" | ") || "(none)"}`,
         `Screenshots (${evidence.screenshots.length}): ${evidence.screenshots.join(", ") || "(none)"}`,
+        BACKGROUND_NOTE,
       ];
-      return { ok: true, output: lines.join("\n") };
+      return { ok: true, output: lines.join("\n"), meta: { surface: "background" } };
     }),
   };
 }

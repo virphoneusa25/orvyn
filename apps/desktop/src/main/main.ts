@@ -10,8 +10,10 @@ import { connectionFileRecord } from "./connectionRecord";
 import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowserManager } from "./workbenchBrowser";
 import { fetchOfficialRegistry } from "./officialRegistryFetch";
 import { localWorkerManager } from "./localWorkerManager";
+import { BrowserSessionManager } from "./browserSessionManager";
 
 let browserManager: WorkbenchBrowserManager | null = null;
+let browserSessions: BrowserSessionManager | null = null;
 
 let mainWindow: BrowserWindow | null = null;
 let currentProjectRoot: string | null = null;
@@ -194,6 +196,14 @@ if (!app.requestSingleInstanceLock()) {
     await browserManager.start();
     if (mainWindow) browserManager.bindWindow(mainWindow);
     await registerBrowserIpc(browserManager);
+    // One browser session layer: ORION's browser tools (via the Local Worker
+    // or the loopback bridge) and the visible Workbench Browser share it.
+    browserSessions = new BrowserSessionManager(browserManager);
+    const sessions = browserSessions;
+    browserManager.commandHandler = (command) => sessions.handle(command);
+    localWorkerManager.setBrowserHandler((command) => sessions.handle(command));
+    ipcMain.handle("browser:sessions", () => sessions.list());
+    (globalThis as { __orvynBrowser?: unknown }).__orvynBrowser = { sessions, workbench: browserManager };
     void registerElectronBrowserTarget(browserManager);
   });
 }

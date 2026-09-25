@@ -159,6 +159,19 @@ export function BrowserWorkbench({
         </div>
       </div>
 
+      {tab?.sessionId && (
+        <div
+          data-testid="workbench-browser-session"
+          data-session-id={tab.sessionId}
+          data-viewport={tab.viewport ? `${tab.viewport.preset}:${tab.viewport.width}x${tab.viewport.height}` : "desktop"}
+          style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 10px", fontSize: 11, color: "var(--orvyn-text-muted)", borderBottom: "1px solid var(--orvyn-border-soft)", fontFamily: "var(--font-mono)" }}
+        >
+          <span style={{ color: "var(--orvyn-cyan)" }}>ORION session</span>
+          <span>{tab.sessionId}</span>
+          <span>·</span>
+          <span>{tab.viewport ? `${tab.viewport.preset[0]!.toUpperCase()}${tab.viewport.preset.slice(1)} ${tab.viewport.width}×${tab.viewport.height}` : "Desktop"}</span>
+        </div>
+      )}
       {orionStatus && tab?.controlOwner === "orion" && (
         <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-cyan)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>{orionStatus}</div>
       )}
