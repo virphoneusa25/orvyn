@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reducePresentation, splitPath } from "./presentationReducer.ts";
+import { commandSummary, reducePresentation, splitPath } from "./presentationReducer.ts";
 import type { AgentEventLike, ToolItem, WorkGroupItem as WgItem } from "./presentationReducer.ts";
 
 let seq = 0;
@@ -458,4 +458,32 @@ test("capability.required becomes a chat card, not a tool dump", () => {
   assert.ok(card);
   assert.match(card.reason, /GitHub/);
   assert.equal(card.recommendedServers[0]?.name, "GitHub");
+});
+
+test("command rows show the result that matters: test counts or the exit code", () => {
+  assert.equal(commandSummary("$ npm test\nexit 1\n\n# tests 1\n# pass 0\n# fail 1"), "1 failing");
+  assert.equal(commandSummary("> node --test\n# pass 3\n# fail 0"), "3 passed");
+  assert.equal(commandSummary("  2 passing (4ms)\n  1 failing"), "1 failing");
+  assert.equal(commandSummary("Tests:       18 passed, 18 total"), "18 passed");
+  assert.equal(commandSummary("$ ls\nexit 0"), "exit 0");
+  assert.equal(commandSummary("hello"), undefined);
+});
+
+test("a pause before ORION speaks shows one Thought marker; a quick reply shows none", () => {
+  reset();
+  const t0 = 1_000_000;
+  const at = (type: string, data: Record<string, unknown>, ts: number, i: number) => ({ id: `x${i}`, type, data, timestamp: ts, sequence: i });
+  const slow = reducePresentation([
+    at("run.started", {}, t0, 1),
+    at("message.delta", { content: "Checking." }, t0 + 3000, 2),
+    at("message.completed", {}, t0 + 3100, 3),
+  ] as any, "completed");
+  const marks = slow.filter((i) => i.kind === "status" && (i as any).thought);
+  assert.equal(marks.length, 1);
+  const quick = reducePresentation([
+    at("run.started", {}, t0, 1),
+    at("message.delta", { content: "Checking." }, t0 + 200, 2),
+    at("message.completed", {}, t0 + 300, 3),
+  ] as any, "completed");
+  assert.equal(quick.filter((i) => i.kind === "status").length, 0);
 });

@@ -101,8 +101,8 @@ async function main() {
     const rows = (snapshotAtFirstOutput ?? []).flatMap((i) => (i.kind === "workgroup" ? i.items : i.kind === "tool" ? [i] : []));
     ok(rows.some((r) => r.status === "running" && /tick 1/.test(r.output ?? "")), "the chat showed a running row with the live output", JSON.stringify(rows.map((r) => [r.status, r.output])));
     const final = reducePresentation(events, status);
-    const leftover = final.filter((i) => i.kind === "status" && !/^Execution ·/.test(i.label));
-    ok(leftover.length === 0, "no status or check rows left in the finished chat (only the Execution line)", JSON.stringify(leftover));
+    const leftover = final.filter((i) => i.kind === "status" && !/^Execution ·/.test(i.label) && !i.thought);
+    ok(leftover.length === 0, "no status or check rows left in the finished chat (only Execution and Thought markers)", JSON.stringify(leftover));
     const lastTool = final.map((i) => ["tool", "workgroup", "group"].includes(i.kind)).lastIndexOf(true);
     const afterTool = final.slice(lastTool + 1).filter((i) => i.kind === "assistant");
     ok(afterTool.length === 1 && /tick 5/.test(afterTool[0].content), "exactly one final answer after the last tool", JSON.stringify(afterTool.map((a) => a.content)));

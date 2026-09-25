@@ -258,11 +258,27 @@ function detailFromPreview(op: ToolOp, preview?: string): string | undefined {
     if (lines.length > 1) return `${lines.length} results`;
     return text.slice(0, 40);
   }
-  if (op === "terminal") return text.split("\n")[0]?.slice(0, 48) || undefined;
+  if (op === "terminal") return commandSummary(text);
+  return undefined;
+}
+
+/** The one result worth showing on a command row: test counts, else the exit code. */
+export function commandSummary(text?: string): string | undefined {
+  if (!text) return undefined;
+  const n = (re: RegExp) => { const m = text.match(re); return m ? Number(m[1]) : undefined; };
+  const failing = n(/^# fail (\d+)/m) ?? n(/(\d+) failing/) ?? n(/Tests:\s+(\d+) failed/) ?? n(/(\d+) failed/);
+  const passing = n(/^# pass (\d+)/m) ?? n(/(\d+) passing/) ?? n(/Tests:\s+(?:\d+ failed, )?(\d+) passed/) ?? n(/(\d+) passed/);
+  if (failing && failing > 0) return `${failing} failing`;
+  if (passing !== undefined) return `${passing} passed`;
+  const exit = n(/\bexit (\d+)/i);
+  if (exit !== undefined) return exit === 0 ? "exit 0" : `exit ${exit}`;
   return undefined;
 }
 
 // ---- the reducer ---------------------------------------------------------
+
+/** A pause this long before ORION speaks shows a "Thought · Ns" marker. */
+export const THOUGHT_MARK_MS = 1500;
 
 export function reducePresentation(events: AgentEventLike[], runStatus: string): PresentationItem[] {
   const items: PresentationItem[] = [];
@@ -288,11 +304,23 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
     textBuf = "";
   };
 
+  let lastTs = startTs;
   for (const e of events) {
+    const prevTs = lastTs;
+    lastTs = e.timestamp;
     switch (e.type) {
       case "message.delta":
         // The first spoken word after a Thought closes it (its duration).
-        if (!textBuf) closeThought(e.timestamp);
+        if (!textBuf) {
+          closeThought(e.timestamp);
+          // When ORION took a moment before speaking, mark it once — the
+          // "✦ Thought · 3 seconds" line the ORVYN site shows before a reply.
+          const gap = e.timestamp - prevTs;
+          const last = items[items.length - 1];
+          if (gap >= THOUGHT_MARK_MS && !(last?.kind === "status" && last.thought)) {
+            items.push({ kind: "status", key: `th-${e.id}`, label: "Thought", ephemeral: false, tone: "thought", thought: { ts: prevTs, endTs: e.timestamp, summary: "Thought" } });
+          }
+        }
         textBuf += String(e.data.content ?? "");
         continue;
       case "message.completed":
@@ -438,7 +466,9 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
               : `Created ${e.data.artifactName}`;
           } else {
             const preview = typeof e.data.preview === "string" ? e.data.preview : undefined;
-            const det = detailFromPreview(item.op, preview);
+            const det = item.op === "terminal"
+              ? commandSummary(item.output) ?? commandSummary(preview) ?? "done"
+              : detailFromPreview(item.op, preview);
             if (det) item.detail = det;
           }
         }
@@ -486,6 +516,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           item.status = "failed";
           item.endedAt = e.timestamp;
           item.error = String(e.data.error ?? "").slice(0, 200);
+          if (item.op === "terminal") item.detail = commandSummary(item.output) ?? commandSummary(String(e.data.error ?? "")) ?? item.detail;
         } else if (String(e.data.tool) === "model") {
           // A worker model error surfaces as an actionable line, not silence.
           items.push({

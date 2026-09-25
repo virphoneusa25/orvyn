@@ -7,7 +7,7 @@ import "./ConversationActivity.css";
 
 const LABELS: Record<ToolOp, [string, string]> = {
   read: ["Reading", "Read"], create: ["Writing", "Wrote"], edit: ["Editing", "Edited"],
-  delete: ["Deleting", "Deleted"], search: ["Searching", "Searched"], terminal: ["Running command", "Ran command"],
+  delete: ["Deleting", "Deleted"], search: ["Searching", "Searched"], terminal: ["Running", "Ran"],
   browser: ["Using browser", "Used browser"], git: ["Checking Git", "Checked Git"],
   test: ["Running tests", "Ran tests"], other: ["Using tool", "Used tool"],
 };
@@ -79,43 +79,64 @@ export function liveTail(output: string, lines = 12): string {
   return all.slice(-lines).join("\n");
 }
 
+const StateIcon = ({ status, warn }: { status: ToolItem["status"]; warn?: boolean }) =>
+  status === "running" ? <i className="tool-line__spin" aria-hidden="true" />
+  : warn
+    ? <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v6M8 12.5v.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
+  : status === "failed" || status === "stopped"
+    ? <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+    : <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+
+/**
+ * One tool step as a single line, the way the ORVYN site shows the app:
+ * [spinner → ✓ / ✕] [icon] Verb `target` ……… result
+ * Running commands print their newest output underneath while they run.
+ */
 export function ToolActivityRow({ item }: { item: ToolItem }) {
   const [expanded, setExpanded] = useState(false);
   const command = item.op === "terminal";
+  const running = item.status === "running";
+  const failed = item.status === "failed" || item.status === "stopped";
   const generating = item.toolName === "generate_image" || item.toolName === "create_document" || item.toolName === "create_zip" || item.toolName === "artifact_create";
-  const state = item.status === "failed"
-    ? "Failed"
-    : item.status === "stopped"
-      ? "Stopped"
-      : item.status === "running"
-        ? (item.toolName === "generate_image" ? "Drawing" : "In progress")
-        : generating && item.fileName
-          ? item.fileName
-          : "Done";
   const verb = item.toolName === "generate_image"
-    ? (item.status === "done" && item.fileName ? "Generated" : "Generate image")
-    : item.status === "failed" || item.status === "stopped" ? LABELS[item.op][0] : LABELS[item.op][item.status === "running" ? 0 : 1];
-  return <div className={`activity-item activity-${item.status}`}>
-    <div className="activity-row" onClick={() => { if (item.op === "browser" && item.ctx) openArtifactInContext({ tab: item.ctx, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op }); }}>
-      {item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}
-      <div className="activity-target">
-        <span className="activity-verb">{verb}</span>
-        {item.fileName ? <><strong>{item.fileName}</strong><span className="activity-path">{item.path}</span></> : !command && <span>{item.label}</span>}
-      </div>
-      <span className="activity-state">{item.status === "running" && <span className="activity-pulse" />}{state}</span>
-      {item.ctx && <button className="activity-link" aria-label={`Open ${item.fileName ?? item.label ?? verb} in ${item.ctx}`} onClick={() => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op })}>Open ↗</button>}
+    ? (item.status === "done" && item.fileName ? "Generated" : "Generating image")
+    : LABELS[item.op][running ? 0 : 1];
+  const target = item.fileName ?? (command ? (item.label || "Preparing command…") : item.label);
+  const meta = failed
+    ? (item.status === "stopped" ? "stopped" : item.detail && item.detail !== "Command failed" ? item.detail : "failed")
+    : running
+      ? (generating ? "working…" : "")
+      : item.detail ?? "";
+  // A command that ran and reported failing tests is a finding, not a crash:
+  // amber like the site's "2 failing", with the result as the meta.
+  const warn = failed && item.op === "terminal" && /failing|exit \d/.test(meta);
+  const open = item.ctx
+    ? () => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op })
+    : undefined;
+  return <div className={`tool-line tool-line--${item.status}${warn ? " tool-line--warn" : ""}`}>
+    <div
+      className={`tool-line__row${open ? " is-link" : ""}`}
+      onClick={open}
+      role={open ? "button" : undefined}
+      tabIndex={open ? 0 : undefined}
+      onKeyDown={open ? (e) => { if (e.key === "Enter") open(); } : undefined}
+      title={item.fileName ? `${item.path ?? ""}${item.fileName}` : target}
+    >
+      <span className="tool-line__state"><StateIcon status={item.status} warn={warn} /></span>
+      <span className="tool-line__icon">{item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}</span>
+      <span className="tool-line__verb">{verb}</span>
+      {target && <code className="tool-line__target">{target}</code>}
+      {meta && <em className="tool-line__meta">{meta}</em>}
+      {open && <span className="tool-line__open" aria-label="Open">↗</span>}
     </div>
-    {item.toolName === "generate_image" && item.status === "running" && <ImageSketch name={item.fileName} />}
-    {command && <pre className="activity-command"><span aria-hidden="true">$ </span>{item.label || "Preparing command…"}</pre>}
-    {item.detail && <div className="activity-detail">{item.detail}</div>}
-    {item.error && <div className="activity-error">{item.error}</div>}
-    {item.output && item.status === "running" && (
-      // While a command runs, its newest output prints live under the row.
-      <pre className="activity-output activity-output-live" aria-live="polite">{liveTail(item.output)}</pre>
+    {item.toolName === "generate_image" && running && <ImageSketch name={item.fileName} />}
+    {item.output && running && (
+      <pre className="tool-line__live" aria-live="polite">{liveTail(item.output)}</pre>
     )}
-    {item.output && item.status !== "running" && <>
-      <button className="activity-link activity-output-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide output ▴" : "Show output ▾"}</button>
-      {expanded && <><pre className="activity-output">{item.output}</pre>{item.outputTruncated && <div className="activity-detail">Showing the last portion of the output.</div>}</>}
+    {item.error && failed && !warn && <div className="tool-line__error">{item.error}</div>}
+    {item.output && !running && <>
+      <button className="tool-line__toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide output" : "Output"}</button>
+      {expanded && <><pre className="tool-line__live tool-line__live--full">{item.output}</pre>{item.outputTruncated && <div className="tool-line__note">Showing the last portion of the output.</div>}</>}
     </>}
   </div>;
 }
@@ -124,14 +145,21 @@ export function ToolActivityGroup({ group }: { group: GroupItem }) {
 }
 export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
   if (group.type === "inspection") {
+    const status = group.status === "running" ? "running" : group.status === "done" ? "done" : "failed";
+    const single = group.items.length === 1 ? group.items[0] : null;
+    if (single) return <div className="activity-phase"><ToolActivityRow item={single} /></div>;
     return (
-      <details className="activity-group stream-explore" open={group.status === "running" ? true : undefined}>
-        <summary>
-          <IconSearch size={14} />
-          <span className="stream-explore-title">{group.title}{group.summary ? ` · ${group.summary}` : ""}</span>
-          <span className="activity-state">{group.status === "running" ? "Running" : group.status === "done" ? "Done" : "Needs attention"}</span>
+      <details className="activity-phase tool-line-group">
+        <summary className={`tool-line tool-line--${status}`}>
+          <span className="tool-line__row">
+            <span className="tool-line__state"><StateIcon status={status} /></span>
+            <span className="tool-line__icon"><IconSearch size={14} /></span>
+            <span className="tool-line__verb">{group.status === "running" ? "Exploring" : "Explored"}</span>
+            {group.summary && <code className="tool-line__target">{group.summary}</code>}
+            <em className="tool-line__meta">details ▾</em>
+          </span>
         </summary>
-        {group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}
+        <div className="tool-line-group__items">{group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>
       </details>
     );
   }
