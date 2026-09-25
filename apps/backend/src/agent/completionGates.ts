@@ -10,6 +10,11 @@ export interface CompletionGateInput {
   events: Array<{ type: string; data?: Record<string, unknown> }>;
   /** When set, only that task's evidence gate applies. */
   category?: string;
+  /**
+   * The engine runs on the user's own computer (the desktop's local engine,
+   * not ORVYN Cloud): a localhost preview IS on the machine the user looks at.
+   */
+  localEngine?: boolean;
 }
 
 export interface CompletionGateResult {
@@ -131,9 +136,9 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     const preview = input.events.some((e) => {
       if (e.type !== "preview.available") return false;
       const url = String(e.data?.url ?? "");
-      return /^https?:\/\//i.test(url) && !/localhost|127\.0\.0\.1/i.test(url);
+      return /^https?:\/\//i.test(url) && (input.localEngine || !/localhost|127\.0\.0\.1/i.test(url));
     });
-    const decision = decideCompletion({ instruction: input.instruction, events: input.events });
+    const decision = decideCompletion({ instruction: input.instruction, events: input.events, localEngine: input.localEngine });
     if (!wrotePage) {
       failedGate = "code";
       reasons.push("The site files were not written.");

@@ -37,8 +37,8 @@ import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConn
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats } from "./chatSession";
-import { syncSessions } from "./sessionsApi";
+import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats } from "./chatSession";
+import { fetchSessionState, sameRoot, syncSessions } from "./sessionsApi";
 import { pickReattachRun } from "./appReattach";
 import {
   appGridTemplateColumns,
@@ -170,6 +170,25 @@ export function App() {
 
   const openFile = tabs.find((t) => t.path === activePath) ?? null;
   const workspaceRoot = workspace?.root ?? null;
+  // Reopening a conversation continues ITS project: when the chat's session
+  // worked in another folder, switch the workspace back to that folder, so a
+  // follow-up runs there (not in whatever folder happens to be open).
+  const workspaceRootRef = useRef<string | null>(workspaceRoot);
+  workspaceRootRef.current = workspaceRoot;
+  const restoredChat = useRef<string | null>(null);
+  useEffect(() => subscribeChat(() => {
+    const chat = getActiveChat();
+    if (!chat?.sessionId || restoredChat.current === chat.id) return;
+    restoredChat.current = chat.id;
+    void (async () => {
+      const state = await fetchSessionState(chat.sessionId!);
+      const root = state?.session.projectRoot;
+      if (!root || sameRoot(root, workspaceRootRef.current)) return;
+      // A Cloud workspace path is not a folder on this computer: openPath says no.
+      const next = await window.orvyn.project.openPath(root).catch(() => null);
+      if (next && getActiveChat()?.id === chat.id) setWorkspace(next);
+    })();
+  }), []);
   // Home is the landing surface; Code and Terminal share the editor chrome;
   // the context panel rides along wherever work happens.
   const showEditorChrome = view === "editor" || view === "terminal";

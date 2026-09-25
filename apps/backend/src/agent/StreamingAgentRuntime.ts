@@ -407,15 +407,24 @@ export class StreamingAgentRuntime {
     }
   }
 
+  /**
+   * The engine is the desktop's own, on the user's computer (not ORVYN Cloud,
+   * not a cloud worker): its localhost is the user's localhost.
+   */
+  private isLocalEngine(runId: string): boolean {
+    if (process.env.ORVYN_CLOUD_MODE === "true" || process.env.ORVYN_PROJECTS_DIR) return false;
+    return this.runs.get(runId)?.execution?.location !== "OVH_WORKER";
+  }
+
   private async verifyPublishedPreview(runId: string, url: string): Promise<void> {
-    if (/localhost|127\.0\.0\.1/i.test(url)) {
+    if (/localhost|127\.0\.0\.1/i.test(url) && !this.isLocalEngine(runId)) {
       this.store.emit(runId, "browser.verification.failed", { url, issues: ["A cloud preview cannot be a localhost address."] });
       return;
     }
     try {
       const response = await fetch(url);
       const html = await response.text();
-      const result = assessRenderedPage(url, response.status, html);
+      const result = assessRenderedPage(url, response.status, html, { localEngine: this.isLocalEngine(runId) });
       this.store.emit(runId, result.passed ? "browser.verification.passed" : "browser.verification.failed", { ...result });
       if (!result.passed) {
         this.speak(runId, `The preview is up, but the page is not ready yet. ${result.issues[0] ?? "I'm checking it again."}`);
@@ -1577,6 +1586,7 @@ export class StreamingAgentRuntime {
           artifacts: state.createdArtifacts,
           events: this.store.get(runId)?.events ?? [],
           category: state.intent.category,
+          localEngine: this.isLocalEngine(runId),
         });
         if (gates.ok) return { kind: "approved" };
         this.store.emit(runId, "completion.blocked", {

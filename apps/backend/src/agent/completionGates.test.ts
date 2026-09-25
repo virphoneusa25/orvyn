@@ -135,3 +135,17 @@ test("npm test run through the terminal counts as the test run", () => {
   ] as any;
   assert.equal(evaluateCompletionGates({ instruction, artifacts: [], events: unrelated, category: "code" } as any).ok, false);
 });
+
+test("a localhost preview counts on the desktop's local engine, not on ORVYN Cloud", () => {
+  const events = [
+    { type: "file.created", data: { path: "index.html" } },
+    { type: "preview.available", data: { url: "http://localhost:4570/api/v1/sites/x/" } },
+    { type: "browser.verification.passed", data: { url: "http://localhost:4570/api/v1/sites/x/" } },
+  ] as any;
+  const input = { instruction: "Build a small landing page", artifacts: [], events };
+  const cloud = evaluateCompletionGates(input as any);
+  assert.equal(cloud.ok, false);
+  assert.match(cloud.reasons.join(" "), /no reachable preview/);
+  const local = evaluateCompletionGates({ ...input, localEngine: true } as any);
+  assert.ok(!/no reachable preview/.test(local.reasons.join(" ")), local.reasons.join(" "));
+});

@@ -20,13 +20,14 @@ export function cloudBrowserUrl(executionTarget: string, workerUrl: string, prev
 }
 
 /** Page content, not a status code. An empty 200 does not pass. */
-export function assessRenderedPage(url: string, status: number, html: string): BrowserVerificationResult {
+export function assessRenderedPage(url: string, status: number, html: string, opts: { localEngine?: boolean } = {}): BrowserVerificationResult {
   const text = html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ");
   const words = text.replace(/\s+/g, " ").trim();
   const hasStructure = /<(h1|main|header|nav)\b/i.test(html);
   const issues: string[] = [];
   if (status !== 200) issues.push(`Page responded ${status}.`);
-  if (LOCALHOST.test(url)) issues.push("The browser was given a localhost URL.");
+  // On the desktop's own engine, localhost is the user's machine.
+  if (LOCALHOST.test(url) && !opts.localEngine) issues.push("The browser was given a localhost URL.");
   if (!hasStructure) issues.push("The page has no heading, navigation, or main content.");
   if (words.length < 40) issues.push("The rendered page has almost no visible text.");
   const passed = issues.length === 0;

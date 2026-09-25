@@ -51,6 +51,32 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}`), { method: "DELETE", headers: authHeaders() }).catch(() => undefined);
 }
 
+export interface SessionStateView {
+  session: BackendSessionLike & { workspaceId: string | null; projectId: string | null };
+  runs: { runId: string; status: string; createdAt: number; instruction: string }[];
+  activeRunId: string | null;
+  messageCount: number;
+  files: { path: string; operation: string; runId: string; at: number }[];
+  artifacts: { artifactId: string; name: string; mimeType?: string; runId: string; at: number }[];
+  preview: { url: string; runId: string; at: number; available: boolean } | null;
+}
+
+/** Everything the session produced: project, runs, changed files, artifacts, newest preview. */
+export async function fetchSessionState(sessionId: string): Promise<SessionStateView | null> {
+  try {
+    const res = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}/state`), { headers: authHeaders() });
+    return res.ok ? ((await res.json()) as SessionStateView) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Same folder, whatever the case or slashes (Windows paths). */
+export function sameRoot(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (p: string) => { const r = p.trim().replace(/\\/g, "/").replace(/\/+$/, ""); return /^[A-Za-z]:\//.test(r) ? r.toLowerCase() : r; };
+  return Boolean(a && b) && norm(a!) === norm(b!);
+}
+
 /** A session's messages, in order, merged into its chat. */
 export async function loadSessionMessages(sessionId: string): Promise<number> {
   try {

@@ -6,6 +6,7 @@ import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorker
 import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
 import { summarizeRuns, threadHistory } from "../agent/runThread";
 import { recordRunAnswer, recordRunInstruction } from "../sessions/sessionMessages";
+import { sessionState } from "../sessions/sessionState";
 import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
@@ -898,6 +899,15 @@ v1Router.get("/sessions/:id", (req, res) => {
   const s = t.sessions.get(String(req.params.id));
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s, runs: summarizeRuns(t.runStore, s.runIds) });
+});
+
+// Everything the session produced: project, runs, changed files, artifacts,
+// newest live preview. Reopening a conversation restores from this.
+v1Router.get("/sessions/:id/state", (req, res) => {
+  const t = requireTenant(req);
+  const s = t.sessions.get(String(req.params.id));
+  if (!s) return res.status(404).json({ error: "Unknown session" });
+  res.json(sessionState(t.sessions, t.runStore, s));
 });
 
 // ---- Durable messages of a session ------------------------------------------

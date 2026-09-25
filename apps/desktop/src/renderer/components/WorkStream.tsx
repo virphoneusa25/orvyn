@@ -9,7 +9,7 @@
 // chain-of-thought. Detail lives in the Workbench.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, ensureChatForRun, type ChatMessage } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, ensureChatForRun, type ChatMessage } from "../chatSession";
 import { partitionStreamMessages } from "../streamOrder";
 import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import { ContextUsageMenu } from "./ContextUsageMenu";
@@ -28,6 +28,7 @@ import type { CommandMode } from "../orvynIntent";
 import type { AgentEvent } from "./AgentActivityList";
 import { useRunThread } from "../useRunThread";
 import { threadTimeline } from "../streamOrder";
+import { SessionRestoreCard } from "./SessionRestoreCard";
 
 /** The single run state (owned by App, shared with the right ContextPanel). */
 export interface RunView {
@@ -621,6 +622,9 @@ export function WorkStream({
         {/* The whole conversation, oldest first: earlier chat turns and the
             earlier runs of this thread (each follow-up is a run that continues
             the previous one), then the current run below. */}
+        {/* The conversation's project: the files it changed and its live preview. */}
+        <SessionRestoreCard sessionId={getActiveChat()?.sessionId} refreshKey={`${run.runId ?? ""}:${run.status}`} />
+
         {threadTimeline(earlierMessages, thread.earlier).map((entry, i) =>
           entry.kind === "message" ? (
             <ChatTurn key={`earlier-${i}`} message={entry.message} live={streaming && entry.message === messages[messages.length - 1]} />
