@@ -87,3 +87,12 @@ test("a named text or code file stays in the open folder, generated deliverables
     "Create a spreadsheet of expenses",
   ]) assert.equal(belongsInCloudStorage(p), true, p);
 });
+
+test("an explicit request for the cloud goes to ORVYN Cloud even with a folder open", () => {
+  for (const p of ["Create test-cloud.txt in a cloud workspace.", "Save notes.md to ORVYN Cloud", "Create hello.txt in the cloud"]) {
+    assert.equal(belongsInCloudStorage(p), true, p);
+  }
+  for (const p of ["Create test-local.txt.", "Create notes.md, not in the cloud", "Don't use cloud, create a.txt here"]) {
+    assert.equal(belongsInCloudStorage(p), false, p);
+  }
+});

@@ -42,7 +42,12 @@ const NAMES_TEXT_FILE =
  */
 export function belongsInCloudStorage(text: string): boolean {
   const t = text.trim();
-  if (!t || NAMES_TEXT_FILE.test(t)) return false;
+  if (!t) return false;
+  // "… in a cloud workspace" / "in ORVYN Cloud": the user chose Cloud, even
+  // with a folder open. "not in the cloud" / "don't use cloud" keeps it local.
+  if (/\b(?:not|don'?t|do not|never|without|no)\b[^.]{0,24}\bcloud\b/i.test(t)) return false;
+  if (/\bcloud\s+workspace\b|\b(?:in|on|to|into|using)\s+(?:a|an|the|my|our)?\s*(?:orvyn\s+)?cloud\b/i.test(t)) return true;
+  if (NAMES_TEXT_FILE.test(t)) return false;
   return looksLikeGeneratedFileRequest(t) || /\b(documents?|docx|pdf|spreadsheet|xlsx|slides?|pptx|report|letter|resume)\b/i.test(t);
 }
 
