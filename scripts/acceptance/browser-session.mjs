@@ -258,6 +258,23 @@ async function main() {
     const workerLog = existsSync(join(userData, "local-worker.log")) ? readFileSync(join(userData, "local-worker.log"), "utf8") : "";
     const relayed = workerLog.split("\n").filter((l) => l.includes("[local-worker] browser "));
     console.log(`        worker relay: ${relayed.map((l) => l.replace(/.*\[local-worker\] /, "")).join(" | ")}`);
+
+    // ── A screenshot while the user is NOT looking at the Browser tab ───────
+    // (the Files tab is open or the panel is closed): the tab is detached and
+    // used to fail with "The Workbench tab could not be captured."
+    console.log(`\nScreenshot while the Browser tab is hidden`);
+    const hidden = await app.evaluate(async (_e, sid) => {
+      const b = globalThis.__orvynBrowser;
+      b.workbench.setSurfaceVisible(false);
+      const view = b.workbench.surfaceReport().views.find((v) => v.sessionId === sid);
+      const r = await b.sessions.handle({ op: "screenshot", sessionId: sid });
+      const after = b.workbench.surfaceReport().views.find((v) => v.sessionId === sid);
+      return { wasShown: view?.visible, ok: r.ok, error: r.ok ? null : r.error, w: r.screenshot?.width, h: r.screenshot?.height, stillHidden: !after?.visible, attached: after?.attached };
+    }, orionSid);
+    ok(hidden.wasShown === false, "the Browser tab was hidden", JSON.stringify(hidden));
+    ok(hidden.ok && hidden.w > 100 && hidden.h > 100, "…and ORION's screenshot still works", JSON.stringify(hidden));
+    ok(hidden.stillHidden && hidden.attached === false, "…without showing the tab to the user", JSON.stringify(hidden));
+    await app.evaluate(() => globalThis.__orvynBrowser.workbench.setSurfaceVisible(true));
   } catch (err) {
     failures++; console.error("HARNESS ERROR:", err.stack ?? err.message);
   } finally {

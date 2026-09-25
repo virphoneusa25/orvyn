@@ -433,7 +433,11 @@ export function WorkStream({
 
   const streaming = isChatStreaming();
   const completion = [...run.events].reverse().find(e => e.type === "run.completed");
-  const displayStatus = completion?.data.missionStatus === "BLOCKED" ? "needs attention" : Number(completion?.data.tasksFailed) > 0 ? "incomplete" : run.status;
+  // ORION answered and the independent check is running: say so, instead of
+  // a bare RUNNING under a finished-looking answer.
+  const lastVerify = [...run.events].reverse().find((e) => e.type === "verification.started" || e.type === "verification.completed");
+  const checking = runActive && lastVerify?.type === "verification.started";
+  const displayStatus = completion?.data.missionStatus === "BLOCKED" ? "needs attention" : Number(completion?.data.tasksFailed) > 0 ? "incomplete" : checking ? "checking" : run.status;
   // Retry target: the run's own instruction, replayed as a NEW run.
   const retryInstruction = (run.events.find((e) => e.type === "run.started")?.data.instruction as string | undefined)?.trim() ?? null;
   // Stall clock: re-render every 5s while a run is active so "Still working…"

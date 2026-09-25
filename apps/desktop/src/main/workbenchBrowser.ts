@@ -177,6 +177,8 @@ export class WorkbenchBrowserManager {
       webPreferences: {
         ...guestSecurityPrefs(),
         session: session.fromPartition(PARTITION),
+        // ORION keeps using a tab the user is not looking at: do not freeze it.
+        backgroundThrottling: false,
       },
     });
     view.setVisible(false);
@@ -491,21 +493,41 @@ export class WorkbenchBrowserManager {
     if (!guest) return null;
     const wc = guest.view.webContents;
     const within = <T,>(p: Promise<T>, ms: number) => Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
-    // capturePage is what the user sees; a view that is not painting (panel
-    // hidden) may never answer, so fall back to a CDP capture of the page.
-    const image = await within(wc.capturePage(), 8000).catch(() => null);
-    if (image && !image.isEmpty()) {
-      const size = image.getSize();
-      return { png: image.toPNG(), width: size.width, height: size.height };
+    // A tab the user is not looking at (the Files tab is open, or the panel is
+    // closed) is detached from the window and paints nothing, so it could not
+    // be captured ("The Workbench tab could not be captured."). Paint it
+    // backstage for the capture: attached UNDER the app page (the user never
+    // sees it) at the surface size, with the capturer keeping it rendering.
+    const backstage = !guest.shown;
+    const win = this.boundWindow ?? this.getWindow();
+    if (backstage && win) {
+      try {
+        try { win.contentView.removeChildView(guest.view); } catch { /* not attached */ }
+        win.contentView.addChildView(guest.view, 0);
+        guest.view.setBounds(fitViewport(this.lastBounds ?? { x: 0, y: 0, width: 1280, height: 800 }, guest.tab.viewport));
+        guest.view.setVisible(true);
+        wc.invalidate();
+        await new Promise((r) => setTimeout(r, 250));
+      } catch { /* capture below still tries */ }
     }
     try {
-      if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
-      const shot = await within(wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" }) as Promise<{ data: string }>, 8000);
-      if (!shot?.data) return null;
-      const png = Buffer.from(shot.data, "base64");
-      return { png, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
-    } catch {
-      return null;
+      const image = await within(wc.capturePage(undefined, { stayHidden: true, stayAwake: true }), 8000).catch(() => null);
+      if (image && !image.isEmpty()) {
+        const size = image.getSize();
+        return { png: image.toPNG(), width: size.width, height: size.height };
+      }
+      try {
+        if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
+        const shot = await within(wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" }) as Promise<{ data: string }>, 8000);
+        if (!shot?.data) return null;
+        const png = Buffer.from(shot.data, "base64");
+        return { png, width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+      } catch {
+        return null;
+      }
+    } finally {
+      // Back to what the user was looking at.
+      if (backstage) this.attachActive();
     }
   }
 

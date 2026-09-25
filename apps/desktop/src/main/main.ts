@@ -167,6 +167,11 @@ function createWindow(): void {
 
 // Single instance: relaunching (e.g. the desktop shortcut while ORVYN is
 // already open) focuses the existing window instead of opening a second app.
+// Windows marks a window part it thinks is covered as "occluded" and stops
+// painting it. The Workbench Browser's page must keep rendering while ORION
+// works in it, even when the user is on another tab (screenshots, checks).
+if (process.platform === "win32") app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
