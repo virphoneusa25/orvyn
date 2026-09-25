@@ -7,6 +7,8 @@ import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, fmtDuration, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
 import { openArtifactInContext } from "../contextOpen";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
+import { MissionPhases } from "./MissionPhases";
+import { deriveMissionPhases } from "../missionPhases";
 
 export interface AgentEvent {
   id: string;
@@ -177,9 +179,11 @@ export function AgentActivityList({
   // task/mission/agent internals and reviewer text never render directly;
   // tool lifecycles collapse into single rows that update in place.
   const items = React.useMemo(() => reducePresentation(events, status), [events, status]);
+  const mission = React.useMemo(() => deriveMissionPhases(events as any, status), [events, status]);
 
   return (
     <>
+      {mission && <MissionPhases view={mission} />}
       {items.map((item) => {
         switch (item.kind) {
           case "assistant":

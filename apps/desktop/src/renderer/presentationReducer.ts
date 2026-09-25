@@ -29,6 +29,7 @@ export type ToolOp =
   | "browser"
   | "git"
   | "test"
+  | "web"
   | "other";
 
 export interface ToolItem {
@@ -200,6 +201,10 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "get_project_outline":
     case "search":
       return { op: "search", label: String(args?.query ?? args?.pattern ?? args?.name ?? args?.path ?? ""), ctx: "files" };
+    case "web_search":
+      return { op: "web", label: String(args?.query ?? ""), ctx: "browser" };
+    case "fetch_url":
+      return { op: "web", label: String(args?.url ?? ""), ctx: "browser" };
     case "list_directory":
     case "list_files":
     case "list_symbols":
@@ -259,6 +264,10 @@ function detailFromPreview(op: ToolOp, preview?: string): string | undefined {
     return text.slice(0, 40);
   }
   if (op === "terminal") return commandSummary(text);
+  if (op === "web") {
+    const urls = text.match(/https?:\/\/\S+/g) ?? [];
+    return urls.length > 1 ? `${urls.length} sources` : undefined;
+  }
   return undefined;
 }
 

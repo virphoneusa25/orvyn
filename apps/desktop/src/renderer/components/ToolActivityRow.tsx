@@ -9,7 +9,7 @@ const LABELS: Record<ToolOp, [string, string]> = {
   read: ["Reading", "Read"], create: ["Writing", "Wrote"], edit: ["Editing", "Edited"],
   delete: ["Deleting", "Deleted"], search: ["Searching", "Searched"], terminal: ["Running", "Ran"],
   browser: ["Using browser", "Used browser"], git: ["Checking Git", "Checked Git"],
-  test: ["Running tests", "Ran tests"], other: ["Using tool", "Used tool"],
+  test: ["Running tests", "Ran tests"], web: ["Researching", "Researched"], other: ["Using tool", "Used tool"],
 };
 
 /** One icon authority: the brand glyph set (official-style language marks,
@@ -18,7 +18,7 @@ export function FileTypeIcon({ name }: { name: string; ext?: string }) {
   return <BrandFileTypeIcon path={name} />;
 }
 function ActivityIcon({ op }: { op: ToolOp }) {
-  return op === "terminal" || op === "test" ? <IconTerminal size={16} /> : op === "search" ? <IconSearch size={16} /> : op === "browser" ? <IconGlobe size={16} /> : op === "edit" || op === "create" ? <IconWrench size={16} /> : <IconFile size={16} />;
+  return op === "terminal" || op === "test" ? <IconTerminal size={16} /> : op === "search" ? <IconSearch size={16} /> : op === "browser" || op === "web" ? <IconGlobe size={16} /> : op === "edit" || op === "create" ? <IconWrench size={16} /> : <IconFile size={16} />;
 }
 function ImageSketch({ name }: { name?: string }) {
   const ref = useRef<HTMLCanvasElement>(null);

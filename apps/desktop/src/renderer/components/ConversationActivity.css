@@ -88,3 +88,21 @@
 @media (prefers-reduced-motion: reduce) { .tool-line { animation: none; } .tool-line__spin { animation: none; } }
 @media (max-width: 700px) { .tool-line__meta { display: none; } }
 .tool-line--warn .tool-line__state, .tool-line--warn .tool-line__meta { color: var(--warning); }
+
+/* ── Mission timeline (Understand → Deliver), as on the ORVYN site ── */
+.mission-phases { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); animation: tool-line-in .28s ease-out both; }
+.mission-phases__list { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 0; list-style: none; flex: 1; min-width: 0; }
+.mission-phases__item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 4px; border-radius: 999px; font-size: 11.5px; color: var(--text-muted); transition: color .25s, background-color .25s; }
+.mission-phases__num { display: inline-grid; place-items: center; min-width: 20px; height: 20px; border-radius: 999px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 9.5px; transition: all .25s; }
+.mission-phases__item.is-active { color: var(--text); background: rgba(34, 211, 238, .07); }
+.mission-phases__item.is-active .mission-phases__num { border-color: #22D3EE; color: #22D3EE; box-shadow: 0 0 12px -2px rgba(34, 211, 238, .5); }
+.mission-phases__item.is-done { color: var(--text-secondary); }
+.mission-phases__item.is-done .mission-phases__num { border-color: rgba(52, 211, 153, .5); color: var(--success); background: rgba(52, 211, 153, .08); }
+.mission-phases__item.is-skipped { opacity: .45; }
+.mission-phases__item.is-failed { color: var(--danger); }
+.mission-phases__item.is-failed .mission-phases__num { border-color: var(--danger); color: var(--danger); }
+.mission-phases__pill { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 11px; white-space: nowrap; }
+.mission-phases__pill.is-running { color: #22D3EE; border-color: rgba(34, 211, 238, .3); background: rgba(34, 211, 238, .07); }
+.mission-phases__pill.is-verified, .mission-phases__pill.is-completed { color: var(--success); border-color: rgba(52, 211, 153, .3); background: rgba(52, 211, 153, .07); }
+.mission-phases__pill.is-attention { color: var(--warning); border-color: rgba(245, 185, 66, .3); background: rgba(245, 185, 66, .07); }
+@media (max-width: 700px) { .mission-phases { flex-direction: column; align-items: flex-start; } }
