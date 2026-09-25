@@ -20,11 +20,24 @@ export interface CompletionGateResult {
   failMessage: string;
 }
 
+/** A shell command that runs a test suite ("npm test", "node --test", "pytest" …). */
+export const TEST_COMMAND = /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|node\s+--test|npx\s+(?:vitest|jest|mocha)|vitest|jest|mocha|pytest|python\s+-m\s+pytest|go\s+test|cargo\s+test)\b/i;
+
 function testsRan(events: CompletionGateInput["events"]): { ran: boolean; passed: boolean } {
   let ran = false;
   let failed = false;
+  // "npm test" through the terminal is a test run too: remember each call's command.
+  const commandOf = new Map<string, string>();
   for (const e of events) {
-    const tool = String(e.data?.tool ?? e.data?.name ?? "");
+    if (e.type === "tool.input") {
+      const input = (e.data?.input ?? {}) as Record<string, unknown>;
+      if (typeof input.command === "string") commandOf.set(String(e.data?.callId ?? ""), input.command);
+    }
+  }
+  for (const e of events) {
+    const named = String(e.data?.tool ?? e.data?.name ?? "");
+    const command = commandOf.get(String(e.data?.callId ?? "")) ?? "";
+    const tool = TEST_COMMAND.test(command) ? `${named} test` : named;
     // The LATEST check decides: a failed run followed by a passing re-run is a
     // pass (that is the repair loop working), not a permanent failure.
     if (e.type === "test.completed") {

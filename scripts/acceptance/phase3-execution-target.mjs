@@ -1,6 +1,6 @@
-// scripts/acceptance/phase2-execution-target.mjs
+// scripts/acceptance/phase3-execution-target.mjs
 //
-// PHASE 2 acceptance — Workspace + execution target.
+// PHASE 3 acceptance — Workspace + execution target.
 //
 // Recreates the production topology on one machine:
 //   * the backend runs as the OVH control plane (ORVYN_CLOUD_MODE=true,
@@ -19,7 +19,7 @@
 //         under a Windows-looking path on the server.
 //
 // Usage (after `npm run build -w @orvyn/backend`):
-//   node scripts/acceptance/phase2-execution-target.mjs
+//   node scripts/acceptance/phase3-execution-target.mjs
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -228,7 +228,7 @@ async function main() {
   } finally {
     workerStop = true; server.kill(); model.close();
   }
-  console.log(failures === 0 ? "\nPHASE 2: PASS" : `\nPHASE 2: FAIL (${failures} check(s))`);
+  console.log(failures === 0 ? "\nPHASE 3: PASS" : `\nPHASE 3: FAIL (${failures} check(s))`);
   process.exit(failures === 0 ? 0 : 1);
 }
 main();

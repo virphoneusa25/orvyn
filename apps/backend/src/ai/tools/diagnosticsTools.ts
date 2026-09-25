@@ -111,7 +111,11 @@ export function makeRunTestsTool(projectRoot: string): AITool {
       }
       const out = await execCapture(cmd, projectRoot, RUN_TIMEOUT_MS);
       const text = clip(`${out.stdout}\n${out.stderr}`.trim());
-      return { ok: true, output: `$ ${cmd}\nexit ${out.code}\n\n${text}` };
+      const report = `$ ${cmd}\nexit ${out.code}\n\n${text}`;
+      // A failing suite is a failed tool call. Reporting it as success let a
+      // red test run count as "verified" and hid the failure from the loop.
+      if (out.code !== 0) return { ok: false, error: `Tests failed (exit ${out.code}).\n\n${report}`, output: report };
+      return { ok: true, output: report };
     },
   };
 }

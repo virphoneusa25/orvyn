@@ -202,6 +202,9 @@ function runCap(name: string): number {
  * even though their capability class looks harmless. One browser session
  * cannot be on two pages at once.
  */
+/** Tools whose success changes the files a later command sees. */
+const WORKSPACE_CHANGING_TOOLS = new Set(["write_file", "edit_file", "delete_file", "move_file", "apply_patch", "create_file", "rename_file"]);
+
 const SERIAL_ONLY_TOOLS = new Set([
   "browser_open",
   "browser_navigate",
@@ -1818,6 +1821,10 @@ export class StreamingAgentRuntime {
       if (result.ok) {
         state.failedFingerprints.delete(fingerprint);
         anySucceeded = true;
+        // After the workspace changes, re-running a command that failed before
+        // (npm test after a fix) is not an "identical retry": it is the repair
+        // loop. Only unchanged retries stay blocked.
+        if (WORKSPACE_CHANGING_TOOLS.has(call.name)) state.failedFingerprints.clear();
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
           // Remote tools carry the REAL before/after diff back with the
           // result; local runs use the pre-execution preview.

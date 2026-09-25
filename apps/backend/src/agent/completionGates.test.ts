@@ -112,3 +112,26 @@ test("the word test alone does not demand a test run", () => {
     assert.equal(asksForVerification(p), true, p);
   }
 });
+
+test("npm test run through the terminal counts as the test run", () => {
+  const instruction = "Fix the failing test in src/app.js";
+  const failedOnly = [
+    { type: "tool.completed", data: { tool: "edit_file", callId: "c1" } },
+    { type: "tool.input", data: { callId: "c2", input: { command: "npm test" } } },
+    { type: "tool.failed", data: { tool: "terminal", callId: "c2", error: "exit 1" } },
+  ] as any;
+  assert.equal(evaluateCompletionGates({ instruction, artifacts: [], events: failedOnly, category: "code" } as any).ok, false);
+  const repaired = [
+    ...failedOnly,
+    { type: "tool.completed", data: { tool: "edit_file", callId: "c3" } },
+    { type: "tool.input", data: { callId: "c4", input: { command: "npm test" } } },
+    { type: "tool.completed", data: { tool: "terminal", callId: "c4" } },
+  ] as any;
+  assert.equal(evaluateCompletionGates({ instruction, artifacts: [], events: repaired, category: "code" } as any).ok, true);
+  const unrelated = [
+    { type: "tool.completed", data: { tool: "edit_file", callId: "c1" } },
+    { type: "tool.input", data: { callId: "c2", input: { command: "ls" } } },
+    { type: "tool.completed", data: { tool: "terminal", callId: "c2" } },
+  ] as any;
+  assert.equal(evaluateCompletionGates({ instruction, artifacts: [], events: unrelated, category: "code" } as any).ok, false);
+});
