@@ -1,4 +1,5 @@
 // apps/backend/src/ai/ToolTypes.ts
+import type { ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 
 export type ToolPermission = "allowed" | "ask" | "denied";
 
@@ -23,6 +24,11 @@ export interface ToolResult {
     truncated?: boolean;
     note?: string;
   };
+  /**
+   * Set by ToolGateway on every execution: status, model payload, user
+   * summary, structured data, evidence, retryable. Tools never set it.
+   */
+  envelope?: ToolResultEnvelope;
   /** Structured side-channel (capability.required, activation). Never secrets. */
   meta?: Record<string, unknown>;
   /** Persisted file-producing results. Success requires artifactId on each entry. */
@@ -43,6 +49,8 @@ export interface ToolExecutionContext {
   onOutput?: (chunk: string) => void;
   executionTarget?: string;
   workspaceRoot?: string;
+  /** The model's tool call id, carried into the result envelope. */
+  toolUseId?: string;
 }
 
 export interface AITool {

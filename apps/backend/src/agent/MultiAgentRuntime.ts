@@ -15,6 +15,7 @@ import { CONVERSATION_STYLE } from "./conversationStyle";
 // flows through the EventBus over the existing RunStore SSE protocol, so the
 // UI needs no second socket.
 
+import { envelopeForEvent } from "../gateway/toolResultEnvelope";
 import { randomUUID } from "crypto";
 import { AIMessage, AIModelProvider, Attachment, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
@@ -862,6 +863,7 @@ export class MultiAgentRuntime {
             artifactId: persisted[0]?.artifactId,
             artifactName: persisted[0]?.name,
             ...(isTerminal ? { output: output.slice(-16000), outputTruncated: output.length > 16000 } : {}),
+            ...(result.envelope ? { envelope: envelopeForEvent({ ...result.envelope, toolUseId: call.id }) } : {}),
           });
           // The transcript is the reviewer's evidence: include real output, not
           // just "-> ok", or the reviewer will reject verified work as unproven.
@@ -869,7 +871,7 @@ export class MultiAgentRuntime {
           transcript.push(`${call.name}(${JSON.stringify(call.arguments).slice(0, 160)}) -> ok${evidence ? `: ${evidence}` : ""}`);
           messages.push({ role: "tool", name: call.name, toolCallId: call.id, content: clampToolOutput(result.output ?? "", MAX_TOOL_OUTPUT_CHARS).text });
         } else {
-          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: result.error });
+          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: result.error, ...(result.envelope ? { envelope: envelopeForEvent({ ...result.envelope, toolUseId: call.id }) } : {}) });
           transcript.push(`${call.name} -> FAILED: ${result.error}`);
           messages.push({
             role: "tool",
