@@ -18,6 +18,17 @@ import { environmentName } from "./identity/principal";
 import { loadVaultKey } from "./secrets/vault";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
+import { readFileSync } from "fs";
+import { join } from "path";
+
+/** Which commit this server runs (written by scripts/deploy-ovh.sh). */
+const BUILD_INFO: { commit?: string; builtAt?: string } = (() => {
+  if (process.env.ORVYN_BUILD_SHA) return { commit: process.env.ORVYN_BUILD_SHA };
+  for (const file of [join(process.cwd(), "build-info.json"), join(__dirname, "..", "build-info.json")]) {
+    try { return JSON.parse(readFileSync(file, "utf8")); } catch { /* try next */ }
+  }
+  return {};
+})();
 
 const app = express();
 app.use(cloudCors());
@@ -32,6 +43,8 @@ app.get("/api/v1/health", (_req, res) =>
     status: "ok",
     service: "orvyn-backend",
     version: "0.2.0",
+    commit: BUILD_INFO.commit ?? "unknown",
+    builtAt: BUILD_INFO.builtAt,
     environment: environmentName(),
     artifactStorage: "healthy",
     marketplaceCatalogVersion: 1,

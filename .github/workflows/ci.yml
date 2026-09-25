@@ -127,8 +127,10 @@ jobs:
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
         run: |
           if [ -z "$OVH_SSH_PRIVATE_KEY" ]; then
-            echo "OVH_SSH_PRIVATE_KEY is not set — add it as a GitHub Actions secret to auto-deploy."
-            exit 0
+            # Fail loudly: a green job that deployed nothing hid for days that
+            # the server was still running old code.
+            echo "::error title=OVH deploy skipped::OVH_SSH_PRIVATE_KEY is not set. Nothing was deployed. Add it under Settings → Secrets and variables → Actions."
+            exit 1
           fi
           install -m 600 /dev/null "$HOME/.ssh/ovh_deploy"
           printf '%s\n' "$OVH_SSH_PRIVATE_KEY" > "$HOME/.ssh/ovh_deploy"

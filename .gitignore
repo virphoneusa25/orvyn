@@ -22,3 +22,4 @@ _vp_*.py
 
 apps/desktop/resources/backend/
 .orvyn-test-account.txt
+apps/backend/build-info.json

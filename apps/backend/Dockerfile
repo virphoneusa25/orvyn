@@ -21,6 +21,8 @@ COPY apps/backend apps/backend
 
 RUN npm run build -w packages/ai-core
 RUN npm run build -w apps/backend
+# deploy-ovh.sh writes build-info.json (commit + time); local builds get "{}".
+RUN test -f apps/backend/build-info.json || echo '{}' > apps/backend/build-info.json
 
 # Playwright: install the npm package + Chromium in the build stage so the
 # runtime image carries them (browserTools.ts does a runtime require).
@@ -47,6 +49,7 @@ COPY --from=build /repo/node_modules ./node_modules
 COPY --from=build /repo/packages/ai-core ./packages/ai-core
 COPY --from=build /repo/apps/backend/dist ./dist
 COPY --from=build /repo/apps/backend/package.json ./package.json
+COPY --from=build /repo/apps/backend/build-info.json ./build-info.json
 
 # Playwright + Chromium from the build stage.
 COPY --from=build /ms-playwright /ms-playwright

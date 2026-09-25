@@ -17,6 +17,10 @@ fi
 SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 RSH="${SSH[*]}"
 
+# Stamp the build so /api/v1/health says exactly which commit is live.
+COMMIT="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+printf '{"commit":"%s","builtAt":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ROOT/apps/backend/build-info.json"
+
 echo "Syncing $ROOT → $HOST:$REMOTE (preserving remote .env)"
 
 "${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts'"
@@ -77,6 +81,11 @@ fi
 echo "OVH deploy healthy: $PUBLIC_HEALTH"
 curl -sS -m 8 "$PUBLIC_HEALTH"
 echo
+if ! curl -fsS -m 8 "$PUBLIC_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
+  echo "The public health check does not report commit $COMMIT: the new build is not the one serving traffic." >&2
+  exit 1
+fi
+echo "Live commit: $COMMIT"
 
 echo "Building orvyn-desktop image on $HOST"
 if ! "${SSH[@]}" "$HOST" "cd '$REMOTE/infrastructure/desktop' && docker build -t orvyn-desktop:latest ."; then
