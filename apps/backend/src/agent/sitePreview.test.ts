@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { composeSiteDocument, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, composeSiteDocument, hasSiteFile, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
 
 test("a preview is only the directory the agent wrote", () => {
   const empty = mkdtempSync(join(tmpdir(), "orvyn-empty-"));
@@ -55,4 +55,28 @@ test("a fixed script replaces the broken one in the preview (the page is never r
   assert.match(readPublishedFile(second.id, "app.js")?.body.toString() ?? "", /fixed/);
   assert.doesNotMatch(readPublishedFile(second.id, "index.html")?.body.toString() ?? "", /broken/);
   assert.equal(readPublishedFile(second.id, "style.css")?.body.toString(), "h1{color:red}");
+});
+
+test("a stylesheet linked as /styles.css loads in the preview (served under /sites/<id>/)", () => {
+  const runId = "run-root-ref";
+  rememberSiteFile(runId, "index.html", `<html><head><link rel="stylesheet" href="/styles.css"></head><body><h1>Radio</h1><script src="/app.js"></script></body></html>`);
+  rememberSiteFile(runId, "styles.css", "h1 { color: orange; }");
+  rememberSiteFile(runId, "app.js", "console.log(1);");
+  const published = publishRememberedSite(runId)!;
+  const page = readPublishedFile(published.id, "index.html")!.body.toString();
+  assert.match(page, /href="styles\.css"/);
+  assert.match(page, /src="app\.js"/);
+  assert.equal(readPublishedFile(published.id, "styles.css")?.body.toString(), "h1 { color: orange; }");
+});
+
+test("an edit to the stylesheet reaches the preview", () => {
+  const runId = "run-edit";
+  rememberSiteFile(runId, "index.html", `<link rel="stylesheet" href="style.css"><h1>x</h1>`);
+  rememberSiteFile(runId, "style.css", "h1 { color: red; }");
+  assert.equal(applySiteEdit(runId, "style.css", "red", "blue"), true);
+  assert.equal(applySiteEdit(runId, "style.css", "missing text", "x"), false);
+  assert.equal(applySiteEdit(runId, "other.css", "a", "b"), false);
+  const published = publishRememberedSite(runId)!;
+  assert.equal(readPublishedFile(published.id, "style.css")?.body.toString(), "h1 { color: blue; }");
+  assert.equal(hasSiteFile(runId, "style.css"), true);
 });

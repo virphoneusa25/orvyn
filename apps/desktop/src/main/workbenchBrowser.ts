@@ -49,6 +49,7 @@ type Guest = {
 };
 
 export class WorkbenchBrowserManager {
+  private disposing = false;
   private readonly guests = new Map<string, Guest>();
   private activeId: string | null = null;
   private recents: BrowserRecent[] = [];
@@ -312,10 +313,11 @@ export class WorkbenchBrowserManager {
     const guest = this.guests.get(id);
     if (!guest) return this.snapshot();
     this.detach(guest);
-    guest.view.webContents.close();
+    try { if (!guest.view.webContents.isDestroyed()) guest.view.webContents.close(); } catch { /* already gone */ }
     this.guests.delete(id);
     this.tabEvent(id, { kind: "closed" });
     if (this.activeId === id) this.activeId = [...this.guests.keys()].at(-1) ?? null;
+    if (this.disposing) return this.snapshot();
     this.attachActive();
     this.emit();
     return this.snapshot();
@@ -412,6 +414,9 @@ export class WorkbenchBrowserManager {
   }
 
   dispose(): void {
+    // The app is quitting: the window may already be destroyed. Close the tabs
+    // without touching it (that threw "Object has been destroyed").
+    this.disposing = true;
     for (const id of [...this.guests.keys()]) this.closeTab(id);
     this.loopback?.close();
     this.loopback = null;
@@ -452,7 +457,7 @@ export class WorkbenchBrowserManager {
     this.attachActive();
     this.emit();
     const tab = publicBrowserTab(this.guests.get(tabId)!.tab);
-    for (const win of BrowserWindow.getAllWindows()) win.webContents.send("browser:reveal", { tabId, sessionId: tab.sessionId, tab });
+    for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send("browser:reveal", { tabId, sessionId: tab.sessionId, tab });
   }
 
   /**
@@ -498,9 +503,10 @@ export class WorkbenchBrowserManager {
     // be captured ("The Workbench tab could not be captured."). Paint it
     // backstage for the capture: attached UNDER the app page (the user never
     // sees it) at the surface size, with the capturer keeping it rendering.
+    if (wc.isDestroyed()) return null;
     const backstage = !guest.shown;
     const win = this.boundWindow ?? this.getWindow();
-    if (backstage && win) {
+    if (backstage && win && !win.isDestroyed()) {
       try {
         try { win.contentView.removeChildView(guest.view); } catch { /* not attached */ }
         win.contentView.addChildView(guest.view, 0);
@@ -604,8 +610,9 @@ export class WorkbenchBrowserManager {
 
   private attachActive(): void {
     const win = this.boundWindow ?? this.getWindow();
-    if (!win) return;
+    if (!win || win.isDestroyed() || this.disposing) return;
     for (const guest of this.guests.values()) {
+      if (guest.view.webContents.isDestroyed()) continue;
       const show = this.visible && guest.tab.id === this.activeId && !!guest.tab.url && !guest.tab.error;
       if (show && this.lastBounds) {
         // Index 0 sits under the window page, so the site never appears and a
@@ -630,16 +637,17 @@ export class WorkbenchBrowserManager {
   private detach(guest: Guest): void {
     const win = this.getWindow();
     guest.shown = false;
-    guest.view.setVisible(false);
     try {
-      win?.contentView.removeChildView(guest.view);
+      guest.view.setVisible(false);
+      if (win && !win.isDestroyed()) win.contentView.removeChildView(guest.view);
     } catch {
-      /* already detached */
+      /* already detached, or the window is gone */
     }
   }
 
   private emit(): void {
     for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
       win.webContents.send("browser:changed", this.snapshot());
     }
   }

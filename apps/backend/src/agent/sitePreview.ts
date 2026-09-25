@@ -73,6 +73,36 @@ export function rememberSiteFile(runId: string, relPath: string, content: string
   remembered.set(runId, bag);
 }
 
+/** A site file already remembered for this run (ORION wrote or read it). */
+export function hasSiteFile(runId: string, relPath: string): boolean {
+  return remembered.get(runId)?.has(relPath.replace(/\\/g, "/").replace(/^\/+/, "")) ?? false;
+}
+
+/**
+ * edit_file changes a file in place (on the user's computer for local runs):
+ * apply the same replacement to the remembered copy, so the preview shows the
+ * edited stylesheet instead of the old one. Returns false when the file is
+ * not remembered or the text is not found.
+ */
+export function applySiteEdit(runId: string, relPath: string, oldText: string, newText: string, replaceAll = false): boolean {
+  const rel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const bag = remembered.get(runId);
+  const current = bag?.get(rel);
+  if (!bag || current === undefined || !oldText || !current.includes(oldText)) return false;
+  bag.set(rel, replaceAll ? current.split(oldText).join(newText) : current.replace(oldText, () => newText));
+  return true;
+}
+
+/** Local refs written as "/styles.css" point at the site root: in a preview served under /sites/<id>/ they must be relative. */
+function relativizeRootRefs(html: string, pageKey: string, bag: Map<string, string>): string {
+  const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+  return html.replace(/(<(?:link|script|img|source)\b[^>]*?\s(?:href|src)\s*=\s*["'])\/(?!\/)([^"'?#]+)/gi, (m, lead: string, ref: string) => {
+    if (!bag.has(ref)) return m;
+    const rel = pageDir && ref.startsWith(pageDir) ? ref.slice(pageDir.length) : ref;
+    return `${lead}${"../".repeat(pageDir.split("/").filter(Boolean).length)}${rel}`;
+  });
+}
+
 /** True when the page already loads this file with a <link href> or <script src>. */
 function pageLoads(html: string, pageKey: string, file: string): boolean {
   const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
@@ -97,7 +127,7 @@ export function composeSiteDocument(runId: string): string | null {
   if (!bag) return null;
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
   if (!pageKey) return null;
-  let html = bag.get(pageKey) ?? "";
+  let html = relativizeRootRefs(bag.get(pageKey) ?? "", pageKey, bag);
   const unloaded = (ext: string) => [...bag.entries()].filter(([name]) => name.endsWith(ext) && !pageLoads(html, pageKey, name)).map(([, body]) => body);
   const css = unloaded(".css").join("\n");
   const js = unloaded(".js").join("\n");

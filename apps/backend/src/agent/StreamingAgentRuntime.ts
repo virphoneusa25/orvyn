@@ -38,7 +38,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
-import { publishRememberedSite, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } from "./sitePreview";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
@@ -407,6 +407,12 @@ export class StreamingAgentRuntime {
     }
   }
 
+  /** Re-publish the run's remembered site (same URL) after its files changed. */
+  private republishPreview(runId: string): void {
+    const published = publishRememberedSite(runId);
+    if (published) this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+  }
+
   /**
    * The engine is the desktop's own, on the user's computer (not ORVYN Cloud,
    * not a cloud worker): its localhost is the user's localhost.
@@ -448,6 +454,10 @@ export class StreamingAgentRuntime {
         this.openAgentPreview(runId, args.path, args.content);
         break;
       case "edit_file":
+        this.store.emit(runId, "file.edit", { path: args.path, preview });
+        // The preview follows edits too, not only whole-file writes.
+        if (applySiteEdit(runId, String(args.path ?? ""), String(args.old_string ?? ""), String(args.new_string ?? ""), args.replace_all === true)) this.republishPreview(runId);
+        break;
       case "delete_file":
       case "move_file":
         // The diff rides along so the UI can show what changed rather than
@@ -1896,6 +1906,15 @@ export class StreamingAgentRuntime {
         // (npm test after a fix) is not an "identical retry": it is the repair
         // loop. Only unchanged retries stay blocked.
         if (WORKSPACE_CHANGING_TOOLS.has(call.name)) state.failedFingerprints.clear();
+        // A page file ORION read (e.g. an existing style.css) is part of the
+        // site: without it the preview had a page whose stylesheet 404'd.
+        if (call.name === "read_file" && typeof result.output === "string" && !/…\(truncated\)\s*$/.test(result.output)) {
+          const readPath = String((call.arguments as { path?: unknown })?.path ?? "");
+          if (/\.(html|css|js)$/i.test(readPath) && !hasSiteFile(runId, readPath)) {
+            rememberSiteFile(runId, readPath, result.output);
+            this.republishPreview(runId);
+          }
+        }
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
           // Remote tools carry the REAL before/after diff back with the
           // result; local runs use the pre-execution preview.
