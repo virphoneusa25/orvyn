@@ -17,7 +17,7 @@ import { skillsPromptFor } from "../learning/validatedSkills";
 // resume without disturbing the run.
 
 import { randomUUID } from "crypto";
-import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition } from "@orvyn/ai-core";
+import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition, type TokenUsage } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { AITool, ToolResult } from "../ai/ToolTypes";
@@ -46,6 +46,7 @@ import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
 import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
+import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, MAX_CONTINUATION_NUDGES } from "./continuation";
@@ -1183,6 +1184,45 @@ export class StreamingAgentRuntime {
     return true;
   }
 
+  /** Token accounting and the context breakdown for one streamed usage report. */
+  private noteUsage(runId: string, state: RunState, provider: AIModelProvider, messages: AIMessage[], usage: TokenUsage): void {
+    const total = this.store.addUsage(runId, usage);
+    state.cachedTokensSum += Number(usage.cachedTokens ?? 0);
+    state.promptTokensSum += Number(usage.promptTokens ?? 0);
+    if (!total) return;
+    // Context composition breakdown: pre-request accounting of what
+    // the next model call carries. Provider-reported totals stay
+    // authoritative for the overall count; these shares explain it.
+    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : [];
+    let toolDefinitionTokens = 0;
+    let mcpToolTokens = 0;
+    for (const t of toolDefs) {
+      const size = estimateTokens(JSON.stringify(t.parameters)) + estimateTokens(t.description ?? "");
+      if (t.name.startsWith("mcp.") || t.name === "mcp_call" || t.name === "mcp_list") mcpToolTokens += size;
+      else toolDefinitionTokens += size;
+    }
+    const systemMsgTokens = messages[0]?.role === "system" ? estimateMessageTokens(messages[0]) : 0;
+    const conversationTokens = Math.max(0, estimateConversationTokens(messages) - systemMsgTokens);
+    this.store.emit(runId, "usage.updated", {
+      ...total,
+      contextTokens: estimateConversationTokens(messages),
+      contextBudget: this.contextBudget(provider),
+      contextWindow: provider.config.contextWindow,
+      modelId: provider.config.id,
+      contextBreakdown: {
+        systemPrompt: state.contextParts?.systemPrompt ?? 0,
+        messages: conversationTokens,
+        toolDefinitions: toolDefinitionTokens,
+        mcpTools: mcpToolTokens,
+        projectContext: state.contextParts?.projectContext ?? 0,
+        memory: state.contextParts?.memory ?? 0,
+      },
+      ...(state.promptTokensSum > 0 && state.cachedTokensSum > 0
+        ? { cacheHitRate: state.cachedTokensSum / state.promptTokensSum }
+        : {}),
+    });
+  }
+
   private async loop(
     runId: string,
     messages: AIMessage[],
@@ -1246,43 +1286,49 @@ export class StreamingAgentRuntime {
 
     let steps = 0;
     let consecutiveFailures = 0;
+    const tools = () => (state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : undefined);
+    const fail = (message: string, extra: Record<string, unknown> = {}) => {
+      this.store.emit(runId, "run.error", { message, ...extra });
+      this.store.setStatus(runId, "error");
+      return { kind: "stop" as const, outcome: "failed" as const, reason: message };
+    };
+    const cancelled = () => {
+      this.finishCancelled(runId, steps);
+      return { kind: "stop" as const, outcome: "cancelled" as const, reason: "cancelled by the user" };
+    };
 
-    try {
-      this.store.emit(runId, "agent.phase", { phase: steps === 0 ? "EXECUTE" : "VERIFY", note: steps === 0 ? "Working on the task" : "Verifying results" });
-      while (steps < MAX_STEPS) {
-        if (state.cancelled) return this.finishCancelled(runId, steps);
+    // One user message → model turn → tool calls → tool results → next model
+    // turn … until the completion evaluator approves, or the run is blocked,
+    // fails, or is cancelled. AgentTurn sequences; the hooks below do the work.
+    const policy: AgentTurnPolicy = {
+      maxTurns: MAX_STEPS,
 
+      beforeTurn: (turn) => {
+        if (state.cancelled) { const c = cancelled(); return { outcome: c.outcome, reason: c.reason }; }
         if (consecutiveFailures >= FAILURE_CIRCUIT_BREAKER) {
-          this.store.emit(runId, "run.error", {
-            message: `Stopped after ${FAILURE_CIRCUIT_BREAKER} consecutive tool failures without recovery.`,
-          });
-          this.store.setStatus(runId, "error");
-          return;
+          const f = fail(`Stopped after ${FAILURE_CIRCUIT_BREAKER} consecutive tool failures without recovery.`);
+          return { outcome: f.outcome, reason: f.reason };
         }
-        steps++;
-
+        steps = turn;
         // Runaway guards (spec §45): stop the run with a clear reason before
         // the next model call rather than failing opaquely mid-mission.
         const capRequests = runCap("ORVYN_RUN_MAX_MODEL_REQUESTS");
         if (capRequests > 0 && state.modelCalls >= capRequests) {
-          this.store.emit(runId, "run.error", {
-            message: `Run budget exceeded — model requests: ${state.modelCalls}/${capRequests}. Set ORVYN_RUN_MAX_MODEL_REQUESTS higher (0 disables).`,
-          });
-          this.store.setStatus(runId, "error");
-          return;
+          const f = fail(`Run budget exceeded — model requests: ${state.modelCalls}/${capRequests}. Set ORVYN_RUN_MAX_MODEL_REQUESTS higher (0 disables).`);
+          return { outcome: f.outcome, reason: f.reason };
         }
         const capTokens = runCap("ORVYN_RUN_MAX_TOKENS");
         const runUsage = this.store.get(runId)?.usage;
         const spent = runUsage ? runUsage.promptTokens + runUsage.completionTokens : 0;
         if (capTokens > 0 && spent >= capTokens) {
-          this.store.emit(runId, "run.error", {
-            message: `Run budget exceeded — tokens: ${spent}/${capTokens}. Set ORVYN_RUN_MAX_TOKENS higher (0 disables).`,
-          });
-          this.store.setStatus(runId, "error");
-          return;
+          const f = fail(`Run budget exceeded — tokens: ${spent}/${capTokens}. Set ORVYN_RUN_MAX_TOKENS higher (0 disables).`);
+          return { outcome: f.outcome, reason: f.reason };
         }
         state.modelCalls++;
+        return null;
+      },
 
+      requestModelTurn: async () => {
         // Keep the conversation inside the window before asking, not after
         // the server rejects it.
         const compaction = compactConversation(messages, this.contextBudget(provider));
@@ -1311,7 +1357,7 @@ export class StreamingAgentRuntime {
         try {
         for await (const chunk of provider.stream({
           messages,
-          tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : undefined,
+          tools: tools(),
           reasoningEffort: state.reasoningEffort,
           stream: true,
           signal,
@@ -1327,7 +1373,7 @@ export class StreamingAgentRuntime {
               if (isMostlyChinese(langBuffer)) {
                 const retry = await generateEnglish(provider, {
                   messages,
-                  tools: state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : undefined,
+                  tools: tools(),
                   reasoningEffort: state.reasoningEffort,
                 });
                 const text = String(retry?.content ?? "");
@@ -1351,66 +1397,21 @@ export class StreamingAgentRuntime {
           }
           if (chunk.toolCall) streamedCalls.push(chunk.toolCall);
           if (chunk.reasoning) reasoning = chunk.reasoning;
-          if (chunk.usage) {
-            const total = this.store.addUsage(runId, chunk.usage);
-            state.cachedTokensSum += Number(chunk.usage.cachedTokens ?? 0);
-            state.promptTokensSum += Number(chunk.usage.promptTokens ?? 0);
-            if (total) {
-              // Context composition breakdown: pre-request accounting of what
-              // the next model call carries. Provider-reported totals stay
-              // authoritative for the overall count; these shares explain it.
-              const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : [];
-              let toolDefinitionTokens = 0;
-              let mcpToolTokens = 0;
-              for (const t of toolDefs) {
-                const size = estimateTokens(JSON.stringify(t.parameters)) + estimateTokens(t.description ?? "");
-                if (t.name.startsWith("mcp.") || t.name === "mcp_call" || t.name === "mcp_list") mcpToolTokens += size;
-                else toolDefinitionTokens += size;
-              }
-              const systemMsgTokens = messages[0]?.role === "system" ? estimateMessageTokens(messages[0]) : 0;
-              const conversationTokens = Math.max(0, estimateConversationTokens(messages) - systemMsgTokens);
-              this.store.emit(runId, "usage.updated", {
-                ...total,
-                contextTokens: estimateConversationTokens(messages),
-                contextBudget: this.contextBudget(provider),
-                contextWindow: provider.config.contextWindow,
-                modelId: provider.config.id,
-                contextBreakdown: {
-                  systemPrompt: state.contextParts?.systemPrompt ?? 0,
-                  messages: conversationTokens,
-                  toolDefinitions: toolDefinitionTokens,
-                  mcpTools: mcpToolTokens,
-                  projectContext: state.contextParts?.projectContext ?? 0,
-                  memory: state.contextParts?.memory ?? 0,
-                },
-                ...(state.promptTokensSum > 0 && state.cachedTokensSum > 0
-                  ? { cacheHitRate: state.cachedTokensSum / state.promptTokensSum }
-                  : {}),
-              });
-            }
-          }
+          if (chunk.usage) this.noteUsage(runId, state, provider, messages, chunk.usage);
           if (chunk.done) break;
         }
         } catch (err: any) {
           const block = classifyProviderError(err, provider.config.provider);
-          if (block) {
-            const next = this.applyComputerUseFallback(runId, state, provider, block);
-            if (next) {
-              provider = next;
-              continue;
-            }
-            this.store.emit(runId, "run.error", {
-              message: providerBlockUserMessage(block, Boolean(state.requestedModelId)),
-              desktopHealthy: true,
-              code: block.code,
-            });
-            this.store.setStatus(runId, "error");
-            return;
+          if (!block) throw err;
+          const next = this.applyComputerUseFallback(runId, state, provider, block);
+          if (next) {
+            provider = next;
+            return { kind: "retry", reason: `provider swapped: ${block.code}` };
           }
-          throw err;
+          return fail(providerBlockUserMessage(block, Boolean(state.requestedModelId)), { desktopHealthy: true, code: block.code });
         }
 
-        if (state.cancelled) return this.finishCancelled(runId, steps);
+        if (state.cancelled) return cancelled();
 
         // Drop malformed calls rather than sending the model a reply to a tool
         // it never named; keep duplicates out so one id is answered once.
@@ -1426,19 +1427,64 @@ export class StreamingAgentRuntime {
           const next = this.applyComputerUseFallback(runId, state, provider, textBlock);
           if (next) {
             provider = next;
-            continue;
+            return { kind: "retry", reason: `provider swapped: ${textBlock.code}` };
           }
-          this.store.emit(runId, "run.error", {
-            message: providerBlockUserMessage(textBlock, Boolean(state.requestedModelId)),
-            desktopHealthy: true,
-            code: textBlock.code,
-          });
-          this.store.setStatus(runId, "error");
-          return;
+          return fail(providerBlockUserMessage(textBlock, Boolean(state.requestedModelId)), { desktopHealthy: true, code: textBlock.code });
         }
+        return { kind: "reply", reply: { content, calls, reasoning, streamedText } };
+      },
 
+      runTools: async (_turn, { content, calls, reasoning, streamedText }) => {
+        // Record the assistant turn that requested the tools BEFORE pushing
+        // any tool result. OpenAI-style APIs reject a tool message that is
+        // not preceded by the matching assistant tool_calls message, and
+        // every call listed here must get exactly one reply below. Thinking
+        // models additionally require their reasoning echoed back.
+        messages.push({
+          role: "assistant",
+          content: content || "",
+          ...(reasoning ? { reasoningContent: reasoning } : {}),
+          toolCalls: calls,
+        });
+        // Narration ("I'll check the auth flow first…") closes as its own
+        // utterance so the UI can pin it above the tool card.
+        this.emitNarration(runId, content, streamedText);
+
+        // Tool-call runaway guard, checked before the batch so no call is
+        // left unanswered by stopping mid-batch.
+        const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
+        if (capTools > 0 && state.toolCalls >= capTools) {
+          return fail(`Run budget exceeded — tool calls: ${state.toolCalls}/${capTools}. Set ORVYN_RUN_MAX_TOOL_CALLS higher (0 disables).`);
+        }
+        state.toolCalls += calls.length;
+
+        // Every call goes through ToolGateway (and, for Local/Cloud workers,
+        // the ExecutionProvider's Tool RPC); one reply per call is appended.
+        const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
+        if (state.websiteBlocked) return fail(state.websiteBlocked);
+        if (state.handoffModelId && !state.modelPinned) {
+          const next = this.modelService.registry.get(state.handoffModelId);
+          if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
+            this.store.emit(runId, "model.escalated", { from: provider.config.id, to: next.config.id, runId });
+            provider = next;
+            state.actualModelId = next.config.id;
+          }
+          state.handoffModelId = undefined;
+        }
+        this.enterPhase(runId, "observing");
+        this.speakProgress(runId);
+        if (outcome === "cancelled") return cancelled();
+        if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
+          const grounded = availableArtifactsPrompt(state.createdArtifacts);
+          messages[0] = { ...messages[0], content: `${messages[0].content}\n${grounded}` };
+        }
+        consecutiveFailures = outcome === "all_failed" ? consecutiveFailures + 1 : 0;
+        return { kind: outcome === "all_failed" ? "all_failed" : "ok" };
+      },
+
+      onFinalAnswer: (_turn, { content, streamedText }) => {
+        // An action request answered without ever using a tool: nudge once.
         if (
-          calls.length === 0 &&
           state.toolsEnabled &&
           state.toolCalls === 0 &&
           state.actionNudges < 1 &&
@@ -1451,67 +1497,10 @@ export class StreamingAgentRuntime {
             content:
               "You answered without calling a tool. This is an action task. Use the available tools now — search, read, edit, terminal, browser, or desktop as the capability list allows. Do not hand the commands back. Do not claim work that has no tool result.",
           });
-          continue;
+          return { kind: "continue", reason: "answered an action request without a tool" };
         }
-
-        if (calls.length > 0) {
-          // Record the assistant turn that requested the tools BEFORE pushing
-          // any tool result. OpenAI-style APIs reject a tool message that is
-          // not preceded by the matching assistant tool_calls message, and
-          // every call listed here must get exactly one reply below. Thinking
-          // models additionally require their reasoning echoed back.
-          messages.push({
-            role: "assistant",
-            content: content || "",
-            ...(reasoning ? { reasoningContent: reasoning } : {}),
-            toolCalls: calls,
-          });
-          // Narration ("I'll check the auth flow first…") used to land only in
-          // history. Close it as its own utterance so the UI can pin it above
-          // the tool card instead of waiting for the final answer.
-          this.emitNarration(runId, content, streamedText);
-
-          // Tool-call runaway guard, checked before the batch so no call is
-          // left unanswered by stopping mid-batch.
-          const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
-          if (capTools > 0 && state.toolCalls >= capTools) {
-            this.store.emit(runId, "run.error", {
-              message: `Run budget exceeded — tool calls: ${state.toolCalls}/${capTools}. Set ORVYN_RUN_MAX_TOOL_CALLS higher (0 disables).`,
-            });
-            this.store.setStatus(runId, "error");
-            return;
-          }
-          state.toolCalls += calls.length;
-
-          const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
-          if (state.websiteBlocked) {
-            this.store.emit(runId, "run.error", { message: state.websiteBlocked });
-            this.store.setStatus(runId, "error");
-            return;
-          }
-          if (state.handoffModelId && !state.modelPinned) {
-            const next = this.modelService.registry.get(state.handoffModelId);
-            if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
-              this.store.emit(runId, "model.escalated", { from: provider.config.id, to: next.config.id, runId });
-              provider = next;
-              state.actualModelId = next.config.id;
-            }
-            state.handoffModelId = undefined;
-          }
-          this.enterPhase(runId, "observing");
-          this.speakProgress(runId);
-          if (outcome === "cancelled") return this.finishCancelled(runId, steps);
-          if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
-            const grounded = availableArtifactsPrompt(state.createdArtifacts);
-            messages[0] = { ...messages[0], content: `${messages[0].content}\n${grounded}` };
-          }
-          consecutiveFailures = outcome === "all_failed" ? consecutiveFailures + 1 : 0;
-          continue;
-        }
-
-        // No tool call. A reply that only ANNOUNCES the next step ("Next I'll
-        // read it back…") is not a final answer — send the same agent back to
-        // work instead of completing after one tool (Phase 1 core loop).
+        // A reply that only ANNOUNCES the next step ("Next I'll read it
+        // back…") is not a final answer — send the same agent back to work.
         if (
           state.toolsEnabled &&
           state.toolCalls > 0 &&
@@ -1527,10 +1516,13 @@ export class StreamingAgentRuntime {
             reason: "Reply announced a next step without doing it",
             attempt: state.continuationNudges,
           });
-          continue;
+          return { kind: "continue", reason: "reply announced a next step without doing it" };
         }
+        return { kind: "verify" };
+      },
 
-        // No tool call: token deltas were already emitted while streaming.
+      // The completion evaluator: only its approval completes the run.
+      verify: async () => {
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         const gates = evaluateCompletionGates({
@@ -1539,37 +1531,35 @@ export class StreamingAgentRuntime {
           events: this.store.get(runId)?.events ?? [],
           category: state.intent.category,
         });
-        if (!gates.ok) {
-          this.store.emit(runId, "completion.blocked", {
-            gate: gates.failedGate,
-            reasons: gates.reasons,
-            retries: state.gateRetries,
+        if (gates.ok) return { kind: "approved" };
+        this.store.emit(runId, "completion.blocked", {
+          gate: gates.failedGate,
+          reasons: gates.reasons,
+          retries: state.gateRetries,
+        });
+        if (state.gateRetries >= 3) return fail(gates.failMessage);
+        state.gateRetries += 1;
+        if (!state.modelPinned) {
+          const escalated = selectAgentModel({
+            intent: state.intent,
+            composerMode: state.composerMode,
+            requestedModelId: state.requestedModelId,
+            availableIds: this.modelService.registry.list().map((p) => p.config.id),
+            escalate: Math.min(state.gateRetries, 2),
           });
-          if (state.gateRetries < 3) {
-            state.gateRetries += 1;
-            if (!state.modelPinned) {
-              const escalated = selectAgentModel({
-                intent: state.intent,
-                composerMode: state.composerMode,
-                requestedModelId: state.requestedModelId,
-                availableIds: this.modelService.registry.list().map((p) => p.config.id),
-                escalate: Math.min(state.gateRetries, 2),
-              });
-              const next = escalated.registryId ? this.modelService.registry.get(escalated.registryId) : undefined;
-              if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
-                provider = next;
-                this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
-              }
-            }
-            this.enterPhase(runId, "repairing");
-            this.store.setStatus(runId, "running");
-            messages.push({ role: "user", content: gates.retryPrompt });
-            continue;
+          const next = escalated.registryId ? this.modelService.registry.get(escalated.registryId) : undefined;
+          if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
+            provider = next;
+            this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
           }
-          this.store.emit(runId, "run.error", { message: gates.failMessage });
-          this.store.setStatus(runId, "error");
-          return;
         }
+        this.enterPhase(runId, "repairing");
+        this.store.setStatus(runId, "running");
+        messages.push({ role: "user", content: gates.retryPrompt });
+        return { kind: "retry", reason: `completion gate "${gates.failedGate}": ${gates.reasons.join("; ")}` };
+      },
+
+      complete: (_turn, { content, streamedText }) => {
         const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
         const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts);
         if (claimCheck.blocked) grounded.blocked = true;
@@ -1596,11 +1586,21 @@ export class StreamingAgentRuntime {
         }
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
         this.store.setStatus(runId, "completed");
-        return;
-      }
+      },
 
-      this.store.emit(runId, "run.error", { message: `Stopped after ${MAX_STEPS} steps without finishing.` });
-      this.store.setStatus(runId, "error");
+      onTurnLimit: () => {
+        fail(`Stopped after ${MAX_STEPS} steps without finishing.`);
+      },
+
+      onTurn: (record) => {
+        this.store.emit(runId, "agent.turn", { ...record, modelId: provider.config.id });
+      },
+    };
+
+    try {
+      this.store.emit(runId, "agent.phase", { phase: "EXECUTE", note: "Working on the task" });
+      const result = await runAgentTurns(policy);
+      this.store.emit(runId, "agent.loop.finished", { outcome: result.outcome, reason: result.reason, turns: result.turns });
     } catch (err: any) {
       // An abort surfaces here as a fetch rejection; it is a cancellation, not
       // a failure, and must not be reported as one.

@@ -95,6 +95,8 @@ export type AgentEventType =
   | "model.escalated"
   /** The agent announced a next step without doing it and was sent back to work. */
   | "agent.continue"
+  | "agent.turn"
+  | "agent.loop.finished"
   // --- Durable ordered queue: follow-up instructions queued during a run ---
   | "queue.item.created"
   | "queue.item.updated"
