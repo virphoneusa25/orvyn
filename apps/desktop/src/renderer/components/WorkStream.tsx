@@ -16,6 +16,7 @@ import { ContextUsageMenu } from "./ContextUsageMenu";
 import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand } from "../orvynCommand";
+import { COMPOSER_HANDOFF_EVENT, takeComposerHandoff } from "../composerHandoff";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
 import "./ConversationActivity.css";
@@ -195,9 +196,20 @@ export function WorkStream({
     window.addEventListener("keydown", onKey);
     const onFocus = () => inputRef.current?.focus();
     document.addEventListener("orvyn:focus-composer", onFocus);
+    // A prompt from Home that could not start comes back here, with why.
+    const onHandoff = () => {
+      const h = takeComposerHandoff();
+      if (!h) return;
+      setPrompt(h.text);
+      setError(h.error ?? null);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    };
+    onHandoff();
+    document.addEventListener(COMPOSER_HANDOFF_EVENT, onHandoff);
     return () => {
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("orvyn:focus-composer", onFocus);
+      document.removeEventListener(COMPOSER_HANDOFF_EVENT, onHandoff);
     };
   }, []);
 
