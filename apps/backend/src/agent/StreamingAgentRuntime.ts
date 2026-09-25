@@ -363,6 +363,13 @@ export class StreamingAgentRuntime {
     const name = rel.split("/").pop() || rel;
     if (typeof content === "string") {
       rememberSiteFile(runId, rel, content);
+    }
+    // A file written into the user's project is already where it belongs: the
+    // stream shows it as a change, not as a second "generated" copy (that made
+    // duplicate style-2.css / a-2.js cards). Only a Cloud workspace, which the
+    // user cannot open directly, keeps a copy in Files → Generated.
+    const cloudWorkspace = this.runs.get(runId)?.execution?.executionLabel === "Cloud";
+    if (typeof content === "string" && cloudWorkspace) {
       void this.artifacts?.persistArtifact({ name, content, kind: "file" }).then((rec) => {
         this.store.emit(runId, "artifact.created", {
           artifactId: rec.artifactId,

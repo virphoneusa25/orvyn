@@ -16,9 +16,31 @@ export interface ArtifactTarget {
   artifactId?: string;
   /** The operation that produced it (read/edit/create/delete). */
   op?: string;
+  /** The page a browser row visited. */
+  url?: string;
+}
+
+// The Workbench listens only while it is on screen. A click while it is closed
+// opens it (App) and leaves the target here for it to pick up once mounted;
+// before, that click opened an empty panel and the target was lost.
+let pending: ArtifactTarget | null = null;
+let listening = 0;
+
+/** AgentWorkspace calls this while it listens; returns the unregister. */
+export function registerContextListener(): () => void {
+  listening++;
+  return () => { listening = Math.max(0, listening - 1); };
+}
+
+/** The target clicked while the Workbench was closed, once. */
+export function takePendingContext(): ArtifactTarget | null {
+  const p = pending;
+  pending = null;
+  return p;
 }
 
 export function openArtifactInContext(target: ArtifactTarget): void {
+  if (listening === 0) pending = target;
   document.dispatchEvent(new CustomEvent<ArtifactTarget>("orvyn:context-open", { detail: target }));
 }
 

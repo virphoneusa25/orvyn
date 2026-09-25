@@ -115,6 +115,12 @@ export function mediaTypeForName(name: string): string {
     ".txt": "text/plain",
     ".json": "application/json",
     ".html": "text/html",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".ts": "text/plain",
+    ".php": "text/plain",
+    ".py": "text/plain",
     ".zip": "application/zip",
   };
   return map[ext] ?? "application/octet-stream";

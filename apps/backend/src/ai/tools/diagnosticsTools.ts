@@ -41,7 +41,7 @@ async function runTypecheck(projectRoot: string, project?: string): Promise<Tool
   if (!(await exists(tsconfig))) {
     return {
       ok: false,
-      error: `No tsconfig.json found at ${path.dirname(tsconfig)} — TypeScript diagnostics unavailable for this project.`,
+      error: `Not applicable: no tsconfig.json at ${path.dirname(tsconfig)}, so this project has no TypeScript to check. Do not add TypeScript, a tsconfig.json or a package.json unless the user asked for them.`,
     };
   }
   const cmd = project ? `npx tsc --noEmit -p "${project}"` : "npx tsc --noEmit";
@@ -106,7 +106,7 @@ export function makeRunTestsTool(projectRoot: string): AITool {
       if (!cmd) {
         return {
           ok: false,
-          error: "No test runner found: package.json has no real `test` script and no pytest config exists.",
+          error: "Not applicable: no test runner found (package.json has no real `test` script and no pytest config exists). Do not add a test setup unless the user asked for one.",
         };
       }
       const out = await execCapture(cmd, projectRoot, RUN_TIMEOUT_MS);
@@ -129,7 +129,7 @@ export function makeRunLinterTool(projectRoot: string): AITool {
     async execute(): Promise<ToolResult> {
       const scripts = await packageScripts(projectRoot);
       if (!scripts.lint) {
-        return { ok: false, error: "No `lint` script in package.json — linting unavailable for this project." };
+        return { ok: false, error: "Not applicable: no `lint` script in package.json, so there is no linter to run. Do not add one unless the user asked for it." };
       }
       const out = await execCapture("npm run lint", projectRoot, RUN_TIMEOUT_MS);
       const text = clip(`${out.stdout}\n${out.stderr}`.trim());

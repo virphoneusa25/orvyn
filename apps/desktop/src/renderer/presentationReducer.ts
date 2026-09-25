@@ -57,6 +57,8 @@ export interface ToolItem {
   ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
   /** A read-only check by the independent verifier, not ORION's own work. */
   verifier?: boolean;
+  /** The page a browser/fetch row visited (opens it in the Workbench Browser). */
+  url?: string;
 }
 
 export interface GroupItem {
@@ -206,7 +208,7 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     case "web_search":
       return { op: "web", label: String(args?.query ?? ""), ctx: "browser" };
     case "fetch_url":
-      return { op: "web", label: String(args?.url ?? ""), ctx: "browser" };
+      return { op: "web", label: String(args?.url ?? ""), url: typeof args?.url === "string" ? args.url : undefined, ctx: "browser" };
     case "list_directory":
     case "list_files":
     case "list_symbols":
@@ -249,7 +251,7 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
       if (name.startsWith("browser_")) {
         const url = String(args?.url ?? "");
         const local = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(url);
-        return { op: "browser", label: url || name.replace(/^browser_/, ""), ctx: local ? "preview" : "browser" };
+        return { op: "browser", label: url || name.replace(/^browser_/, ""), url: url || undefined, ctx: local ? "preview" : "browser" };
       }
       return { op: "other", label: name.replace(/_/g, " ") };
   }

@@ -139,3 +139,14 @@ test("evidence is collected from envelopes: changed files, tests, browser", () =
   assert.equal(ev.website, true);
   assert.equal(ev.lastChangeSequence, 1);
 });
+
+test("a check that does not apply to the project is not a failure (no tsconfig, no test script)", () => {
+  const na = (tool: string, msg: string, sd: Record<string, unknown> = {}) => ({ tool, envelope: { toolName: tool, status: "error", userSummary: tool, modelPayload: msg, structuredData: sd, evidence: [] } });
+  const ev = collectVerificationEvidence("Build a small landing page", [
+    { type: "tool.failed", sequence: 1, data: na("run_typecheck", "Not applicable: no tsconfig.json at C:\\site, so this project has no TypeScript to check.") },
+    { type: "tool.failed", sequence: 2, data: na("run_tests", "Not applicable: no test runner found") },
+    { type: "tool.failed", sequence: 3, data: na("terminal", "'npm' is not recognized as an internal or external command", { command: "npm test", exitCode: 1 }) },
+    { type: "tool.failed", sequence: 4, data: na("run_tests", "Tests failed (exit 1).", {}) },
+  ]);
+  assert.deepEqual(ev.testBuildEvidence.map((t) => [t.command, t.ok]), [["run_tests", false]]);
+});

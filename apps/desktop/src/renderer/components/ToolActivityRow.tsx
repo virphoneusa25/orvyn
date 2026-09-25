@@ -111,7 +111,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
   // amber like the site's "2 failing", with the result as the meta.
   const warn = failed && item.op === "terminal" && /failing|exit \d/.test(meta);
   const open = item.ctx
-    ? () => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op })
+    ? () => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op, url: item.url })
     : undefined;
   return <div className={`tool-line tool-line--${item.status}${warn ? " tool-line--warn" : ""}`}>
     <div

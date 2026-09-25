@@ -2,18 +2,23 @@
 
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { defaultDataDir } from "../persistence/LocalStore";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
 const roots = new Map<string, string>();
-const rootIndex = join(tmpdir(), "orvyn-preview", "roots.json");
+// Previews live in the data directory (a persistent volume in the cloud), so a
+// preview link still opens after the engine restarts or is redeployed.
+function previewBase(): string {
+  return join(defaultDataDir(), "previews");
+}
+const rootIndex = () => join(previewBase(), "roots.json");
 let rootsLoaded = false;
 
 function loadRoots(): void {
   if (rootsLoaded) return;
   rootsLoaded = true;
   try {
-    const saved = JSON.parse(readFileSync(rootIndex, "utf8")) as Record<string, string>;
+    const saved = JSON.parse(readFileSync(rootIndex(), "utf8")) as Record<string, string>;
     for (const [id, dir] of Object.entries(saved)) {
       if (typeof dir === "string" && existsSync(dir)) roots.set(id, dir);
     }
@@ -25,8 +30,8 @@ function saveRoot(id: string, dir: string): void {
   loadRoots();
   const all: Record<string, string> = {};
   for (const [key, value] of roots) all[key] = value;
-  mkdirSync(join(tmpdir(), "orvyn-preview"), { recursive: true });
-  writeFileSync(rootIndex, JSON.stringify(all));
+  mkdirSync(previewBase(), { recursive: true });
+  writeFileSync(rootIndex(), JSON.stringify(all));
 }
 const publishedIds = new Map<string, string>();
 const remembered = new Map<string, Map<string, string>>();
@@ -113,7 +118,7 @@ export function publishRememberedSite(runId: string): { id: string; url: string;
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
   const composed = composeSiteDocument(runId);
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
-  const dir = join(tmpdir(), "orvyn-preview", runId);
+  const dir = join(previewBase(), runId);
   for (const [rel, content] of bag) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });

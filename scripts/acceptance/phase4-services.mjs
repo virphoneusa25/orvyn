@@ -208,7 +208,8 @@ async function main() {
       const x = exec(b.events);
       ok(x.executionLabel === "Cloud", "the run says Cloud", JSON.stringify(x));
       ok(b.status === "completed", "the run finishes", `status=${b.status} ${tail(b.events)}`);
-      const inCloud = findFile(projectsDir, "main.js").concat(findFile(dataDir, "main.js"));
+      // Live-preview copies live in the data directory too; the workspace is the app.
+      const inCloud = findFile(projectsDir, "main.js").concat(findFile(dataDir, "main.js")).filter((f) => !/[\\/]previews[\\/]/.test(f));
       ok(inCloud.length === 1, "the app is in the ORVYN Cloud workspace", inCloud.join(", ") || "(not found)");
       cloudSvc = (await services()).find((s) => s.location === "cloud" && s.status === "running");
       ok(Boolean(cloudSvc?.url), "ORVYN lists the Cloud service as running after the run ended", JSON.stringify(await services()));

@@ -1,3 +1,4 @@
+import { registerContextListener, takePendingContext } from "../../contextOpen";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentEvent } from "../AgentActivityList";
 import {
@@ -262,7 +263,12 @@ export function AgentWorkspace({
     };
     document.addEventListener("orvyn:context-open", open);
     document.addEventListener("orvyn:context-tab", open);
+    const unregister = registerContextListener();
+    // A row clicked while the Workbench was closed: open what was clicked.
+    const waiting = takePendingContext();
+    if (waiting) open(new CustomEvent("orvyn:context-open", { detail: waiting }));
     return () => {
+      unregister();
       document.removeEventListener("orvyn:context-open", open);
       document.removeEventListener("orvyn:context-tab", open);
     };

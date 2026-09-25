@@ -44,6 +44,8 @@ export function normalizeWindowsCommand(command: string): string {
  */
 const TERMINAL_TIMEOUT_MS = Number(process.env.ORVYN_TERMINAL_TIMEOUT_MS) > 0 ? Number(process.env.ORVYN_TERMINAL_TIMEOUT_MS) : 5 * 60_000;
 const MAX_CAPTURE = 1024 * 1024;
+/** After the shell exits, how long to wait for output still in the pipes. */
+const EXIT_GRACE_MS = 1500;
 
 /**
  * Runs a shell command and streams its output as it is printed, so the chat
@@ -91,12 +93,26 @@ export function runStreaming(
       resolve(result);
     };
     child.on("error", (err) => finish({ ok: false, error: err.message, output: stdout }));
-    child.on("close", (code) => {
+    const settle = (code: number | null) => {
       if (code === 0 && !timedOut) return finish({ ok: true, output: stdout || stderr });
       const reason = timedOut
         ? `Command timed out after ${Math.round(timeoutMs / 1000)}s: ${command}`
         : `Command failed (exit ${code ?? "killed"}): ${command}`;
       finish({ ok: false, error: stderr || reason, output: stdout });
+    };
+    child.on("close", (code) => settle(code));
+    // "start /b node server.js & curl …" or "node server.js &": the shell exits
+    // but the background process keeps our output pipes open, so "close" never
+    // comes and the command used to hang until the timeout. The command is
+    // done when the shell exits; take what is left of its output, then stop
+    // listening (the background process keeps running).
+    child.on("exit", (code) => {
+      setTimeout(() => {
+        if (settled) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle(code);
+      }, EXIT_GRACE_MS).unref?.();
     });
   });
 }

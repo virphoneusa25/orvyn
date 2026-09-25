@@ -128,6 +128,14 @@ interface EventLike { type: string; sequence?: number; data?: Record<string, any
 const TEST_BUILD = /\b(test|vitest|jest|mocha|pytest|build|tsc|typecheck|lint|eslint)\b/i;
 const WEBSITE_FILE = /\.(html?|css|js|mjs|jsx|tsx|vue|svelte|php)$/i;
 
+/**
+ * A check that could not apply to this project (no tsconfig, no test script,
+ * a Unix command on Windows) is not a failure of the work. Counting it as one
+ * made the agent add TypeScript, package.json and npm installs to a plain
+ * HTML page just to turn the verifier green.
+ */
+export const NOT_APPLICABLE = /\bNot applicable\b|No tsconfig\.json found|No test runner found|no test specified|Missing script|No `lint` script|is not recognized as an internal or external command|: command not found|ENOENT[^\n]*package\.json/i;
+
 export function collectVerificationEvidence(goal: string, events: EventLike[], opts: { website?: boolean } = {}): VerificationEvidence {
   const changed = new Map<string, ChangedFile>();
   const toolEvidence: ToolEvidence[] = [];
@@ -152,6 +160,7 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
       }
     }
     const command = String(env.structuredData?.command ?? "");
+    if (env.status !== "success" && NOT_APPLICABLE.test(`${env.modelPayload ?? ""}\n${env.userSummary ?? ""}`)) continue;
     if ((tool === "terminal" || tool === "run_command") && TEST_BUILD.test(command) && !env.structuredData?.service) {
       testBuild.push({ command, ok: env.status === "success", exitCode: env.structuredData?.exitCode ?? null, sequence: seq });
     }
@@ -480,5 +489,6 @@ export function findingsPrompt(result: VerificationResult, attempt: number): str
     ...lines,
     "",
     "Fix every finding with the tools, check the result yourself, then give your final answer. Do not claim it is done until these are resolved.",
+    "Fix the work the user asked for. Do not add new tooling (TypeScript, a tsconfig.json, a package.json, test frameworks, npm installs) to make a check pass unless the user asked for it.",
   ].join("\n");
 }
