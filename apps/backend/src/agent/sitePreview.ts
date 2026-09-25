@@ -6,6 +6,28 @@ import { tmpdir } from "os";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
 const roots = new Map<string, string>();
+const rootIndex = join(tmpdir(), "orvyn-preview", "roots.json");
+let rootsLoaded = false;
+
+function loadRoots(): void {
+  if (rootsLoaded) return;
+  rootsLoaded = true;
+  try {
+    const saved = JSON.parse(readFileSync(rootIndex, "utf8")) as Record<string, string>;
+    for (const [id, dir] of Object.entries(saved)) {
+      if (typeof dir === "string" && existsSync(dir)) roots.set(id, dir);
+    }
+  } catch { /* first publish */ }
+}
+
+function saveRoot(id: string, dir: string): void {
+  roots.set(id, dir);
+  loadRoots();
+  const all: Record<string, string> = {};
+  for (const [key, value] of roots) all[key] = value;
+  mkdirSync(join(tmpdir(), "orvyn-preview"), { recursive: true });
+  writeFileSync(rootIndex, JSON.stringify(all));
+}
 const publishedIds = new Map<string, string>();
 const remembered = new Map<string, Map<string, string>>();
 let publicOrigin = (process.env.ORVYN_PUBLIC_ORIGIN || "").replace(/\/$/, "");
@@ -101,7 +123,7 @@ export function publishRememberedSite(runId: string): { id: string; url: string;
   const root = pageDir ? join(dir, pageDir) : dir;
   const id = publishedIds.get(runId) ?? randomUUID();
   publishedIds.set(runId, id);
-  roots.set(id, root);
+  saveRoot(id, root);
   return { id, url: previewUrl(id), files: [...bag.keys()] };
 }
 
@@ -111,18 +133,26 @@ export function publishAgentSite(dir: string): { id: string; url: string } | nul
   const page = ["index.html", "index.php"].find((name) => existsSync(join(dir, name)));
   if (!page) return null;
   const id = randomUUID();
-  roots.set(id, dir);
+  saveRoot(id, dir);
   return { id, url: previewUrl(id) };
 }
 
 export function readPublishedFile(id: string, rel: string): { body: Buffer; contentType: string } | undefined {
+  loadRoots();
   const root = roots.get(id);
   if (!root) return undefined;
   const safe = normalize(rel || "index.html").replace(/^(\.\.(\/|\\|$))+/, "");
   if (!safe || safe.startsWith("..") || safe.includes("\0") || isAbsolute(safe)) return undefined;
   const abs = join(root, safe === "." ? "index.html" : safe);
-  const contentType = TYPES[extname(abs).toLowerCase()];
   const rootPrefix = root.endsWith(sep) ? root : root + sep;
-  if (!contentType || !abs.startsWith(rootPrefix) || !existsSync(abs) || !statSync(abs).isFile()) return undefined;
+  if (!abs.startsWith(rootPrefix)) return undefined;
+  const ext = extname(abs).toLowerCase();
+  const index = join(root, "index.html");
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    if ((!ext || ext === ".html") && existsSync(index)) return { body: readFileSync(index), contentType: TYPES[".html"] };
+    return undefined;
+  }
+  const contentType = TYPES[ext];
+  if (!contentType) return undefined;
   return { body: readFileSync(abs), contentType };
 }

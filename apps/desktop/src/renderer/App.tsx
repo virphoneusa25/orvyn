@@ -37,7 +37,7 @@ import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConn
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages } from "./chatSession";
+import { newChat, openChatSession, initChatHistory, getActiveChat, getChatMessages, ensureChatForRun, findChatByRun } from "./chatSession";
 import { pickReattachRun } from "./appReattach";
 import {
   appGridTemplateColumns,
@@ -239,7 +239,7 @@ export function App() {
       setCenterMode("work");
       setView("newtask");
       if (outcome.kind === "mission" || outcome.kind === "run") {
-        newChat();
+        ensureChatForRun(text, outcome.runId);
         setActiveRunId(outcome.runId);
       }
     });
@@ -325,9 +325,8 @@ export function App() {
     const onOpenRun = (e: Event) => {
       const runId = (e as CustomEvent<string>).detail;
       if (!runId) return;
-      // The run carries its own conversation (instruction + streamed reply);
-      // whatever chat thread was active must not bleed into this workspace.
-      newChat();
+      const saved = findChatByRun(runId);
+      if (saved) openChatSession(saved.id);
       setActiveRunId(runId);
       setCenterMode("work");
       setView("newtask");

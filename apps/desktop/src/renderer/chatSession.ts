@@ -217,6 +217,46 @@ export function archiveChatSession(id: string, archived: boolean): void {
   }
 }
 
+export function findChatByRun(runId: string): ChatSession | null {
+  return sessions.find((s) => s.runId === runId) ?? null;
+}
+
+/** Remember which run this conversation is, so opening the chat brings the stream back. */
+export function ensureChatForRun(prompt: string, runId: string): void {
+  const existing = sessions.find((s) => s.runId === runId);
+  if (existing) {
+    activeId = existing.id;
+    emit();
+    return;
+  }
+  const title = prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "Chat";
+  const current = active();
+  if (current && !current.runId) {
+    current.runId = runId;
+    if (current.messages.length === 0) {
+      current.title = title;
+      current.messages = [{ role: "user", content: prompt, createdAt: Date.now() }];
+    }
+    current.updatedAt = Date.now();
+    persist();
+    emit();
+    return;
+  }
+  const session: ChatSession = {
+    id: `chat_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    title,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [{ role: "user", content: prompt, createdAt: Date.now() }],
+    status: "idle",
+    runId,
+  };
+  sessions.push(session);
+  activeId = session.id;
+  persist();
+  emit();
+}
+
 export function linkChatToRun(id: string, runId: string | undefined, missionId?: string): void {
   const s = sessions.find((x) => x.id === id);
   if (s) {
@@ -333,8 +373,8 @@ export function newChat(): void {
 }
 
 /** Backward-compatible export for older components. */
-export function listChatSessions(): { id: string; title: string; updatedAt: number; count: number }[] {
-  return listChatSummaries().map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messageCount }));
+export function listChatSessions(): { id: string; title: string; updatedAt: number; count: number; runId?: string }[] {
+  return listChatSummaries().map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt, count: c.messageCount, runId: c.runId }));
 }
 
 

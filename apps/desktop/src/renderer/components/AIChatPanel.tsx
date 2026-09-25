@@ -5,6 +5,7 @@ import {
   appendAssistantDelta,
   deleteChatSession,
   finishAssistantTurn,
+  getActiveChat,
   getActiveChatId,
   getChatMessages,
   initChatHistory,
@@ -261,6 +262,8 @@ export function AIChatPanel({
               <ChatHistoryDropdown
                 onOpen={(id) => {
                   openChatSession(id);
+                  const runId = getActiveChat()?.runId;
+                  if (runId) document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: runId }));
                   setShowHistory(false);
                 }}
                 onDelete={(id) => deleteChatSession(id)}
@@ -283,7 +286,11 @@ export function AIChatPanel({
           <EmptyHome
             recents={workspace?.recents ?? []}
             recentChats={listChatSessions().slice(0, 5)}
-            onOpenChat={(id) => openChatSession(id)}
+            onOpenChat={(id) => {
+              openChatSession(id);
+              const runId = getActiveChat()?.runId;
+              if (runId) document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: runId }));
+            }}
             onOpenFolder={onOpenFolder}
             onOpenFile={onOpenFile}
             onOpenRecent={onOpenRecent}
@@ -300,7 +307,10 @@ export function AIChatPanel({
               .map((s) => (
                 <button
                   key={s.id}
-                  onClick={() => openChatSession(s.id)}
+                  onClick={() => {
+                    openChatSession(s.id);
+                    if (s.runId) document.dispatchEvent(new CustomEvent("orvyn:open-run", { detail: s.runId }));
+                  }}
                   style={{
                     display: "block",
                     width: "100%",

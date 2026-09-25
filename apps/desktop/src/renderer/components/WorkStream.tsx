@@ -9,7 +9,7 @@
 // chain-of-thought. Detail lives in the Workbench.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, type ChatMessage } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, ensureChatForRun, type ChatMessage } from "../chatSession";
 import { partitionStreamMessages } from "../streamOrder";
 import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import { ContextUsageMenu } from "./ContextUsageMenu";
@@ -278,6 +278,16 @@ export function WorkStream({
       setAttachments([]);
       setChips([]);
       try {
+        const steered = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ text: outgoing }),
+        });
+        if (steered.ok) return;
+        if (steered.status === 409) {
+          await send(instruction, true);
+          return;
+        }
         const r = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/queue`), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -316,7 +326,10 @@ export function WorkStream({
       setPrompt("");
       setAttachments([]);
       setChips([]);
-      if (outcome.kind !== "chat") onRunStarted(outcome.runId);
+      if (outcome.kind !== "chat") {
+        ensureChatForRun(outgoing, outcome.runId);
+        onRunStarted(outcome.runId);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {

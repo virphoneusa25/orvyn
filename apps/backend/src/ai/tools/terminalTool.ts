@@ -113,6 +113,9 @@ export function makeTerminalTool(projectRoot: string): AITool {
     defaultPermission: "ask",
     async execute(args, context): Promise<ToolResult> {
       const command = String(args.command);
+      if (/\btaskkill\b/i.test(command) && /\bnode(\.exe)?\b/i.test(command)) {
+        return { ok: false, error: "Refusing to kill every node process. That stops ORVYN itself. Stop the one server by its port." };
+      }
       const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
       // A dev server never "finishes". It becomes a service that outlives the run.
       if (isServiceCommand(finalCommand)) {
