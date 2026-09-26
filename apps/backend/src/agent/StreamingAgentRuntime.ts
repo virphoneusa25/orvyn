@@ -1,7 +1,8 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
-import { creditsFor, escalate as escalateStep, runCreditBudget, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
+import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
+import { isModelNotFound, isModelUnavailable, markModelUnavailable } from "../models/modelAvailability";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
@@ -497,6 +498,41 @@ export class StreamingAgentRuntime {
     if (out.usage && model) this.noteCredits(runId, state, model.config.id, { promptTokens: out.usage.promptTokens, completionTokens: out.usage.completionTokens } as TokenUsage);
     this.store.emit(runId, "tool.output.condensed", { callId: call.id, tool: call.name, fromChars: raw.length, toChars: out.text.length, digestModel: out.digested ? model?.config.id : undefined });
     return out.text;
+  }
+
+  /**
+   * The current model is missing on the provider (not enabled for the key,
+   * retired, renamed). Skip it for a while and continue on the next model of
+   * the run's ladder — or, off the ladder, the default agent model.
+   */
+  private fallbackForMissingModel(runId: string, state: RunState, current: AIModelProvider, reason: string): AIModelProvider | null {
+    markModelUnavailable(current.config.id, reason);
+    const ids = this.modelService.registry.list().map((p) => p.config.id);
+    const usable = (p: AIModelProvider | undefined): p is AIModelProvider =>
+      Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isModelUnavailable(p.config.id));
+    let next: AIModelProvider | undefined;
+    if (state.route) {
+      // Same tier first (another model for the same job), then the tiers above it.
+      const hit = stepFrom(state.route.tiers, state.route.step, ids);
+      const candidate = hit ? this.modelService.registry.get(hit.registryId) : undefined;
+      if (hit && usable(candidate)) {
+        next = candidate;
+        state.route = { ...state.route, step: hit.step, tier: hit.tier, registryId: hit.registryId, weight: TIERS[hit.tier].weight, reason: "The first model is not available on this account." };
+      }
+    }
+    if (!next) {
+      for (const tier of ["auto", "agent", "heavy", "code", "advanced", "deep"] as const) {
+        const id = TIERS[tier].candidates.find((c) => ids.includes(c) && usable(this.modelService.registry.get(c)));
+        if (id) { next = this.modelService.registry.get(id); break; }
+      }
+    }
+    if (!next) {
+      next = this.modelService.registry.list().find((p) => usable(p));
+    }
+    if (!next) return null;
+    state.actualModelId = next.config.id;
+    this.store.emit(runId, "model.unavailable", { modelId: current.config.id, fallback: next.config.id, reason: reason.slice(0, 240) });
+    return next;
   }
 
   private isKnownTool(name: string): boolean {
@@ -1700,6 +1736,15 @@ export class StreamingAgentRuntime {
           if (chunk.done) break;
         }
         } catch (err: any) {
+          // The provider says this model does not exist for the account: switch models, don't fail.
+          if (isModelNotFound(err) && !content && streamedCalls.length === 0) {
+            const next = this.fallbackForMissingModel(runId, state, provider, String(err?.message ?? err));
+            if (next) {
+              provider = next;
+              return { kind: "retry", reason: `model unavailable: switched to ${next.config.id}` };
+            }
+            return fail(`${provider.config.name || provider.config.id} is not available on this account, and no other model for this task is set up. Pick another model in Settings → Models.`, { desktopHealthy: true, code: "MODEL_UNAVAILABLE" });
+          }
           const block = classifyProviderError(err, provider.config.provider);
           if (!block) throw err;
           const next = this.applyComputerUseFallback(runId, state, provider, block);

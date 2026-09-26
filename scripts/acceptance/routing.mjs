@@ -38,6 +38,8 @@ const MODELS = {
   sol: "gpt-5.6-sol",
 };
 const calls = []; // { model, user }
+/** Models the provider answers with 404 "Model not found" (an account without access). */
+const missing = new Set();
 
 function toolResultsSinceUser(msgs) {
   const i = msgs.map((m) => m.role).lastIndexOf("user");
@@ -86,6 +88,10 @@ const model = createServer((req, res) => {
       return res.end(JSON.stringify({ data: ["scripted-agent", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", ...Object.values(MODELS)].map((id) => ({ id })) }));
     }
     let body = {}; try { body = JSON.parse(raw || "{}"); } catch {}
+    if (missing.has(String(body.model ?? ""))) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "Model not found, inaccessible, and/or not deployed", param: "model", code: "NOT_FOUND", type: "error" } }));
+    }
     const turn = nextTurn(body);
     const toolCalls = turn.call ? [{ index: 0, id: `call_${++seq}`, type: "function", function: { name: turn.call.name, arguments: JSON.stringify(turn.call.args) } }] : undefined;
     // Report realistic usage: about one token per 4 characters sent.
@@ -190,6 +196,25 @@ async function main() {
     const err = [...big.events].reverse().find((e) => e.type === "run.error")?.data?.message ?? "";
     ok(big.status === "error" && /credit budget/.test(err), "over the budget the run stops with a clear message", `${big.status} ${err}`);
     ok(bc && bc.credits >= 20, `…after ${bc?.credits} credits (budget ${bc?.budget})`);
+
+    console.log("\n7. The Code agent's model is missing on the account (HTTP 404)");
+    missing.add(MODELS.kimi);
+    const lost = await runTask("Refactor utils.js into two files", { composerMode: "code" });
+    const un = lost.events.find((e) => e.type === "model.unavailable");
+    ok(un?.data?.modelId === `fw:${MODELS.kimi}` && un.data.fallback === `fw:${MODELS.glm}`, "Kimi K2.7 Code answered 404; the run switched to GLM-5.3", JSON.stringify(un?.data ?? lost.events.filter((e) => e.type === "run.error").map((e) => e.data)));
+    ok(lost.status === "completed", "…and finished instead of failing", lost.status);
+    const next = await runTask("Refactor utils.js into two files", { composerMode: "code" });
+    ok(started(next.events).actualModelId === `fw:${MODELS.glm}` && !next.events.some((e) => e.type === "model.unavailable"), "the next Code run starts on GLM-5.3 directly", started(next.events).actualModelId);
+    missing.add(MODELS.gemini);
+    const chat2 = await new Promise((resolveChat) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws/chat`);
+      let text = "";
+      sock.onopen = () => sock.send(JSON.stringify({ task: "chat", history: [], userMessage: "What should we name our foundation model family? Give me your recommendation.", context: { useRag: false } }));
+      sock.onmessage = (ev) => { const c = JSON.parse(ev.data); if (c.delta) text += c.delta; if (c.done) { sock.close(); resolveChat(text); } };
+      sock.onerror = () => resolveChat(text);
+      setTimeout(() => resolveChat(text), 15000);
+    });
+    ok(/^Answer from /.test(String(chat2).trim()) && !/Error|404/.test(String(chat2)), "a chat whose model is missing answers with another model", String(chat2));
   } catch (e) {
     failures++; console.error("HARNESS ERROR:", e.stack ?? e.message);
   } finally {

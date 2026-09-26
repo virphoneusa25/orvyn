@@ -364,6 +364,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         if (target) target.condensed = { fromChars: Number(e.data.fromChars ?? 0), toChars: Number(e.data.toChars ?? 0), digested: Boolean(e.data.digestModel) };
         continue;
       }
+      case "model.unavailable": {
+        flushAssistant(false);
+        const name = (id: unknown) => String(id ?? "").split(/[:/]/).pop() ?? "";
+        items.push({ kind: "status", key: e.id, label: `${name(e.data.modelId)} isn't available on this account — continuing with ${name(e.data.fallback)}`, ephemeral: false, tone: "working" });
+        continue;
+      }
       case "capability.installed": {
         const tools = Array.isArray(e.data.tools) ? e.data.tools.length : 0;
         items.push({ kind: "status", key: e.id, label: `Installed ${String(e.data.name ?? "the tool")}${tools ? ` · ${tools} new tool${tools === 1 ? "" : "s"}` : ""} — continuing`, ephemeral: false, tone: "working" });

@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { isModelNotFound, isModelUnavailable, markModelUnavailable } from "../models/modelAvailability";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
@@ -247,7 +248,11 @@ export class Orchestrator {
       const deep = route.registryId ? this.modelService.registry.get(route.registryId) : undefined;
       if (deep && (deep.config.capabilities as any).chat !== false) return deep;
     }
-    return this.modelService.router.resolve(req.task);
+    const routed = this.modelService.router.resolve(req.task);
+    if (!isModelUnavailable(routed.config.id)) return routed;
+    // The routed model is missing on the provider: the next chat model that is not.
+    const other = this.modelService.registry.list().find((p) => !isModelUnavailable(p.config.id) && (p.config.capabilities as any).chat !== false && p.supportsTools());
+    return other ?? routed;
   }
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean }> {
@@ -403,6 +408,12 @@ export class Orchestrator {
       }
       yield { delta: "", done: true };
     } catch (err: any) {
+      // The model does not exist for this account: skip it and answer with another one.
+      if (isModelNotFound(err) && !(req as any).__modelFallback) {
+        markModelUnavailable(provider.config.id, String(err?.message ?? err));
+        yield* this.streamChat({ ...req, requestedModelId: undefined, __modelFallback: true } as ChatTurnRequest);
+        return;
+      }
       yield { delta: `\n\n[Error: ${err.message}]`, done: true };
     }
   }

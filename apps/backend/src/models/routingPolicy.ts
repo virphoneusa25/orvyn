@@ -12,6 +12,8 @@
 // preference, and the first one that is registered (its provider key is set)
 // serves the tier. With no new provider keys, ORVYN keeps today's models.
 
+import { isModelUnavailable } from "./modelAvailability";
+
 export type RouteProfile = "code" | "server" | "auto" | "deep";
 
 export type Tier =
@@ -111,7 +113,7 @@ export interface ModelHealthLike { registryId: string; failureRate: number }
 
 function firstRegistered(tier: Tier, available: Set<string>, health: ModelHealthLike[]): string | null {
   for (const id of TIERS[tier].candidates) {
-    if (!available.has(id)) continue;
+    if (!available.has(id) || isModelUnavailable(id)) continue;
     const h = health.find((x) => x.registryId === id);
     if (h && h.failureRate >= 0.5) continue;
     return id;

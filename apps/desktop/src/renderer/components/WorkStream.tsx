@@ -606,7 +606,7 @@ export function WorkStream({
               flexShrink: 0,
             }}
           >
-            <span>● {(() => { const esc = [...run.events].reverse().find((e) => e.type === "route.escalated")?.data as any; return esc?.modelId ? `${modelLine} → ${esc.modelId}` : modelLine; })()}{fallback}</span>
+            <span>● {(() => { const esc = [...run.events].reverse().find((e) => e.type === "route.escalated" || e.type === "model.unavailable")?.data as any; const to = esc?.fallback ?? esc?.modelId; return to && to !== started.actualModelId ? `${modelLine} → ${to}` : modelLine; })()}{fallback}</span>
             {started.route && <span data-testid="run-route" title={started.route.reason}>{String(started.route.profile).replace(/^./, (c: string) => c.toUpperCase())} agent</span>}
             {(() => {
               const c = [...run.events].reverse().find((e) => e.type === "run.credits")?.data as any;
