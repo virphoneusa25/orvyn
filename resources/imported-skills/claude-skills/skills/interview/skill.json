@@ -1,0 +1,80 @@
+{
+  "id": "skill_cs_interview",
+  "slug": "interview",
+  "name": "interview",
+  "version": "2.11.2",
+  "description": "Phase 1 of building a Claude Managed Agent — interview the founder about the one job the agent should do, then produce a build sheet (CMA primitives table + v1/v2 deferrals + eval plan) WITHOUT needing their API key yet. Use when the user says \"help me scope an agent\", \"I have an idea for an agent\", \"what should this agent be\", or when the orchestrator routes phase=interview. Drives the six intake slots (job, trigger, inputs, actions, definition-of-done, recurrence) via AskUserQuestion, maps them to primitives with interview_planner.py, assembles build-sheet.json with build_sheet_builder.py, and validates limits with primitives_validator.py. Connectors are mockable in v0 (schema-true custom tools); real MCP servers become v1 deferrals. Distinct from stage-launch (which turns the sheet into payloads).",
+  "category": "agent-launcher",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "interview"
+  ],
+  "taskDomains": [
+    "agent-launcher"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "agent-launcher/skills/interview",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "2.11.2",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "partially_supported",
+  "unresolvedTools": [
+    {
+      "name": "[claude-code",
+      "requirement": "optional"
+    },
+    {
+      "name": "codex-cli",
+      "requirement": "optional"
+    },
+    {
+      "name": "cursor",
+      "requirement": "optional"
+    },
+    {
+      "name": "antigravity",
+      "requirement": "optional"
+    },
+    {
+      "name": "opencode",
+      "requirement": "optional"
+    },
+    {
+      "name": "gemini-cli]",
+      "requirement": "optional"
+    }
+  ],
+  "certificationBlockers": [
+    "Optional capability \"[claude-code\" has no ORVYN tool and is omitted.",
+    "Optional capability \"codex-cli\" has no ORVYN tool and is omitted.",
+    "Optional capability \"cursor\" has no ORVYN tool and is omitted.",
+    "Optional capability \"antigravity\" has no ORVYN tool and is omitted.",
+    "Optional capability \"opencode\" has no ORVYN tool and is omitted.",
+    "Optional capability \"gemini-cli]\" has no ORVYN tool and is omitted."
+  ],
+  "relatedSkillIds": []
+}

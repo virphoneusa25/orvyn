@@ -1,0 +1,48 @@
+{
+  "id": "skill_cs_pricing_strategy",
+  "slug": "pricing-strategy",
+  "name": "pricing-strategy",
+  "version": "1.0.0",
+  "description": "Design, optimize, and communicate SaaS pricing — tier structure, value metrics, pricing pages, and price increase strategy. Use when building a pricing model from scratch, redesigning existing pricing, planning a price increase, or improving a pricing page. Trigger keywords: pricing tiers, pricing page, price increase, packaging, value metric, per seat pricing, usage-based pricing, freemium, good-better-best, pricing strategy, monetization, pricing page conversion, Van Westendorp. NOT for broader product strategy — use product-strategist for that. NOT for customer success or renewals — use customer-success-manager for expansion revenue.",
+  "category": "marketing",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "pricing-strategy"
+  ],
+  "taskDomains": [
+    "marketing"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "marketing-skill/skills/pricing-strategy",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "1.0.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

@@ -1,0 +1,71 @@
+{
+  "id": "skill_cs_pw_review",
+  "slug": "pw-review",
+  "name": "pw-review",
+  "version": "0.0.0",
+  "description": "Review Playwright tests for quality. Use when user says \"review tests\", \"check test quality\", \"audit tests\", \"improve tests\", \"test code review\", or \"playwright best practices check\".",
+  "category": "engineering-team",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "pw-review",
+    "playwright-style browser checks"
+  ],
+  "taskDomains": [
+    "engineering-team"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [
+    "browser_open",
+    "browser_navigate",
+    "browser_click",
+    "browser_screenshot"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    }
+  ],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "engineering-team/playwright-pro/skills/pw-review",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

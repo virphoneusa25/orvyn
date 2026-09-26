@@ -1,0 +1,80 @@
+{
+  "id": "skill_cs_agent_launcher_orchestrator",
+  "slug": "agent-launcher-orchestrator",
+  "name": "agent-launcher-orchestrator",
+  "version": "2.11.2",
+  "description": "Use when a user wants to build, launch, grade, or schedule a Claude Managed Agent (CMA) in their own Anthropic account — \"build me an agent\", \"launch this as a managed agent\", \"run this on a schedule\", \"grade my agent against a rubric\", \"set up a nightly worker\". Reads the per-session goal (./my-agent/goal.json), routes deterministically to one of five phase sub-skills (interview → stage-launch → grade-iterate → run-without-you → wrap-up) via goal_router.py, and compiles the goal+phase into an execution shape (single-pass workflow / bounded grade→iterate loop / recurring cron deployment loop) via loop_compiler.py. Forks context so heavy intake (build sheets, payloads, eval cases) stays out of the parent thread. All launches are emitted as BYOK curl the user runs with their own key; no tool makes API calls. Inspired by anthropics/launch-your-agent (Apache-2.0). Distinct from engineering/agent-harness (generic domain loop) and engineering/write-a-skill (authors Claude Code skills, not CMAs).",
+  "category": "agent-launcher",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "agent-launcher-orchestrator"
+  ],
+  "taskDomains": [
+    "agent-launcher"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "agent-launcher/skills/agent-launcher-orchestrator",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "2.11.2",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "partially_supported",
+  "unresolvedTools": [
+    {
+      "name": "[claude-code",
+      "requirement": "optional"
+    },
+    {
+      "name": "codex-cli",
+      "requirement": "optional"
+    },
+    {
+      "name": "cursor",
+      "requirement": "optional"
+    },
+    {
+      "name": "antigravity",
+      "requirement": "optional"
+    },
+    {
+      "name": "opencode",
+      "requirement": "optional"
+    },
+    {
+      "name": "gemini-cli]",
+      "requirement": "optional"
+    }
+  ],
+  "certificationBlockers": [
+    "Optional capability \"[claude-code\" has no ORVYN tool and is omitted.",
+    "Optional capability \"codex-cli\" has no ORVYN tool and is omitted.",
+    "Optional capability \"cursor\" has no ORVYN tool and is omitted.",
+    "Optional capability \"antigravity\" has no ORVYN tool and is omitted.",
+    "Optional capability \"opencode\" has no ORVYN tool and is omitted.",
+    "Optional capability \"gemini-cli]\" has no ORVYN tool and is omitted."
+  ],
+  "relatedSkillIds": []
+}

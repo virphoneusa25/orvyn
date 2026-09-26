@@ -1,0 +1,48 @@
+{
+  "id": "skill_cs_cmo_advisor",
+  "slug": "cmo-advisor",
+  "name": "cmo-advisor",
+  "version": "1.0.0",
+  "description": "Marketing leadership for scaling companies. Brand positioning, growth model design, marketing budget allocation, and marketing org design. Use when designing brand strategy, selecting growth models (PLG vs sales-led vs community-led), allocating marketing budgets, building marketing teams, or when user mentions CMO, brand strategy, growth model, CAC, LTV, channel mix, or marketing ROI.",
+  "category": "c-level",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "cmo-advisor"
+  ],
+  "taskDomains": [
+    "c-level"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "c-level-advisor/skills/cmo-advisor",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "1.0.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

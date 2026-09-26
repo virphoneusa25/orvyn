@@ -1,0 +1,48 @@
+{
+  "id": "skill_cs_incident_response",
+  "slug": "incident-response",
+  "name": "incident-response",
+  "version": "0.0.0",
+  "description": "Use when a security incident has been detected or declared and needs classification, triage, escalation path determination, and forensic evidence collection. Covers SEV1-SEV4 classification, false positive filtering, incident taxonomy, and NIST SP 800-61 lifecycle.",
+  "category": "engineering-team",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "incident-response"
+  ],
+  "taskDomains": [
+    "engineering-team"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "engineering-team/skills/incident-response",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

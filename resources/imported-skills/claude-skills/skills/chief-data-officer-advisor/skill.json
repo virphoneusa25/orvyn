@@ -1,0 +1,48 @@
+{
+  "id": "skill_cs_chief_data_officer_advisor",
+  "slug": "chief-data-officer-advisor",
+  "name": "chief-data-officer-advisor",
+  "version": "1.0.0",
+  "description": "Chief Data Officer advisory for startups: AI training data rights and consent provenance, data product strategy (warehouse vs lakehouse vs mesh, build-vs-buy), B2B customer-data-as-asset valuation and M&A readiness, data team org evolution. Use when deciding whether to train models on customer data, choosing data architecture, valuing data for fundraising or M&A, sequencing data hires, or when user mentions CDO, chief data officer, data strategy, data mesh, lakehouse, training data, data product, data monetization, or customer data asset. NOT a tactical data engineering skill — strategic decisions only.",
+  "category": "c-level",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "chief-data-officer-advisor"
+  ],
+  "taskDomains": [
+    "c-level"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "c-level-advisor/chief-data-officer-advisor/skills/chief-data-officer-advisor",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "1.0.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

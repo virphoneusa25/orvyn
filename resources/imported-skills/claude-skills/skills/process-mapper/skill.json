@@ -1,0 +1,80 @@
+{
+  "id": "skill_cs_process_mapper",
+  "slug": "process-mapper",
+  "name": "process-mapper",
+  "version": "2.8.0",
+  "description": "Use when a BizOps lead, COO, or process-improvement owner needs to document an end-to-end business process (procurement, employee onboarding, incident handoff, customer-onboarding, claims adjudication) in BPMN-style notation, measure cycle times by stage, surface where work spends most of its time waiting vs. being worked, and quantify the gap between processing time and total elapsed time. Pairs Lean / Six Sigma / Theory-of-Constraints canon with deterministic stdlib-only Python tools to produce a process map, a ranked bottleneck list (with severity + root-cause hypothesis), and a cycle-time analysis (P50, P90, value-add ratio, Little's-Law throughput). Distinct from sales-pipeline, system-reliability (SLO), and strategic-OKR work — this is tactical process documentation for internal operations.",
+  "category": "business-operations",
+  "publisher": "claude-code-skills",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "process-mapper"
+  ],
+  "taskDomains": [
+    "business-operations"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "business-operations/skills/process-mapper",
+    "license": "MIT",
+    "author": "claude-code-skills",
+    "version": "2.8.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "partially_supported",
+  "unresolvedTools": [
+    {
+      "name": "[claude-code",
+      "requirement": "optional"
+    },
+    {
+      "name": "codex-cli",
+      "requirement": "optional"
+    },
+    {
+      "name": "cursor",
+      "requirement": "optional"
+    },
+    {
+      "name": "antigravity",
+      "requirement": "optional"
+    },
+    {
+      "name": "opencode",
+      "requirement": "optional"
+    },
+    {
+      "name": "gemini-cli]",
+      "requirement": "optional"
+    }
+  ],
+  "certificationBlockers": [
+    "Optional capability \"[claude-code\" has no ORVYN tool and is omitted.",
+    "Optional capability \"codex-cli\" has no ORVYN tool and is omitted.",
+    "Optional capability \"cursor\" has no ORVYN tool and is omitted.",
+    "Optional capability \"antigravity\" has no ORVYN tool and is omitted.",
+    "Optional capability \"opencode\" has no ORVYN tool and is omitted.",
+    "Optional capability \"gemini-cli]\" has no ORVYN tool and is omitted."
+  ],
+  "relatedSkillIds": []
+}

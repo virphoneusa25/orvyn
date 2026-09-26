@@ -1,0 +1,80 @@
+{
+  "id": "skill_cs_feature_flags_architect_2",
+  "slug": "feature-flags-architect-2",
+  "name": "feature-flags-architect",
+  "version": "2.9.0",
+  "description": "Use when adding, retiring, or auditing feature flags. Triggers on \"add a flag\", \"ship behind a flag\", \"rollout plan\", \"kill switch\", \"stale flags\", \"flag debt\", \"LaunchDarkly\", \"GrowthBook\", \"Statsig\", \"Unleash\", \"Flipt\", or any progressive-delivery question. Ships flag debt scanner, rollout planner, and kill-switch auditor (all stdlib Python), 4 references on flag taxonomy + provider trade-offs + rollout strategies + lifecycle, plus a /flag-cleanup slash command.",
+  "category": "engineering",
+  "publisher": "claude-code-skills",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "feature-flags-architect"
+  ],
+  "taskDomains": [
+    "engineering"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "engineering/skills/feature-flags-architect",
+    "license": "MIT",
+    "author": "claude-code-skills",
+    "version": "2.9.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "partially_supported",
+  "unresolvedTools": [
+    {
+      "name": "[claude-code",
+      "requirement": "optional"
+    },
+    {
+      "name": "codex-cli",
+      "requirement": "optional"
+    },
+    {
+      "name": "cursor",
+      "requirement": "optional"
+    },
+    {
+      "name": "antigravity",
+      "requirement": "optional"
+    },
+    {
+      "name": "opencode",
+      "requirement": "optional"
+    },
+    {
+      "name": "gemini-cli]",
+      "requirement": "optional"
+    }
+  ],
+  "certificationBlockers": [
+    "Optional capability \"[claude-code\" has no ORVYN tool and is omitted.",
+    "Optional capability \"codex-cli\" has no ORVYN tool and is omitted.",
+    "Optional capability \"cursor\" has no ORVYN tool and is omitted.",
+    "Optional capability \"antigravity\" has no ORVYN tool and is omitted.",
+    "Optional capability \"opencode\" has no ORVYN tool and is omitted.",
+    "Optional capability \"gemini-cli]\" has no ORVYN tool and is omitted."
+  ],
+  "relatedSkillIds": []
+}

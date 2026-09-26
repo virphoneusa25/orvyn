@@ -1,0 +1,80 @@
+{
+  "id": "skill_cs_procurement_optimizer",
+  "slug": "procurement-optimizer",
+  "name": "procurement-optimizer",
+  "version": "2.8.0",
+  "description": "Use when running an annual SaaS audit, doing category-level spend review, or rationalizing the supplier base — when the user needs a spend audit, spend categorization (UNSPSC-aligned with Pareto breakdown and industry profiles), purchasing-cycle analysis (bottleneck categories per Goldratt's Theory of Constraints), or risk-balanced supplier consolidation that refuses single-source recommendations for tier-1 categories without a documented break-glass plan. Triggers on \"spend audit\", \"SaaS audit\", \"spend categorization\", \"supplier rationalization\", \"supplier consolidation\", \"category strategy\", \"duplicate SaaS\", \"renewal cluster\".",
+  "category": "business-operations",
+  "publisher": "claude-code-skills",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "procurement-optimizer"
+  ],
+  "taskDomains": [
+    "business-operations"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "business-operations/skills/procurement-optimizer",
+    "license": "MIT",
+    "author": "claude-code-skills",
+    "version": "2.8.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "partially_supported",
+  "unresolvedTools": [
+    {
+      "name": "[claude-code",
+      "requirement": "optional"
+    },
+    {
+      "name": "codex-cli",
+      "requirement": "optional"
+    },
+    {
+      "name": "cursor",
+      "requirement": "optional"
+    },
+    {
+      "name": "antigravity",
+      "requirement": "optional"
+    },
+    {
+      "name": "opencode",
+      "requirement": "optional"
+    },
+    {
+      "name": "gemini-cli]",
+      "requirement": "optional"
+    }
+  ],
+  "certificationBlockers": [
+    "Optional capability \"[claude-code\" has no ORVYN tool and is omitted.",
+    "Optional capability \"codex-cli\" has no ORVYN tool and is omitted.",
+    "Optional capability \"cursor\" has no ORVYN tool and is omitted.",
+    "Optional capability \"antigravity\" has no ORVYN tool and is omitted.",
+    "Optional capability \"opencode\" has no ORVYN tool and is omitted.",
+    "Optional capability \"gemini-cli]\" has no ORVYN tool and is omitted."
+  ],
+  "relatedSkillIds": []
+}

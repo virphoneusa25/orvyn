@@ -1,0 +1,60 @@
+{
+  "id": "skill_cs_autoresearch_agent",
+  "slug": "autoresearch-agent",
+  "name": "autoresearch-agent",
+  "version": "2.0.0",
+  "description": "Autonomous experiment loop that optimizes any file by a measurable metric. Inspired by Karpathy's autoresearch. The agent edits a target file, runs a fixed evaluation, keeps improvements (git commit), discards failures (git reset), and loops indefinitely. Use when: user wants to optimize code speed, reduce bundle/image size, improve test pass rate, optimize prompts, improve content quality (headlines, copy, CTR), or run any measurable improvement loop. Requires: a target file, an evaluation command that outputs a metric, and a git repo.",
+  "category": "engineering",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": true,
+  "triggers": [
+    "autoresearch-agent"
+  ],
+  "taskDomains": [
+    "engineering"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [
+    "web_search",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "web_search",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    }
+  ],
+  "validation": {
+    "rule": "The adapted workflow uses registered ORVYN tools, leaves unresolved optional capabilities unused, and does not execute imported scripts directly."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "engineering/autoresearch-agent/skills/autoresearch-agent",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "2.0.0",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "certified",
+  "unresolvedTools": [],
+  "certificationBlockers": [],
+  "relatedSkillIds": []
+}

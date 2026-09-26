@@ -4,7 +4,11 @@ import type { SkillCandidate } from "./skillCandidates";
 
 /** Packaged built-ins from resources/skills. The agent loop still calls skillsPromptFor. */
 function packagedSkills(): SkillCandidate[] {
-  return skillRegistry.list().map((skill) => ({
+  return skillRegistry.list().filter((skill) => {
+    if (skill.metadata.certificationStatus === "blocked") return false;
+    if (skill.metadata.source === "imported" && skill.enabled === false) return false;
+    return true;
+  }).map((skill) => ({
     id: skill.id,
     name: skill.name,
     trigger: skill.trigger,

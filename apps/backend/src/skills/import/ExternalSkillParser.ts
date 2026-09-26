@@ -18,6 +18,8 @@ export interface ParsedExternalSkill {
   /** Original SKILL.md bytes. Import copies these unchanged. */
   rawMarkdown: string;
   frontmatter: ExternalSkillFrontmatter;
+  /** Unmodified frontmatter object, including fields this parser does not promote. */
+  raw: Record<string, unknown>;
   references: string[];
   templates: string[];
   scripts: string[];
@@ -41,11 +43,25 @@ interface Frame {
   key?: string;
 }
 
-/** A small YAML subset: scalars, nested maps, and scalar lists. Enough for SKILL.md frontmatter. */
+/** A small YAML subset: scalars, nested maps, scalar lists, and folded blocks. Unknown lines are skipped. */
 export function parseFrontmatterBlock(text: string): Record<string, unknown> {
   const root: Record<string, unknown> = {};
   const stack: Frame[] = [{ indent: -1, value: root }];
+  let fold: { indent: number; key: string; parent: Record<string, unknown>; lines: string[] } | null = null;
+  const finishFold = () => {
+    if (!fold) return;
+    fold.parent[fold.key] = fold.lines.join(" ").replace(/\s+/g, " ").trim();
+    fold = null;
+  };
   for (const rawLine of text.split(/\r?\n/)) {
+    if (fold) {
+      const indent = rawLine.match(/^ */)?.[0].length ?? 0;
+      if (rawLine.trim() && indent > fold.indent) {
+        fold.lines.push(rawLine.trim());
+        continue;
+      }
+      finishFold();
+    }
     if (!rawLine.trim() || rawLine.trim().startsWith("#")) continue;
     const indent = rawLine.match(/^ */)?.[0].length ?? 0;
     const line = rawLine.trim();
@@ -54,23 +70,26 @@ export function parseFrontmatterBlock(text: string): Record<string, unknown> {
     if (line.startsWith("- ")) {
       let list = frame.value;
       if (!Array.isArray(list)) {
-        if (frame.parent && frame.key && Object.keys(frame.value).length === 0) {
+        if (frame.parent && frame.key && !Array.isArray(frame.value) && Object.keys(frame.value).length === 0) {
           const created: unknown[] = [];
           frame.parent[frame.key] = created;
           frame.value = created;
           list = created;
         } else {
-          throw new Error("Frontmatter list item is not inside a list.");
+          continue;
         }
       }
       list.push(unquote(line.slice(2)));
       continue;
     }
     const splitAt = line.indexOf(":");
-    if (splitAt <= 0) throw new Error(`Frontmatter line is not a field: ${line}`);
-    if (Array.isArray(frame.value)) throw new Error("Frontmatter field is nested inside a list.");
+    if (splitAt <= 0 || Array.isArray(frame.value)) continue;
     const key = line.slice(0, splitAt).trim();
     const rest = line.slice(splitAt + 1).trim();
+    if (rest === ">" || rest === "|" || rest === ">-" || rest === "|-" || rest === ">+" || rest === "|+") {
+      fold = { indent, key, parent: frame.value, lines: [] };
+      continue;
+    }
     if (!rest) {
       const child: Record<string, unknown> = {};
       frame.value[key] = child;
@@ -79,6 +98,7 @@ export function parseFrontmatterBlock(text: string): Record<string, unknown> {
     }
     frame.value[key] = unquote(rest);
   }
+  finishFold();
   return root;
 }
 
@@ -169,6 +189,7 @@ export function parseExternalSkill(dir: string): ParsedExternalSkill {
   return {
     dir,
     rawMarkdown,
+    raw: parsed,
     frontmatter: {
       name: pickString(parsed, ["name"]),
       description: pickString(parsed, ["description"]),

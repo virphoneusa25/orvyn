@@ -23,7 +23,7 @@ export interface SkillOrigin {
   importedAt: string;
 }
 
-export type CertificationStatus = "pending" | "certified" | "rejected";
+export type CertificationStatus = "pending" | "certified" | "rejected" | "partially_supported" | "blocked";
 
 /** An external tool name that was not mapped onto an ORVYN tool. */
 export interface UnresolvedTool {
@@ -55,6 +55,8 @@ export interface SkillMetadata {
   certificationStatus?: CertificationStatus;
   unresolvedTools?: UnresolvedTool[];
   certificationBlockers?: string[];
+  /** Other skills named by the upstream package. Matching does not activate them. */
+  relatedSkillIds?: string[];
 }
 
 /** A package that passed validation, including the playbook body. */

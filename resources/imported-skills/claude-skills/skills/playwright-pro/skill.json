@@ -1,0 +1,72 @@
+{
+  "id": "skill_cs_playwright_pro",
+  "slug": "playwright-pro",
+  "name": "playwright-pro",
+  "version": "0.0.0",
+  "description": "Production-grade Playwright testing toolkit. Use when the user mentions Playwright tests, end-to-end testing, browser automation, fixing flaky tests, test migration, CI/CD testing, or test suites. Generate tests, fix flaky failures, migrate from Cypress/Selenium, sync with TestRail, run on BrowserStack. 55 templates, 3 agents, smart reporting.",
+  "category": "engineering-team",
+  "publisher": "Alireza Rezvani",
+  "source": "imported",
+  "builtIn": false,
+  "trusted": false,
+  "triggers": [
+    "playwright-pro"
+  ],
+  "taskDomains": [
+    "engineering-team"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [],
+  "optionalTools": [
+    "browser_open",
+    "browser_navigate",
+    "browser_click",
+    "browser_screenshot"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Mapped from the upstream skill onto a registered ORVYN tool."
+    }
+  ],
+  "validation": {
+    "rule": "Blocked. Do not run this skill."
+  },
+  "tags": [
+    "imported",
+    "claude-skills",
+    "third-party"
+  ],
+  "scope": "personal",
+  "origin": {
+    "repository": "https://github.com/alirezarezvani/claude-skills",
+    "path": "engineering-team/playwright-pro/skills/pw",
+    "license": "MIT",
+    "author": "Alireza Rezvani",
+    "version": "",
+    "importedAt": "2026-09-26T17:30:00.000Z"
+  },
+  "certificationStatus": "blocked",
+  "unresolvedTools": [],
+  "certificationBlockers": [
+    "Core capability depends on BrowserStack cloud grid, which ORVYN cannot provide."
+  ],
+  "relatedSkillIds": []
+}

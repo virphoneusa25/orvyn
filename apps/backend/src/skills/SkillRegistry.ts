@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
-import { SkillLoader, type SkillPackage } from "./SkillLoader";
+import { importedSkillsRoot, SkillLoader, type SkillPackage } from "./SkillLoader";
 import type { SkillRejection } from "./types";
 
 export interface RegistrySkill extends SkillPackage {
@@ -32,9 +32,17 @@ function saveDisabled(ids: Set<string>): void {
   fs.renameSync(tmp, prefsFile());
 }
 
-/** Installed built-in skills shipped in resources/skills. Enablement is stored beside them, not inside the packages. */
+function importedLoader(): SkillLoader | null {
+  const root = importedSkillsRoot();
+  return root ? new SkillLoader(root, true) : null;
+}
+
+/** Built-in skills plus certified and partially supported imports. Blocked imports stay disabled. */
 export class SkillRegistry {
-  constructor(private readonly loader = new SkillLoader()) {}
+  constructor(
+    private readonly loader = new SkillLoader(),
+    private readonly imported = importedLoader(),
+  ) {}
 
   list(): RegistrySkill[] {
     return this.report().skills;
@@ -42,10 +50,23 @@ export class SkillRegistry {
 
   report(): { skills: RegistrySkill[]; rejected: SkillRejection[] } {
     const loaded = this.loader.load();
+    const extra = this.imported?.load() ?? { skills: [], rejected: [] };
     const off = disabledIds();
+    const seen = new Set(loaded.skills.map((skill) => skill.id));
+    const skills = [...loaded.skills];
+    const rejected = [...loaded.rejected];
+    for (const skill of extra.skills) {
+      if (seen.has(skill.id)) {
+        rejected.push({ slug: skill.metadata.slug, dir: skill.dir, errors: [`id ${skill.id} duplicates a production skill and was not installed.`] });
+        continue;
+      }
+      seen.add(skill.id);
+      skills.push(skill);
+    }
+    rejected.push(...extra.rejected);
     return {
-      skills: loaded.skills.map((skill) => this.present(skill, !off.has(skill.id))),
-      rejected: loaded.rejected,
+      skills: skills.map((skill) => this.present(skill, !off.has(skill.id))),
+      rejected,
     };
   }
 
@@ -60,7 +81,8 @@ export class SkillRegistry {
   }
 
   private present(skill: SkillPackage, enabled: boolean): RegistrySkill {
-    return { ...skill, enabled, deletable: false };
+    const blocked = skill.metadata.certificationStatus === "blocked" || skill.metadata.source === "imported" && skill.metadata.trusted === false;
+    return { ...skill, enabled: blocked ? false : enabled, deletable: false };
   }
 }
 

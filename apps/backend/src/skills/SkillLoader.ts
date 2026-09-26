@@ -64,7 +64,9 @@ export function builtinSkillsRoot(start = process.cwd()): string {
 }
 
 function stepsFromMarkdown(markdown: string): string[] {
-  return markdown
+  const marker = "<!-- ORVYN-ADAPTED-STEPS -->";
+  const source = markdown.includes(marker) ? markdown.split(marker).slice(1).join(marker) : markdown;
+  return source
     .split(/\r?\n/)
     .map((line) => line.match(/^\s*\d+\.\s+(.+)$/)?.[1]?.trim() ?? "")
     .filter(Boolean);
@@ -143,8 +145,8 @@ function readOrigin(value: unknown, errors: string[]): SkillOrigin | undefined {
 
 function readCertification(value: unknown, errors: string[]): CertificationStatus | undefined {
   if (value === undefined) return undefined;
-  if (value !== "pending" && value !== "certified" && value !== "rejected") {
-    errors.push("certificationStatus must be pending, certified, or rejected.");
+  if (value !== "pending" && value !== "certified" && value !== "rejected" && value !== "partially_supported" && value !== "blocked") {
+    errors.push("certificationStatus must be pending, certified, rejected, partially_supported, or blocked.");
     return undefined;
   }
   return value;
@@ -216,10 +218,14 @@ export function validateSkillPackage(dir: string): { skill: SkillPackage } | { r
   const certificationBlockers = raw.certificationBlockers === undefined
     ? undefined
     : needStringList(raw.certificationBlockers, "certificationBlockers", errors, true);
+  const relatedSkillIds = raw.relatedSkillIds === undefined
+    ? undefined
+    : needStringList(raw.relatedSkillIds, "relatedSkillIds", errors, true);
   if (origin) metadata.origin = origin;
   if (certificationStatus) metadata.certificationStatus = certificationStatus;
   if (unresolvedTools) metadata.unresolvedTools = unresolvedTools;
   if (certificationBlockers) metadata.certificationBlockers = certificationBlockers;
+  if (relatedSkillIds) metadata.relatedSkillIds = relatedSkillIds;
   if (metadata.slug && metadata.slug !== slug) errors.push(`slug must match the package directory (${slug}).`);
 
   let instructions = "";
@@ -261,17 +267,58 @@ export function validateSkillPackage(dir: string): { skill: SkillPackage } | { r
   };
 }
 
+export function importedSkillsRoot(start = process.cwd()): string | null {
+  const origins = [start, __dirname];
+  for (const origin of origins) {
+    let dir = origin;
+    for (let i = 0; i < 8; i++) {
+      const candidate = path.join(dir, "resources", "imported-skills");
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
+}
+
+function packageDirs(root: string, recursive: boolean): string[] {
+  if (!recursive) {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name))
+      .filter((dir) => fs.existsSync(path.join(dir, "skill.json")))
+      .sort();
+  }
+  const found: string[] = [];
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (entries.some((entry) => entry.name === "skill.json")) {
+      found.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === ".git" || entry.name === "node_modules") continue;
+      walk(path.join(dir, entry.name));
+    }
+  };
+  walk(root);
+  return found.sort();
+}
+
 export class SkillLoader {
-  constructor(private readonly root = builtinSkillsRoot()) {}
+  constructor(private readonly root = builtinSkillsRoot(), private readonly recursive = false) {}
 
   /** Validate every package. A malformed skill is reported and skipped. */
   load(): SkillLoadReport {
-    let names: string[] = [];
+    let dirs: string[] = [];
     try {
-      names = fs.readdirSync(this.root, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .sort();
+      dirs = packageDirs(this.root, this.recursive);
     } catch (err) {
       return {
         skills: [],
@@ -281,8 +328,8 @@ export class SkillLoader {
     const skills: SkillPackage[] = [];
     const rejected: SkillRejection[] = [];
     const seen = new Set<string>();
-    for (const name of names) {
-      const dir = path.join(this.root, name);
+    for (const dir of dirs) {
+      const name = path.basename(dir);
       if (!fs.existsSync(path.join(dir, "skill.json"))) continue;
       try {
         const result = validateSkillPackage(dir);
