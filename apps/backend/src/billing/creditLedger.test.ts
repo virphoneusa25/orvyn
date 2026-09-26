@@ -103,6 +103,18 @@ test("auto-recharge fires once and stops at the monthly cap", () => {
   db.close();
 });
 
+test("rolling windows name the moment the oldest charge leaves", () => {
+  const { db } = ledger();
+  const t0 = Date.UTC(2026, 8, 8, 12);
+  db.setPlan("u1", "pro", t0);
+  db.charge({ userId: "u1", type: "model", lane: "utility", providerCostUsd: 0.05, now: t0 + 1000 });
+  const snap = db.snapshot("u1", t0 + 60_000);
+  assert.equal(snap.windows.fiveHour.resetAt, t0 + 1000 + 5 * 3_600_000);
+  assert.equal(snap.windows.cycle.resetAt, t0 + 30 * 24 * 3_600_000);
+  assert.ok(snap.windows.fiveHour.used > 0);
+  db.close();
+});
+
 test("per-run cap stops a runaway and says so", () => {
   const { db } = ledger();
   const t0 = Date.UTC(2026, 8, 7);

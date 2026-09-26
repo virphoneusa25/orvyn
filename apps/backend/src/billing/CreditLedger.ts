@@ -335,9 +335,9 @@ export class CreditLedger {
       reservedBalance: row.reserved_balance,
       availableBalance: available,
       windows: {
-        fiveHour: { used: used5h, limit: limit5h },
-        sevenDay: { used: used7d, limit: plan.rolling7d },
-        cycle: { used: cycleUsed, limit: plan.monthlyCredits },
+        fiveHour: { used: used5h, limit: limit5h, resetAt: this.windowResetAt(userId, now, 5 * HOUR) },
+        sevenDay: { used: used7d, limit: plan.rolling7d, resetAt: this.windowResetAt(userId, now, 7 * DAY) },
+        cycle: { used: cycleUsed, limit: plan.monthlyCredits, resetAt: row.cycle_start + CYCLE },
       },
       packs: CREDIT_PACKS,
       autoRecharge: this.autoRecharge(userId),
@@ -431,6 +431,14 @@ export class CreditLedger {
         throw new BillingLimitError("IMAGE_BURST", "Image generation is paused until the burst window frees up.");
       }
     }
+  }
+
+  /** When the oldest charge in this rolling window leaves it. A full window resets one span from now. */
+  private windowResetAt(userId: string, now: number, spanMs: number): number {
+    const row = this.db.prepare(
+      `SELECT MIN(created_at) AS t FROM usage_events WHERE user_id = ? AND credits_charged > 0 AND created_at > ? AND created_at <= ?`,
+    ).get(userId, now - spanMs, now) as { t: number | null };
+    return row?.t ? Number(row.t) + spanMs : now + spanMs;
   }
 
   private windowCredits(userId: string, from: number, to: number): number {

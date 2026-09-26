@@ -147,7 +147,7 @@ interface RunState {
   reasoningEffort: ReasoningEffort;
   /** Context composition measured at assembly time (token estimates) —
    *  feeds the context-usage breakdown in usage.updated events. */
-  contextParts: { systemPrompt: number; projectContext: number; memory: number };
+  contextParts: { systemPrompt: number; projectContext: number; memory: number; skills: number; meta: number };
   /** Cumulative provider-reported cache samples for the run's average. */
   cachedTokensSum: number;
   promptTokensSum: number;
@@ -897,7 +897,7 @@ export class StreamingAgentRuntime {
       execution,
       mode,
       reasoningEffort: options?.reasoningEffort ?? "auto",
-      contextParts: { systemPrompt: 0, projectContext: 0, memory: 0 },
+      contextParts: { systemPrompt: 0, projectContext: 0, memory: 0, skills: 0, meta: 0 },
       cachedTokensSum: 0,
       promptTokensSum: 0,
       ...(accessMode ? { accessMode } : {}),
@@ -1010,6 +1010,7 @@ export class StreamingAgentRuntime {
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
+    const skillsPrompt = skillsPromptFor(instruction, this.memoryStore);
     // Context composition, measured at assembly time. These estimates feed
     // the live context-usage breakdown; provider-reported totals (when the
     // API returns them) remain the source of truth for the overall count.
@@ -1023,12 +1024,15 @@ export class StreamingAgentRuntime {
           gapNotes.join("\n"),
           CONVERSATION_STYLE,
           mcpCapabilities(this.mcpSummary),
+        ].filter(Boolean).join("\n")),
+        projectContext: 0,
+        memory: estimateTokens(memoryContext),
+        skills: estimateTokens(skillsPrompt),
+        meta: estimateTokens([
           `Project root (absolute): ${projectRoot}`,
           LANGUAGE_RULE,
           rules ? `\nProject rules:\n${rules}` : "",
         ].filter(Boolean).join("\n")),
-        projectContext: 0,
-        memory: estimateTokens(memoryContext),
       };
     }
     const messages: AIMessage[] = [
@@ -1040,7 +1044,7 @@ export class StreamingAgentRuntime {
           modeOverlay,
           gapNotes.join("\n"),
           CONVERSATION_STYLE,
-          skillsPromptFor(instruction, this.memoryStore),
+          skillsPrompt,
           mcpCapabilities(this.mcpSummary),
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
@@ -1478,9 +1482,19 @@ export class StreamingAgentRuntime {
     }
     const systemMsgTokens = messages[0]?.role === "system" ? estimateMessageTokens(messages[0]) : 0;
     const conversationTokens = Math.max(0, estimateConversationTokens(messages) - systemMsgTokens);
+    const contextTokens = estimateConversationTokens(messages);
+    const named =
+      (state.contextParts?.systemPrompt ?? 0) +
+      conversationTokens +
+      toolDefinitionTokens +
+      mcpToolTokens +
+      (state.contextParts?.projectContext ?? 0) +
+      (state.contextParts?.memory ?? 0) +
+      (state.contextParts?.skills ?? 0) +
+      (state.contextParts?.meta ?? 0);
     this.store.emit(runId, "usage.updated", {
       ...total,
-      contextTokens: estimateConversationTokens(messages),
+      contextTokens,
       contextBudget: this.contextBudget(provider),
       contextWindow: provider.config.contextWindow,
       modelId: provider.config.id,
@@ -1491,6 +1505,8 @@ export class StreamingAgentRuntime {
         mcpTools: mcpToolTokens,
         projectContext: state.contextParts?.projectContext ?? 0,
         memory: state.contextParts?.memory ?? 0,
+        skills: state.contextParts?.skills ?? 0,
+        meta: (state.contextParts?.meta ?? 0) + Math.max(0, contextTokens - named),
       },
       ...(state.promptTokensSum > 0 && state.cachedTokensSum > 0
         ? { cacheHitRate: state.cachedTokensSum / state.promptTokensSum }

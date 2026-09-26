@@ -91,10 +91,14 @@ function useQuota(open: boolean): { quota: UsageQuota | null; cycleTokens: numbe
   return state;
 }
 
-function useCreditWindows(open: boolean): { fiveHour: number | null; weekly: number | null; credits: number | null } {
-  const [windows, setWindows] = useState<{ fiveHour: number | null; weekly: number | null; credits: number | null }>({
-    fiveHour: null, weekly: null, credits: null,
-  });
+interface CreditWindow {
+  remaining: number | null;
+  resetAt: number | null;
+}
+
+function useCreditWindows(open: boolean): { fiveHour: CreditWindow; weekly: CreditWindow; credits: CreditWindow } {
+  const empty: CreditWindow = { remaining: null, resetAt: null };
+  const [windows, setWindows] = useState({ fiveHour: empty, weekly: empty, credits: empty });
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -103,23 +107,32 @@ function useCreditWindows(open: boolean): { fiveHour: number | null; weekly: num
       .then((d) => {
         if (cancelled) return;
         const w = d?.wallet?.windows;
-        const remaining = (row?: { used?: number; limit?: number }) => {
+        const read = (row?: { used?: number; limit?: number; resetAt?: number }): CreditWindow => {
           const limit = Number(row?.limit ?? 0);
-          if (limit <= 0) return null;
-          return Math.max(0, Math.min(1, (limit - Number(row?.used ?? 0)) / limit));
+          return {
+            remaining: limit > 0 ? Math.max(0, Math.min(1, (limit - Number(row?.used ?? 0)) / limit)) : null,
+            resetAt: Number(row?.resetAt) > 0 ? Number(row?.resetAt) : null,
+          };
         };
         setWindows({
-          fiveHour: remaining(w?.fiveHour),
-          weekly: remaining(w?.sevenDay),
-          credits: remaining(w?.cycle),
+          fiveHour: read(w?.fiveHour),
+          weekly: read(w?.sevenDay),
+          credits: read(w?.cycle),
         });
       })
       .catch(() => {
-        if (!cancelled) setWindows({ fiveHour: null, weekly: null, credits: null });
+        if (!cancelled) setWindows({ fiveHour: empty, weekly: empty, credits: empty });
       });
     return () => { cancelled = true; };
   }, [open]);
   return windows;
+}
+
+function resetLabel(at: number | null, kind: "time" | "date"): string {
+  if (!at) return "Reset —";
+  const d = new Date(at);
+  if (kind === "time") return `Reset ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return `Reset ${d.toLocaleDateString([], { month: "short", day: "numeric" })}`;
 }
 
 export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
@@ -157,7 +170,7 @@ export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
     >
       {(close) => {
         const byKey = new Map(shares.map((c) => [c.key, c.share]));
-        const five = creditWindows.fiveHour ?? (quotaState.quota ? (quotaState.quota.remaining ?? 0) / (quotaState.quota.limit ?? 1) : null);
+        const five = creditWindows.fiveHour.remaining ?? (quotaState.quota ? (quotaState.quota.remaining ?? 0) / (quotaState.quota.limit ?? 1) : null);
         return (
         <div style={{ padding: "8px 10px 10px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
@@ -208,9 +221,9 @@ export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
               </button>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-              <RemainCard label="5 hours" hint="Rolling" value={five} color="#3b82f6" />
-              <RemainCard label="Weekly" hint="Rolling" value={creditWindows.weekly} color="#64748b" />
-              <RemainCard label="MCP Credits" hint="Included" value={creditWindows.credits} color="#8b5cf6" />
+              <RemainCard label="5 hours" hint={resetLabel(creditWindows.fiveHour.resetAt, "time")} value={five} color="#3b82f6" />
+              <RemainCard label="Weekly" hint={resetLabel(creditWindows.weekly.resetAt, "date")} value={creditWindows.weekly.remaining} color="#3b82f6" />
+              <RemainCard label="MCP Credits" hint={resetLabel(creditWindows.credits.resetAt, "date")} value={creditWindows.credits.remaining} color="#8b5cf6" />
             </div>
           </div>
         </div>
