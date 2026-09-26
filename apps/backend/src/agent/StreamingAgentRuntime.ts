@@ -1413,6 +1413,9 @@ export class StreamingAgentRuntime {
     }
 
     state.controller.abort();
+    // The loop may be inside a tool or model call that has not observed the
+    // abort yet. The run is stopped now; that call must not keep it alive.
+    this.finishCancelled(runId, state.modelCalls);
     return true;
   }
 
@@ -1471,6 +1474,11 @@ export class StreamingAgentRuntime {
   }
 
   private finishCancelled(runId: string, steps: number): void {
+    const run = this.store.get(runId);
+    if (run?.events.some((event) => event.type === "run.cancelled")) {
+      this.store.setStatus(runId, "cancelled");
+      return;
+    }
     this.store.emit(runId, "run.cancelled", { steps, reason: "Stopped by user" });
     this.store.setStatus(runId, "cancelled");
   }
@@ -1639,6 +1647,7 @@ export class StreamingAgentRuntime {
     let consecutiveFailures = 0;
     const tools = () => (state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : undefined);
     const fail = (message: string, extra: Record<string, unknown> = {}) => {
+      if (state.cancelled) return cancelled();
       this.store.emit(runId, "run.error", { message, ...extra });
       this.store.setStatus(runId, "error");
       return { kind: "stop" as const, outcome: "failed" as const, reason: message };
@@ -1988,6 +1997,7 @@ export class StreamingAgentRuntime {
       },
 
       complete: (_turn, { content, streamedText }) => {
+        if (state.cancelled) return;
         const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
         const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts);
         if (claimCheck.blocked) grounded.blocked = true;
@@ -2236,7 +2246,7 @@ export class StreamingAgentRuntime {
           });
         }
       } else {
-        result = await runWithComputerContext(
+        const executed = runWithComputerContext(
           {
             tenantId: state.execution?.tenantId || "",
             userId: state.execution?.userId ?? null,
@@ -2256,6 +2266,26 @@ export class StreamingAgentRuntime {
               onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
             })
         );
+        // A tool that ignores the abort signal must not keep the run alive.
+        result = await Promise.race([
+          executed,
+          new Promise<ToolResult>((resolve) => {
+            if (state.controller.signal.aborted) {
+              resolve({ ok: false, error: "Stopped by user" });
+              return;
+            }
+            state.controller.signal.addEventListener(
+              "abort",
+              () => resolve({ ok: false, error: "Stopped by user" }),
+              { once: true }
+            );
+          }),
+        ]);
+      }
+      if (state.cancelled) {
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: "Stopped by user" });
+        replies.set(call.id, "Stopped by user.");
+        return;
       }
       if (call.name === "install_mcp_server" && result.ok && result.meta?.installed) {
         this.giveRunTools(runId, state, result.meta.installed as { name?: string; tools?: string[]; serverId?: string });
@@ -2417,6 +2447,7 @@ export class StreamingAgentRuntime {
       if (state.cancelled) return "cancelled";
       await runOne(call);
     }
+    if (state.cancelled) return "cancelled";
 
     // Missing capabilities: ask the user to install an MCP server (the card),
     // and tell the model to say so instead of "the tool isn't available".

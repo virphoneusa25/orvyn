@@ -225,11 +225,15 @@ export class MultiAgentRuntime {
 
     this.controllers.get(runId)?.abort();
 
-    // A mission still waiting in the queue never reaches the orchestrate()
-    // guard below — mark it terminal HERE so "stopped" is immediately true.
+    // Stop is immediate for a queued mission and for one already in a model
+    // or tool call. The in-flight call unwinds on the abort; the status does
+    // not wait for that call to return.
     const run = this.store.get(runId);
-    if (run && !run.events.some((e) => e.type === "run.started")) {
-      this.store.emit(runId, "run.cancelled", { reason: "Stopped by user before it started" });
+    if (run && run.status !== "cancelled" && !run.events.some((e) => e.type === "run.cancelled")) {
+      const started = run.events.some((e) => e.type === "run.started");
+      this.store.emit(runId, "run.cancelled", {
+        reason: started ? "Stopped by user" : "Stopped by user before it started",
+      });
       this.store.setStatus(runId, "cancelled");
     }
     return true;
@@ -249,7 +253,10 @@ export class MultiAgentRuntime {
   }
 
   private finishCancelled(runId: string, missionId?: string): void {
-    this.store.emit(runId, "run.cancelled", { reason: "Stopped by user" });
+    const run = this.store.get(runId);
+    if (!run?.events.some((event) => event.type === "run.cancelled")) {
+      this.store.emit(runId, "run.cancelled", { reason: "Stopped by user" });
+    }
     if (missionId) this.taskEngine.setMissionStatus(missionId, "BLOCKED");
     this.store.setStatus(runId, "cancelled");
     this.missionApproved.delete(runId);
@@ -606,6 +613,7 @@ export class MultiAgentRuntime {
     // corrections must not drag the mission to FAILED (approved-yet-FAILED
     // is a contradiction the user rightly reads as "it doesn't work").
     const missionStatus = blocked ? "BLOCKED" : "COMPLETED";
+    if (this.isCancelled(runId) || this.store.get(runId)?.status === "cancelled") return;
 
     const summary = await this.modelService.usage.with(
       { missionId: mission.id, agent: "orchestrator" },
@@ -631,6 +639,8 @@ export class MultiAgentRuntime {
         signal: modelCallSignal(this.signalFor(runId)),
         })
     );
+
+    if (this.isCancelled(runId) || this.store.get(runId)?.status === "cancelled") return;
 
     for (const chunk of (summary.content ?? "").match(/.{1,24}/gs) ?? []) {
       this.store.emit(runId, "message.delta", { content: chunk });

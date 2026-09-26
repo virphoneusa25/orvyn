@@ -92,7 +92,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "stop",
     title: "Stop a run",
     tags: ["stop", "run"],
-    body: "Press Stop in the composer or Esc while a run is active. The run enters cancelling, then stops. Queued follow-ups remain until you remove them.",
+    body: "Press Stop in the composer or Esc while a run is active. The run stops immediately. Queued follow-ups remain until you remove them.",
   },
   {
     id: "queue",

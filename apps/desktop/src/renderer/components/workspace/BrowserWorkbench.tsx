@@ -26,6 +26,8 @@ export function BrowserWorkbench({
   const [state, setState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const surface = useRef<HTMLDivElement | null>(null);
   const address = useRef<HTMLInputElement | null>(null);
   const hasNative = Boolean(api) && /Electron/i.test(navigator.userAgent);
@@ -72,7 +74,7 @@ export function BrowserWorkbench({
       ro.disconnect();
       window.removeEventListener("resize", send);
     };
-  }, [api, surfaceShown, state.activeId, tabForBounds?.url]);
+  }, [api, surfaceShown, state.activeId, tabForBounds?.url, expanded, fullscreen]);
 
   useEffect(() => {
     const tab = activeTab(state);
@@ -86,6 +88,18 @@ export function BrowserWorkbench({
       void api?.setVisible(false);
     };
   }, [api]);
+
+  useEffect(() => {
+    if (!expanded && !fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (fullscreen) setFullscreen(false);
+      else setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [expanded, fullscreen]);
 
   function apply(next: WorkbenchBrowserState) {
     setState(next);
@@ -104,8 +118,21 @@ export function BrowserWorkbench({
     apply(await api.navigate(current.id, raw));
   }
 
+  const frameStyle = expanded || fullscreen
+    ? {
+        position: "fixed" as const,
+        inset: 0,
+        zIndex: 1000,
+        background: "#070b14",
+        display: "flex",
+        flexDirection: "column" as const,
+        minHeight: 0,
+      }
+    : { flex: 1, minHeight: 0, display: "flex" as const, flexDirection: "column" as const };
+
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }} data-testid="workbench-browser">
+    <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
+      {!fullscreen && (
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)", flexShrink: 0 }}>
         <button title="Back" disabled={!tab?.canGoBack} style={ghostBtn()} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
         <button title="Forward" disabled={!tab?.canGoForward} style={ghostBtn()} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
@@ -142,6 +169,32 @@ export function BrowserWorkbench({
             <IconExternal size={12} />
           </button>
         )}
+        {tab?.url && (
+          <button
+            data-testid="preview-expand"
+            title={expanded ? "Collapse preview" : "Expand preview"}
+            style={ghostBtn()}
+            onClick={() => {
+              setFullscreen(false);
+              setExpanded((v) => !v);
+            }}
+          >
+            {expanded ? "Collapse" : "Expand"}
+          </button>
+        )}
+        {tab?.url && (
+          <button
+            data-testid="preview-fullscreen"
+            title="Full screen"
+            style={ghostBtn()}
+            onClick={() => {
+              setExpanded(true);
+              setFullscreen(true);
+            }}
+          >
+            Full Screen
+          </button>
+        )}
         {tab?.controlOwner === "orion" && (
           <button style={ghostBtn()} onClick={() => tab && void api?.takeControl(tab.id).then(apply)}>Take Control</button>
         )}
@@ -158,8 +211,9 @@ export function BrowserWorkbench({
           )}
         </div>
       </div>
+      )}
 
-      {tab?.sessionId && (
+      {!fullscreen && tab?.sessionId && (
         <div
           data-testid="workbench-browser-session"
           data-session-id={tab.sessionId}
@@ -172,13 +226,13 @@ export function BrowserWorkbench({
           <span>{tab.viewport ? `${tab.viewport.preset[0]!.toUpperCase()}${tab.viewport.preset.slice(1)} ${tab.viewport.width}×${tab.viewport.height}` : "Desktop"}</span>
         </div>
       )}
-      {orionStatus && tab?.controlOwner === "orion" && (
+      {!fullscreen && orionStatus && tab?.controlOwner === "orion" && (
         <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-cyan)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>{orionStatus}</div>
       )}
-      {tab?.controlOwner === "user" && orionStatus && (
+      {!fullscreen && tab?.controlOwner === "user" && orionStatus && (
         <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-yellow)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>You are controlling this browser</div>
       )}
-      {tab?.download && (
+      {!fullscreen && tab?.download && (
         <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-text-muted)" }}>
           Download {tab.download.filename} · {tab.download.state}
         </div>
@@ -199,6 +253,15 @@ export function BrowserWorkbench({
             <div style={{ fontSize: 12 }}>{tab?.loading ? `Opening ${tab.url}` : "Page opens in this pane."}</div>
           )}
         </div>
+      )}
+      {fullscreen && (
+        <button
+          data-testid="preview-exit-fullscreen"
+          onClick={() => setFullscreen(false)}
+          style={{ position: "absolute", top: 10, right: 10, zIndex: 7, ...ghostBtn(), background: "rgba(11,18,32,0.85)" }}
+        >
+          Exit Full Screen (Esc)
+        </button>
       )}
     </div>
   );

@@ -262,6 +262,35 @@ test("cancel ends the run as cancelled, not as an error", async () => {
   assert.ok(!types.includes("run.error"), "cancelling is not an error and must not be reported as one");
 });
 
+test("cancel marks the run cancelled without waiting for a hung model call", async () => {
+  const hung = new FakeProvider([[{ delta: "still going", done: true }]]);
+  hung.stream = async function* (request: AIRequest) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 30_000);
+      request.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    if (request.signal?.aborted) {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      throw err;
+    }
+    yield { delta: "late", done: true };
+  };
+  const h = harness([], { provider: hung });
+  const runId = h.runtime.start("/tmp/project", "do not finish");
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.runtime.cancel(runId), true);
+  assert.equal(h.store.get(runId)?.status, "cancelled");
+  assert.ok(h.store.get(runId)?.events.some((event) => event.type === "run.cancelled"));
+  assert.equal(h.runtime.cancel(runId), false);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(h.store.get(runId)?.status, "cancelled");
+  assert.equal(h.store.get(runId)?.events.filter((event) => event.type === "run.cancelled").length, 1);
+});
+
 test("cancel is idempotent and ignores unknown runs", () => {
   const h = harness([[{ delta: "hi", done: true }]]);
   assert.equal(h.runtime.cancel("no-such-run"), false);

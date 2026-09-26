@@ -638,6 +638,9 @@ export class RunStore {
   setStatus(runId: string, status: RunStatus): void {
     const run = this.runs.get(runId);
     if (!run) return;
+    // Stop is terminal. A tool or model call that finishes after the user
+    // hits Stop must not put the run back into running or completed.
+    if (run.status === "cancelled" && status !== "cancelled") return;
     run.status = status;
     this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}) });
   }

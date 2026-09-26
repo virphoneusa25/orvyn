@@ -38,6 +38,9 @@ export function useAgentRun(
   const lastSeq = useRef(0);
   const streamRef = useRef<EventSource | null>(null);
   const modeRef = useRef("agent");
+  const stoppedRef = useRef(false);
+  const statusRef = useRef("idle");
+  statusRef.current = status;
   // Read inside poll(), which is a stable callback and would otherwise close
   // over a stale runId from the render that created it.
   const runIdRef = useRef<string | null>(null);
@@ -67,6 +70,7 @@ export function useAgentRun(
     setRunId(id);
     runIdRef.current = id;
     modeRef.current = "multitask";
+    stoppedRef.current = false;
     setStatus("running");
     attachStream(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,7 +103,12 @@ export function useAgentRun(
   function applyEvent(e: AgentEvent) {
     lastSeq.current = Math.max(lastSeq.current, e.sequence);
     setLastEventAt(Date.now());
-    setEvents((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setEvents((prev) => {
+      if (prev.some((x) => x.id === e.id)) return prev;
+      if (e.type === "run.cancelled" && prev.some((x) => x.type === "run.cancelled")) return prev;
+      return [...prev, e];
+    });
+    if (stoppedRef.current && e.type !== "run.cancelled" && e.type !== "run.completed" && e.type !== "run.error") return;
     if (e.type === "approval.required") setStatus("awaiting_approval");
     else if (e.type === "run.queued") setStatus("queued");
     else if (e.type === "run.started") setStatus("running");
@@ -166,8 +175,9 @@ export function useAgentRun(
       if (data.events?.length) {
         for (const e of data.events) applyEvent(e);
       }
-      setStatus(data.status);
-      if (data.status === "running" || data.status === "awaiting_approval" || data.status === "queued") {
+      const live = data.status === "running" || data.status === "awaiting_approval" || data.status === "queued";
+      if (!(stoppedRef.current && live)) setStatus(data.status);
+      if (live && !stoppedRef.current) {
         setTimeout(() => poll(id), 80);
       }
     } catch {
@@ -186,6 +196,7 @@ export function useAgentRun(
     if (!projectRoot || !opts.instruction.trim()) return false;
     const mode = opts.mode ?? "agent";
     modeRef.current = mode;
+    stoppedRef.current = false;
     setEvents([]);
     setError(null);
     setUsage(null);
@@ -216,14 +227,23 @@ export function useAgentRun(
   }
 
   /**
-   * Stops the run. The status flips immediately so the button responds, but
-   * the authoritative `run.cancelled` event still arrives over the stream —
-   * the server decides when the run is really over.
+   * Stops the run immediately. The transcript shows Stopped as soon as Stop
+   * is clicked; the server aborts the in-flight model call and tool at the
+   * same time. A failed request puts the run back.
    */
   async function stop(): Promise<void> {
     const id = runIdRef.current;
-    if (!id || isRunFinished(status)) return;
-    setStatus("cancelling");
+    if (!id || isRunFinished(statusRef.current) || stoppedRef.current) return;
+    stoppedRef.current = true;
+    const localId = `local-stop-${id}`;
+    applyEvent({
+      id: localId,
+      runId: id,
+      type: "run.cancelled",
+      sequence: lastSeq.current,
+      timestamp: Date.now(),
+      data: { reason: "Stopped by user" },
+    });
     try {
       const res = await fetch(apiUrl(`/agent/stream/runs/${id}/cancel`), {
         method: "POST",
@@ -231,10 +251,11 @@ export function useAgentRun(
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to stop run");
     } catch (err: any) {
-      // Surface it and restore the status: a Stop that silently did nothing is
-      // worse than one that admits it failed.
+      stoppedRef.current = false;
+      setEvents((prev) => prev.filter((event) => event.id !== localId));
       setError(err.message);
       setStatus("running");
+      attachStream(id);
     }
   }
 
