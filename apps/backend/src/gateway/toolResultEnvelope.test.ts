@@ -107,3 +107,20 @@ test("paths are shown relative to the workspace, Windows or POSIX", () => {
   assert.equal(displayPath("./hello.txt", "/srv/ws/t1"), "hello.txt");
   assert.equal(displayPath("/etc/passwd", "/srv/ws/t1"), "/etc/passwd");
 });
+
+test("web_search and fetch_url name the sites ORION used (url evidence)", () => {
+  const search = buildToolResultEnvelope({
+    toolName: "web_search",
+    args: { query: "KXM model training" },
+    result: { ok: true, output: "1. Scaling laws\n   https://arxiv.org/abs/2001.08361\n   Compute-optimal training…\n2. Hugging Face docs\n   https://huggingface.co/docs\n   Transformers" },
+  });
+  assert.equal(search.userSummary, 'Searched the web for "KXM model training" · 2 results');
+  assert.deepEqual(search.evidence.map((e) => [e.type, e.value, e.label, (e.extra as any).kind]), [
+    ["url", "https://arxiv.org/abs/2001.08361", "Scaling laws", "search"],
+    ["url", "https://huggingface.co/docs", "Hugging Face docs", "search"],
+  ]);
+  const read = buildToolResultEnvelope({ toolName: "fetch_url", args: { url: "https://nvidia.com/blog" }, result: { ok: true, output: "HTTP 200 text/html\n\n<title>NVIDIA Blog</title>…" } });
+  assert.deepEqual(read.evidence.map((e) => [e.type, e.value, e.label, (e.extra as any).kind]), [["url", "https://nvidia.com/blog", "NVIDIA Blog", "read"]]);
+  const failed = buildToolResultEnvelope({ toolName: "fetch_url", args: { url: "https://x.test" }, result: { ok: false, error: "Fetch failed: timeout" } });
+  assert.equal(failed.evidence.filter((e) => e.type === "url").length, 0);
+});

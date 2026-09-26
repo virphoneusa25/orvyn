@@ -1,5 +1,6 @@
 // Shared renderer for agent tool/file/terminal events so Chat and Agent
 // both show "Editing …" / "Running …" instead of swallowing them.
+import { SourcesBar } from "./SourcesBar";
 import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
@@ -526,6 +527,7 @@ export function RunFooter({
         color: "var(--text-muted)",
       }}
     >
+      <SourcesBar events={events} />
       {hasChanges && (
         <span
           style={{

@@ -230,6 +230,40 @@ function browserEnvelopeParts(p: BuildEnvelopeParams, ok: boolean) {
   return { data, summary, evidence };
 }
 
+/** "1. Title\n   https://url\n   snippet" rows, as web_search prints them. */
+export function parseSearchResults(output: string): { title: string; url: string; snippet: string }[] {
+  const rows: { title: string; url: string; snippet: string }[] = [];
+  const re = /^\s*\d+\.\s+(.*)\n\s+(https?:\/\/\S+)(?:\n\s+(.*))?/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(output))) rows.push({ title: m[1]!.trim(), url: m[2]!.trim(), snippet: (m[3] ?? "").trim() });
+  return rows;
+}
+
+/** The sites ORION searched and read: each becomes url evidence (the stream's "Sources"). */
+function webEnvelopeParts(p: BuildEnvelopeParams, ok: boolean) {
+  const output = str(p.result.output);
+  const evidence: ToolResultEvidence[] = [];
+  if (p.toolName === "web_search") {
+    const query = str(p.args.query);
+    const results = ok ? parseSearchResults(output) : [];
+    for (const r of results) evidence.push({ type: "url", label: r.title || r.url, value: r.url, extra: { kind: "search", title: r.title, snippet: r.snippet.slice(0, 300), query } });
+    return {
+      data: { query, results: results.map((r) => ({ title: r.title, url: r.url })) },
+      summary: ok ? `Searched the web for "${query}" · ${results.length} result${results.length === 1 ? "" : "s"}` : `Web search for "${query}" failed`,
+      evidence,
+    };
+  }
+  const url = str(p.args.url);
+  const status = /^HTTP (\d{3})/.exec(output)?.[1];
+  const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(output)?.[1]?.trim();
+  if (ok && url) evidence.push({ type: "url", label: title || url, value: url, extra: { kind: "read", title, status: status ? Number(status) : undefined } });
+  return {
+    data: { url, status: status ? Number(status) : undefined, title },
+    summary: ok ? `Read ${url.replace(/^https?:\/\//, "")}` : `Could not read ${url}`,
+    evidence,
+  };
+}
+
 export function buildToolResultEnvelope(p: BuildEnvelopeParams): ToolResultEnvelope {
   const ok = Boolean(p.result.ok);
   const status: ToolResultEnvelopeStatus = ok ? "success" : p.cancelled ? "cancelled" : p.blocked ? "blocked" : "error";
@@ -240,6 +274,7 @@ export function buildToolResultEnvelope(p: BuildEnvelopeParams): ToolResultEnvel
   if (fileOp) parts = fileEnvelopeParts(p, fileOp, ok);
   else if (COMMAND_TOOLS.has(p.toolName)) parts = commandEnvelopeParts(p, ok);
   else if (p.toolName.startsWith("browser_") && p.result.meta?.browserSessionId) parts = browserEnvelopeParts(p, ok);
+  else if (p.toolName === "web_search" || p.toolName === "fetch_url") parts = webEnvelopeParts(p, ok);
   else {
     parts = {
       data: { outputBytes: Buffer.byteLength(str(p.result.output), "utf8") },

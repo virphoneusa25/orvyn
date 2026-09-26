@@ -123,7 +123,9 @@ export function makeWebSearchTool(): AITool {
         }
 
         // Keyless fallback: DuckDuckGo's HTML endpoint.
-        const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        // ORVYN_WEB_SEARCH_URL: a DuckDuckGo-compatible HTML endpoint (self-hosting, tests).
+        const searchBase = process.env.ORVYN_WEB_SEARCH_URL?.trim() || "https://html.duckduckgo.com/html/";
+        const res = await fetch(`${searchBase}?q=${encodeURIComponent(query)}`, {
           headers: { "User-Agent": "ORVYN-Agent/1.0" },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
