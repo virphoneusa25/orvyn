@@ -1,0 +1,60 @@
+{
+  "id": "skill_ops_log_analysis",
+  "slug": "log-analysis",
+  "name": "Log Analysis",
+  "version": "1.0.0",
+  "description": "Summarize a narrow slice of logs, keep timestamps and repeated errors, and do not paste a huge raw log.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "log analysis",
+    "repeated error signature",
+    "journal excerpt"
+  ],
+  "taskDomains": [
+    "logs",
+    "diagnostics"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_file",
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Read a filtered journal or log excerpt from a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "Read a filtered local log."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a small local log file."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs from a local process ORVYN started."
+    }
+  ],
+  "validation": {
+    "rule": "The summary cites timestamps and repeated error lines from a filtered excerpt, and a huge unfiltered log was not treated as the evidence."
+  },
+  "tags": [
+    "logs",
+    "journal",
+    "diagnostics"
+  ],
+  "scope": "builtin"
+}

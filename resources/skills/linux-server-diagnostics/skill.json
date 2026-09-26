@@ -1,0 +1,65 @@
+{
+  "id": "skill_ops_linux_diagnostics",
+  "slug": "linux-server-diagnostics",
+  "name": "Linux Server Diagnostics",
+  "version": "1.0.0",
+  "description": "Inspect CPU, memory, disk, processes, ports, services, and logs, then name a cause only when the output supports it.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "linux server diagnostics",
+    "server health check",
+    "disk memory cpu"
+  ],
+  "taskDomains": [
+    "server",
+    "diagnostics"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec",
+    "terminal"
+  ],
+  "optionalTools": [
+    "read_file",
+    "list_processes",
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Run a read-only check on a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run the same read-only check when the machine is local."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a local unit or config the check names."
+    },
+    {
+      "id": "list_processes",
+      "reason": "List local processes ORVYN started."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs from a local process ORVYN started."
+    }
+  ],
+  "validation": {
+    "rule": "The cause cites command output for CPU, memory, disk, processes, ports, services, or logs, and no mutating command ran unless that output required a repair."
+  },
+  "tags": [
+    "server",
+    "linux",
+    "diagnostics"
+  ],
+  "scope": "builtin"
+}

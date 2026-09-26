@@ -1,0 +1,54 @@
+{
+  "id": "skill_ops_compose_recovery",
+  "slug": "docker-compose-recovery",
+  "name": "Docker Compose Recovery",
+  "version": "1.0.0",
+  "description": "Read the compose file and the failing service logs, repair only that service, and verify health afterward.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "docker compose recovery",
+    "compose service down",
+    "recreate the service"
+  ],
+  "taskDomains": [
+    "containers",
+    "compose"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the compose file before changing it."
+    },
+    {
+      "id": "terminal",
+      "reason": "Inspect logs and recreate only the failing service."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run compose on a configured server alias when the stack is remote."
+    }
+  ],
+  "validation": {
+    "rule": "The compose file and service logs were inspected before the repair, only the necessary service was recreated, and health was verified afterward."
+  },
+  "tags": [
+    "docker",
+    "compose",
+    "recovery"
+  ],
+  "scope": "builtin"
+}

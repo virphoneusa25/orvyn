@@ -1,0 +1,55 @@
+{
+  "id": "skill_ops_network",
+  "slug": "network-diagnostics",
+  "name": "Network Diagnostics",
+  "version": "1.0.0",
+  "description": "Separate an application failure from DNS, routing, ports, listeners, and HTTP or TLS reachability.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "network diagnostics",
+    "dns lookup",
+    "port listener"
+  ],
+  "taskDomains": [
+    "network",
+    "diagnostics"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Check listeners, DNS, and routes on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Request the HTTP or TLS endpoint from this machine."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run the same network checks locally."
+    }
+  ],
+  "validation": {
+    "rule": "DNS, routes, listeners, or an HTTP/TLS request was reported, and the reply says whether the failure is the application or the network."
+  },
+  "tags": [
+    "network",
+    "dns",
+    "diagnostics"
+  ],
+  "scope": "builtin"
+}

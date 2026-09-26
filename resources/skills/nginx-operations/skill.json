@@ -1,0 +1,59 @@
+{
+  "id": "skill_ops_nginx",
+  "slug": "nginx-operations",
+  "name": "Nginx Operations",
+  "version": "1.0.0",
+  "description": "Read the nginx config, test it before a reload, check the upstream, and verify the endpoint after a repair.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "nginx operations",
+    "nginx config test",
+    "reload nginx"
+  ],
+  "taskDomains": [
+    "proxy",
+    "nginx"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "ssh_exec",
+    "read_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Test and reload nginx on a configured server alias."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a local nginx config before editing it."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run nginx -t on a local nginx."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Request the site after the reload."
+    }
+  ],
+  "validation": {
+    "rule": "nginx -t was run before a reload when nginx is available, and a follow-up status or endpoint check was reported after the repair."
+  },
+  "tags": [
+    "nginx",
+    "proxy",
+    "server"
+  ],
+  "scope": "builtin"
+}

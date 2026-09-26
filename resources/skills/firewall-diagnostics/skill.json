@@ -1,0 +1,55 @@
+{
+  "id": "skill_ops_firewall",
+  "slug": "firewall-diagnostics",
+  "name": "Firewall Diagnostics",
+  "version": "1.0.0",
+  "description": "Read the current firewall rules first, never flush or reset them automatically, and keep SSH reachable.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "firewall diagnostics",
+    "firewall rules",
+    "preserve ssh access"
+  ],
+  "taskDomains": [
+    "network",
+    "firewall"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "List firewall rules on a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "List local firewall rules."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a firewall config stored in the project."
+    }
+  ],
+  "validation": {
+    "rule": "Current firewall rules were listed before any change, no flush or reset ran, and SSH access was preserved."
+  },
+  "tags": [
+    "firewall",
+    "network",
+    "ssh"
+  ],
+  "scope": "builtin"
+}

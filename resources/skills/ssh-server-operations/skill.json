@@ -1,0 +1,50 @@
+{
+  "id": "skill_ops_ssh",
+  "slug": "ssh-server-operations",
+  "name": "SSH Server Operations",
+  "version": "1.0.0",
+  "description": "Run commands only on a server that is already configured, using its alias, and stop cleanly when no server exists.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "ssh server operations",
+    "configured ssh host",
+    "remote shell alias"
+  ],
+  "taskDomains": [
+    "server",
+    "ssh"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias. Host and command are both required."
+    },
+    {
+      "id": "read_file",
+      "reason": "Confirm .orvyn/ssh.json exists. Do not repeat key paths or secrets from it."
+    }
+  ],
+  "validation": {
+    "rule": "ssh_exec was called with a non-empty configured server alias, or the run stopped because no server resource was configured. No hostname, user, password, or key was invented."
+  },
+  "tags": [
+    "server",
+    "ssh",
+    "remote"
+  ],
+  "scope": "builtin"
+}

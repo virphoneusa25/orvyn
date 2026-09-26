@@ -1,0 +1,55 @@
+{
+  "id": "skill_ops_docker",
+  "slug": "docker-operations",
+  "name": "Docker Operations",
+  "version": "1.0.0",
+  "description": "Inspect containers, images, networks, and logs, then confirm container health after any change.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "docker operations",
+    "container health",
+    "docker logs"
+  ],
+  "taskDomains": [
+    "containers",
+    "docker"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run docker ps, inspect, and logs on the local engine."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run the same docker checks on a configured server alias."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a local Dockerfile or compose file before changing it."
+    }
+  ],
+  "validation": {
+    "rule": "Container state or logs were read before any change, and container health was checked again after a mutating docker command."
+  },
+  "tags": [
+    "docker",
+    "containers",
+    "server"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,65 @@
+{
+  "id": "skill_ops_deploy_verify",
+  "slug": "deployment-verification",
+  "name": "Deployment Verification",
+  "version": "1.0.0",
+  "description": "Check the process or container, the health endpoint, logs, the expected port, and a real response before calling a deploy healthy.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "deployment verification",
+    "health endpoint",
+    "verify the deploy"
+  ],
+  "taskDomains": [
+    "deployment",
+    "verification"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_process_logs",
+    "list_processes"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Check service or container status and the listening port on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Request the health endpoint."
+    },
+    {
+      "id": "terminal",
+      "reason": "Check a local process or container."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs from a local process."
+    },
+    {
+      "id": "list_processes",
+      "reason": "List local processes for the deploy."
+    }
+  ],
+  "validation": {
+    "rule": "Process or container status, a health endpoint or application response, logs, and the expected port were reported. Deploy-command success alone was not called a healthy deploy."
+  },
+  "tags": [
+    "deployment",
+    "health",
+    "verification"
+  ],
+  "scope": "builtin"
+}

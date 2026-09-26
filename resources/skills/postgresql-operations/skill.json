@@ -1,0 +1,60 @@
+{
+  "id": "skill_ops_postgresql",
+  "slug": "postgresql-operations",
+  "name": "PostgreSQL Operations",
+  "version": "1.0.0",
+  "description": "Check that Postgres is up, look at connections, storage, and logs, and refuse destructive SQL unless the user explicitly allows it.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "postgresql operations",
+    "postgres availability",
+    "database connections"
+  ],
+  "taskDomains": [
+    "database",
+    "postgresql"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_file",
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Check Postgres status and a read-only query path on a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run the same checks when Postgres is local."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a local Postgres config or migration."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs from a local database process."
+    }
+  ],
+  "validation": {
+    "rule": "Availability, connections, storage, or logs were inspected before a repair, no DROP, TRUNCATE, or delete-without-where ran without explicit authority, and database availability was checked afterward."
+  },
+  "tags": [
+    "postgresql",
+    "database",
+    "server"
+  ],
+  "scope": "builtin"
+}

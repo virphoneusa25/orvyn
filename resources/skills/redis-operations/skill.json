@@ -1,0 +1,55 @@
+{
+  "id": "skill_ops_redis",
+  "slug": "redis-operations",
+  "name": "Redis Operations",
+  "version": "1.0.0",
+  "description": "Check Redis service, connectivity, memory, and persistence, and do not flush or reset it unless the user explicitly allows that.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "redis operations",
+    "redis memory",
+    "redis persistence"
+  ],
+  "taskDomains": [
+    "database",
+    "redis"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Run redis-cli INFO and service status on a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run the same checks when Redis is local."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a local Redis config."
+    }
+  ],
+  "validation": {
+    "rule": "Service, connectivity, memory, or persistence was inspected before a change, and no FLUSHALL, FLUSHDB, or CONFIG RESETSTAT ran without explicit authority."
+  },
+  "tags": [
+    "redis",
+    "cache",
+    "server"
+  ],
+  "scope": "builtin"
+}

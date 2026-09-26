@@ -1,0 +1,54 @@
+{
+  "id": "skill_ops_systemd",
+  "slug": "systemd-service-management",
+  "name": "systemd Service Management",
+  "version": "1.0.0",
+  "description": "Read unit status, the journal, and the unit file before a restart, and confirm the service is active afterward.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "systemd service",
+    "systemctl status",
+    "unit journal"
+  ],
+  "taskDomains": [
+    "services",
+    "systemd"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "terminal",
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Read systemctl status and the journal on a configured server alias."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run the same systemctl checks when the unit is local."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a unit file in the project before editing it."
+    }
+  ],
+  "validation": {
+    "rule": "systemctl status and the journal were read before a restart, daemon-reload ran only after a unit file change, and the service was active on the follow-up status."
+  },
+  "tags": [
+    "systemd",
+    "services",
+    "server"
+  ],
+  "scope": "builtin"
+}

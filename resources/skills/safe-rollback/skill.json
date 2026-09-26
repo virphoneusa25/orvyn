@@ -1,0 +1,64 @@
+{
+  "id": "skill_ops_rollback",
+  "slug": "safe-rollback",
+  "name": "Safe Rollback",
+  "version": "1.0.0",
+  "description": "Name the known-good state, show the rollback target, avoid throwing away data, and verify after the rollback.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "safe rollback",
+    "rollback target",
+    "known-good release"
+  ],
+  "taskDomains": [
+    "deployment",
+    "rollback"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "ssh_exec",
+    "read_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "git_log",
+    "git_status"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Inspect the running release on a configured server alias before switching back."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the local release or compose definition for the known-good target."
+    },
+    {
+      "id": "terminal",
+      "reason": "Roll back a local process or compose service."
+    },
+    {
+      "id": "git_log",
+      "reason": "Find the known-good commit locally."
+    },
+    {
+      "id": "git_status",
+      "reason": "See whether the worktree is the rollback target."
+    }
+  ],
+  "validation": {
+    "rule": "A known-good target was named from git history, a release id, or the running version before the rollback, and service health was checked afterward."
+  },
+  "tags": [
+    "rollback",
+    "deployment",
+    "server"
+  ],
+  "scope": "builtin"
+}

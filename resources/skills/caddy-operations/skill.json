@@ -1,0 +1,59 @@
+{
+  "id": "skill_ops_caddy",
+  "slug": "caddy-operations",
+  "name": "Caddy Operations",
+  "version": "1.0.0",
+  "description": "Read the Caddyfile, service state, and logs, validate the config when Caddy can, and check HTTP or TLS after a change.",
+  "category": "Server & DevOps",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "caddy operations",
+    "caddyfile check",
+    "caddy reload"
+  ],
+  "taskDomains": [
+    "proxy",
+    "caddy"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "ssh_exec"
+  ],
+  "optionalTools": [
+    "read_file",
+    "terminal",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "ssh_exec",
+      "reason": "Read Caddy status and validate config on a configured server alias."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a Caddyfile in the project."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run caddy validate when Caddy is local."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Check the HTTP or TLS endpoint after a reload."
+    }
+  ],
+  "validation": {
+    "rule": "The Caddyfile or service logs were read before a change, config validate ran where caddy is available, and the HTTP or TLS endpoint was checked after the change."
+  },
+  "tags": [
+    "caddy",
+    "proxy",
+    "tls"
+  ],
+  "scope": "builtin"
+}
