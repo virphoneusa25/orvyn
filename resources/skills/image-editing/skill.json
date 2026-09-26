@@ -1,0 +1,54 @@
+{
+  "id": "skill_art_image_edit",
+  "slug": "image-editing",
+  "name": "Image Editing",
+  "version": "1.0.0",
+  "description": "Edit only an existing image artifact, and do not invent a replacement.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "image editing",
+    "edit the existing image",
+    "preserve unchanged areas"
+  ],
+  "taskDomains": [
+    "images",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "artifact_get",
+    "artifact_list"
+  ],
+  "optionalTools": [
+    "artifact_read"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_list",
+      "reason": "Find an existing artifact in this session."
+    },
+    {
+      "id": "artifact_read",
+      "reason": "Read the same artifact through the read alias."
+    }
+  ],
+  "validation": {
+    "rule": "The source image artifactId was read back first. No edited file is claimed unless a later tool result persists a new artifact that artifact_get reads with size greater than 0."
+  },
+  "tags": [
+    "image",
+    "edit",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

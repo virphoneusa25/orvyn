@@ -1,0 +1,59 @@
+{
+  "id": "skill_art_report",
+  "slug": "technical-report-builder",
+  "name": "Technical Report Builder",
+  "version": "1.0.0",
+  "description": "Turn findings into a report that separates facts, observations, and conclusions.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "technical report builder",
+    "findings into a report",
+    "facts observations and conclusions"
+  ],
+  "taskDomains": [
+    "documents",
+    "reports"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "read_file",
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a source file that is already in the project."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    }
+  ],
+  "validation": {
+    "rule": "The report artifactId was persisted and read back. Facts, observations, and conclusions are separate, and every citation comes from a tool result."
+  },
+  "tags": [
+    "report",
+    "documents",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

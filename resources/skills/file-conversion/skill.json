@@ -1,0 +1,59 @@
+{
+  "id": "skill_art_convert",
+  "slug": "file-conversion",
+  "name": "File Conversion",
+  "version": "1.0.0",
+  "description": "Convert a verified source into a supported destination type and read it back.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "file conversion",
+    "convert this source file",
+    "destination file type"
+  ],
+  "taskDomains": [
+    "documents",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_document",
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "artifact_list"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    },
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_list",
+      "reason": "Find an existing artifact in this session."
+    }
+  ],
+  "validation": {
+    "rule": "The source type was read first, create_document persisted the destination, and artifact_get confirmed that destination type with size greater than 0."
+  },
+  "tags": [
+    "conversion",
+    "documents",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

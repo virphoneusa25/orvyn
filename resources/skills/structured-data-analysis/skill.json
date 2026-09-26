@@ -1,0 +1,65 @@
+{
+  "id": "skill_art_data",
+  "slug": "structured-data-analysis",
+  "name": "Structured Data Analysis",
+  "version": "1.0.0",
+  "description": "Inspect columns and types, and write an artifact only when one was requested.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "structured data analysis",
+    "inspect columns and types",
+    "calculated results versus source values"
+  ],
+  "taskDomains": [
+    "data",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "read_document",
+    "read_file"
+  ],
+  "optionalTools": [
+    "create_document",
+    "artifact_get",
+    "artifact_create"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a source file that is already in the project."
+    },
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_create",
+      "reason": "Persist text or data when a document type is not required."
+    }
+  ],
+  "validation": {
+    "rule": "Columns and types are cited from a read result. Calculated results are labeled separately from source values. A file exists only when its artifactId was persisted and read back."
+  },
+  "tags": [
+    "data",
+    "columns",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

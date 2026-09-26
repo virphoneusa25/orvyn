@@ -1,0 +1,54 @@
+{
+  "id": "skill_art_zip",
+  "slug": "archive-zip-builder",
+  "name": "Archive / ZIP Builder",
+  "version": "1.0.0",
+  "description": "Zip only the intended files and read the archive back before claiming success.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "archive zip builder",
+    "zip these intended files",
+    "package the intended files"
+  ],
+  "taskDomains": [
+    "archives",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_zip",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "artifact_list"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_zip",
+      "reason": "Persist a ZIP of only the requested files."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_list",
+      "reason": "Find an existing artifact in this session."
+    }
+  ],
+  "validation": {
+    "rule": "create_zip returned an artifactId and artifact_get read a .zip with mime application/zip and size greater than 0."
+  },
+  "tags": [
+    "zip",
+    "archive",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

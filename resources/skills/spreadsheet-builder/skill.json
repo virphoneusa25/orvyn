@@ -1,0 +1,54 @@
+{
+  "id": "skill_art_spreadsheet",
+  "slug": "spreadsheet-builder",
+  "name": "Spreadsheet Builder",
+  "version": "1.0.0",
+  "description": "Create a real XLSX workbook with formula totals and verify it reads back.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "spreadsheet builder",
+    "xlsx workbook",
+    "worksheet formulas"
+  ],
+  "taskDomains": [
+    "spreadsheets",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    }
+  ],
+  "validation": {
+    "rule": "An .xlsx artifactId was persisted and artifact_get read the workbook back with size greater than 0. A markdown table is not a workbook."
+  },
+  "tags": [
+    "xlsx",
+    "spreadsheet",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

@@ -34,9 +34,6 @@ const PRIOR = [
   "Deployment Verification",
   "Safe Rollback",
   "Log Analysis",
-];
-
-const UI = [
   "Browser QA",
   "Responsive UI Testing",
   "Visual Verification",
@@ -51,6 +48,21 @@ const UI = [
   "Authentication Flow Testing",
 ];
 
+const CONTENT = [
+  "Document Builder",
+  "Spreadsheet Builder",
+  "Presentation Builder",
+  "PDF Handling",
+  "Image Generation",
+  "Image Editing",
+  "File Conversion",
+  "Structured Data Analysis",
+  "Technical Report Builder",
+  "Archive / ZIP Builder",
+  "Export Deliverable",
+  "Artifact Verification",
+];
+
 function body(name: string): string {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   const skill = report.skills.find((item) => item.name === name);
@@ -58,21 +70,21 @@ function body(name: string): string {
   return `${skill!.instructions}\n${skill!.metadata.validation.rule}`;
 }
 
-test("browser and ui built-ins load beside the existing 29 skills", () => {
+test("artifacts and content built-ins load beside the existing 41 skills", () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   assert.deepEqual(report.rejected, []);
   const ids = report.skills.map((skill) => skill.id);
   const slugs = report.skills.map((skill) => skill.metadata.slug);
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(new Set(slugs).size, slugs.length);
-  assert.ok(report.skills.length >= 41);
+  assert.equal(report.skills.length, 53);
   for (const name of PRIOR) assert.ok(report.skills.some((skill) => skill.name === name), name);
 
-  const ui = report.skills.filter((skill) => skill.metadata.category === "Browser & UI");
-  assert.equal(ui.length, 12);
-  assert.deepEqual(ui.map((skill) => skill.name).sort(), [...UI].sort());
+  const content = report.skills.filter((skill) => skill.metadata.category === "Artifacts & Content");
+  assert.equal(content.length, 12);
+  assert.deepEqual(content.map((skill) => skill.name).sort(), [...CONTENT].sort());
   const tools = registeredToolNames();
-  for (const skill of ui) {
+  for (const skill of content) {
     assert.equal(skill.metadata.publisher, "Kernel AI Labs");
     assert.equal(skill.metadata.source, "builtin");
     assert.equal(skill.metadata.builtIn, true);
@@ -89,9 +101,22 @@ test("browser and ui built-ins load beside the existing 29 skills", () => {
     const permissionIds = skill.metadata.permissionsRequired.map((item) => item.id);
     assert.deepEqual([...permissionIds].sort(), [...referenced].sort());
     const text = `${skill.instructions}\n${skill.metadata.validation.rule}`;
-    assert.match(text, /existing ORVYN Browser session/i);
-    assert.match(text, /do not create a second browser/i);
+    assert.match(text, /do not invent a filename, an artifactId, a sandbox path, or a download URL/i);
+    assert.match(text, /persisted bytes and a successful readback|persisted bytes and a successful artifact_get readback/i);
+    assert.match(text, /zero-byte artifact does not pass/i);
+    assert.match(text, /do not bypass artifact persistence/i);
+    assert.doesNotMatch(text, /\$|provider pricing is|fireworks|cost money/i);
   }
+
+  const deliver = report.skills.find((skill) => skill.id === "skill_deliver_file");
+  assert.ok(deliver);
+  assert.equal(deliver!.name, "Deliver a generated file");
+  assert.equal(deliver!.trigger, "logo, PNG, image, PDF, document, zip, generate a file");
+  assert.equal(deliver!.validation, "artifact.created with status ready + readable bytes");
+  assert.equal(deliver!.metadata.publisher, "ORVYN");
+  assert.equal(deliver!.metadata.category, "General");
+  assert.deepEqual(deliver!.metadata.requiredTools, ["generate_image", "create_document", "artifact_create"]);
+  assert.match(deliver!.instructions, /Never invent a filename or a sandbox\/artifacts\/\.\.\.\/download path/);
 
   assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((skill) => skill.id), ["skill_deliver_file"]);
   assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((skill) => skill.id), ["skill_code_with_tests"]);
@@ -99,29 +124,40 @@ test("browser and ui built-ins load beside the existing 29 skills", () => {
   assert.equal(skillsPromptFor("What time is it?"), "");
 });
 
-test("visual, responsive, website build, and auth skills keep their evidence rules", () => {
-  for (const name of ["Browser QA", "Visual Verification", "Website Build Verification"]) {
-    const text = body(name);
-    assert.match(text, /real browser evidence/i, name);
-    assert.match(text, /browser_screenshot/, name);
-  }
+test("document, spreadsheet, presentation, image, and verification skills require real artifacts", () => {
+  const document = body("Document Builder");
+  assert.match(document, /create_document/);
+  assert.match(document, /\.docx/);
+  assert.match(document, /artifact_get/);
+  assert.match(document, /headings/);
 
-  const responsive = body("Responsive UI Testing");
-  assert.match(responsive, /desktop/);
-  assert.match(responsive, /tablet/);
-  assert.match(responsive, /mobile/);
-  assert.match(responsive, /do not judge responsiveness from CSS source alone/i);
-  assert.match(responsive, /browser_set_viewport/);
-  assert.match(responsive, /real browser evidence/i);
+  const sheet = body("Spreadsheet Builder");
+  assert.match(sheet, /create_document/);
+  assert.match(sheet, /\.xlsx/);
+  assert.match(sheet, /=SUM\(B2:B9\)/);
+  assert.match(sheet, /not markdown pretending to be a spreadsheet/i);
+  assert.match(sheet, /artifact_get/);
+  assert.match(sheet, /workbook/i);
 
-  const website = body("Website Build Verification");
-  assert.match(website, /started process is not verification/i);
-  assert.match(website, /HTTP response alone is not full verification/i);
-  assert.match(website, /browser_console_errors/);
+  const slides = body("Presentation Builder");
+  assert.match(slides, /create_document/);
+  assert.match(slides, /\.pptx/);
+  assert.match(slides, /presentation artifact/i);
+  assert.match(slides, /overflow/i);
+  assert.match(slides, /artifact_get/);
+  assert.doesNotMatch(slides, /markdown outline is the presentation/i);
 
-  const auth = body("Authentication Flow Testing");
-  assert.match(auth, /never invent credentials/i);
-  assert.match(auth, /password or token/i);
-  assert.match(auth, /browser_screenshot/);
-  assert.match(auth, /existing ORVYN Browser session/i);
+  const image = body("Image Generation");
+  assert.match(image, /generate_image/);
+  assert.match(image, /persisted image artifact/i);
+  assert.match(image, /artifact_get/);
+  assert.match(image, /mime type/i);
+  assert.match(image, /size must be greater than 0/i);
+
+  const verify = body("Artifact Verification");
+  assert.match(verify, /artifact_get/);
+  assert.match(verify, /file size must be greater than 0/i);
+  assert.match(verify, /zero-byte/i);
+  assert.match(verify, /wrong-type/i);
+  assert.match(verify, /unreadable/i);
 });

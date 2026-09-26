@@ -1,0 +1,54 @@
+{
+  "id": "skill_art_presentation",
+  "slug": "presentation-builder",
+  "name": "Presentation Builder",
+  "version": "1.0.0",
+  "description": "Create a real PPTX slide deck with one layout and verify the artifact.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "presentation builder",
+    "slide deck artifact",
+    "pptx slides"
+  ],
+  "taskDomains": [
+    "presentations",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    }
+  ],
+  "validation": {
+    "rule": "A .pptx presentation artifact was persisted and artifact_get read it back with size greater than 0."
+  },
+  "tags": [
+    "pptx",
+    "slides",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

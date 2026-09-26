@@ -1,0 +1,59 @@
+{
+  "id": "skill_art_verify",
+  "slug": "artifact-verification",
+  "name": "Artifact Verification",
+  "version": "1.0.0",
+  "description": "Accept an artifact only after readback shows a non-empty file of the expected type.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "artifact verification",
+    "read the artifact back",
+    "reject a zero-byte artifact"
+  ],
+  "taskDomains": [
+    "artifacts",
+    "verification"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "artifact_read",
+    "artifact_list",
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_read",
+      "reason": "Read the same artifact through the read alias."
+    },
+    {
+      "id": "artifact_list",
+      "reason": "Find an existing artifact in this session."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    }
+  ],
+  "validation": {
+    "rule": "artifact_get succeeded for the cited artifactId, the size is greater than 0, and the mime type matches the expected type. Zero-byte, unreadable, and wrong-type results fail."
+  },
+  "tags": [
+    "verification",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

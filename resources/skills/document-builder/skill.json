@@ -1,0 +1,54 @@
+{
+  "id": "skill_art_document",
+  "slug": "document-builder",
+  "name": "Document Builder",
+  "version": "1.0.0",
+  "description": "Create a structured DOCX and verify the persisted artifact.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "document builder",
+    "structured docx",
+    "word headings and lists"
+  ],
+  "taskDomains": [
+    "documents",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    }
+  ],
+  "validation": {
+    "rule": "create_document returned an artifactId and artifact_get read the DOCX back with size greater than 0."
+  },
+  "tags": [
+    "docx",
+    "document",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

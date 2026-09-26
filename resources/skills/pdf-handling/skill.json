@@ -1,0 +1,65 @@
+{
+  "id": "skill_art_pdf",
+  "slug": "pdf-handling",
+  "name": "PDF Handling",
+  "version": "1.0.0",
+  "description": "Extract, assemble, or convert PDF content and avoid visual claims from text alone.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "pdf handling",
+    "extract pdf text",
+    "assemble a pdf"
+  ],
+  "taskDomains": [
+    "documents",
+    "pdf"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "read_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "create_document",
+    "browser_open",
+    "browser_screenshot"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open a persisted PDF in the existing browser session when the page appearance matters."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture the PDF page when text extraction is not visual proof."
+    }
+  ],
+  "validation": {
+    "rule": "PDF text or a persisted PDF artifact is cited from read_document or artifact_get. Visual page claims require a browser screenshot, not raw text alone."
+  },
+  "tags": [
+    "pdf",
+    "documents",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

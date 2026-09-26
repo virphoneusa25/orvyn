@@ -1,0 +1,53 @@
+{
+  "id": "skill_art_image",
+  "slug": "image-generation",
+  "name": "Image Generation",
+  "version": "1.0.0",
+  "description": "Generate an image only when a real image artifact is persisted and read back.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "image generation",
+    "draw a persisted image",
+    "generated image artifact"
+  ],
+  "taskDomains": [
+    "images",
+    "artifacts"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "generate_image",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "artifact_read"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "generate_image",
+      "reason": "Persist a real image through the registered image tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "artifact_read",
+      "reason": "Read the same artifact through the read alias."
+    }
+  ],
+  "validation": {
+    "rule": "generate_image returned an image artifactId and artifact_get read back an image mime type with size greater than 0."
+  },
+  "tags": [
+    "image",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}

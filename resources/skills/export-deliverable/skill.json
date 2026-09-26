@@ -1,0 +1,63 @@
+{
+  "id": "skill_art_export",
+  "slug": "export-deliverable",
+  "name": "Export Deliverable",
+  "version": "1.0.0",
+  "description": "Export the requested supported format and verify the destination artifact.",
+  "category": "Artifacts & Content",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "export deliverable",
+    "export into the requested type",
+    "supported export output"
+  ],
+  "taskDomains": [
+    "artifacts",
+    "export"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "create_document",
+    "artifact_get"
+  ],
+  "optionalTools": [
+    "create_zip",
+    "read_document",
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "create_document",
+      "reason": "Persist the document through the registered document tool."
+    },
+    {
+      "id": "artifact_get",
+      "reason": "Read the artifact back by the id the tool returned."
+    },
+    {
+      "id": "create_zip",
+      "reason": "Persist a ZIP of only the requested files."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read the persisted document back as text."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a source file that is already in the project."
+    }
+  ],
+  "validation": {
+    "rule": "The requested format was persisted and artifact_get confirmed the destination type with size greater than 0."
+  },
+  "tags": [
+    "export",
+    "artifacts"
+  ],
+  "scope": "builtin"
+}
