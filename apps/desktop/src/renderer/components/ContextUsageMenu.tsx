@@ -16,18 +16,36 @@ import {
   exceedsLimit,
   categoryShares,
   quotaFromServer,
-  formatTokens,
   formatPercent,
+  type ContextBreakdown,
   type ContextUsage,
   type UsageQuota,
 } from "../contextUsage";
 
-const SEVERITY_COLOR: Record<string, string> = {
-  normal: "var(--orvyn-purple)",
-  elevated: "var(--orvyn-yellow)",
-  warning: "var(--orvyn-yellow)",
-  critical: "var(--orvyn-red)",
-};
+const ROWS: { key: keyof ContextBreakdown; label: string; color: string }[] = [
+  { key: "messages", label: "Messages", color: "#3b82f6" },
+  { key: "toolDefinitions", label: "System tools", color: "#60a5fa" },
+  { key: "systemPrompt", label: "System prompt", color: "#a78bfa" },
+  { key: "skills", label: "Skills", color: "#34d399" },
+  { key: "mcpTools", label: "MCP tools", color: "#2dd4bf" },
+  { key: "meta", label: "Meta context", color: "#6b7280" },
+];
+
+function percentLabel(share: number): string {
+  const n = share * 100;
+  if (Math.abs(n - Math.round(n)) < 0.05) return `${Math.round(n)}%`;
+  return `${n.toFixed(1)}%`;
+}
+
+function headerTokens(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—";
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+  }
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
 
 /** The live context numbers the popover renders: the active (or most
  *  recent) run's usage event plus the selected model's registry window. */
@@ -73,9 +91,41 @@ function useQuota(open: boolean): { quota: UsageQuota | null; cycleTokens: numbe
   return state;
 }
 
+function useCreditWindows(open: boolean): { fiveHour: number | null; weekly: number | null; credits: number | null } {
+  const [windows, setWindows] = useState<{ fiveHour: number | null; weekly: number | null; credits: number | null }>({
+    fiveHour: null, weekly: null, credits: null,
+  });
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch(apiUrl("/billing"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => {
+        if (cancelled) return;
+        const w = d?.wallet?.windows;
+        const remaining = (row?: { used?: number; limit?: number }) => {
+          const limit = Number(row?.limit ?? 0);
+          if (limit <= 0) return null;
+          return Math.max(0, Math.min(1, (limit - Number(row?.used ?? 0)) / limit));
+        };
+        setWindows({
+          fiveHour: remaining(w?.fiveHour),
+          weekly: remaining(w?.sevenDay),
+          credits: remaining(w?.cycle),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setWindows({ fiveHour: null, weekly: null, credits: null });
+      });
+    return () => { cancelled = true; };
+  }, [open]);
+  return windows;
+}
+
 export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
   const [open, setOpen] = useState(false);
   const quotaState = useQuota(open);
+  const creditWindows = useCreditWindows(open);
   const limit = state.usage?.contextWindow ?? state.modelContextWindow ?? 0;
   const usage: ContextUsage | null = state.usage?.contextTokens
     ? {
@@ -93,8 +143,9 @@ export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
 
   return (
     <Dropdown
-      title="Context window and usage — tokens in the next model request, and what remains of your quotas"
-      width={400}
+      title="Context usage — tokens in the next model request, and what remains of your quotas"
+      width={360}
+      maxHeight={520}
       open={open}
       onOpenChange={setOpen}
       label={
@@ -104,132 +155,82 @@ export function ContextUsageMenu({ state }: { state: ComposerContextState }) {
         </>
       }
     >
-      {(close) => (
-        <div style={{ padding: "4px 2px", maxHeight: 360, overflowY: "auto" }}>
-          {/* ── Section 1: context window ── */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "2px 8px 6px" }}>
-            <span
-              style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4 }}
-              title="Tokens currently included in the next model request."
-            >
-              Context window
+      {(close) => {
+        const byKey = new Map(shares.map((c) => [c.key, c.share]));
+        const five = creditWindows.fiveHour ?? (quotaState.quota ? (quotaState.quota.remaining ?? 0) / (quotaState.quota.limit ?? 1) : null);
+        return (
+        <div style={{ padding: "8px 10px 10px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 650 }} title="Tokens currently included in the next model request.">
+              Context usage
+              <span style={{ width: 14, height: 14, borderRadius: "50%", border: "1px solid #66708a", color: "#8b95ad", fontSize: 9, display: "inline-grid", placeItems: "center" }}>i</span>
             </span>
-            <span style={{ fontSize: 10.5, fontFamily: "var(--font-mono)", color: "var(--orvyn-text-secondary)" }}>
-              {formatTokens(usage?.totalUsed ?? 0)} / {formatTokens(limit || null)}
-              {percent !== null ? ` (${formatPercent(percent)})` : ""}
+            <span style={{ fontSize: 12, color: "#c5d0e4", fontVariantNumeric: "tabular-nums" }}>
+              {headerTokens(usage?.totalUsed ?? 0)}/{limit > 0 ? headerTokens(limit) : "—"}
+              {percent !== null ? ` (${percentLabel(percent)})` : ""}
             </span>
           </div>
-          <div style={{ height: 6, borderRadius: 3, background: "var(--orvyn-border-soft)", overflow: "hidden", margin: "0 8px 4px" }}>
-            <div
-              style={{
-                width: `${Math.round((percent ?? 0) * 100)}%`,
-                height: "100%",
-                background: SEVERITY_COLOR[severity],
-                transition: "width 240ms ease",
-                borderRadius: 3,
-              }}
-            />
+          <div style={{ height: 6, borderRadius: 99, background: "#1c2638", overflow: "hidden", margin: "10px 0 12px" }}>
+            <div style={{ width: `${Math.round((percent ?? 0) * 100)}%`, height: "100%", borderRadius: 99, background: "linear-gradient(90deg, #3b82f6, #22d3ee 55%, #a78bfa)" }} />
           </div>
           {warning && (
-            <div style={{ fontSize: 10.5, color: severity === "critical" ? "var(--orvyn-red)" : "var(--orvyn-yellow)", padding: "2px 8px 6px" }}>
-              {warning}
-            </div>
+            <div style={{ fontSize: 11, color: severity === "critical" ? "#f87171" : "#fbbf24", marginTop: -6, marginBottom: 8 }}>{warning}</div>
           )}
           {overNewLimit && (
-            <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow)", padding: "2px 8px 6px" }}>
-              Current context exceeds this model's window — the next run will compact it.
-            </div>
+            <div style={{ fontSize: 11, color: "#fbbf24", marginBottom: 8 }}>Current context exceeds this model's window — the next run will compact it.</div>
           )}
-          {shares.length > 0 && (
-            <div style={{ padding: "2px 8px 4px" }}>
-              {shares.map((c) => (
-                <div
-                  key={c.key}
-                  style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, lineHeight: 1.8 }}
-                  title={
-                    c.key === "toolDefinitions"
-                      ? "Tool definitions available to ORION."
-                      : c.key === "projectContext"
-                        ? "Retrieved code and project intelligence."
-                        : c.key === "mcpTools"
-                          ? "Tool schemas from connected MCP servers."
-                          : undefined
-                  }
-                >
-                  <span style={{ color: "var(--orvyn-text-secondary)" }}>{c.label}</span>
-                  <span style={{ fontFamily: "var(--font-mono)", color: "var(--orvyn-text-muted)" }}>
-                    {formatTokens(c.tokens)} · {formatPercent(c.share)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {usage === null && (
-            <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", padding: "2px 8px 6px" }}>
-              No run yet — the context meter starts with the first model turn.
-            </div>
-          )}
-          {typeof usage?.cacheHitRate === "number" && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                fontSize: 10.5,
-                padding: "4px 8px",
-                borderTop: "1px solid var(--orvyn-border-soft)",
-              }}
-              title="Portion of reusable prompt tokens served from provider cache."
-            >
-              <span style={{ color: "var(--orvyn-text-secondary)" }}>Average cache hit rate</span>
-              <span style={{ fontFamily: "var(--font-mono)" }}>{formatPercent(usage.cacheHitRate)}</span>
-            </div>
-          )}
-
-          {/* ── Section 2: usage remaining ── */}
-          <div style={{ borderTop: "1px solid var(--orvyn-border-soft)", marginTop: 4, padding: "6px 8px 2px" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.4, marginBottom: 4 }}>Usage remaining</div>
-            {quotaState.quota ? (
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5 }}>
-                  <span style={{ color: "var(--orvyn-text-secondary)" }}>{quotaState.quota.label}</span>
-                  <span style={{ fontFamily: "var(--font-mono)" }}>
-                    {formatPercent((quotaState.quota.remaining ?? 0) / (quotaState.quota.limit ?? 1), 0)} remaining
-                    {quotaState.quota.resetAt ? ` · resets ${new Date(quotaState.quota.resetAt).toLocaleDateString()}` : ""}
-                  </span>
-                </div>
-                <div style={{ height: 4, borderRadius: 2, background: "var(--orvyn-border-soft)", overflow: "hidden", margin: "3px 0 4px" }}>
-                  <div
-                    style={{
-                      width: `${Math.round(((quotaState.quota.remaining ?? 0) / (quotaState.quota.limit ?? 1)) * 100)}%`,
-                      height: "100%",
-                      background: "var(--orvyn-purple)",
-                    }}
-                  />
-                </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {ROWS.map((row) => (
+              <div key={row.key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12.5 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#d5deef" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: row.color, flexShrink: 0 }} />
+                  {row.label}
+                </span>
+                <span style={{ color: "#c5d0e4", fontVariantNumeric: "tabular-nums" }}>{percentLabel(byKey.get(row.key) ?? 0)}</span>
               </div>
-            ) : (
-              <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>
-                {quotaState.unavailable ? "Usage service unavailable" : "Usage tracking available · no quota limit configured"}
-              </div>
-            )}
-            {quotaState.cycleTokens !== null && (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, marginTop: 2 }}>
-                <span style={{ color: "var(--orvyn-text-secondary)" }}>Tokens this cycle</span>
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--orvyn-text-muted)" }}>{formatTokens(quotaState.cycleTokens)}</span>
-              </div>
-            )}
-            <button
-              onClick={() => {
-                close();
-                document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "usage" }));
-              }}
-              style={{ background: "transparent", border: "none", color: "var(--orvyn-purple-hi)", fontSize: 10.5, cursor: "pointer", padding: "4px 0 2px" }}
-            >
-              More →
-            </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 10, borderTop: "1px solid #1c2638", fontSize: 12.5 }}>
+            <span style={{ color: "#9aa6bd" }}>Average cache hit rate</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{typeof usage?.cacheHitRate === "number" ? percentLabel(usage.cacheHitRate) : "—"}</span>
+          </div>
+          <div style={{ borderTop: "1px solid #1c2638", marginTop: 10, paddingTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 650 }}>Usage remaining</span>
+              <button
+                onClick={() => {
+                  close();
+                  document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "usage" }));
+                }}
+                style={{ background: "transparent", border: "none", color: "#9aa6bd", fontSize: 12, cursor: "pointer", padding: 0 }}
+              >
+                More &gt;
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+              <RemainCard label="5 hours" hint="Rolling" value={five} color="#3b82f6" />
+              <RemainCard label="Weekly" hint="Rolling" value={creditWindows.weekly} color="#64748b" />
+              <RemainCard label="MCP Credits" hint="Included" value={creditWindows.credits} color="#8b5cf6" />
+            </div>
           </div>
         </div>
-      )}
+        );
+      }}
     </Dropdown>
+  );
+}
+
+function RemainCard({ label, hint, value, color }: { label: string; hint: string; value: number | null; color: string }) {
+  const shown = value === null ? "—" : percentLabel(value);
+  const width = value === null ? 0 : Math.round(value * 100);
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 650 }}>{label}</div>
+      <div style={{ fontSize: 10.5, color: "#8b95ad", marginTop: 1 }}>{hint}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, margin: "6px 0 6px", fontVariantNumeric: "tabular-nums" }}>{shown}</div>
+      <div style={{ height: 4, borderRadius: 99, background: "#1c2638", overflow: "hidden" }}>
+        <div style={{ width: `${width}%`, height: "100%", borderRadius: 99, background: color }} />
+      </div>
+    </div>
   );
 }

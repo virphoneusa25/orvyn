@@ -62,6 +62,7 @@ export function Dropdown({
   title,
   children,
   width = 280,
+  maxHeight = 320,
   open: controlledOpen,
   onOpenChange,
 }: {
@@ -69,6 +70,7 @@ export function Dropdown({
   title: string;
   children: (close: () => void) => React.ReactNode;
   width?: number;
+  maxHeight?: number;
   /** Controlled open state (optional) — lets a menu compute data on open. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -132,7 +134,7 @@ export function Dropdown({
             left: 0,
             zIndex: 60,
             width,
-            maxHeight: 320,
+            maxHeight,
             overflowY: "auto",
             background: "var(--orvyn-surface-2)",
             border: "1px solid var(--orvyn-border)",
