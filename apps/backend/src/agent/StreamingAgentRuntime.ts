@@ -14,7 +14,7 @@ import { evaluateCompletionGates } from "./completionGates";
 import { collectRunEvidence, introductionFor, planSteps, progressFor, type RunEvidence } from "./conversationCoordinator";
 import { assessRenderedPage } from "./browserVerification";
 import { canEnterPhase, type RunPhase } from "./agentRunState";
-import { skillsPromptFor } from "../learning/validatedSkills";
+import { routeSkills } from "../skills/SkillRouter";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
 //
 // The agent loop, re-expressed as an event producer. Instead of returning a
@@ -1071,7 +1071,27 @@ export class StreamingAgentRuntime {
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
-    const skillsPrompt = skillsPromptFor(instruction, this.memoryStore);
+    const toolNames = new Set(this.tools.list().map((tool) => tool.name));
+    const routed = routeSkills({
+      instruction,
+      runMode: mode,
+      executionTarget: execution?.location,
+      availableTools: toolNames,
+      resources: {
+        ssh: catalog.some((resource) => resource.type === "server" && resource.status === "ready"),
+        browser: toolNames.has("browser_open"),
+      },
+      openProject: projectRoot,
+    });
+    this.store.emit(runId, "skills.routed", {
+      candidateCount: routed.candidateCount,
+      selectedSkillIds: routed.selected.map((skill) => skill.id),
+      selectedSkillNames: routed.selected.map((skill) => skill.name),
+      rejectedByCapability: routed.rejectedByCapability.map((item) => item.id),
+      rejectedByScore: routed.rejectedByScore.map((item) => item.id),
+      reasonSummary: routed.reasonSummary,
+    });
+    const skillsPrompt = routed.prompt;
     // Context composition, measured at assembly time. These estimates feed
     // the live context-usage breakdown; provider-reported totals (when the
     // API returns them) remain the source of truth for the overall count.

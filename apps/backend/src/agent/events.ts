@@ -143,7 +143,8 @@ export type AgentEventType =
   | "model.capability.blocked"
   | "model.fallback"
   | "resource.required"
-  | "run.blocked";
+  | "run.blocked"
+  | "skills.routed";
 
 export interface AgentEvent {
   id: string;
