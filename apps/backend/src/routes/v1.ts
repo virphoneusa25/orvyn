@@ -1484,6 +1484,7 @@ v1Router.get("/usage", (req, res) => {
 import { ModelRegistry } from "../learning/ModelRegistry";
 import { persistSkillCandidates } from "../learning/skillCandidates";
 import { listValidatedSkills, seedValidatedSkills } from "../learning/validatedSkills";
+import { skillRegistry } from "../skills/SkillRegistry";
 import { persistDataset } from "../learning/datasetBuilder";
 import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
@@ -1522,6 +1523,10 @@ v1Router.get("/learning/experiences", (req, res) => {
 v1Router.get("/learning/skills", (req, res) => {
   const t = requireTenant(req);
   res.json({ skills: t.localStore.listLearningRecords("skill", 80).map((r) => r.payload) });
+});
+
+v1Router.get("/skills/registry", (_req, res) => {
+  res.json({ skills: skillRegistry.list() });
 });
 
 v1Router.get("/skills", (req, res) => {

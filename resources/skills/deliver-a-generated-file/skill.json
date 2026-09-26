@@ -1,0 +1,12 @@
+{
+  "id": "skill_deliver_file",
+  "name": "Deliver a generated file",
+  "trigger": "logo, PNG, image, PDF, document, zip, generate a file",
+  "description": "Create a real file in ORVYN virtual storage and hand it to the user from Files → Generated.",
+  "requiredTools": ["generate_image", "create_document", "artifact_create"],
+  "validation": "artifact.created with status ready + readable bytes",
+  "scope": "tenant",
+  "confidence": 1,
+  "sourceRuns": ["seed"],
+  "validated": true
+}

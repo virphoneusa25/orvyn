@@ -1,0 +1,12 @@
+{
+  "id": "skill_visual_verify",
+  "name": "Verify the UI you changed",
+  "trigger": "dashboard, layout, CSS, visible bug, screenshot, preview",
+  "description": "Change the UI, then capture proof the user can see.",
+  "requiredTools": ["browser_screenshot", "desktop_screenshot", "browser_open"],
+  "validation": "desktop.verification.passed or screenshot artifact",
+  "scope": "tenant",
+  "confidence": 1,
+  "sourceRuns": ["seed"],
+  "validated": true
+}
