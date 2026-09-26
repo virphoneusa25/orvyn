@@ -11,6 +11,7 @@ import { ComposerPanel } from "./components/ComposerPanel";
 import { AgentPanel } from "./components/AgentPanel";
 import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
+import { SettingsScreen } from "./components/SettingsScreen";
 import { LearningCenter } from "./components/LearningCenter";
 import { BillingPanel } from "./components/BillingPanel";
 import { HostDesktopBanner } from "./components/HostDesktopBanner";
@@ -159,6 +160,10 @@ export function App() {
 
   /** The run any entry point last started — ONE state, shared by center + right. */
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const settingsReturn = useRef<ViewId>("home");
+  useEffect(() => {
+    if (view !== "settings") settingsReturn.current = view;
+  }, [view]);
   const autoOpenedRoot = useRef<string | null>(null);
   const [codeChatOpen, setCodeChatOpen] = useState(true);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -1039,6 +1044,13 @@ export function App() {
             />
           )}
         </div>
+        {view === "settings" && (
+          <SettingsScreen
+            userName={presentation.userName || "ORVYN"}
+            planLabel="Pro"
+            onBack={() => setView(settingsReturn.current)}
+          />
+        )}
       </div>
 
       {(view === "editor" || view === "terminal") && <BottomPanel />}
