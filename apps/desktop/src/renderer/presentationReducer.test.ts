@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { commandSummary, reducePresentation, splitPath } from "./presentationReducer.ts";
+import { commandSummary, fileTypeLabel, reducePresentation, splitPath } from "./presentationReducer.ts";
 import type { AgentEventLike, ToolItem, WorkGroupItem as WgItem } from "./presentationReducer.ts";
 
 let seq = 0;
@@ -393,6 +393,32 @@ test("tool.completed with artifactId also becomes an attachment card", () => {
   assert.ok(card);
   assert.equal(card.artifactId, "art_2");
   assert.ok(items.some((i) => i.kind === "status" && /Files → Generated/.test(String((i as { label?: string }).label))));
+});
+
+test("any created file gets a download card, and a rewrite of the same path replaces it", () => {
+  reset();
+  assert.equal(fileTypeLabel("index.html"), "HTML");
+  assert.equal(fileTypeLabel("styles.css"), "CSS");
+  assert.equal(fileTypeLabel("notes.pdf"), "PDF");
+  assert.equal(fileTypeLabel("bundle.zip"), "ZIP");
+  assert.equal(fileTypeLabel("logo.png"), "Image");
+  assert.equal(fileTypeLabel("report.docx"), "Word");
+  assert.equal(fileTypeLabel("Makefile"), "File");
+  const items = reducePresentation(
+    [
+      ev("artifact.created", { artifactId: "a1", name: "index.html", path: "sites/virphone/index.html", mimeType: "text/html", downloadPath: "/artifacts/a1/download" }),
+      ev("artifact.created", { artifactId: "a2", name: "styles.css", path: "sites/virphone/styles.css", mimeType: "text/css", downloadPath: "/artifacts/a2/download" }),
+      ev("artifact.created", { artifactId: "a3", name: "packet.zip", path: "packet.zip", mimeType: "application/zip", downloadPath: "/artifacts/a3/download" }),
+      ev("artifact.created", { artifactId: "a4", name: "index.html", path: "sites/virphone/index.html", mimeType: "text/html", downloadPath: "/artifacts/a4/download" }),
+    ],
+    "completed"
+  );
+  const cards = items.filter((i) => i.kind === "attachment") as { name: string; artifactId?: string; path?: string }[];
+  assert.deepEqual(cards.map((c) => [c.name, c.artifactId, c.path]), [
+    ["index.html", "a4", "sites/virphone/index.html"],
+    ["styles.css", "a2", "sites/virphone/styles.css"],
+    ["packet.zip", "a3", "packet.zip"],
+  ]);
 });
 
 test("artifact.created without artifactId is ignored", () => {

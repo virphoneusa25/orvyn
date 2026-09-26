@@ -21,8 +21,7 @@ import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
-import { reducePresentation, fmtDuration, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
-import { openArtifactInContext } from "../contextOpen";
+import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 import { MissionPhases } from "./MissionPhases";
 import { deriveMissionPhases } from "../missionPhases";
@@ -332,13 +331,14 @@ function formatBytes(n?: number): string {
 
 function ArtifactCard({ item }: { item: AttachmentItem }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   if (!item.artifactId) return null;
-  const image = (item.mediaType ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/i.test(item.name);
-  const typeLabel = item.mediaType?.split("/")[1]?.toUpperCase() || (item.name.split(".").pop() ?? "FILE").toUpperCase();
-  const meta = [typeLabel, formatBytes(item.size)].filter(Boolean).join(" · ");
+  const typeLabel = fileTypeLabel(item.name);
+  const meta = [busy ? "Downloading…" : error || typeLabel, formatBytes(item.size)].filter(Boolean).join(" · ");
   async function download() {
-    if (!item.artifactId) return;
+    if (!item.artifactId || busy) return;
     setBusy(true);
+    setError("");
     try {
       const r = await fetch(apiUrl(item.downloadPath || `/artifacts/${item.artifactId}/download`), { headers: authHeaders() });
       if (!r.ok) throw new Error("Download failed");
@@ -350,26 +350,35 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      /* keep the card; user can retry from Files */
+      setError("Could not download. Try again.");
     } finally {
       setBusy(false);
     }
   }
   return (
-    <div style={{ ...card("var(--orvyn-cyan, #22d3ee)"), display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <IconFile />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{meta || (item.kindLabel === "generated" ? "Generated" : "Artifact")}</div>
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, artifactId: item.artifactId, op: "create" })}>Preview</button>
-        <button style={ghostBtn()} disabled={busy} onClick={() => void download()}>{busy ? "Downloading…" : "Download"}</button>
-        <button style={ghostBtn()} onClick={() => openArtifactInContext({ tab: "files", path: item.path, fileName: item.name, artifactId: item.artifactId, op: "create" })}>Show in Files</button>
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={() => void download()}
+      disabled={busy}
+      title={`Download ${item.name}`}
+      style={{
+        ...card("var(--border)"),
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "min(100%, 420px)",
+        textAlign: "left",
+        cursor: busy ? "wait" : "pointer",
+        borderRadius: 12,
+        padding: "10px 12px",
+      }}
+    >
+      <IconFile />
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{ display: "block", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+        <span style={{ display: "block", fontSize: 12, color: error ? "var(--danger, #F25F75)" : "var(--text-muted)" }}>{meta}</span>
+      </span>
+    </button>
   );
 }
 

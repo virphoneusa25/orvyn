@@ -56,7 +56,7 @@ const REQUIRED_BY_TOOL: Record<string, string[]> = {
 export function shellServerRefusal(command: string, frontend: boolean): string | null {
   if (!frontend) return null;
   if (!/\bpython3?\b|http\.server|which python|npx serve|live-server/i.test(command)) return null;
-  return "Do not start a shell server. python3 is not installed in this workspace. Call write_file for index.html and its stylesheet. The preview is published from those files.";
+  return "Do not start a shell server. python3 is not installed in this workspace. Call write_file for the new site's index.html and its stylesheet. Do not replace site files that were already written. The preview is published from the new files.";
 }
 
 export function validateToolArguments(

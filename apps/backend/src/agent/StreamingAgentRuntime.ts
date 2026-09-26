@@ -48,6 +48,7 @@ import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
 import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } from "./sitePreview";
+import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
@@ -170,6 +171,10 @@ interface RunState {
   /** Lane pins (fast/code/premium) are not model pins. */
   modelPinned: boolean;
   website?: WebsiteMissionState;
+  /** Where a new website is written, and which existing pages it must not replace. */
+  websiteLayout?: WebsiteLayout;
+  /** Workspace path → artifact id for the download card of a file this run wrote. */
+  writtenDownloads?: Map<string, string>;
   handoffModelId?: string;
   websiteBlocked?: string;
   composerMode?: string;
@@ -395,31 +400,6 @@ export class StreamingAgentRuntime {
     if (typeof content === "string") {
       rememberSiteFile(runId, rel, content);
     }
-    // A file written into the user's project is already where it belongs: the
-    // stream shows it as a change, not as a second "generated" copy (that made
-    // duplicate style-2.css / a-2.js cards). Only a Cloud workspace, which the
-    // user cannot open directly, keeps a copy in Files → Generated.
-    const cloudWorkspace = this.runs.get(runId)?.execution?.executionLabel === "Cloud";
-    if (typeof content === "string" && cloudWorkspace) {
-      void this.artifacts?.persistArtifact({ name, content, kind: "file" }).then((rec) => {
-        this.store.emit(runId, "artifact.created", {
-          artifactId: rec.artifactId,
-          id: rec.artifactId,
-          name: rec.name,
-          mimeType: rec.mimeType,
-          size: rec.size,
-          downloadable: true,
-          previewable: false,
-          downloadPath: `/artifacts/${rec.artifactId}/download`,
-        });
-        this.store.emit(runId, "files.ready", {
-          artifactId: rec.artifactId,
-          name: rec.name,
-          location: "Files → Generated",
-          message: `${rec.name} is in Files → Generated.`,
-        });
-      }).catch(() => {});
-    }
     const lines = typeof content === "string" ? content.split("\n").length : 0;
     this.store.emit(runId, "files.ready", {
       name,
@@ -435,6 +415,51 @@ export class StreamingAgentRuntime {
       const st = this.runs.get(runId);
       this.speakProgress(runId);
       void this.verifyPublishedPreview(runId, published.url);
+    }
+  }
+
+  /**
+   * A file this run wrote is also a download in the chat. Rewriting the same
+   * path updates that card instead of inventing a second filename.
+   */
+  private async offerWrittenFileDownload(
+    runId: string,
+    state: RunState,
+    filePath: string,
+    content: string
+  ): Promise<{ artifactId: string; name: string; mimeType?: string; size?: number } | null> {
+    if (!this.artifacts || !content) return null;
+    const rel = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
+    const name = rel.split("/").pop() || rel;
+    if (!name || name === "." || name === "..") return null;
+    const prior = state.writtenDownloads?.get(rel);
+    try {
+      const rec = await this.artifacts.persistArtifact({
+        name,
+        content,
+        kind: "file",
+        runId,
+        sourceTool: "write_file",
+        projectRoot: state.projectRoot,
+        overwrite: Boolean(prior),
+      });
+      if (!state.writtenDownloads) state.writtenDownloads = new Map();
+      state.writtenDownloads.set(rel, rec.artifactId);
+      this.store.emit(runId, "artifact.created", {
+        artifactId: rec.artifactId,
+        id: rec.artifactId,
+        name: rec.name,
+        mimeType: rec.mimeType,
+        size: rec.size,
+        kind: "file",
+        downloadable: true,
+        previewable: false,
+        downloadPath: `/artifacts/${rec.artifactId}/download`,
+        path: rel,
+      });
+      return { artifactId: rec.artifactId, name: rec.name, mimeType: rec.mimeType, size: rec.size };
+    } catch {
+      return null;
     }
   }
 
@@ -946,7 +971,7 @@ export class StreamingAgentRuntime {
       gateRetries: 0,
       verifyRounds: 0,
       modelPinned: choice.pinned,
-      ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission() } : {}),
+      ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission(), websiteLayout: planWebsiteLayout(instruction, listExistingSiteFiles(projectRoot)) } : {}),
       composerMode: options?.composerMode,
       actionNudges: 0,
       phase: "preflight",
@@ -1087,9 +1112,7 @@ export class StreamingAgentRuntime {
           execution?.location === "OVH_WORKER"
             ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
             : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
-          intent.requiresFrontend
-            ? "This run is a website. Call write_file for index.html and its stylesheet. Do not open the sandbox desktop and do not start a shell server. The preview URL is the rendered site."
-            : "",
+          intent.requiresFrontend ? (this.runs.get(runId)?.websiteLayout?.prompt ?? "") : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
@@ -2073,8 +2096,19 @@ export class StreamingAgentRuntime {
         continue;
       }
 
+      const sitePath = String((call.arguments as { path?: unknown; from?: unknown } | undefined)?.path ?? (call.arguments as { from?: unknown } | undefined)?.from ?? "");
+      const siteRefusal = siteWriteRefusal(state.websiteLayout, call.name, sitePath);
+      if (siteRefusal) {
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: siteRefusal, envelope: this.refusalEnvelope(state, call, siteRefusal) });
+        replies.set(call.id, siteRefusal);
+        continue;
+      }
+
       if (state.intent.requiresFrontend && !state.intent.requiresDesktop && (call.name.startsWith("desktop_") || call.name.startsWith("computer."))) {
-        const message = "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
+        const folder = state.websiteLayout?.directory;
+        const message = folder
+          ? `Do not open the sandbox desktop. Write the new site under ${folder}/. Do not replace site files that were already written.`
+          : "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
         continue;
@@ -2272,7 +2306,7 @@ export class StreamingAgentRuntime {
         // site: without it the preview had a page whose stylesheet 404'd.
         if (call.name === "read_file" && typeof result.output === "string" && !/…\(truncated\)\s*$/.test(result.output)) {
           const readPath = String((call.arguments as { path?: unknown })?.path ?? "");
-          if (/\.(html|css|js)$/i.test(readPath) && !hasSiteFile(runId, readPath)) {
+          if (/\.(html|css|js)$/i.test(readPath) && !hasSiteFile(runId, readPath) && !siteWriteRefusal(state.websiteLayout, "write_file", readPath)) {
             rememberSiteFile(runId, readPath, result.output);
             this.republishPreview(runId);
           }
@@ -2330,16 +2364,21 @@ export class StreamingAgentRuntime {
         const forModel = shouldCondense(call.name, raw) ? await this.condenseForModel(runId, state, call, raw, command) : raw;
         const { text, truncated } = clampToolOutput(forModel, MAX_TOOL_OUTPUT_CHARS);
         const first = persisted[0];
+        const written = call.name === "write_file" && typeof toolArgs.content === "string" && toolArgs.content && String(toolArgs.path ?? "")
+          ? await this.offerWrittenFileDownload(runId, state, String(toolArgs.path), toolArgs.content)
+          : null;
+        const download = written ?? first;
         this.store.emit(runId, "tool.completed", {
           callId: call.id,
           tool: call.name,
           preview: raw.slice(0, 400),
           truncated,
           bytes: raw.length,
-          artifactId: first?.artifactId,
-          artifactName: first?.name,
-          mimeType: first?.mimeType,
-          size: first?.size,
+          artifactId: download?.artifactId,
+          artifactName: download?.name,
+          mimeType: download?.mimeType,
+          size: download?.size,
+          path: written ? String(toolArgs.path ?? "") : undefined,
           envelope: envelopeForEvent(envelope),
         });
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
@@ -2350,7 +2389,9 @@ export class StreamingAgentRuntime {
             this.store.emit(runId, "desktop.screenshot", { tool: call.name, sessionId: result.meta.sessionId, surface: result.meta.surface });
           }
         }
-        replies.set(call.id, text);
+        replies.set(call.id, written
+          ? `${text}\n\nDownload card ready: ${written.name} (artifactId ${written.artifactId}). The chat shows this file for download. Mention that name. Do not invent a URL or a different filename.`
+          : text);
         if (emptySearchResult(call.name, raw)) gaps.set(call.id, "search the web");
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);

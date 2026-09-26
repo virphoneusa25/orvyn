@@ -186,7 +186,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
           ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."
           : "COMPLETION GATE — FILE: This is a workspace file. Call write_file with the requested path and exact contents, then read_file and report that result. Do not use generate_image or create_document for a plain text file."
         : website && !input.events.some((e) => (e.type === "file.created" || e.type === "file.edit") && /\.(html|css|js|php)$/i.test(String(e.data?.path ?? "")))
-          ? "COMPLETION GATE — WEBSITE: Call write_file for index.html and its stylesheet. Do not claim the site is built or verified. A one-shot node server on localhost is not a preview."
+          ? "COMPLETION GATE — WEBSITE: Call write_file for the new site's index.html and its stylesheet. If site files were already written, do not replace them — write the new site in its own folder. Do not claim the site is built or verified. A one-shot node server on localhost is not a preview."
         : website
           ? "COMPLETION GATE — WEBSITE: The pages exist. Do not start localhost for the user. Finish the files with write_file so the workspace preview can open. Do not say verified until that preview exists."
         : input.category === "server"

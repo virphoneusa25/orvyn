@@ -137,6 +137,53 @@ export interface CapabilityRequiredItem {
   settled?: boolean;
 }
 
+const FILE_TYPE_LABELS: Record<string, string> = {
+  doc: "Word",
+  docx: "Word",
+  pdf: "PDF",
+  xls: "Excel",
+  xlsx: "Excel",
+  csv: "CSV",
+  ppt: "PowerPoint",
+  pptx: "PowerPoint",
+  html: "HTML",
+  htm: "HTML",
+  css: "CSS",
+  js: "JavaScript",
+  mjs: "JavaScript",
+  jsx: "JavaScript",
+  ts: "TypeScript",
+  tsx: "TypeScript",
+  json: "JSON",
+  md: "Markdown",
+  txt: "Text",
+  png: "Image",
+  jpg: "Image",
+  jpeg: "Image",
+  gif: "Image",
+  webp: "Image",
+  svg: "Image",
+  zip: "ZIP",
+  py: "Python",
+  php: "PHP",
+  xml: "XML",
+  yaml: "YAML",
+  yml: "YAML",
+  go: "Go",
+  rs: "Rust",
+  java: "Java",
+  mp3: "Audio",
+  mp4: "Video",
+  wav: "Audio",
+};
+
+/** Short type shown under a download card. Any extension still gets a label. */
+export function fileTypeLabel(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (!ext || ext === name.toLowerCase()) return "File";
+  return FILE_TYPE_LABELS[ext] ?? ext.toUpperCase();
+}
+
 export interface AttachmentItem {
   kind: "attachment";
   key: string;
@@ -566,13 +613,14 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         }
         const artifactId = e.data.artifactId ? String(e.data.artifactId) : undefined;
         const artifactName = e.data.artifactName ? String(e.data.artifactName) : e.data.name ? String(e.data.name) : undefined;
-        if (artifactId && !items.some((it) => it.kind === "attachment" && it.artifactId === artifactId)) {
+        if (artifactId) {
           flushAssistant(false);
-          items.push({
+          placeAttachment(items, {
             kind: "attachment",
             key: `att-${e.id}`,
             name: artifactName || "file",
             artifactId,
+            path: e.data.path ? String(e.data.path) : undefined,
             mediaType: e.data.mimeType ? String(e.data.mimeType) : undefined,
             downloadPath: `/artifacts/${artifactId}/download`,
             previewUrl: `/artifacts/${artifactId}/preview`,
@@ -799,9 +847,8 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const artifactId = e.data.artifactId ? String(e.data.artifactId) : e.data.id ? String(e.data.id) : undefined;
         const name = String(e.data.name ?? e.data.filename ?? "").trim();
         if (!artifactId) continue;
-        if (artifactId && items.some((it) => it.kind === "attachment" && it.artifactId === artifactId)) continue;
         flushAssistant(false);
-        items.push({
+        placeAttachment(items, {
           kind: "attachment",
           key: `att-${e.id}`,
           name: name || "file",
@@ -843,6 +890,20 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   // "✓ Inspected project · 18 files" — so a mission reads as a conversation,
   // not a scroll of rows. Assistant text and other items close the group.
   return phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral));
+}
+
+/** One download card per file. A later write of the same path replaces the card. */
+function placeAttachment(items: PresentationItem[], card: AttachmentItem): void {
+  if (items.some((it) => it.kind === "attachment" && it.artifactId === card.artifactId)) return;
+  const samePath = card.path
+    ? items.findIndex((it) => it.kind === "attachment" && it.path === card.path)
+    : -1;
+  if (samePath >= 0) {
+    const previous = items[samePath] as AttachmentItem;
+    items[samePath] = { ...card, key: previous.key };
+    return;
+  }
+  items.push(card);
 }
 
 /** Ephemeral statuses that were superseded by real activity disappear. */
