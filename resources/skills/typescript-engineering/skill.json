@@ -1,0 +1,69 @@
+{
+  "id": "skill_eng_typescript",
+  "slug": "typescript-engineering",
+  "name": "TypeScript Engineering",
+  "version": "1.0.0",
+  "description": "Preserve the project's types, avoid new any, and prove the change with the TypeScript compiler.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "typescript engineering",
+    "typescript types",
+    "strict typing"
+  ],
+  "taskDomains": [
+    "code",
+    "types"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "edit_file",
+    "run_typecheck"
+  ],
+  "optionalTools": [
+    "get_diagnostics",
+    "run_tests"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the types around the change."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the existing type used for this value."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Change the TypeScript without widening types."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Run tsc and report its result."
+    },
+    {
+      "id": "get_diagnostics",
+      "reason": "Read file and line diagnostics from the compiler."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run tests when the type change has a runtime effect."
+    }
+  ],
+  "validation": {
+    "rule": "run_typecheck completed, and no new any was added unless the surrounding code already uses any for that case."
+  },
+  "tags": [
+    "engineering",
+    "typescript",
+    "types"
+  ],
+  "scope": "builtin"
+}

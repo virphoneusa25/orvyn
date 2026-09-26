@@ -1,0 +1,69 @@
+{
+  "id": "skill_eng_refactor_safely",
+  "slug": "refactor-safely",
+  "name": "Refactor Safely",
+  "version": "1.0.0",
+  "description": "Restructure code in small steps that preserve behavior, with a test result before and after when a runner exists.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "refactor safely",
+    "preserve behavior",
+    "behavior-preserving change"
+  ],
+  "taskDomains": [
+    "code",
+    "refactoring"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "edit_file",
+    "run_tests"
+  ],
+  "optionalTools": [
+    "run_typecheck",
+    "find_symbol"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the code being restructured."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find callers that the restructure must keep working."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Apply a small behavior-preserving edit."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Record the suite result before and after the edit."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Confirm types still hold after the restructure."
+    },
+    {
+      "id": "find_symbol",
+      "reason": "Find the definition and references of a moved symbol."
+    }
+  ],
+  "validation": {
+    "rule": "The edit preserves behavior, and run_tests results are reported from before and after, or the before-run is explicitly not applicable."
+  },
+  "tags": [
+    "engineering",
+    "refactor",
+    "behavior"
+  ],
+  "scope": "builtin"
+}

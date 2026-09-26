@@ -1,0 +1,69 @@
+{
+  "id": "skill_eng_git_workflow",
+  "slug": "git-workflow",
+  "name": "Git Workflow",
+  "version": "1.0.0",
+  "description": "Inspect status, branch, and diff first. Commit or switch branches only when asked, and never force or reset.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "git workflow",
+    "prepare a commit",
+    "inspect the branch"
+  ],
+  "taskDomains": [
+    "git",
+    "code"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch"
+  ],
+  "optionalTools": [
+    "git_commit",
+    "git_checkout"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "git_status",
+      "reason": "Read the working tree before any git mutation."
+    },
+    {
+      "id": "git_diff",
+      "reason": "Read the diff that would be committed."
+    },
+    {
+      "id": "git_log",
+      "reason": "Read recent commits before writing a message."
+    },
+    {
+      "id": "git_branch",
+      "reason": "Read the current branch before checkout."
+    },
+    {
+      "id": "git_commit",
+      "reason": "Create a commit only when the user asked."
+    },
+    {
+      "id": "git_checkout",
+      "reason": "Switch or create a branch only when the user asked."
+    }
+  ],
+  "validation": {
+    "rule": "git_status and git_diff were read before completion, and no reset, clean, force, or push was run."
+  },
+  "tags": [
+    "engineering",
+    "git",
+    "commits"
+  ],
+  "scope": "builtin"
+}

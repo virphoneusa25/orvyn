@@ -1,0 +1,75 @@
+{
+  "id": "skill_eng_test_verify",
+  "slug": "test-and-verify",
+  "name": "Test & Verify",
+  "version": "1.0.0",
+  "description": "Select the tests, typecheck, lint, or build this project actually has, run them, and report only those results.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "run the checks",
+    "prove this change",
+    "verification pass"
+  ],
+  "taskDomains": [
+    "code",
+    "verification"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "search_tests",
+    "read_file",
+    "run_tests",
+    "run_typecheck"
+  ],
+  "optionalTools": [
+    "run_linter",
+    "terminal",
+    "get_diagnostics"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "search_tests",
+      "reason": "Find tests that cover the change."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read package scripts and the test that should run."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project test script or a filtered subset."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Run tsc when a tsconfig exists."
+    },
+    {
+      "id": "run_linter",
+      "reason": "Run the lint script when package.json defines one."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a build script that the project already defines."
+    },
+    {
+      "id": "get_diagnostics",
+      "reason": "Read compiler diagnostics when typecheck output is needed."
+    }
+  ],
+  "validation": {
+    "rule": "The reply names each check that ran and its tool result. It does not say verified when run_tests, run_typecheck, run_linter, or a build was not executed."
+  },
+  "tags": [
+    "engineering",
+    "tests",
+    "verification"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,69 @@
+{
+  "id": "skill_eng_api",
+  "slug": "api-development",
+  "name": "API Development",
+  "version": "1.0.0",
+  "description": "Add or change an endpoint using the project's existing routing, validation, and auth patterns, then test it.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "api development",
+    "http endpoint",
+    "route handler"
+  ],
+  "taskDomains": [
+    "api",
+    "code"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "edit_file",
+    "run_tests"
+  ],
+  "optionalTools": [
+    "run_typecheck",
+    "get_diagnostics"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the existing route, validation, and auth checks."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the API pattern this endpoint should follow."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Change the route handler through the tool gateway."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the test that exercises the endpoint behavior."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck the handler when the API is TypeScript."
+    },
+    {
+      "id": "get_diagnostics",
+      "reason": "Read type errors in the route module."
+    }
+  ],
+  "validation": {
+    "rule": "The endpoint follows the existing route, validation, and auth patterns, and run_tests reported the status and error behavior."
+  },
+  "tags": [
+    "engineering",
+    "api",
+    "http"
+  ],
+  "scope": "builtin"
+}

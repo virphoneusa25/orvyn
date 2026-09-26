@@ -1,0 +1,71 @@
+{
+  "id": "skill_eng_bug_diagnosis",
+  "slug": "bug-diagnosis",
+  "name": "Bug Diagnosis",
+  "version": "1.0.0",
+  "description": "Reproduce or inspect a failure, name an evidence-backed cause, then repair it and rerun the failing check.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "bug diagnosis",
+    "root cause",
+    "stack trace",
+    "reproduce the failure"
+  ],
+  "taskDomains": [
+    "code",
+    "defects"
+  ],
+  "runModes": [
+    "debug",
+    "agent"
+  ],
+  "requiredTools": [
+    "search_codebase",
+    "read_file",
+    "get_diagnostics",
+    "run_tests"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "run_typecheck"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "search_codebase",
+      "reason": "Locate the code implicated by the failure."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the implicated source before naming a cause."
+    },
+    {
+      "id": "get_diagnostics",
+      "reason": "Collect compiler diagnostics for the failure."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Reproduce the failure and rerun the same check after a repair."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Repair the diagnosed cause, and nothing else."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Recheck types when the failure is a type error."
+    }
+  ],
+  "validation": {
+    "rule": "The stated cause cites a file, diagnostic, or failing check read before any edit, and that check was rerun."
+  },
+  "tags": [
+    "engineering",
+    "bugs",
+    "diagnosis"
+  ],
+  "scope": "builtin"
+}

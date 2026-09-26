@@ -1,0 +1,74 @@
+{
+  "id": "skill_eng_frontend_design",
+  "slug": "frontend-design",
+  "name": "Frontend Design",
+  "version": "1.0.0",
+  "description": "Improve a screen inside the product's existing design language, and capture a screenshot when the browser is available.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "frontend design",
+    "visual polish",
+    "interface quality"
+  ],
+  "taskDomains": [
+    "ui",
+    "design"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "browser_open",
+    "browser_screenshot",
+    "browser_console_errors",
+    "run_typecheck"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the current layout, components, and styles."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the shared components and tokens the screen already uses."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Apply a visual change that stays in the existing design language."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open the screen when a browser session is available."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture the screen after the change."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "Read console errors on the page that was opened."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck when the visual change touches TypeScript."
+    }
+  ],
+  "validation": {
+    "rule": "The UI change uses the existing design language, and browser_screenshot was captured or visual verification was reported as unavailable."
+  },
+  "tags": [
+    "engineering",
+    "ui",
+    "design"
+  ],
+  "scope": "builtin"
+}

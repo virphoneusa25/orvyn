@@ -8,8 +8,10 @@ import { SkillLoader, builtinSkillsRoot } from "./SkillLoader";
 test("packaged built-ins satisfy the skill contract", () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   assert.deepEqual(report.rejected, []);
-  const names = report.skills.map((skill) => skill.name).sort();
-  assert.deepEqual(names, ["Deliver a generated file", "Ship code with proof", "Verify the UI you changed"]);
+  const names = report.skills.map((skill) => skill.name);
+  for (const name of ["Deliver a generated file", "Ship code with proof", "Verify the UI you changed"]) {
+    assert.ok(names.includes(name), name);
+  }
   const deliver = report.skills.find((skill) => skill.id === "skill_deliver_file");
   assert.equal(deliver?.trigger, "logo, PNG, image, PDF, document, zip, generate a file");
   assert.equal(deliver?.validation, "artifact.created with status ready + readable bytes");

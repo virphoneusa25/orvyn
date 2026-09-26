@@ -1,0 +1,70 @@
+{
+  "id": "skill_eng_dependency_repair",
+  "slug": "dependency-repair",
+  "name": "Dependency Repair",
+  "version": "1.0.0",
+  "description": "Read the package manager and lockfile, repair the broken dependency without a broad upgrade, and verify install plus a check.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "dependency repair",
+    "broken dependency",
+    "lockfile conflict"
+  ],
+  "taskDomains": [
+    "dependencies",
+    "code"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_files",
+    "terminal"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "run_tests",
+    "run_typecheck"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the manifest and lockfile."
+    },
+    {
+      "id": "search_files",
+      "reason": "Find every manifest the package manager uses."
+    },
+    {
+      "id": "terminal",
+      "reason": "Install with the repo's package manager and report the output."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Change only the dependency that is failing."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run tests after the install when a test script exists."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck after the install when a tsconfig exists."
+    }
+  ],
+  "validation": {
+    "rule": "The package manager and lockfile were read, only the broken dependency changed, and the install, build, or test output was reported."
+  },
+  "tags": [
+    "engineering",
+    "dependencies",
+    "lockfile"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,66 @@
+{
+  "id": "skill_eng_code_review",
+  "slug": "code-review",
+  "name": "Code Review",
+  "version": "1.0.0",
+  "description": "Read a change and report concrete issues with file and location evidence. Do not modify the project unless the user asks.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "code review",
+    "review this change",
+    "read-only review"
+  ],
+  "taskDomains": [
+    "code",
+    "review"
+  ],
+  "runModes": [
+    "ask",
+    "plan",
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "git_diff"
+  ],
+  "optionalTools": [
+    "git_log",
+    "find_symbol"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the code under review."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find callers and related implementations."
+    },
+    {
+      "id": "git_diff",
+      "reason": "Read the uncommitted or requested diff."
+    },
+    {
+      "id": "git_log",
+      "reason": "Read recent history when the diff needs context."
+    },
+    {
+      "id": "find_symbol",
+      "reason": "Locate the definition of a symbol mentioned in the diff."
+    }
+  ],
+  "validation": {
+    "rule": "Each finding cites a file and location from read_file or git_diff, and no file was modified."
+  },
+  "tags": [
+    "engineering",
+    "review",
+    "read-only"
+  ],
+  "scope": "builtin"
+}

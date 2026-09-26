@@ -1,0 +1,80 @@
+{
+  "id": "skill_eng_coding_agent",
+  "slug": "coding-agent",
+  "name": "Coding Agent",
+  "version": "1.0.0",
+  "description": "Implement a multi-file change by inspecting the project, editing only what the job needs, and checking the result.",
+  "category": "Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "implement the feature",
+    "multi-file implementation",
+    "coding agent"
+  ],
+  "taskDomains": [
+    "code",
+    "implementation"
+  ],
+  "runModes": [
+    "agent",
+    "multitask"
+  ],
+  "requiredTools": [
+    "search_codebase",
+    "read_file",
+    "edit_file",
+    "run_tests"
+  ],
+  "optionalTools": [
+    "write_file",
+    "run_typecheck",
+    "run_linter",
+    "get_project_outline"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "search_codebase",
+      "reason": "Find the code that owns the requested behavior before editing."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the live file that will change."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Apply the planned edit through the tool gateway."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project test script and report its result."
+    },
+    {
+      "id": "write_file",
+      "reason": "Create a file only when the change needs one that does not exist."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck when the project has a tsconfig."
+    },
+    {
+      "id": "run_linter",
+      "reason": "Lint when the project defines a lint script."
+    },
+    {
+      "id": "get_project_outline",
+      "reason": "See the project shape before choosing files."
+    }
+  ],
+  "validation": {
+    "rule": "Edits stay inside files that were read, and run_tests or run_typecheck returned a result."
+  },
+  "tags": [
+    "engineering",
+    "implementation",
+    "multi-file"
+  ],
+  "scope": "builtin"
+}
