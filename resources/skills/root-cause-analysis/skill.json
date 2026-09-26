@@ -1,0 +1,54 @@
+{
+  "id": "skill_res_root_cause",
+  "slug": "root-cause-analysis",
+  "name": "Root Cause Analysis",
+  "version": "1.0.0",
+  "description": "Follow the evidence from the symptom to a cause, and stop when the chain is incomplete.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "root cause analysis",
+    "symptom versus root cause",
+    "evidence chain for the failure"
+  ],
+  "taskDomains": [
+    "research",
+    "diagnosis"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase"
+  ],
+  "optionalTools": [
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code or docs that the question is about."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs that are already captured for this incident."
+    }
+  ],
+  "validation": {
+    "rule": "A root cause is named only when the evidence chain connects it to the symptom. An incomplete chain is reported as incomplete."
+  },
+  "tags": [
+    "root-cause",
+    "diagnosis"
+  ],
+  "scope": "builtin"
+}

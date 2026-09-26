@@ -1,0 +1,55 @@
+{
+  "id": "skill_res_web",
+  "slug": "web-research",
+  "name": "Web Research",
+  "version": "1.0.0",
+  "description": "Search the web widely enough to answer the question and keep every source attached to its claim.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "web research",
+    "search the open web",
+    "authoritative web sources"
+  ],
+  "taskDomains": [
+    "research",
+    "web"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "web_search",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "browser_open"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "web_search",
+      "reason": "Search for sources that can answer the question."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open a page in the existing browser session when the fetched text is not enough."
+    }
+  ],
+  "validation": {
+    "rule": "Every factual claim cites a web_search or fetch_url result. No source, quotation, or date was invented."
+  },
+  "tags": [
+    "web",
+    "research",
+    "sources"
+  ],
+  "scope": "builtin"
+}

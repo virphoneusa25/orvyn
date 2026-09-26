@@ -1,0 +1,53 @@
+{
+  "id": "skill_res_planning",
+  "slug": "implementation-planning",
+  "name": "Implementation Planning",
+  "version": "1.0.0",
+  "description": "Lay out the work in order, with dependencies and checks, without doing the work.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "implementation planning",
+    "sequenced work plan",
+    "verification gates for the plan"
+  ],
+  "taskDomains": [
+    "research",
+    "planning"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase"
+  ],
+  "optionalTools": [
+    "get_project_outline"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code or docs that the question is about."
+    },
+    {
+      "id": "get_project_outline",
+      "reason": "See the project structure before describing architecture."
+    }
+  ],
+  "validation": {
+    "rule": "The plan is sequenced and names dependencies and verification gates. It does not claim the work was executed."
+  },
+  "tags": [
+    "planning",
+    "implementation"
+  ],
+  "scope": "builtin"
+}

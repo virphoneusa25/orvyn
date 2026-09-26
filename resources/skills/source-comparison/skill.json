@@ -1,0 +1,55 @@
+{
+  "id": "skill_res_compare",
+  "slug": "source-comparison",
+  "name": "Source Comparison",
+  "version": "1.0.0",
+  "description": "Compare sources on the same criteria and keep their disagreements visible.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "source comparison",
+    "where sources disagree",
+    "compare source authority"
+  ],
+  "taskDomains": [
+    "research",
+    "sources"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "web_search",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "web_search",
+      "reason": "Search for sources that can answer the question."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read a long document section instead of a lone snippet."
+    }
+  ],
+  "validation": {
+    "rule": "The comparison uses the same criteria for every source and states agreement, disagreement, recency, authority, and missing evidence from the tool results."
+  },
+  "tags": [
+    "sources",
+    "comparison",
+    "research"
+  ],
+  "scope": "builtin"
+}

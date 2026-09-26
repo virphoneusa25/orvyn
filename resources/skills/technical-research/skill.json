@@ -1,0 +1,60 @@
+{
+  "id": "skill_res_technical",
+  "slug": "technical-research",
+  "name": "Technical Research",
+  "version": "1.0.0",
+  "description": "Answer a technical question from official documentation, specifications, repositories, and the code in front of you.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "technical research",
+    "official documentation lookup",
+    "primary technical sources"
+  ],
+  "taskDomains": [
+    "research",
+    "technical"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "web_search",
+    "fetch_url",
+    "search_codebase"
+  ],
+  "optionalTools": [
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "web_search",
+      "reason": "Search for sources that can answer the question."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code or docs that the question is about."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    }
+  ],
+  "validation": {
+    "rule": "The answer cites an official or primary technical source, and current behavior is separated from deprecated behavior."
+  },
+  "tags": [
+    "technical",
+    "docs",
+    "research"
+  ],
+  "scope": "builtin"
+}

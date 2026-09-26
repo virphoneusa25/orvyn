@@ -46,9 +46,6 @@ const PRIOR = [
   "Preview Validation",
   "Navigation Flow Testing",
   "Authentication Flow Testing",
-];
-
-const CONTENT = [
   "Document Builder",
   "Spreadsheet Builder",
   "Presentation Builder",
@@ -63,6 +60,38 @@ const CONTENT = [
   "Artifact Verification",
 ];
 
+const RESEARCH = [
+  "Web Research",
+  "Technical Research",
+  "Source Comparison",
+  "Long Document Analysis",
+  "Requirements Analysis",
+  "Architecture Analysis",
+  "Root Cause Analysis",
+  "Incident Analysis",
+  "Implementation Planning",
+  "Competitive Research",
+  "Evidence Synthesis",
+  "Decision Support",
+];
+
+const MUTATION = new Set([
+  "write_file",
+  "edit_file",
+  "delete_file",
+  "move_file",
+  "terminal",
+  "ssh_exec",
+  "git_commit",
+  "git_checkout",
+  "start_process",
+  "create_document",
+  "create_zip",
+  "artifact_create",
+  "artifact_write",
+  "generate_image",
+]);
+
 function body(name: string): string {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   const skill = report.skills.find((item) => item.name === name);
@@ -70,21 +99,21 @@ function body(name: string): string {
   return `${skill!.instructions}\n${skill!.metadata.validation.rule}`;
 }
 
-test("artifacts and content built-ins load beside the existing 41 skills", () => {
+test("research and analysis built-ins load beside the existing 53 skills", () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   assert.deepEqual(report.rejected, []);
   const ids = report.skills.map((skill) => skill.id);
   const slugs = report.skills.map((skill) => skill.metadata.slug);
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(new Set(slugs).size, slugs.length);
-  assert.ok(report.skills.length >= 53);
+  assert.equal(report.skills.length, 65);
   for (const name of PRIOR) assert.ok(report.skills.some((skill) => skill.name === name), name);
 
-  const content = report.skills.filter((skill) => skill.metadata.category === "Artifacts & Content");
-  assert.equal(content.length, 12);
-  assert.deepEqual(content.map((skill) => skill.name).sort(), [...CONTENT].sort());
+  const research = report.skills.filter((skill) => skill.metadata.category === "Research & Analysis");
+  assert.equal(research.length, 12);
+  assert.deepEqual(research.map((skill) => skill.name).sort(), [...RESEARCH].sort());
   const tools = registeredToolNames();
-  for (const skill of content) {
+  for (const skill of research) {
     assert.equal(skill.metadata.publisher, "Kernel AI Labs");
     assert.equal(skill.metadata.source, "builtin");
     assert.equal(skill.metadata.builtIn, true);
@@ -100,23 +129,16 @@ test("artifacts and content built-ins load beside the existing 41 skills", () =>
     assert.deepEqual(unknown, [], `${skill.name} references unknown tools: ${unknown.join(", ")}`);
     const permissionIds = skill.metadata.permissionsRequired.map((item) => item.id);
     assert.deepEqual([...permissionIds].sort(), [...referenced].sort());
+    const mutating = skill.metadata.requiredTools.filter((name) => MUTATION.has(name));
+    assert.deepEqual(mutating, [], `${skill.name} requires mutation tools`);
     const text = `${skill.instructions}\n${skill.metadata.validation.rule}`;
-    assert.match(text, /do not invent a filename, an artifactId, a sandbox path, or a download URL/i);
-    assert.match(text, /persisted bytes and a successful readback|persisted bytes and a successful artifact_get readback/i);
-    assert.match(text, /zero-byte artifact does not pass/i);
-    assert.match(text, /do not bypass artifact persistence/i);
-    assert.doesNotMatch(text, /\$|provider pricing is|fireworks|cost money/i);
+    assert.match(text, /never fabricate sources, citations, quotations, facts, or evidence/i);
+    assert.match(text, /sourced fact/i);
+    assert.match(text, /model inference/i);
+    assert.match(text, /hypothesis/i);
+    assert.match(text, /recommendation/i);
+    assert.match(text, /unless the user explicitly asks for implementation/i);
   }
-
-  const deliver = report.skills.find((skill) => skill.id === "skill_deliver_file");
-  assert.ok(deliver);
-  assert.equal(deliver!.name, "Deliver a generated file");
-  assert.equal(deliver!.trigger, "logo, PNG, image, PDF, document, zip, generate a file");
-  assert.equal(deliver!.validation, "artifact.created with status ready + readable bytes");
-  assert.equal(deliver!.metadata.publisher, "ORVYN");
-  assert.equal(deliver!.metadata.category, "General");
-  assert.deepEqual(deliver!.metadata.requiredTools, ["generate_image", "create_document", "artifact_create"]);
-  assert.match(deliver!.instructions, /Never invent a filename or a sandbox\/artifacts\/\.\.\.\/download path/);
 
   assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((skill) => skill.id), ["skill_deliver_file"]);
   assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((skill) => skill.id), ["skill_code_with_tests"]);
@@ -124,40 +146,31 @@ test("artifacts and content built-ins load beside the existing 41 skills", () =>
   assert.equal(skillsPromptFor("What time is it?"), "");
 });
 
-test("document, spreadsheet, presentation, image, and verification skills require real artifacts", () => {
-  const document = body("Document Builder");
-  assert.match(document, /create_document/);
-  assert.match(document, /\.docx/);
-  assert.match(document, /artifact_get/);
-  assert.match(document, /headings/);
+test("web, technical, document, root cause, and planning skills keep their research rules", () => {
+  const web = body("Web Research");
+  assert.match(web, /web_search/);
+  assert.match(web, /fetch_url/);
+  assert.match(web, /authoritative/i);
+  assert.match(web, /source attribution/i);
 
-  const sheet = body("Spreadsheet Builder");
-  assert.match(sheet, /create_document/);
-  assert.match(sheet, /\.xlsx/);
-  assert.match(sheet, /=SUM\(B2:B9\)/);
-  assert.match(sheet, /not markdown pretending to be a spreadsheet/i);
-  assert.match(sheet, /artifact_get/);
-  assert.match(sheet, /workbook/i);
+  const technical = body("Technical Research");
+  assert.match(technical, /official documentation/i);
+  assert.match(technical, /primary technical sources/i);
+  assert.match(technical, /deprecated/i);
 
-  const slides = body("Presentation Builder");
-  assert.match(slides, /create_document/);
-  assert.match(slides, /\.pptx/);
-  assert.match(slides, /presentation artifact/i);
-  assert.match(slides, /overflow/i);
-  assert.match(slides, /artifact_get/);
-  assert.doesNotMatch(slides, /markdown outline is the presentation/i);
+  const document = body("Long Document Analysis");
+  assert.match(document, /full section/i);
+  assert.match(document, /do not draw a conclusion from an isolated snippet or from disconnected snippets/i);
+  assert.match(document, /read_document/);
 
-  const image = body("Image Generation");
-  assert.match(image, /generate_image/);
-  assert.match(image, /persisted image artifact/i);
-  assert.match(image, /artifact_get/);
-  assert.match(image, /mime type/i);
-  assert.match(image, /size must be greater than 0/i);
+  const cause = body("Root Cause Analysis");
+  assert.match(cause, /symptom from the root cause/i);
+  assert.match(cause, /contributing factors/i);
+  assert.match(cause, /do not claim a root cause when the evidence is incomplete/i);
 
-  const verify = body("Artifact Verification");
-  assert.match(verify, /artifact_get/);
-  assert.match(verify, /file size must be greater than 0/i);
-  assert.match(verify, /zero-byte/i);
-  assert.match(verify, /wrong-type/i);
-  assert.match(verify, /unreadable/i);
+  const plan = body("Implementation Planning");
+  assert.match(plan, /sequenced/i);
+  assert.match(plan, /verification gate/i);
+  assert.match(plan, /does not claim the work was executed/i);
+  assert.doesNotMatch(plan, /the implementation is complete/i);
 });

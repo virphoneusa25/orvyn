@@ -1,0 +1,64 @@
+{
+  "id": "skill_res_architecture",
+  "slug": "architecture-analysis",
+  "name": "Architecture Analysis",
+  "version": "1.0.0",
+  "description": "Describe how the system is actually put together, including the boundaries and tradeoffs the code shows.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "architecture analysis",
+    "component dependency review",
+    "failure and security boundaries"
+  ],
+  "taskDomains": [
+    "research",
+    "architecture"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "search_codebase",
+    "read_file",
+    "get_project_outline"
+  ],
+  "optionalTools": [
+    "find_symbol",
+    "related_files"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "search_codebase",
+      "reason": "Find the code or docs that the question is about."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    },
+    {
+      "id": "get_project_outline",
+      "reason": "See the project structure before describing architecture."
+    },
+    {
+      "id": "find_symbol",
+      "reason": "Locate the symbol a technical claim depends on."
+    },
+    {
+      "id": "related_files",
+      "reason": "See which files a component depends on."
+    }
+  ],
+  "validation": {
+    "rule": "The description cites components, dependencies, and boundaries found with search or read tools. A rewrite is not recommended without evidence from those results."
+  },
+  "tags": [
+    "architecture",
+    "analysis"
+  ],
+  "scope": "builtin"
+}

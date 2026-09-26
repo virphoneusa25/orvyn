@@ -1,0 +1,59 @@
+{
+  "id": "skill_res_decision",
+  "slug": "decision-support",
+  "name": "Decision Support",
+  "version": "1.0.0",
+  "description": "Lay out options, criteria, and risks without inventing a sure answer.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "decision support",
+    "tradeoffs and criteria",
+    "options without manufactured certainty"
+  ],
+  "taskDomains": [
+    "research",
+    "decisions"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "read_file",
+    "web_search"
+  ],
+  "optionalTools": [
+    "fetch_url",
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    },
+    {
+      "id": "web_search",
+      "reason": "Search for sources that can answer the question."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read a long document section instead of a lone snippet."
+    }
+  ],
+  "validation": {
+    "rule": "Options are compared on stated criteria. Risks stay visible, and no option is marked certain without evidence."
+  },
+  "tags": [
+    "decisions",
+    "research"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,59 @@
+{
+  "id": "skill_res_incident",
+  "slug": "incident-analysis",
+  "name": "Incident Analysis",
+  "version": "1.0.0",
+  "description": "Reconstruct what happened, who was affected, and what would prevent a repeat.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "incident analysis",
+    "incident timeline reconstruction",
+    "recovery and prevention"
+  ],
+  "taskDomains": [
+    "research",
+    "incidents"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase"
+  ],
+  "optionalTools": [
+    "read_process_logs",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code or docs that the question is about."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs that are already captured for this incident."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The write-up separates timeline, impact, contributing causes, recovery, and prevention, and each item cites evidence that was actually read."
+  },
+  "tags": [
+    "incident",
+    "analysis"
+  ],
+  "scope": "builtin"
+}

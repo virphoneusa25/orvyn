@@ -1,0 +1,59 @@
+{
+  "id": "skill_res_synthesis",
+  "slug": "evidence-synthesis",
+  "name": "Evidence Synthesis",
+  "version": "1.0.0",
+  "description": "Combine the sources you actually read and keep the gaps visible.",
+  "category": "Research & Analysis",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "evidence synthesis",
+    "strongest evidence and gaps",
+    "consolidate the sources"
+  ],
+  "taskDomains": [
+    "research",
+    "evidence"
+  ],
+  "runModes": [
+    "agent",
+    "research"
+  ],
+  "requiredTools": [
+    "web_search",
+    "fetch_url",
+    "read_document"
+  ],
+  "optionalTools": [
+    "read_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "web_search",
+      "reason": "Search for sources that can answer the question."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read a specific page that a search result named."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read a long document section instead of a lone snippet."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read a project file that the question depends on."
+    }
+  ],
+  "validation": {
+    "rule": "The synthesis names the strongest evidence and the gaps. Uncertainty from the sources is preserved."
+  },
+  "tags": [
+    "evidence",
+    "synthesis"
+  ],
+  "scope": "builtin"
+}
