@@ -1,0 +1,65 @@
+{
+  "id": "skill_ui_responsive",
+  "slug": "responsive-ui-testing",
+  "name": "Responsive UI Testing",
+  "version": "1.0.0",
+  "description": "Check the same page at desktop, tablet, and mobile widths in the shared Browser session, using screenshots rather than CSS source.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "responsive ui testing",
+    "desktop tablet mobile",
+    "viewport overflow check"
+  ],
+  "taskDomains": [
+    "ui",
+    "responsive"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_set_viewport",
+    "browser_screenshot"
+  ],
+  "optionalTools": [
+    "browser_scroll",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the page in the shared Browser session."
+    },
+    {
+      "id": "browser_set_viewport",
+      "reason": "Apply the desktop, tablet, and mobile presets."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture each viewport as the user sees it."
+    },
+    {
+      "id": "browser_scroll",
+      "reason": "See content below the fold at a narrow width."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Record the viewport that was applied."
+    }
+  ],
+  "validation": {
+    "rule": "Screenshots exist for desktop, tablet, and mobile. Overflow, clipping, broken navigation, stacking, or unreadable controls are reported only from those screenshots."
+  },
+  "tags": [
+    "responsive",
+    "viewport",
+    "ui"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,69 @@
+{
+  "id": "skill_ui_form",
+  "slug": "form-testing",
+  "name": "Form Testing",
+  "version": "1.0.0",
+  "description": "Exercise fields, validation, and submit states in the shared Browser session without a destructive real-world submission.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "form interaction check",
+    "field validation states",
+    "submit button states"
+  ],
+  "taskDomains": [
+    "ui",
+    "forms"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_type",
+    "browser_click",
+    "browser_screenshot"
+  ],
+  "optionalTools": [
+    "browser_console_errors",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the page that contains the form."
+    },
+    {
+      "id": "browser_type",
+      "reason": "Fill a field in the shared session."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Trigger validation or a safe submit."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture disabled, loading, error, and success states that appear."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "See if submit produced a page error."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Record the URL after submit."
+    }
+  ],
+  "validation": {
+    "rule": "Field, validation, and submit behavior are described from browser_screenshot or the session result. No destructive real-world submission ran unless the user explicitly allowed it."
+  },
+  "tags": [
+    "forms",
+    "browser",
+    "ui"
+  ],
+  "scope": "builtin"
+}

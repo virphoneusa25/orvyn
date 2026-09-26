@@ -1,0 +1,60 @@
+{
+  "id": "skill_ui_visual",
+  "slug": "visual-verification",
+  "name": "Visual Verification",
+  "version": "1.0.0",
+  "description": "Screenshot the shared Browser session after a UI change and compare that visible state with what was requested.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "visual verification",
+    "visible state check",
+    "compare the rendered page"
+  ],
+  "taskDomains": [
+    "ui",
+    "visual"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_screenshot",
+    "browser_evidence"
+  ],
+  "optionalTools": [
+    "browser_open",
+    "browser_navigate"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture the page after the change."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Tie the screenshot to the session URL and viewport."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open the page when no shared session is on it yet."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Reach the changed screen in the same session."
+    }
+  ],
+  "validation": {
+    "rule": "A browser_screenshot from the shared session is cited. The UI is not called fixed from code inspection or an HTTP status."
+  },
+  "tags": [
+    "visual",
+    "screenshot",
+    "ui"
+  ],
+  "scope": "builtin"
+}

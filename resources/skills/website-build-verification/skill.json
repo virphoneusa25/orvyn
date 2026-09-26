@@ -1,0 +1,74 @@
+{
+  "id": "skill_ui_website_build",
+  "slug": "website-build-verification",
+  "name": "Website Build Verification",
+  "version": "1.0.0",
+  "description": "Build the site, open the real page in the shared Browser session, and finish only after visible content, console, network, and a screenshot are checked.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "website build verification",
+    "verify the built site",
+    "built page in the browser"
+  ],
+  "taskDomains": [
+    "ui",
+    "build"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "terminal",
+    "browser_open",
+    "browser_screenshot",
+    "browser_console_errors"
+  ],
+  "optionalTools": [
+    "browser_evidence",
+    "fetch_url",
+    "start_process"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run the project build and report its output."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open the built page in the shared Browser session."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture the loaded page."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "Read console errors and failed requests on that page."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Confirm the URL, viewport, and screenshot id."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "See whether the preview URL responds. This is not UI proof."
+    },
+    {
+      "id": "start_process",
+      "reason": "Start the preview process when the project needs one."
+    }
+  ],
+  "validation": {
+    "rule": "Completion cites the build output plus a browser_screenshot and browser_console_errors from the opened page. A started process or an HTTP response alone is not full verification."
+  },
+  "tags": [
+    "website",
+    "build",
+    "preview"
+  ],
+  "scope": "builtin"
+}

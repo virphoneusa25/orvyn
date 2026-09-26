@@ -1,0 +1,65 @@
+{
+  "id": "skill_ui_console",
+  "slug": "console-error-diagnosis",
+  "name": "Console Error Diagnosis",
+  "version": "1.0.0",
+  "description": "Read the shared Browser console, separate warnings from blocking errors, and confirm a repaired error is gone.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "console error diagnosis",
+    "uncaught page error",
+    "blocking runtime error"
+  ],
+  "taskDomains": [
+    "ui",
+    "console"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_console_errors"
+  ],
+  "optionalTools": [
+    "read_file",
+    "search_codebase",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the page that produces the console output."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "Read console and page errors for this session."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the application file named in the stack."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code the stack trace points at."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Confirm the URL the errors were collected on."
+    }
+  ],
+  "validation": {
+    "rule": "Console output from browser_console_errors is cited, warnings are separated from blocking errors, and a repair is confirmed only by a later console read that no longer shows that error."
+  },
+  "tags": [
+    "console",
+    "errors",
+    "browser"
+  ],
+  "scope": "builtin"
+}

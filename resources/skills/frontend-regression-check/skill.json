@@ -1,0 +1,64 @@
+{
+  "id": "skill_ui_regression",
+  "slug": "frontend-regression-check",
+  "name": "Frontend Regression Check",
+  "version": "1.0.0",
+  "description": "Re-check the major flows touched by a change in the shared Browser session, and leave unrelated pages alone unless the change reaches them.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "frontend regression check",
+    "flows touched by the change",
+    "ui regression pass"
+  ],
+  "taskDomains": [
+    "ui",
+    "regression"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_navigate",
+    "browser_screenshot"
+  ],
+  "optionalTools": [
+    "browser_click",
+    "browser_console_errors"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the flow the change touched."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Follow that flow in the same session."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture the flow after the change."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Step through the controls in the flow."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "See if the flow raised a page error."
+    }
+  ],
+  "validation": {
+    "rule": "The flows that were rechecked are ones the change touched, and each result cites a browser_screenshot or session navigation. Untouched areas were not broadly retested without a reason."
+  },
+  "tags": [
+    "regression",
+    "flows",
+    "ui"
+  ],
+  "scope": "builtin"
+}

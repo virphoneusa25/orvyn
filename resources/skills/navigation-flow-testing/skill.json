@@ -1,0 +1,64 @@
+{
+  "id": "skill_ui_navigation",
+  "slug": "navigation-flow-testing",
+  "name": "Navigation Flow Testing",
+  "version": "1.0.0",
+  "description": "Walk important routes in the shared Browser session, including back and forward, and report dead links or unexpected redirects from the resulting URL.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "navigation flow testing",
+    "back and forward",
+    "dead link check"
+  ],
+  "taskDomains": [
+    "ui",
+    "navigation"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_navigate",
+    "browser_click"
+  ],
+  "optionalTools": [
+    "browser_screenshot",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the start of the flow."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Follow a route in the same session."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Activate a link or control."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture a wrong or dead destination."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Record the URL after each hop."
+    }
+  ],
+  "validation": {
+    "rule": "Each checked route cites the URL browser_navigate or browser_evidence returned. Dead links and unexpected redirects are reported only from those results."
+  },
+  "tags": [
+    "navigation",
+    "routes",
+    "browser"
+  ],
+  "scope": "builtin"
+}

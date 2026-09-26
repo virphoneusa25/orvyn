@@ -1,0 +1,75 @@
+{
+  "id": "skill_ui_browser_qa",
+  "slug": "browser-qa",
+  "name": "Browser QA",
+  "version": "1.0.0",
+  "description": "Open the page in the shared Browser session, check what is visible, and report only failures the page evidence shows.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "browser qa",
+    "check the page in the browser",
+    "page qa pass"
+  ],
+  "taskDomains": [
+    "ui",
+    "browser"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_screenshot",
+    "browser_console_errors"
+  ],
+  "optionalTools": [
+    "browser_navigate",
+    "browser_click",
+    "browser_scroll",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the target in the shared Browser session."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "Capture what is actually visible."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "Read console and failed requests for this session."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Move to another URL in the same session."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Use a control the check depends on."
+    },
+    {
+      "id": "browser_scroll",
+      "reason": "Bring a control into view."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Read the session URL, viewport, and screenshot list."
+    }
+  ],
+  "validation": {
+    "rule": "The report cites a browser_screenshot or browser_evidence result from the shared session. HTTP success alone is not treated as a correct UI."
+  },
+  "tags": [
+    "browser",
+    "qa",
+    "ui"
+  ],
+  "scope": "builtin"
+}

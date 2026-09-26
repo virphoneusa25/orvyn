@@ -1,0 +1,65 @@
+{
+  "id": "skill_ui_a11y",
+  "slug": "accessibility-review",
+  "name": "Accessibility Review",
+  "version": "1.0.0",
+  "description": "Review labels, keyboard use, semantics, focus, and visible contrast from the shared Browser session, and mark recommendations separately from blockers.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "accessibility review",
+    "keyboard usability",
+    "focus behavior"
+  ],
+  "taskDomains": [
+    "ui",
+    "accessibility"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_screenshot",
+    "browser_evidence"
+  ],
+  "optionalTools": [
+    "browser_click",
+    "browser_scroll"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the page under review."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "See labels and contrast as rendered."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Record the URL and viewport of the review."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Move focus by activating a control."
+    },
+    {
+      "id": "browser_scroll",
+      "reason": "Reach controls below the fold."
+    }
+  ],
+  "validation": {
+    "rule": "Findings cite the shared Browser session. Recommendations are separated from blocking defects, and contrast or focus claims are limited to what the screenshot or interaction showed."
+  },
+  "tags": [
+    "accessibility",
+    "keyboard",
+    "ui"
+  ],
+  "scope": "builtin"
+}

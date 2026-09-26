@@ -1,0 +1,69 @@
+{
+  "id": "skill_ui_auth",
+  "slug": "authentication-flow-testing",
+  "name": "Authentication Flow Testing",
+  "version": "1.0.0",
+  "description": "Exercise an authorized sign-in flow in the shared Browser session without inventing credentials or printing secrets.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "authentication flow testing",
+    "sign-in screen check",
+    "session-safe login"
+  ],
+  "taskDomains": [
+    "ui",
+    "authentication"
+  ],
+  "runModes": [
+    "agent"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_navigate",
+    "browser_screenshot"
+  ],
+  "optionalTools": [
+    "browser_type",
+    "browser_click",
+    "browser_console_errors"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the sign-in screen in the shared Browser session."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Follow the authorized return path."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "See the auth UI state that actually rendered."
+    },
+    {
+      "id": "browser_type",
+      "reason": "Type into a field only with a value the user supplied for this session."
+    },
+    {
+      "id": "browser_click",
+      "reason": "Submit the authorized flow."
+    },
+    {
+      "id": "browser_console_errors",
+      "reason": "Separate a page error from a rejected session."
+    }
+  ],
+  "validation": {
+    "rule": "The auth result cites the shared Browser session. No credential was invented, and no password or token was written into the reply."
+  },
+  "tags": [
+    "authentication",
+    "session",
+    "browser"
+  ],
+  "scope": "builtin"
+}

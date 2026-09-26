@@ -1,0 +1,65 @@
+{
+  "id": "skill_ui_preview",
+  "slug": "preview-validation",
+  "name": "Preview Validation",
+  "version": "1.0.0",
+  "description": "Open the preview URL in the shared Browser session and confirm the expected application loaded. A running process is not a preview.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "preview validation",
+    "preview url reachable",
+    "loaded application check"
+  ],
+  "taskDomains": [
+    "ui",
+    "preview"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_open",
+    "browser_screenshot"
+  ],
+  "optionalTools": [
+    "fetch_url",
+    "browser_navigate",
+    "browser_evidence"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_open",
+      "reason": "Open the preview URL in the shared Browser session."
+    },
+    {
+      "id": "browser_screenshot",
+      "reason": "See which application actually loaded."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Check that the URL responds before opening it."
+    },
+    {
+      "id": "browser_navigate",
+      "reason": "Follow a redirect in the same session."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "Record the final URL and title evidence."
+    }
+  ],
+  "validation": {
+    "rule": "The preview is marked reachable only after browser_open and browser_screenshot show the expected application. A started process is not marked as a preview."
+  },
+  "tags": [
+    "preview",
+    "browser",
+    "ui"
+  ],
+  "scope": "builtin"
+}

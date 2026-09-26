@@ -1,0 +1,60 @@
+{
+  "id": "skill_ui_network",
+  "slug": "network-request-diagnosis",
+  "name": "Network Request Diagnosis",
+  "version": "1.0.0",
+  "description": "Use the shared Browser session's failed requests to tell a frontend bug from an API, CORS, auth, DNS, TLS, or server failure.",
+  "category": "Browser & UI",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "network request diagnosis",
+    "failed page request",
+    "cors or tls failure"
+  ],
+  "taskDomains": [
+    "ui",
+    "network"
+  ],
+  "runModes": [
+    "agent",
+    "debug"
+  ],
+  "requiredTools": [
+    "browser_console_errors",
+    "browser_evidence"
+  ],
+  "optionalTools": [
+    "browser_open",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "browser_console_errors",
+      "reason": "Read failed network requests captured in the session."
+    },
+    {
+      "id": "browser_evidence",
+      "reason": "See the page URL those requests belong to."
+    },
+    {
+      "id": "browser_open",
+      "reason": "Open the page so the session can record requests."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Compare one URL from outside the page. This is not UI proof."
+    }
+  ],
+  "validation": {
+    "rule": "A failed or blocked request from browser_console_errors or browser_evidence is cited, and the reply names frontend, API, CORS, auth, DNS, TLS, or server only when that evidence supports it."
+  },
+  "tags": [
+    "network",
+    "requests",
+    "browser"
+  ],
+  "scope": "builtin"
+}
