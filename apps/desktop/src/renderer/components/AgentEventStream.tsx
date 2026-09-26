@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
+import { ORION_THINKING_TEXT, OrionThinkingIndicator } from "./OrionThinkingIndicator";
 import { LiveActivity, MissionPlan } from "./MissionPlan";
 import { isRunFinished, RunUsage, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
@@ -148,7 +149,7 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
             whiteSpace: "nowrap",
           }}
         >
-          {live}
+          <OrionThinkingIndicator motion={live === "Thinking…" ? "thinking" : "tool"} message={live === "Thinking…" ? ORION_THINKING_TEXT : live} />
         </div>
       )}
 

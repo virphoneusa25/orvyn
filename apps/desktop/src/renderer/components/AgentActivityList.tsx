@@ -25,6 +25,7 @@ import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
 import { MissionPhases } from "./MissionPhases";
 import { deriveMissionPhases } from "../missionPhases";
+import { ORION_THINKING_TEXT, OrionThinkingIndicator, orbMotionForLabel } from "./OrionThinkingIndicator";
 
 export interface AgentEvent {
   id: string;
@@ -238,7 +239,14 @@ export function AgentActivityList({
           case "workgroup":
             return <WorkGroupRow key={item.key} group={item} />;
           case "status":
-            if (item.ephemeral) return <div key={item.key} className="activity-thinking" role="status"><span className="activity-pulse" />{item.label}</div>;
+            if (item.ephemeral) {
+              const motion = orbMotionForLabel(item.label);
+              return (
+                <div key={item.key} className="activity-thinking">
+                  <OrionThinkingIndicator motion={motion} message={motion === "thinking" ? ORION_THINKING_TEXT : item.label} />
+                </div>
+              );
+            }
             // Thought rows: while one is the live activity (no endTs, run
             // still streaming) it reads as an active state — "Working…" with
             // the pulse. Once real activity follows, it becomes the quiet
@@ -257,9 +265,8 @@ export function AgentActivityList({
               if (!live && !item.thought.summary) return null;
               if (live) {
                 return (
-                  <div key={item.key} className="activity-thinking" role="status" title={item.thought.summary ?? "Working"}>
-                    <span className="activity-pulse" />
-                    {item.thought.summary ? `${item.thought.summary}…` : "Working…"}
+                  <div key={item.key} className="activity-thinking" title={item.thought.summary ?? "Working"}>
+                    <OrionThinkingIndicator motion="thinking" />
                   </div>
                 );
               }

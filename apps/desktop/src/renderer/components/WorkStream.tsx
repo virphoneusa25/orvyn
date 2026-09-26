@@ -31,6 +31,7 @@ import { threadTimeline } from "../streamOrder";
 import { SessionRestoreCard } from "./SessionRestoreCard";
 import { AnswerActions } from "./AnswerActions";
 import { ResearchTimeline } from "./ResearchTimeline";
+import { OrionThinkingIndicator, type OrbMotion } from "./OrionThinkingIndicator";
 import { SourcesBar } from "./SourcesBar";
 import { sourcesFromActivity, stepsFromActivity } from "../researchSteps";
 
@@ -246,6 +247,20 @@ export function WorkStream({
    */
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
+  const wasRunning = useRef(false);
+  const [orbFading, setOrbFading] = useState(false);
+  useEffect(() => {
+    if (runActive) {
+      wasRunning.current = true;
+      setOrbFading(false);
+      return;
+    }
+    if (!wasRunning.current) return;
+    wasRunning.current = false;
+    setOrbFading(true);
+    const timer = window.setTimeout(() => setOrbFading(false), 340);
+    return () => window.clearTimeout(timer);
+  }, [runActive]);
   const refreshQueue = useCallback(async () => {
     const ids: string[] = [];
     if (queueScopeRef.current) ids.push(queueScopeRef.current);
@@ -552,7 +567,12 @@ export function WorkStream({
             {displayStatus.replace("_", " ").toUpperCase()}
           </span>
         )}
-        {runActive && <WorkTimer startedAt={run.events.length > 0 ? run.events[0].timestamp : Date.now()} />}
+        {(runActive || orbFading) && (
+          <OrionThinkingIndicator
+            motion={orbFading && !runActive ? "done" : headerOrbMotion(run.status, run.events)}
+            detail={<WorkElapsed startedAt={run.events.length > 0 ? run.events[0].timestamp : Date.now()} />}
+          />
+        )}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L</span>
           <button
@@ -670,8 +690,6 @@ export function WorkStream({
         {/* The run instruction is already represented by the canonical chat
             message. Never render it again here: duplicate user bubbles make
             the stream look like two conversations and break chronology. */}
-        {runActive && <div role="status" style={{fontSize:12,color:"var(--text-secondary)",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>Working{run.events[0] ? ` for ${Math.max(0,Math.floor((Date.now()-run.events[0].timestamp)/1000))}s` : "…"}</div>}
-
         {/* Activity from the attached run — the presentation reducer's
             conversation: assistant text, compact tool rows, approvals. */}
         {(run.events.length > 0 || runActive) && (
@@ -1048,7 +1066,20 @@ export function WorkStream({
 
 /** "Working for 4s" — self-contained 1s ticker so only this chip re-renders,
  *  never the whole conversation (spec Part 9). */
-function WorkTimer({ startedAt }: { startedAt: number }) {
+function headerOrbMotion(status: string, events: AgentEvent[]): OrbMotion {
+  if (status === "error") return "error";
+  if (status === "queued" || status === "awaiting_approval" || status === "cancelling") return "waiting";
+  const open = new Set<string>();
+  for (const event of events) {
+    const id = event.data && typeof event.data.callId === "string" ? event.data.callId : "";
+    if (!id) continue;
+    if (event.type === "tool.started") open.add(id);
+    if (event.type === "tool.completed" || event.type === "tool.failed") open.delete(id);
+  }
+  return open.size > 0 ? "tool" : "thinking";
+}
+
+function WorkElapsed({ startedAt }: { startedAt: number }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -1056,12 +1087,7 @@ function WorkTimer({ startedAt }: { startedAt: number }) {
   }, []);
   const s = Math.max(0, Math.floor((now - startedAt) / 1000));
   const label = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  return (
-    <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", fontStyle: "italic", display: "inline-flex", alignItems: "center", gap: 5 }}>
-      <span className="activity-pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--orvyn-purple)", display: "inline-block" }} />
-      Working for {label}
-    </span>
-  );
+  return <>{label}</>;
 }
 
 function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMessage; live: boolean; question?: string; onRegenerate?: () => void }) {
@@ -1104,9 +1130,7 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
         )}
         <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
           {!message.content && live && message.activity?.length ? null : !message.content && live ? (
-            <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
-              Thinking…
-            </span>
+            <OrionThinkingIndicator />
           ) : (
             <MessageContent content={message.content} streaming={live} />
           )}

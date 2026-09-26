@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from "react";
 import { researchSummary, type ResearchStep } from "../researchSteps";
 import { openArtifactInContext } from "../contextOpen";
+import { OrionThinkingIndicator } from "./OrionThinkingIndicator";
 
 function Favicon({ domain }: { domain?: string }) {
   const [failed, setFailed] = useState(false);
@@ -64,7 +65,7 @@ export function ResearchTimeline({ steps, live, thinking, startedAt }: {
         </ol>
       )}
       {live && thinking && (
-        <div className="rt__thinking" data-testid="research-thinking"><span className="rt__dots" aria-hidden="true"><i /><i /><i /></span>Still thinking… {startedAt ? <>· <Elapsed since={startedAt} /></> : null}</div>
+        <div className="rt__thinking" data-testid="research-thinking"><OrionThinkingIndicator detail={startedAt ? <Elapsed since={startedAt} /> : null} /></div>
       )}
     </div>
   );

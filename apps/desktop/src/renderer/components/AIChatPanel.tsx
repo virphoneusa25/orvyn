@@ -20,6 +20,7 @@ import {
 import { WorkspaceState } from "../orvyn-bridge";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
+import { ORION_THINKING_TEXT, OrionThinkingIndicator } from "./OrionThinkingIndicator";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { isRunFinished, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
@@ -415,7 +416,7 @@ export function AIChatPanel({
               whiteSpace: "nowrap",
             }}
           >
-            {live}
+            <OrionThinkingIndicator motion={live === "Thinking…" ? "thinking" : "tool"} message={live === "Thinking…" ? ORION_THINKING_TEXT : live} />
           </div>
         )}
         <div
