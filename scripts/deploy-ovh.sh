@@ -23,7 +23,7 @@ printf '{"commit":"%s","builtAt":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%
 
 echo "Syncing $ROOT → $HOST:$REMOTE (preserving remote .env)"
 
-"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts'"
+"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts' '$REMOTE/resources'"
 
 rsync -az --delete -e "$RSH" \
   --exclude node_modules/ --exclude dist/ --exclude '*.log' \
@@ -39,6 +39,11 @@ rsync -az --delete -e "$RSH" \
 
 rsync -az --delete -e "$RSH" \
   "$ROOT/infrastructure/" "$HOST:$REMOTE/infrastructure/"
+
+# The backend image copies resources/skills. The OVH build context is this
+# partial sync, not a git checkout, so the directory has to be sent explicitly.
+rsync -az --delete -e "$RSH" \
+  "$ROOT/resources/" "$HOST:$REMOTE/resources/"
 
 rsync -az -e "$RSH" \
   "$ROOT/docker-compose.yml" \

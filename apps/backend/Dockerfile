@@ -50,6 +50,8 @@ COPY --from=build /repo/packages/ai-core ./packages/ai-core
 COPY --from=build /repo/apps/backend/dist ./dist
 COPY --from=build /repo/apps/backend/package.json ./package.json
 COPY --from=build /repo/apps/backend/build-info.json ./build-info.json
+# Packaged skills. The process cwd is /app, and the loader looks for resources/skills there.
+COPY resources/skills ./resources/skills
 
 # Playwright + Chromium from the build stage.
 COPY --from=build /ms-playwright /ms-playwright
