@@ -50,6 +50,9 @@ export const ACCESS_MODES: Record<AccessMode, { profile: PermissionProfile; labe
 /** Tools ASK additionally gates: reaching beyond the machine is not a plain
  *  "read" even when the capability class says NETWORK — the most
  *  approval-heavy mode asks for those too. */
+/** Read-only web access: searching and reading pages. */
+const WEB_READ = new Set(["web_search", "fetch_url"]);
+
 const ASK_DOWNGRADE = new Set([
   "fetch_url",
   "web_search",
@@ -184,6 +187,14 @@ export function applyProfile(registry: ToolRegistry, profile: PermissionProfile)
 export function applyAccessMode(registry: ToolRegistry, mode: AccessMode): void {
   const conf = ACCESS_MODES[mode];
   applyProfile(registry, conf.profile);
+  // Reading the web is a read: every mode but Ask searches and reads pages
+  // without a prompt, so ORION can research on its own ("Auto Read:
+  // read/search automatically"). Never un-denies a tool.
+  if (mode !== "ask") {
+    for (const tool of registry.list()) {
+      if (WEB_READ.has(tool.name) && registry.getPermission(tool.name) === "ask") registry.setPermission(tool.name, "allowed");
+    }
+  }
   if (mode === "ask") {
     for (const tool of registry.list()) {
       if (ASK_DOWNGRADE.has(tool.name) && registry.getPermission(tool.name) === "allowed") {

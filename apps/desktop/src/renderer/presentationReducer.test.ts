@@ -518,3 +518,19 @@ test("verifier checks are their own labelled rows, and a verifier with no verdic
   const status = items.find((i) => i.kind === "status") as { label: string } | undefined;
   assert.match(String(status?.label), /automatic checks/);
 });
+
+test("a withdrawn reply (research first) is not shown as ORION's answer", async () => {
+  const { reducePresentation } = await import("./presentationReducer.ts");
+  const ev = (type: string, data: Record<string, unknown> = {}, i = 0) => ({ id: `e${i}`, type, timestamp: 1000 + i, data });
+  const events = [
+    ev("run.started", { instruction: "latest node lts?" }, 0),
+    ev("message.delta", { content: "Node.js 20 is the LTS release." }, 1),
+    ev("message.retracted", {}, 2),
+    ev("message.delta", { content: "Searching the web." }, 3),
+    ev("message.completed", {}, 4),
+  ];
+  const items = reducePresentation(events as any, "running");
+  const text = JSON.stringify(items);
+  assert.ok(!text.includes("Node.js 20 is the LTS"), text);
+  assert.ok(text.includes("Searching the web."), text);
+});

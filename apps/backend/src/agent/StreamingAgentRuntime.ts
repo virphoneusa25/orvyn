@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
+import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { evaluateCompletionGates } from "./completionGates";
@@ -175,6 +176,8 @@ interface RunState {
   resumeMode?: AgentMode;
   /** Times the run was sent back after a reply announced work without doing it. */
   continuationNudges: number;
+  /** "Search the web first" was said once for a task that needs current info. */
+  researchNudges: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -407,6 +410,15 @@ export class StreamingAgentRuntime {
     }
   }
 
+  /** web_search is registered and not denied (Plan/Research modes keep it; nothing turns it off silently). */
+  private webResearchAvailable(): boolean {
+    try {
+      return this.tools.list().some((t) => t.name === "web_search") && this.tools.getPermission("web_search") !== "denied";
+    } catch {
+      return false;
+    }
+  }
+
   /** Re-publish the run's remembered site (same URL) after its files changed. */
   private republishPreview(runId: string): void {
     const published = publishRememberedSite(runId);
@@ -632,7 +644,7 @@ export class StreamingAgentRuntime {
       this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
       { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform)].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : ""].filter(Boolean).join("\n");
     const modeOverlay = composerModeOverlay(options?.composerMode, mode);
     const gapNotes = capabilityGapNotes(instruction, runCaps);
     const intent = inferTaskIntent(instruction, options?.composerMode ?? mode);
@@ -691,6 +703,7 @@ export class StreamingAgentRuntime {
       phase: "preflight",
       repositoryDetected: workspace.repositoryDetected,
       continuationNudges: 0,
+      researchNudges: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1544,6 +1557,23 @@ export class StreamingAgentRuntime {
               "You answered without calling a tool. This is an action task. Use the available tools now — search, read, edit, terminal, browser, or desktop as the capability list allows. Do not hand the commands back. Do not claim work that has no tool result.",
           });
           return { kind: "continue", reason: "answered an action request without a tool" };
+        }
+        // A task that needs current information, answered without looking
+        // anything up: research first (once), then answer from the sources.
+        if (
+          state.toolsEnabled &&
+          state.researchNudges < 1 &&
+          this.webResearchAvailable() &&
+          needsWebResearch(state.instruction) &&
+          !(this.store.get(runId)?.events ?? []).some((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && /^(web_search|fetch_url|browser_open|browser_navigate)$/.test(String(e.data?.tool ?? "")))
+        ) {
+          state.researchNudges += 1;
+          // The answer from memory is not shown as ORION's answer: it is replaced by the researched one.
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "research first" });
+          messages.push({ role: "assistant", content: content || "" });
+          messages.push({ role: "user", content: RESEARCH_NUDGE });
+          this.store.emit(runId, "agent.continue", { reason: "Researching on the web before answering", attempt: state.researchNudges });
+          return { kind: "continue", reason: "task needs current information" };
         }
         // A reply that only ANNOUNCES the next step ("Next I'll read it
         // back…") is not a final answer — send the same agent back to work.

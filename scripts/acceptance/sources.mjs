@@ -33,7 +33,8 @@ const dataDir = mkdtempSync(join(tmpdir(), "orvyn-src-data-"));
 const projectsDir = mkdtempSync(join(tmpdir(), "orvyn-src-projects-"));
 const OUT = process.env.OUT_DIR || work;
 
-const Q = "Research the current Node.js LTS release and cite your sources";
+// A plain question in Auto mode: the user does NOT pick Research.
+const Q = "What is the latest Node.js LTS release?";
 const RESULTS = [
   { title: "Node.js Releases", url: "https://nodejs.org/en/about/previous-releases", snippet: "Major Node.js versions enter Active LTS status…" },
   { title: "Node.js — Wikipedia", url: "https://en.wikipedia.org/wiki/Node.js", snippet: "Node.js is a cross-platform JavaScript runtime…" },
@@ -46,6 +47,7 @@ const search = createServer((req, res) => {
   res.end(RESULTS.map((r) => `<div><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=${encodeURIComponent(r.url)}&rut=x">${r.title}</a><a class="result__snippet" href="#">${r.snippet}</a></div>`).join("\n"));
 });
 const searches = [];
+const modes = [];
 
 function nextTurn(body) {
   const msgs = body.messages ?? [];
@@ -54,6 +56,10 @@ function nextTurn(body) {
   const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
   const toolsSince = msgs.slice(lastUserIdx).filter((m) => m.role === "tool");
   if (!tools.length) return { text: "OK." };
+  const last = String(msgs[lastUserIdx]?.content ?? "");
+  modes.push(tools.includes("write_file") ? "agent" : "research");
+  // First answer from memory, like a model that does not think to look it up.
+  if (!/current information from the web/.test(last)) return { text: "Node.js 20 is the LTS release." };
   if (!toolsSince.length) return { text: "Searching the web.", call: { name: "web_search", args: { query: "Node.js LTS release" } } };
   return { text: "The current Node.js LTS line is listed on the Node.js releases page (nodejs.org), with background on Wikipedia." };
 }
@@ -149,17 +155,25 @@ async function main() {
 
     await win.getByPlaceholder(/Describe what ORVYN should build/).fill(Q);
     await win.getByRole("button", { name: /Run mission/ }).click();
+    let askedApproval = false;
     const done = await waitFor(async () => {
       const r = (await api("/agent/stream/runs")).json.runs ?? [];
       if (r.some((x) => x.status === "awaiting_approval")) {
+        askedApproval = true;
         const allow = win.getByRole("button", { name: /Allow for Mission|Allow Once/ }).first();
         if (await allow.isVisible().catch(() => false)) await allow.click().catch(() => {});
       }
       return r.length >= 1 && ["completed", "error", "cancelled"].includes(r[0].status) ? r : null;
     }, 90_000, 400);
-    ok(done?.[0]?.status === "completed", "the research run completed");
-    ok(searches.length >= 1, `ORION searched the web (${searches.join(", ")})`);
+    ok(done?.[0]?.status === "completed", "the question ran as a task and completed");
     const ev = (await api(`/agent/stream/runs/${done?.[0]?.id}/events.json`)).json.events ?? [];
+    ok(String(ev.find((e) => e.type === "run.started")?.data?.mode ?? "") === "research" || modes[0] === "research", "Auto mode routed the question to research on its own (no mode picked)", JSON.stringify({ started: ev.find((e) => e.type === "run.started")?.data?.mode, modes }));
+    ok(ev.some((e) => e.type === "agent.continue" && /Researching/.test(String(e.data?.reason))), "ORION's answer from memory was sent back: research first");
+    ok(searches.length >= 1, `ORION searched the web on its own (${searches.join(", ")})`);
+    ok(!askedApproval, "…without asking for approval");
+    const answer = await win.locator("body").innerText();
+    ok(/listed on the Node\.js releases page/.test(answer), "the final answer comes from the search, not from memory");
+    ok(!/Node\.js 20 is the LTS release/.test(answer), "the unchecked answer from memory is not left in the stream");
     const env1 = ev.find((e) => e.type === "tool.completed" && e.data?.tool === "web_search")?.data?.envelope;
     ok(env1?.evidence?.filter((x) => x.type === "url").map((x) => x.value).join() === RESULTS.map((r) => r.url).join(), "the search result sites are recorded on the run", JSON.stringify(env1?.evidence));
 

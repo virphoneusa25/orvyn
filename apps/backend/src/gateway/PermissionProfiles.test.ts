@@ -63,13 +63,15 @@ test("ask: reads allowed, network reads gated, everything mutating asks", () => 
   assert.equal(registry.getPermission("terminal"), "ask");
 });
 
-test("auto_read: file/search reads allowed, network and mutations ask", () => {
+test("auto_read: file/search and web reads allowed, mutations ask", () => {
   const registry = freshRegistry();
   applyMode(registry, "agent");
   applyAccessMode(registry, "auto_read");
   assert.equal(registry.getPermission("read_file"), "allowed");
   assert.equal(registry.getPermission("search_code"), "allowed");
-  assert.equal(registry.getPermission("fetch_url"), "ask", "network reads ask in Auto Read (spec: only file/search/inspection is auto)");
+  // ORION researches on its own: searching and reading web pages are reads.
+  assert.equal(registry.getPermission("fetch_url"), "allowed");
+  assert.equal(registry.getPermission("web_search"), "allowed");
   assert.equal(registry.getPermission("write_file"), "ask");
   assert.equal(registry.getPermission("edit_file"), "ask");
   assert.equal(registry.getPermission("run_tests"), "ask");
@@ -125,4 +127,12 @@ test("ACCESS_MODES covers exactly the four user-facing modes with descriptions",
   for (const mode of Object.values(ACCESS_MODES)) {
     assert.ok(mode.label.length > 0 && mode.description.length > 0);
   }
+});
+
+test("Ask mode still asks before every web read; a mode that denies web tools keeps them denied", () => {
+  const ask = freshRegistry();
+  applyMode(ask, "agent");
+  applyAccessMode(ask, "ask");
+  assert.equal(ask.getPermission("web_search"), "ask");
+  assert.equal(ask.getPermission("fetch_url"), "ask");
 });

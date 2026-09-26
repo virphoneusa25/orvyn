@@ -96,3 +96,14 @@ test("an explicit request for the cloud goes to ORVYN Cloud even with a folder o
     assert.equal(belongsInCloudStorage(p), false, p);
   }
 });
+
+test("auto mode researches on its own when a question needs current or sourced information", async () => {
+  const { needsWebResearch } = await import("./orvynIntent.ts");
+  for (const p of ["What is the latest Node.js LTS version?", "Who is the current CEO of Nvidia?", "Research the best VoIP softswitches and cite sources"]) {
+    assert.equal(classifyIntent(p, "auto"), "research", p);
+    assert.equal(needsWebResearch(p), true, p);
+  }
+  assert.equal(classifyIntent("What is 2+2?", "auto"), "chat");
+  assert.equal(classifyIntent("Create hello.txt", "auto"), "code");
+  assert.equal(classifyIntent("Build a landing page with the newest iPhone prices", "auto"), "code", "build work stays an agent run (it researches inside the run)");
+});

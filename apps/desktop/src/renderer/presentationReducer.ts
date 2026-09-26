@@ -339,6 +339,15 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "message.completed":
         flushAssistant(false);
         continue;
+      case "message.retracted": {
+        // ORION's unchecked reply was withdrawn (it goes to research first).
+        if (textBuf) textBuf = "";
+        else {
+          const at = items.map((it) => it.kind).lastIndexOf("assistant");
+          if (at >= 0) items.splice(at, 1);
+        }
+        continue;
+      }
 
       case "agent.phase": {
         // Phase notes ("Waiting for the Local Worker") are a live indicator
