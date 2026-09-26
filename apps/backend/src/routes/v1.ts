@@ -1526,7 +1526,7 @@ v1Router.get("/learning/skills", (req, res) => {
 });
 
 v1Router.get("/skills/registry", (_req, res) => {
-  res.json({ skills: skillRegistry.list() });
+  res.json(skillRegistry.report());
 });
 
 v1Router.patch("/skills/registry/:id", (req, res) => {

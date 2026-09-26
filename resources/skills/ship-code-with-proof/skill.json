@@ -1,12 +1,21 @@
 {
   "id": "skill_code_with_tests",
+  "slug": "ship-code-with-proof",
   "name": "Ship code with proof",
-  "trigger": "fix, test, refactor, typecheck, lint, failing tests",
+  "version": "1.0.0",
   "description": "Edit the project, then prove the change with tests before claiming done.",
+  "category": "General",
+  "publisher": "ORVYN",
+  "source": "built-in",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": ["fix", "test", "refactor", "typecheck", "lint", "failing tests"],
+  "taskDomains": ["code"],
+  "runModes": ["agent"],
   "requiredTools": ["read_file", "edit_file", "run_tests", "run_typecheck"],
-  "validation": "run_tests or test.completed passed",
-  "scope": "tenant",
-  "confidence": 1,
-  "sourceRuns": ["seed"],
-  "validated": true
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": { "rule": "run_tests or test.completed passed" },
+  "tags": ["code", "tests"],
+  "scope": "builtin"
 }

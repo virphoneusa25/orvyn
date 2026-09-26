@@ -1,9 +1,20 @@
 import * as fs from "fs";
 import * as path from "path";
+import {
+  SKILL_SCOPES,
+  type SkillDefinition,
+  type SkillMetadata,
+  type SkillPermissionRequirement,
+  type SkillRejection,
+  type SkillScope,
+  type SkillValidationRule,
+} from "./types";
 
+/** Shape the registry and the existing skill prompt already consume. */
 export interface SkillPackage {
   id: string;
   name: string;
+  /** Comma-separated triggers. Skill matching still splits this string. */
   trigger: string;
   description: string;
   requiredTools: string[];
@@ -13,13 +24,19 @@ export interface SkillPackage {
   confidence: number;
   sourceRuns: string[];
   validated: true;
-  builtin: true;
+  builtin: boolean;
   installed: true;
   category: string;
   version: string;
   source: string;
   dir: string;
   instructions: string;
+  metadata: SkillMetadata;
+}
+
+export interface SkillLoadReport {
+  skills: SkillPackage[];
+  rejected: SkillRejection[];
 }
 
 /** Walk upward until resources/skills exists. Works from the repo root and from apps/backend. */
@@ -50,51 +67,179 @@ function stepsFromMarkdown(markdown: string): string[] {
     .filter(Boolean);
 }
 
-function readPackage(dir: string): SkillPackage {
+function needString(value: unknown, field: string, errors: string[]): string {
+  if (typeof value !== "string" || !value.trim()) {
+    errors.push(`${field} must be a non-empty string.`);
+    return "";
+  }
+  return value.trim();
+}
+
+function needBoolean(value: unknown, field: string, errors: string[]): boolean {
+  if (typeof value !== "boolean") {
+    errors.push(`${field} must be true or false.`);
+    return false;
+  }
+  return value;
+}
+
+function needStringList(value: unknown, field: string, errors: string[], allowEmpty: boolean): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !String(item).trim())) {
+    errors.push(`${field} must be an array of non-empty strings.`);
+    return [];
+  }
+  if (!allowEmpty && value.length === 0) errors.push(`${field} must include at least one entry.`);
+  return value.map((item) => String(item).trim());
+}
+
+function needPermissions(value: unknown, errors: string[]): SkillPermissionRequirement[] {
+  if (!Array.isArray(value)) {
+    errors.push("permissionsRequired must be an array.");
+    return [];
+  }
+  const out: SkillPermissionRequirement[] = [];
+  value.forEach((item, index) => {
+    const row = item as { id?: unknown; reason?: unknown } | null;
+    if (!row || typeof row !== "object" || typeof row.id !== "string" || !row.id.trim() || typeof row.reason !== "string" || !row.reason.trim()) {
+      errors.push(`permissionsRequired[${index}] must include a non-empty id and reason.`);
+      return;
+    }
+    out.push({ id: row.id.trim(), reason: row.reason.trim() });
+  });
+  return out;
+}
+
+function needValidation(value: unknown, errors: string[]): SkillValidationRule {
+  const row = value as { rule?: unknown } | null;
+  if (!row || typeof row !== "object" || typeof row.rule !== "string" || !row.rule.trim()) {
+    errors.push("validation.rule must be a non-empty string.");
+    return { rule: "" };
+  }
+  return { rule: row.rule.trim() };
+}
+
+function needScope(value: unknown, errors: string[]): SkillScope {
+  if (typeof value !== "string" || !SKILL_SCOPES.includes(value as SkillScope)) {
+    errors.push("scope must be builtin, personal, organization, or project.");
+    return "builtin";
+  }
+  return value as SkillScope;
+}
+
+export function validateSkillPackage(dir: string): { skill: SkillPackage } | { rejection: SkillRejection } {
+  const slug = path.basename(dir);
   const metaPath = path.join(dir, "skill.json");
   const bodyPath = path.join(dir, "SKILL.md");
-  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as Partial<SkillPackage> & { category?: unknown; version?: unknown };
-  const instructions = fs.readFileSync(bodyPath, "utf8");
+  const errors: string[] = [];
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(metaPath, "utf8")) as Record<string, unknown>;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) errors.push("skill.json must be an object.");
+  } catch {
+    return { rejection: { slug, dir, errors: ["skill.json is not valid JSON."] } };
+  }
+
+  const metadata: SkillMetadata = {
+    id: needString(raw.id, "id", errors),
+    slug: needString(raw.slug, "slug", errors),
+    name: needString(raw.name, "name", errors),
+    version: needString(raw.version, "version", errors),
+    description: needString(raw.description, "description", errors),
+    category: needString(raw.category, "category", errors),
+    publisher: needString(raw.publisher, "publisher", errors),
+    source: needString(raw.source, "source", errors),
+    builtIn: needBoolean(raw.builtIn, "builtIn", errors),
+    trusted: needBoolean(raw.trusted, "trusted", errors),
+    triggers: needStringList(raw.triggers, "triggers", errors, false),
+    taskDomains: needStringList(raw.taskDomains, "taskDomains", errors, false),
+    runModes: needStringList(raw.runModes, "runModes", errors, false),
+    requiredTools: needStringList(raw.requiredTools, "requiredTools", errors, true),
+    optionalTools: needStringList(raw.optionalTools, "optionalTools", errors, true),
+    permissionsRequired: needPermissions(raw.permissionsRequired, errors),
+    validation: needValidation(raw.validation, errors),
+    tags: needStringList(raw.tags, "tags", errors, true),
+    scope: needScope(raw.scope, errors),
+  };
+  if (metadata.slug && metadata.slug !== slug) errors.push(`slug must match the package directory (${slug}).`);
+
+  let instructions = "";
+  if (!fs.existsSync(bodyPath)) errors.push("SKILL.md is missing.");
+  else {
+    try {
+      instructions = fs.readFileSync(bodyPath, "utf8");
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : "SKILL.md could not be read.");
+    }
+  }
   const steps = stepsFromMarkdown(instructions);
-  if (!meta.id || !meta.name) throw new Error(`Skill package ${dir} is missing id or name.`);
-  if (steps.length === 0) throw new Error(`Skill package ${dir} has no numbered steps in SKILL.md.`);
+  if (fs.existsSync(bodyPath) && steps.length === 0) errors.push("SKILL.md must include numbered steps.");
+  if (errors.length > 0) return { rejection: { slug, dir, errors } };
+
+  const definition: SkillDefinition = { metadata, steps, instructions, dir };
   return {
-    id: meta.id,
-    name: meta.name,
-    trigger: String(meta.trigger ?? ""),
-    description: String(meta.description ?? ""),
-    requiredTools: Array.isArray(meta.requiredTools) ? meta.requiredTools.map(String) : [],
-    steps,
-    validation: String(meta.validation ?? ""),
-    scope: "tenant",
-    confidence: typeof meta.confidence === "number" ? meta.confidence : 1,
-    sourceRuns: Array.isArray(meta.sourceRuns) ? meta.sourceRuns.map(String) : ["seed"],
-    validated: true,
-    builtin: true,
-    installed: true,
-    category: typeof meta.category === "string" && meta.category.trim() ? meta.category.trim() : "General",
-    version: typeof meta.version === "string" && meta.version.trim() ? meta.version.trim() : "1.0.0",
-    source: "built-in",
-    dir,
-    instructions,
+    skill: {
+      id: metadata.id,
+      name: metadata.name,
+      trigger: metadata.triggers.join(", "),
+      description: metadata.description,
+      requiredTools: metadata.requiredTools,
+      steps,
+      validation: metadata.validation.rule,
+      scope: "tenant",
+      confidence: 1,
+      sourceRuns: ["seed"],
+      validated: true,
+      builtin: metadata.builtIn,
+      installed: true,
+      category: metadata.category,
+      version: metadata.version,
+      source: metadata.source,
+      dir,
+      instructions,
+      metadata: definition.metadata,
+    },
   };
 }
 
 export class SkillLoader {
   constructor(private readonly root = builtinSkillsRoot()) {}
 
-  /** Load every packaged built-in that has both skill.json and SKILL.md. */
-  loadBuiltin(): SkillPackage[] {
-    const names = fs.readdirSync(this.root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
+  /** Validate every package. A malformed skill is reported and skipped. */
+  load(): SkillLoadReport {
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(this.root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch (err) {
+      return {
+        skills: [],
+        rejected: [{ slug: path.basename(this.root), dir: this.root, errors: [err instanceof Error ? err.message : "Could not read the skills directory."] }],
+      };
+    }
     const skills: SkillPackage[] = [];
+    const rejected: SkillRejection[] = [];
+    const seen = new Set<string>();
     for (const name of names) {
       const dir = path.join(this.root, name);
-      if (!fs.existsSync(path.join(dir, "skill.json")) || !fs.existsSync(path.join(dir, "SKILL.md"))) continue;
-      skills.push(readPackage(dir));
+      if (!fs.existsSync(path.join(dir, "skill.json"))) continue;
+      try {
+        const result = validateSkillPackage(dir);
+        if ("rejection" in result) {
+          rejected.push(result.rejection);
+          continue;
+        }
+        if (seen.has(result.skill.id)) {
+          rejected.push({ slug: name, dir, errors: [`id ${result.skill.id} is already used by another package.`] });
+          continue;
+        }
+        seen.add(result.skill.id);
+        skills.push(result.skill);
+      } catch (err) {
+        rejected.push({ slug: name, dir, errors: [err instanceof Error ? err.message : "Could not load this skill."] });
+      }
     }
-    return skills;
+    return { skills, rejected };
   }
 }

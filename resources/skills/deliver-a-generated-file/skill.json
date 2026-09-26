@@ -1,12 +1,21 @@
 {
   "id": "skill_deliver_file",
+  "slug": "deliver-a-generated-file",
   "name": "Deliver a generated file",
-  "trigger": "logo, PNG, image, PDF, document, zip, generate a file",
+  "version": "1.0.0",
   "description": "Create a real file in ORVYN virtual storage and hand it to the user from Files → Generated.",
+  "category": "General",
+  "publisher": "ORVYN",
+  "source": "built-in",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": ["logo", "PNG", "image", "PDF", "document", "zip", "generate a file"],
+  "taskDomains": ["files", "artifacts"],
+  "runModes": ["agent"],
   "requiredTools": ["generate_image", "create_document", "artifact_create"],
-  "validation": "artifact.created with status ready + readable bytes",
-  "scope": "tenant",
-  "confidence": 1,
-  "sourceRuns": ["seed"],
-  "validated": true
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": { "rule": "artifact.created with status ready + readable bytes" },
+  "tags": ["files", "artifacts"],
+  "scope": "builtin"
 }

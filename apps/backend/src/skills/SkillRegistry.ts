@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { SkillLoader, type SkillPackage } from "./SkillLoader";
+import type { SkillRejection } from "./types";
 
 export interface RegistrySkill extends SkillPackage {
   enabled: boolean;
@@ -36,12 +37,20 @@ export class SkillRegistry {
   constructor(private readonly loader = new SkillLoader()) {}
 
   list(): RegistrySkill[] {
+    return this.report().skills;
+  }
+
+  report(): { skills: RegistrySkill[]; rejected: SkillRejection[] } {
+    const loaded = this.loader.load();
     const off = disabledIds();
-    return this.loader.loadBuiltin().map((skill) => this.present(skill, !off.has(skill.id)));
+    return {
+      skills: loaded.skills.map((skill) => this.present(skill, !off.has(skill.id))),
+      rejected: loaded.rejected,
+    };
   }
 
   setEnabled(id: string, enabled: boolean): RegistrySkill {
-    const skill = this.loader.loadBuiltin().find((item) => item.id === id);
+    const skill = this.loader.load().skills.find((item) => item.id === id);
     if (!skill) throw new Error("Unknown skill.");
     const off = disabledIds();
     if (enabled) off.delete(id);

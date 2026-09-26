@@ -1,12 +1,21 @@
 {
   "id": "skill_visual_verify",
+  "slug": "verify-the-ui-you-changed",
   "name": "Verify the UI you changed",
-  "trigger": "dashboard, layout, CSS, visible bug, screenshot, preview",
+  "version": "1.0.0",
   "description": "Change the UI, then capture proof the user can see.",
+  "category": "General",
+  "publisher": "ORVYN",
+  "source": "built-in",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": ["dashboard", "layout", "CSS", "visible bug", "screenshot", "preview"],
+  "taskDomains": ["ui"],
+  "runModes": ["agent"],
   "requiredTools": ["browser_screenshot", "desktop_screenshot", "browser_open"],
-  "validation": "desktop.verification.passed or screenshot artifact",
-  "scope": "tenant",
-  "confidence": 1,
-  "sourceRuns": ["seed"],
-  "validated": true
+  "optionalTools": [],
+  "permissionsRequired": [],
+  "validation": { "rule": "desktop.verification.passed or screenshot artifact" },
+  "tags": ["ui", "screenshot"],
+  "scope": "builtin"
 }
