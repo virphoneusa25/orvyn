@@ -134,6 +134,30 @@ export function rootKey(projectRoot: string): string {
   return /^[A-Za-z]:\//.test(r) || r.startsWith("//") ? r.toLowerCase() : r;
 }
 
+/** Relative project path stored on a workspace. Rejects escapes. */
+export function normalizeKnownFile(filePath: string): string {
+  const rel = String(filePath ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+  if (!rel || rel === "." || rel.split("/").includes("..")) return "";
+  return rel;
+}
+
+function parseKnownFiles(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string") continue;
+      const rel = normalizeKnownFile(item);
+      if (rel && !out.includes(rel)) out.push(rel);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 interface Row {
   session_id: string; tenant_id: string; user_id: string; title: string; project_id: string | null;
   workspace_id: string | null; project_root: string | null; run_ids_json: string; active_run_id: string | null;
@@ -160,10 +184,20 @@ function fromRow(r: Row): WorkSession {
   };
 }
 
+export interface WorkspaceRecord {
+  workspaceId: string;
+  projectId: string;
+  projectRoot: string;
+  knownFiles: string[];
+}
+
 export class WorkSessionStore {
   private db: DatabaseSync;
+  /** Directory that holds this tenant's session database and provisioned workspaces. */
+  readonly dataDirectory: string;
 
   constructor(private readonly tenantId: string, dataDir: string = defaultDataDir()) {
+    this.dataDirectory = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}-sessions.db`));
     this.db.exec("PRAGMA journal_mode = WAL;");
@@ -172,17 +206,72 @@ export class WorkSessionStore {
     // Added after the first release: message detail (web research activity).
     const cols = this.db.prepare(`PRAGMA table_info(session_messages)`).all() as { name: string }[];
     if (!cols.some((c) => c.name === "meta_json")) this.db.exec(`ALTER TABLE session_messages ADD COLUMN meta_json TEXT`);
+    const wsCols = this.db.prepare(`PRAGMA table_info(workspaces)`).all() as { name: string }[];
+    if (!wsCols.some((c) => c.name === "known_files_json")) this.db.exec(`ALTER TABLE workspaces ADD COLUMN known_files_json TEXT`);
   }
 
   /** The stable workspace (and project) for a folder; created the first time it is seen. */
-  workspaceFor(projectRoot: string): { workspaceId: string; projectId: string } {
+  workspaceFor(projectRoot: string): { workspaceId: string; projectId: string; created: boolean } {
     const key = rootKey(projectRoot);
     const hit = this.db.prepare(`SELECT workspace_id, project_id FROM workspaces WHERE root_key = ?`).get(key) as { workspace_id: string; project_id: string } | undefined;
-    if (hit) return { workspaceId: hit.workspace_id, projectId: hit.project_id };
-    const w = { workspaceId: id("ws"), projectId: id("proj") };
-    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at) VALUES (?, ?, ?, ?, ?)`)
+    if (hit) return { workspaceId: hit.workspace_id, projectId: hit.project_id, created: false };
+    const w = { workspaceId: id("ws"), projectId: id("proj"), created: true };
+    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json) VALUES (?, ?, ?, ?, ?, '[]')`)
       .run(w.workspaceId, w.projectId, key, projectRoot, Date.now());
     return w;
+  }
+
+  /**
+   * A new per-chat workspace directory under the tenant data dir.
+   * The directory is created here; callers must not invent a second folder.
+   */
+  provisionWorkspace(): { workspaceId: string; projectId: string; projectRoot: string } {
+    const workspaceId = id("ws");
+    const projectId = id("proj");
+    const dir = path.join(this.dataDirectory, "tenants", this.tenantId, "workspaces", workspaceId);
+    fs.mkdirSync(dir, { recursive: true });
+    const projectRoot = fs.realpathSync(dir);
+    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json) VALUES (?, ?, ?, ?, ?, '[]')`)
+      .run(workspaceId, projectId, rootKey(projectRoot), projectRoot, Date.now());
+    return { workspaceId, projectId, projectRoot };
+  }
+
+  getWorkspace(workspaceId: string): WorkspaceRecord | undefined {
+    const row = this.db.prepare(`SELECT workspace_id, project_id, project_root, known_files_json FROM workspaces WHERE workspace_id = ?`).get(workspaceId) as
+      | { workspace_id: string; project_id: string; project_root: string; known_files_json?: string | null }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      projectRoot: row.project_root,
+      knownFiles: parseKnownFiles(row.known_files_json),
+    };
+  }
+
+  knownFiles(workspaceId: string): string[] {
+    return this.getWorkspace(workspaceId)?.knownFiles ?? [];
+  }
+
+  /** Remember project files that have existed in this workspace. Paths are relative. */
+  rememberFiles(workspaceId: string, files: string[]): string[] {
+    const current = this.knownFiles(workspaceId);
+    const next = current.slice();
+    for (const file of files) {
+      const rel = normalizeKnownFile(file);
+      if (!rel || next.includes(rel)) continue;
+      next.push(rel);
+    }
+    this.db.prepare(`UPDATE workspaces SET known_files_json = ? WHERE workspace_id = ?`).run(JSON.stringify(next), workspaceId);
+    return next;
+  }
+
+  /** Point a session at a workspace. Does not mint a new id when one is already stored. */
+  bindWorkspace(sessionId: string, binding: { workspaceId: string; projectId: string; projectRoot: string }): WorkSession | undefined {
+    if (!this.get(sessionId)) return undefined;
+    this.db.prepare(`UPDATE work_sessions SET workspace_id = ?, project_id = ?, project_root = ?, updated_at = ? WHERE session_id = ?`)
+      .run(binding.workspaceId, binding.projectId, binding.projectRoot, Date.now(), sessionId);
+    return this.get(sessionId);
   }
 
   create(input: { title: string; userId?: string; projectRoot?: string | null }): WorkSession {

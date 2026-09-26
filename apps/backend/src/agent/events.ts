@@ -103,6 +103,7 @@ export type AgentEventType =
   | "agent.continue"
   | "agent.turn"
   | "run.session"
+  | "workspace.resolved"
   | "verification.started"
   | "verification.completed"
   | "agent.loop.finished"

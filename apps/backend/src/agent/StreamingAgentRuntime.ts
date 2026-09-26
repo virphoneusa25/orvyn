@@ -51,6 +51,7 @@ import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } f
 import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
+import { normalizeKnownFile, workspaceModelNote } from "./workspacePreflight";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
@@ -223,6 +224,8 @@ interface RunState {
   /** Capabilities ORVYN already asked the user to install in this run. */
   capabilityQueries: Set<string>;
   capabilityNudges: number;
+  /** Records a project file on the session workspace after a successful write. */
+  onProjectFile?: (relativePath: string) => void;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -231,6 +234,10 @@ export interface RunOptions {
   accessMode?: AccessMode;
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
   composerMode?: string;
+  /** Set when workspace preflight already bound this run. */
+  workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean };
+  /** Persists written paths onto the workspace so a later empty resolve is a mismatch. */
+  onProjectFile?: (relativePath: string) => void;
 }
 
 /**
@@ -241,6 +248,18 @@ export interface RunOptions {
  */
 const MAX_STEPS = Number(process.env.ORVYN_AGENT_MAX_STEPS) || 48;
 const FAILURE_CIRCUIT_BREAKER = 5;
+/** Workspace wording for the model. Host paths stay out of normal chat. */
+function workspaceAnchor(
+  execution: ExecutionSpec | undefined,
+  identity?: { created: boolean; restored: boolean; fresh: boolean }
+): string {
+  if (execution?.location === "OVH_WORKER") {
+    return "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
+  }
+  if (identity) return workspaceModelNote(identity);
+  return "File tools take paths relative to this chat's workspace. Do not invent another project folder.";
+}
+
 /** Tells the model which shell its terminal commands run in. */
 function shellHint(platform?: string): string {
   if (platform === "win32") {
@@ -1002,6 +1021,7 @@ export class StreamingAgentRuntime {
       helperSteps: 0,
       capabilityQueries: new Set<string>(),
       capabilityNudges: 0,
+      ...(options?.onProjectFile ? { onProjectFile: options.onProjectFile } : {}),
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1125,7 +1145,7 @@ export class StreamingAgentRuntime {
         memory: estimateTokens(memoryContext),
         skills: estimateTokens(skillsPrompt),
         meta: estimateTokens([
-          `Project root (absolute): ${projectRoot}`,
+          workspaceAnchor(execution, options?.workspaceIdentity),
           LANGUAGE_RULE,
           rules ? `\nProject rules:\n${rules}` : "",
         ].filter(Boolean).join("\n")),
@@ -1144,9 +1164,7 @@ export class StreamingAgentRuntime {
           mcpCapabilities(this.mcpSummary),
           // Without the root the agent has no anchor: vague instructions used
           // to produce a greeting instead of an investigation.
-          execution?.location === "OVH_WORKER"
-            ? "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded."
-            : `Project root (absolute): ${projectRoot}\nFile tools take paths relative to the project root.`,
+          workspaceAnchor(execution, options?.workspaceIdentity),
           intent.requiresFrontend ? (this.runs.get(runId)?.websiteLayout?.prompt ?? "") : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
@@ -2409,7 +2427,11 @@ export class StreamingAgentRuntime {
           this.emitDomainEvent(runId, call, (result.edit as EditPreview | undefined) ?? previews.get(call.id));
           const args = call.arguments as Record<string, unknown>;
           const artifactPath = String(args.path ?? args.to ?? args.from ?? "").trim();
-          if (artifactPath && call.name !== "delete_file") this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
+          if (artifactPath && call.name !== "delete_file") {
+            this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
+            const remembered = normalizeKnownFile(artifactPath);
+            if (remembered) state.onProjectFile?.(remembered);
+          }
         }
         const raw = envelope.modelPayload;
         const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? await this.verifiedPersisted(result) : [];

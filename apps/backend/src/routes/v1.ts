@@ -93,16 +93,17 @@ v1Router.use(async (req, res, next) => {
     // C:\Users\me\project) names the user's LOCAL project. It must reach the
     // route untouched so Auto can send it to the Local Worker — rewriting it to
     // the Cloud virtual workspace silently wrote "local" files on the server.
-    const runStart = req.method === "POST" && req.path === "/agent/stream/runs";
+    const runStart = req.method === "POST" && (req.path === "/agent/stream/runs" || req.path === "/agent/orchestrate");
     const clientMachineRoot = runStart
       && typeof req.body?.projectRoot === "string"
       && looksLikeForeignAbsolutePath(req.body.projectRoot.trim());
-    if (!forcedRemote && !clientMachineRoot && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
+    // Stream and mission runs resolve their own workspace. Rewriting an empty
+    // root here used to land every chat in one shared virtual folder.
+    if (!runStart && !forcedRemote && !clientMachineRoot && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
-    if (req.method === "POST" && ["/agent/stream/runs", "/agent/orchestrate"].includes(req.path)) {
+    if (runStart) {
       const tenant = requireTenant(req);
       if (tenant.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) return res.status(409).json({error:"A task is already active. Stop it or wait before starting another."});
-      if (!forcedRemote && !clientMachineRoot) req.body.projectRoot = await resolveWorkspace(tenant, req.body.projectRoot);
     }
     next();
   } catch (e: any) { res.status(400).json({error:e.message}); }
@@ -555,12 +556,54 @@ v1Router.post("/chat/completions", async (req, res) => {
     const intent = inferTaskIntent(message, composerMode);
     const chip = composerMode.toLowerCase();
     if (!intent.informational && chip !== "research" && chip !== "ask" && chip !== "plan") {
-      const projectRoot = String(req.body.projectRoot ?? tc.currentProjectRoot ?? "");
-      _regTools(tc, projectRoot);
-      const runId = tc.agentRuntime.start(projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+      let session = typeof req.body.sessionId === "string" ? tc.sessions.get(req.body.sessionId) : undefined;
+      if (!session) {
+        session = tc.sessions.create({
+          title: message.split("\n")[0]!.slice(0, 80) || "New conversation",
+          userId: req.principal?.userId ?? "",
+          projectRoot: null,
+        });
+      }
+      const preflight = resolveRunWorkspace({
+        sessions: tc.sessions,
+        tenantId: tc.id,
+        session,
+        instruction: message,
         composerMode: chip,
+        clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
+        switchProject: req.body.switchProject === true,
       });
-      return res.status(201).json({ runId, routed: "agent" });
+      if (preflight.status === "mismatch") {
+        return res.status(409).json({
+          error: preflight.message,
+          code: preflight.code,
+          sessionId: preflight.sessionId,
+          projectId: preflight.projectId,
+          workspaceId: preflight.workspaceId,
+          projectRoot: preflight.projectRoot,
+        });
+      }
+      if (!exposeProjectTools(preflight)) {
+        return res.status(409).json({ error: "This task needs a workspace before file tools can run.", code: "WORKSPACE_REQUIRED" });
+      }
+      _regTools(tc, preflight.projectRoot);
+      const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+        composerMode: chip,
+        workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+        onProjectFile: (rel: string) => { tc.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+      });
+      tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot);
+      if (tc.runStore.get(runId)) {
+        tc.runStore.emit(runId, "workspace.resolved", {
+          sessionId: preflight.sessionId,
+          projectId: preflight.projectId,
+          workspaceId: preflight.workspaceId,
+          projectRoot: preflight.projectRoot,
+          created: preflight.created,
+          restored: preflight.restored,
+        });
+      }
+      return res.status(201).json({ runId, routed: "agent", sessionId: preflight.sessionId, workspaceId: preflight.workspaceId, projectId: preflight.projectId });
     }
     const response = await new Orchestrator(tc.modelService, tc.indexService, tc.artifactService, tc.localStore as unknown as MemoryStoreLike).chat({
       task: req.body.task ?? "chat",
@@ -584,6 +627,7 @@ import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
 import { inferTaskIntent } from "../agent/taskIntent";
+import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace } from "../agent/workspacePreflight";
 import { notePublicOrigin } from "../agent/sitePreview";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
@@ -591,14 +635,51 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // aborts the run itself.
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
+  const instruction = String(req.body.instruction ?? req.body.goal ?? "");
+  const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
+  const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
+  let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
+  if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
+  if (!session) {
+    session = t.sessions.create({
+      title: instruction.split("\n")[0]!.slice(0, 80) || "New conversation",
+      userId: req.principal?.userId ?? "",
+      projectRoot: null,
+    });
+  }
+  const clientRoot = typeof req.body.projectRoot === "string"
+    ? req.body.projectRoot
+    : (typeof req.body.remoteProjectRoot === "string" ? req.body.remoteProjectRoot : null);
+  const preflight = resolveRunWorkspace({
+    sessions: t.sessions,
+    tenantId: t.id,
+    session,
+    instruction,
+    composerMode,
+    clientRoot,
+    switchProject: req.body.switchProject === true,
+  });
+  if (preflight.status === "mismatch") {
+    return res.status(409).json({
+      error: preflight.message,
+      code: preflight.code,
+      sessionId: preflight.sessionId,
+      projectId: preflight.projectId,
+      workspaceId: preflight.workspaceId,
+      projectRoot: preflight.projectRoot,
+    });
+  }
+  session = t.sessions.get(session.sessionId) ?? session;
+  const boundRoot = preflight.status === "resolved" ? preflight.projectRoot : "";
 
   const requestedTarget = isExecutionTarget(req.body.executionTarget)
     ? req.body.executionTarget
     : req.body.executionLocation === "OVH_WORKER"
       ? "ovh_worker"
       : "auto";
-  const resolvedRoot = String(req.body.projectRoot ?? "").trim();
-  const virtualWorkspace = Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id);
+  const resolvedRoot = boundRoot;
+  const managedWorkspace = Boolean(resolvedRoot) && isProvisionedWorkspace(resolvedRoot, t.id, t.sessions.dataDirectory);
+  const virtualWorkspace = managedWorkspace || (Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id));
   const hasLocalProject = Boolean(resolvedRoot) && !virtualWorkspace;
   const hints = classifyExecutionHints(String(req.body.instruction ?? req.body.goal ?? ""), String(req.body.composerMode ?? req.body.mode ?? "auto"));
   const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
@@ -652,7 +733,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     ? "LOCAL"
     : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
   const clientProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
-  const remoteProjectRoot = location === "OVH_WORKER" ? cloudWorkerSourcePath(clientProjectRoot) : clientProjectRoot;
+  const remoteProjectRoot = location === "OVH_WORKER" ? cloudWorkerSourcePath(clientProjectRoot) : boundRoot;
   const executionLabel = controlPlaneVirtual && cloudHost
     ? "Cloud"
     : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud";
@@ -661,24 +742,12 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     String(req.headers["x-forwarded-proto"] || req.protocol || "https"),
     String(req.headers["x-forwarded-host"] || req.get("host") || "")
   );
-  _regTools(t, location === "LOCAL" ? req.body.projectRoot : (req.body.projectRoot || t.currentProjectRoot || remoteProjectRoot));
+  if (exposeProjectTools(preflight)) _regTools(t, boundRoot);
   t.usage.agentRuns++;
-  const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
-  // Every run belongs to a durable WorkSession: the chat's (sessionId), the
-  // previous run's, or a new one for a new conversation.
-  let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
-  if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
-  if (!session) {
-    session = t.sessions.create({
-      title: String(req.body.instruction ?? "").split("\n")[0]!.slice(0, 80) || "New conversation",
-      userId: req.principal?.userId ?? "",
-      projectRoot: String(req.body.projectRoot ?? remoteProjectRoot ?? "") || null,
-    });
-  }
   // A follow-up continues the conversation: the session's runs are its history.
   const history: {role: "user" | "assistant";content:string}[] = threadHistory(t.runStore, session.runIds);
   const runId = t.agentRuntime.start(
-    req.body.projectRoot || remoteProjectRoot || t.currentProjectRoot || "",
+    boundRoot,
     req.body.instruction,
     req.body.rules,
     req.body.mode ?? "agent",
@@ -691,7 +760,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       tenantId: t.id,
       organizationId: req.principal?.organizationId ?? "",
       userId: req.principal?.userId ?? "",
-      projectId: typeof req.body.projectId === "string" ? req.body.projectId : null,
+      projectId: preflight.status === "resolved" ? preflight.projectId : (typeof req.body.projectId === "string" ? req.body.projectId : null),
       targetRequested: routed.requested,
       targetActual: routed.actual,
       executionLabel,
@@ -707,13 +776,31 @@ v1Router.post("/agent/stream/runs", (req, res) => {
         : undefined,
       accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
+      ...(preflight.status === "resolved"
+        ? {
+            workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+            onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+          }
+        : {}),
     }
   );
   if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {
-    queueLocalHostJob(runId, remoteProjectRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
+    queueLocalHostJob(runId, remoteProjectRoot || boundRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
   }
-  const attached = t.sessions.attachRun(session.sessionId, runId, String(req.body.projectRoot || remoteProjectRoot || "") || null) ?? session;
-  if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId });
+  const attached = t.sessions.attachRun(session.sessionId, runId, boundRoot || null) ?? session;
+  if (t.runStore.get(runId)) {
+    t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId });
+    if (preflight.status === "resolved") {
+      t.runStore.emit(runId, "workspace.resolved", {
+        sessionId: preflight.sessionId,
+        projectId: preflight.projectId,
+        workspaceId: preflight.workspaceId,
+        projectRoot: preflight.projectRoot,
+        created: preflight.created,
+        restored: preflight.restored,
+      });
+    }
+  }
   // The conversation is stored as it happens: the instruction now, ORION's answer when the run ends.
   const userMessage = recordRunInstruction(t.sessions, attached.sessionId, runId, String(req.body.instruction ?? ""), {
     messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
@@ -1054,15 +1141,38 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  _regTools(t, req.body.projectRoot);
+  const goal = String(req.body.goal ?? "");
+  const missionSession = (typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined)
+    ?? t.sessions.create({ title: goal.split("\n")[0]!.slice(0, 80) || "Mission", userId: req.principal?.userId ?? "", projectRoot: null });
+  const preflight = resolveRunWorkspace({
+    sessions: t.sessions,
+    tenantId: t.id,
+    session: missionSession,
+    instruction: goal,
+    composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : "agent",
+    clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
+    switchProject: req.body.switchProject === true,
+  });
+  if (preflight.status === "mismatch") {
+    return res.status(409).json({
+      error: preflight.message,
+      code: preflight.code,
+      sessionId: preflight.sessionId,
+      projectId: preflight.projectId,
+      workspaceId: preflight.workspaceId,
+      projectRoot: preflight.projectRoot,
+    });
+  }
+  if (exposeProjectTools(preflight)) _regTools(t, preflight.projectRoot);
   t.usage.agentRuns++;
   // One agent loop. Mission requests use the same runtime as chat runs.
   const reasoningEffort = ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
     ? req.body.reasoningEffort
     : undefined;
   const accessMode = isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined;
+  const missionRoot = preflight.status === "resolved" ? preflight.projectRoot : "";
   const runId = t.agentRuntime.start(
-    req.body.projectRoot,
+    missionRoot,
     req.body.goal,
     req.body.rules,
     "agent",
@@ -1070,13 +1180,32 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     [],
     typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
     undefined,
-    { reasoningEffort, accessMode, composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined }
+    {
+      reasoningEffort,
+      accessMode,
+      composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
+      ...(preflight.status === "resolved"
+        ? {
+            workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+            onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+          }
+        : {}),
+    }
   );
-  // Missions are work sessions too: the run joins the given session or a new one.
-  const missionSession = (typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined)
-    ?? t.sessions.create({ title: String(req.body.goal ?? "Mission").split("\n")[0]!.slice(0, 80), userId: req.principal?.userId ?? "", projectRoot: req.body.projectRoot ?? null });
-  const joined = t.sessions.attachRun(missionSession.sessionId, runId, req.body.projectRoot ?? null) ?? missionSession;
-  if (t.runStore.get(runId)) t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId });
+  const joined = t.sessions.attachRun(missionSession.sessionId, runId, missionRoot || null) ?? missionSession;
+  if (t.runStore.get(runId)) {
+    t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId });
+    if (preflight.status === "resolved") {
+      t.runStore.emit(runId, "workspace.resolved", {
+        sessionId: preflight.sessionId,
+        projectId: preflight.projectId,
+        workspaceId: preflight.workspaceId,
+        projectRoot: preflight.projectRoot,
+        created: preflight.created,
+        restored: preflight.restored,
+      });
+    }
+  }
   recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission" });
   recordRunAnswer(t.sessions, t.runStore, joined.sessionId, runId);
   res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });

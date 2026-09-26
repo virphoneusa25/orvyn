@@ -10,7 +10,12 @@ export interface WorkspaceContext {
 
 /** A project name is not a workspace. Git tools need a real repository root. */
 export function inspectWorkspace(projectRoot: string): WorkspaceContext {
-  const start = path.resolve(String(projectRoot || "").trim() || ".");
+  const raw = String(projectRoot || "").trim();
+  // Never treat a missing root as the backend process directory.
+  if (!raw || raw === "." || raw === "./") {
+    return { path: raw, available: false, repositoryDetected: false, repositoryRoot: null };
+  }
+  const start = path.resolve(raw);
   if (!existsSync(start)) {
     return { path: start, available: false, repositoryDetected: false, repositoryRoot: null };
   }
