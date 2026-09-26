@@ -1047,7 +1047,7 @@ export function App() {
         {view === "settings" && (
           <SettingsScreen
             userName={presentation.userName || "ORVYN"}
-            planLabel="Pro"
+            planLabel="Pro Plan"
             onBack={() => setView(settingsReturn.current)}
           />
         )}

@@ -1619,6 +1619,11 @@ v1Router.get("/billing", (req, res) => {
   });
 });
 
+v1Router.get("/billing/stats", (req, res) => {
+  const t = requireTenant(req);
+  res.json(creditLedger.usageStats(t.id));
+});
+
 v1Router.post("/billing/topup", (req, res) => {
   const t = requireTenant(req);
   const pack = packById(String(req.body?.packId ?? ""));

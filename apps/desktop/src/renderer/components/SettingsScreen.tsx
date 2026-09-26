@@ -1,4 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { apiUrl, authHeaders } from "../connection";
+import { UsageStatsPage } from "./UsageStatsPage";
 import logo from "../assets/logo-lockup.png";
 import mark from "../assets/icon.png";
 import "../styles/settings-screen.css";
@@ -35,7 +37,7 @@ const NAV: { label: string; items: { id: SectionId; label: string; icon: React.R
   {
     label: "ACCOUNT & DATA",
     items: [
-      { id: "usage", label: "Usage stats", icon: <Chart /> },
+      { id: "usage", label: "Usage & Stats", icon: <Chart /> },
       { id: "billing", label: "Billing", icon: <Card /> },
       { id: "security", label: "Security", icon: <Shield /> },
       { id: "vault", label: "Vault / Secrets", icon: <Lock /> },
@@ -85,6 +87,18 @@ export function SettingsScreen({
   onBack: () => void;
 }) {
   const [section, setSection] = useState<SectionId>("models");
+  const [livePlan, setLivePlan] = useState(planLabel);
+  useEffect(() => {
+    let cancel = false;
+    fetch(apiUrl("/billing"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        const label = body?.wallet?.plan?.label;
+        if (!cancel && typeof label === "string" && label) setLivePlan(`${label} Plan`);
+      })
+      .catch(() => undefined);
+    return () => { cancel = true; };
+  }, []);
   const [providerId, setProviderId] = useState("openai");
   const [enabled, setEnabled] = useState<Record<string, boolean>>({ openai: true, auto: true, anthropic: true, fireworks: true, gemini: true, openrouter: true, custom: true });
   const [modelsOn, setModelsOn] = useState<Record<string, boolean>>(() => Object.fromEntries(MODELS.map((m) => [m.name, true])));
@@ -121,7 +135,7 @@ export function SettingsScreen({
           <span className="settings-avatar">{userName.slice(0, 1).toUpperCase() || "O"}</span>
           <span className="settings-user__text">
             <span className="settings-user__name">{userName}</span>
-            <span className="settings-user__plan">{planLabel}</span>
+            <span className="settings-user__plan">{livePlan}</span>
           </span>
           <button type="button" className="settings-gear" aria-label="Settings" onClick={() => setSection("models")}>
             <Gear />
@@ -140,6 +154,8 @@ export function SettingsScreen({
             modelsOn={modelsOn}
             onToggleModel={(name) => setModelsOn((s) => ({ ...s, [name]: !s[name] }))}
           />
+        ) : section === "usage" ? (
+          <UsageStatsPage />
         ) : (
           <section>
             <h1>{NAV.flatMap((g) => g.items).find((i) => i.id === section)?.label}</h1>

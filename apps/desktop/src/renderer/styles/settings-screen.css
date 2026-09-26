@@ -339,8 +339,86 @@
 }
 .settings-toggle.is-on i { transform: translateX(16px); }
 
+.usage-page h2 { margin: 18px 0 10px; font-size: 15px; font-weight: 650; }
+.usage-page__head, .usage-card__top, .usage-meter__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.usage-page__title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.usage-refresh { display: flex; align-items: center; gap: 8px; color: #8b95ad; font-size: 12px; white-space: nowrap; }
+.usage-refresh button {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  background: transparent; border: 1px solid #2a354c; color: #c5d0e4; border-radius: 50%; cursor: pointer;
+}
+.usage-refresh button:disabled { opacity: 0.5; cursor: default; }
+.usage-pills { display: inline-flex; gap: 6px; }
+.usage-pills button {
+  background: transparent; border: 1px solid #2a354c; color: #c5d0e4; border-radius: 99px; padding: 4px 12px; cursor: pointer; font-size: 12px;
+}
+.usage-pills button.is-on { background: #2563eb; border-color: #2563eb; color: white; }
+.usage-error { color: #f87171; font-size: 13px; }
+.usage-meters, .usage-trends { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.usage-meter, .usage-card, .usage-trend {
+  background: #101826; border: 1px solid #1c2638; border-radius: 14px; padding: 14px 16px;
+}
+.usage-card { margin-top: 14px; }
+.usage-meter__name { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #d5def0; }
+.usage-meter__value { font-size: 28px; font-weight: 700; margin: 10px 0 8px; display: flex; align-items: baseline; gap: 8px; letter-spacing: -0.03em; }
+.usage-meter__value small, .usage-muted, .usage-stat span, .usage-meter__foot { color: #8b95ad; font-size: 12px; font-weight: 500; }
+.usage-meter__value i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; align-self: center; }
+.usage-bar { height: 6px; border-radius: 99px; background: #1c2638; overflow: hidden; }
+.usage-bar > div { height: 100%; border-radius: 99px; }
+.usage-meter__foot { text-align: right; margin-top: 8px; }
+.usage-activity { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.usage-stat { display: flex; gap: 10px; align-items: center; color: #9eb0d0; min-width: 0; }
+.usage-stat b { display: block; color: #e7eefc; font-size: 18px; letter-spacing: -0.02em; }
+.usage-glyph { display: inline-grid; place-items: center; color: #9eb6ff; flex-shrink: 0; }
+.usage-glyph--blue { color: #60a5fa; }
+.usage-glyph--green { color: #34d399; }
+.usage-glyph--purple { color: #c4b5fd; }
+.usage-glyph--cyan { color: #22d3ee; }
+.usage-glyph--orange { color: #fb923c; }
+.usage-glyph--amber { color: #fbbf24; }
+.usage-trend { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.usage-trend__label { display: flex; align-items: center; gap: 6px; color: #8b95ad; font-size: 12px; }
+.usage-trend__value { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
+.usage-trend b { font-size: 22px; letter-spacing: -0.03em; }
+.usage-heat { overflow-x: auto; }
+.usage-heat__months, .usage-heat__days { color: #8b95ad; font-size: 10px; }
+.usage-heat__months {
+  display: grid; grid-template-columns: repeat(53, 11px); gap: 2px; margin: 8px 0 6px 40px;
+}
+.usage-heat__months span { overflow: visible; white-space: nowrap; }
+.usage-heat__body { display: grid; grid-template-columns: 32px max-content auto; gap: 8px; align-items: start; }
+.usage-heat__days { display: grid; grid-template-rows: repeat(7, 11px); align-items: center; }
+.usage-heat__grid { display: grid; grid-template-rows: repeat(7, 11px); grid-auto-flow: column; grid-auto-columns: 11px; gap: 2px; }
+.usage-heat__grid i, .usage-heat__scale i { width: 9px; height: 9px; border-radius: 2px; background: #172033; display: block; }
+.usage-heat__grid i[data-level="1"], .usage-heat__scale i[data-level="1"] { background: #1e3a8a; }
+.usage-heat__grid i[data-level="2"], .usage-heat__scale i[data-level="2"] { background: #1d4ed8; }
+.usage-heat__grid i[data-level="3"], .usage-heat__scale i[data-level="3"] { background: #3b82f6; }
+.usage-heat__grid i[data-level="4"], .usage-heat__scale i[data-level="4"] { background: #bfdbfe; }
+.usage-heat__scale { display: flex; flex-direction: column; align-items: center; gap: 4px; color: #8b95ad; font-size: 10px; text-align: center; max-width: 72px; }
+.usage-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; color: #c5d0e4; font-size: 12px; }
+.usage-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 4px; }
+.usage-plot { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.usage-plot__axis { display: flex; flex-direction: column; justify-content: space-between; color: #8b95ad; font-size: 10px; height: 140px; padding-bottom: 16px; }
+.usage-bars { display: flex; align-items: flex-end; gap: 6px; height: 140px; }
+.usage-bars__col { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; min-width: 0; }
+.usage-bars__stack { width: 100%; max-width: 28px; height: calc(100% - 16px); display: flex; flex-direction: column; justify-content: flex-end; }
+.usage-bars__stack > div { width: 100%; min-height: 0; }
+.usage-bars__stack > div:first-child { border-radius: 3px 3px 0 0; }
+.usage-bars__col span, .usage-health__dates { color: #8b95ad; font-size: 10px; }
+.usage-health-frame { position: relative; }
+.usage-health { width: 100%; height: 150px; display: block; }
+.usage-health-empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  margin: 0; color: #8b95ad; font-size: 13px;
+}
+.usage-health__dates { display: flex; justify-content: space-between; margin-left: 50px; }
+
 @media (max-width: 1100px) {
   .settings-screen { grid-template-columns: 1fr; }
   .settings-side { max-height: 280px; }
-  .settings-grid, .settings-fields, .settings-meters { grid-template-columns: 1fr; }
+  .settings-grid, .settings-fields, .settings-meters, .usage-meters, .usage-trends { grid-template-columns: 1fr; }
+  .usage-activity { grid-template-columns: 1fr 1fr; }
+  .usage-page__head { align-items: flex-start; flex-direction: column; }
+  .usage-heat__body { grid-template-columns: 28px minmax(0, 1fr); }
+  .usage-heat__scale { grid-column: 1 / -1; flex-direction: row; max-width: none; justify-content: flex-end; }
 }

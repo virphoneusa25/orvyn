@@ -115,6 +115,33 @@ test("rolling windows name the moment the oldest charge leaves", () => {
   db.close();
 });
 
+test("usage stats roll tokens, cache, and streaks and skip failed calls", () => {
+  const { db } = ledger();
+  const t0 = Date.UTC(2026, 8, 10, 12);
+  db.setPlan("u1", "pro", t0);
+  db.charge({
+    userId: "u1", type: "model", model: "ORVYN-5.3", lane: "utility",
+    inputTokens: 1_000, cachedInputTokens: 250, outputTokens: 100, providerCostUsd: 0.05, now: t0,
+  });
+  db.charge({
+    userId: "u1", type: "search", model: "ORVYN-5.3", lane: "search",
+    inputTokens: 400, outputTokens: 20, providerCostUsd: 0.01, ok: false, now: t0 + 1_000,
+  });
+  const stats = db.usageStats("u1", t0 + 60_000);
+  assert.equal(stats.plan.id, "pro");
+  assert.equal(stats.activity.totalTokens, 1_100);
+  assert.equal(stats.activity.peakTokens, 1_100);
+  assert.equal(stats.activity.currentStreakDays, 1);
+  assert.equal(stats.cache.cachedTokens, 250);
+  assert.equal(stats.cache.inputTokens, 1_000);
+  assert.equal(stats.days.length, 1);
+  assert.equal(stats.days[0].day, "2026-09-10");
+  assert.ok(stats.days[0].models["ORVYN-5.3"].credits > 0);
+  assert.equal(stats.days[0].tools.model.tokens, 1_100);
+  assert.equal(stats.days[0].tools.search, undefined);
+  db.close();
+});
+
 test("per-run cap stops a runaway and says so", () => {
   const { db } = ledger();
   const t0 = Date.UTC(2026, 8, 7);

@@ -9,6 +9,56 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const CYCLE = 30 * DAY;
 
+function dayKey(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
+function streakEnding(days: string[], now: number): number {
+  const set = new Set(days);
+  let cursor = dayKey(now);
+  if (!set.has(cursor)) cursor = dayKey(now - 86_400_000);
+  let n = 0;
+  while (set.has(cursor)) {
+    n++;
+    cursor = dayKey(Date.parse(cursor + "T00:00:00Z") - 86_400_000);
+  }
+  return n;
+}
+
+interface Part { credits: number; tokens: number }
+interface DayBucket {
+  tokens: number;
+  credits: number;
+  cached: number;
+  input: number;
+  models: Record<string, Part>;
+  tools: Record<string, Part>;
+}
+
+function emptyDay(): DayBucket {
+  return { tokens: 0, credits: 0, cached: 0, input: 0, models: {}, tools: {} };
+}
+
+function addPart(bucket: Record<string, Part>, key: string, credits: number, tokens: number): void {
+  const part = bucket[key] ?? { credits: 0, tokens: 0 };
+  part.credits += credits;
+  part.tokens += tokens;
+  bucket[key] = part;
+}
+
+function longestStreak(days: string[]): number {
+  let best = 0;
+  let run = 0;
+  let prev = "";
+  for (const day of days) {
+    const expected = prev ? dayKey(Date.parse(prev + "T00:00:00Z") + 86_400_000) : day;
+    run = day === expected ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = day;
+  }
+  return best;
+}
+
 export class BillingLimitError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -343,6 +393,58 @@ export class CreditLedger {
       autoRecharge: this.autoRecharge(userId),
       recent: this.recent(userId, 12),
       note: "Stripe is not connected. Credit packs are recorded on this account immediately so the wallet can be tested.",
+    };
+  }
+
+  /** Aggregates the usage page: windows, activity, heatmap, and credit series. */
+  usageStats(userId: string, now = Date.now()) {
+    const wallet = this.snapshot(userId, now);
+    const rows = this.db.prepare(
+      `SELECT created_at AS at, COALESCE(input_tokens, 0) AS inputTokens, COALESCE(cached_input_tokens, 0) AS cachedTokens,
+              COALESCE(output_tokens, 0) AS outputTokens, credits_charged AS credits,
+              COALESCE(model, 'ORVYN') AS model, COALESCE(type, 'model') AS type
+       FROM usage_events WHERE user_id = ? AND ok = 1 ORDER BY created_at ASC`,
+    ).all(userId) as { at: number; inputTokens: number; cachedTokens: number; outputTokens: number; credits: number; model: string; type: string }[];
+    let totalTokens = 0;
+    let peakTokens = 0;
+    let cachedTokens = 0;
+    let inputTokens = 0;
+    const byDay = new Map<string, DayBucket>();
+    const daySet = new Set<string>();
+    for (const row of rows) {
+      const tokens = row.inputTokens + row.outputTokens;
+      totalTokens += tokens;
+      peakTokens = Math.max(peakTokens, tokens);
+      cachedTokens += row.cachedTokens;
+      inputTokens += row.inputTokens;
+      const key = dayKey(row.at);
+      daySet.add(key);
+      const bucket = byDay.get(key) ?? emptyDay();
+      bucket.tokens += tokens;
+      bucket.credits += row.credits;
+      bucket.cached += row.cachedTokens;
+      bucket.input += row.inputTokens;
+      addPart(bucket.models, row.model, row.credits, tokens);
+      addPart(bucket.tools, row.type, row.credits, tokens);
+      byDay.set(key, bucket);
+    }
+    const days = [...daySet].sort();
+    const span = rows.length > 1 ? rows[rows.length - 1].at - rows[0].at : 0;
+    return {
+      refreshedAt: now,
+      plan: wallet.plan,
+      includedBalance: wallet.includedBalance,
+      purchasedBalance: wallet.purchasedBalance,
+      windows: wallet.windows,
+      cache: { cachedTokens, inputTokens },
+      activity: {
+        totalTokens,
+        peakTokens,
+        durationMs: span,
+        currentStreakDays: streakEnding(days, now),
+        longestStreakDays: longestStreak(days),
+      },
+      days: days.map((day) => ({ day, ...byDay.get(day)! })),
     };
   }
 
