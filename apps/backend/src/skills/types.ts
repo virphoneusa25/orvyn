@@ -13,6 +13,24 @@ export interface SkillValidationRule {
   rule: string;
 }
 
+/** Where an imported skill came from. Built-in packages omit this. */
+export interface SkillOrigin {
+  repository: string;
+  path: string;
+  license: string;
+  author: string;
+  version: string;
+  importedAt: string;
+}
+
+export type CertificationStatus = "pending" | "certified" | "rejected";
+
+/** An external tool name that was not mapped onto an ORVYN tool. */
+export interface UnresolvedTool {
+  name: string;
+  requirement: "required" | "optional";
+}
+
 export interface SkillMetadata {
   id: string;
   slug: string;
@@ -33,6 +51,10 @@ export interface SkillMetadata {
   validation: SkillValidationRule;
   tags: string[];
   scope: SkillScope;
+  origin?: SkillOrigin;
+  certificationStatus?: CertificationStatus;
+  unresolvedTools?: UnresolvedTool[];
+  certificationBlockers?: string[];
 }
 
 /** A package that passed validation, including the playbook body. */

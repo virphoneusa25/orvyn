@@ -2,12 +2,15 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   SKILL_SCOPES,
+  type CertificationStatus,
   type SkillDefinition,
   type SkillMetadata,
+  type SkillOrigin,
   type SkillPermissionRequirement,
   type SkillRejection,
   type SkillScope,
   type SkillValidationRule,
+  type UnresolvedTool,
 } from "./types";
 
 /** Shape the registry and the existing skill prompt already consume. */
@@ -118,6 +121,53 @@ function needValidation(value: unknown, errors: string[]): SkillValidationRule {
   return { rule: row.rule.trim() };
 }
 
+function readOrigin(value: unknown, errors: string[]): SkillOrigin | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push("origin must be an object.");
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  const fields = ["repository", "path", "license", "author", "version", "importedAt"] as const;
+  const origin = {} as SkillOrigin;
+  for (const field of fields) {
+    if (typeof row[field] !== "string") {
+      errors.push(`origin.${field} must be a string.`);
+      origin[field] = "";
+    } else {
+      origin[field] = row[field];
+    }
+  }
+  return origin;
+}
+
+function readCertification(value: unknown, errors: string[]): CertificationStatus | undefined {
+  if (value === undefined) return undefined;
+  if (value !== "pending" && value !== "certified" && value !== "rejected") {
+    errors.push("certificationStatus must be pending, certified, or rejected.");
+    return undefined;
+  }
+  return value;
+}
+
+function readUnresolved(value: unknown, errors: string[]): UnresolvedTool[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    errors.push("unresolvedTools must be an array.");
+    return [];
+  }
+  const out: UnresolvedTool[] = [];
+  value.forEach((item, index) => {
+    const row = item as { name?: unknown; requirement?: unknown } | null;
+    if (!row || typeof row !== "object" || typeof row.name !== "string" || !row.name.trim() || (row.requirement !== "required" && row.requirement !== "optional")) {
+      errors.push(`unresolvedTools[${index}] must include a name and a requirement of required or optional.`);
+      return;
+    }
+    out.push({ name: row.name.trim(), requirement: row.requirement });
+  });
+  return out;
+}
+
 function needScope(value: unknown, errors: string[]): SkillScope {
   if (typeof value !== "string" || !SKILL_SCOPES.includes(value as SkillScope)) {
     errors.push("scope must be builtin, personal, organization, or project.");
@@ -160,6 +210,16 @@ export function validateSkillPackage(dir: string): { skill: SkillPackage } | { r
     tags: needStringList(raw.tags, "tags", errors, true),
     scope: needScope(raw.scope, errors),
   };
+  const origin = readOrigin(raw.origin, errors);
+  const certificationStatus = readCertification(raw.certificationStatus, errors);
+  const unresolvedTools = readUnresolved(raw.unresolvedTools, errors);
+  const certificationBlockers = raw.certificationBlockers === undefined
+    ? undefined
+    : needStringList(raw.certificationBlockers, "certificationBlockers", errors, true);
+  if (origin) metadata.origin = origin;
+  if (certificationStatus) metadata.certificationStatus = certificationStatus;
+  if (unresolvedTools) metadata.unresolvedTools = unresolvedTools;
+  if (certificationBlockers) metadata.certificationBlockers = certificationBlockers;
   if (metadata.slug && metadata.slug !== slug) errors.push(`slug must match the package directory (${slug}).`);
 
   let instructions = "";
