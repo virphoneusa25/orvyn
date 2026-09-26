@@ -48,6 +48,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
       { id: "tools", label: "Tools & MCP", icon: "plug" },
       { id: "memory", label: "Memory", icon: "database" },
       { id: "learning", label: "Learning", icon: "cpu" },
+      { id: "skills", label: "Skills", icon: "spark" },
     ],
   },
 ];
@@ -59,6 +60,7 @@ const RAIL: NavEntry[] = [
   { id: "terminal", label: "Terminal", icon: "terminal" },
   { id: "servers", label: "Servers", icon: "server" },
   { id: "agents", label: "Agents", icon: "agent" },
+  { id: "skills", label: "Skills", icon: "spark" },
 ];
 
 export interface SidebarProps {

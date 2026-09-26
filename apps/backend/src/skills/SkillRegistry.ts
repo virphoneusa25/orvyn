@@ -2,7 +2,17 @@ import * as fs from "fs";
 import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { importedSkillsRoot, SkillLoader, type SkillPackage } from "./SkillLoader";
+import { recordSkillEvent } from "./SkillRouteLog";
 import type { SkillRejection } from "./types";
+import { qualityIndex } from "./quality/SkillQualityReport";
+
+export class SkillControlError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export interface RegistrySkill extends SkillPackage {
   enabled: boolean;
@@ -39,6 +49,8 @@ function importedLoader(): SkillLoader | null {
 
 /** Built-in skills plus certified and partially supported imports. Blocked imports stay disabled. */
 export class SkillRegistry {
+  private snapshot: { key: string; report: { skills: RegistrySkill[]; rejected: SkillRejection[] } } | null = null;
+
   constructor(
     private readonly loader = new SkillLoader(),
     private readonly imported = importedLoader(),
@@ -49,6 +61,23 @@ export class SkillRegistry {
   }
 
   report(): { skills: RegistrySkill[]; rejected: SkillRejection[] } {
+    const key = this.prefsKey();
+    if (this.snapshot?.key === key) return this.snapshot.report;
+    const report = this.loadReport();
+    this.snapshot = { key, report };
+    return report;
+  }
+
+  private prefsKey(): string {
+    const file = prefsFile();
+    try {
+      return `${file}:${fs.statSync(file).mtimeMs}`;
+    } catch {
+      return `${file}:0`;
+    }
+  }
+
+  private loadReport(): { skills: RegistrySkill[]; rejected: SkillRejection[] } {
     const loaded = this.loader.load();
     const extra = this.imported?.load() ?? { skills: [], rejected: [] };
     const off = disabledIds();
@@ -71,13 +100,30 @@ export class SkillRegistry {
   }
 
   setEnabled(id: string, enabled: boolean): RegistrySkill {
-    const skill = this.loader.load().skills.find((item) => item.id === id);
-    if (!skill) throw new Error("Unknown skill.");
+    const current = this.report().skills.find((item) => item.id === id);
+    if (!current) throw new SkillControlError("Unknown skill.", 404);
+    const blocked = current.metadata.certificationStatus === "blocked" || (current.metadata.source === "imported" && current.metadata.trusted === false);
+    if (enabled && blocked) {
+      throw new SkillControlError("Blocked skills cannot be enabled until certification changes.", 409);
+    }
+    const quality = qualityIndex().get(id);
+    if (enabled && quality?.qualityStatus === "disabled") {
+      throw new SkillControlError("This skill is disabled by the quality review and cannot be enabled until that review changes.", 409);
+    }
     const off = disabledIds();
     if (enabled) off.delete(id);
     else off.add(id);
     saveDisabled(off);
-    return this.present(skill, enabled);
+    this.snapshot = null;
+    const next = this.present(current, enabled);
+    if (next.enabled !== current.enabled) {
+      recordSkillEvent({
+        type: enabled ? "skill.enabled" : "skill.disabled",
+        skillId: id,
+        detail: `${current.name} ${enabled ? "enabled" : "disabled"}`,
+      });
+    }
+    return next;
   }
 
   private present(skill: SkillPackage, enabled: boolean): RegistrySkill {

@@ -53,6 +53,15 @@ export interface OverlapCollapse {
   droppedName: string;
 }
 
+/** Score exposure for the Skills workspace. Built after selection. It does not change who is selected. */
+export interface ExposedRank {
+  id: string;
+  name: string;
+  score: number;
+  tier: SkillTier;
+  selected: boolean;
+}
+
 export interface RankResult {
   candidateCount: number;
   selected: RankableSkill[];
@@ -62,6 +71,7 @@ export interface RankResult {
   reasonSummary: string;
   complex: boolean;
   selectionCap: number;
+  ranked: ExposedRank[];
 }
 
 const SELECT_MIN = 40;
@@ -434,6 +444,17 @@ export function rankSkills(skills: RankableSkill[], request: RankRequest): RankR
     ? `Selected ${names.length} skill${names.length === 1 ? "" : "s"} for this ${groupLabel(lead)} task: ${names.join(", ")}.`
     : "No skill matched this request closely enough to load.";
 
+  const selectedIds = new Set(selected.map((item) => item.skill.id));
+  const ranked: ExposedRank[] = eligible
+    .filter((item) => item.score >= SELECT_MIN)
+    .map((item) => ({
+      id: item.skill.id,
+      name: item.skill.name,
+      score: item.score,
+      tier: item.tier,
+      selected: selectedIds.has(item.skill.id),
+    }));
+
   return {
     candidateCount: eligible.length,
     selected: selected.map((item) => item.skill),
@@ -443,5 +464,6 @@ export function rankSkills(skills: RankableSkill[], request: RankRequest): RankR
     reasonSummary,
     complex,
     selectionCap,
+    ranked,
   };
 }

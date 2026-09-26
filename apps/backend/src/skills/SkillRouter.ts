@@ -3,7 +3,8 @@ import * as path from "path";
 import type { SkillPackage } from "./SkillLoader";
 import { skillRegistry, type RegistrySkill } from "./SkillRegistry";
 import { buildSkillPrompt } from "./SkillContextLoader";
-import { rankSkills, type ProjectSignals, type RankableSkill } from "./SkillRanker";
+import { rankSkills, type ExposedRank, type ProjectSignals, type RankableSkill } from "./SkillRanker";
+import { recordSkillRoute } from "./SkillRouteLog";
 import { precedenceOverlay } from "./quality/SkillConflictDetector";
 import { qualityIndex } from "./quality/SkillQualityReport";
 
@@ -30,6 +31,7 @@ export interface SkillRouteResult {
   reasonSummary: string;
   complex: boolean;
   selectionCap: number;
+  ranked: ExposedRank[];
   prompt: string;
 }
 
@@ -121,7 +123,15 @@ export function routeSkills(request: SkillRouteRequest): SkillRouteResult {
   })));
   const overlay = precedenceOverlay(ranked.selected);
   const prompt = overlay && body ? `${overlay}\n\n${body}` : body;
-  return { ...ranked, prompt };
+  const result: SkillRouteResult = { ...ranked, prompt };
+  if (!request.skills) {
+    try {
+      recordSkillRoute(request.instruction, skills, result);
+    } catch {
+      // The route log is observational. A disk failure must not change selection.
+    }
+  }
+  return result;
 }
 
 export type { RegistrySkill, SkillPackage };

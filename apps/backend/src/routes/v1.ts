@@ -1484,7 +1484,9 @@ v1Router.get("/usage", (req, res) => {
 import { ModelRegistry } from "../learning/ModelRegistry";
 import { persistSkillCandidates } from "../learning/skillCandidates";
 import { listValidatedSkills, seedValidatedSkills } from "../learning/validatedSkills";
-import { skillRegistry } from "../skills/SkillRegistry";
+import { SkillControlError, skillRegistry } from "../skills/SkillRegistry";
+import { listSkillFiles, qualityReportView, readSkillFile, skillCatalog, skillDetail, summarizeSkill } from "../skills/SkillCatalog";
+import { latestSkillRoute, listSkillEvents } from "../skills/SkillRouteLog";
 import { persistDataset } from "../learning/datasetBuilder";
 import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
@@ -1529,16 +1531,60 @@ v1Router.get("/skills/registry", (_req, res) => {
   res.json(skillRegistry.report());
 });
 
+v1Router.get("/skills/catalog", (_req, res) => {
+  res.json(skillCatalog());
+});
+
+v1Router.get("/skills/catalog/:id/files", (req, res) => {
+  try {
+    res.json({ files: listSkillFiles(String(req.params.id)) });
+  } catch (err) {
+    res.status(404).json({ error: err instanceof Error ? err.message : "Unknown skill." });
+  }
+});
+
+v1Router.get("/skills/catalog/:id/file", (req, res) => {
+  const rel = typeof req.query.path === "string" ? req.query.path : "";
+  try {
+    res.json(readSkillFile(String(req.params.id), rel));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not read that file.";
+    const status = message === "Unknown skill." || message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: message });
+  }
+});
+
+v1Router.get("/skills/catalog/:id", (req, res) => {
+  const detail = skillDetail(String(req.params.id));
+  if (!detail) return res.status(404).json({ error: "Unknown skill." });
+  res.json({ skill: detail });
+});
+
+v1Router.get("/skills/quality", (_req, res) => {
+  const report = qualityReportView();
+  if (!report) return res.status(404).json({ error: "The skill quality report is not available." });
+  res.json(report);
+});
+
+v1Router.get("/skills/routing/latest", (_req, res) => {
+  res.json({ route: latestSkillRoute() });
+});
+
+v1Router.get("/skills/events", (_req, res) => {
+  res.json({ events: listSkillEvents(40) });
+});
+
 v1Router.patch("/skills/registry/:id", (req, res) => {
   if (typeof req.body?.enabled !== "boolean") {
     return res.status(400).json({ error: "enabled must be true or false." });
   }
   try {
     const skill = skillRegistry.setEnabled(String(req.params.id), req.body.enabled);
-    res.json({ skill });
+    res.json({ skill: summarizeSkill(skill) });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not update the skill.";
-    res.status(404).json({ error: message });
+    const status = err instanceof SkillControlError ? err.status : 404;
+    res.status(status).json({ error: message });
   }
 });
 

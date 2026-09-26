@@ -13,6 +13,7 @@ import { SearchPanel } from "./components/SearchPanel";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { LearningCenter } from "./components/LearningCenter";
+import { SkillsIntelligence } from "./components/skills/SkillsIntelligence";
 import { BillingPanel } from "./components/BillingPanel";
 import { HostDesktopBanner } from "./components/HostDesktopBanner";
 import { ViewId } from "./components/Navigation";
@@ -132,7 +133,7 @@ export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [tabs, setTabs] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
-  const [view, setView] = useState<ViewId>("home");
+  const [view, setView] = useState<ViewId>(() => (typeof window !== "undefined" && window.location.hash === "#skills" ? "skills" : "home"));
   function navigateView(v: string) {
     if (v === "marketplace") {
       setView("tools");
@@ -931,6 +932,12 @@ export function App() {
         {view === "learning" && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <LearningCenter />
+          </div>
+        )}
+
+        {view === "skills" && (
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden" }}>
+            <SkillsIntelligence />
           </div>
         )}
 

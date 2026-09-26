@@ -215,6 +215,22 @@ export function writeSkillQualityReport(report: SkillQualityReportData, markdown
   fs.writeFileSync(markdownPath, renderQualityMarkdown(report));
 }
 
+let reportCache: { mtime: number; report: SkillQualityReportData } | null = null;
+
+/** Read the committed quality report. The file is the source of truth for the Skills workspace. */
+export function readSkillQualityReport(): SkillQualityReportData | null {
+  const file = qualityReportPath();
+  try {
+    const mtime = fs.statSync(file).mtimeMs;
+    if (reportCache && reportCache.mtime === mtime) return reportCache.report;
+    const report = JSON.parse(fs.readFileSync(file, "utf8")) as SkillQualityReportData;
+    reportCache = { mtime, report };
+    return report;
+  } catch {
+    return null;
+  }
+}
+
 let indexCache: Map<string, { qualityStatus: QualityStatus; qualityScore: number }> | null = null;
 
 /** Read the committed review index. Missing file means no quality stamp. */
