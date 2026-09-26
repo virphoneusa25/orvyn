@@ -1,5 +1,8 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
-import { creditsFor, escalate as escalateStep, runCreditBudget, weightFor, type RouteStep } from "../models/routingPolicy";
+import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
+import { creditsFor, escalate as escalateStep, runCreditBudget, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
+import { condenseOutput, shouldCondense } from "./outputCondenser";
+import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
@@ -191,6 +194,11 @@ interface RunState {
   creditsExceeded?: boolean;
   /** Failed tool calls in a row (a repair loop that is not working). */
   failureStreak: number;
+  /** Look-only tool batches in a row (per-step routing hands the next look to a cheaper helper). */
+  readOnlyStreak: number;
+  /** Helper steps discarded because the helper wanted to change something or finish. */
+  helperRejects: number;
+  helperSteps: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -465,6 +473,59 @@ export class StreamingAgentRuntime {
     state.handoffModelId = next.registryId;
     this.store.emit(runId, "route.escalated", { tier: next.tier, modelId: next.registryId, reason, weight: next.weight });
     return true;
+  }
+
+  /** The routing policy's utility tier (Mistral Small 4, GPT-5.6 Luna, …) for side jobs like digests. */
+  private utilityModel(): AIModelProvider | undefined {
+    for (const id of TIERS.utility.candidates) {
+      const p = this.modelService.registry.get(id);
+      if (p) return p;
+    }
+    return undefined;
+  }
+
+  /** Condenses a big tool output for the model (metered at the utility weight) and says so in the stream. */
+  private async condenseForModel(runId: string, state: RunState, call: ToolCall, raw: string, command?: string): Promise<string> {
+    const model = this.utilityModel();
+    const out = await condenseOutput({ raw, command, goal: state.instruction, model, modelId: model?.config.id });
+    if (out.usage && model) this.noteCredits(runId, state, model.config.id, { promptTokens: out.usage.promptTokens, completionTokens: out.usage.completionTokens } as TokenUsage);
+    this.store.emit(runId, "tool.output.condensed", { callId: call.id, tool: call.name, fromChars: raw.length, toChars: out.text.length, digestModel: out.digested ? model?.config.id : undefined });
+    return out.text;
+  }
+
+  /**
+   * One look-around step on a cheaper helper model (routing policy, per step).
+   * Returns the helper's reply when it only gathered; null to let the main
+   * model take the turn.
+   */
+  private async tryHelperStep(runId: string, state: RunState, provider: AIModelProvider, messages: AIMessage[], tools: any): Promise<{ content: string; calls: ToolCall[]; reasoning: string; streamedText: boolean } | null> {
+    const currentId = provider.config.id;
+    if (!shouldUseHelper({ route: state.route, readOnlyStreak: state.readOnlyStreak, helperRejects: state.helperRejects, currentModelId: currentId, pinned: state.modelPinned })) return null;
+    const helperId = helperFor(state.route, currentId, this.modelService.registry.list().map((p) => p.config.id));
+    const helper = helperId ? this.modelService.registry.get(helperId) : undefined;
+    if (!helper || !helper.supportsTools() || !helper.config.capabilities.agent) return null;
+    let reply: any;
+    try {
+      reply = await helper.generate({ messages: [...messages, { role: "user", content: HELPER_NOTE }], tools, reasoningEffort: state.reasoningEffort });
+    } catch {
+      state.helperRejects++;
+      this.store.emit(runId, "route.step", { modelId: helper.config.id, accepted: false, reason: "The helper model did not answer." });
+      return null;
+    }
+    if (reply?.usage) this.noteCredits(runId, state, helper.config.id, reply.usage as TokenUsage);
+    const seen = new Set<string>();
+    const calls: ToolCall[] = (reply?.toolCalls ?? []).filter((c: ToolCall) => c?.name && !seen.has(c.id) && seen.add(c.id));
+    if (!acceptHelperStep(calls)) {
+      state.helperRejects++;
+      this.store.emit(runId, "route.step", { modelId: helper.config.id, accepted: false, reason: calls.length ? "The helper wanted to change something; the main model takes this step." : "Nothing more to gather; the main model takes this step." });
+      return null;
+    }
+    state.helperSteps++;
+    state.readOnlyStreak = 0;
+    const content = isMostlyChinese(String(reply?.content ?? "")) ? "" : String(reply?.content ?? "");
+    if (content) this.store.emit(runId, "message.delta", { content });
+    this.store.emit(runId, "route.step", { modelId: helper.config.id, accepted: true, mainModelId: currentId, tools: calls.map((c) => c.name), weight: weightFor(helper.config.id) });
+    return { content, calls, reasoning: String(reply?.reasoningContent ?? ""), streamedText: Boolean(content) };
   }
 
   /** Re-publish the run's remembered site (same URL) after its files changed. */
@@ -758,6 +819,9 @@ export class StreamingAgentRuntime {
       credits: 0,
       creditBudget: choice.route && !choice.pinned ? runCreditBudget(choice.route.profile) : runCreditBudget("auto"),
       failureStreak: 0,
+      readOnlyStreak: 0,
+      helperRejects: 0,
+      helperSteps: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1460,6 +1524,13 @@ export class StreamingAgentRuntime {
         if (steerList.length > 0) {
           messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${steerList.join(" | ")}` });
         }
+        // Per-step routing: after a run of look-only steps, a cheaper helper
+        // takes the next look. It may only gather; anything else is discarded
+        // and the main model takes the turn.
+        const helperStep = await this.tryHelperStep(runId, state, provider, messages, tools());
+        if (helperStep) return { kind: "reply", reply: helperStep };
+        if (state.cancelled) return cancelled();
+
         let langChecked = false;
         let langBuffer = "";
         try {
@@ -1576,6 +1647,7 @@ export class StreamingAgentRuntime {
         // Three failed tool calls in a row: the current model is stuck — climb one step.
         const batch = (this.store.get(runId)?.events ?? []).filter((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && calls.some((c) => c.id === e.data?.callId));
         for (const e of batch) state.failureStreak = e.type === "tool.failed" ? state.failureStreak + 1 : 0;
+        state.readOnlyStreak = calls.length > 0 && calls.every((c) => isReadOnlyCall(c.name, c.arguments)) ? state.readOnlyStreak + 1 : 0;
         if (state.failureStreak >= 3 && this.escalateRoute(runId, state, `${state.failureStreak} tool calls failed in a row.`)) state.failureStreak = 0;
         if (state.creditWarned && !state.creditNoteSent) {
           state.creditNoteSent = true;
@@ -1859,17 +1931,27 @@ export class StreamingAgentRuntime {
       // Hard boundary: destructive shell commands require approval no matter
       // what the mode/profile granted — a prior "Allow for Run" does not cover
       // them either.
-      const destructive =
-        (call.name === "terminal" || call.name === "run_command") &&
-        isDestructiveCommand(String((call.arguments as any).command ?? ""));
-      const runApproved = !destructive && state.approvedTools.has(call.name);
+      // Commands (terminal, SSH) by risk: read-only checks run without asking
+      // (except in Ask mode); changes follow the access mode; dangerous
+      // commands always ask and are never covered by "Allow for this mission".
+      const decision = approvalFor({
+        toolName: call.name,
+        args: call.arguments as Record<string, unknown>,
+        permission,
+        accessMode: state.accessMode,
+        approvedForRun: state.approvedTools.has(call.name),
+      });
+      const destructive = decision.dangerous ||
+        ((call.name === "terminal" || call.name === "run_command" || call.name === "ssh_exec") &&
+          isDestructiveCommand(String((call.arguments as any).command ?? "")));
 
-      if ((permission === "ask" && !runApproved) || destructive) {
+      if (decision.ask || destructive) {
         this.store.emit(runId, "approval.required", {
           callId: call.id,
           tool: call.name,
           input: call.arguments,
           destructive,
+          risk: decision.risk ?? (destructive ? "dangerous" : undefined),
           preview,
         });
         this.store.setStatus(runId, "awaiting_approval");
@@ -2055,7 +2137,10 @@ export class StreamingAgentRuntime {
         }
         // The model gets the clamped text, not the raw output: one oversized
         // result would otherwise consume the whole window.
-        const { text, truncated } = clampToolOutput(raw, MAX_TOOL_OUTPUT_CHARS);
+        // Big command output (journalctl, docker logs, long builds) is condensed
+        // before the model reads it; the user still sees all of it.
+        const forModel = shouldCondense(call.name, raw) ? await this.condenseForModel(runId, state, call, raw, command) : raw;
+        const { text, truncated } = clampToolOutput(forModel, MAX_TOOL_OUTPUT_CHARS);
         const first = persisted[0];
         this.store.emit(runId, "tool.completed", {
           callId: call.id,
@@ -2080,7 +2165,9 @@ export class StreamingAgentRuntime {
         replies.set(call.id, text);
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
-        const error = result.error ?? "unknown error";
+        const fullError = result.error ?? "unknown error";
+        // A failing command with a huge output (a build log) is condensed for the model too.
+        const error = shouldCondense(call.name, fullError) ? await this.condenseForModel(runId, state, call, fullError, command) : fullError;
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error, envelope: envelopeForEvent(envelope) });
         this.noteWebsiteFailure(runId, state, call.name, command, error);
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });

@@ -427,6 +427,15 @@ function ApprovalCard({
     <div style={card(item.destructive ? "var(--danger)" : "var(--accent)")}>
       <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>
         {item.destructive ? "Destructive action requested" : "Agent wants to run"}
+        {item.risk && (
+          <span
+            data-testid="approval-risk"
+            title={item.risk === "dangerous" ? "Can destroy data or cut off the server. Always asks, in every access mode." : item.risk === "change" ? "Changes something (restart, install, config edit). Follows your access mode." : "Only reads."}
+            style={{ marginLeft: 8, fontSize: 10.5, padding: "1px 6px", borderRadius: 4, border: `1px solid ${item.risk === "dangerous" ? "var(--danger)" : "var(--border)"}`, color: item.risk === "dangerous" ? "var(--danger)" : "var(--text-muted)" }}
+          >
+            {item.risk === "dangerous" ? "Dangerous" : item.risk === "change" ? "Makes a change" : "Read-only"}
+          </span>
+        )}
       </div>
       {preview ? (
         <div style={{ marginBottom: 8 }}>

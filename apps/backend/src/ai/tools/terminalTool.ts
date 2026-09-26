@@ -120,7 +120,7 @@ export function runStreaming(
 export function makeTerminalTool(projectRoot: string): AITool {
   return {
     name: "terminal",
-    description: "Run a shell command in the project directory. Always requires user approval.",
+    description: "Run a shell command in the project directory. Read-only commands (status, logs, df, ls, cat …) run without asking; changes (restart, install, write) follow the access mode; dangerous commands (rm -rf, DROP DATABASE, firewall resets, reboot) always ask the user.",
     parameters: {
       type: "object",
       properties: { command: { type: "string" } },

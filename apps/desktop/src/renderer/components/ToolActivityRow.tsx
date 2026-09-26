@@ -128,6 +128,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
       {item.verifier && <span className="tool-line__by" title="Independent read-only check, not ORION's own work">verifier</span>}
       {target && <code className="tool-line__target">{target}</code>}
       {meta && <em className="tool-line__meta">{meta}</em>}
+      {item.condensed && <span className="tool-line__by" data-testid="tool-condensed" title={`The output was ${item.condensed.fromChars.toLocaleString()} characters; ORION read a ${item.condensed.toChars.toLocaleString()}-character digest${item.condensed.digested ? " made by a cheaper model" : ""} (errors and warnings kept verbatim). You see the full output here.`}>digest for ORION</span>}
       {open && <span className="tool-line__open" aria-label="Open">↗</span>}
     </div>
     {item.toolName === "generate_image" && running && <ImageSketch name={item.fileName} />}

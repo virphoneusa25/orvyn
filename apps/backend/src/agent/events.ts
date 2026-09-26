@@ -33,6 +33,8 @@ export type AgentEventType =
   | "run.credits"
   | "run.credits.warning"
   | "route.escalated"
+  | "route.step"
+  | "tool.output.condensed"
   | "conversation.message"
   | "thinking"
   | "tool.started"

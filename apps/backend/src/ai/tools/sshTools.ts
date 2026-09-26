@@ -53,7 +53,7 @@ export function makeSshExecTool(projectRoot: string): AITool {
   return {
     name: "ssh_exec",
     description:
-      "Run a shell command on a remote server over SSH. Hosts must be pre-configured by the user in .orvyn/ssh.json — pass the alias, not a hostname. Key-based auth only. Output is captured and returned.",
+      "Run a shell command on a remote server over SSH. Hosts must be pre-configured by the user in .orvyn/ssh.json — pass the alias, not a hostname. Key-based auth only. Output is captured and returned; very long output (journalctl, logs) comes back as a digest with the error lines verbatim, so prefer narrow commands (grep, tail -n, --since). Read-only commands run without asking; restarts, installs and config edits follow the access mode; dangerous commands (rm -rf, DROP DATABASE, firewall resets, reboot) always ask the user.",
     parameters: {
       type: "object",
       properties: {

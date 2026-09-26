@@ -59,6 +59,8 @@ export interface ToolItem {
   verifier?: boolean;
   /** The page a browser/fetch row visited (opens it in the Workbench Browser). */
   url?: string;
+  /** Big output the model read as a digest (the user still sees all of it). */
+  condensed?: { fromChars: number; toChars: number; digested: boolean };
 }
 
 export interface GroupItem {
@@ -109,6 +111,8 @@ export interface ApprovalItem {
   tool: string;
   input: unknown;
   destructive: boolean;
+  /** Command risk: read / change / dangerous (terminal and SSH). */
+  risk?: "read" | "change" | "dangerous";
   preview?: unknown;
   settled: boolean;
   approved?: boolean;
@@ -345,6 +349,19 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "status", key: e.id, label: `Switched to a stronger model${model ? ` (${model})` : ""}: ${String(e.data.reason ?? "the work stalled")}`.slice(0, 160), ephemeral: false, tone: "working" });
         continue;
       }
+      case "route.step": {
+        // A cheaper helper model took a look-around step (per-step routing).
+        if (!e.data.accepted) continue;
+        flushAssistant(false);
+        const model = String(e.data.modelId ?? "").split(/[:/]/).pop() ?? "";
+        items.push({ kind: "status", key: e.id, label: `Light step on a cheaper model${model ? ` (${model})` : ""}: gathering only`, ephemeral: false, tone: "working" });
+        continue;
+      }
+      case "tool.output.condensed": {
+        const target = items.find((it) => it.kind === "tool" && it.key === String(e.data.callId)) as ToolItem | undefined;
+        if (target) target.condensed = { fromChars: Number(e.data.fromChars ?? 0), toChars: Number(e.data.toChars ?? 0), digested: Boolean(e.data.digestModel) };
+        continue;
+      }
       case "run.credits.warning": {
         items.push({ kind: "status", key: e.id, label: `80% of this task's credit budget used (${e.data.credits} of ${e.data.budget}) — finishing the essentials`, ephemeral: false, tone: "working" });
         continue;
@@ -469,6 +486,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           tool: String(e.data.tool ?? ""),
           input: e.data.input,
           destructive: Boolean(e.data.destructive),
+          ...(e.data.risk ? { risk: String(e.data.risk) as ApprovalItem["risk"] } : {}),
           preview: e.data.preview,
           settled: false,
         });
