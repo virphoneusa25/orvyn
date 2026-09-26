@@ -1,0 +1,727 @@
+# ORVYN skill quality report
+
+Internal certification review of the active catalog. The review score is for queues and routing tie-breaks. It is not a user-facing intelligence score.
+
+Original package files, provenance, and license metadata are unchanged. Platform wording is adapted when a selected skill is loaded into context.
+
+## Summary
+
+| | Count |
+| --- | ---: |
+| Skills checked | 493 |
+| Approved | 410 |
+| Needs revision | 67 |
+| Disabled | 16 |
+
+## Native and imported
+
+| Source | Checked | Approved | Needs revision | Disabled |
+| --- | ---: | ---: | ---: | ---: |
+| Native | 105 | 105 | 0 | 0 |
+| Imported | 388 | 305 | 67 | 16 |
+
+## Disabled
+
+- skill_cs_arquiteto_de_empresa_2 (arquiteto-de-empresa): duplicate_package
+- skill_cs_browserstack (browserstack): certification_blocked
+- skill_cs_chaos_engineering_2 (chaos-engineering): duplicate_package
+- skill_cs_chief_ai_officer_advisor_2 (chief-ai-officer-advisor): duplicate_package
+- skill_cs_chief_customer_officer_advisor_2 (chief-customer-officer-advisor): duplicate_package
+- skill_cs_chief_data_officer_advisor_2 (chief-data-officer-advisor): duplicate_package
+- skill_cs_eu_ai_act_specialist_2 (eu-ai-act-specialist): duplicate_package
+- skill_cs_feature_flags_architect_2 (feature-flags-architect): duplicate_package
+- skill_cs_general_counsel_advisor_2 (general-counsel-advisor): duplicate_package
+- skill_cs_iso42001_specialist_2 (iso42001-specialist): duplicate_package
+- skill_cs_kubernetes_operator_2 (kubernetes-operator): duplicate_package
+- skill_cs_playwright_pro (playwright-pro): certification_blocked
+- skill_cs_slo_architect_2 (slo-architect): duplicate_package
+- skill_cs_syllabus (syllabus): certification_blocked
+- skill_cs_testrail (testrail): certification_blocked
+- skill_cs_vpe_advisor_2 (vpe-advisor): duplicate_package
+
+## Needs revision
+
+- skill_cs_agent_launcher_orchestrator (agent-launcher-orchestrator): broken_reference
+- skill_cs_ai_act_readiness (ai-act-readiness): broken_reference
+- skill_cs_aims_audit (aims-audit): broken_reference
+- skill_cs_ar_resume (ar-resume): broken_reference
+- skill_cs_ar_status (ar-status): broken_reference
+- skill_cs_atlassian_admin (atlassian-admin): broken_reference
+- skill_cs_atlassian_templates (atlassian-templates): broken_reference
+- skill_cs_autoresearch_agent (autoresearch-agent): broken_reference
+- skill_cs_board (board): broken_reference
+- skill_cs_business_growth_skills (business-growth-skills): broken_reference
+- skill_cs_c_level_agents (c-level-agents): broken_reference
+- skill_cs_c_level_skills (c-level-skills): broken_reference
+- skill_cs_caio_review (caio-review): broken_reference
+- skill_cs_cco_review (cco-review): broken_reference
+- skill_cs_cdo_review (cdo-review): broken_reference
+- skill_cs_cfo_review (cfo-review): broken_reference
+- skill_cs_ciso_review (ciso-review): broken_reference
+- skill_cs_cmo_review (cmo-review): broken_reference
+- skill_cs_compliance_readiness (compliance-readiness): broken_reference
+- skill_cs_confluence_expert (confluence-expert): broken_reference
+- skill_cs_cpo_review (cpo-review): broken_reference
+- skill_cs_cro_review (cro-review): broken_reference
+- skill_cs_cto_review (cto-review): broken_reference
+- skill_cs_deal_desk (deal-desk): broken_reference
+- skill_cs_decide (decide): broken_reference
+- skill_cs_docker_development (docker-development): broken_reference
+- skill_cs_email_template_builder (email-template-builder): broken_reference
+- skill_cs_eval (eval): broken_reference
+- skill_cs_fda_qsr_audit_prep (fda-qsr-audit-prep): broken_reference
+- skill_cs_finance_skills (finance-skills): broken_reference
+- skill_cs_gc_review (gc-review): broken_reference
+- skill_cs_gdpr_audit_prep (gdpr-audit-prep): broken_reference
+- skill_cs_generate (generate): broken_reference
+- skill_cs_grade_iterate (grade-iterate): broken_reference
+- skill_cs_hard_call (hard-call): broken_reference
+- skill_cs_helm_chart_builder (helm-chart-builder): broken_reference
+- skill_cs_hub_init (hub-init): broken_reference
+- skill_cs_hub_status (hub-status): broken_reference
+- skill_cs_interview (interview): broken_reference
+- skill_cs_iso13485_audit_prep (iso13485-audit-prep): broken_reference
+- skill_cs_iso27001_audit_prep (iso27001-audit-prep): broken_reference
+- skill_cs_jira_expert (jira-expert): broken_reference
+- skill_cs_landing_page_generator (landing-page-generator): broken_reference
+- skill_cs_loop (loop): broken_reference
+- skill_cs_ma_playbook (ma-playbook): broken_reference
+- skill_cs_markdown_html_orchestrator (markdown-html-orchestrator): broken_reference
+- skill_cs_merge (merge): broken_reference
+- skill_cs_onboard (onboard): broken_reference
+- skill_cs_pm_skills (pm-skills): broken_reference
+- skill_cs_product_skills (product-skills): broken_reference
+- skill_cs_ra_qm_skills (ra-qm-skills): broken_reference
+- skill_cs_research_ops_skills (research-ops-skills): broken_reference
+- skill_cs_research_summarizer (research-summarizer): broken_reference
+- skill_cs_run (run): broken_reference
+- skill_cs_run_2 (run): broken_reference
+- skill_cs_run_without_you (run-without-you): broken_reference
+- skill_cs_self_improving_agent (self-improving-agent): broken_reference
+- skill_cs_senior_ml_engineer (senior-ml-engineer): broken_reference
+- skill_cs_setup (setup): broken_reference
+- skill_cs_skill_security_auditor (skill-security-auditor): broken_reference
+- skill_cs_skill_tester (skill-tester): broken_reference
+- skill_cs_skillopt_sleep (skillopt-sleep): broken_reference
+- skill_cs_slo_architect (slo-architect): broken_reference
+- skill_cs_soc2_audit_prep (soc2-audit-prep): broken_reference
+- skill_cs_spawn (spawn): broken_reference
+- skill_cs_terraform_patterns (terraform-patterns): broken_reference
+- skill_cs_vpe_review (vpe-review): broken_reference
+
+## Broken references
+
+- skill_cs_agent_launcher_orchestrator: references/cma-primitives.md, references/loops-and-workflows.md
+- skill_cs_ai_act_readiness: scripts/ai_system_risk_classifier.py, scripts/conformity_assessment_planner.py, scripts/ai_act_obligation_tracker.py, scripts/cross_framework_mapper.py
+- skill_cs_aims_audit: scripts/aims_gap_analyzer.py, scripts/ai_risk_register_builder.py, scripts/aims_audit_scheduler.py, scripts/cross_framework_mapper.py
+- skill_cs_ar_resume: scripts/setup_experiment.py
+- skill_cs_ar_status: scripts/log_results.py
+- skill_cs_atlassian_admin: references/atlassian-mcp-tools.md
+- skill_cs_atlassian_templates: references/atlassian-mcp-tools.md
+- skill_cs_autoresearch_agent: scripts/convert.sh
+- skill_cs_board: scripts/board_manager.py
+- skill_cs_business_growth_skills: scripts/health_score_calculator.py
+- skill_cs_c_level_agents: references/persona-voices.md, references/llm-wiki-bridge.md
+- skill_cs_c_level_skills: references/routing-matrix.md
+- skill_cs_caio_review: scripts/model_buildvsbuy_calculator.py, scripts/ai_risk_classifier.py, scripts/ai_cost_economics.py
+- skill_cs_cco_review: scripts/retention_decomposition_analyzer.py, scripts/customer_segmentation_designer.py, scripts/cs_coverage_calculator.py
+- skill_cs_cdo_review: scripts/ai_training_data_audit.py, scripts/data_product_strategy_picker.py, scripts/data_asset_valuator.py
+- skill_cs_cfo_review: scripts/burn_rate_calculator.py, scripts/unit_economics_analyzer.py, scripts/fundraising_model.py
+- skill_cs_ciso_review: scripts/risk_quantifier.py, scripts/compliance_tracker.py
+- skill_cs_cmo_review: scripts/marketing_budget_modeler.py, scripts/growth_model_simulator.py
+- skill_cs_compliance_readiness: scripts/framework_selector.py, scripts/cross_framework_mapper.py, scripts/evidence_pool_generator.py, scripts/audit_simulator.py
+- skill_cs_confluence_expert: references/atlassian-mcp-tools.md, templates/scripts/template_scaffolder.py
+- skill_cs_cpo_review: scripts/rice_prioritizer.py, scripts/pmf_scorer.py, scripts/portfolio_analyzer.py
+- skill_cs_cro_review: scripts/revenue_forecast_model.py, scripts/churn_analyzer.py
+- skill_cs_cto_review: scripts/tech_debt_analyzer.py, scripts/team_scaling_calculator.py
+- skill_cs_deal_desk: scripts/contract_risk_scanner.py
+- skill_cs_decide: references/llm-wiki-bridge.md
+- skill_cs_docker_development: scripts/convert.sh
+- skill_cs_email_template_builder: templates/welcome.tsx, templates/invoice.tsx
+- skill_cs_eval: scripts/result_ranker.py, scripts/session_manager.py
+- skill_cs_fda_qsr_audit_prep: scripts/qsr_compliance_checker.py, scripts/fda_submission_tracker.py, scripts/hipaa_risk_assessment.py, scripts/audit_simulator.py
+- skill_cs_finance_skills: scripts/ratio_calculator.py, scripts/metrics_calculator.py
+- skill_cs_gc_review: scripts/contract_risk_scanner.py, scripts/term_sheet_analyzer.py
+- skill_cs_gdpr_audit_prep: scripts/gdpr_compliance_checker.py, scripts/dpia_generator.py, scripts/data_subject_rights_tracker.py, scripts/cross_framework_mapper.py, references/gdpr_audit_playbook.md
+- skill_cs_generate: templates/auth/login.md
+- skill_cs_grade_iterate: references/loops-and-workflows.md, references/cma-primitives.md
+- skill_cs_hard_call: references/hard_things.md
+- skill_cs_helm_chart_builder: scripts/convert.sh
+- skill_cs_hub_init: scripts/hub_init.py
+- skill_cs_hub_status: scripts/session_manager.py, scripts/dag_analyzer.py, scripts/board_manager.py
+- skill_cs_interview: references/examples-bank.md, references/interview-to-config.md
+- skill_cs_iso13485_audit_prep: scripts/audit_schedule_optimizer.py, scripts/audit_simulator.py, references/iso13485_audit_playbook.md
+- skill_cs_iso27001_audit_prep: scripts/isms_audit_scheduler.py, scripts/audit_simulator.py, scripts/cross_framework_mapper.py, references/iso27001_audit_playbook.md
+- skill_cs_jira_expert: references/atlassian-mcp-tools.md
+- skill_cs_landing_page_generator: scripts/brand_voice_analyzer.py
+- skill_cs_loop: scripts/run_experiment.py
+- skill_cs_ma_playbook: scripts/term_sheet_analyzer.py, scripts/contract_risk_scanner.py, scripts/ai_training_data_audit.py, scripts/data_asset_valuator.py
+- skill_cs_markdown_html_orchestrator: scripts/onboard.py, scripts/brand_palette_validator.py
+- skill_cs_merge: scripts/session_manager.py
+- skill_cs_onboard: templates/company-context-template.md, references/llm-wiki-bridge.md
+- skill_cs_pm_skills: scripts/velocity_analyzer.py, scripts/goal_compiler.py, scripts/loop_controller.py, references/atlassian-mcp-tools.md
+- skill_cs_product_skills: scripts/goal_compiler.py, scripts/validate_project.py, scripts/sample_size_calculator.py
+- skill_cs_ra_qm_skills: scripts/risk_matrix_calculator.py
+- skill_cs_research_ops_skills: scripts/onboard.py, scripts/ar_evaluator.py
+- skill_cs_research_summarizer: scripts/convert.sh
+- skill_cs_run: scripts/hub_init.py, references/agent-templates.md
+- skill_cs_run_2: scripts/setup_experiment.py, scripts/run_experiment.py
+- skill_cs_run_without_you: references/loops-and-workflows.md
+- skill_cs_self_improving_agent: scripts/codex-install.sh
+- skill_cs_senior_ml_engineer: scripts/prompt_optimizer.py
+- skill_cs_setup: scripts/setup_experiment.py
+- skill_cs_skill_security_auditor: scripts/helper.py, scripts/analyzer.py, scripts/scanner.py
+- skill_cs_skill_tester: scripts/audit_skills.py
+- skill_cs_skillopt_sleep: scripts/sleep.sh
+- skill_cs_slo_architect: scripts/blast_radius_calculator.py
+- skill_cs_slo_architect_2: scripts/blast_radius_calculator.py
+- skill_cs_soc2_audit_prep: scripts/gap_analyzer.py, scripts/control_matrix_builder.py, scripts/evidence_tracker.py, scripts/audit_simulator.py, references/soc2_audit_playbook.md
+- skill_cs_spawn: references/agent-templates.md, scripts/session_manager.py
+- skill_cs_terraform_patterns: scripts/convert.sh
+- skill_cs_vpe_review: scripts/delivery_throughput_analyzer.py, scripts/eng_hiring_funnel_calculator.py, scripts/eng_team_structure_designer.py
+
+## Provider-specific wording
+
+84 skills contain Claude Code, Claude.ai, AskUserQuestion, or /cs: commands. Those phrases are rewritten to ORVYN workflows when the skill is loaded. No new tool is introduced.
+
+- skill_cs_agent_launcher_orchestrator: 1 phrase
+- skill_cs_agent_memory: 1 phrase
+- skill_cs_agent_protocol: 3 phrases
+- skill_cs_ai_act_readiness: 9 phrases
+- skill_cs_aims_audit: 9 phrases
+- skill_cs_board_meeting: 4 phrases
+- skill_cs_boardroom: 14 phrases
+- skill_cs_brief: 9 phrases
+- skill_cs_c_level_agents: 27 phrases
+- skill_cs_c_level_skills: 2 phrases
+- skill_cs_caio_review: 9 phrases
+- skill_cs_capture: 1 phrase
+- skill_cs_caveman: 1 phrase
+- skill_cs_cco_review: 8 phrases
+- skill_cs_cdo_review: 8 phrases
+- skill_cs_cfo_review: 6 phrases
+- skill_cs_channel_economics: 1 phrase
+- skill_cs_chief_ai_officer_advisor: 3 phrases
+- skill_cs_chief_ai_officer_advisor_2: 3 phrases
+- skill_cs_chief_data_officer_advisor: 3 phrases
+- skill_cs_chief_data_officer_advisor_2: 3 phrases
+- skill_cs_ciso_review: 7 phrases
+- skill_cs_clinical_research: 1 phrase
+- skill_cs_cmo_review: 6 phrases
+- skill_cs_commercial_forecaster: 1 phrase
+- skill_cs_commercial_policy: 1 phrase
+- skill_cs_compliance_readiness: 10 phrases
+- skill_cs_context_engine: 3 phrases
+- skill_cs_cpo_review: 6 phrases
+- skill_cs_cro_review: 7 phrases
+- skill_cs_cross_eval: 6 phrases
+- skill_cs_cs_onboard: 5 phrases
+- skill_cs_cto_review: 7 phrases
+- skill_cs_deal_desk: 1 phrase
+- skill_cs_decide: 11 phrases
+- skill_cs_decision_logger: 9 phrases
+- skill_cs_execute: 8 phrases
+- skill_cs_fable_goal: 1 phrase
+- skill_cs_fda_qsr_audit_prep: 7 phrases
+- skill_cs_founder_mode: 19 phrases
+- skill_cs_freeze: 10 phrases
+- skill_cs_gc_review: 6 phrases
+- skill_cs_gdpr_audit_prep: 8 phrases
+- skill_cs_general_counsel_advisor: 4 phrases
+- skill_cs_general_counsel_advisor_2: 4 phrases
+- skill_cs_grill_me: 1 phrase
+- skill_cs_grill_with_docs: 1 phrase
+- skill_cs_handoff: 1 phrase
+- skill_cs_handoff_2: 9 phrases
+- skill_cs_hivemind: 1 phrase
+- skill_cs_internal_comms: 1 phrase
+- skill_cs_interview: 2 phrases
+- skill_cs_iso13485_audit_prep: 9 phrases
+- skill_cs_iso27001_audit_prep: 9 phrases
+- skill_cs_knowledge_ops: 1 phrase
+- skill_cs_linkedin_skills: 1 phrase
+- skill_cs_markdown_html_orchestrator: 1 phrase
+- skill_cs_market_research: 1 phrase
+- skill_cs_md_document: 4 phrases
+- skill_cs_md_review: 3 phrases
+- skill_cs_md_slides: 2 phrases
+- skill_cs_meetings: 1 phrase
+- skill_cs_office_hours: 9 phrases
+- skill_cs_onboard: 5 phrases
+- skill_cs_partnerships_architect: 1 phrase
+- skill_cs_post_mortem: 12 phrases
+- skill_cs_pricing_strategist: 1 phrase
+- skill_cs_process_mapper: 1 phrase
+- skill_cs_procurement_optimizer: 1 phrase
+- skill_cs_product_research: 1 phrase
+- skill_cs_pulse: 1 phrase
+- skill_cs_research_finance: 1 phrase
+- skill_cs_roast: 1 phrase
+- skill_cs_senior_backend: 2 phrases
+- skill_cs_senior_frontend: 2 phrases
+- skill_cs_senior_fullstack: 2 phrases
+- skill_cs_soc2_audit_prep: 7 phrases
+- skill_cs_spinning_up_deep_rl: 3 phrases
+- skill_cs_vendor_management: 1 phrase
+- skill_cs_vpe_advisor: 1 phrase
+- skill_cs_vpe_advisor_2: 1 phrase
+- skill_cs_vpe_review: 8 phrases
+- skill_cs_weekly_review: 1 phrase
+- skill_cs_write_a_skill: 3 phrases
+
+## Unresolved tool assumptions
+
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: [claude-code
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: codex-cli
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: cursor
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: antigravity
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: opencode
+- skill_cs_agent_launcher_orchestrator: Optional tool is not available: gemini-cli]
+- skill_cs_business_operations_skills: Optional tool is not available: [claude-code
+- skill_cs_business_operations_skills: Optional tool is not available: codex-cli
+- skill_cs_business_operations_skills: Optional tool is not available: cursor
+- skill_cs_business_operations_skills: Optional tool is not available: antigravity
+- skill_cs_business_operations_skills: Optional tool is not available: opencode
+- skill_cs_business_operations_skills: Optional tool is not available: gemini-cli]
+- skill_cs_capacity_planner: Optional tool is not available: [claude-code
+- skill_cs_capacity_planner: Optional tool is not available: codex-cli
+- skill_cs_capacity_planner: Optional tool is not available: cursor
+- skill_cs_capacity_planner: Optional tool is not available: antigravity
+- skill_cs_capacity_planner: Optional tool is not available: opencode
+- skill_cs_capacity_planner: Optional tool is not available: gemini-cli]
+- skill_cs_channel_economics: Optional tool is not available: [claude-code
+- skill_cs_channel_economics: Optional tool is not available: codex-cli
+- skill_cs_channel_economics: Optional tool is not available: cursor
+- skill_cs_channel_economics: Optional tool is not available: antigravity
+- skill_cs_channel_economics: Optional tool is not available: opencode
+- skill_cs_channel_economics: Optional tool is not available: gemini-cli]
+- skill_cs_chaos_engineering: Optional tool is not available: [claude-code
+- skill_cs_chaos_engineering: Optional tool is not available: codex-cli
+- skill_cs_chaos_engineering: Optional tool is not available: cursor
+- skill_cs_chaos_engineering: Optional tool is not available: antigravity
+- skill_cs_chaos_engineering: Optional tool is not available: opencode
+- skill_cs_chaos_engineering: Optional tool is not available: gemini-cli]
+- skill_cs_chaos_engineering_2: Optional tool is not available: [claude-code
+- skill_cs_chaos_engineering_2: Optional tool is not available: codex-cli
+- skill_cs_chaos_engineering_2: Optional tool is not available: cursor
+- skill_cs_chaos_engineering_2: Optional tool is not available: antigravity
+- skill_cs_chaos_engineering_2: Optional tool is not available: opencode
+- skill_cs_chaos_engineering_2: Optional tool is not available: gemini-cli]
+- skill_cs_clinical_research: Optional tool is not available: [claude-code
+- skill_cs_clinical_research: Optional tool is not available: codex-cli
+- skill_cs_clinical_research: Optional tool is not available: cursor
+- skill_cs_clinical_research: Optional tool is not available: antigravity
+- skill_cs_clinical_research: Optional tool is not available: opencode
+- skill_cs_clinical_research: Optional tool is not available: gemini-cli]
+- skill_cs_commercial_forecaster: Optional tool is not available: [claude-code
+- skill_cs_commercial_forecaster: Optional tool is not available: codex-cli
+- skill_cs_commercial_forecaster: Optional tool is not available: cursor
+- skill_cs_commercial_forecaster: Optional tool is not available: antigravity
+- skill_cs_commercial_forecaster: Optional tool is not available: opencode
+- skill_cs_commercial_forecaster: Optional tool is not available: gemini-cli]
+- skill_cs_commercial_policy: Optional tool is not available: [claude-code
+- skill_cs_commercial_policy: Optional tool is not available: codex-cli
+- skill_cs_commercial_policy: Optional tool is not available: cursor
+- skill_cs_commercial_policy: Optional tool is not available: antigravity
+- skill_cs_commercial_policy: Optional tool is not available: opencode
+- skill_cs_commercial_policy: Optional tool is not available: gemini-cli]
+- skill_cs_commercial_skills: Optional tool is not available: [claude-code
+- skill_cs_commercial_skills: Optional tool is not available: codex-cli
+- skill_cs_commercial_skills: Optional tool is not available: cursor
+- skill_cs_commercial_skills: Optional tool is not available: antigravity
+- skill_cs_commercial_skills: Optional tool is not available: opencode
+- skill_cs_commercial_skills: Optional tool is not available: gemini-cli]
+- skill_cs_deal_desk: Optional tool is not available: [claude-code
+- skill_cs_deal_desk: Optional tool is not available: codex-cli
+- skill_cs_deal_desk: Optional tool is not available: cursor
+- skill_cs_deal_desk: Optional tool is not available: antigravity
+- skill_cs_deal_desk: Optional tool is not available: opencode
+- skill_cs_deal_desk: Optional tool is not available: gemini-cli]
+- skill_cs_design_system: Optional tool is not available: [claude-code
+- skill_cs_design_system: Optional tool is not available: codex-cli
+- skill_cs_design_system: Optional tool is not available: cursor
+- skill_cs_design_system: Optional tool is not available: antigravity
+- skill_cs_design_system: Optional tool is not available: opencode
+- skill_cs_design_system: Optional tool is not available: gemini-cli]
+- skill_cs_feature_flags_architect: Optional tool is not available: [claude-code
+- skill_cs_feature_flags_architect: Optional tool is not available: codex-cli
+- skill_cs_feature_flags_architect: Optional tool is not available: cursor
+- skill_cs_feature_flags_architect: Optional tool is not available: antigravity
+- skill_cs_feature_flags_architect: Optional tool is not available: opencode
+- skill_cs_feature_flags_architect: Optional tool is not available: gemini-cli]
+- skill_cs_feature_flags_architect_2: Optional tool is not available: [claude-code
+- skill_cs_feature_flags_architect_2: Optional tool is not available: codex-cli
+- skill_cs_feature_flags_architect_2: Optional tool is not available: cursor
+- skill_cs_feature_flags_architect_2: Optional tool is not available: antigravity
+- skill_cs_feature_flags_architect_2: Optional tool is not available: opencode
+- skill_cs_feature_flags_architect_2: Optional tool is not available: gemini-cli]
+- skill_cs_grade_iterate: Optional tool is not available: [claude-code
+- skill_cs_grade_iterate: Optional tool is not available: codex-cli
+- skill_cs_grade_iterate: Optional tool is not available: cursor
+- skill_cs_grade_iterate: Optional tool is not available: antigravity
+- skill_cs_grade_iterate: Optional tool is not available: opencode
+- skill_cs_grade_iterate: Optional tool is not available: gemini-cli]
+- skill_cs_internal_comms: Optional tool is not available: [claude-code
+- skill_cs_internal_comms: Optional tool is not available: codex-cli
+- skill_cs_internal_comms: Optional tool is not available: cursor
+- skill_cs_internal_comms: Optional tool is not available: antigravity
+- skill_cs_internal_comms: Optional tool is not available: opencode
+- skill_cs_internal_comms: Optional tool is not available: gemini-cli]
+- skill_cs_interview: Optional tool is not available: [claude-code
+- skill_cs_interview: Optional tool is not available: codex-cli
+- skill_cs_interview: Optional tool is not available: cursor
+- skill_cs_interview: Optional tool is not available: antigravity
+- skill_cs_interview: Optional tool is not available: opencode
+- skill_cs_interview: Optional tool is not available: gemini-cli]
+- skill_cs_karpathy_coder: Optional tool is not available: [claude-code
+- skill_cs_karpathy_coder: Optional tool is not available: codex-cli
+- skill_cs_karpathy_coder: Optional tool is not available: cursor
+- skill_cs_karpathy_coder: Optional tool is not available: antigravity
+- skill_cs_karpathy_coder: Optional tool is not available: opencode
+- skill_cs_karpathy_coder: Optional tool is not available: gemini-cli]
+- skill_cs_knowledge_ops: Optional tool is not available: [claude-code
+- skill_cs_knowledge_ops: Optional tool is not available: codex-cli
+- skill_cs_knowledge_ops: Optional tool is not available: cursor
+- skill_cs_knowledge_ops: Optional tool is not available: antigravity
+- skill_cs_knowledge_ops: Optional tool is not available: opencode
+- skill_cs_knowledge_ops: Optional tool is not available: gemini-cli]
+- skill_cs_kubernetes_operator: Optional tool is not available: [claude-code
+- skill_cs_kubernetes_operator: Optional tool is not available: codex-cli
+- skill_cs_kubernetes_operator: Optional tool is not available: cursor
+- skill_cs_kubernetes_operator: Optional tool is not available: antigravity
+- skill_cs_kubernetes_operator: Optional tool is not available: opencode
+- skill_cs_kubernetes_operator: Optional tool is not available: gemini-cli]
+- skill_cs_kubernetes_operator_2: Optional tool is not available: [claude-code
+- skill_cs_kubernetes_operator_2: Optional tool is not available: codex-cli
+- skill_cs_kubernetes_operator_2: Optional tool is not available: cursor
+- skill_cs_kubernetes_operator_2: Optional tool is not available: antigravity
+- skill_cs_kubernetes_operator_2: Optional tool is not available: opencode
+- skill_cs_kubernetes_operator_2: Optional tool is not available: gemini-cli]
+- skill_cs_llm_wiki: Optional tool is not available: [claude-code
+- skill_cs_llm_wiki: Optional tool is not available: codex-cli
+- skill_cs_llm_wiki: Optional tool is not available: cursor
+- skill_cs_llm_wiki: Optional tool is not available: antigravity
+- skill_cs_llm_wiki: Optional tool is not available: opencode
+- skill_cs_llm_wiki: Optional tool is not available: gemini-cli]
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: [claude-code
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: codex-cli
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: cursor
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: antigravity
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: opencode
+- skill_cs_markdown_html_orchestrator: Optional tool is not available: gemini-cli]
+- skill_cs_market_research: Optional tool is not available: [claude-code
+- skill_cs_market_research: Optional tool is not available: codex-cli
+- skill_cs_market_research: Optional tool is not available: cursor
+- skill_cs_market_research: Optional tool is not available: antigravity
+- skill_cs_market_research: Optional tool is not available: opencode
+- skill_cs_market_research: Optional tool is not available: gemini-cli]
+- skill_cs_md_document: Optional tool is not available: [claude-code
+- skill_cs_md_document: Optional tool is not available: codex-cli
+- skill_cs_md_document: Optional tool is not available: cursor
+- skill_cs_md_document: Optional tool is not available: antigravity
+- skill_cs_md_document: Optional tool is not available: opencode
+- skill_cs_md_document: Optional tool is not available: gemini-cli]
+- skill_cs_md_review: Optional tool is not available: [claude-code
+- skill_cs_md_review: Optional tool is not available: codex-cli
+- skill_cs_md_review: Optional tool is not available: cursor
+- skill_cs_md_review: Optional tool is not available: antigravity
+- skill_cs_md_review: Optional tool is not available: opencode
+- skill_cs_md_review: Optional tool is not available: gemini-cli]
+- skill_cs_md_slides: Optional tool is not available: [claude-code
+- skill_cs_md_slides: Optional tool is not available: codex-cli
+- skill_cs_md_slides: Optional tool is not available: cursor
+- skill_cs_md_slides: Optional tool is not available: antigravity
+- skill_cs_md_slides: Optional tool is not available: opencode
+- skill_cs_md_slides: Optional tool is not available: gemini-cli]
+- skill_cs_partnerships_architect: Optional tool is not available: [claude-code
+- skill_cs_partnerships_architect: Optional tool is not available: codex-cli
+- skill_cs_partnerships_architect: Optional tool is not available: cursor
+- skill_cs_partnerships_architect: Optional tool is not available: antigravity
+- skill_cs_partnerships_architect: Optional tool is not available: opencode
+- skill_cs_partnerships_architect: Optional tool is not available: gemini-cli]
+- skill_cs_pm_skills: Optional tool is not available: [claude-code
+- skill_cs_pm_skills: Optional tool is not available: codex-cli
+- skill_cs_pm_skills: Optional tool is not available: cursor
+- skill_cs_pm_skills: Optional tool is not available: antigravity
+- skill_cs_pm_skills: Optional tool is not available: opencode
+- skill_cs_pm_skills: Optional tool is not available: gemini-cli]
+- skill_cs_pricing_strategist: Optional tool is not available: [claude-code
+- skill_cs_pricing_strategist: Optional tool is not available: codex-cli
+- skill_cs_pricing_strategist: Optional tool is not available: cursor
+- skill_cs_pricing_strategist: Optional tool is not available: antigravity
+- skill_cs_pricing_strategist: Optional tool is not available: opencode
+- skill_cs_pricing_strategist: Optional tool is not available: gemini-cli]
+- skill_cs_process_mapper: Optional tool is not available: [claude-code
+- skill_cs_process_mapper: Optional tool is not available: codex-cli
+- skill_cs_process_mapper: Optional tool is not available: cursor
+- skill_cs_process_mapper: Optional tool is not available: antigravity
+- skill_cs_process_mapper: Optional tool is not available: opencode
+- skill_cs_process_mapper: Optional tool is not available: gemini-cli]
+- skill_cs_procurement_optimizer: Optional tool is not available: [claude-code
+- skill_cs_procurement_optimizer: Optional tool is not available: codex-cli
+- skill_cs_procurement_optimizer: Optional tool is not available: cursor
+- skill_cs_procurement_optimizer: Optional tool is not available: antigravity
+- skill_cs_procurement_optimizer: Optional tool is not available: opencode
+- skill_cs_procurement_optimizer: Optional tool is not available: gemini-cli]
+- skill_cs_product_research: Optional tool is not available: [claude-code
+- skill_cs_product_research: Optional tool is not available: codex-cli
+- skill_cs_product_research: Optional tool is not available: cursor
+- skill_cs_product_research: Optional tool is not available: antigravity
+- skill_cs_product_research: Optional tool is not available: opencode
+- skill_cs_product_research: Optional tool is not available: gemini-cli]
+- skill_cs_product_skills: Optional tool is not available: [claude-code
+- skill_cs_product_skills: Optional tool is not available: codex-cli
+- skill_cs_product_skills: Optional tool is not available: cursor
+- skill_cs_product_skills: Optional tool is not available: antigravity
+- skill_cs_product_skills: Optional tool is not available: opencode
+- skill_cs_product_skills: Optional tool is not available: gemini-cli]
+- skill_cs_research_finance: Optional tool is not available: [claude-code
+- skill_cs_research_finance: Optional tool is not available: codex-cli
+- skill_cs_research_finance: Optional tool is not available: cursor
+- skill_cs_research_finance: Optional tool is not available: antigravity
+- skill_cs_research_finance: Optional tool is not available: opencode
+- skill_cs_research_finance: Optional tool is not available: gemini-cli]
+- skill_cs_research_ops_skills: Optional tool is not available: [claude-code
+- skill_cs_research_ops_skills: Optional tool is not available: codex-cli
+- skill_cs_research_ops_skills: Optional tool is not available: cursor
+- skill_cs_research_ops_skills: Optional tool is not available: antigravity
+- skill_cs_research_ops_skills: Optional tool is not available: opencode
+- skill_cs_research_ops_skills: Optional tool is not available: gemini-cli]
+- skill_cs_rfp_responder: Optional tool is not available: [claude-code
+- skill_cs_rfp_responder: Optional tool is not available: codex-cli
+- skill_cs_rfp_responder: Optional tool is not available: cursor
+- skill_cs_rfp_responder: Optional tool is not available: antigravity
+- skill_cs_rfp_responder: Optional tool is not available: opencode
+- skill_cs_rfp_responder: Optional tool is not available: gemini-cli]
+- skill_cs_run_without_you: Optional tool is not available: [claude-code
+- skill_cs_run_without_you: Optional tool is not available: codex-cli
+- skill_cs_run_without_you: Optional tool is not available: cursor
+- skill_cs_run_without_you: Optional tool is not available: antigravity
+- skill_cs_run_without_you: Optional tool is not available: opencode
+- skill_cs_run_without_you: Optional tool is not available: gemini-cli]
+- skill_cs_slo_architect: Optional tool is not available: [claude-code
+- skill_cs_slo_architect: Optional tool is not available: codex-cli
+- skill_cs_slo_architect: Optional tool is not available: cursor
+- skill_cs_slo_architect: Optional tool is not available: antigravity
+- skill_cs_slo_architect: Optional tool is not available: opencode
+- skill_cs_slo_architect: Optional tool is not available: gemini-cli]
+- skill_cs_slo_architect_2: Optional tool is not available: [claude-code
+- skill_cs_slo_architect_2: Optional tool is not available: codex-cli
+- skill_cs_slo_architect_2: Optional tool is not available: cursor
+- skill_cs_slo_architect_2: Optional tool is not available: antigravity
+- skill_cs_slo_architect_2: Optional tool is not available: opencode
+- skill_cs_slo_architect_2: Optional tool is not available: gemini-cli]
+- skill_cs_stage_launch: Optional tool is not available: [claude-code
+- skill_cs_stage_launch: Optional tool is not available: codex-cli
+- skill_cs_stage_launch: Optional tool is not available: cursor
+- skill_cs_stage_launch: Optional tool is not available: antigravity
+- skill_cs_stage_launch: Optional tool is not available: opencode
+- skill_cs_stage_launch: Optional tool is not available: gemini-cli]
+- skill_cs_vendor_management: Optional tool is not available: [claude-code
+- skill_cs_vendor_management: Optional tool is not available: codex-cli
+- skill_cs_vendor_management: Optional tool is not available: cursor
+- skill_cs_vendor_management: Optional tool is not available: antigravity
+- skill_cs_vendor_management: Optional tool is not available: opencode
+- skill_cs_vendor_management: Optional tool is not available: gemini-cli]
+- skill_cs_wrap_up: Optional tool is not available: [claude-code
+- skill_cs_wrap_up: Optional tool is not available: codex-cli
+- skill_cs_wrap_up: Optional tool is not available: cursor
+- skill_cs_wrap_up: Optional tool is not available: antigravity
+- skill_cs_wrap_up: Optional tool is not available: opencode
+- skill_cs_wrap_up: Optional tool is not available: gemini-cli]
+
+## Conflict pairs
+
+No opposing instructions were found among skills that can route.
+
+## Duplicate pairs
+
+- KEEP_BOTH: Code Review / code-reviewer. Code Review is the general workflow. code-reviewer adds language-specific review depth.
+- KEEP_BOTH: Web Research / deep-research. Web Research gathers sources. deep-research compares approaches and stays a specialist.
+- KEEP_BOTH: Technical Research / research. Technical Research is the native research workflow. The imported research skill is a separate method, not a replacement.
+- MERGE_LATER: pricing-strategy / pricing-strategist. Both cover SaaS pricing design. Keep pricing-strategy in front until the workflows are merged. Do not delete either package.
+- KEEP_BOTH: Browser QA / pw-review. Browser QA is the native page check. pw-review adds Playwright-style depth and must use the existing ORVYN browser session.
+- PREFER_NATIVE: Browser QA / playwright-pro. playwright-pro is blocked. Browser QA remains the usable browser workflow.
+- DISABLE_DUPLICATE: arquiteto-de-empresa / arquiteto-de-empresa. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: chaos-engineering / chaos-engineering. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: chief-ai-officer-advisor / chief-ai-officer-advisor. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: chief-customer-officer-advisor / chief-customer-officer-advisor. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: chief-data-officer-advisor / chief-data-officer-advisor. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: eu-ai-act-specialist / eu-ai-act-specialist. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: feature-flags-architect / feature-flags-architect. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: general-counsel-advisor / general-counsel-advisor. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- MERGE_LATER: handoff / handoff. The -2 package shares a name stem but the text differs. Leave both installed for manual review.
+- DISABLE_DUPLICATE: iso42001-specialist / iso42001-specialist. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: kubernetes-operator / kubernetes-operator. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- MERGE_LATER: run / run. The -2 package shares a name stem but the text differs. Leave both installed for manual review.
+- DISABLE_DUPLICATE: slo-architect / slo-architect. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+- DISABLE_DUPLICATE: vpe-advisor / vpe-advisor. The -2 package repeats the same description and workflow. It stays installed and is not routed.
+
+Imported security, threat, and audit skills have no native security counterpart, so they are not collapsed into a native skill.
+
+## Safety violations
+
+None in the installed catalog.
+
+## Automatic normalizations
+
+Applied at context load. Package bytes stay available for audit.
+
+- skill_cs_agent_launcher_orchestrator: 1
+- skill_cs_agent_memory: 1
+- skill_cs_agent_protocol: 3
+- skill_cs_ai_act_readiness: 9
+- skill_cs_aims_audit: 9
+- skill_cs_board_meeting: 4
+- skill_cs_boardroom: 14
+- skill_cs_brief: 9
+- skill_cs_c_level_agents: 27
+- skill_cs_c_level_skills: 2
+- skill_cs_caio_review: 9
+- skill_cs_capture: 1
+- skill_cs_caveman: 1
+- skill_cs_cco_review: 8
+- skill_cs_cdo_review: 8
+- skill_cs_cfo_review: 6
+- skill_cs_channel_economics: 1
+- skill_cs_chief_ai_officer_advisor: 3
+- skill_cs_chief_ai_officer_advisor_2: 3
+- skill_cs_chief_data_officer_advisor: 3
+- skill_cs_chief_data_officer_advisor_2: 3
+- skill_cs_ciso_review: 7
+- skill_cs_clinical_research: 1
+- skill_cs_cmo_review: 6
+- skill_cs_commercial_forecaster: 1
+- skill_cs_commercial_policy: 1
+- skill_cs_compliance_readiness: 10
+- skill_cs_context_engine: 3
+- skill_cs_cpo_review: 6
+- skill_cs_cro_review: 7
+- skill_cs_cross_eval: 6
+- skill_cs_cs_onboard: 5
+- skill_cs_cto_review: 7
+- skill_cs_deal_desk: 1
+- skill_cs_decide: 11
+- skill_cs_decision_logger: 9
+- skill_cs_execute: 8
+- skill_cs_fable_goal: 1
+- skill_cs_fda_qsr_audit_prep: 7
+- skill_cs_founder_mode: 19
+- skill_cs_freeze: 10
+- skill_cs_gc_review: 6
+- skill_cs_gdpr_audit_prep: 8
+- skill_cs_general_counsel_advisor: 4
+- skill_cs_general_counsel_advisor_2: 4
+- skill_cs_grill_me: 1
+- skill_cs_grill_with_docs: 1
+- skill_cs_handoff: 1
+- skill_cs_handoff_2: 9
+- skill_cs_hivemind: 1
+- skill_cs_internal_comms: 1
+- skill_cs_interview: 2
+- skill_cs_iso13485_audit_prep: 9
+- skill_cs_iso27001_audit_prep: 9
+- skill_cs_knowledge_ops: 1
+- skill_cs_linkedin_skills: 1
+- skill_cs_markdown_html_orchestrator: 1
+- skill_cs_market_research: 1
+- skill_cs_md_document: 4
+- skill_cs_md_review: 3
+- skill_cs_md_slides: 2
+- skill_cs_meetings: 1
+- skill_cs_office_hours: 9
+- skill_cs_onboard: 5
+- skill_cs_partnerships_architect: 1
+- skill_cs_post_mortem: 12
+- skill_cs_pricing_strategist: 1
+- skill_cs_process_mapper: 1
+- skill_cs_procurement_optimizer: 1
+- skill_cs_product_research: 1
+- skill_cs_pulse: 1
+- skill_cs_research_finance: 1
+- skill_cs_roast: 1
+- skill_cs_senior_backend: 2
+- skill_cs_senior_frontend: 2
+- skill_cs_senior_fullstack: 2
+- skill_cs_soc2_audit_prep: 7
+- skill_cs_spinning_up_deep_rl: 3
+- skill_cs_vendor_management: 1
+- skill_cs_vpe_advisor: 1
+- skill_cs_vpe_advisor_2: 1
+- skill_cs_vpe_review: 8
+- skill_cs_weekly_review: 1
+- skill_cs_write_a_skill: 3
+
+## Manual review
+
+- skill_cs_pricing_strategist (pricing-strategist): MERGE_LATER: Both cover SaaS pricing design. Keep pricing-strategy in front until the workflows are merged. Do not delete either package.
+- skill_cs_handoff_2 (handoff): MERGE_LATER: The -2 package shares a name stem but the text differs. Leave both installed for manual review.
+- skill_cs_run_2 (run): MERGE_LATER: The -2 package shares a name stem but the text differs. Leave both installed for manual review.
+- skill_cs_agent_launcher_orchestrator (agent-launcher-orchestrator): Referenced file is missing: references/cma-primitives.md, references/loops-and-workflows.md
+- skill_cs_ai_act_readiness (ai-act-readiness): Referenced file is missing: scripts/ai_system_risk_classifier.py, scripts/conformity_assessment_planner.py, scripts/ai_act_obligation_tracker.py, scripts/cross_framework_mapper.py
+- skill_cs_aims_audit (aims-audit): Referenced file is missing: scripts/aims_gap_analyzer.py, scripts/ai_risk_register_builder.py, scripts/aims_audit_scheduler.py, scripts/cross_framework_mapper.py
+- skill_cs_ar_resume (ar-resume): Referenced file is missing: scripts/setup_experiment.py
+- skill_cs_ar_status (ar-status): Referenced file is missing: scripts/log_results.py
+- skill_cs_atlassian_admin (atlassian-admin): Referenced file is missing: references/atlassian-mcp-tools.md
+- skill_cs_atlassian_templates (atlassian-templates): Referenced file is missing: references/atlassian-mcp-tools.md
+- skill_cs_autoresearch_agent (autoresearch-agent): Referenced file is missing: scripts/convert.sh
+- skill_cs_board (board): Referenced file is missing: scripts/board_manager.py
+- skill_cs_business_growth_skills (business-growth-skills): Referenced file is missing: scripts/health_score_calculator.py
+- skill_cs_c_level_agents (c-level-agents): Referenced file is missing: references/persona-voices.md, references/llm-wiki-bridge.md
+- skill_cs_c_level_skills (c-level-skills): Referenced file is missing: references/routing-matrix.md
+- skill_cs_caio_review (caio-review): Referenced file is missing: scripts/model_buildvsbuy_calculator.py, scripts/ai_risk_classifier.py, scripts/ai_cost_economics.py
+- skill_cs_cco_review (cco-review): Referenced file is missing: scripts/retention_decomposition_analyzer.py, scripts/customer_segmentation_designer.py, scripts/cs_coverage_calculator.py
+- skill_cs_cdo_review (cdo-review): Referenced file is missing: scripts/ai_training_data_audit.py, scripts/data_product_strategy_picker.py, scripts/data_asset_valuator.py
+- skill_cs_cfo_review (cfo-review): Referenced file is missing: scripts/burn_rate_calculator.py, scripts/unit_economics_analyzer.py, scripts/fundraising_model.py
+- skill_cs_ciso_review (ciso-review): Referenced file is missing: scripts/risk_quantifier.py, scripts/compliance_tracker.py
+- skill_cs_cmo_review (cmo-review): Referenced file is missing: scripts/marketing_budget_modeler.py, scripts/growth_model_simulator.py
+- skill_cs_compliance_readiness (compliance-readiness): Referenced file is missing: scripts/framework_selector.py, scripts/cross_framework_mapper.py, scripts/evidence_pool_generator.py, scripts/audit_simulator.py
+- skill_cs_confluence_expert (confluence-expert): Referenced file is missing: references/atlassian-mcp-tools.md, templates/scripts/template_scaffolder.py
+- skill_cs_cpo_review (cpo-review): Referenced file is missing: scripts/rice_prioritizer.py, scripts/pmf_scorer.py, scripts/portfolio_analyzer.py
+- skill_cs_cro_review (cro-review): Referenced file is missing: scripts/revenue_forecast_model.py, scripts/churn_analyzer.py
+- skill_cs_cto_review (cto-review): Referenced file is missing: scripts/tech_debt_analyzer.py, scripts/team_scaling_calculator.py
+- skill_cs_deal_desk (deal-desk): Referenced file is missing: scripts/contract_risk_scanner.py
+- skill_cs_decide (decide): Referenced file is missing: references/llm-wiki-bridge.md
+- skill_cs_docker_development (docker-development): Referenced file is missing: scripts/convert.sh
+- skill_cs_email_template_builder (email-template-builder): Referenced file is missing: templates/welcome.tsx, templates/invoice.tsx
+- skill_cs_eval (eval): Referenced file is missing: scripts/result_ranker.py, scripts/session_manager.py
+- skill_cs_fda_qsr_audit_prep (fda-qsr-audit-prep): Referenced file is missing: scripts/qsr_compliance_checker.py, scripts/fda_submission_tracker.py, scripts/hipaa_risk_assessment.py, scripts/audit_simulator.py
+- skill_cs_finance_skills (finance-skills): Referenced file is missing: scripts/ratio_calculator.py, scripts/metrics_calculator.py
+- skill_cs_gc_review (gc-review): Referenced file is missing: scripts/contract_risk_scanner.py, scripts/term_sheet_analyzer.py
+- skill_cs_gdpr_audit_prep (gdpr-audit-prep): Referenced file is missing: scripts/gdpr_compliance_checker.py, scripts/dpia_generator.py, scripts/data_subject_rights_tracker.py, scripts/cross_framework_mapper.py, references/gdpr_audit_playbook.md
+- skill_cs_generate (generate): Referenced file is missing: templates/auth/login.md
+- skill_cs_grade_iterate (grade-iterate): Referenced file is missing: references/loops-and-workflows.md, references/cma-primitives.md
+- skill_cs_hard_call (hard-call): Referenced file is missing: references/hard_things.md
+- skill_cs_helm_chart_builder (helm-chart-builder): Referenced file is missing: scripts/convert.sh
+- skill_cs_hub_init (hub-init): Referenced file is missing: scripts/hub_init.py
+- skill_cs_hub_status (hub-status): Referenced file is missing: scripts/session_manager.py, scripts/dag_analyzer.py, scripts/board_manager.py
+- skill_cs_interview (interview): Referenced file is missing: references/examples-bank.md, references/interview-to-config.md
+- skill_cs_iso13485_audit_prep (iso13485-audit-prep): Referenced file is missing: scripts/audit_schedule_optimizer.py, scripts/audit_simulator.py, references/iso13485_audit_playbook.md
+- skill_cs_iso27001_audit_prep (iso27001-audit-prep): Referenced file is missing: scripts/isms_audit_scheduler.py, scripts/audit_simulator.py, scripts/cross_framework_mapper.py, references/iso27001_audit_playbook.md
+- skill_cs_jira_expert (jira-expert): Referenced file is missing: references/atlassian-mcp-tools.md
+- skill_cs_landing_page_generator (landing-page-generator): Referenced file is missing: scripts/brand_voice_analyzer.py
+- skill_cs_loop (loop): Referenced file is missing: scripts/run_experiment.py
+- skill_cs_ma_playbook (ma-playbook): Referenced file is missing: scripts/term_sheet_analyzer.py, scripts/contract_risk_scanner.py, scripts/ai_training_data_audit.py, scripts/data_asset_valuator.py
+- skill_cs_markdown_html_orchestrator (markdown-html-orchestrator): Referenced file is missing: scripts/onboard.py, scripts/brand_palette_validator.py
+- skill_cs_merge (merge): Referenced file is missing: scripts/session_manager.py
+- skill_cs_onboard (onboard): Referenced file is missing: templates/company-context-template.md, references/llm-wiki-bridge.md
+- skill_cs_pm_skills (pm-skills): Referenced file is missing: scripts/velocity_analyzer.py, scripts/goal_compiler.py, scripts/loop_controller.py, references/atlassian-mcp-tools.md
+- skill_cs_product_skills (product-skills): Referenced file is missing: scripts/goal_compiler.py, scripts/validate_project.py, scripts/sample_size_calculator.py
+- skill_cs_ra_qm_skills (ra-qm-skills): Referenced file is missing: scripts/risk_matrix_calculator.py
+- skill_cs_research_ops_skills (research-ops-skills): Referenced file is missing: scripts/onboard.py, scripts/ar_evaluator.py
+- skill_cs_research_summarizer (research-summarizer): Referenced file is missing: scripts/convert.sh
+- skill_cs_run (run): Referenced file is missing: scripts/hub_init.py, references/agent-templates.md
+- skill_cs_run_2 (run): Referenced file is missing: scripts/setup_experiment.py, scripts/run_experiment.py
+- skill_cs_run_without_you (run-without-you): Referenced file is missing: references/loops-and-workflows.md
+- skill_cs_self_improving_agent (self-improving-agent): Referenced file is missing: scripts/codex-install.sh
+- skill_cs_senior_ml_engineer (senior-ml-engineer): Referenced file is missing: scripts/prompt_optimizer.py
+- skill_cs_setup (setup): Referenced file is missing: scripts/setup_experiment.py
+- skill_cs_skill_security_auditor (skill-security-auditor): Referenced file is missing: scripts/helper.py, scripts/analyzer.py, scripts/scanner.py
+- skill_cs_skill_tester (skill-tester): Referenced file is missing: scripts/audit_skills.py
+- skill_cs_skillopt_sleep (skillopt-sleep): Referenced file is missing: scripts/sleep.sh
+- skill_cs_slo_architect (slo-architect): Referenced file is missing: scripts/blast_radius_calculator.py
+- skill_cs_slo_architect_2 (slo-architect): Referenced file is missing: scripts/blast_radius_calculator.py
+- skill_cs_soc2_audit_prep (soc2-audit-prep): Referenced file is missing: scripts/gap_analyzer.py, scripts/control_matrix_builder.py, scripts/evidence_tracker.py, scripts/audit_simulator.py, references/soc2_audit_playbook.md
+- skill_cs_spawn (spawn): Referenced file is missing: references/agent-templates.md, scripts/session_manager.py
+- skill_cs_terraform_patterns (terraform-patterns): Referenced file is missing: scripts/convert.sh
+- skill_cs_vpe_review (vpe-review): Referenced file is missing: scripts/delivery_throughput_analyzer.py, scripts/eng_hiring_funnel_calculator.py, scripts/eng_team_structure_designer.py

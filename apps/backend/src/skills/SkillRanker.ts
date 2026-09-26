@@ -4,6 +4,10 @@ export type SkillTier = "specialist" | "workflow" | "verify" | "generic";
 
 export interface RankableSkill extends SkillPackage {
   enabled?: boolean;
+  /** Review status. Disabled skills are not routed. It does not change the selection cap. */
+  qualityStatus?: "approved" | "needs_revision" | "disabled";
+  /** Internal review score used only when relevance and tier already tie. */
+  qualityScore?: number;
 }
 
 export interface ProjectSignals {
@@ -232,6 +236,7 @@ function browserExecution(instruction: string): boolean {
 function capabilityReason(skill: RankableSkill, request: RankRequest): string | null {
   const status = skill.metadata?.certificationStatus;
   if (status === "blocked") return "certification blocked";
+  if (skill.qualityStatus === "disabled") return "quality disabled";
   if (skill.enabled === false) return "disabled";
   if (skill.metadata?.source === "imported" && skill.metadata.trusted === false) return "disabled";
 
@@ -304,6 +309,12 @@ function tierRank(tier: SkillTier): number {
   if (tier === "workflow") return 1;
   if (tier === "verify") return 2;
   return 3;
+}
+
+function qualityRank(skill: RankableSkill): number {
+  if (skill.qualityStatus === "needs_revision") return 1;
+  if (skill.qualityStatus === "disabled") return 2;
+  return 0;
 }
 
 function builtinRank(skill: RankableSkill): number {
@@ -382,6 +393,10 @@ export function rankSkills(skills: RankableSkill[], request: RankRequest): RankR
     if (b.score !== a.score) return b.score - a.score;
     const tier = tierRank(a.tier) - tierRank(b.tier);
     if (tier !== 0) return tier;
+    const quality = qualityRank(a.skill) - qualityRank(b.skill);
+    if (quality !== 0) return quality;
+    const review = (b.skill.qualityScore ?? 0) - (a.skill.qualityScore ?? 0);
+    if (review !== 0) return review;
     const built = builtinRank(a.skill) - builtinRank(b.skill);
     if (built !== 0) return built;
     return a.skill.name.localeCompare(b.skill.name);

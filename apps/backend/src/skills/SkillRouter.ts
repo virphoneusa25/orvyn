@@ -4,6 +4,8 @@ import type { SkillPackage } from "./SkillLoader";
 import { skillRegistry, type RegistrySkill } from "./SkillRegistry";
 import { buildSkillPrompt } from "./SkillContextLoader";
 import { rankSkills, type ProjectSignals, type RankableSkill } from "./SkillRanker";
+import { precedenceOverlay } from "./quality/SkillConflictDetector";
+import { qualityIndex } from "./quality/SkillQualityReport";
 
 export interface SkillRouteRequest {
   instruction: string;
@@ -88,9 +90,20 @@ function registrySkills(): RankableSkill[] {
   return skillRegistry.list();
 }
 
-/** Classify, filter, rank, and load only the selected skill playbooks. */
+function withQuality(skills: readonly RankableSkill[]): RankableSkill[] {
+  const index = qualityIndex();
+  if (!index.size) return [...skills];
+  return skills.map((skill) => {
+    if (skill.qualityStatus) return skill;
+    const row = index.get(skill.id);
+    if (!row) return skill;
+    return { ...skill, qualityStatus: row.qualityStatus, qualityScore: row.qualityScore };
+  });
+}
+
+/** Classify, filter, rank, and load only the selected skill playbooks. Selection caps stay 5 and 7. */
 export function routeSkills(request: SkillRouteRequest): SkillRouteResult {
-  const skills = (request.skills ?? registrySkills()) as RankableSkill[];
+  const skills = withQuality((request.skills ?? registrySkills()) as RankableSkill[]);
   const ranked = rankSkills(skills, {
     instruction: request.instruction,
     runMode: request.runMode,
@@ -100,12 +113,14 @@ export function routeSkills(request: SkillRouteRequest): SkillRouteResult {
     project: projectSignals(request),
     previousSuccessfulSkillIds: request.previousSuccessfulSkillIds,
   });
-  const prompt = buildSkillPrompt(ranked.selected.map((skill) => ({
+  const body = buildSkillPrompt(ranked.selected.map((skill) => ({
     id: skill.id,
     name: skill.name,
     instructions: skill.instructions,
     dir: skill.dir,
   })));
+  const overlay = precedenceOverlay(ranked.selected);
+  const prompt = overlay && body ? `${overlay}\n\n${body}` : body;
   return { ...ranked, prompt };
 }
 

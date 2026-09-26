@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { normalizeSkillInstructions } from "./quality/SkillInstructionNormalizer";
 
 /** A selected skill whose playbook is already in memory. */
 export interface LoadedSkillContext {
@@ -15,7 +16,7 @@ const ON_DEMAND = "References, templates, and scripts stay on disk. Read a file 
 export function buildSkillPrompt(selected: LoadedSkillContext[]): string {
   if (!selected.length) return "";
   const blocks = selected.map((skill) => {
-    const body = skill.instructions.trim();
+    const body = normalizeSkillInstructions(skill.instructions).text.trim();
     return [`### ${skill.name}`, body, ON_DEMAND].filter(Boolean).join("\n");
   });
   return ["Active skills for this task:", ...blocks].join("\n\n");
