@@ -111,6 +111,8 @@ export interface ApprovalItem {
   tool: string;
   input: unknown;
   destructive: boolean;
+  /** ORION found an MCP server it needs: approving installs it (and continues the task). */
+  install?: { name: string; canonicalId?: string; description?: string; query?: string; freeInstall?: boolean; secrets?: string[] };
   /** Command risk: read / change / dangerous (terminal and SSH). */
   risk?: "read" | "change" | "dangerous";
   preview?: unknown;
@@ -362,6 +364,11 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         if (target) target.condensed = { fromChars: Number(e.data.fromChars ?? 0), toChars: Number(e.data.toChars ?? 0), digested: Boolean(e.data.digestModel) };
         continue;
       }
+      case "capability.installed": {
+        const tools = Array.isArray(e.data.tools) ? e.data.tools.length : 0;
+        items.push({ kind: "status", key: e.id, label: `Installed ${String(e.data.name ?? "the tool")}${tools ? ` · ${tools} new tool${tools === 1 ? "" : "s"}` : ""} — continuing`, ephemeral: false, tone: "working" });
+        continue;
+      }
       case "run.credits.warning": {
         items.push({ kind: "status", key: e.id, label: `80% of this task's credit budget used (${e.data.credits} of ${e.data.budget}) — finishing the essentials`, ephemeral: false, tone: "working" });
         continue;
@@ -487,6 +494,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           input: e.data.input,
           destructive: Boolean(e.data.destructive),
           ...(e.data.risk ? { risk: String(e.data.risk) as ApprovalItem["risk"] } : {}),
+          ...(e.data.install ? { install: e.data.install as ApprovalItem["install"] } : {}),
           preview: e.data.preview,
           settled: false,
         });

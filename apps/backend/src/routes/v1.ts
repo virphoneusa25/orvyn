@@ -1033,7 +1033,7 @@ v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   // The pending call may live in either runtime (clients cannot always know
   // which one owns the run). Resolve across both — approving is idempotent.
   const ok =
-    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
+    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope, { secrets: req.body.secrets }) ||
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
   if (!ok) return res.status(404).json({ error: "No pending approval with that callId" });
   res.json({ ok: true });

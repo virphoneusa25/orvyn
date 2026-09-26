@@ -8,7 +8,8 @@
 /** One web search or page read ORION did while answering (live, then kept with the reply). */
 export interface ChatActivity {
   id: string;
-  kind: "search" | "read";
+  /** capability: ORION needs a tool it does not have (shown as an install card). */
+  kind: "search" | "read" | "capability";
   status: "running" | "done" | "failed";
   query?: string;
   url?: string;
@@ -16,6 +17,9 @@ export interface ChatActivity {
   results?: number;
   found?: { url: string; title: string; snippet?: string }[];
   error?: string;
+  reason?: string;
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  servers?: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean }[];
   startedAt: number;
   endedAt?: number;
 }

@@ -18,7 +18,7 @@ import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand, regenerateLastReply } from "../orvynCommand";
 import { COMPOSER_HANDOFF_EVENT, takeComposerHandoff } from "../composerHandoff";
 import { MessageContent } from "./MessageContent";
-import { AgentActivityList, RunFooter } from "./AgentActivityList";
+import { AgentActivityList, CapabilityCard, RunFooter } from "./AgentActivityList";
 import "./ConversationActivity.css";
 import { Attachment } from "./AttachmentBar";
 import { IconPlus, IconRocket } from "./Icons";
@@ -1099,7 +1099,7 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
             ASSISTANT
           </span>
         </div>
-        {message.activity && message.activity.length > 0 && (
+        {message.activity && message.activity.some((a) => a.kind !== "capability") && (
           <ResearchTimeline steps={stepsFromActivity(message.activity)} live={live} thinking={live && !message.content.trim()} startedAt={message.createdAt} />
         )}
         <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
@@ -1111,6 +1111,12 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
             <MessageContent content={message.content} streaming={live} />
           )}
         </div>
+        {/* ORION needs a tool it does not have: the install card, never "the tool isn't available". */}
+        {(message.activity ?? []).filter((a) => a.kind === "capability").map((a) => (
+          <div key={a.id} data-testid="chat-capability" style={{ marginTop: 8 }}>
+            <CapabilityCard item={{ kind: "capability", key: a.id, query: a.query ?? "", reason: a.reason ?? "", recommendedServers: a.servers ?? [] }} install={a.install} onInstalled={onRegenerate} />
+          </div>
+        ))}
         {!live && message.content.trim() && (
           <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {message.activity && message.activity.length > 0 && <SourcesBar sources={sourcesFromActivity(message.activity)} />}

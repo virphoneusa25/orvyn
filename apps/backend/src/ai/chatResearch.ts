@@ -11,7 +11,8 @@ import { parseSearchResults } from "../gateway/toolResultEnvelope";
 
 export interface ChatActivity {
   id: string;
-  kind: "search" | "read";
+  /** capability: ORION needs a tool it does not have; the chat shows an install card. */
+  kind: "search" | "read" | "capability";
   status: "running" | "done" | "failed";
   query?: string;
   url?: string;
@@ -21,13 +22,29 @@ export interface ChatActivity {
   /** Search: the result sites (for Sources). */
   found?: { url: string; title: string; snippet?: string }[];
   error?: string;
+  /** Capability: why ORION needs it and the MCP servers that provide it. */
+  reason?: string;
+  servers?: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean }[];
+  /** The server ORION will install once the user approves (the card's Install button). */
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  /** Set by the desktop once installed. */
+  installed?: boolean;
   startedAt: number;
   endedAt?: number;
 }
 
 export interface WebToolRunner {
-  execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; output?: string; error?: string }>;
+  execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
+  /** Tools of MCP servers the user installed (mcp.<server>.<tool>), offered to the chat too. */
+  mcpTools?(): ToolDefinition[];
 }
+
+/** Finding a tool ORION lacks (an MCP server the user can install from the card). */
+export const CHAT_CAPABILITY_TOOL: ToolDefinition = {
+  name: "search_capabilities",
+  description: "Find an MCP tool that gives you a capability you do not have in this chat (email, GitHub, a database, a calendar, a browser, a better web search…). ORVYN shows the user a card to install it.",
+  parameters: { type: "object", properties: { query: { type: "string", description: "What you need to do, e.g. 'search the web', 'send email'" } }, required: ["query"] },
+};
 
 export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   {

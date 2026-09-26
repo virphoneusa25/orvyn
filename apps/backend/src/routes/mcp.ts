@@ -5,6 +5,7 @@
 // secret values never leave the backend.
 
 import { Router } from "express";
+import { makeInstallMcpServerTool } from "../ai/tools/searchCapabilities";
 import { marketplaceFor } from "../mcp/marketplace/service";
 import { MARKETPLACE_CATEGORIES } from "../mcp/marketplace/types";
 import { hardeningFor } from "../mcp/hardening/hardening";
@@ -211,6 +212,24 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  // ORION asked for a tool in chat and the user approved it on the card:
+  // install the server it found, connect it, and return its tools.
+  r.post("/capability/install", async (req, res) => {
+    const t = requireTenant(req);
+    const canonicalId = String(req.body?.canonicalId ?? "").trim();
+    if (!canonicalId) return res.status(400).json({ error: "canonicalId is required" });
+    const secrets = req.body?.secrets && typeof req.body.secrets === "object" ? req.body.secrets : undefined;
+    const args = { canonicalId, ...(secrets ? { secrets } : {}) };
+    const context = { workspaceRoot: typeof req.body?.projectRoot === "string" ? req.body.projectRoot : undefined } as any;
+    const result = t.toolGateway.list().some((x: { name: string }) => x.name === "install_mcp_server")
+      ? await t.toolGateway.execute("install_mcp_server", args, undefined, context)
+      : await makeInstallMcpServerTool(() => marketplaceFor(t.mcpManager, t.localStore, t.id)).execute(args, context);
+    const installed = (result.meta?.installed ?? {}) as { name?: string; tools?: string[]; serverId?: string; state?: string };
+    try { hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("install", { serverId: installed.serverId, marketplaceId: canonicalId, via: "capability-card" }); } catch { /* audit is best-effort */ }
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error ?? "The install did not finish.", ...installed });
+    res.json({ ok: true, ...installed });
   });
 
   r.get("/marketplace/secrets", (req, res) => {

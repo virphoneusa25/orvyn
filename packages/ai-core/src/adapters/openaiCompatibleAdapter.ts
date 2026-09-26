@@ -88,7 +88,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
             type: "function",
-            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+            function: { name: wireToolName(tc.name), arguments: JSON.stringify(tc.arguments ?? {}) },
           })),
         };
       }
@@ -121,7 +121,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     if (!request.tools || request.tools.length === 0) return undefined;
     return request.tools.map((t) => ({
       type: "function",
-      function: { name: t.name, description: t.description, parameters: t.parameters },
+      function: { name: wireToolName(t.name), description: t.description, parameters: t.parameters },
     }));
   }
 
@@ -171,7 +171,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
         } catch {
           args = {};
         }
-        return { id: tc.id, name: tc.function?.name, arguments: args };
+        return { id: tc.id, name: fromWireToolName(tc.function?.name, request), arguments: args };
       }),
       finishReason: choice?.finish_reason === "tool_calls" ? "tool_call" : (choice?.finish_reason ?? "stop"),
       usage: data.usage
@@ -230,7 +230,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
         } catch {
           args = {};
         }
-        yield { delta: "", toolCall: { id: t.id, name: t.name, arguments: args }, done: false } as AIChunk;
+        yield { delta: "", toolCall: { id: t.id, name: fromWireToolName(t.name, request), arguments: args }, done: false } as AIChunk;
       }
     };
 
@@ -388,4 +388,21 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     rows.sort((a: { index?: number }, b: { index?: number }) => (a.index ?? 0) - (b.index ?? 0));
     return rows.map((row: { embedding?: number[] }) => row.embedding ?? []);
   }
+}
+
+/**
+ * OpenAI-style APIs only accept tool names matching ^[a-zA-Z0-9_-]{1,64}$.
+ * ORVYN's MCP tools are named mcp.<server>.<tool>, so dots go out as "__"
+ * and come back through the request's own tool list.
+ */
+export function wireToolName(name: string): string {
+  const n = String(name ?? "");
+  if (/^[A-Za-z0-9_-]{1,64}$/.test(n)) return n;
+  return n.replace(/\./g, "__").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+}
+
+export function fromWireToolName(name: string | undefined, request: { tools?: { name: string }[] }): string {
+  const n = String(name ?? "");
+  const hit = request.tools?.find((t) => t.name === n || wireToolName(t.name) === n);
+  return hit ? hit.name : n;
 }

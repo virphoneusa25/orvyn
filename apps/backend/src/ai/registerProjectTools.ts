@@ -35,7 +35,7 @@ import { registerArtifactTools } from "./tools/artifactTools";
 import { makeFetchUrlTool, makeWebSearchTool } from "./tools/netTools";
 import { makeSshExecTool } from "./tools/sshTools";
 import { makeMcpListTool, makeMcpCallTool } from "./tools/mcpTools";
-import { makeSearchCapabilitiesTool } from "./tools/searchCapabilities";
+import { makeSearchCapabilitiesTool, makeInstallMcpServerTool } from "./tools/searchCapabilities";
 import { marketplaceFor } from "../mcp/marketplace/service";
 import {
   makeBrowserOpenTool,
@@ -156,6 +156,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
   g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
   g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
+  g.register(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
   // registry.clear() above dropped namespaced mcp.* tools. Re-bind any
   // servers that are still CONNECTED so marketplace installs survive a run.
   tenant.mcpManager.reregisterConnectedTools();

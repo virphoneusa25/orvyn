@@ -1,7 +1,15 @@
 import type { McpManager } from "../McpManager";
 import type { RegistryAggregator } from "./aggregator";
-import { isPublicFreeMcp } from "./publicInstall";
-import { DEFAULT_TOOL_BUDGET } from "./types";
+import { isPublicFreeMcp, serverRequiresUserSecret } from "./publicInstall";
+import { DEFAULT_TOOL_BUDGET, type MarketplaceMcpServer } from "./types";
+
+/** The secrets a server needs from the user before it can run (API keys, tokens). */
+export function secretNamesFor(server: MarketplaceMcpServer): string[] {
+  const names = new Set<string>();
+  for (const t of server.transports ?? []) for (const h of t.headers ?? []) if (h.secret || h.required) names.add(h.name);
+  for (const a of server.auth ?? []) if (a.kind === "api_key" || a.kind === "bearer" || a.kind === "custom") names.add(String((a as { name?: string }).name ?? (a.kind === "api_key" ? "API_KEY" : "TOKEN")));
+  return [...names];
+}
 
 export interface CapabilityHit {
   kind: "installed" | "marketplace";
@@ -16,6 +24,9 @@ export interface CapabilityHit {
   health?: string;
   scope?: string;
   freeInstall?: boolean;
+  /** Secrets the user must supply (empty: installs with one click). */
+  secrets?: string[];
+  oauth?: boolean;
 }
 
 export interface RankContext {
@@ -29,6 +40,12 @@ export class CapabilityIndex {
   activated = new Set<string>();
   budget = { ...DEFAULT_TOOL_BUDGET };
   rankContext: RankContext = {};
+  /** Marketplace servers seen in searches, so ORION can install the one it found. */
+  private seen = new Map<string, MarketplaceMcpServer>();
+
+  serverFor(canonicalId: string): MarketplaceMcpServer | undefined {
+    return this.seen.get(canonicalId);
+  }
 
   constructor(private manager: McpManager, public aggregator?: RegistryAggregator) {}
 
@@ -103,6 +120,7 @@ export class CapabilityIndex {
     let market: CapabilityHit[] = [];
     if (this.aggregator) {
       const fed = await this.aggregator.search({ query, limit: 8 });
+      for (const r of fed.results) if (r.server.canonicalId) this.seen.set(r.server.canonicalId, r.server);
       market = fed.results.map((r) => ({
         kind: "marketplace" as const,
         name: r.server.title || r.server.name,
@@ -112,6 +130,8 @@ export class CapabilityIndex {
         canonicalId: r.server.canonicalId,
         trust: r.server.trust?.level ?? this.rankContext.trustOf?.(r.server.canonicalId),
         freeInstall: isPublicFreeMcp(r.server),
+        secrets: serverRequiresUserSecret(r.server) ? secretNamesFor(r.server) : [],
+        oauth: (r.server.auth ?? []).some((a) => a.kind === "oauth"),
         score: rankHit(q, r.server.name, r.server.description, {
           installed: Boolean(r.server.installed),
           trust: r.server.trust?.level,
@@ -119,7 +139,9 @@ export class CapabilityIndex {
         }),
       }));
     }
-    const askInstall = market.filter((m) => !m.installed).sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 5);
+    // One-click installs first (no key, no sign-in), then by relevance.
+    const easy = (h: CapabilityHit) => (h.oauth ? 2 : h.secrets?.length ? 1 : 0);
+    const askInstall = market.filter((m) => !m.installed).sort((a, b) => easy(a) - easy(b) || (b.score ?? 0) - (a.score ?? 0)).slice(0, 5);
     const hits = [...installed, ...market].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 16);
     return { hits, activated: [...this.activated], askInstall, diagnostics: this.diagnostics() };
   }

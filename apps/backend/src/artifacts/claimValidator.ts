@@ -5,7 +5,10 @@ export interface GroundedArtifact {
 }
 
 const CLAIM =
-  /\b(generated|download(?:able)?|attached|files\s*→\s*generated|you'll find it|card above)\b/i;
+  /\b(generated|download(?:able)?|attached|files\s*→\s*generated|you'll find it)\b/i;
+/** "It's in the card above" claims a file — "install it from the card above" (an MCP install card) does not. */
+const CARD_CLAIM = /\bcard above\b/i;
+const INSTALL_CARD = /\b(install|connect|add|enable)\b[^.\n]{0,40}\bcard\b|\bcard\b[^.\n]{0,40}\b(install|connect|mcp|tool)\b/i;
 const FILENAME = /\b[\w.-]+\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx|zip)\b/gi;
 const SANDBOX_PATH = /\b(?:sandbox|\/opt\/orvyn|worker-local)\/\S+/i;
 
@@ -32,7 +35,7 @@ export function asksToReadFileBack(text: string): boolean {
 
 export function claimsGeneratedFile(text: string): boolean {
   FILENAME.lastIndex = 0;
-  return CLAIM.test(text) || FILENAME.test(text);
+  return CLAIM.test(text) || (CARD_CLAIM.test(text) && !INSTALL_CARD.test(text)) || FILENAME.test(text);
 }
 
 /** Invented filenames that are not in the persisted set. */

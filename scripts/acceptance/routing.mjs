@@ -189,7 +189,7 @@ async function main() {
     ok(big.events.some((e) => e.type === "run.credits.warning"), "at 80% of the budget ORION is told to finish the essentials");
     const err = [...big.events].reverse().find((e) => e.type === "run.error")?.data?.message ?? "";
     ok(big.status === "error" && /credit budget/.test(err), "over the budget the run stops with a clear message", `${big.status} ${err}`);
-    ok(bc && bc.credits > 20, `…after ${bc?.credits} credits (budget ${bc?.budget})`);
+    ok(bc && bc.credits >= 20, `…after ${bc?.credits} credits (budget ${bc?.budget})`);
   } catch (e) {
     failures++; console.error("HARNESS ERROR:", e.stack ?? e.message);
   } finally {

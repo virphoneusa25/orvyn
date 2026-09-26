@@ -1,4 +1,7 @@
 import "./loadEnv";
+import { makeFetchUrlTool, makeWebSearchTool } from "./ai/tools/netTools";
+import { makeInstallMcpServerTool, makeSearchCapabilitiesTool } from "./ai/tools/searchCapabilities";
+import { marketplaceFor as chatMarketplaceFor } from "./mcp/marketplace/service";
 import { learnFromUserMessage, type MemoryStoreLike } from "./memory/userMemory";
 import { memoryModel } from "./memory/learnModel";
 import { ChatTurnRecorder } from "./sessions/sessionMessages";
@@ -216,7 +219,16 @@ wss.on("connection", (socket, req) => {
     try {
       const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService, tenant.localStore as unknown as MemoryStoreLike, {
         // The chat researches on its own: web_search / fetch_url through the tool gateway.
-        execute: (name, args) => tenant.toolGateway.execute(name, args),
+        // Before a project is opened the gateway has no tools yet; the chat's own tools still work.
+        execute: (name, args) => {
+          if (tenant.toolGateway.list().some((t) => t.name === name)) return tenant.toolGateway.execute(name, args);
+          const own = chatOwnTool(tenant, name);
+          return own ? own.execute(args, {} as any) : Promise.resolve({ ok: false, error: `Unknown tool "${name}"` });
+        },
+        // MCP servers the user installed (e.g. a search server ORION asked for) are the chat's tools too.
+        mcpTools: () => tenant.toolGateway.list()
+          .filter((t) => t.name.startsWith("mcp.") && tenant.toolGateway.getPermission?.(t.name) !== "denied")
+          .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters as any })),
       });
       // What the user says about themselves or their work is remembered for next time (best-effort, after the reply).
       const learn = () => { if (typeof body?.userMessage === "string") void learnFromUserMessage(tenant.localStore as unknown as MemoryStoreLike, memoryModel(tenant.modelService), body.userMessage); };
@@ -307,3 +319,15 @@ server.listen(PORT, () => {
     );
   }
 });
+
+/** The chat's own tools (web search, page reads, finding and installing MCP tools), usable before any project is open. */
+function chatOwnTool(tenant: any, name: string) {
+  const market = () => chatMarketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id);
+  switch (name) {
+    case "web_search": return makeWebSearchTool();
+    case "fetch_url": return makeFetchUrlTool();
+    case "search_capabilities": return makeSearchCapabilitiesTool(market);
+    case "install_mcp_server": return makeInstallMcpServerTool(market);
+    default: return null;
+  }
+}

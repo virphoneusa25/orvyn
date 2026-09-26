@@ -1,5 +1,6 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
-import { CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
+import { CHAT_CAPABILITY_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -258,10 +259,55 @@ export class Orchestrator {
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
-    const web = this.webTools && provider.supportsTools() ? CHAT_WEB_TOOLS : undefined;
-    if (web) messages.splice(1, 0, { role: "system", content: CHAT_RESEARCH_PROMPT });
+    const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
+    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
+    const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
+    if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}` });
     let toolCallsUsed = 0;
     let nudged = false;
+    let capabilityNudged = false;
+    const requested = new Map<string, string>();
+    // A missing capability: find an MCP server, show the install card (as chat activity), tell the model.
+    const requestCapability = async function* (this: Orchestrator, query: string): AsyncGenerator<AIChunk & { activity?: ChatActivity }, string> {
+      const seen = requested.get(query);
+      if (seen) return seen;
+      let servers: NonNullable<ChatActivity["servers"]> = [];
+      // A tool the user already installed can do it: use that instead of asking again.
+      const ready = installedTools.filter((t) => /search/i.test(query) ? /search/i.test(t.name) : true);
+      if (ready.length && /search/i.test(query)) {
+        const note = `Use ${ready.map((t) => t.name).join(", ")} (installed MCP tools) to ${query}.`;
+        requested.set(query, note);
+        return note;
+      }
+      let reason = "";
+      try {
+        const found = await this.webTools!.execute("search_capabilities", { query });
+        const required = found.ok ? (found.meta?.capabilityRequired as { reason?: string; recommendedServers?: typeof servers } | undefined) : undefined;
+        servers = required?.recommendedServers ?? [];
+        reason = required?.reason ?? "";
+      } catch { servers = []; }
+      const pick = servers.find((c) => c.canonicalId && !c.oauth);
+      const primary = pick?.name || pick?.server || servers[0]?.name || servers[0]?.server;
+      const activity: ChatActivity = {
+        id: `cap_${requested.size + 1}_${Date.now()}`,
+        kind: "capability",
+        status: "done",
+        query,
+        reason: reason || (primary ? `ORION needs ${primary} to ${query}.` : "No tool for this is installed yet. Pick one in Tools & MCP → Marketplace and ORION will finish the task."),
+        servers,
+        ...(pick ? { install: { name: String(primary), canonicalId: pick.canonicalId!, description: pick.description, secrets: pick.secrets ?? [], freeInstall: pick.freeInstall } } : {}),
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+      };
+      yield { delta: "", activity, done: false };
+      const note = pick
+        ? `ORVYN is asking the user to approve installing ${primary} (an MCP server) so you can ${query}; when they approve, ORVYN installs it and you continue. Do not say the tool is unavailable. Tell the user in one sentence that you need ${primary} to ${query} and that approving the install below lets you continue — then stop.`
+        : primary
+        ? `ORVYN is showing the user an install card for ${primary} (an MCP server) so you can ${query}. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences that you need ${primary} to ${query}, why, and that installing it from the card lets you finish.`
+        : `ORVYN is showing the user a card to add an MCP tool that can ${query}. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences what you need and that adding it from Tools & MCP lets you finish.`;
+      requested.set(query, note);
+      return note;
+    };
     try {
       for (let round = 0; round < MAX_RESEARCH_ROUNDS + 1; round++) {
         const offerTools = web && round < MAX_RESEARCH_ROUNDS && toolCallsUsed < MAX_RESEARCH_CALLS ? web : undefined;
@@ -306,23 +352,52 @@ export class Orchestrator {
             messages.push({ role: "user", content: RESEARCH_NUDGE });
             continue;
           }
+          // "Search isn't available": ask for the tool instead (once).
+          if (web && !capabilityNudged && round < MAX_RESEARCH_ROUNDS && claimsToolUnavailable(text)) {
+            capabilityNudged = true;
+            if (text) yield { delta: "", retract: true, done: false };
+            messages.push({ role: "assistant", content: text });
+            messages.push({ role: "user", content: CAPABILITY_NUDGE });
+            continue;
+          }
           yield { delta: "", done: true };
           return;
         }
-        messages.push({ role: "assistant", content: text, toolCalls: calls });
-        for (const call of calls) {
+        const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || isInstalledTool(n);
+        const turnCalls = unwrapParallelCalls(calls, known);
+        messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
+        for (const call of turnCalls) {
           toolCallsUsed++;
-          const allowed = call.name === "web_search" || call.name === "fetch_url";
-          let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
-          if (allowed) yield { delta: "", activity, done: false };
-          const result = allowed
-            ? await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }))
-            : { ok: false, error: `Tool ${call.name} is not available in chat.` };
-          if (allowed) {
+          if (call.name === "search_capabilities") {
+            const query = String((call.arguments as { query?: string })?.query ?? "").trim() || "this task";
+            const note = yield* requestCapability.call(this, query);
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: note });
+            continue;
+          }
+          if (isInstalledTool(call.name)) {
+            let activity = startActivity(call.id || `call_${toolCallsUsed}`, /search/i.test(call.name) ? "web_search" : "fetch_url", { query: (call.arguments as any)?.query ?? (call.arguments as any)?.q ?? call.name, url: (call.arguments as any)?.url ?? call.name });
+            yield { delta: "", activity, done: false };
+            const result: { ok: boolean; output?: string; error?: string } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
             activity = finishActivity(activity, result);
             yield { delta: "", activity, done: false };
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: toolResultForModel(result) });
+            continue;
           }
-          messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: toolResultForModel(result) });
+          const allowed = call.name === "web_search" || call.name === "fetch_url";
+          if (!allowed) {
+            const note = yield* requestCapability.call(this, capabilityForToolName(call.name));
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: `There is no tool named "${call.name}" in this chat.\n\n${note}` });
+            continue;
+          }
+          let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
+          yield { delta: "", activity, done: false };
+          const result: { ok: boolean; output?: string; error?: string } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
+          activity = finishActivity(activity, result);
+          yield { delta: "", activity, done: false };
+          let content = toolResultForModel(result);
+          const gap = result.ok ? (emptySearchResult(call.name, String(result.output ?? "")) ? "search the web" : null) : capabilityGapFor({ toolName: call.name, error: String(result.error ?? "") });
+          if (gap) content = `${content}\n\n${yield* requestCapability.call(this, gap)}`;
+          messages.push({ role: "tool", toolCallId: call.id, name: call.name, content });
         }
         if (text.trim()) yield { delta: "\n\n", done: false };
       }

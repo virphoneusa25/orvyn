@@ -57,6 +57,10 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
   list_processes: ["READ"],
   fetch_url: ["NETWORK"],
   web_search: ["NETWORK"],
+  // Only searches the tool catalog (and activates tools the user already installed); never installs.
+  search_capabilities: ["READ"],
+  // Installs and starts an MCP server: only after the user approves it.
+  install_mcp_server: ["EXECUTE", "NETWORK"],
   // Remote execution — strictly more dangerous than either class alone.
   ssh_exec: ["EXECUTE", "NETWORK"],
   browser_open: ["NETWORK", "EXECUTE"],

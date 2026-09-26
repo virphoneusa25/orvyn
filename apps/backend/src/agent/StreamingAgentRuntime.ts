@@ -2,6 +2,7 @@ import { CONVERSATION_STYLE } from "./conversationStyle";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
 import { creditsFor, escalate as escalateStep, runCreditBudget, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
+import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
@@ -199,6 +200,9 @@ interface RunState {
   /** Helper steps discarded because the helper wanted to change something or finish. */
   helperRejects: number;
   helperSteps: number;
+  /** Capabilities ORVYN already asked the user to install in this run. */
+  capabilityQueries: Set<string>;
+  capabilityNudges: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -310,6 +314,8 @@ function parseToolArtifacts(raw: string, tool: string, args: Record<string, unkn
 
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
+  /** What the user typed into an approval (an MCP server's API key), by callId. Used once, then dropped. */
+  private approvalInputs = new Map<string, Record<string, string>>();
   private runs = new Map<string, RunState>();
 
   constructor(
@@ -493,6 +499,102 @@ export class StreamingAgentRuntime {
     return out.text;
   }
 
+  private isKnownTool(name: string): boolean {
+    return this.tools.list().some((t) => t.name === name);
+  }
+
+  /**
+   * Finds an MCP server that provides `query` and shows the user the install
+   * card (capability.required), once per capability per run. Returns what the
+   * model should do next.
+   */
+  private async requestCapability(runId: string, state: RunState, query: string): Promise<string> {
+    if (state.capabilityQueries.has(query)) {
+      return `ORVYN already handled a tool to ${query} in this run. Do not say the tool is unavailable; finish with the tools you have.`;
+    }
+    state.capabilityQueries.add(query);
+    type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean };
+    let servers: Candidate[] = [];
+    let reason = "";
+    if (this.isKnownTool("search_capabilities")) {
+      try {
+        const found = await this.tools.execute("search_capabilities", { query }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot } as any);
+        const required = found.ok ? (found.meta?.capabilityRequired as { reason?: string; recommendedServers?: Candidate[] } | undefined) : undefined;
+        servers = required?.recommendedServers ?? [];
+        reason = required?.reason ?? "";
+      } catch {
+        servers = [];
+      }
+    }
+    const pick = servers.find((c) => c.canonicalId && !c.oauth);
+    if (pick && this.isKnownTool("install_mcp_server")) return this.installWithApproval(runId, state, query, pick, servers);
+    const primary = servers[0]?.name || servers[0]?.server;
+    this.store.emit(runId, "capability.required", {
+      query,
+      reason: reason || (primary ? `ORION needs ${primary} to ${query}.` : "No tool for this is installed yet. Pick one in Tools & MCP → Marketplace and ORION will finish the task."),
+      recommendedServers: servers,
+      runId,
+    });
+    return primary
+      ? `ORVYN is showing the user a card to connect ${primary} (it needs the user to sign in) so you can ${query}. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences that you need ${primary} to ${query}, and that connecting it from the card lets you finish — then stop.`
+      : `ORVYN found no tool to install that can ${query}, and is showing the user a card to add one. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences what you need — then stop.`;
+  }
+
+  /**
+   * ORION found an MCP server for what it needs: ask the user once ("Install
+   * Brave Search?"), then install it, connect it and give the run its tools.
+   */
+  private async installWithApproval(runId: string, state: RunState, query: string, pick: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[] }, alternatives: unknown[]): Promise<string> {
+    const name = pick.name || pick.server || pick.canonicalId!;
+    const callId = `install_${Math.random().toString(36).slice(2, 10)}`;
+    const call: ToolCall = { id: callId, name: "install_mcp_server", arguments: { canonicalId: pick.canonicalId, reason: `ORION needs ${name} to ${query}.` } };
+    this.store.emit(runId, "approval.required", {
+      callId,
+      tool: "install_mcp_server",
+      input: call.arguments,
+      destructive: false,
+      risk: "change",
+      install: { name, canonicalId: pick.canonicalId, description: pick.description ?? "", query, freeInstall: Boolean(pick.freeInstall), secrets: pick.secrets ?? [], alternatives },
+    });
+    this.store.setStatus(runId, "awaiting_approval");
+    const { approved, timedOut } = await raceApprovalTimeout((settle) => {
+      this.pending.set(callId, { call, destructive: false, resolve: settle, runId });
+      return () => this.pending.delete(callId);
+    });
+    this.store.emit(runId, "approval.resolved", { callId, approved, ...(timedOut ? { timedOut: true } : {}) });
+    this.store.setStatus(runId, "running");
+    const secrets = this.approvalInputs.get(callId);
+    this.approvalInputs.delete(callId);
+    if (!approved) {
+      return `The user did not approve installing ${name}. Do not say the tool is unavailable and do not ask again; finish the task as well as you can with the tools you have and mention in one sentence that installing ${name} would let you ${query}.`;
+    }
+    this.store.emit(runId, "tool.started", { callId, tool: "install_mcp_server", args: call.arguments });
+    let result;
+    try {
+      result = await this.tools.execute("install_mcp_server", { canonicalId: pick.canonicalId, ...(secrets ? { secrets } : {}) }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot } as any);
+    } catch (err: any) {
+      result = { ok: false, error: String(err?.message ?? err) };
+    }
+    const installed = (result as any).meta?.installed as { name?: string; tools?: string[]; serverId?: string } | undefined;
+    if (!result.ok || !installed?.tools?.length) {
+      this.store.emit(runId, "tool.failed", { callId, tool: "install_mcp_server", error: result.error ?? "No tools came online." });
+      this.store.emit(runId, "capability.required", { query, reason: `Installing ${name} did not finish: ${String(result.error ?? "it did not start").slice(0, 200)}`, recommendedServers: [pick], runId });
+      return `Installing ${name} did not finish (${String(result.error ?? "it did not start").slice(0, 300)}). Do not say the tool is unavailable; finish with the tools you have and tell the user in one sentence what went wrong with the install.`;
+    }
+    this.store.emit(runId, "tool.completed", { callId, tool: "install_mcp_server", preview: String(result.output ?? "").slice(0, 400) });
+    this.giveRunTools(runId, state, installed);
+    return `The user approved it: ${name} is installed and connected. You now have these tools (use them now to ${query}):\n${String(result.output ?? "")}`;
+  }
+
+  /** A server installed during the run: expose its tools and don't ask again for each call (the user approved the install). */
+  private giveRunTools(runId: string, state: RunState, installed: { name?: string; tools?: string[]; serverId?: string }): void {
+    for (const t of installed.tools ?? []) {
+      state.exposedTools?.add(t);
+      state.approvedTools.add(t);
+    }
+    this.store.emit(runId, "capability.installed", { name: installed.name, serverId: installed.serverId, tools: installed.tools ?? [] });
+  }
+
   /**
    * One look-around step on a cheaper helper model (routing policy, per step).
    * Returns the helper's reply when it only gathered; null to let the main
@@ -514,7 +616,7 @@ export class StreamingAgentRuntime {
     }
     if (reply?.usage) this.noteCredits(runId, state, helper.config.id, reply.usage as TokenUsage);
     const seen = new Set<string>();
-    const calls: ToolCall[] = (reply?.toolCalls ?? []).filter((c: ToolCall) => c?.name && !seen.has(c.id) && seen.add(c.id));
+    const calls: ToolCall[] = unwrapParallelCalls(reply?.toolCalls ?? [], (n) => this.isKnownTool(n)).filter((c: ToolCall) => c?.name && !seen.has(c.id) && seen.add(c.id));
     if (!acceptHelperStep(calls)) {
       state.helperRejects++;
       this.store.emit(runId, "route.step", { modelId: helper.config.id, accepted: false, reason: calls.length ? "The helper wanted to change something; the main model takes this step." : "Nothing more to gather; the main model takes this step." });
@@ -755,7 +857,7 @@ export class StreamingAgentRuntime {
       this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
       { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const modeOverlay = composerModeOverlay(options?.composerMode, mode);
     const gapNotes = capabilityGapNotes(instruction, runCaps);
     const intent = inferTaskIntent(instruction, options?.composerMode ?? mode);
@@ -822,6 +924,8 @@ export class StreamingAgentRuntime {
       readOnlyStreak: 0,
       helperRejects: 0,
       helperSteps: 0,
+      capabilityQueries: new Set<string>(),
+      capabilityNudges: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1595,7 +1699,7 @@ export class StreamingAgentRuntime {
         // Drop malformed calls rather than sending the model a reply to a tool
         // it never named; keep duplicates out so one id is answered once.
         const seen = new Set<string>();
-        const calls = streamedCalls.filter((c) => {
+        const calls = unwrapParallelCalls(streamedCalls, (n) => this.isKnownTool(n)).filter((c) => {
           if (!c?.name || seen.has(c.id)) return false;
           seen.add(c.id);
           return true;
@@ -1706,6 +1810,15 @@ export class StreamingAgentRuntime {
           messages.push({ role: "user", content: RESEARCH_NUDGE });
           this.store.emit(runId, "agent.continue", { reason: "Researching on the web before answering", attempt: state.researchNudges });
           return { kind: "continue", reason: "task needs current information" };
+        }
+        // "Search isn't available in this session": ask for the tool instead.
+        if (state.toolsEnabled && state.capabilityNudges < 1 && claimsToolUnavailable(content)) {
+          state.capabilityNudges += 1;
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "ask for the missing tool" });
+          messages.push({ role: "assistant", content: content || "" });
+          messages.push({ role: "user", content: CAPABILITY_NUDGE });
+          this.store.emit(runId, "agent.continue", { reason: "Finding a tool to install instead of giving up", attempt: state.capabilityNudges });
+          return { kind: "continue", reason: "reply blamed a missing tool" };
         }
         // A reply that only ANNOUNCES the next step ("Next I'll read it
         // back…") is not a final answer — send the same agent back to work.
@@ -1866,6 +1979,8 @@ export class StreamingAgentRuntime {
     const screenshots: Array<{ b64: string; mediaType: string; name: string }> = [];
     const runnable: ToolCall[] = [];
     const previews = new Map<string, EditPreview | undefined>();
+    /** Calls that failed because a capability is missing → what to ask the user to install. */
+    const gaps = new Map<string, string>();
 
     for (const call of calls) {
       if (state.cancelled) return "cancelled";
@@ -1878,6 +1993,15 @@ export class StreamingAgentRuntime {
         const message = `Blocked identical retry after ${priorFailures} prior failure${priorFailures === 1 ? "" : "s"}. Change the arguments or use a different approach.`;
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, repeated: true, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
+        continue;
+      }
+
+      // A tool the model invented: find one to install instead of failing.
+      if (!this.isKnownTool(call.name)) {
+        const message = `There is no tool named "${call.name}" in this run.`;
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, envelope: this.refusalEnvelope(state, call, message) });
+        replies.set(call.id, message);
+        gaps.set(call.id, capabilityGapFor({ toolName: call.name, error: message, unknownTool: true })!);
         continue;
       }
 
@@ -2038,19 +2162,22 @@ export class StreamingAgentRuntime {
             })
         );
       }
+      if (call.name === "install_mcp_server" && result.ok && result.meta?.installed) {
+        this.giveRunTools(runId, state, result.meta.installed as { name?: string; tools?: string[]; serverId?: string });
+      }
       if (call.name === "search_capabilities" && result.ok && result.meta) {
         const required = result.meta.capabilityRequired as
           | { query?: string; reason?: string; recommendedServers?: unknown[] }
           | undefined;
-        if (required) {
-          this.store.emit(runId, "capability.required", {
-            query: required.query,
-            reason: required.reason,
-            recommendedServers: required.recommendedServers ?? [],
-            runId,
-          });
-        }
         const activated = Array.isArray(result.meta.activated) ? result.meta.activated : [];
+        const asked = String((call.arguments as { query?: string })?.query ?? "").trim();
+        if (required && asked) {
+          // Something to install: ORVYN asks the user once and installs it (below, after this batch).
+          gaps.set(call.id, asked);
+        } else if (activated.length === 0 && asked) {
+          // Nothing installed and nothing found to install: still show the user a card to add one.
+          gaps.set(call.id, asked);
+        }
         const diagnostics = (result.meta.diagnostics as Record<string, unknown> | undefined) ?? {};
         this.store.emit(runId, "mcp.activation", {
           activatedTools: activated,
@@ -2163,6 +2290,7 @@ export class StreamingAgentRuntime {
           }
         }
         replies.set(call.id, text);
+        if (emptySearchResult(call.name, raw)) gaps.set(call.id, "search the web");
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
         const fullError = result.error ?? "unknown error";
@@ -2175,6 +2303,8 @@ export class StreamingAgentRuntime {
           call.id,
           `The tool "${call.name}" FAILED:\n${error}\n\nDiagnose and try a different approach. Do not repeat the identical call.`
         );
+        const gap = capabilityGapFor({ toolName: call.name, error: fullError });
+        if (gap) gaps.set(call.id, gap);
       }
     };
 
@@ -2184,6 +2314,13 @@ export class StreamingAgentRuntime {
     for (const call of serial) {
       if (state.cancelled) return "cancelled";
       await runOne(call);
+    }
+
+    // Missing capabilities: ask the user to install an MCP server (the card),
+    // and tell the model to say so instead of "the tool isn't available".
+    for (const [callId, query] of gaps) {
+      const note = await this.requestCapability(runId, state, query);
+      replies.set(callId, `${replies.get(callId) ?? ""}\n\n${note}`.trim());
     }
 
     // One reply per requested call, in the order the model asked — anything
@@ -2387,10 +2524,11 @@ export class StreamingAgentRuntime {
   }
 
   /** Resolves a pending approval, unblocking the paused loop. */
-  resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once"): boolean {
+  resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once", inputs?: { secrets?: Record<string, string> }): boolean {
     const p = this.pending.get(callId);
     if (!p) return false;
     this.pending.delete(callId);
+    if (approved && inputs?.secrets && typeof inputs.secrets === "object") this.approvalInputs.set(callId, inputs.secrets);
     if (approved && scope === "mission" && !p.destructive) {
       this.runs.get(p.runId)?.approvedTools.add(p.call.name);
     }

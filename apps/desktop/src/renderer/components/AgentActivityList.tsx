@@ -210,7 +210,7 @@ export function AgentActivityList({
 }: {
   events: AgentEvent[];
   status: string;
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission", secrets?: Record<string, string>) => void;
 }) {
   // RAW EVENTS → presentation items → rows. Raw event names, timestamps,
   // task/mission/agent internals and reviewer text never render directly;
@@ -373,12 +373,70 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
   );
 }
 
-function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
+export function CapabilityCard({ item, install, onInstalled }: {
+  item: CapabilityRequiredItem;
+  /** Chat: the server ORION found; the button installs it and the reply continues. */
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  onInstalled?: () => void;
+}) {
   const [settled, setSettled] = useState(Boolean(item.settled));
-  const primary = item.recommendedServers[0]?.name || item.recommendedServers[0]?.server || "this integration";
+  const [state, setState] = useState<"idle" | "installing" | "done" | "error">("idle");
+  const [error, setError] = useState("");
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
+  if (install) {
+    const need = install.secrets ?? [];
+    const run = async () => {
+      setState("installing"); setError("");
+      try {
+        const res = await fetch(apiUrl("/mcp/capability/install"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ canonicalId: install.canonicalId, ...(need.length ? { secrets } : {}) }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || !out.ok) throw new Error(out.error || `Install failed (${res.status})`);
+        setState("done");
+        onInstalled?.();
+      } catch (err: any) {
+        setState("error"); setError(String(err?.message ?? err));
+      }
+    };
+    return (
+      <div style={card("var(--accent)")} data-testid="capability-install-card">
+        <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 4 }}>
+          ORION wants to install {install.name} to {item.query || "continue"}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.45 }}>
+          {install.description ? `${install.description.slice(0, 220)} ` : ""}
+          {install.freeInstall ? "Official public MCP tool, no API key. " : ""}
+          ORVYN installs it on this desktop, connects it and ORION continues.
+        </div>
+        {state !== "done" && !settled && need.map((n) => (
+          <input key={n} type="password" placeholder={`${n} (needed by ${install.name})`} value={secrets[n] ?? ""}
+            onChange={(e) => setSecrets({ ...secrets, [n]: e.target.value })}
+            style={{ display: "block", width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }} />
+        ))}
+        {error && <div style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 6 }}>{error}</div>}
+        {state === "done" ? (
+          <span data-testid="capability-installed" style={{ fontSize: 11.5, color: "var(--success)" }}>Installed {install.name} — ORION is continuing.</span>
+        ) : settled ? (
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Not installed.</span>
+        ) : (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button data-testid="capability-install" disabled={state === "installing" || need.some((n) => !secrets[n]?.trim())} onClick={() => void run()} style={btn("var(--accent)")}>
+              {state === "installing" ? "Installing…" : `Install ${install.name}`}
+            </button>
+            <button onClick={() => setSettled(true)} style={btn("var(--border)")}>Not now</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+  const named = item.recommendedServers[0]?.name || item.recommendedServers[0]?.server;
+  const primary = named || "an MCP tool";
   const free = Boolean((item.recommendedServers[0] as { freeInstall?: boolean } | undefined)?.freeInstall) || /no API key/i.test(item.reason);
   const openMarket = (query: string) => {
-    document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail: { query, reason: item.reason } }));
+    document.dispatchEvent(new CustomEvent("orvyn:capability-install", { detail: { query, reason: item.reason } }));
   };
   return (
     <div style={card("var(--accent)")}>
@@ -393,8 +451,8 @@ function CapabilityCard({ item }: { item: CapabilityRequiredItem }) {
         <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Cancelled — ORION will not install this itself.</span>
       ) : (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => openMarket(primary)} style={btn("var(--accent)")}>
-            {free ? `Install ${primary}` : `Connect ${primary}`}
+          <button data-testid="capability-install" onClick={() => openMarket(named || item.query || "")} style={btn("var(--accent)")}>
+            {!named ? "Find a tool" : free ? `Install ${primary}` : `Connect ${primary}`}
           </button>
           <button onClick={() => openMarket(item.query || primary)} style={btn("var(--border)")}>
             View MCP options
@@ -413,16 +471,54 @@ function ApprovalCard({
   onApprove,
 }: {
   item: ApprovalItem;
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission") => void | Promise<void>;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission", secrets?: Record<string, string>) => void | Promise<void>;
 }) {
   const preview = item.preview as EditPreview | undefined;
   // PENDING → APPROVING → APPROVED/DENIED; a failed request re-enables the
   // buttons (the run-level error surfaces separately) — never a silent click.
   const [busy, setBusy] = useState(false);
+  const [secrets, setSecrets] = useState<Record<string, string>>({});
   const act = (approved: boolean, scope?: "once" | "mission") => {
     setBusy(true);
-    Promise.resolve(onApprove(item.key, approved, scope)).finally(() => setBusy(false));
+    const filled = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v.trim()));
+    Promise.resolve(onApprove(item.key, approved, scope, approved && Object.keys(filled).length ? filled : undefined)).finally(() => setBusy(false));
   };
+  if (item.install) {
+    const need = item.install.secrets ?? [];
+    const missing = need.some((n) => !secrets[n]?.trim());
+    return (
+      <div style={card("var(--accent)")} data-testid="install-approval">
+        <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 4 }}>
+          ORION wants to install {item.install.name}{item.install.query ? ` to ${item.install.query}` : ""}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, lineHeight: 1.45 }}>
+          {item.install.description ? `${item.install.description.slice(0, 220)} ` : ""}
+          {item.install.freeInstall ? "Official public MCP tool, no API key. " : ""}
+          ORVYN installs it on this desktop, connects it and continues the task.
+        </div>
+        {!item.settled && need.map((n) => (
+          <input
+            key={n}
+            type="password"
+            placeholder={`${n} (needed by ${item.install!.name})`}
+            value={secrets[n] ?? ""}
+            onChange={(e) => setSecrets({ ...secrets, [n]: e.target.value })}
+            style={{ display: "block", width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
+          />
+        ))}
+        {item.settled ? (
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{item.approved ? "Approved — installing" : "Not installed"}</span>
+        ) : (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button data-testid="install-approve" disabled={busy || missing} onClick={() => act(true)} style={btn("var(--accent)")}>
+              {busy ? "Installing…" : `Install ${item.install.name}`}
+            </button>
+            <button disabled={busy} onClick={() => act(false)} style={btn("var(--border)")}>Not now</button>
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={card(item.destructive ? "var(--danger)" : "var(--accent)")}>
       <div style={{ fontSize: 12.5, fontWeight: 500, marginBottom: 6 }}>

@@ -340,6 +340,13 @@ export function App() {
       if (target) setView(target);
     };
     document.addEventListener("orvyn:nav", onNav);
+    // An install card ("ORION needs Brave Search to search the web"): open Tools & MCP → Marketplace on that search.
+    const onCapability = (e: Event) => {
+      const detail = (e as CustomEvent<{ query?: string; reason?: string }>).detail ?? {};
+      setView("tools");
+      setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:marketplace-open", { detail })), 60);
+    };
+    document.addEventListener("orvyn:capability-install", onCapability);
     // Recent Missions / Mission Control re-entry: reopen a mission's Active
     // Workspace with its run attached (conversation + activity restored).
     const onOpenRun = (e: Event) => {
@@ -360,6 +367,7 @@ export function App() {
     document.addEventListener("orvyn:context-open", onCtx);
     document.addEventListener("orvyn:context-tab", onCtx);
     return () => {
+      document.removeEventListener("orvyn:capability-install", onCapability);
       document.removeEventListener("orvyn:nav", onNav);
       document.removeEventListener("orvyn:open-run", onOpenRun);
       document.removeEventListener("orvyn:context-open", onCtx);

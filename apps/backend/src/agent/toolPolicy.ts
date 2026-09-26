@@ -10,7 +10,8 @@ const SERVICE = /^(start_process|stop_process|read_process_logs|list_processes)$
 const BROWSER = /^browser_/;
 const DESKTOP = /^(desktop_|computer[._])/;
 const ARTIFACT = /^(generate_image|artifact_|create_document|create_zip)$/;
-const MCP = /mcp|search_capabilities/i;
+/** MCP tools stay off until the task needs them; search_capabilities is always there so ORION can ask for a missing tool. */
+const MCP = /^mcp[._]/i;
 const GIT = /^git_/;
 
 export function selectToolNames(

@@ -248,7 +248,7 @@ export function useAgentRun(
     } catch (err: any) { setError(err.message); return false; }
   }
 
-  async function approve(callId: string, approved: boolean, scope: "once" | "mission" = "once") {
+  async function approve(callId: string, approved: boolean, scope: "once" | "mission" = "once", secrets?: Record<string, string>) {
     // The owning runtime is not always knowable client-side (attached runs
     // look identical). Try the expected endpoint, then the other — and never
     // fail silently: a dead Approve button is undebuggable from the UI.
@@ -262,7 +262,7 @@ export function useAgentRun(
         const res = await fetch(apiUrl(p), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ approved, scope }),
+          body: JSON.stringify({ approved, scope, ...(secrets ? { secrets } : {}) }),
         });
         if (res.ok) {
           if (runId) attachStream(runId);

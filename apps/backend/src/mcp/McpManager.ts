@@ -444,6 +444,11 @@ export class McpManager {
     };
   }
 
+  /** The gateway names (mcp.<server>.<tool>) of a connected server's tools. */
+  namespacedTools(id: string): { name: string; description: string }[] {
+    return (this.connections.get(id)?.tools ?? []).map((t) => ({ name: t.namespacedName, description: t.description.slice(0, 200) }));
+  }
+
   statuses(): McpServerStatus[] {
     return this.registry.list().map((c) => this.status(c.id)!).filter(Boolean);
   }

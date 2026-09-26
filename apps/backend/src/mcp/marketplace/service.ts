@@ -41,7 +41,7 @@ export class MarketplaceService {
   private cache: CatalogCache<any>;
 
   constructor(
-    private manager: McpManager,
+    readonly manager: McpManager,
     private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void },
     private tenantId = "local",
   ) {
