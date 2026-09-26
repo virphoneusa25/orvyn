@@ -12,6 +12,8 @@ export function BrowserWorkbench({
   surfaceActive = true,
   onTabs,
   addressFocusToken,
+  liveVersion = 0,
+  updating = false,
 }: {
   kind: "browser" | "preview";
   projectName?: string | null;
@@ -21,13 +23,20 @@ export function BrowserWorkbench({
   surfaceActive?: boolean;
   onTabs: (state: WorkbenchBrowserState) => void;
   addressFocusToken?: number;
+  liveVersion?: number;
+  updating?: boolean;
 }) {
   const api = window.orvyn.browser;
   const [state, setState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState(false);
+  const [deviceMenu, setDeviceMenu] = useState(false);
+  const [device, setDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [stopped, setStopped] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const seenVersion = useRef(0);
   const surface = useRef<HTMLDivElement | null>(null);
   const address = useRef<HTMLInputElement | null>(null);
   const hasNative = Boolean(api) && /Electron/i.test(navigator.userAgent);
@@ -90,6 +99,15 @@ export function BrowserWorkbench({
   }, [api]);
 
   useEffect(() => {
+    if (kind !== "preview" || !autoRefresh || liveVersion <= 0) return;
+    const previous = seenVersion.current;
+    seenVersion.current = liveVersion;
+    if (previous === 0 || previous === liveVersion || stopped) return;
+    const id = state.activeId;
+    if (id) void api?.reload(id).then(apply);
+  }, [liveVersion, autoRefresh, kind, stopped]);
+
+  useEffect(() => {
     if (!expanded && !fullscreen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -133,10 +151,10 @@ export function BrowserWorkbench({
   return (
     <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
       {!fullscreen && (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)", flexShrink: 0 }}>
-        <button title="Back" disabled={!tab?.canGoBack} style={ghostBtn()} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
-        <button title="Forward" disabled={!tab?.canGoForward} style={ghostBtn()} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
-        <button title={tab?.loading ? "Stop" : "Reload"} style={ghostBtn()} onClick={() => tab && void api?.reload(tab.id).then(apply)}>
+      <div data-testid="preview-controls" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)", flexShrink: 0 }}>
+        <button title="Back" aria-label="Back" disabled={!tab?.canGoBack} style={ghostBtn()} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
+        <button title="Forward" aria-label="Forward" disabled={!tab?.canGoForward} style={ghostBtn()} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
+        <button title={tab?.loading ? "Stop" : "Refresh"} aria-label="Refresh" style={ghostBtn()} onClick={() => tab && void api?.reload(tab.id).then(apply)}>
           {tab?.loading ? "■" : <IconRefresh size={12} />}
         </button>
         <form
@@ -164,73 +182,35 @@ export function BrowserWorkbench({
             }}
           />
         </form>
-        {tab?.url && (
-          <button title="Open externally" style={ghostBtn()} onClick={() => void api?.openExternal(tab.id)}>
-            <IconExternal size={12} />
-          </button>
-        )}
-        {tab?.url && (
-          <button
-            data-testid="preview-expand"
-            title={expanded ? "Collapse preview" : "Expand preview"}
-            style={ghostBtn()}
-            onClick={() => {
-              setFullscreen(false);
-              setExpanded((v) => !v);
-            }}
-          >
-            {expanded ? "Collapse" : "Expand"}
-          </button>
-        )}
-        {tab?.url && (
-          <button
-            data-testid="preview-fullscreen"
-            title="Full screen"
-            style={ghostBtn()}
-            onClick={() => {
-              setExpanded(true);
-              setFullscreen(true);
-            }}
-          >
-            Full Screen
-          </button>
-        )}
-        {tab?.controlOwner === "orion" && (
-          <button style={ghostBtn()} onClick={() => tab && void api?.takeControl(tab.id).then(apply)}>Take Control</button>
-        )}
-        {tab?.controlOwner === "user" && orionStatus && (
-          <button style={ghostBtn()} onClick={() => tab && void api?.returnControl(tab.id).then(apply)}>Return to ORION</button>
-        )}
+        <button title="Open in new tab" aria-label="Open in new tab" style={ghostBtn()} disabled={!tab?.url} onClick={() => tab && void api?.openExternal(tab.id)}>
+          <IconExternal size={12} />
+        </button>
         <div style={{ position: "relative" }}>
-          <button title="More" style={ghostBtn()} onClick={() => setMenu((v) => !v)}><IconMore size={12} /></button>
+          <button title="Responsive preview" aria-label="Responsive preview" style={ghostBtn()} onClick={() => { setDeviceMenu((v) => !v); setMenu(false); }}>
+            {device === "mobile" ? "Mobile" : device === "tablet" ? "Tablet" : "Desktop"}
+          </button>
+          {deviceMenu && (
+            <div style={{ position: "absolute", right: 0, top: 28, zIndex: 30, minWidth: 140, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
+              {(["desktop", "tablet", "mobile"] as const).map((id) => (
+                <MenuItem key={id} label={id[0].toUpperCase() + id.slice(1)} onClick={() => { setDevice(id); setDeviceMenu(false); }} />
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ position: "relative" }}>
+          <button title="More" aria-label="More" style={ghostBtn()} onClick={() => { setMenu((v) => !v); setDeviceMenu(false); }}><IconMore size={12} /></button>
           {menu && (
             <div style={{ position: "absolute", right: 0, top: 28, zIndex: 30, minWidth: 180, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
+              <MenuItem label={expanded ? "Collapse" : "Expand"} onClick={() => { setFullscreen(false); setExpanded((v) => !v); setMenu(false); }} />
+              <MenuItem label="Full screen" onClick={() => { setExpanded(true); setFullscreen(true); setMenu(false); }} />
+              {tab?.controlOwner === "orion" && <MenuItem label="Take control" onClick={() => { void api?.takeControl(tab.id).then(apply); setMenu(false); }} />}
+              {tab?.controlOwner === "user" && <MenuItem label="Return to ORION" onClick={() => { void api?.returnControl(tab.id).then(apply); setMenu(false); }} />}
               <MenuItem label="Clear browsing data" onClick={() => { void api?.clearData().then(apply); setMenu(false); }} />
               <MenuItem label="Inspect page" onClick={() => { if (tab) void api?.openDevTools(tab.id); setMenu(false); }} />
             </div>
           )}
         </div>
       </div>
-      )}
-
-      {!fullscreen && tab?.sessionId && (
-        <div
-          data-testid="workbench-browser-session"
-          data-session-id={tab.sessionId}
-          data-viewport={tab.viewport ? `${tab.viewport.preset}:${tab.viewport.width}x${tab.viewport.height}` : "desktop"}
-          style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 10px", fontSize: 11, color: "var(--orvyn-text-muted)", borderBottom: "1px solid var(--orvyn-border-soft)", fontFamily: "var(--font-mono)" }}
-        >
-          <span style={{ color: "var(--orvyn-cyan)" }}>ORION session</span>
-          <span>{tab.sessionId}</span>
-          <span>·</span>
-          <span>{tab.viewport ? `${tab.viewport.preset[0]!.toUpperCase()}${tab.viewport.preset.slice(1)} ${tab.viewport.width}×${tab.viewport.height}` : "Desktop"}</span>
-        </div>
-      )}
-      {!fullscreen && orionStatus && tab?.controlOwner === "orion" && (
-        <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-cyan)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>{orionStatus}</div>
-      )}
-      {!fullscreen && tab?.controlOwner === "user" && orionStatus && (
-        <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-yellow)", borderBottom: "1px solid var(--orvyn-border-soft)" }}>You are controlling this browser</div>
       )}
       {!fullscreen && tab?.download && (
         <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--orvyn-text-muted)" }}>
@@ -243,7 +223,8 @@ export function BrowserWorkbench({
       ) : tab?.error ? (
         <ErrorPage tab={tab} local={kind === "preview"} onRetry={() => void go(tab.url)} />
       ) : (
-        <div ref={surface} data-testid="workbench-browser-surface" className="orvyn-browser-surface" style={{ flex: 1, minHeight: 0, background: "#0b0e14", color: "var(--orvyn-text-muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", justifyContent: "center", background: "#070b14" }}>
+        <div ref={surface} data-testid="workbench-browser-surface" className="orvyn-browser-surface" style={{ flex: device === "desktop" ? 1 : undefined, width: device === "mobile" ? 390 : device === "tablet" ? 768 : "100%", maxWidth: "100%", minHeight: 0, background: "#0b0e14", color: "var(--orvyn-text-muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           {!hasNative ? (
             <div style={{ padding: 28, textAlign: "center" }}>
               <div style={emptyTitle()}>Embedded browser requires ORVYN Desktop</div>
@@ -252,6 +233,7 @@ export function BrowserWorkbench({
           ) : (
             <div style={{ fontSize: 12 }}>{tab?.loading ? `Opening ${tab.url}` : "Page opens in this pane."}</div>
           )}
+        </div>
         </div>
       )}
       {fullscreen && (
@@ -262,6 +244,30 @@ export function BrowserWorkbench({
         >
           Exit Full Screen (Esc)
         </button>
+      )}
+      {kind === "preview" && !fullscreen && (
+        <div
+          data-testid="preview-footer"
+          style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderTop: "1px solid var(--orvyn-border-soft)", fontSize: 11, color: "var(--orvyn-text-secondary)", flexShrink: 0 }}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: tab?.url && !stopped ? "#34d399" : "#64748b", flexShrink: 0 }} />
+          <span>{tab?.url && !stopped ? `Live Preview (v${Math.max(liveVersion, 1)})` : stopped ? "Preview stopped" : "Preview"}</span>
+          {updating && autoRefresh && !stopped && <span style={{ color: "var(--orvyn-text-muted)" }}>Updating after file changes</span>}
+          <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+            Auto Refresh
+          </label>
+          <button style={ghostBtn()} disabled={!tab?.url} onClick={() => tab && void api?.openExternal(tab.id)}>Open in new tab</button>
+          <button
+            style={ghostBtn()}
+            onClick={() => {
+              setStopped(true);
+              if (tab) void api?.close(tab.id).then(apply);
+            }}
+          >
+            Stop Preview
+          </button>
+        </div>
       )}
     </div>
   );

@@ -42,7 +42,10 @@ test("closing the active tab selects a neighbor, never a second pane", () => {
 
 test("Follow ORION maps events onto one workbench tab", () => {
   assert.equal(followWorkbenchTab("diff", { path: "App.tsx" }).id, "diff:App.tsx");
-  assert.equal(followWorkbenchTab("preview", { url: "http://127.0.0.1:5173" }).kind, "preview");
+  const preview = followWorkbenchTab("preview", { url: "http://127.0.0.1:5173" });
+  assert.equal(preview.kind, "preview");
+  assert.equal(preview.id, "preview");
+  assert.equal(preview.url, "http://127.0.0.1:5173");
   assert.equal(followWorkbenchTab("browser", { browserId: "b1" }).id, "browser:b1");
   assert.equal(followWorkbenchTab("desktop").id, "desktop");
   assert.equal(followWorkbenchTab("terminal").id, "terminal");
@@ -90,10 +93,13 @@ test("artifact tabs carry ArtifactService identity, not a generated/ path", () =
   assert.equal(followWorkbenchTab("artifact", { name: "virphone-logo-2.png", artifactId: "art_logo2" }).artifactId, "art_logo2");
 });
 
-test("closing the last tab returns the empty launcher state", () => {
-  const next = closeTab([parseWorkbenchTab("files")], "files", "files");
-  assert.deepEqual(next.tabs, []);
-  assert.equal(next.activeId, "");
+test("pinned workbench tabs stay; closing the last dynamic tab does not open a second pane", () => {
+  const pinned = closeTab([parseWorkbenchTab("files")], "files", "files");
+  assert.equal(pinned.tabs.length, 1);
+  assert.equal(pinned.tabs[0].id, "files");
+  const next = closeTab([parseWorkbenchTab("files"), parseWorkbenchTab(fileTabId("src/App.tsx"))], fileTabId("src/App.tsx"), fileTabId("src/App.tsx"));
+  assert.deepEqual(next.tabs.map((t) => t.id), ["files"]);
+  assert.equal(next.activeId, "files");
 });
 
 test("DOM contract: one workbench, one tab bar, no inspector", () => {

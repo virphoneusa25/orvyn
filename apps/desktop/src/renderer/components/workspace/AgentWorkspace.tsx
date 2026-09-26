@@ -29,10 +29,9 @@ import {
   followWorkbenchTab,
   nextTerminalTabId,
   parseWorkbenchTab,
-  previewTabId,
-  previewTitle,
   truncateTabTitle,
   upsertTab,
+  WORKBENCH_CORE_TABS,
   WORKBENCH_TABBAR_TEST_ID,
   WORKBENCH_TEST_ID,
   type WorkbenchTab,
@@ -45,7 +44,6 @@ import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
 import { IconClose, IconCrosshair, IconExpand, IconGlobe, IconLayout, IconPlug, IconPlus } from "../Icons";
 import type { WorkbenchBrowserState } from "../../orvyn-bridge";
-import { AgentActivityHeader } from "./AgentActivityHeader";
 import { ArtifactView } from "./ArtifactView";
 import { BrowserWorkbench } from "./BrowserWorkbench";
 import { ChangesView } from "./ChangesView";
@@ -114,41 +112,34 @@ export function AgentWorkspace({
   const eventText = events.map((e) => String(e.data?.output ?? e.data?.preview ?? e.data?.chunk ?? "")).join("\n");
   const ports = useWorkbenchPorts({ environment, runId, projectRoot, eventText });
 
+  const previewVersion = useMemo(() => {
+    const updates = events.filter((e) => e.type === "preview.available").length;
+    if (updates > 0) return updates;
+    return derived.previews.length > 0 ? 1 : 0;
+  }, [events, derived.previews.length]);
+
   const tabs = useMemo(() => {
-    const ids = layout.openTabIds;
-    let list = ids.map(parseWorkbenchTab);
-
-    const nativeBrowser = browserState.tabs.filter((t) => t.kind === "browser");
-    if (nativeBrowser.length) {
-      list = list.filter((t) => t.id !== "browser");
-      for (const t of nativeBrowser) {
-        list = upsertTab(list, {
-          id: `browser:${t.id}`,
-          kind: "browser",
-          title: t.url ? truncateTabTitle(t.title || t.url) : "Browser",
-          closable: true,
-          url: t.url,
-        });
-      }
+    const previewUrl = derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined;
+    const coreIds = new Set(WORKBENCH_CORE_TABS.map((t) => t.id));
+    let list: WorkbenchTab[] = WORKBENCH_CORE_TABS.map((t) => (t.id === "preview" && previewUrl ? { ...t, url: previewUrl } : { ...t }));
+    for (const id of layout.openTabIds) {
+      if (coreIds.has(id) || id.startsWith("preview:")) continue;
+      list = upsertTab(list, parseWorkbenchTab(id));
     }
-
-    for (const t of browserState.tabs.filter((x) => x.kind === "preview")) {
-      const url = t.url;
+    for (const t of browserState.tabs.filter((x) => x.kind === "browser")) {
       list = upsertTab(list, {
-        id: url ? previewTabId(url) : `browser:${t.id}`,
-        kind: "preview",
-        title: truncateTabTitle(t.title || (url ? previewTitle(url, projectName) : "Preview")),
+        id: `browser:${t.id}`,
+        kind: "browser",
+        title: t.url ? truncateTabTitle(t.title || t.url) : "Browser",
         closable: true,
-        url,
+        url: t.url,
       });
     }
-    for (const p of derived.previews) {
-      list = upsertTab(list, parseWorkbenchTab(previewTabId(p.url)));
-    }
     return list;
-  }, [layout.openTabIds, derived.previews, desktopLive, browserState.tabs, projectName]);
+  }, [layout.openTabIds, layout.previewUrl, derived.previews, browserState.tabs]);
 
-  const activeId = tabs.some((t) => t.id === layout.activeTabId) ? layout.activeTabId : tabs[0]?.id ?? "";
+  const wantedId = layout.activeTabId.startsWith("preview:") ? "preview" : layout.activeTabId;
+  const activeId = tabs.some((t) => t.id === wantedId) ? wantedId : "preview";
   const active = tabs.find((t) => t.id === activeId);
   const emptyWorkbench = !active;
   const overlay = shouldOverlayAgentPanel(viewportWidth);
@@ -188,24 +179,32 @@ export function AgentWorkspace({
   useEffect(() => {
     const api = window.orvyn.browser;
     if (!api) return;
-    for (const p of derived.previews) {
-      if (previewSeeded.current.has(p.url)) continue;
-      if (browserState.tabs.some((t) => urlsMatch(t.url, p.url))) {
-        previewSeeded.current.add(p.url);
-        continue;
+    const latest = derived.previews[derived.previews.length - 1];
+    if (!latest?.url) return;
+    const previewTab = { id: "preview", kind: "preview" as const, title: "Preview", closable: false, url: latest.url };
+    const existing = browserState.tabs.find((t) => t.kind === "preview");
+    if (existing) {
+      if (!urlsMatch(existing.url, latest.url)) {
+        const key = `nav:${latest.url}`;
+        if (previewSeeded.current.has(key)) return;
+        previewSeeded.current.add(key);
+        void api.navigate(existing.id, latest.url).then((state) => {
+          setBrowserState(state);
+          activate(previewTab, false);
+        });
+        return;
       }
-      previewSeeded.current.add(p.url);
-      void api.create("preview", p.url).then((state) => {
-        setBrowserState(state);
-        const native = state.tabs.find((t) => urlsMatch(t.url, p.url));
-        if (native?.url) {
-          activate(
-            { id: previewTabId(native.url), kind: "preview", title: native.title || previewTitle(native.url, projectName), closable: true, url: native.url },
-            false
-          );
-        }
-      });
+      if (previewSeeded.current.has(latest.url)) return;
+      previewSeeded.current.add(latest.url);
+      activate(previewTab, false);
+      return;
     }
+    if (previewSeeded.current.has(latest.url)) return;
+    previewSeeded.current.add(latest.url);
+    void api.create("preview", latest.url).then((state) => {
+      setBrowserState(state);
+      activate(previewTab, false);
+    });
   }, [derived.previews, browserState.tabs]);
 
   useEffect(() => {
@@ -344,8 +343,8 @@ export function AgentWorkspace({
       setBrowserState(state);
     }
     const native = state.tabs.find((t) => t.id === state.activeId) ?? existing ?? state.tabs[0];
-    const tab: WorkbenchTab = native?.kind === "preview" && native.url
-      ? { id: previewTabId(native.url), kind: "preview", title: native.title || previewTitle(native.url, projectName), closable: true, url: native.url }
+    const tab: WorkbenchTab = native?.kind === "preview" || kind === "preview"
+      ? { id: "preview", kind: "preview", title: "Preview", closable: false, url: native?.url || url }
       : native
         ? { id: `browser:${native.id}`, kind: "browser", title: native.title || "Browser", closable: true, url: native.url }
         : parseWorkbenchTab(kind);
@@ -450,6 +449,9 @@ export function AgentWorkspace({
                     </span>
                   )}
                   {t.title}
+                  {t.id === "preview" && previewVersion > 0 && (
+                    <span data-testid="preview-live" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.4, color: "#6ee7b7" }}>Live</span>
+                  )}
                   {t.closable && (
                     <span
                       onClick={(e) => {
@@ -519,7 +521,6 @@ export function AgentWorkspace({
             </button>
           </span>
         </div>
-        <AgentActivityHeader line={derived.activity?.line} running={running} waitingApproval={derived.waitingApproval} />
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative", zIndex: WORKBENCH_Z.content }}>
           {emptyWorkbench && (
             <WorkbenchLauncher onOpen={(id) => {
@@ -533,6 +534,8 @@ export function AgentWorkspace({
               projectName={projectName}
               orionStatus={derived.activity?.tab === "browser" || derived.activity?.tab === "preview" ? derived.activity.line : null}
               requestedUrl={active?.url}
+              liveVersion={previewVersion}
+              updating={running && active?.kind === "preview"}
               sessionId={activeNative?.id}
               surfaceActive={browserish && !plusOpen && !portsOpen}
               onTabs={setBrowserState}

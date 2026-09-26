@@ -440,8 +440,34 @@ test("desktop verification and preview events render compact activity", () => {
   );
   const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
   assert.ok(labels.some((l) => /Execution · Local/.test(l)));
-  assert.ok(labels.some((l) => /Browser · Opened/.test(l) && /5173/.test(l)));
+  assert.ok(labels.some((l) => l === "Preview updated (v1)"));
+  assert.equal(labels.some((l) => /5173/.test(l)), false);
   assert.ok(labels.some((l) => /Desktop · Verification passed/.test(l)));
+});
+
+test("website file writes collapse into one structure group and preview updates stay versioned", () => {
+  reset();
+  const events: AgentEventLike[] = [];
+  for (const path of ["index.html", "styles.css", "app.js"]) {
+    const id = path;
+    events.push(ev("tool.started", { callId: id, tool: "write_file" }));
+    events.push(ev("tool.input", { callId: id, tool: "write_file", input: { path } }));
+    events.push(ev("tool.completed", { callId: id, tool: "write_file", preview: "written" }));
+  }
+  events.push(ev("preview.available", { url: "http://127.0.0.1:4173" }));
+  events.push(ev("preview.available", { url: "http://127.0.0.1:4173" }));
+  const items = reducePresentation(events, "running");
+  const group = items.find((i) => i.kind === "workgroup") as WgItem;
+  assert.equal(group.title, "Created website structure");
+  assert.deepEqual(group.items.map((i) => i.fileName), ["index.html", "styles.css", "app.js"]);
+  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
+  assert.deepEqual(labels.filter((l) => l.startsWith("Preview updated")), ["Preview updated (v1)", "Preview updated (v2)"]);
+});
+
+test("an internal credit warning is not a chat interruption", () => {
+  reset();
+  const items = reducePresentation([ev("run.credits.warning", { credits: 3200, budget: 4000 })], "completed");
+  assert.equal(items.length, 0);
 });
 
 test("provider computer-use block and Auto fallback stay truthful in the stream", () => {

@@ -168,9 +168,31 @@ export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
   if (group.items.length === 1) {
     return <div className="activity-phase">{group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>;
   }
+  if (group.type === "edits") {
+    return (
+      <div className="activity-phase site-progress" data-testid="site-progress">
+        <div className="site-progress__title">{group.title}</div>
+        {group.items.map((item) => (
+          <div key={item.key} className="site-progress__line">
+            <span className="site-progress__mark" aria-hidden="true">{item.status === "running" ? "↻" : item.status === "failed" || item.status === "stopped" ? "!" : "✓"}</span>
+            <span>{editProgressLine(item)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="activity-phase">
       {group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}
     </div>
   );
+}
+
+function editProgressLine(item: ToolItem): string {
+  const name = item.fileName || item.label || "file";
+  if (item.status === "running") return `Updating ${name}`;
+  if (/assets/i.test(name) && !/\.[a-z0-9]+$/i.test(name)) return "Created assets directory";
+  if (/hero/i.test(item.label ?? "") || /hero/i.test(item.detail ?? "")) return "Added hero section";
+  if (/nav/i.test(name)) return "Added navigation";
+  return `${item.op === "delete" ? "Removed" : "Created"} ${name}`;
 }

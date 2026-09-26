@@ -23,8 +23,6 @@ import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icon
 import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
-import { MissionPhases } from "./MissionPhases";
-import { deriveMissionPhases } from "../missionPhases";
 import { ORION_THINKING_TEXT, OrionThinkingIndicator, orbMotionForLabel } from "./OrionThinkingIndicator";
 
 export interface AgentEvent {
@@ -217,11 +215,9 @@ export function AgentActivityList({
   // tool lifecycles collapse into single rows that update in place.
   const items = React.useMemo(() => groupResearch(reducePresentation(events, status)), [events, status]);
   const live = status === "running" || status === "awaiting_approval" || status === "verifying";
-  const mission = React.useMemo(() => deriveMissionPhases(events as any, status), [events, status]);
 
   return (
     <>
-      {mission && <MissionPhases view={mission} />}
       {items.map((item) => {
         switch (item.kind) {
           case "assistant":
@@ -279,6 +275,14 @@ export function AgentActivityList({
                   <span aria-hidden="true">✦</span>
                   <span className="stream-thought-label">{item.thought.summary || "Working"}</span>
                   {dur ? <span>· {dur}</span> : null}
+                </div>
+              );
+            }
+            if (item.label.startsWith("Preview updated")) {
+              return (
+                <div key={item.key} className="preview-updated">
+                  <span aria-hidden="true">↻</span>
+                  <span>{item.label}</span>
                 </div>
               );
             }

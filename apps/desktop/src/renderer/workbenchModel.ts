@@ -53,6 +53,15 @@ export interface WorkbenchTab {
 export const WORKBENCH_TEST_ID = "agent-workbench";
 export const WORKBENCH_TABBAR_TEST_ID = "agent-workbench-tabbar";
 
+/** One row. These stay pinned; files, diffs, and browser pages append after them. */
+export const WORKBENCH_CORE_TABS: WorkbenchTab[] = [
+  { id: "preview", kind: "preview", title: "Preview", closable: false },
+  { id: "files", kind: "files", title: "Files", closable: false },
+  { id: "changes", kind: "changes", title: "Changes", closable: false },
+  { id: "terminal", kind: "terminal", title: "Terminal", closable: false },
+  { id: "environment", kind: "environment", title: "Environment", closable: false },
+];
+
 export function previewTabId(url: string): string {
   return `preview:${url}`;
 }
@@ -122,13 +131,14 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
     return { id, kind: "terminal", title: `Terminal ${n}`, closable: true };
   }
   const pinned: Record<string, WorkbenchTab> = {
-    changes: { id: "changes", kind: "changes", title: "Changes", closable: true },
+    preview: { id: "preview", kind: "preview", title: "Preview", closable: false },
+    changes: { id: "changes", kind: "changes", title: "Changes", closable: false },
     desktop: { id: "desktop", kind: "desktop", title: "Desktop", closable: true },
     browser: { id: "browser", kind: "browser", title: "Browser", closable: true },
-    files: { id: "files", kind: "files", title: "Files", closable: true },
-    terminal: { id: "terminal", kind: "terminal", title: "Terminal", closable: true },
+    files: { id: "files", kind: "files", title: "Files", closable: false },
+    terminal: { id: "terminal", kind: "terminal", title: "Terminal", closable: false },
     review: { id: "review", kind: "review", title: "Review", closable: true },
-    environment: { id: "environment", kind: "environment", title: "Environment", closable: true },
+    environment: { id: "environment", kind: "environment", title: "Environment", closable: false },
     plan: { id: "plan", kind: "plan", title: "Plan", closable: true },
     docs: { id: "docs", kind: "docs", title: "Docs", closable: true },
   };
@@ -162,7 +172,10 @@ export function rememberUrl(recents: string[], url: string, limit = 8): string[]
 }
 
 export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: string; path?: string; name?: string; browserId?: string; artifactId?: string }): WorkbenchTab {
-  if (kind === "preview" && extras?.url) return parseWorkbenchTab(previewTabId(extras.url));
+  if (kind === "preview") {
+    const tab = parseWorkbenchTab("preview");
+    return extras?.url ? { ...tab, url: extras.url } : tab;
+  }
   if (kind === "browser" && extras?.browserId) return parseWorkbenchTab(`browser:${extras.browserId}`);
   if (kind === "diff" && extras?.path) return parseWorkbenchTab(diffTabId(extras.path));
   if (kind === "file" && extras?.path) return parseWorkbenchTab(fileTabId(extras.path));

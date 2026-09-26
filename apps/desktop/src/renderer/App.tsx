@@ -72,6 +72,15 @@ interface OpenFile {
   dirty?: boolean;
 }
 
+function creditUsageLabel(events: { type: string; data?: Record<string, unknown> }[]): string | null {
+  const data = [...events].reverse().find((e) => e.type === "run.credits")?.data;
+  if (!data || typeof data.credits !== "number") return null;
+  const credits = data.credits.toLocaleString();
+  return typeof data.budget === "number" && data.budget > 0
+    ? `${credits} / ${data.budget.toLocaleString()} credits`
+    : `${credits} credits`;
+}
+
 function guessLanguage(path: string): string {
   const base = (path.split(/[\\/]/).pop() ?? path).toLowerCase();
   if (base === "dockerfile") return "dockerfile";
@@ -660,9 +669,7 @@ export function App() {
       <TitleBar
         menus={appMenus}
         title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}
-        // Usage/plan chips removed from the title bar: the redesigned screens
-        // and the status bar already present this — showing it twice was the
-        // reported duplicate-header issue.
+        usageLabel={creditUsageLabel(agentRun.events)}
         onOpenCommand={() => setPalette("commands")}
         onOpenSettings={() => setView("settings")}
         onSwitchWorkspace={() => setView("projects")}

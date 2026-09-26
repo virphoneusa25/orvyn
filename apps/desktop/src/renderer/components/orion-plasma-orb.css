@@ -1,0 +1,188 @@
+.orion-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  max-width: 100%;
+  color: var(--ov-text, var(--orvyn-text, #e8eaf3));
+  animation: orion-status-in 220ms ease;
+}
+.orion-status--done {
+  animation: orion-status-out 260ms ease forwards;
+  pointer-events: none;
+}
+.orion-status__msg {
+  font-size: 13px;
+  font-weight: 480;
+  letter-spacing: -0.011em;
+  color: var(--ov-text-secondary, var(--orvyn-text-secondary, #c5cad8));
+  white-space: nowrap;
+}
+.orion-status__name {
+  font-weight: 700;
+  color: #f5f7ff;
+}
+.orion-status__detail {
+  font-size: 11px;
+  color: var(--ov-faint, var(--orvyn-text-muted, #858ca2));
+  font-variant-numeric: tabular-nums;
+}
+
+.opo {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  overflow: visible;
+}
+.opo__atmo {
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(170, 140, 255, 0.55) 0%, rgba(80, 190, 255, 0.28) 36%, rgba(120, 40, 180, 0.05) 58%, transparent 70%);
+  filter: blur(0.4px);
+  animation: opo-atmo 3.2s ease-in-out infinite;
+  pointer-events: none;
+}
+.opo__svg {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  overflow: visible;
+  display: block;
+}
+.opo__core {
+  transform-origin: 32px 32px;
+  animation: opo-breathe 2.4s ease-in-out infinite;
+}
+.opo__blob {
+  transform-origin: 34px 34px;
+  animation: opo-blob 3.8s linear infinite;
+}
+.opo__blob-b {
+  transform-origin: 26px 28px;
+  animation-duration: 5.1s;
+  animation-direction: reverse;
+}
+.opo__spec {
+  opacity: 0.92;
+}
+.opo__spin {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.opo__spin-a {
+  animation: opo-spin 11s linear infinite;
+}
+.opo__spin-b {
+  animation: opo-spin-b 6.2s linear infinite reverse;
+  opacity: 0.82;
+}
+.opo__path {
+  fill: none;
+}
+.opo__path-a {
+  stroke-dasharray: 58 42;
+  animation: opo-dash 4.6s linear infinite;
+}
+.opo__path-b {
+  stroke-dasharray: 48 52;
+  animation: opo-dash 6.2s linear infinite reverse;
+}
+.opo__path-c {
+  stroke-dasharray: 30 70;
+  animation: opo-dash 3.4s linear infinite;
+}
+.opo__flash {
+  display: none;
+}
+
+.opo--tool .opo__path-a { animation-duration: 2.2s; }
+.opo--tool .opo__path-b { animation-duration: 2.9s; }
+.opo--tool .opo__path-c { animation-duration: 1.7s; }
+.opo--tool .opo__spin-a { animation-duration: 6.4s; }
+.opo--tool .opo__spin-b { animation-duration: 3.6s; }
+.opo--tool .opo__blob { animation-duration: 2.1s; }
+.opo--tool .opo__core { animation-duration: 1.5s; }
+.opo--tool .opo__atmo { animation-duration: 1.8s; opacity: 1; }
+.opo--tool { filter: brightness(1.18); }
+
+.opo--waiting .opo__path-a { animation-duration: 9.2s; }
+.opo--waiting .opo__path-b { animation-duration: 12.4s; }
+.opo--waiting .opo__path-c { animation-duration: 8s; }
+.opo--waiting .opo__spin-a { animation-duration: 22s; }
+.opo--waiting .opo__spin-b { animation-duration: 16s; }
+.opo--waiting .opo__blob { animation-duration: 8s; }
+.opo--waiting .opo__core { animation-duration: 4.8s; }
+.opo--waiting .opo__atmo { opacity: 0.65; }
+
+.orion-status--error .opo {
+  animation: opo-error 720ms ease forwards;
+}
+.orion-status--done .opo__atmo {
+  animation: opo-flash 260ms ease forwards;
+}
+
+@keyframes opo-breathe {
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.05); }
+}
+@keyframes opo-blob {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.14); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+@keyframes opo-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes opo-spin-b {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(-180deg) scale(1.08); }
+  100% { transform: rotate(-360deg) scale(1); }
+}
+@keyframes opo-dash {
+  to { stroke-dashoffset: -100; }
+}
+@keyframes opo-atmo {
+  0%, 100% { opacity: 0.62; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes opo-error {
+  0% { filter: none; opacity: 1; }
+  40% { filter: hue-rotate(-42deg) saturate(1.45); opacity: 1; }
+  100% { filter: hue-rotate(-24deg) saturate(1.1); opacity: 0; }
+}
+@keyframes opo-flash {
+  0% { opacity: 0.7; filter: brightness(1); }
+  35% { opacity: 1; filter: brightness(1.8); }
+  100% { opacity: 0; filter: brightness(1.2); }
+}
+@keyframes orion-status-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes orion-status-out {
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opo__atmo,
+  .opo__core,
+  .opo__blob,
+  .opo__blob-b,
+  .opo__spin-a,
+  .opo__spin-b,
+  .opo__path-a,
+  .opo__path-b,
+  .opo__path-c,
+  .orion-status,
+  .orion-status--done,
+  .orion-status--error .opo {
+    animation: none;
+  }
+  .opo__path-a,
+  .opo__path-b,
+  .opo__path-c {
+    stroke-dashoffset: 0;
+  }
+}

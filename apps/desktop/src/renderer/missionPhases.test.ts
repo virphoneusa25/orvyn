@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveMissionPhases } from "./missionPhases.ts";
+import { deriveMissionPhases, deriveMissionStages } from "./missionPhases.ts";
 
 let n = 0;
 const ev = (type: string, data: Record<string, unknown> = {}) => ({ type, data, id: `e${++n}` });
@@ -52,4 +52,44 @@ test("the verifier's FAIL sends the mission back to Act; its PASS marks it Verif
   assert.equal(passed.status, "verified");
   const fetchOnly = deriveMissionPhases([{ type: "tool.started", data: { callId: "w", tool: "write_file" } }, { type: "browser.verification.passed", data: {} }], "completed")!;
   assert.equal(fetchOnly.status, "completed");
+});
+
+test("mission header stages follow real events and do not invent completion", () => {
+  const started = deriveMissionStages([{ type: "run.started", data: { instruction: "Build a site" } }], "running")!;
+  assert.deepEqual(started.stages.map((s) => s.state), ["active", "pending", "pending", "pending", "pending", "pending"]);
+  const building = deriveMissionStages(
+    [
+      { type: "run.started", data: {} },
+      { type: "tool.started", data: { callId: "w", tool: "write_file" } },
+      { type: "tool.completed", data: { callId: "w", tool: "write_file" } },
+      { type: "preview.available", data: { url: "http://127.0.0.1:4173" } },
+    ],
+    "running"
+  )!;
+  assert.deepEqual(
+    building.stages.map((s) => [s.name, s.state]),
+    [
+      ["Plan", "done"],
+      ["Research", "pending"],
+      ["Build", "done"],
+      ["Preview", "active"],
+      ["Verify", "pending"],
+      ["Complete", "pending"],
+    ]
+  );
+  const done = deriveMissionStages(
+    [
+      { type: "run.started", data: {} },
+      { type: "tool.started", data: { callId: "w", tool: "write_file" } },
+      { type: "tool.completed", data: { callId: "w", tool: "write_file" } },
+      { type: "preview.available", data: {} },
+      { type: "verification.completed", data: { verdict: "PASS" } },
+    ],
+    "completed"
+  )!;
+  assert.equal(done.stages.find((s) => s.name === "Verify")?.state, "done");
+  assert.equal(done.stages.find((s) => s.name === "Complete")?.state, "done");
+  assert.equal(done.stages.find((s) => s.name === "Research")?.state, "pending");
+  const idle = deriveMissionStages([], "idle")!;
+  assert.deepEqual(idle.stages.map((s) => s.state), ["pending", "pending", "pending", "pending", "pending", "pending"]);
 });

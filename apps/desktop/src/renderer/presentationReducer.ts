@@ -371,6 +371,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   };
 
   let lastTs = startTs;
+  let previewRev = 0;
   for (const e of events) {
     const prevTs = lastTs;
     lastTs = e.timestamp;
@@ -422,10 +423,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "status", key: e.id, label: `Installed ${String(e.data.name ?? "the tool")}${tools ? ` · ${tools} new tool${tools === 1 ? "" : "s"}` : ""} — continuing`, ephemeral: false, tone: "working" });
         continue;
       }
-      case "run.credits.warning": {
-        items.push({ kind: "status", key: e.id, label: `80% of this task's credit budget used (${e.data.credits} of ${e.data.budget}) — finishing the essentials`, ephemeral: false, tone: "working" });
+      case "run.credits.warning":
+        // Metering stays on run.credits for the header. An internal budget
+        // note is not a chat interruption.
         continue;
-      }
       case "message.retracted": {
         // ORION's unchecked reply was withdrawn (it goes to research first).
         if (textBuf) textBuf = "";
@@ -819,10 +820,11 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       case "preview.available":
         flushAssistant(false);
+        previewRev += 1;
         items.push({
           kind: "status",
           key: e.id,
-          label: `Browser · Opened ${String(e.data.url ?? e.data.previewUrl ?? "localhost")}`,
+          label: `Preview updated (v${previewRev})`,
           ephemeral: false,
           tone: "working",
         });
@@ -984,7 +986,11 @@ function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGrou
   } else if (type === "edits") {
     const { adds, dels } = sumEdits(items);
     const delta = adds || dels ? `+${adds} −${dels}` : "";
-    if (items.length === 1 && items[0].fileName) {
+    const webish = items.filter((i) => /\.(html|css|js|jsx|tsx|svg)$/i.test(i.fileName ?? "") || /assets/i.test(i.fileName ?? ""));
+    if (items.length > 1 && webish.length >= 2) {
+      title = anyRunning ? "Creating website structure" : "Created website structure";
+      summary = undefined;
+    } else if (items.length === 1 && items[0].fileName) {
       title = anyRunning ? `Updating ${items[0].fileName}…` : `Updated ${items[0].fileName}`;
       summary = delta || items[0].detail;
     } else {

@@ -37,6 +37,102 @@ export function phaseOfTool(tool: string, input: Record<string, any> | undefined
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 
+export type StageName = "Plan" | "Research" | "Build" | "Preview" | "Verify" | "Complete";
+export type StageState = "pending" | "active" | "done";
+export const MISSION_STAGES: StageName[] = ["Plan", "Research", "Build", "Preview", "Verify", "Complete"];
+
+export interface MissionStageView {
+  stages: Array<{ name: StageName; state: StageState }>;
+}
+
+const RESEARCH_TOOLS = /^(web_search|fetch_url|search)$/;
+const BUILD_TOOLS = /^(write_file|edit_file|apply_edit|create_document|artifact_create|artifact_write|generate_image|start_dev_server|delete_file|move_file|rename_file)$/;
+
+/**
+ * Header chips for the current mission. A stage is done only when an event
+ * proves it. Unreached stages stay pending — nothing is marked complete
+ * because a later stage happened.
+ */
+export function deriveMissionStages(events: Ev[], runStatus: string): MissionStageView | null {
+  const started =
+    events.some((e) => e.type === "run.started" || e.type === "tool.started" || e.type === "preview.available") ||
+    ["running", "completed", "error", "failed", "cancelled", "verifying", "awaiting_approval", "queued", "cancelling", "streaming", "working"].includes(runStatus);
+  if (!started) {
+    return { stages: MISSION_STAGES.map((name) => ({ name, state: "pending" as const })) };
+  }
+
+  const inputs = new Map<string, Record<string, any>>();
+  const open = new Map<string, string>();
+  let research = false;
+  let build = false;
+  let preview = false;
+  let verifyStarted = false;
+  let verifyPassed = false;
+  let anyTool = false;
+
+  for (const e of events) {
+    if (e.type === "tool.input") inputs.set(String(e.data?.callId ?? ""), (e.data?.input ?? {}) as Record<string, any>);
+    const callId = String(e.data?.callId ?? "");
+    const tool = String(e.data?.tool ?? "");
+    if (e.type === "tool.started") {
+      anyTool = true;
+      open.set(callId, tool);
+    } else if (e.type === "tool.completed" || e.type === "tool.failed") {
+      const name = open.get(callId) || tool;
+      open.delete(callId);
+      if (e.type === "tool.completed") {
+        if (RESEARCH_TOOLS.test(name)) research = true;
+        if (BUILD_TOOLS.test(name)) build = true;
+      }
+    } else if (e.type === "preview.available") {
+      preview = true;
+    } else if (e.type === "verification.started") {
+      verifyStarted = true;
+    } else if (e.type === "verification.completed") {
+      if (e.data?.verdict === "PASS") verifyPassed = true;
+    } else if (e.type === "browser.verification.passed" || e.type === "desktop.verification.passed") {
+      verifyPassed = true;
+    }
+  }
+
+  let researchOpen = false;
+  let buildOpen = false;
+  for (const name of open.values()) {
+    if (RESEARCH_TOOLS.test(name)) researchOpen = true;
+    if (BUILD_TOOLS.test(name)) buildOpen = true;
+  }
+
+  const live = !["completed", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
+  const finishedOk = runStatus === "completed";
+  let active: StageName | null = null;
+  if (live) {
+    if (verifyStarted && !verifyPassed) active = "Verify";
+    else if (buildOpen) active = "Build";
+    else if (researchOpen) active = "Research";
+    else if (preview && !verifyPassed) active = "Preview";
+    else if (!anyTool) active = "Plan";
+    else if (build) active = "Build";
+    else if (research) active = "Research";
+    else active = "Plan";
+  }
+
+  const done: Record<StageName, boolean> = {
+    Plan: anyTool || preview || verifyStarted || finishedOk,
+    Research: research && !researchOpen,
+    Build: build && !buildOpen,
+    Preview: preview,
+    Verify: verifyPassed,
+    Complete: finishedOk,
+  };
+
+  return {
+    stages: MISSION_STAGES.map((name) => ({
+      name,
+      state: active === name ? "active" : done[name] ? "done" : "pending",
+    })),
+  };
+}
+
 export function deriveMissionPhases(events: Ev[], runStatus: string): MissionView | null {
   const inputs = new Map<string, Record<string, any>>();
   for (const e of events) if (e.type === "tool.input") inputs.set(String(e.data?.callId ?? ""), (e.data?.input ?? {}) as Record<string, any>);

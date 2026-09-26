@@ -51,9 +51,11 @@ export function ghostBtn(): React.CSSProperties {
 
 export function tabBtn(active: boolean): React.CSSProperties {
   return {
-    background: active ? "rgba(255,255,255,0.04)" : "transparent",
+    background: active ? "linear-gradient(180deg, rgba(124,92,255,0.28), rgba(34,211,238,0.1))" : "transparent",
     border: "none",
-    borderBottom: active ? "2px solid var(--orvyn-cyan)" : "2px solid transparent",
+    borderBottom: active ? "2px solid #7dd3fc" : "2px solid transparent",
+    boxShadow: active ? "inset 0 1px 0 rgba(196,181,253,0.45)" : "none",
+    borderRadius: active ? "7px 7px 0 0" : 0,
     color: active ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
     fontSize: 11.5,
     fontWeight: active ? 650 : 500,

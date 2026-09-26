@@ -488,8 +488,9 @@ export class StreamingAgentRuntime {
 
   /**
    * Meters a model call in credits (routing-policy weight × tokens / 1000).
-   * At 80% of the run's budget ORION is told to wrap up and stops climbing to
-   * dearer models; over the budget the run stops at the next step.
+   * At 80% of an internal run budget ORION stops climbing to dearer models.
+   * Crossing that budget does not stop the run; only a real account or
+   * safety limit may interrupt work.
    */
   private noteCredits(runId: string, state: RunState, modelId: string, usage: TokenUsage): void {
     const spent = creditsFor(modelId, usage);
@@ -501,7 +502,6 @@ export class StreamingAgentRuntime {
       state.creditWarned = true;
       this.store.emit(runId, "run.credits.warning", { credits: Math.round(state.credits), budget });
     }
-    if (budget > 0 && state.credits > budget) state.creditsExceeded = true;
   }
 
   /**
@@ -1863,9 +1863,6 @@ export class StreamingAgentRuntime {
 
         // Tool-call runaway guard, checked before the batch so no call is
         // left unanswered by stopping mid-batch.
-        if (state.creditsExceeded) {
-          return fail(`This task reached its credit budget (${Math.round(state.credits)} of ${state.creditBudget} credits). Send a follow-up to continue from here, or raise ORVYN_RUN_CREDITS_${(state.route?.profile ?? "auto").toUpperCase()}.`);
-        }
         const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
         if (capTools > 0 && state.toolCalls >= capTools) {
           return fail(`Run budget exceeded — tool calls: ${state.toolCalls}/${capTools}. Set ORVYN_RUN_MAX_TOOL_CALLS higher (0 disables).`);
@@ -1890,10 +1887,6 @@ export class StreamingAgentRuntime {
         }
         state.readOnlyStreak = calls.length > 0 && calls.every((c) => isReadOnlyCall(c.name, c.arguments)) ? state.readOnlyStreak + 1 : 0;
         if (state.failureStreak >= 3 && this.escalateRoute(runId, state, `${state.failureStreak} tool calls failed in a row.`)) state.failureStreak = 0;
-        if (state.creditWarned && !state.creditNoteSent) {
-          state.creditNoteSent = true;
-          messages.push({ role: "user", content: "Budget note: this task has used 80% of its credit budget. Finish the essential work now, verify it, and give your final answer; leave optional polish for a follow-up." });
-        }
         if (state.handoffModelId && !state.modelPinned) {
           const next = this.modelService.registry.get(state.handoffModelId);
           if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {

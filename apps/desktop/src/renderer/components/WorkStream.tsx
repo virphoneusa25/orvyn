@@ -31,7 +31,8 @@ import { threadTimeline } from "../streamOrder";
 import { SessionRestoreCard } from "./SessionRestoreCard";
 import { AnswerActions } from "./AnswerActions";
 import { ResearchTimeline } from "./ResearchTimeline";
-import { OrionThinkingIndicator, type OrbMotion } from "./OrionThinkingIndicator";
+import { OrionThinkingIndicator } from "./OrionThinkingIndicator";
+import { deriveMissionStages, type StageState } from "../missionPhases";
 import { SourcesBar } from "./SourcesBar";
 import { sourcesFromActivity, stepsFromActivity } from "../researchSteps";
 
@@ -65,7 +66,6 @@ interface QueueItemView {
 
 export function WorkStream({
   projectRoot,
-  projectName,
   run,
   onRunStarted,
   onOpenTerminal,
@@ -124,7 +124,7 @@ export function WorkStream({
   const draggedId = useRef<string | null>(null);
   /** Auto-follow only while the user is at the bottom; scrolling up pauses it. */
   const [follow, setFollow] = useState(true);
-  const [indexHint, setIndexHint] = useState<string | null>(null);
+  const [, setIndexHint] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -247,20 +247,6 @@ export function WorkStream({
    */
   const runActive =
     run.status === "running" || run.status === "awaiting_approval" || run.status === "queued" || run.status === "cancelling";
-  const wasRunning = useRef(false);
-  const [orbFading, setOrbFading] = useState(false);
-  useEffect(() => {
-    if (runActive) {
-      wasRunning.current = true;
-      setOrbFading(false);
-      return;
-    }
-    if (!wasRunning.current) return;
-    wasRunning.current = false;
-    setOrbFading(true);
-    const timer = window.setTimeout(() => setOrbFading(false), 340);
-    return () => window.clearTimeout(timer);
-  }, [runActive]);
   const refreshQueue = useCallback(async () => {
     const ids: string[] = [];
     if (queueScopeRef.current) ids.push(queueScopeRef.current);
@@ -461,12 +447,6 @@ export function WorkStream({
   }
 
   const streaming = isChatStreaming();
-  const completion = [...run.events].reverse().find(e => e.type === "run.completed");
-  // ORION answered and the independent check is running: say so, instead of
-  // a bare RUNNING under a finished-looking answer.
-  const lastVerify = [...run.events].reverse().find((e) => e.type === "verification.started" || e.type === "verification.completed");
-  const checking = runActive && lastVerify?.type === "verification.started";
-  const displayStatus = completion?.data.missionStatus === "BLOCKED" ? "needs attention" : Number(completion?.data.tasksFailed) > 0 ? "incomplete" : checking ? "checking" : run.status;
   // Retry target: the run's own instruction, replayed as a NEW run.
   const retryInstruction = (run.events.find((e) => e.type === "run.started")?.data.instruction as string | undefined)?.trim() ?? null;
   // Stall clock: re-render every 5s while a run is active so "Still working…"
@@ -511,135 +491,57 @@ export function WorkStream({
   // session from before must never leak its title (the "hi" bug) or its
   // messages into this workspace.
   const runInstruction = run.events.find((e) => e.type === "run.started")?.data.instruction;
-  const title =
-    (runInstruction ? String(runInstruction) : "").trim().split("\n")[0]?.slice(0, 60) ||
-    (messages.find((m) => m.role === "user")?.content.trim().split("\n")[0] ?? "").slice(0, 60) ||
-    "Work Stream";
+  const mission = missionCopy(
+    runInstruction ? String(runInstruction) : undefined,
+    messages.find((m) => m.role === "user")?.content
+  );
+  const stages = deriveMissionStages(run.events, run.status);
 
   return (
     <div style={{ height: "100%", minWidth: 0, display: "flex", flexDirection: "column", background: "var(--orvyn-surface-1)" }}>
-      {/* Compact workspace header — replaces the Hero once work begins. */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "8px 16px",
-          borderBottom: "1px solid var(--orvyn-border-soft)",
-          flexShrink: 0,
-        }}
-      >
-        <img src={appIcon} alt="" width={18} height={18} style={{ borderRadius: 5 }} />
-        <span style={{ fontSize: 12.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "46%" }}>
-          {title}
-        </span>
-        {projectName && (
-          <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", fontFamily: "var(--font-mono)" }}>
-            {projectName}
-          </span>
-        )}
-        {indexHint && (
-          <span style={{ fontSize: 10, color: "var(--orvyn-text-muted)", letterSpacing: 0.3 }}>
-            {indexHint}
-          </span>
-        )}
-        {run.status !== "idle" && (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: 0.8,
-              color:
-                runActive && run.status !== "queued"
-                  ? "var(--orvyn-purple-hi)"
-                  : run.status === "queued"
-                    ? "var(--orvyn-yellow)"
-                    : displayStatus === "completed"
-                      ? "var(--orvyn-green)"
-                      : run.status === "cancelled"
-                        ? "var(--orvyn-yellow)"
-                        : "var(--orvyn-red)",
-              border: "1px solid currentColor",
-              borderRadius: 4,
-              padding: "1px 7px",
-            }}
-          >
-            {displayStatus.replace("_", " ").toUpperCase()}
-          </span>
-        )}
-        {(runActive || orbFading) && (
-          <OrionThinkingIndicator
-            motion={orbFading && !runActive ? "done" : headerOrbMotion(run.status, run.events)}
-            detail={<WorkElapsed startedAt={run.events.length > 0 ? run.events[0].timestamp : Date.now()} />}
-          />
-        )}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L</span>
-          <button
-            title="New task — fresh conversation"
-            onClick={() => {
-              newChat();
-              onRunStarted(null);
-              setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:focus-composer")), 50);
-            }}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--orvyn-border)",
-              borderRadius: 5,
-              color: "var(--orvyn-text-secondary)",
-              fontSize: 11,
-              padding: "3px 10px",
-              cursor: "pointer",
-            }}
-          >
-            New
-          </button>
-        </span>
-      </div>
-
-      {/* Run configuration truth line — what is actually executing this run:
-          model (requested→actual), reasoning, access, execution location. */}
-      {(() => {
-        const started = run.events.find((e) => e.type === "run.started")?.data as any;
-        const exec = run.events.find((e) => e.type === "run.execution")?.data as any;
-        if (!started) return null;
-        const modelLine =
-          started.requestedModelId && started.requestedModelId !== "auto" && started.requestedModelId !== started.actualModelId
-            ? `${started.requestedModelId} → ${started.actualModelId}`
-            : started.actualModelId ?? "";
-        const reasoning =
-          started.reasoningEffortRequested && started.reasoningEffortRequested !== "auto"
-            ? `Reasoning ${started.reasoningEffortRequested}${started.reasoningEffortApplied && started.reasoningEffortApplied !== "not supported by this model" ? ` (${started.reasoningEffortApplied})` : ""}`
-            : "";
-        const fallback = started.fallbackReason ? ` — fallback: ${started.fallbackReason}` : "";
-        return (
-          <div
-            style={{
-              display: "flex",
-              gap: 12,
-              flexWrap: "wrap",
-              padding: "3px 16px 5px",
-              borderBottom: "1px solid var(--orvyn-border-soft)",
-              fontSize: 10,
-              fontFamily: "var(--font-mono)",
-              color: "var(--orvyn-text-muted)",
-              flexShrink: 0,
-            }}
-          >
-            <span>● {(() => { const esc = [...run.events].reverse().find((e) => e.type === "route.escalated" || e.type === "model.unavailable")?.data as any; const to = esc?.fallback ?? esc?.modelId; return to && to !== started.actualModelId ? `${modelLine} → ${to}` : modelLine; })()}{fallback}</span>
-            {started.route && <span data-testid="run-route" title={started.route.reason}>{String(started.route.profile).replace(/^./, (c: string) => c.toUpperCase())} agent</span>}
-            {(() => {
-              const c = [...run.events].reverse().find((e) => e.type === "run.credits")?.data as any;
-              return c ? <span data-testid="run-credits" title="Credits = model weight × tokens / 1000">{c.credits}{c.budget ? ` / ${c.budget}` : ""} credits</span> : null;
-            })()}
-            {reasoning && <span>🧠 {reasoning}</span>}
-            {started.permissionMode && <span>🛡 {started.permissionMode}</span>}
-            {(exec?.executionLabel || exec?.location) && (
-              <span>Execution: {String(exec.executionLabel || (String(exec.location).includes("OVH") ? "ORVYN Cloud" : "Local"))}</span>
+      <div data-testid="mission-header" style={{ padding: "12px 16px 10px", borderBottom: "1px solid var(--orvyn-border-soft)", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div data-testid="mission-title" style={{ fontSize: 15, fontWeight: 650, letterSpacing: -0.02, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {mission.title}
+            </div>
+            {mission.description && (
+              <div data-testid="mission-description" style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginTop: 3, lineHeight: 1.4 }}>
+                {mission.description}
+              </div>
+            )}
+            {stages && (
+              <div data-testid="mission-stages" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {stages.stages.map((stage) => (
+                  <StageChip key={stage.name} name={stage.name} state={stage.state} />
+                ))}
+              </div>
             )}
           </div>
-        );
-      })()}
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <span style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>Ctrl+L</span>
+            <button
+              title="New task — fresh conversation"
+              onClick={() => {
+                newChat();
+                onRunStarted(null);
+                setTimeout(() => document.dispatchEvent(new CustomEvent("orvyn:focus-composer")), 50);
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--orvyn-border)",
+                borderRadius: 5,
+                color: "var(--orvyn-text-secondary)",
+                fontSize: 11,
+                padding: "3px 10px",
+                cursor: "pointer",
+              }}
+            >
+              New
+            </button>
+          </span>
+        </div>
+      </div>
 
       {/* The stream: older turns, then this run's activity, then follow-ups.
           Newest text is always the last block so it sits at the bottom. */}
@@ -1064,30 +966,46 @@ export function WorkStream({
 
 
 
-/** "Working for 4s" — self-contained 1s ticker so only this chip re-renders,
- *  never the whole conversation (spec Part 9). */
-function headerOrbMotion(status: string, events: AgentEvent[]): OrbMotion {
-  if (status === "error") return "error";
-  if (status === "queued" || status === "awaiting_approval" || status === "cancelling") return "waiting";
-  const open = new Set<string>();
-  for (const event of events) {
-    const id = event.data && typeof event.data.callId === "string" ? event.data.callId : "";
-    if (!id) continue;
-    if (event.type === "tool.started") open.add(id);
-    if (event.type === "tool.completed" || event.type === "tool.failed") open.delete(id);
-  }
-  return open.size > 0 ? "tool" : "thinking";
+function missionCopy(instruction: string | undefined, fallback: string | undefined): { title: string; description: string | null } {
+  const raw = (instruction || fallback || "").trim();
+  if (!raw) return { title: "Work Stream", description: null };
+  const lines = raw.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const first = lines[0].slice(0, 140);
+  const rest = lines.slice(1).join(" ").trim();
+  if (rest && rest !== first) return { title: first, description: rest.slice(0, 220) };
+  const parts = first.split(/(?<=\.)\s+/);
+  if (parts.length > 1 && parts[0].length > 8) return { title: parts[0], description: parts.slice(1).join(" ").slice(0, 220) };
+  return { title: first, description: null };
 }
 
-function WorkElapsed({ startedAt }: { startedAt: number }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const s = Math.max(0, Math.floor((now - startedAt) / 1000));
-  const label = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  return <>{label}</>;
+function StageChip({ name, state }: { name: string; state: StageState }) {
+  const active = state === "active";
+  const done = state === "done";
+  return (
+    <span
+      data-stage={name}
+      data-state={state}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        fontWeight: 650,
+        padding: "3px 9px",
+        borderRadius: 999,
+        background: active
+          ? "linear-gradient(90deg, rgba(124,92,255,0.42), rgba(34,211,238,0.28))"
+          : done
+            ? "rgba(52,211,153,0.12)"
+            : "rgba(255,255,255,0.04)",
+        color: active ? "#f3fbff" : done ? "#6ee7b7" : "rgba(232,234,243,0.42)",
+        border: active ? "1px solid rgba(125,211,252,0.65)" : "1px solid rgba(255,255,255,0.04)",
+      }}
+    >
+      {done ? "✓" : null}
+      {name}
+    </span>
+  );
 }
 
 function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMessage; live: boolean; question?: string; onRegenerate?: () => void }) {
@@ -1111,19 +1029,6 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 700 }}>ORION</span>
-          <span
-            style={{
-              fontSize: 8,
-              fontWeight: 700,
-              letterSpacing: 1,
-              color: "var(--orvyn-purple-hi)",
-              border: "1px solid rgba(124,92,255,0.45)",
-              borderRadius: 4,
-              padding: "1px 5px",
-            }}
-          >
-            ASSISTANT
-          </span>
         </div>
         {message.activity && message.activity.some((a) => a.kind !== "capability") && (
           <ResearchTimeline steps={stepsFromActivity(message.activity)} live={live} thinking={live && !message.content.trim()} startedAt={message.createdAt} />
