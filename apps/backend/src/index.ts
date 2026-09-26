@@ -1,4 +1,6 @@
 import "./loadEnv";
+import { learnFromUserMessage, type MemoryStoreLike } from "./memory/userMemory";
+import { memoryModel } from "./memory/learnModel";
 import { ChatTurnRecorder } from "./sessions/sessionMessages";
 import express from "express";
 import { cloudCors } from "./http/corsPolicy";
@@ -212,13 +214,17 @@ wss.on("connection", (socket, req) => {
     }
 
     try {
-      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService);
+      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService, tenant.localStore as unknown as MemoryStoreLike);
+      // What the user says about themselves or their work is remembered for next time (best-effort, after the reply).
+      const learn = () => { if (typeof body?.userMessage === "string") void learnFromUserMessage(tenant.localStore as unknown as MemoryStoreLike, memoryModel(tenant.modelService), body.userMessage); };
       const rawSocket = (socket as any)._socket;
       if (rawSocket?.setNoDelay) rawSocket.setNoDelay(true);
       const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
       // The turn is stored now, and the reply as it streams: the session is
       // the durable conversation, not the desktop's cache file.
       const session = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      // Regenerate: the old reply is replaced by the one about to stream.
+      if (session && typeof body?.replacesMessageId === "string") tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId);
       recorder = session && typeof body?.userMessage === "string"
         ? new ChatTurnRecorder(tenant.sessions, session.sessionId, {
             userMessage: body.userMessage,
@@ -232,7 +238,7 @@ wss.on("connection", (socket, req) => {
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunkError) recorder?.finish(String(chunkError));
         else recorder?.delta(String(chunk.delta ?? ""));
-        if (chunk.done) { recorder?.finish(); break; }
+        if (chunk.done) { recorder?.finish(); learn(); break; }
         // Yield so each token can leave the process and paint in the UI
         // instead of arriving as one burst.
         await new Promise<void>((resolve) => setImmediate(resolve));

@@ -297,6 +297,12 @@ export class WorkSessionStore {
     return this.getMessage(messageId);
   }
 
+  /** Removes one message of a session (a regenerated reply replaces the old one). */
+  deleteMessage(sessionId: string, messageId: string): boolean {
+    const r = this.db.prepare(`DELETE FROM session_messages WHERE message_id = ? AND session_id = ?`).run(messageId, sessionId);
+    return Number(r.changes) > 0;
+  }
+
   getMessage(messageId: string): SessionMessage | undefined {
     const r = this.db.prepare(`SELECT * FROM session_messages WHERE message_id = ?`).get(messageId) as MessageRow | undefined;
     return r ? messageFromRow(r) : undefined;

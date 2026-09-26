@@ -12,7 +12,7 @@
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { noteActiveRunId } from "./connectionRuntime";
-import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, type ChatMessage } from "./chatSession";
+import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, type ChatMessage } from "./chatSession";
 import { createSession } from "./sessionsApi";
 import { wsUrl } from "./connection";
 import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
@@ -63,6 +63,19 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
           if (s && !chat.sessionId) bindChatToRun(chat.id, s.sessionId, undefined);
           return chat.sessionId;
         });
+  streamChatTurn(cmd, history, userMsg, replyMsg, sessionReady);
+  return { kind: "chat" };
+}
+
+/** Streams one chat turn over /ws/chat into the active chat's last (reply) message. */
+function streamChatTurn(
+  cmd: Pick<OrvynCommand, "prompt" | "attachments" | "requestedModelId" | "reasoningEffort" | "projectRoot">,
+  history: ChatMessage[] | { role: string; content: string }[],
+  userMsg: ChatMessage | undefined,
+  replyMsg: ChatMessage | undefined,
+  sessionReady: Promise<string | undefined>,
+  replacesMessageId?: string,
+): void {
   try {
     const ws = new WebSocket(wsUrl("/ws/chat"));
     const giveUp = setTimeout(() => {
@@ -86,6 +99,7 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
           assistantMessageId: replyMsg?.id,
           userCreatedAt: userMsg?.createdAt,
           userMessage: cmd.prompt,
+          replacesMessageId,
           attachments: cmd.attachments ?? [],
           requestedModelId: cmd.requestedModelId,
           reasoningEffort: cmd.reasoningEffort,
@@ -113,7 +127,25 @@ function runChat(cmd: OrvynCommand): CommandOutcome {
     appendAssistantDelta(`\n\n${err.message}`);
     finishAssistantTurn();
   }
-  return { kind: "chat" };
+}
+
+/**
+ * Regenerate the active chat's last reply: the same question is answered
+ * again and the new reply replaces the old one (here and in the session).
+ */
+export function regenerateLastReply(settings: Pick<OrvynCommand, "requestedModelId" | "reasoningEffort" | "projectRoot"> = { projectRoot: null }): boolean {
+  const turn = beginRegenerate();
+  if (!turn) return false;
+  const chat = getActiveChat();
+  streamChatTurn(
+    { prompt: turn.user.content, projectRoot: settings.projectRoot ?? null, requestedModelId: settings.requestedModelId, reasoningEffort: settings.reasoningEffort },
+    turn.history,
+    turn.user,
+    turn.reply,
+    Promise.resolve(chat?.sessionId),
+    turn.replacedId,
+  );
+  return true;
 }
 
 async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {

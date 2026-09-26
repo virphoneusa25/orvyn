@@ -18,6 +18,11 @@ export interface AgentModelChoice {
   pinned: boolean;
 }
 
+/** Server/deploy composer modes are operational work, not advice. */
+function engineeringModeOnly(mode: string): boolean {
+  return mode === "server" || mode === "deploy";
+}
+
 const LONG_HORIZON = /\b(architect|refactor|long[- ]horizon|multi-file|across the (repo|codebase))\b/i;
 
 function usable(id: string, available: Set<string>, health: ModelHealth[]): boolean {
@@ -42,6 +47,8 @@ export function selectAgentModel(input: {
   health?: ModelHealth[];
   /** 0 = no escalation. 1 moves Auto to GLM-5.3. 2 moves that to GPT-5.6 Sol. */
   escalate?: number;
+  /** A thinking-heavy task (strategy, planning, naming, architecture, deep reasoning). */
+  deep?: boolean;
 }): AgentModelChoice {
   const available = new Set(input.availableIds);
   const health = input.health ?? [];
@@ -74,6 +81,9 @@ export function selectAgentModel(input: {
       : escalate === 1
         ? "Website repair escalated from Kimi K2.7 Code to GLM-5.3."
         : "Website repair escalated to GPT-5.6 Sol.";
+  } else if (input.deep && laneRequest === "auto" && !engineeringModeOnly(mode)) {
+    lanes = ["premium", "premium-alt", "engineering", "auto"];
+    reason = "Strategy, planning, naming and architecture go to the strongest reasoning model.";
   } else if (laneRequest === "premium" || escalate >= 2) {
     lanes = ["premium", "premium-alt"];
     reason = escalate >= 2 ? "Escalated to the premium lane." : "Premium lane.";

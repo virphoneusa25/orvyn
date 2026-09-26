@@ -105,3 +105,13 @@ test("image quality and edits stay on Kontext models", () => {
   });
   assert.equal(cannotEdit.registryId, null);
 });
+
+test("a thinking-heavy task goes to the strongest reasoning model; a pinned model still wins", () => {
+  const intent = inferTaskIntent("What should we name our foundation model family?", "auto");
+  const deep = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: ids, deep: true });
+  assert.equal(deep.registryId, laneModel("premium").registryId);
+  const noPremium = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: ids.filter((i) => i !== laneModel("premium").registryId), deep: true });
+  assert.equal(noPremium.registryId, laneModel("engineering").registryId, "no premium model registered: the next strongest");
+  const pinned = selectAgentModel({ intent, composerMode: "auto", requestedModelId: laneModel("fast").registryId, availableIds: ids, deep: true });
+  assert.equal(pinned.registryId, laneModel("fast").registryId);
+});

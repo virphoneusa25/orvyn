@@ -15,7 +15,7 @@ import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerM
 import { ContextUsageMenu } from "./ContextUsageMenu";
 import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
-import { submitOrvynCommand } from "../orvynCommand";
+import { submitOrvynCommand, regenerateLastReply } from "../orvynCommand";
 import { COMPOSER_HANDOFF_EVENT, takeComposerHandoff } from "../composerHandoff";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, RunFooter } from "./AgentActivityList";
@@ -29,6 +29,7 @@ import type { AgentEvent } from "./AgentActivityList";
 import { useRunThread } from "../useRunThread";
 import { threadTimeline } from "../streamOrder";
 import { SessionRestoreCard } from "./SessionRestoreCard";
+import { AnswerActions } from "./AnswerActions";
 
 /** The single run state (owned by App, shared with the right ContextPanel). */
 export interface RunView {
@@ -167,6 +168,16 @@ export function WorkStream({
   // Follow-ups stamped after run.started render under the run. Painting
   // them above the activity is what made a new message appear at the top.
   const { earlier: earlierMessages, later: laterMessages } = partitionStreamMessages(messages, run.events);
+  // The question an assistant reply answered (for Share), and Regenerate on the newest reply only.
+  const questionFor = (m: ChatMessage): string | undefined => {
+    const i = messages.indexOf(m);
+    for (let j = i - 1; j >= 0; j--) if (messages[j]!.role === "user") return messages[j]!.content;
+    return undefined;
+  };
+  const regenerateFor = (m: ChatMessage): (() => void) | undefined =>
+    m.role === "assistant" && m === messages[messages.length - 1] && !streaming
+      ? () => { regenerateLastReply({ projectRoot, requestedModelId, reasoningEffort }); }
+      : undefined;
   const thread = useRunThread(run.runId, run.events);
   // Opened on an older run of a conversation: show it from its newest run,
   // so the whole thread (and the latest answer) is on screen.
@@ -631,7 +642,7 @@ export function WorkStream({
 
         {threadTimeline(earlierMessages, thread.earlier).map((entry, i) =>
           entry.kind === "message" ? (
-            <ChatTurn key={`earlier-${i}`} message={entry.message} live={streaming && entry.message === messages[messages.length - 1]} />
+            <ChatTurn key={`earlier-${i}`} message={entry.message} live={streaming && entry.message === messages[messages.length - 1]} question={questionFor(entry.message)} onRegenerate={regenerateFor(entry.message)} />
           ) : (
             <div key={`thread-${entry.run.runId}`} data-testid="thread-run" style={{ minWidth: 0 }}>
               {entry.run.instruction && <ChatTurn message={{ role: "user", content: entry.run.instruction }} live={false} />}
@@ -658,7 +669,8 @@ export function WorkStream({
         {(run.events.length > 0 || runActive) && (
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
-            <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"} />
+            <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"}
+              onRegenerate={retryInstruction ? () => { void send(retryInstruction, true); } : undefined} />
           </div>
         )}
 
@@ -721,7 +733,7 @@ export function WorkStream({
         )}
 
         {laterMessages.map((m, i) => (
-          <ChatTurn key={`later-${i}`} message={m} live={streaming && m === messages[messages.length - 1]} />
+          <ChatTurn key={`later-${i}`} message={m} live={streaming && m === messages[messages.length - 1]} question={questionFor(m)} onRegenerate={regenerateFor(m)} />
         ))}
         </div>
         </div>
@@ -1044,7 +1056,7 @@ function WorkTimer({ startedAt }: { startedAt: number }) {
   );
 }
 
-function ChatTurn({ message, live }: { message: ChatMessage; live: boolean }) {
+function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMessage; live: boolean; question?: string; onRegenerate?: () => void }) {
   if (message.role === "user") {
     return (
       <div style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 10px" }}>
@@ -1088,6 +1100,11 @@ function ChatTurn({ message, live }: { message: ChatMessage; live: boolean }) {
             <MessageContent content={message.content} streaming={live} />
           )}
         </div>
+        {!live && message.content.trim() && (
+          <div style={{ marginTop: 6 }}>
+            <AnswerActions speakKey={`chat:${message.id ?? message.createdAt ?? ""}`} text={message.content} question={question} onRegenerate={onRegenerate} when={message.createdAt} />
+          </div>
+        )}
       </div>
     </div>
   );

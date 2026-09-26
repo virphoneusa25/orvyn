@@ -69,3 +69,15 @@ test("messages are stored one by one, in order, and survive a restart", () => {
   b.delete(s.sessionId);
   assert.equal(b.messages(s.sessionId).length, 0);
 });
+
+test("a regenerated reply replaces the old one", () => {
+  const store = new WorkSessionStore("t1", mkdtempSync(join(tmpdir(), "orvyn-sessions-")));
+  const s = store.create({ title: "chat" });
+  store.appendMessage(s.sessionId, { messageId: "q", role: "user", content: "Name ideas?" });
+  store.appendMessage(s.sessionId, { messageId: "a1", role: "assistant", content: "Old answer" });
+  assert.equal(store.deleteMessage("sess_other", "a1"), false, "only within its own session");
+  assert.equal(store.deleteMessage(s.sessionId, "a1"), true);
+  store.appendMessage(s.sessionId, { messageId: "q", role: "user", content: "Name ideas?" });
+  store.appendMessage(s.sessionId, { messageId: "a2", role: "assistant", content: "New answer" });
+  assert.deepEqual(store.messages(s.sessionId).map((m) => [m.messageId, m.content]), [["q", "Name ideas?"], ["a2", "New answer"]]);
+});

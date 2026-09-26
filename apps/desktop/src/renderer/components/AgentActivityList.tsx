@@ -1,6 +1,19 @@
 // Shared renderer for agent tool/file/terminal events so Chat and Agent
 // both show "Editing …" / "Running …" instead of swallowing them.
 import { SourcesBar } from "./SourcesBar";
+import { AnswerActions } from "./AnswerActions";
+import { collectSources } from "../runSources";
+
+/** ORION's final answer in a run: what it said after its last tool (or the whole reply). */
+function finalAnswerText(events: AgentEvent[]): string {
+  let lastTool = -1;
+  events.forEach((e, i) => { if (e.type === "tool.completed" || e.type === "tool.failed") lastTool = i; });
+  let text = "";
+  events.forEach((e, i) => { if (e.type === "message.retracted") text = ""; else if (e.type === "message.delta" && i > lastTool) text += String(e.data.content ?? ""); });
+  if (!text.trim()) text = events.filter((e) => e.type === "message.delta").map((e) => String(e.data.content ?? "")).join("");
+  const grounded = [...events].reverse().find((e) => e.type === "message.grounded");
+  return String(grounded?.data.content ?? text).trim();
+}
 import React, { useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
@@ -426,12 +439,15 @@ export function RunFooter({
   runId,
   finished,
   onAfterUndo,
+  onRegenerate,
 }: {
   events: AgentEvent[];
   runId: string | null;
   finished: boolean;
   /** Called after a successful undo so the parent can refresh open files. */
   onAfterUndo?: () => void;
+  /** Answer the same instruction again (a new run in the same conversation). */
+  onRegenerate?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [feedback, setFeedback] = useState<"up" | "down" | null>(null);
@@ -528,6 +544,15 @@ export function RunFooter({
       }}
     >
       <SourcesBar events={events} />
+      <AnswerActions
+        speakKey={`run:${runId ?? ""}`}
+        text={finalAnswerText(events)}
+        question={String(events.find((e) => e.type === "run.started")?.data.instruction ?? "")}
+        sources={collectSources(events)}
+        onRegenerate={onRegenerate}
+        showCopy={false}
+        when={endEvent?.timestamp}
+      />
       {hasChanges && (
         <span
           style={{

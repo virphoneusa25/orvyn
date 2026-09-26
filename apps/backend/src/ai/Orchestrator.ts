@@ -1,4 +1,7 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
+import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
+import { laneModel } from "../models/certifiedModels";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
 import { AIMessage, AIChunk, Attachment, TaskType } from "@orvyn/ai-core";
@@ -103,7 +106,7 @@ function boundedHistory(history: AIMessage[]): AIMessage[] {
   return out;
 }
 
-async function buildMessages(req: ChatTurnRequest, indexService?: IndexService): Promise<AIMessage[]> {
+async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, memory?: MemoryStoreLike): Promise<AIMessage[]> {
   const messages: AIMessage[] = [];
   const mode = req.context?.mode ?? "ask";
 
@@ -116,12 +119,16 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService):
     "A short hi gets a short hello. A question about what you can do is answered from the capability summary, without starting work and without denying tools that summary lists.",
     "When a file, image, or folder is attached, use it. Ask for a folder only when the answer actually depends on those files.",
     "Put code in fenced markdown blocks with a language tag.",
+    ADVISOR_STYLE,
+    "In chat, this advisor style replaces the short final-reply rule: size each answer to the question.",
     "Image generation is built in. When the user asks to mock up, draw, design, or generate a logo, icon, or picture, produce the image.",
     modeInstructions(mode),
   ];
   if (req.context?.projectRules) {
     systemParts.push(`Project rules (.orvyn/rules.md):\n${req.context.projectRules}`);
   }
+  const remembered = userMemoryPrompt(memory, req.userMessage, req.context?.projectRoot ?? null);
+  if (remembered) systemParts.push(remembered);
   messages.push({ role: "system", content: systemParts.join("\n\n") });
 
   if (req.context?.currentFile) {
@@ -199,7 +206,9 @@ export class Orchestrator {
   constructor(
     private modelService: ModelService,
     private indexService?: IndexService,
-    private artifacts?: import("../artifacts/ArtifactService").ArtifactService
+    private artifacts?: import("../artifacts/ArtifactService").ArtifactService,
+    /** What ORION remembers about the user, shown in every chat turn. */
+    private memory?: MemoryStoreLike
   ) {}
 
   private resolveProvider(req: ChatTurnRequest) {
@@ -222,6 +231,14 @@ export class Orchestrator {
         // Fall through to the requested task.
       }
     }
+    // Thinking-heavy questions (strategy, planning, naming, architecture, or
+    // the user asked for deep reasoning) go to the strongest reasoning model.
+    if (req.task === "chat" && isDeepQuestion(req.userMessage, req.reasoningEffort)) {
+      for (const lane of ["premium", "premium-alt", "engineering"] as const) {
+        const deep = this.modelService.registry.get(laneModel(lane).registryId);
+        if (deep && (deep.config.capabilities as any).chat !== false) return deep;
+      }
+    }
     return this.modelService.router.resolve(req.task);
   }
 
@@ -231,7 +248,7 @@ export class Orchestrator {
       return;
     }
     const provider = this.resolveProvider(req);
-    const messages = await buildMessages(req, this.indexService);
+    const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // Output-language guard: the routed providers include Chinese-first
     // models that mirror the user's language even when told not to. Detect
@@ -281,7 +298,7 @@ export class Orchestrator {
       return { content, finishReason: "stop" as const };
     }
     const provider = this.resolveProvider(req);
-    const messages = await buildMessages(req, this.indexService);
+    const messages = await buildMessages(req, this.indexService, this.memory);
     return provider.generate({ messages, temperature: req.context?.mode === "ask" ? 0.7 : 0.3 });
   }
 

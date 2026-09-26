@@ -1,4 +1,6 @@
 import { documentRouter } from "./documents";
+import { learnFromUserMessage, type MemoryStoreLike } from "../memory/userMemory";
+import { memoryModel } from "../memory/learnModel";
 import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
@@ -560,7 +562,7 @@ v1Router.post("/chat/completions", async (req, res) => {
       });
       return res.status(201).json({ runId, routed: "agent" });
     }
-    const response = await new Orchestrator(tc.modelService, tc.indexService, tc.artifactService).chat({
+    const response = await new Orchestrator(tc.modelService, tc.indexService, tc.artifactService, tc.localStore as unknown as MemoryStoreLike).chat({
       task: req.body.task ?? "chat",
       history: req.body.history ?? [],
       userMessage: req.body.message,
@@ -718,6 +720,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     mode: String(req.body.mode ?? "agent"),
   });
   recordRunAnswer(t.sessions, t.runStore, attached.sessionId, runId);
+  // What the user says about themselves or their work is remembered for next time.
+  void learnFromUserMessage(t.localStore as unknown as MemoryStoreLike, memoryModel(t.modelService), String(req.body.instruction ?? ""));
   res.status(201).json({
     runId,
     messageId: userMessage?.messageId,

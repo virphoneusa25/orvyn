@@ -1,4 +1,6 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
+import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
+import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
@@ -587,11 +589,13 @@ export class StreamingAgentRuntime {
   ): string {
     const runId = randomUUID();
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     const choice = selectAgentModel({
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
       availableIds: this.modelService.registry.list().map((p) => p.config.id),
+      deep,
     });
     let provider = choice.pinned
       ? (() => {
@@ -644,7 +648,7 @@ export class StreamingAgentRuntime {
       this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
       { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const modeOverlay = composerModeOverlay(options?.composerMode, mode);
     const gapNotes = capabilityGapNotes(instruction, runCaps);
     const intent = inferTaskIntent(instruction, options?.composerMode ?? mode);
@@ -1078,15 +1082,8 @@ export class StreamingAgentRuntime {
   }
 
   private relevantMemory(projectRoot: string, instruction: string): string {
-    if (!this.memoryStore) return "";
-    const terms = new Set(instruction.toLowerCase().split(/[^a-z0-9_./-]+/).filter((x) => x.length > 2));
-    return this.memoryStore.listMemories(projectRoot, 100).map((m: any) => {
-      const hay = `${m.title} ${m.content} ${m.kind}`.toLowerCase();
-      const score = (m.pinned ? 5 : 0) + [...terms].reduce((n, t) => n + (hay.includes(t) ? 1 : 0), 0);
-      return { m, score };
-    }).filter((x: any) => x.score > 0).sort((a: any, b: any) => b.score - a.score).slice(0, 8)
-      .map(({ m }: any) => `- [${m.scope}/${m.kind}; source=${m.source ?? "unknown"}] ${m.title}: ${String(m.content).slice(0, 1200)}`)
-      .join("\n").slice(0, 7000);
+    // What ORION knows about the user (every run), plus notes relevant to this task.
+    return userMemoryPrompt(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
   }
 
   private async relevantCode(instruction: string): Promise<string> {

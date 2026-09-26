@@ -399,6 +399,29 @@ export function startUserTurn(
   return history;
 }
 
+/**
+ * Regenerate: the active chat's last reply is replaced by a new one to the
+ * same question. Returns what the new turn needs, or null when the chat does
+ * not end with a finished question → reply pair (or a reply is streaming).
+ */
+export function beginRegenerate(): { history: ChatMessage[]; user: ChatMessage; reply: ChatMessage; replacedId?: string } | null {
+  const session = active();
+  if (!session || streaming) return null;
+  const n = session.messages.length;
+  const last = session.messages[n - 1];
+  const question = session.messages[n - 2];
+  if (!last || !question || last.role !== "assistant" || question.role !== "user" || last.runId || question.runId) return null;
+  const history = session.messages.slice(0, n - 2).map((m) => ({ role: m.role, content: toWireContent(m.content) }));
+  const reply: ChatMessage = { id: newMessageId(), role: "assistant", content: "", createdAt: Date.now() };
+  session.messages = [...session.messages.slice(0, n - 1), reply];
+  session.updatedAt = Date.now();
+  streaming = true;
+  streamingChatId = session.id;
+  emit();
+  persist();
+  return { history, user: question, reply, replacedId: last.id };
+}
+
 export function appendAssistantDelta(delta: string): void {
   const session = sessions.find((s) => s.id === streamingChatId) ?? active();
   if (!delta || !session || session.messages.length === 0) return;
