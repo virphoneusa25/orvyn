@@ -5,6 +5,21 @@
 // Chats and missions are SEPARATE concepts: a chat may exist without a
 // mission; a mission may have a linked chat.
 
+/** One web search or page read ORION did while answering (live, then kept with the reply). */
+export interface ChatActivity {
+  id: string;
+  kind: "search" | "read";
+  status: "running" | "done" | "failed";
+  query?: string;
+  url?: string;
+  title?: string;
+  results?: number;
+  found?: { url: string; title: string; snippet?: string }[];
+  error?: string;
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface ChatMessage {
   /** Durable id, shared with the backend session's copy of this message. */
   id?: string;
@@ -14,6 +29,8 @@ export interface ChatMessage {
   runId?: string;
   /** Position in the backend session (set once the backend has it). */
   sequence?: number;
+  /** The web research ORION did for this reply. */
+  activity?: ChatActivity[];
   mode?: string;
   attachments?: { path: string; kind: string; purpose?: string }[];
   createdAt?: number;
@@ -422,6 +439,29 @@ export function beginRegenerate(): { history: ChatMessage[]; user: ChatMessage; 
   return { history, user: question, reply, replacedId: last.id };
 }
 
+/** A search or page read arrived (or finished) for the reply being streamed. */
+export function upsertAssistantActivity(a: ChatActivity): void {
+  const session = sessions.find((s) => s.id === streamingChatId) ?? active();
+  const last = session?.messages[session.messages.length - 1];
+  if (!session || !last || last.role !== "assistant") return;
+  const list = [...(last.activity ?? [])];
+  const i = list.findIndex((x) => x.id === a.id);
+  if (i >= 0) list[i] = a; else list.push(a);
+  last.activity = list;
+  session.updatedAt = Date.now();
+  emit();
+  persist();
+}
+
+/** ORION withdrew what it said so far (it researches first): clear the reply text. */
+export function retractAssistantText(): void {
+  const session = sessions.find((s) => s.id === streamingChatId) ?? active();
+  const last = session?.messages[session.messages.length - 1];
+  if (!session || !last || last.role !== "assistant") return;
+  last.content = "";
+  emit();
+}
+
 export function appendAssistantDelta(delta: string): void {
   const session = sessions.find((s) => s.id === streamingChatId) ?? active();
   if (!delta || !session || session.messages.length === 0) return;
@@ -501,6 +541,7 @@ export interface BackendMessageLike {
   sequence: number;
   mode: string | null;
   status?: "complete" | "streaming";
+  meta?: { activity?: ChatActivity[] } & Record<string, unknown>;
   createdAt: number;
 }
 
@@ -521,6 +562,7 @@ export function applyBackendMessages(sessionId: string, list: BackendMessageLike
     runId: m.runId ?? undefined,
     sequence: m.sequence,
     mode: m.mode ?? undefined,
+    activity: Array.isArray(m.meta?.activity) ? m.meta!.activity : undefined,
     createdAt: m.createdAt,
   }));
   const ids = new Set(backend.map((m) => m.id));

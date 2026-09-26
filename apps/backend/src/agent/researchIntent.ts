@@ -5,7 +5,7 @@
 // asks for sources gets a web search first — the user does not have to pick
 // the Research mode. Purely local work (files, this project's code) does not.
 
-const CURRENT_INFO = /\b(latest|newest|current(?:ly)?|recent(?:ly)?|today|tonight|this (?:week|month|year)|right now|up[- ]to[- ]date|as of|news|headlines?|prices?|pricing|how much (?:is|does|are)|stock|weather|forecast|scores?|standings|released?|releases|lts|announced?|announcements?|who (?:is|are|won) (?:the )?(?:current|new|ceo|president|prime minister|leader|champion)|trending|best .* (?:in|for) 20\d\d|20(?:2[5-9]|3\d))\b/i;
+const CURRENT_INFO = /\b(latest|newest|current(?:ly)?|recent(?:ly)?|today|tonight|this (?:week|month|year)|right now|up[- ]to[- ]date|as of|news|headlines?|prices?|pricing|cheap(?:er|est)?|costs?|expensive|afford(?:able)?|worth it|make (?:good )?money|profit(?:able|s)?|margins?|sellable|resell|how much (?:is|does|are)|stock|weather|forecast|scores?|standings|released?|releases|lts|announced?|announcements?|who (?:is|are|won) (?:the )?(?:current|new|ceo|president|prime minister|leader|champion)|trending|best .* (?:in|for) 20\d\d|20(?:2[5-9]|3\d))\b/i;
 const ASKS_FOR_SOURCES = /\b(research|look (?:it |this |that )?up|search (?:the )?(?:web|internet|online)|google|find (?:out|sources|articles|references)|cite|citations?|with sources|sources? for|fact[- ]check|compare .+ (?:vs\.?|versus) )\b/i;
 const LOCAL_ONLY = /\b(this (?:file|folder|repo|repository|project|codebase)|in (?:my|the) (?:project|repo|codebase|workspace)|hello\.txt|package\.json|\b(?!(?:node|next|nuxt|vue|react|three|d3|chart|express|nest|ember|backbone|solid)\.js\b)[\w-]+\.(?:js|ts|tsx|css|html|py|json|txt|md)\b)/i;
 

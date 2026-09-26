@@ -52,15 +52,16 @@ const modes = [];
 function nextTurn(body) {
   const msgs = body.messages ?? [];
   if (String(msgs[0]?.content ?? "").includes("ORVYN VERIFIER")) return { text: "VERDICT: PASS\n- Answer is grounded in the search results." };
+  if (String(msgs[0]?.content ?? "").includes("You maintain a short memory")) return { text: '{"add":[],"update":[],"remove":[]}' };
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
   const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
   const toolsSince = msgs.slice(lastUserIdx).filter((m) => m.role === "tool");
-  if (!tools.length) return { text: "OK." };
   const last = String(msgs[lastUserIdx]?.content ?? "");
-  modes.push(tools.includes("write_file") ? "agent" : "research");
+  modes.push(tools.includes("write_file") ? "agent" : tools.includes("web_search") ? "chat+web" : "plain");
   // First answer from memory, like a model that does not think to look it up.
   if (!/current information from the web/.test(last)) return { text: "Node.js 20 is the LTS release." };
-  if (!toolsSince.length) return { text: "Searching the web.", call: { name: "web_search", args: { query: "Node.js LTS release" } } };
+  if (toolsSince.length === 0) return { text: "Let me check.", call: { name: "web_search", args: { query: "Node.js LTS release" } } };
+  if (toolsSince.length === 1) return { text: "", call: { name: "fetch_url", args: { url: RESULTS[0].url } } };
   return { text: "The current Node.js LTS line is listed on the Node.js releases page (nodejs.org), with background on Wikipedia." };
 }
 let seq = 0;
@@ -155,28 +156,24 @@ async function main() {
 
     await win.getByPlaceholder(/Describe what ORVYN should build/).fill(Q);
     await win.getByRole("button", { name: /Run mission/ }).click();
-    let askedApproval = false;
-    const done = await waitFor(async () => {
-      const r = (await api("/agent/stream/runs")).json.runs ?? [];
-      if (r.some((x) => x.status === "awaiting_approval")) {
-        askedApproval = true;
-        const allow = win.getByRole("button", { name: /Allow for Mission|Allow Once/ }).first();
-        if (await allow.isVisible().catch(() => false)) await allow.click().catch(() => {});
-      }
-      return r.length >= 1 && ["completed", "error", "cancelled"].includes(r[0].status) ? r : null;
-    }, 90_000, 400);
-    ok(done?.[0]?.status === "completed", "the question ran as a task and completed");
-    const ev = (await api(`/agent/stream/runs/${done?.[0]?.id}/events.json`)).json.events ?? [];
-    ok(String(ev.find((e) => e.type === "run.started")?.data?.mode ?? "") === "research" || modes[0] === "research", "Auto mode routed the question to research on its own (no mode picked)", JSON.stringify({ started: ev.find((e) => e.type === "run.started")?.data?.mode, modes }));
-    ok(ev.some((e) => e.type === "agent.continue" && /Researching/.test(String(e.data?.reason))), "ORION's answer from memory was sent back: research first");
+    // Chat never asks before searching; an approval card here would be a failure.
+    const askedApproval = await waitFor(async () => (await win.getByRole("button", { name: /Allow for Mission|Allow Once/ }).count()) > 0 || /listed on the Node\.js releases page/.test(await win.locator("body").innerText()) ? (await win.getByRole("button", { name: /Allow for Mission|Allow Once/ }).count()) > 0 : null, 30_000, 300);
+    ok(!!(await waitFor(async () => /listed on the Node\.js releases page/.test(await win.locator("body").innerText()), 30_000, 300)), "the question was answered in chat");
+    ok(((await api("/agent/stream/runs")).json.runs ?? []).length === 0, "…as a chat reply (no task was started)");
+    ok(modes.includes("chat+web"), "the chat model was offered web search", JSON.stringify(modes));
     ok(searches.length >= 1, `ORION searched the web on its own (${searches.join(", ")})`);
     ok(!askedApproval, "…without asking for approval");
     const answer = await win.locator("body").innerText();
-    ok(/listed on the Node\.js releases page/.test(answer), "the final answer comes from the search, not from memory");
-    ok(!/Node\.js 20 is the LTS release/.test(answer), "the unchecked answer from memory is not left in the stream");
-    const env1 = ev.find((e) => e.type === "tool.completed" && e.data?.tool === "web_search")?.data?.envelope;
-    ok(env1?.evidence?.filter((x) => x.type === "url").map((x) => x.value).join() === RESULTS.map((r) => r.url).join(), "the search result sites are recorded on the run", JSON.stringify(env1?.evidence));
-
+    ok(!/Node\.js 20 is the LTS release/.test(answer), "the unchecked answer from memory is not left in the chat");
+    const summary = win.locator('[data-testid="research-summary"]');
+    ok((await summary.count()) === 1 && /Searched the web/.test(await summary.innerText()), "the reply shows what ORION researched", await summary.innerText().catch(() => ""));
+    if (!(await win.locator('[data-testid="research-step"]').count())) await summary.click();
+    const steps = await win.locator('[data-testid="research-step"]').allInnerTexts();
+    ok(steps.length === 2 && /Node\.js LTS release/.test(steps[0]) && /2 results/.test(steps[0]) && /nodejs\.org/.test(steps[1]), "…each search (query · 2 results) and page read (URL · site)", JSON.stringify(steps));
+    const sessions = (await api("/sessions")).json.sessions ?? [];
+    const stored = (await api(`/sessions/${sessions[0]?.sessionId}/messages`)).json.messages ?? [];
+    const reply = stored.find((m) => m.role === "assistant");
+    ok(reply?.meta?.activity?.length === 2 && /listed on the Node\.js releases page/.test(reply.content) && !/Node\.js 20/.test(reply.content), "the research and the researched answer are stored with the conversation", JSON.stringify(reply ?? null).slice(0, 300));
     const chip = win.locator('[data-testid="sources-chip"]');
     ok(!!(await waitFor(async () => (await chip.count()) === 1, 15_000, 300)), "a Sources chip is under ORION's answer");
     ok(/Sources\s*2/.test(await chip.innerText()), "…counting 2 sources", await chip.innerText());

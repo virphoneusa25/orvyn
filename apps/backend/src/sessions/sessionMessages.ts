@@ -77,6 +77,21 @@ export class ChatTurnRecorder {
     this.replyId = reply?.messageId ?? null;
   }
 
+  private activities: unknown[] = [];
+
+  /** A web search or page read during the reply (kept with the reply, for restore). */
+  activity(a: { id: string }): void {
+    if (this.done || !this.replyId) return;
+    const i = this.activities.findIndex((x) => (x as { id: string }).id === a.id);
+    if (i >= 0) this.activities[i] = a; else this.activities.push(a);
+    this.sessions.updateMessage(this.replyId, { meta: { activity: this.activities } });
+  }
+
+  /** The reply so far was withdrawn (ORION researches first). */
+  retract(): void {
+    this.text = "";
+  }
+
   delta(chunk: string): void {
     if (this.done || !chunk) return;
     this.text += chunk;

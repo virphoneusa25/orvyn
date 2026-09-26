@@ -30,6 +30,9 @@ import { useRunThread } from "../useRunThread";
 import { threadTimeline } from "../streamOrder";
 import { SessionRestoreCard } from "./SessionRestoreCard";
 import { AnswerActions } from "./AnswerActions";
+import { ResearchTimeline } from "./ResearchTimeline";
+import { SourcesBar } from "./SourcesBar";
+import { sourcesFromActivity, stepsFromActivity } from "../researchSteps";
 
 /** The single run state (owned by App, shared with the right ContextPanel). */
 export interface RunView {
@@ -1091,8 +1094,11 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
             ASSISTANT
           </span>
         </div>
+        {message.activity && message.activity.length > 0 && (
+          <ResearchTimeline steps={stepsFromActivity(message.activity)} live={live} thinking={live && !message.content.trim()} startedAt={message.createdAt} />
+        )}
         <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
-          {!message.content && live ? (
+          {!message.content && live && message.activity?.length ? null : !message.content && live ? (
             <span style={{ color: "var(--orvyn-text-muted)", fontStyle: "italic" }}>
               Thinking…
             </span>
@@ -1101,8 +1107,9 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
           )}
         </div>
         {!live && message.content.trim() && (
-          <div style={{ marginTop: 6 }}>
-            <AnswerActions speakKey={`chat:${message.id ?? message.createdAt ?? ""}`} text={message.content} question={question} onRegenerate={onRegenerate} when={message.createdAt} />
+          <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {message.activity && message.activity.length > 0 && <SourcesBar sources={sourcesFromActivity(message.activity)} />}
+            <AnswerActions speakKey={`chat:${message.id ?? message.createdAt ?? ""}`} text={message.content} question={question} onRegenerate={onRegenerate} when={message.createdAt} sources={sourcesFromActivity(message.activity)} />
           </div>
         )}
       </div>

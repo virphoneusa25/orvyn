@@ -37,6 +37,8 @@ export interface SessionMessage {
   mode: string | null;
   /** "complete", or "streaming" while an assistant reply is still arriving. */
   status: "complete" | "streaming";
+  /** Extra detail kept with the message (e.g. the web research activity of a reply). */
+  meta?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
 }
@@ -105,7 +107,7 @@ const MAX_MESSAGE = 200_000;
 
 interface MessageRow {
   message_id: string; session_id: string; role: string; content: string; run_id: string | null;
-  sequence: number; mode: string | null; status: string; created_at: number; updated_at: number;
+  sequence: number; mode: string | null; status: string; created_at: number; updated_at: number; meta_json?: string | null;
 }
 
 function messageFromRow(r: MessageRow): SessionMessage {
@@ -118,6 +120,7 @@ function messageFromRow(r: MessageRow): SessionMessage {
     sequence: r.sequence,
     mode: r.mode,
     status: r.status === "streaming" ? "streaming" : "complete",
+    meta: (() => { try { return r.meta_json ? JSON.parse(r.meta_json) : undefined; } catch { return undefined; } })(),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -166,6 +169,9 @@ export class WorkSessionStore {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // Added after the first release: message detail (web research activity).
+    const cols = this.db.prepare(`PRAGMA table_info(session_messages)`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === "meta_json")) this.db.exec(`ALTER TABLE session_messages ADD COLUMN meta_json TEXT`);
   }
 
   /** The stable workspace (and project) for a folder; created the first time it is seen. */
@@ -286,13 +292,14 @@ export class WorkSessionStore {
     return this.getMessage(messageId);
   }
 
-  updateMessage(messageId: string, patch: { content?: string; runId?: string | null; status?: "complete" | "streaming" }): SessionMessage | undefined {
+  updateMessage(messageId: string, patch: { content?: string; runId?: string | null; status?: "complete" | "streaming"; meta?: Record<string, unknown> }): SessionMessage | undefined {
     const m = this.getMessage(messageId);
     if (!m) return undefined;
     const content = patch.content !== undefined ? String(patch.content).slice(0, MAX_MESSAGE) : m.content;
+    const meta = patch.meta !== undefined ? { ...(m.meta ?? {}), ...patch.meta } : m.meta;
     const now = Date.now();
-    this.db.prepare(`UPDATE session_messages SET content = ?, run_id = ?, status = ?, updated_at = ? WHERE message_id = ?`)
-      .run(content, patch.runId !== undefined ? patch.runId : m.runId, patch.status ?? m.status, now, messageId);
+    this.db.prepare(`UPDATE session_messages SET content = ?, run_id = ?, status = ?, meta_json = ?, updated_at = ? WHERE message_id = ?`)
+      .run(content, patch.runId !== undefined ? patch.runId : m.runId, patch.status ?? m.status, meta ? JSON.stringify(meta).slice(0, 200_000) : null, now, messageId);
     this.db.prepare(`UPDATE work_sessions SET updated_at = ? WHERE session_id = ?`).run(now, m.sessionId);
     return this.getMessage(messageId);
   }

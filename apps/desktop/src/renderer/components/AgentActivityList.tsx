@@ -1,6 +1,9 @@
 // Shared renderer for agent tool/file/terminal events so Chat and Agent
 // both show "Editing …" / "Running …" instead of swallowing them.
 import { SourcesBar } from "./SourcesBar";
+import { ResearchTimeline } from "./ResearchTimeline";
+import type { ResearchStep } from "../researchSteps";
+import { domainOf } from "../runSources";
 import { AnswerActions } from "./AnswerActions";
 import { collectSources } from "../runSources";
 
@@ -180,6 +183,26 @@ export function liveActivityLabel(events: AgentEvent[]): string | null {
   return null;
 }
 
+type ResearchGroup = { kind: "research"; key: string; steps: ResearchStep[] };
+
+/** Consecutive web searches and page reads become one research timeline ("Searched the web, read 3 pages"). */
+function groupResearch(items: ReturnType<typeof reducePresentation>): Array<ReturnType<typeof reducePresentation>[number] | ResearchGroup> {
+  const out: Array<ReturnType<typeof reducePresentation>[number] | ResearchGroup> = [];
+  for (const item of items) {
+    const web = item.kind === "tool" && !item.verifier && (item.toolName === "web_search" || item.toolName === "fetch_url");
+    if (!web) { out.push(item); continue; }
+    const t = item as Extract<typeof item, { kind: "tool" }>;
+    const status = t.status === "running" ? "running" : t.status === "done" ? "done" : "failed";
+    const step: ResearchStep = t.toolName === "web_search"
+      ? { id: t.key, kind: "search", status, label: t.label ?? "", results: Number(/(\d+)/.exec(t.detail ?? "")?.[1] ?? 0) || undefined }
+      : { id: t.key, kind: "read", status, label: t.url ?? t.label ?? "", url: t.url ?? t.label, domain: domainOf(t.url ?? t.label ?? "") };
+    const last = out[out.length - 1];
+    if (last && last.kind === "research") last.steps.push(step);
+    else out.push({ kind: "research", key: `research-${t.key}`, steps: [step] });
+  }
+  return out;
+}
+
 export function AgentActivityList({
   events,
   status,
@@ -192,7 +215,8 @@ export function AgentActivityList({
   // RAW EVENTS → presentation items → rows. Raw event names, timestamps,
   // task/mission/agent internals and reviewer text never render directly;
   // tool lifecycles collapse into single rows that update in place.
-  const items = React.useMemo(() => reducePresentation(events, status), [events, status]);
+  const items = React.useMemo(() => groupResearch(reducePresentation(events, status)), [events, status]);
+  const live = status === "running" || status === "awaiting_approval" || status === "verifying";
   const mission = React.useMemo(() => deriveMissionPhases(events as any, status), [events, status]);
 
   return (
@@ -206,6 +230,8 @@ export function AgentActivityList({
                 <MessageContent content={item.content} streaming={item.streaming} />
               </div>
             );
+          case "research":
+            return <ResearchTimeline key={item.key} steps={item.steps} live={live && item.steps.some((st) => st.status === "running")} />;
           case "tool":
             return <ToolActivityRow key={item.key} item={item} />;
           case "group":

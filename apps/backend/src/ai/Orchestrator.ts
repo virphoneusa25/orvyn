@@ -1,10 +1,14 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
+const MAX_RESEARCH_ROUNDS = 6;
+const MAX_RESEARCH_CALLS = 12;
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { laneModel } from "../models/certifiedModels";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, Attachment, TaskType } from "@orvyn/ai-core";
+import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { ImageService } from "../images/ImageService";
@@ -113,7 +117,7 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
   const systemParts: string[] = [
     CONVERSATION_STYLE,
     req.capabilityPrompt?.trim() ||
-      "You are ORION, the engineering co-worker in this ORVYN session. This chat turn does not execute tools.",
+      "You are ORION, the engineering co-worker in this ORVYN session. In chat you can research the web; other tools run in tasks.",
     "Voice: a sharp teammate. Use contractions. Be specific. Lead with the useful answer.",
     "Never use: \"How can I assist you today?\", \"Certainly!\", \"Of course!\", \"Great question!\", \"I'd be happy to help\", or any other customer-service opener.",
     "A short hi gets a short hello. A question about what you can do is answered from the capability summary, without starting work and without denying tools that summary lists.",
@@ -208,7 +212,9 @@ export class Orchestrator {
     private indexService?: IndexService,
     private artifacts?: import("../artifacts/ArtifactService").ArtifactService,
     /** What ORION remembers about the user, shown in every chat turn. */
-    private memory?: MemoryStoreLike
+    private memory?: MemoryStoreLike,
+    /** web_search / fetch_url: the chat researches on its own when present. */
+    private webTools?: WebToolRunner
   ) {}
 
   private resolveProvider(req: ChatTurnRequest) {
@@ -242,7 +248,7 @@ export class Orchestrator {
     return this.modelService.router.resolve(req.task);
   }
 
-  async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk> {
+  async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean }> {
     if (looksLikeImageRequest(req.userMessage)) {
       yield* this.streamGeneratedImage(req);
       return;
@@ -250,40 +256,76 @@ export class Orchestrator {
     const provider = this.resolveProvider(req);
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
-    // Output-language guard: the routed providers include Chinese-first
-    // models that mirror the user's language even when told not to. Detect
-    // Chinese in the first bytes and regenerate in English BEFORE the
-    // conversation shows it — streaming continues normally afterwards.
-    let buffered = "";
-    let decided = false;
+    // The chat researches on its own when it has web tools and a model that can call them.
+    const web = this.webTools && provider.supportsTools() ? CHAT_WEB_TOOLS : undefined;
+    if (web) messages.splice(1, 0, { role: "system", content: CHAT_RESEARCH_PROMPT });
+    let toolCallsUsed = 0;
+    let nudged = false;
     try {
-      for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort })) {
-        if (!decided) {
-          if (chunk.delta) buffered += chunk.delta;
-          if (buffered.trim().length < 8 && !chunk.done) continue; // not enough signal yet
-          decided = true;
-          if (isMostlyChinese(buffered)) {
-            const retry = await generateEnglish(provider, {
-              messages: [...messages, { role: "system", content: RETRY_RULE }],
-              temperature,
-            });
-            const text = String(retry?.content ?? "");
-            for (const piece of text.match(/[\s\S]{1,24}/g) ?? []) {
-              yield { delta: piece, done: false };
-              await new Promise<void>((resolve) => setImmediate(resolve));
+      for (let round = 0; round < MAX_RESEARCH_ROUNDS + 1; round++) {
+        const offerTools = web && round < MAX_RESEARCH_ROUNDS && toolCallsUsed < MAX_RESEARCH_CALLS ? web : undefined;
+        let text = "";
+        const calls: ToolCall[] = [];
+        let buffered = "";
+        let decided = round > 0;
+        for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools })) {
+          if (chunk.toolCall) { calls.push(chunk.toolCall); continue; }
+          if (chunk.done) break;
+          if (!chunk.delta) continue;
+          text += chunk.delta;
+          // Output-language guard (first words only): Chinese-first models can
+          // mirror the user's language; regenerate in English before showing it.
+          if (!decided) {
+            buffered += chunk.delta;
+            if (buffered.trim().length < 8) continue;
+            decided = true;
+            if (isMostlyChinese(buffered)) {
+              const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature });
+              const english = String(retry?.content ?? "");
+              for (const piece of english.match(/[\s\S]{1,24}/g) ?? []) {
+                yield { delta: piece, done: false };
+                await new Promise<void>((resolve) => setImmediate(resolve));
+              }
+              yield { delta: "", done: true };
+              return;
             }
-            yield { delta: "", done: true };
-            return;
+            yield { delta: buffered, done: false };
+            continue;
           }
-          if (buffered) yield { delta: buffered, done: false };
-          if (chunk.done) {
-            yield { delta: "", done: true };
-            return;
-          }
-          continue;
+          yield { delta: chunk.delta, done: false };
         }
-        yield chunk;
+        if (!decided && buffered) yield { delta: buffered, done: false };
+
+        if (!calls.length) {
+          // Answered from memory a question that needs current facts: research first (once).
+          if (web && !nudged && toolCallsUsed === 0 && needsWebResearch(req.userMessage)) {
+            nudged = true;
+            if (text) yield { delta: "", retract: true, done: false };
+            messages.push({ role: "assistant", content: text });
+            messages.push({ role: "user", content: RESEARCH_NUDGE });
+            continue;
+          }
+          yield { delta: "", done: true };
+          return;
+        }
+        messages.push({ role: "assistant", content: text, toolCalls: calls });
+        for (const call of calls) {
+          toolCallsUsed++;
+          const allowed = call.name === "web_search" || call.name === "fetch_url";
+          let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
+          if (allowed) yield { delta: "", activity, done: false };
+          const result = allowed
+            ? await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }))
+            : { ok: false, error: `Tool ${call.name} is not available in chat.` };
+          if (allowed) {
+            activity = finishActivity(activity, result);
+            yield { delta: "", activity, done: false };
+          }
+          messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: toolResultForModel(result) });
+        }
+        if (text.trim()) yield { delta: "\n\n", done: false };
       }
+      yield { delta: "", done: true };
     } catch (err: any) {
       yield { delta: `\n\n[Error: ${err.message}]`, done: true };
     }

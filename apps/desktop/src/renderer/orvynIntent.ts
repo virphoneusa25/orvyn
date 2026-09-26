@@ -63,7 +63,7 @@ const GREETING_ONLY =
   /^(hi+|hello+|hey+|yo|sup|hiya|howdy|good (morning|afternoon|evening)|thanks|thank you|thx|ok|okay|cool|nice)[!. ]*$/i;
 
 // Same rule as the backend's agent/researchIntent.ts (keep them in step).
-const CURRENT_INFO = /\b(latest|newest|current(?:ly)?|recent(?:ly)?|today|tonight|this (?:week|month|year)|right now|up[- ]to[- ]date|as of|news|headlines?|prices?|pricing|how much (?:is|does|are)|stock|weather|forecast|scores?|standings|released?|releases|lts|announced?|announcements?|who (?:is|are|won) (?:the )?(?:current|new|ceo|president|prime minister|leader|champion)|trending|best .* (?:in|for) 20\d\d|20(?:2[5-9]|3\d))\b/i;
+const CURRENT_INFO = /\b(latest|newest|current(?:ly)?|recent(?:ly)?|today|tonight|this (?:week|month|year)|right now|up[- ]to[- ]date|as of|news|headlines?|prices?|pricing|cheap(?:er|est)?|costs?|expensive|afford(?:able)?|worth it|make (?:good )?money|profit(?:able|s)?|margins?|sellable|resell|how much (?:is|does|are)|stock|weather|forecast|scores?|standings|released?|releases|lts|announced?|announcements?|who (?:is|are|won) (?:the )?(?:current|new|ceo|president|prime minister|leader|champion)|trending|best .* (?:in|for) 20\d\d|20(?:2[5-9]|3\d))\b/i;
 const ASKS_FOR_SOURCES = /\b(research|look (?:it |this |that )?up|search (?:the )?(?:web|internet|online)|google|find (?:out|sources|articles|references)|cite|citations?|with sources|sources? for|fact[- ]check|compare .+ (?:vs\.?|versus) )\b/i;
 const LOCAL_ONLY = /\b(this (?:file|folder|repo|repository|project|codebase)|in (?:my|the) (?:project|repo|codebase|workspace)|hello\.txt|package\.json|\b(?!(?:node|next|nuxt|vue|react|three|d3|chart|express|nest|ember|backbone|solid)\.js\b)[\w-]+\.(?:js|ts|tsx|css|html|py|json|txt|md)\b)/i;
 
@@ -88,9 +88,10 @@ export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent
 
   if (mode === "research") return "research";
   if (mode === "automate") return "automate";
-  // Auto: a question that needs current or sourced information is researched
-  // on the web (with Sources), not answered from memory by plain chat.
-  if (mode === "auto" && needsWebResearch(trimmed)) return "research";
+  // Auto: questions go to chat, which researches the web on its own when the
+  // answer needs current facts (and shows what it searched and read). A
+  // research ASSIGNMENT ("Research X and cite sources") runs as a research task.
+  if (mode === "auto" && needsWebResearch(trimmed) && !(trimmed.endsWith("?") || CONVERSATIONAL.test(trimmed))) return "research";
   if (mode === "auto") {
     const questionish = trimmed.endsWith("?") || CONVERSATIONAL.test(trimmed);
     return questionish && trimmed.length < 220 ? "chat" : "code";

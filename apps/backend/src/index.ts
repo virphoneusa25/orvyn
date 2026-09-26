@@ -214,7 +214,10 @@ wss.on("connection", (socket, req) => {
     }
 
     try {
-      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService, tenant.localStore as unknown as MemoryStoreLike);
+      const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService, tenant.localStore as unknown as MemoryStoreLike, {
+        // The chat researches on its own: web_search / fetch_url through the tool gateway.
+        execute: (name, args) => tenant.toolGateway.execute(name, args),
+      });
       // What the user says about themselves or their work is remembered for next time (best-effort, after the reply).
       const learn = () => { if (typeof body?.userMessage === "string") void learnFromUserMessage(tenant.localStore as unknown as MemoryStoreLike, memoryModel(tenant.modelService), body.userMessage); };
       const rawSocket = (socket as any)._socket;
@@ -236,6 +239,8 @@ wss.on("connection", (socket, req) => {
       for await (const chunk of orchestrator.streamChat({ ...body, capabilityPrompt })) {
         socket.send(JSON.stringify(chunk));
         const chunkError = (chunk as { error?: unknown }).error;
+        if (chunk.activity) recorder?.activity(chunk.activity);
+        if (chunk.retract) recorder?.retract();
         if (chunkError) recorder?.finish(String(chunkError));
         else recorder?.delta(String(chunk.delta ?? ""));
         if (chunk.done) { recorder?.finish(); learn(); break; }

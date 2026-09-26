@@ -32,9 +32,9 @@ function SourceRow({ source }: { source: RunSource }) {
   );
 }
 
-export function SourcesBar({ events }: { events: { type: string; data?: Record<string, any> }[] }) {
+export function SourcesBar({ events, sources: given }: { events?: { type: string; data?: Record<string, any> }[]; sources?: RunSource[] }) {
   const [open, setOpen] = useState(false);
-  const sources = collectSources(events);
+  const sources = given ?? collectSources(events ?? []);
   if (!sources.length) return null;
   const read = sources.filter((s) => s.kind === "read");
   const found = sources.filter((s) => s.kind === "search");
