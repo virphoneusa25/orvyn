@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
+import { creditsFor, escalate as escalateStep, runCreditBudget, weightFor, type RouteStep } from "../models/routingPolicy";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
@@ -180,6 +181,16 @@ interface RunState {
   continuationNudges: number;
   /** "Search the web first" was said once for a task that needs current info. */
   researchNudges: number;
+  /** The routing policy's ladder for this run and where it is on it. */
+  route?: RouteStep;
+  /** Credits spent so far (weight × tokens / 1000) and the run's cap (0 = none). */
+  credits: number;
+  creditBudget: number;
+  creditWarned?: boolean;
+  creditNoteSent?: boolean;
+  creditsExceeded?: boolean;
+  /** Failed tool calls in a row (a repair loop that is not working). */
+  failureStreak: number;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -419,6 +430,41 @@ export class StreamingAgentRuntime {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Meters a model call in credits (routing-policy weight × tokens / 1000).
+   * At 80% of the run's budget ORION is told to wrap up and stops climbing to
+   * dearer models; over the budget the run stops at the next step.
+   */
+  private noteCredits(runId: string, state: RunState, modelId: string, usage: TokenUsage): void {
+    const spent = creditsFor(modelId, usage);
+    if (!spent) return;
+    state.credits += spent;
+    const budget = state.creditBudget;
+    this.store.emit(runId, "run.credits", { credits: Math.round(state.credits), budget, modelId, weight: weightFor(modelId), profile: state.route?.profile ?? "auto" });
+    if (budget > 0 && !state.creditWarned && state.credits >= budget * 0.8) {
+      state.creditWarned = true;
+      this.store.emit(runId, "run.credits.warning", { credits: Math.round(state.credits), budget });
+    }
+    if (budget > 0 && state.credits > budget) state.creditsExceeded = true;
+  }
+
+  /**
+   * One step up the run's model ladder (routing policy), applied after the
+   * current tool batch. Never for a pinned model, never once 80% of the
+   * credit budget is spent.
+   */
+  private escalateRoute(runId: string, state: RunState, reason: string): boolean {
+    if (state.modelPinned || !state.route || state.creditWarned) return false;
+    const next = escalateStep(state.route, this.modelService.registry.list().map((p) => p.config.id), [], reason);
+    if (!next?.registryId) return false;
+    const provider = this.modelService.registry.get(next.registryId);
+    if (!provider?.config.capabilities.agent || !provider.supportsTools()) return false;
+    state.route = next;
+    state.handoffModelId = next.registryId;
+    this.store.emit(runId, "route.escalated", { tier: next.tier, modelId: next.registryId, reason, weight: next.weight });
+    return true;
   }
 
   /** Re-publish the run's remembered site (same URL) after its files changed. */
@@ -708,6 +754,10 @@ export class StreamingAgentRuntime {
       repositoryDetected: workspace.repositoryDetected,
       continuationNudges: 0,
       researchNudges: 0,
+      route: choice.route,
+      credits: 0,
+      creditBudget: choice.route && !choice.pinned ? runCreditBudget(choice.route.profile) : runCreditBudget("auto"),
+      failureStreak: 0,
       ...(toolFallbackReason ? { fallbackReason: toolFallbackReason, fallbackCount: 1 } : {}),
     });
 
@@ -1243,6 +1293,7 @@ export class StreamingAgentRuntime {
   /** Token accounting and the context breakdown for one streamed usage report. */
   private noteUsage(runId: string, state: RunState, provider: AIModelProvider, messages: AIMessage[], usage: TokenUsage): void {
     const total = this.store.addUsage(runId, usage);
+    this.noteCredits(runId, state, provider.config.id, usage);
     state.cachedTokensSum += Number(usage.cachedTokens ?? 0);
     state.promptTokensSum += Number(usage.promptTokens ?? 0);
     if (!total) return;
@@ -1321,6 +1372,7 @@ export class StreamingAgentRuntime {
       projectId: state.execution?.projectId ?? null,
       executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
       selectedModel: provider.config.id,
+      ...(state.route ? { route: { profile: state.route.profile, tier: state.route.tier, tiers: state.route.tiers, reason: state.route.reason }, creditBudget: state.creditBudget } : {}),
       ...(state.requestedModelId && state.requestedModelId !== provider.config.id
         ? { fallbackReason: `requested model "${state.requestedModelId}" resolved to "${provider.config.id}"` }
         : {}),
@@ -1508,6 +1560,9 @@ export class StreamingAgentRuntime {
 
         // Tool-call runaway guard, checked before the batch so no call is
         // left unanswered by stopping mid-batch.
+        if (state.creditsExceeded) {
+          return fail(`This task reached its credit budget (${Math.round(state.credits)} of ${state.creditBudget} credits). Send a follow-up to continue from here, or raise ORVYN_RUN_CREDITS_${(state.route?.profile ?? "auto").toUpperCase()}.`);
+        }
         const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
         if (capTools > 0 && state.toolCalls >= capTools) {
           return fail(`Run budget exceeded — tool calls: ${state.toolCalls}/${capTools}. Set ORVYN_RUN_MAX_TOOL_CALLS higher (0 disables).`);
@@ -1518,6 +1573,14 @@ export class StreamingAgentRuntime {
         // the ExecutionProvider's Tool RPC); one reply per call is appended.
         const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
         if (state.websiteBlocked) return fail(state.websiteBlocked);
+        // Three failed tool calls in a row: the current model is stuck — climb one step.
+        const batch = (this.store.get(runId)?.events ?? []).filter((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && calls.some((c) => c.id === e.data?.callId));
+        for (const e of batch) state.failureStreak = e.type === "tool.failed" ? state.failureStreak + 1 : 0;
+        if (state.failureStreak >= 3 && this.escalateRoute(runId, state, `${state.failureStreak} tool calls failed in a row.`)) state.failureStreak = 0;
+        if (state.creditWarned && !state.creditNoteSent) {
+          state.creditNoteSent = true;
+          messages.push({ role: "user", content: "Budget note: this task has used 80% of its credit budget. Finish the essential work now, verify it, and give your final answer; leave optional polish for a follow-up." });
+        }
         if (state.handoffModelId && !state.modelPinned) {
           const next = this.modelService.registry.get(state.handoffModelId);
           if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {
@@ -1613,6 +1676,8 @@ export class StreamingAgentRuntime {
             }
             this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
+            // A second failed check means the current model is not getting there: climb one step.
+            if (verification.verdict === "FAIL" && state.verifyRounds >= 2) this.escalateRoute(runId, state, `The independent check failed ${state.verifyRounds} times.`);
             messages.push({ role: "assistant", content: reply.content || "" });
             messages.push({ role: "user", content: findingsPrompt(verification, state.verifyRounds) });
             return { kind: "retry", reason: `verifier ${verification.verdict}: ${verification.findings[0]?.message ?? "no details"}` };

@@ -104,6 +104,29 @@ function fireworksConfig(
   };
 }
 
+/** An OpenAI-compatible provider model (Mistral, OpenRouter): same streaming and tool-call path. */
+function openAiCompatibleConfig(prefix: string, label: string, endpoint: string, id: string, apiKey: string, temperature: number, contextWindow: number): ModelConfig {
+  return {
+    id: `${prefix}:${id}`, apiModelId: id, name: `${label} ${id.split("/").pop() ?? id}`, provider: "openai-compatible",
+    endpoint: endpoint.replace(/\/v1\/?$/, ""),
+    apiKey, contextWindow, maxOutputTokens: 8192, defaultTemperature: temperature, defaultTopP: 1, streaming: true,
+    capabilities: { chat: true, code: true, agent: true, tools: true, vision: false, embeddings: false, completion: true, image: false },
+  };
+}
+
+/** Models ORVYN's routing policy uses from each provider (models/routingPolicy.ts). */
+const MISTRAL_MODELS: { id: string; context: number; temperature: number }[] = [
+  { id: "mistral-small-4-0-26-03", context: 128000, temperature: 0.3 },
+  { id: "codestral-25-08", context: 256000, temperature: 0.2 },
+  { id: "mistral-medium-3-5-26-04", context: 128000, temperature: 0.3 },
+  { id: "mistral-large-3-25-12", context: 128000, temperature: 0.3 },
+  { id: "zai-glm-5-3", context: 200000, temperature: 0.2 },
+];
+const OPENROUTER_MODELS: { id: string; context: number; temperature: number }[] = [
+  { id: "deepseek/deepseek-v3.2", context: 163840, temperature: 0.2 },
+  { id: "minimax/minimax-m2.5", context: 205000, temperature: 0.2 },
+];
+
 function geminiConfig(id: string, apiKey: string, temperature: number): ModelConfig {
   // Gemini exposes an OpenAI-compatible endpoint, allowing ORVYN to use the
   // same proven streaming/tool-call path instead of a nonfunctional placeholder.
@@ -254,9 +277,24 @@ export class ModelService {
       void this.hideUndeployedFireworksImages(fireworksKey);
     }
 
+    // Mistral (Small 4 utility, Codestral, Medium/Large, GLM 5.3) and OpenRouter
+    // (DeepSeek V3.2, MiniMax M2.5): cheap tiers of the routing policy.
+    const mistralKey = process.env.MISTRAL_API_KEY?.trim();
+    if (mistralKey) {
+      const endpoint = process.env.MISTRAL_BASE_URL?.trim() || "https://api.mistral.ai";
+      const extra = (process.env.MISTRAL_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean).map((id) => ({ id, context: 128000, temperature: 0.3 }));
+      for (const m of [...MISTRAL_MODELS, ...extra]) this.addModel(openAiCompatibleConfig("mistral", "Mistral", endpoint, m.id, mistralKey, m.temperature, m.context));
+    }
+    const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
+    if (openRouterKey) {
+      const endpoint = process.env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api";
+      const extra = (process.env.OPENROUTER_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean).map((id) => ({ id, context: 128000, temperature: 0.3 }));
+      for (const m of [...OPENROUTER_MODELS, ...extra]) this.addModel(openAiCompatibleConfig("openrouter", "OpenRouter", endpoint, m.id, openRouterKey, m.temperature, m.context));
+    }
+
     const geminiKey = (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)?.trim();
     if (geminiKey) {
-      const ids = (process.env.GEMINI_MODELS ?? process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite")
+      const ids = (process.env.GEMINI_MODELS ?? process.env.GEMINI_MODEL ?? "gemini-3.8-flash,gemini-2.5-flash-lite")
         .split(",").map((s) => s.trim()).filter(Boolean);
       for (const id of [...new Set(ids)]) this.addModel(geminiConfig(id, geminiKey, 0.3));
     }

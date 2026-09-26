@@ -606,7 +606,12 @@ export function WorkStream({
               flexShrink: 0,
             }}
           >
-            <span>● {modelLine}{fallback}</span>
+            <span>● {(() => { const esc = [...run.events].reverse().find((e) => e.type === "route.escalated")?.data as any; return esc?.modelId ? `${modelLine} → ${esc.modelId}` : modelLine; })()}{fallback}</span>
+            {started.route && <span data-testid="run-route" title={started.route.reason}>{String(started.route.profile).replace(/^./, (c: string) => c.toUpperCase())} agent</span>}
+            {(() => {
+              const c = [...run.events].reverse().find((e) => e.type === "run.credits")?.data as any;
+              return c ? <span data-testid="run-credits" title="Credits = model weight × tokens / 1000">{c.credits}{c.budget ? ` / ${c.budget}` : ""} credits</span> : null;
+            })()}
             {reasoning && <span>🧠 {reasoning}</span>}
             {started.permissionMode && <span>🛡 {started.permissionMode}</span>}
             {(exec?.executionLabel || exec?.location) && (

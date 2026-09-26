@@ -15,17 +15,21 @@ const ids = [
   laneModel("image-quality").registryId,
 ];
 
-test("routine auto coding uses DeepSeek V4.1 Flash, not GLM-5.3", () => {
-  const intent = inferTaskIntent("Fix the failing test.");
-  const choice = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: ids });
-  assert.equal(choice.registryId, laneModel("auto").registryId);
-  assert.equal(choice.lane, "auto");
+const withSonnet = [...ids, laneModel("premium-alt").registryId];
+
+test("coding work starts on Kimi K2.7 Code (the code agent), not GLM or premium", () => {
+  for (const [text, mode] of [["Fix the failing test.", "auto"], ["Refactor the auth module across the repo.", "code"]] as const) {
+    const choice = selectAgentModel({ intent: inferTaskIntent(text), composerMode: mode, requestedModelId: "auto", availableIds: ids });
+    assert.equal(choice.registryId, laneModel("frontend").registryId, text);
+    assert.equal(choice.lane, "code");
+    assert.equal(choice.route?.profile, "code");
+  }
 });
 
-test("code, server, and long-horizon work use GLM-5.3", () => {
-  const intent = inferTaskIntent("Refactor the auth module across the repo.");
-  const choice = selectAgentModel({ intent, composerMode: "code", requestedModelId: "auto", availableIds: ids });
-  assert.equal(choice.registryId, laneModel("engineering").registryId);
+test("routine non-coding agent work uses the cheap Auto model", () => {
+  const choice = selectAgentModel({ intent: inferTaskIntent("Create hello.txt with the text hi"), composerMode: "auto", requestedModelId: "auto", availableIds: ids });
+  assert.equal(choice.registryId, laneModel("auto").registryId);
+  assert.equal(choice.lane, "auto");
 });
 
 test("a website build uses Kimi K2.7 Code", () => {
@@ -36,50 +40,46 @@ test("a website build uses Kimi K2.7 Code", () => {
   assert.equal(choice.registryId, laneModel("frontend").registryId);
 });
 
+test("server work uses the server profile; without Gemini registered it starts on GLM-5.3", () => {
+  const choice = selectAgentModel({ intent: inferTaskIntent("Why is nginx returning 502 on my server?"), composerMode: "server", requestedModelId: "auto", availableIds: ids });
+  assert.equal(choice.route?.profile, "server");
+  assert.equal(choice.registryId, laneModel("engineering").registryId);
+  const gemini = selectAgentModel({ intent: inferTaskIntent("Why is nginx returning 502 on my server?"), composerMode: "server", requestedModelId: "auto", availableIds: [...ids, "gemini:gemini-3.8-flash"] });
+  assert.equal(gemini.registryId, "gemini:gemini-3.8-flash");
+});
+
 test("a pinned model is not replaced", () => {
   const intent = inferTaskIntent("Build a responsive dashboard and show it.");
-  const choice = selectAgentModel({
-    intent,
-    requestedModelId: "ci:gpt-5.6-luna",
-    availableIds: ids,
-  });
+  const choice = selectAgentModel({ intent, requestedModelId: "ci:gpt-5.6-luna", availableIds: ids });
   assert.equal(choice.pinned, true);
   assert.equal(choice.registryId, "ci:gpt-5.6-luna");
 });
 
-test("simple questions stay on the fast lane", () => {
+test("simple questions stay on the fast utility tier", () => {
   const intent = inferTaskIntent("What is a closure in JavaScript?");
   const choice = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids });
   assert.equal(choice.registryId, laneModel("fast").registryId);
 });
 
-test("escalation moves Auto to GLM-5.3 and then stops at premium", () => {
-  const intent = inferTaskIntent("Fix the failing test.");
-  const once = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 1 });
-  assert.equal(once.registryId, laneModel("engineering").registryId);
-  const twice = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 2 });
-  assert.equal(twice.registryId, laneModel("premium").registryId);
-});
-
-test("an unhealthy Auto model is skipped", () => {
-  const intent = inferTaskIntent("Fix the failing test.");
-  const choice = selectAgentModel({
-    intent,
-    requestedModelId: "auto",
-    availableIds: ids,
-    health: [{ registryId: laneModel("auto").registryId, failureRate: 0.8 }],
-  });
-  assert.equal(choice.registryId, laneModel("engineering").registryId);
-});
-
-test("website repairs escalate Kimi, then GLM-5.3, then GPT-5.6 Sol", () => {
+test("escalation climbs Kimi → GLM-5.3 → Claude Sonnet 5, never to GPT-5.6 Sol by itself", () => {
   const intent = inferTaskIntent("Build a polished responsive SaaS landing page and show it to me.");
-  const first = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 0 });
-  const second = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 1 });
-  const third = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, escalate: 2 });
-  assert.equal(first.registryId, laneModel("frontend").registryId);
-  assert.equal(second.registryId, laneModel("engineering").registryId);
-  assert.equal(third.registryId, laneModel("premium").registryId);
+  const at = (n: number) => selectAgentModel({ intent, requestedModelId: "auto", availableIds: withSonnet, escalate: n }).registryId;
+  assert.equal(at(0), laneModel("frontend").registryId);
+  assert.equal(at(1), laneModel("engineering").registryId);
+  assert.equal(at(2), laneModel("premium-alt").registryId);
+  assert.equal(at(3), laneModel("premium-alt").registryId, "the top of the ladder stays put");
+  assert.notEqual(at(5), laneModel("premium").registryId);
+});
+
+test("an unhealthy model is skipped", () => {
+  const intent = inferTaskIntent("Create hello.txt with the text hi");
+  const choice = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, health: [{ registryId: laneModel("auto").registryId, failureRate: 0.8 }] });
+  assert.equal(choice.registryId, laneModel("engineering").registryId, "Auto → (agent tier shares the unhealthy model) → heavy");
+});
+
+test("Premium (requested) puts GPT-5.6 Sol first", () => {
+  const choice = selectAgentModel({ intent: inferTaskIntent("Fix the failing test."), requestedModelId: "premium", availableIds: withSonnet });
+  assert.equal(choice.registryId, laneModel("premium").registryId);
 });
 
 test("image quality and edits stay on Kontext models", () => {
@@ -106,12 +106,12 @@ test("image quality and edits stay on Kontext models", () => {
   assert.equal(cannotEdit.registryId, null);
 });
 
-test("a thinking-heavy task goes to the strongest reasoning model; a pinned model still wins", () => {
+test("a thinking-heavy task goes to a strong reasoning model (not Sol by default); a pinned model still wins", () => {
   const intent = inferTaskIntent("What should we name our foundation model family?", "auto");
-  const deep = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: ids, deep: true });
-  assert.equal(deep.registryId, laneModel("premium").registryId);
-  const noPremium = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: ids.filter((i) => i !== laneModel("premium").registryId), deep: true });
-  assert.equal(noPremium.registryId, laneModel("engineering").registryId, "no premium model registered: the next strongest");
+  const deep = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: [...withSonnet, "gemini:gemini-3.8-flash"], deep: true });
+  assert.equal(deep.registryId, "gemini:gemini-3.8-flash", "Gemini 3.8 Flash first for deep questions");
+  const noGemini = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: withSonnet, deep: true });
+  assert.equal(noGemini.registryId, laneModel("premium-alt").registryId, "then Claude Sonnet 5 — GPT-5.6 Sol is not the default");
   const pinned = selectAgentModel({ intent, composerMode: "auto", requestedModelId: laneModel("fast").registryId, availableIds: ids, deep: true });
   assert.equal(pinned.registryId, laneModel("fast").registryId);
 });

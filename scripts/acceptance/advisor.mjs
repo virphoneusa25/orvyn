@@ -153,7 +153,7 @@ async function main() {
     await win.getByRole("button", { name: /Run mission/ }).click();
     ok(!!(await waitFor(async () => /My top three for Kernel AI/.test(await body()), 30_000, 300)), "1. the naming question was answered");
     const deepCall = calls.find((c) => c.last.includes(DEEP_Q) && !c.system.includes("You maintain a short memory"));
-    ok(deepCall?.model === "gpt-5.6-sol", `2. …by the strongest reasoning model (${deepCall?.model})`);
+    ok(deepCall?.model === "claude-sonnet-5", `2. …by a strong reasoning model (Claude Sonnet 5 here: no Gemini key), not GPT-5.6 Sol (${deepCall?.model})`);
     ok(/senior advisor/.test(deepCall?.system ?? "") && /Take a position/.test(deepCall?.system ?? ""), "1. …with the advisor style (take a position, go one step further, size to the question)");
     ok(!!(await waitFor(async () => (await win.locator("pre").count()) >= 1, 5_000, 200)), "1. the names are in a code block (with Copy)");
 
@@ -189,7 +189,7 @@ async function main() {
     await box.click(); await box.fill(QUICK_Q); await box.press("Enter");
     await waitFor(async () => calls.some((c) => c.last.includes(QUICK_Q)), 15_000, 200);
     const quick = calls.find((c) => c.last.includes(QUICK_Q));
-    ok(quick && quick.model !== "gpt-5.6-sol", `2. a quick question does not use the premium model (${quick?.model})`);
+    ok(quick && quick.model !== "gpt-5.6-sol" && quick.model !== "claude-sonnet-5", `2. a quick question does not use a premium model (${quick?.model})`);
 
     // 3. The Memory panel shows it under "About you", editable.
     await win.getByText(/^Memory$/).first().click();

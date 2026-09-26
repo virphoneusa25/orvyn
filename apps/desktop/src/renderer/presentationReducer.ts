@@ -339,6 +339,16 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "message.completed":
         flushAssistant(false);
         continue;
+      case "route.escalated": {
+        flushAssistant(false);
+        const model = String(e.data.modelId ?? "").split(/[:/]/).pop() ?? "";
+        items.push({ kind: "status", key: e.id, label: `Switched to a stronger model${model ? ` (${model})` : ""}: ${String(e.data.reason ?? "the work stalled")}`.slice(0, 160), ephemeral: false, tone: "working" });
+        continue;
+      }
+      case "run.credits.warning": {
+        items.push({ kind: "status", key: e.id, label: `80% of this task's credit budget used (${e.data.credits} of ${e.data.budget}) — finishing the essentials`, ephemeral: false, tone: "working" });
+        continue;
+      }
       case "message.retracted": {
         // ORION's unchecked reply was withdrawn (it goes to research first).
         if (textBuf) textBuf = "";

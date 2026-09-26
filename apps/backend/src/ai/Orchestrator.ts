@@ -5,7 +5,7 @@ const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
-import { laneModel } from "../models/certifiedModels";
+import { startRoute } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
 import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall } from "@orvyn/ai-core";
@@ -239,11 +239,12 @@ export class Orchestrator {
     }
     // Thinking-heavy questions (strategy, planning, naming, architecture, or
     // the user asked for deep reasoning) go to the strongest reasoning model.
+    // Routing policy: a strong reasoning model first (Gemini 3.8 Flash), Claude
+    // Sonnet 5 behind it; GPT-5.6 Sol only when ultra escalation is allowed.
     if (req.task === "chat" && isDeepQuestion(req.userMessage, req.reasoningEffort)) {
-      for (const lane of ["premium", "premium-alt", "engineering"] as const) {
-        const deep = this.modelService.registry.get(laneModel(lane).registryId);
-        if (deep && (deep.config.capabilities as any).chat !== false) return deep;
-      }
+      const route = startRoute({ profile: "deep", instruction: req.userMessage, availableIds: this.modelService.registry.list().map((p) => p.config.id) });
+      const deep = route.registryId ? this.modelService.registry.get(route.registryId) : undefined;
+      if (deep && (deep.config.capabilities as any).chat !== false) return deep;
     }
     return this.modelService.router.resolve(req.task);
   }
