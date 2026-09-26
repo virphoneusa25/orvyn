@@ -133,7 +133,8 @@ function harness(
 }
 
 function toolCallChunk(id: string, name: string): AIChunk {
-  return { delta: "", toolCall: { id, name, arguments: { path: `${name}.ts` } }, done: false };
+  const args = name === "write_file" ? { path: `${name}.ts`, content: "body" } : { path: `${name}.ts` };
+  return { delta: "", toolCall: { id, name, arguments: args }, done: false };
 }
 
 async function waitForStatus(store: RunStore, runId: string, timeoutMs = 4_000): Promise<string> {

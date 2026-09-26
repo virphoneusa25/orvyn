@@ -45,12 +45,17 @@ const REQUIRED_BY_TOOL: Record<string, string[]> = {
   ssh_exec: ["host", "command"],
   remote_exec: ["resourceId", "command"],
   read_file: ["path"],
-  write_file: ["path"],
+  write_file: ["path", "content"],
   edit_file: ["path"],
   delete_file: ["path"],
   terminal: ["command"],
   run_command: ["command"],
 };
+
+/** Schema required fields plus the arguments this tool cannot run without. */
+export function requiredArgumentNames(name: string, schema?: ToolParameterSchema): string[] {
+  return [...new Set([...(schema?.required ?? []), ...(REQUIRED_BY_TOOL[name] ?? [])])];
+}
 
 /** A website is published from the files the agent writes. A shell server is not available. */
 export function shellServerRefusal(command: string, frontend: boolean): string | null {
@@ -63,20 +68,38 @@ export function validateToolArguments(
   name: string,
   raw: unknown,
   schema?: ToolParameterSchema
-): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+): { ok: true; args: Record<string, unknown> } | {
+  ok: false;
+  error: string;
+  errorType: "INVALID_ARGUMENTS";
+  missing: string[];
+  invalid: string[];
+  retryable: true;
+} {
   const args = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const required = [...new Set([...(schema?.required ?? []), ...(REQUIRED_BY_TOOL[name] ?? [])])];
+  const required = requiredArgumentNames(name, schema);
+  const missing: string[] = [];
+  const invalid: string[] = [];
   for (const field of required) {
     const value = args[field];
     if (value == null || (typeof value === "string" && value.trim() === "")) {
-      if (name === "ssh_exec" || name === "remote_exec") {
-        return {
-          ok: false,
-          error: `${name} needs a non-empty ${field}. Do not call it with an empty host or command. If no server is connected, stop and ask for one.`,
-        };
-      }
-      return { ok: false, error: `${name} is missing required argument "${field}".` };
+      missing.push(field);
+      continue;
     }
+    const expected = schema?.properties?.[field]?.type;
+    if (expected === "string" && typeof value !== "string") invalid.push(field);
+    else if ((expected === "number" || expected === "integer") && (typeof value !== "number" || !Number.isFinite(value))) invalid.push(field);
+    else if (expected === "boolean" && typeof value !== "boolean") invalid.push(field);
+    else if (expected === "array" && !Array.isArray(value)) invalid.push(field);
+    else if (expected === "object" && (value == null || typeof value !== "object" || Array.isArray(value))) invalid.push(field);
   }
-  return { ok: true, args };
+  if (missing.length === 0 && invalid.length === 0) return { ok: true, args };
+  const quote = (names: string[]) => names.map((field) => `"${field}"`).join(", ");
+  const parts: string[] = [];
+  if (missing.length) parts.push(`${name} is missing required argument${missing.length === 1 ? "" : "s"} ${quote(missing)}.`);
+  if (invalid.length) parts.push(`${name} has invalid argument${invalid.length === 1 ? "" : "s"} ${quote(invalid)}.`);
+  if (name === "ssh_exec" || name === "remote_exec") {
+    parts.push("Do not call it with an empty host or command. If no server is connected, stop and ask for one.");
+  }
+  return { ok: false, error: parts.join(" "), errorType: "INVALID_ARGUMENTS", missing, invalid, retryable: true };
 }

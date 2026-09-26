@@ -54,7 +54,17 @@ import { inspectWorkspace } from "./workspaceContext";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
-import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
+import { selectToolNames, shellServerRefusal, validateToolArguments, type ToolParameterSchema } from "./toolPolicy";
+import {
+  MALFORMED_CALL_LIMIT,
+  classifyExecutedToolFailure,
+  countsTowardModelEscalation,
+  executedFailurePayload,
+  invalidArgumentsPayload,
+  normalizeErrorType,
+  permissionDeniedPayload,
+  workspaceSnapshot,
+} from "./toolFailure";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
@@ -135,6 +145,10 @@ interface RunState {
   extraProviderCalls: number;
   /** Failed call fingerprints prevent the model from looping on the exact same broken action. */
   failedFingerprints: Map<string, number>;
+  /** Identical invalid-argument calls. Schema mistakes may be corrected; the same mistake stops after MALFORMED_CALL_LIMIT. */
+  malformedFingerprints: Map<string, number>;
+  /** Set when the same invalid call has been repeated enough times to stop the run. */
+  argumentLoopStop?: string;
   /** Remote execution spec; when OVH_WORKER the coding tools route over Tool RPC. */
   execution?: ExecutionSpec;
   /** Local tools replaced by remote variants for this run (restored on settle). */
@@ -955,6 +969,7 @@ export class StreamingAgentRuntime {
       fallbackCount: 0,
       extraProviderCalls: 0,
       failedFingerprints: new Map(),
+      malformedFingerprints: new Map(),
       execution,
       mode,
       reasoningEffort: options?.reasoningEffort ?? "auto",
@@ -1861,9 +1876,18 @@ export class StreamingAgentRuntime {
         // the ExecutionProvider's Tool RPC); one reply per call is appended.
         const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
         if (state.websiteBlocked) return fail(state.websiteBlocked);
-        // Three failed tool calls in a row: the current model is stuck — climb one step.
+        if (state.argumentLoopStop) return fail(state.argumentLoopStop);
+        // Three real tool failures in a row: the current model is stuck — climb one step.
+        // INVALID_ARGUMENTS is a correctable schema mistake and does not climb by itself.
         const batch = (this.store.get(runId)?.events ?? []).filter((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && calls.some((c) => c.id === e.data?.callId));
-        for (const e of batch) state.failureStreak = e.type === "tool.failed" ? state.failureStreak + 1 : 0;
+        for (const e of batch) {
+          if (e.type !== "tool.failed") {
+            state.failureStreak = 0;
+            continue;
+          }
+          if (!countsTowardModelEscalation(normalizeErrorType(e.data?.errorType))) continue;
+          state.failureStreak += 1;
+        }
         state.readOnlyStreak = calls.length > 0 && calls.every((c) => isReadOnlyCall(c.name, c.arguments)) ? state.readOnlyStreak + 1 : 0;
         if (state.failureStreak >= 3 && this.escalateRoute(runId, state, `${state.failureStreak} tool calls failed in a row.`)) state.failureStreak = 0;
         if (state.creditWarned && !state.creditNoteSent) {
@@ -2105,7 +2129,7 @@ export class StreamingAgentRuntime {
       const websiteBuild = Boolean(state.website) && isBuildCommand(command);
       if (priorFailures > 0 && !websiteBuild) {
         const message = `Blocked identical retry after ${priorFailures} prior failure${priorFailures === 1 ? "" : "s"}. Change the arguments or use a different approach.`;
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, repeated: true, envelope: this.refusalEnvelope(state, call, message) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "EXECUTION_FAILED", retryable: false, repeated: true, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
         continue;
       }
@@ -2113,7 +2137,7 @@ export class StreamingAgentRuntime {
       // A tool the model invented: find one to install instead of failing.
       if (!this.isKnownTool(call.name)) {
         const message = `There is no tool named "${call.name}" in this run.`;
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, envelope: this.refusalEnvelope(state, call, message) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
         gaps.set(call.id, capabilityGapFor({ toolName: call.name, error: message, unknownTool: true })!);
         continue;
@@ -2121,7 +2145,7 @@ export class StreamingAgentRuntime {
 
       const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend);
       if ((call.name === "terminal" || call.name === "run_command") && shellRefusal) {
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal, envelope: this.refusalEnvelope(state, call, shellRefusal) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, shellRefusal) });
         replies.set(call.id, shellRefusal);
         continue;
       }
@@ -2129,7 +2153,7 @@ export class StreamingAgentRuntime {
       const sitePath = String((call.arguments as { path?: unknown; from?: unknown } | undefined)?.path ?? (call.arguments as { from?: unknown } | undefined)?.from ?? "");
       const siteRefusal = siteWriteRefusal(state.websiteLayout, call.name, sitePath);
       if (siteRefusal) {
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: siteRefusal, envelope: this.refusalEnvelope(state, call, siteRefusal) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: siteRefusal, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, siteRefusal) });
         replies.set(call.id, siteRefusal);
         continue;
       }
@@ -2139,32 +2163,54 @@ export class StreamingAgentRuntime {
         const message = folder
           ? `Do not open the sandbox desktop. Write the new site under ${folder}/. Do not replace site files that were already written.`
           : "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, envelope: this.refusalEnvelope(state, call, message) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
         continue;
       }
 
       if (/^git_/.test(call.name) && !state.repositoryDetected) {
         const message = "Git tools are unavailable because preflight did not find a repository.";
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, envelope: this.refusalEnvelope(state, call, message) });
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
         continue;
       }
 
       const spec = this.tools.list().find((t) => t.name === call.name);
-      const validated = validateToolArguments(call.name, call.arguments, spec?.parameters as { required?: string[] } | undefined);
+      const schema = spec?.parameters as ToolParameterSchema | undefined;
+      const validated = validateToolArguments(call.name, call.arguments, schema);
       if (!validated.ok) {
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: validated.error, envelope: this.refusalEnvelope(state, call, validated.error) });
-        replies.set(call.id, validated.error);
-        state.failedFingerprints.set(fingerprint, priorFailures + 1);
+        const seen = (state.malformedFingerprints.get(fingerprint) ?? 0) + 1;
+        state.malformedFingerprints.set(fingerprint, seen);
+        const blocked = seen >= MALFORMED_CALL_LIMIT;
+        const feedback = invalidArgumentsPayload({
+          tool: call.name,
+          missing: validated.missing,
+          invalid: validated.invalid,
+          schema,
+          blocked,
+        });
+        this.store.emit(runId, "tool.failed", {
+          callId: call.id,
+          tool: call.name,
+          error: feedback.error,
+          errorType: "INVALID_ARGUMENTS",
+          missing: validated.missing,
+          invalid: validated.invalid,
+          retryable: feedback.retryable,
+          blocked,
+          envelope: this.refusalEnvelope(state, call, feedback.error),
+        });
+        replies.set(call.id, feedback.modelText);
+        if (blocked && !state.argumentLoopStop) state.argumentLoopStop = feedback.error;
         continue;
       }
       call.arguments = validated.args;
 
       const permission = this.tools.getPermission(call.name);
       if (permission === "denied") {
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: "Denied by project permissions", envelope: this.refusalEnvelope(state, call, "Denied by project permissions") });
-        replies.set(call.id, `Tool "${call.name}" is denied by project permissions. Try another approach.`);
+        const denied = permissionDeniedPayload(call.name);
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: denied.error, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, denied.error) });
+        replies.set(call.id, denied.modelText);
         continue;
       }
 
@@ -2220,12 +2266,15 @@ export class StreamingAgentRuntime {
         this.store.setStatus(runId, "running");
 
         if (!approved) {
-          replies.set(
-            call.id,
-            timedOut
-              ? "The approval was not answered in time and was denied automatically. Do not repeat the identical action; continue with an alternative."
-              : "The user denied this action. Do not repeat it; consider an alternative."
-          );
+          const denialMessage = timedOut
+            ? "The approval was not answered in time and was denied automatically. Do not repeat the identical action; continue with an alternative."
+            : "The user denied this action. Do not repeat it; consider an alternative.";
+          replies.set(call.id, JSON.stringify({
+            ok: false,
+            errorType: timedOut ? "TIMEOUT" : "PERMISSION_DENIED",
+            retryable: false,
+            message: denialMessage,
+          }));
           continue;
         }
       }
@@ -2375,7 +2424,7 @@ export class StreamingAgentRuntime {
           state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
           anySucceeded = false;
           const error = "Generation produced no persisted artifact. No file was saved.";
-          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error, envelope: envelopeForEvent(envelopeFor({ ok: false, error })) });
+          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error, errorType: "EXECUTION_FAILED", retryable: false, envelope: envelopeForEvent(envelopeFor({ ok: false, error })) });
           replies.set(call.id, `The tool "${call.name}" FAILED:\n${error}\n\nDo not tell the user a file was generated, saved, attached, or is in Files → Generated.`);
           return;
         }
@@ -2448,13 +2497,21 @@ export class StreamingAgentRuntime {
         const fullError = result.error ?? "unknown error";
         // A failing command with a huge output (a build log) is condensed for the model too.
         const error = shouldCondense(call.name, fullError) ? await this.condenseForModel(runId, state, call, fullError, command) : fullError;
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error, envelope: envelopeForEvent(envelope) });
+        const errorType = classifyExecutedToolFailure(error);
+        const requestedPath = String(toolArgs.path ?? toolArgs.file ?? toolArgs.from ?? "");
+        const workspace = errorType === "RESOURCE_MISSING" ? workspaceSnapshot(workspaceRoot, requestedPath) : undefined;
+        this.store.emit(runId, "tool.failed", {
+          callId: call.id,
+          tool: call.name,
+          error,
+          errorType,
+          retryable: errorType === "TIMEOUT" || errorType === "TRANSIENT_PROVIDER_ERROR",
+          ...(workspace ? { workspace } : {}),
+          envelope: envelopeForEvent(envelope),
+        });
         this.noteWebsiteFailure(runId, state, call.name, command, error);
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
-        replies.set(
-          call.id,
-          `The tool "${call.name}" FAILED:\n${error}\n\nDiagnose and try a different approach. Do not repeat the identical call.`
-        );
+        replies.set(call.id, executedFailurePayload({ tool: call.name, error, errorType, workspace }));
         const gap = capabilityGapFor({ toolName: call.name, error: fullError });
         if (gap) gaps.set(call.id, gap);
       }
