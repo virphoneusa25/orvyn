@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_linux_install",
+  "slug": "linux-application-installation",
+  "name": "Linux Application Installation",
+  "version": "1.0.0",
+  "description": "Install a Linux application from the package manager or source method the host and project actually use.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "linux application installation",
+    "install the linux package",
+    "package manager install"
+  ],
+  "taskDomains": [
+    "systems",
+    "linux"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "read_process_logs",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The install command was taken from the distro or the project files. The service or binary was checked after install."
+  },
+  "tags": [
+    "linux",
+    "install"
+  ],
+  "scope": "builtin"
+}

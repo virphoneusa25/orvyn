@@ -1,0 +1,76 @@
+{
+  "id": "skill_sys_upstream",
+  "slug": "upstream-project-analysis",
+  "name": "Upstream Project Analysis",
+  "version": "1.0.0",
+  "description": "Separate upstream behavior from local modifications using the repo, releases, and changelog.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "upstream project analysis",
+    "upstream versus local",
+    "changelog and releases"
+  ],
+  "taskDomains": [
+    "systems",
+    "upstream"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "git_log",
+    "git_status",
+    "git_diff",
+    "read_file"
+  ],
+  "optionalTools": [
+    "web_search",
+    "fetch_url",
+    "read_document"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "git_log",
+      "reason": "See upstream history versus local commits."
+    },
+    {
+      "id": "git_status",
+      "reason": "See which files are locally modified."
+    },
+    {
+      "id": "git_diff",
+      "reason": "Read the local diff before treating it as upstream behavior."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read a readme, changelog, or spec."
+    }
+  ],
+  "validation": {
+    "rule": "Upstream behavior and local modifications were distinguished using git or the changelog that was read."
+  },
+  "tags": [
+    "upstream",
+    "opensource"
+  ],
+  "scope": "builtin"
+}

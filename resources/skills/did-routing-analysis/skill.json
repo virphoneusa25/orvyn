@@ -1,0 +1,61 @@
+{
+  "id": "skill_tel_did",
+  "slug": "did-routing-analysis",
+  "name": "DID Routing Analysis",
+  "version": "1.0.0",
+  "description": "Trace a DID from the number in the request to the route or extension that answered it.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "did routing analysis",
+    "did translation",
+    "inbound number route"
+  ],
+  "taskDomains": [
+    "telecom",
+    "routing"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "edit_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    }
+  ],
+  "validation": {
+    "rule": "The DID and the route it hit were cited from config or a log. A translation was not guessed."
+  },
+  "tags": [
+    "did",
+    "routing"
+  ],
+  "scope": "builtin"
+}

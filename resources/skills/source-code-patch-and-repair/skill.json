@@ -1,0 +1,76 @@
+{
+  "id": "skill_sys_patch",
+  "slug": "source-code-patch-and-repair",
+  "name": "Source Code Patch & Repair",
+  "version": "1.0.0",
+  "description": "Patch unfamiliar source by finding the call path and changing only that code.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "startup failure",
+    "source code patch and repair",
+    "minimal source repair"
+  ],
+  "taskDomains": [
+    "systems",
+    "code"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "run_tests",
+    "run_typecheck",
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project tests after a code change."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck after a code change when the project has a typecheck."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    }
+  ],
+  "validation": {
+    "rule": "The patch is limited to the code path that was read, and a compile, typecheck, or test result was reported."
+  },
+  "tags": [
+    "patch",
+    "source"
+  ],
+  "scope": "builtin"
+}

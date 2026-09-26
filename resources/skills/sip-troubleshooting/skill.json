@@ -1,0 +1,66 @@
+{
+  "id": "skill_tel_sip",
+  "slug": "sip-troubleshooting",
+  "name": "SIP Troubleshooting",
+  "version": "1.0.0",
+  "description": "Separate a SIP failure into signaling, routing, authentication, NAT, media, codec, carrier response, or endpoint behavior.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "sip call",
+    "sip troubleshooting",
+    "sip response code"
+  ],
+  "taskDomains": [
+    "telecom",
+    "sip"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "read_process_logs",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The SIP response or log line was cited, and the fault class was one the evidence supports."
+  },
+  "tags": [
+    "sip",
+    "signaling"
+  ],
+  "scope": "builtin"
+}

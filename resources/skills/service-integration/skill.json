@@ -1,0 +1,76 @@
+{
+  "id": "skill_sys_service_integration",
+  "slug": "service-integration",
+  "name": "Service Integration",
+  "version": "1.0.0",
+  "description": "Connect an application to systemd, containers, a proxy, a database, Redis, a queue, or a network service.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "service integration",
+    "wire the service",
+    "connect the daemon"
+  ],
+  "taskDomains": [
+    "systems",
+    "integration"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec",
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    }
+  ],
+  "validation": {
+    "rule": "The integration target was identified from config or code, and the change was verified against that service."
+  },
+  "tags": [
+    "integration",
+    "services"
+  ],
+  "scope": "builtin"
+}

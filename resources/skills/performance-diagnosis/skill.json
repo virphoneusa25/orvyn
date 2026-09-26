@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_performance",
+  "slug": "performance-diagnosis",
+  "name": "Performance Diagnosis",
+  "version": "1.0.0",
+  "description": "Name the bottleneck from CPU, memory, disk, latency, or connection evidence before talking about scale.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "performance diagnosis",
+    "likely bottleneck",
+    "latency evidence"
+  ],
+  "taskDomains": [
+    "systems",
+    "performance"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "terminal",
+    "read_process_logs",
+    "list_processes"
+  ],
+  "optionalTools": [
+    "read_file",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "list_processes",
+      "reason": "See which process is listening or failing."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "A bottleneck was named from evidence. Scaling was not recommended before that evidence."
+  },
+  "tags": [
+    "performance",
+    "diagnosis"
+  ],
+  "scope": "builtin"
+}

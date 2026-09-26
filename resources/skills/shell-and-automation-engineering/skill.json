@@ -1,0 +1,61 @@
+{
+  "id": "skill_sys_shell",
+  "slug": "shell-and-automation-engineering",
+  "name": "Shell & Automation Engineering",
+  "version": "1.0.0",
+  "description": "Write or repair shell automation that matches the host shell and fails visibly.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "shell and automation engineering",
+    "shell script repair",
+    "automation script"
+  ],
+  "taskDomains": [
+    "systems",
+    "scripting"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "edit_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The script was read before editing, and a run of the changed script was reported."
+  },
+  "tags": [
+    "shell",
+    "automation"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,76 @@
+{
+  "id": "skill_tel_yeti",
+  "slug": "yeti-class-4-engineering",
+  "name": "Yeti Class 4 Engineering",
+  "version": "1.0.0",
+  "description": "Inspect Yeti routing, CDR, and switch integration from the config and the database it uses.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "yeti",
+    "yeti class 4",
+    "yeti routing"
+  ],
+  "taskDomains": [
+    "telecom",
+    "yeti"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "terminal",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The Yeti route or CDR path was cited from config or a query result that was read."
+  },
+  "tags": [
+    "yeti",
+    "routing"
+  ],
+  "scope": "builtin"
+}

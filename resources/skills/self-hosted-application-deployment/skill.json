@@ -1,0 +1,76 @@
+{
+  "id": "skill_sys_self_hosted",
+  "slug": "self-hosted-application-deployment",
+  "name": "Self-Hosted Application Deployment",
+  "version": "1.0.0",
+  "description": "Deploy a self-hosted application with the method its files already describe.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "self-hosted application deployment",
+    "deploy the self-hosted app",
+    "self hosted rollout"
+  ],
+  "taskDomains": [
+    "systems",
+    "deployment"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The deployment method came from the project, and a health check or process check confirmed it is running."
+  },
+  "tags": [
+    "deploy",
+    "self-hosted"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_network",
+  "slug": "network-service-engineering",
+  "name": "Network Service Engineering",
+  "version": "1.0.0",
+  "description": "Diagnose an arbitrary TCP or UDP service from listeners, DNS, routes, and the protocol you observed.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "network service engineering",
+    "tcp or udp service",
+    "listener and upstream"
+  ],
+  "taskDomains": [
+    "systems",
+    "network"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "terminal",
+    "list_processes",
+    "read_file"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "read_process_logs"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "list_processes",
+      "reason": "See which process is listening or failing."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    }
+  ],
+  "validation": {
+    "rule": "Listeners, bind address, ports, and the path that failed were cited. The fault was not assumed to be the firewall."
+  },
+  "tags": [
+    "network",
+    "tcp"
+  ],
+  "scope": "builtin"
+}

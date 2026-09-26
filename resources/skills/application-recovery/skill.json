@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_recovery",
+  "slug": "application-recovery",
+  "name": "Application Recovery",
+  "version": "1.0.0",
+  "description": "Restore a failed application to the last known-good process state without a blind reinstall.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "application recovery",
+    "restore the service",
+    "failed application start"
+  ],
+  "taskDomains": [
+    "systems",
+    "recovery"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_process_logs",
+    "read_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "edit_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    }
+  ],
+  "validation": {
+    "rule": "The recovery step was tied to the error that was read, and the process was checked afterward."
+  },
+  "tags": [
+    "recovery",
+    "service"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,81 @@
+{
+  "id": "skill_tel_freeswitch",
+  "slug": "freeswitch-engineering",
+  "name": "FreeSWITCH Engineering",
+  "version": "1.0.0",
+  "description": "Inspect, configure, build, and verify FreeSWITCH as an open-source switch.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "freeswitch",
+    "freeswitch engineering",
+    "freeswitch sofia"
+  ],
+  "taskDomains": [
+    "telecom",
+    "freeswitch"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec",
+    "run_tests"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project tests after a code change."
+    }
+  ],
+  "validation": {
+    "rule": "FreeSWITCH config or source was read before an edit, and a reload or call check was reported."
+  },
+  "tags": [
+    "freeswitch",
+    "telecom"
+  ],
+  "scope": "builtin"
+}

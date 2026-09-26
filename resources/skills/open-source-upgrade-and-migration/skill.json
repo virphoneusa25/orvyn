@@ -1,0 +1,81 @@
+{
+  "id": "skill_sys_upgrade",
+  "slug": "open-source-upgrade-and-migration",
+  "name": "Open Source Upgrade & Migration",
+  "version": "1.0.0",
+  "description": "Upgrade or migrate an open-source application using its own migration notes.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "open source upgrade",
+    "migration notes",
+    "upgrade the application"
+  ],
+  "taskDomains": [
+    "systems",
+    "upgrade"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "read_document",
+    "web_search"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "terminal",
+    "git_log"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "read_document",
+      "reason": "Read a readme, changelog, or spec."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "git_log",
+      "reason": "See upstream history versus local commits."
+    }
+  ],
+  "validation": {
+    "rule": "The upgrade followed migration notes that were read. Local modifications were identified before the upgrade."
+  },
+  "tags": [
+    "upgrade",
+    "migration"
+  ],
+  "scope": "builtin"
+}

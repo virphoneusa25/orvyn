@@ -1,0 +1,76 @@
+{
+  "id": "skill_tel_opensips",
+  "slug": "opensips-engineering",
+  "name": "OpenSIPS Engineering",
+  "version": "1.0.0",
+  "description": "Inspect, configure, build, and verify OpenSIPS from its cfg and modules.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "opensips",
+    "opensips engineering",
+    "opensips cfg"
+  ],
+  "taskDomains": [
+    "telecom",
+    "opensips"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The OpenSIPS route or module in the failure was read before it was edited, and a config check was reported."
+  },
+  "tags": [
+    "opensips",
+    "telecom"
+  ],
+  "scope": "builtin"
+}

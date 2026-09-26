@@ -1,0 +1,56 @@
+{
+  "id": "skill_tel_ladder",
+  "slug": "sip-ladder-analysis",
+  "name": "SIP Ladder Analysis",
+  "version": "1.0.0",
+  "description": "Read a SIP ladder in order and name the first response that diverges from the expected dialog.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "sip ladder analysis",
+    "sip dialog ladder",
+    "first diverging response"
+  ],
+  "taskDomains": [
+    "telecom",
+    "sip"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    }
+  ],
+  "validation": {
+    "rule": "The ladder order and the first diverging status were quoted from the capture or log."
+  },
+  "tags": [
+    "sip",
+    "ladder"
+  ],
+  "scope": "builtin"
+}

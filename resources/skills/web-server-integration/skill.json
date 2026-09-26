@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_web_server",
+  "slug": "web-server-integration",
+  "name": "Web Server Integration",
+  "version": "1.0.0",
+  "description": "Attach an application to the reverse proxy or web server its config already points at.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "web server integration",
+    "reverse proxy upstream",
+    "proxy the application"
+  ],
+  "taskDomains": [
+    "systems",
+    "proxy"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The upstream and the server name were read from the proxy config before it was edited."
+  },
+  "tags": [
+    "proxy",
+    "integration"
+  ],
+  "scope": "builtin"
+}

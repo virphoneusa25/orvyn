@@ -1,0 +1,66 @@
+{
+  "id": "skill_tel_interop",
+  "slug": "carrier-interop-testing",
+  "name": "Carrier Interop Testing",
+  "version": "1.0.0",
+  "description": "Compare a carrier's documented interop behavior with the response captured on this call.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "carrier interop testing",
+    "carrier response capture",
+    "interop test call"
+  ],
+  "taskDomains": [
+    "telecom",
+    "interop"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_process_logs",
+    "read_file",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "web_search",
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    }
+  ],
+  "validation": {
+    "rule": "The carrier response was quoted from a capture. An interop claim was not made without that quote."
+  },
+  "tags": [
+    "interop",
+    "carrier"
+  ],
+  "scope": "builtin"
+}

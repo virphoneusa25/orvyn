@@ -1,0 +1,71 @@
+{
+  "id": "skill_sys_rust",
+  "slug": "rust-application-engineering",
+  "name": "Rust Application Engineering",
+  "version": "1.0.0",
+  "description": "Work in a Rust crate using Cargo.toml and the crate's own checks.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "rust application engineering",
+    "cargo crate layout",
+    "cargo.toml workflow"
+  ],
+  "taskDomains": [
+    "systems",
+    "rust"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "run_tests"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project tests after a code change."
+    }
+  ],
+  "validation": {
+    "rule": "Cargo.toml was read and the Cargo command came from the crate. Coding Agent was not replaced."
+  },
+  "tags": [
+    "rust",
+    "language"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,61 @@
+{
+  "id": "skill_sys_tls",
+  "slug": "tls-and-certificate-engineering",
+  "name": "TLS & Certificate Engineering",
+  "version": "1.0.0",
+  "description": "Inspect a certificate and the listener that presents it, without exposing the private key.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "tls and certificate engineering",
+    "certificate expiration",
+    "hostname mismatch"
+  ],
+  "taskDomains": [
+    "systems",
+    "tls"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "terminal",
+    "read_file"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The certificate subject, dates, and hostname check were reported. The private key was not printed."
+  },
+  "tags": [
+    "tls",
+    "certificates"
+  ],
+  "scope": "builtin"
+}

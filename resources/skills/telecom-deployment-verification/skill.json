@@ -1,0 +1,66 @@
+{
+  "id": "skill_tel_deploy",
+  "slug": "telecom-deployment-verification",
+  "name": "Telecom Deployment Verification",
+  "version": "1.0.0",
+  "description": "Confirm a telecom service is listening and answering the check the project defines after a deploy.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "telecom deployment verification",
+    "sip listener check",
+    "switch health after deploy"
+  ],
+  "taskDomains": [
+    "telecom",
+    "deployment"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "terminal",
+    "list_processes",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "ssh_exec",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "list_processes",
+      "reason": "See which process is listening or failing."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The listener and a protocol check were reported. Process start alone was not called a successful deploy."
+  },
+  "tags": [
+    "deploy",
+    "telecom"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,56 @@
+{
+  "id": "skill_tel_codec",
+  "slug": "codec-transcoding-analysis",
+  "name": "Codec / Transcoding Analysis",
+  "version": "1.0.0",
+  "description": "Compare offered codecs with the codec that was selected and any transcoder in the path.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "codec transcoding",
+    "offered codecs",
+    "transcoder path"
+  ],
+  "taskDomains": [
+    "telecom",
+    "media"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_process_logs",
+    "read_file"
+  ],
+  "optionalTools": [
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    }
+  ],
+  "validation": {
+    "rule": "The offered list and the selected codec were quoted. A transcode was not assumed."
+  },
+  "tags": [
+    "codec",
+    "media"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,61 @@
+{
+  "id": "skill_sys_config",
+  "slug": "application-configuration",
+  "name": "Application Configuration",
+  "version": "1.0.0",
+  "description": "Edit YAML, JSON, TOML, INI, XML, env, or app-specific config without throwing away the rest of the file.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "built and configured",
+    "application configuration",
+    "edit the config file"
+  ],
+  "taskDomains": [
+    "systems",
+    "config"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "search_files",
+    "find_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "search_files",
+      "reason": "Find files by name in an unfamiliar tree."
+    },
+    {
+      "id": "find_file",
+      "reason": "Locate a build or config file by name."
+    }
+  ],
+  "validation": {
+    "rule": "The edit preserved comments and surrounding formatting. The whole file was not replaced without a reason."
+  },
+  "tags": [
+    "config",
+    "yaml"
+  ],
+  "scope": "builtin"
+}

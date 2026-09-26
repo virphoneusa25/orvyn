@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_dependency",
+  "slug": "dependency-and-library-diagnosis",
+  "name": "Dependency & Library Diagnosis",
+  "version": "1.0.0",
+  "description": "Identify a missing or conflicting library from the build or runtime error and the lock or manifest.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "dependency and library diagnosis",
+    "missing library",
+    "shared library error"
+  ],
+  "taskDomains": [
+    "systems",
+    "dependencies"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "terminal"
+  ],
+  "optionalTools": [
+    "web_search",
+    "fetch_url"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    }
+  ],
+  "validation": {
+    "rule": "The missing or conflicting library was named from an error and a manifest. A version was not guessed."
+  },
+  "tags": [
+    "dependencies",
+    "libraries"
+  ],
+  "scope": "builtin"
+}

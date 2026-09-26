@@ -1,0 +1,61 @@
+{
+  "id": "skill_sys_auth",
+  "slug": "authentication-and-identity-integration",
+  "name": "Authentication & Identity Integration",
+  "version": "1.0.0",
+  "description": "Wire authentication using the provider and the claims the configuration already names.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "authentication and identity integration",
+    "identity provider wiring",
+    "auth claims"
+  ],
+  "taskDomains": [
+    "systems",
+    "auth"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "fetch_url",
+    "web_search"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    }
+  ],
+  "validation": {
+    "rule": "The issuer, audience, and claim names were read from config or docs. No secret was printed."
+  },
+  "tags": [
+    "auth",
+    "identity"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_api",
+  "slug": "api-integration",
+  "name": "API Integration",
+  "version": "1.0.0",
+  "description": "Call or expose an HTTP API using the contract the code or the docs already state.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "api integration",
+    "http api client",
+    "external api contract"
+  ],
+  "taskDomains": [
+    "systems",
+    "api"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase",
+    "fetch_url"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "web_search"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    }
+  ],
+  "validation": {
+    "rule": "The endpoint, method, and auth the integration uses were read from code or docs before any edit."
+  },
+  "tags": [
+    "api",
+    "integration"
+  ],
+  "scope": "builtin"
+}

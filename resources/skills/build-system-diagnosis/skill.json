@@ -1,0 +1,71 @@
+{
+  "id": "skill_sys_build_system",
+  "slug": "build-system-diagnosis",
+  "name": "Build System Diagnosis",
+  "version": "1.0.0",
+  "description": "Explain a build failure from the generator and the error, then change only the failing part.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "build system diagnosis",
+    "build failed",
+    "generator error"
+  ],
+  "taskDomains": [
+    "systems",
+    "build"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "find_file",
+    "terminal"
+  ],
+  "optionalTools": [
+    "edit_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "find_file",
+      "reason": "Locate a build or config file by name."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    }
+  ],
+  "validation": {
+    "rule": "The failing target and the build system were named from the log and the project files."
+  },
+  "tags": [
+    "build",
+    "diagnosis"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,61 @@
+{
+  "id": "skill_sys_database",
+  "slug": "database-application-integration",
+  "name": "Database Application Integration",
+  "version": "1.0.0",
+  "description": "Connect an application to the database its config names, without inventing a schema.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "database application integration",
+    "application database url",
+    "persistence wiring"
+  ],
+  "taskDomains": [
+    "systems",
+    "database"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "search_codebase",
+    "terminal"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    }
+  ],
+  "validation": {
+    "rule": "The database name and the config key were cited. No schema was invented."
+  },
+  "tags": [
+    "database",
+    "integration"
+  ],
+  "scope": "builtin"
+}

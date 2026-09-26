@@ -1,0 +1,61 @@
+{
+  "id": "skill_tel_database",
+  "slug": "telecom-database-integration",
+  "name": "Telecom Database Integration",
+  "version": "1.0.0",
+  "description": "Trace routing, CDR, or registration data to the database the telecom app is configured to use.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "telecom database integration",
+    "cdr database",
+    "routing table lookup"
+  ],
+  "taskDomains": [
+    "telecom",
+    "database"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_codebase"
+  ],
+  "optionalTools": [
+    "terminal",
+    "edit_file"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    }
+  ],
+  "validation": {
+    "rule": "The table or query the application uses was read from config or code. A row was not invented."
+  },
+  "tags": [
+    "database",
+    "cdr"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,71 @@
+{
+  "id": "skill_sys_source_build",
+  "slug": "source-build-and-compilation",
+  "name": "Source Build & Compilation",
+  "version": "1.0.0",
+  "description": "Detect the build system from the project files and compile with that system's own command.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "how it is built",
+    "source build and compilation",
+    "compile from source"
+  ],
+  "taskDomains": [
+    "systems",
+    "build"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "find_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "web_search"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "find_file",
+      "reason": "Locate a build or config file by name."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    }
+  ],
+  "validation": {
+    "rule": "The build system was identified from project files. No build command was invented."
+  },
+  "tags": [
+    "build",
+    "compile"
+  ],
+  "scope": "builtin"
+}

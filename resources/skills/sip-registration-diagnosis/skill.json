@@ -1,0 +1,61 @@
+{
+  "id": "skill_tel_registration",
+  "slug": "sip-registration-diagnosis",
+  "name": "SIP Registration Diagnosis",
+  "version": "1.0.0",
+  "description": "Explain a REGISTER failure from the challenge, the response, and the endpoint identity.",
+  "category": "Telecom Engineering",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "sip registration",
+    "register challenge",
+    "endpoint registration"
+  ],
+  "taskDomains": [
+    "telecom",
+    "sip"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_process_logs",
+    "read_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The REGISTER status and the authentication result were quoted. A password was not printed."
+  },
+  "tags": [
+    "sip",
+    "registration"
+  ],
+  "scope": "builtin"
+}

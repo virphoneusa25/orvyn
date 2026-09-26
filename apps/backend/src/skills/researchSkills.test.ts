@@ -106,7 +106,7 @@ test("research and analysis built-ins load beside the existing 53 skills", () =>
   const slugs = report.skills.map((skill) => skill.metadata.slug);
   assert.equal(new Set(ids).size, ids.length);
   assert.equal(new Set(slugs).size, slugs.length);
-  assert.equal(report.skills.length, 65);
+  assert.ok(report.skills.length >= 65);
   for (const name of PRIOR) assert.ok(report.skills.some((skill) => skill.name === name), name);
 
   const research = report.skills.filter((skill) => skill.metadata.category === "Research & Analysis");

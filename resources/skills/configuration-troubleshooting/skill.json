@@ -1,0 +1,66 @@
+{
+  "id": "skill_sys_config_trouble",
+  "slug": "configuration-troubleshooting",
+  "name": "Configuration Troubleshooting",
+  "version": "1.0.0",
+  "description": "Trace a bad setting to the file and key that the process actually loaded.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "configuration troubleshooting",
+    "which config was loaded",
+    "bad setting diagnosis"
+  ],
+  "taskDomains": [
+    "systems",
+    "config"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "search_files",
+    "read_process_logs"
+  ],
+  "optionalTools": [
+    "terminal",
+    "ssh_exec"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "search_files",
+      "reason": "Find files by name in an unfamiliar tree."
+    },
+    {
+      "id": "read_process_logs",
+      "reason": "Read logs for a process this run already started."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "ssh_exec",
+      "reason": "Run a command on a configured server alias."
+    }
+  ],
+  "validation": {
+    "rule": "The loaded config path and the offending key were cited from a file read or a log line."
+  },
+  "tags": [
+    "config",
+    "troubleshooting"
+  ],
+  "scope": "builtin"
+}

@@ -1,0 +1,76 @@
+{
+  "id": "skill_sys_node",
+  "slug": "nodejs-application-engineering",
+  "name": "Node.js Application Engineering",
+  "version": "1.0.0",
+  "description": "Work in a Node.js application using the package manager and scripts the repository defines.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "node.js application engineering",
+    "node project scripts",
+    "package manager scripts"
+  ],
+  "taskDomains": [
+    "systems",
+    "node"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "edit_file"
+  ],
+  "optionalTools": [
+    "terminal",
+    "run_tests",
+    "run_typecheck"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project tests after a code change."
+    },
+    {
+      "id": "run_typecheck",
+      "reason": "Typecheck after a code change when the project has a typecheck."
+    }
+  ],
+  "validation": {
+    "rule": "The package manager and scripts came from the lockfile and package manifest. Coding Agent was not replaced."
+  },
+  "tags": [
+    "node",
+    "language"
+  ],
+  "scope": "builtin"
+}

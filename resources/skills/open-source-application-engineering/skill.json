@@ -1,0 +1,87 @@
+{
+  "id": "skill_sys_opensource",
+  "slug": "open-source-application-engineering",
+  "name": "Open Source Application Engineering",
+  "version": "1.0.0",
+  "description": "Work on an open-source application you have not seen before, from inspection through a verified run.",
+  "category": "Systems & Open Source",
+  "publisher": "Kernel AI Labs",
+  "source": "builtin",
+  "builtIn": true,
+  "trusted": true,
+  "triggers": [
+    "inspect this application",
+    "unfamiliar open-source application",
+    "open source application engineering"
+  ],
+  "taskDomains": [
+    "systems",
+    "opensource"
+  ],
+  "runModes": [
+    "agent",
+    "code",
+    "server",
+    "auto"
+  ],
+  "requiredTools": [
+    "read_file",
+    "list_directory",
+    "search_codebase",
+    "get_project_outline"
+  ],
+  "optionalTools": [
+    "edit_file",
+    "terminal",
+    "web_search",
+    "fetch_url",
+    "run_tests"
+  ],
+  "permissionsRequired": [
+    {
+      "id": "read_file",
+      "reason": "Read the file the change or diagnosis depends on."
+    },
+    {
+      "id": "list_directory",
+      "reason": "See the application layout before changing it."
+    },
+    {
+      "id": "search_codebase",
+      "reason": "Find the code, docs, or config the task names."
+    },
+    {
+      "id": "get_project_outline",
+      "reason": "See languages and top-level structure."
+    },
+    {
+      "id": "edit_file",
+      "reason": "Make the smallest justified edit."
+    },
+    {
+      "id": "terminal",
+      "reason": "Run a command the project files or the host evidence justify."
+    },
+    {
+      "id": "web_search",
+      "reason": "Find official documentation for this software."
+    },
+    {
+      "id": "fetch_url",
+      "reason": "Read the official page a search result named."
+    },
+    {
+      "id": "run_tests",
+      "reason": "Run the project tests after a code change."
+    }
+  ],
+  "validation": {
+    "rule": "The application was inspected before any edit, the build command came from the project files, and the run was verified. No product-specific skill was required."
+  },
+  "tags": [
+    "opensource",
+    "unfamiliar",
+    "systems"
+  ],
+  "scope": "builtin"
+}
