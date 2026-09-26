@@ -1488,6 +1488,9 @@ import { persistDataset } from "../learning/datasetBuilder";
 import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
 import { EntitlementService } from "../billing/EntitlementService";
+import { creditLedger } from "../billing/creditLedgerInstance";
+import { BillingLimitError } from "../billing/CreditLedger";
+import { packById, planById, type PackId, type PlanId } from "../billing/plans";
 import { DEFAULT_PRIVACY, bindTenantResource } from "../orgs/organization";
 import { getHostDesktopState, setHostDesktopAllowed, takeHostControl, returnHostControl } from "../desktop/hostDesktopSession";
 
@@ -1596,24 +1599,62 @@ v1Router.post("/learning/refresh", (req, res) => {
 v1Router.get("/billing", (req, res) => {
   const t = requireTenant(req);
   const totals = t.modelService.usage.totals();
-  const used = {
-    tokenBudget: totals.promptTokens + totals.completionTokens,
-    cloudMinutes: 0,
-    storageBytes: 0,
-    concurrentMissions: t.multiAgentRuntime.queueStats().running,
-    artifactStorageBytes: 0,
-  };
+  const wallet = creditLedger.snapshot(t.id);
   res.json({
     provider: billing.name,
-    note: "Stripe is not wired. Usage is recorded; nothing is charged here.",
+    note: wallet.note,
+    wallet,
     entitlements: entitlements.limits(),
-    used,
-    check: entitlements.check(used),
+    used: {
+      tokenBudget: totals.promptTokens + totals.completionTokens,
+      cloudMinutes: 0,
+      storageBytes: 0,
+      concurrentMissions: t.multiAgentRuntime.queueStats().running,
+      artifactStorageBytes: 0,
+    },
     cost: estimateRunCost({
       promptTokens: totals.promptTokens,
       completionTokens: totals.completionTokens,
     }),
   });
+});
+
+v1Router.post("/billing/topup", (req, res) => {
+  const t = requireTenant(req);
+  const pack = packById(String(req.body?.packId ?? ""));
+  if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
+  try {
+    const order = creditLedger.purchase(t.id, pack.id as PackId);
+    res.json({ order, wallet: creditLedger.snapshot(t.id) });
+  } catch (err) {
+    const message = err instanceof BillingLimitError ? err.message : "Could not add credits.";
+    res.status(409).json({ error: message });
+  }
+});
+
+v1Router.post("/billing/plan", (req, res) => {
+  const t = requireTenant(req);
+  const plan = planById(String(req.body?.planId ?? ""));
+  if (!["starter", "pro", "team", "enterprise"].includes(plan.id) || String(req.body?.planId) !== plan.id) {
+    return res.status(400).json({ error: "Unknown plan." });
+  }
+  creditLedger.setPlan(t.id, plan.id as PlanId);
+  res.json({ wallet: creditLedger.snapshot(t.id) });
+});
+
+v1Router.post("/billing/auto-recharge", (req, res) => {
+  const t = requireTenant(req);
+  const pack = packById(String(req.body?.packId ?? "pack_5k"));
+  if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
+  const threshold = Number(req.body?.threshold ?? 500);
+  const maxPerMonth = Number(req.body?.maxPerMonth ?? 3);
+  try {
+    creditLedger.setAutoRecharge(t.id, { threshold, packId: pack.id as PackId, maxPerMonth });
+    res.json({ wallet: creditLedger.snapshot(t.id) });
+  } catch (err) {
+    const message = err instanceof BillingLimitError ? err.message : "Could not save auto-recharge.";
+    res.status(400).json({ error: message });
+  }
 });
 
 v1Router.get("/privacy", (_req, res) => {

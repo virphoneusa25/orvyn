@@ -13,6 +13,8 @@ import { WorkSessionStore } from "../sessions/WorkSessionStore";
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
+import { creditLedger } from "../billing/creditLedgerInstance";
+import { laneForUsage } from "../billing/plans";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -125,6 +127,24 @@ export class TenantManager {
     }
     // Every provider is metered; from here they're also durably recorded.
     modelService.usage.attachStore(localStore);
+    modelService.usage.onRecord((event) => {
+      if (!event.ok) {
+        creditLedger.charge({
+          userId: id, runId: event.missionId, sessionId: event.missionId,
+          type: event.method === "image" ? "image" : "model",
+          provider: event.provider, model: event.modelId, lane: laneForUsage(event),
+          inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: false,
+        });
+        return;
+      }
+      if (!event.promptTokens && !event.completionTokens) return;
+      creditLedger.charge({
+        userId: id, runId: event.missionId, sessionId: event.missionId,
+        type: event.method === "image" ? "image" : "model",
+        provider: event.provider, model: event.modelId, lane: laneForUsage(event),
+        inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: true,
+      });
+    });
     // Restore the user's routing choices, the same way the autonomy profile is
     // restored. Without this, every restart silently reverted routing to the
     // env-seeded defaults — which may point at a provider with dead credits.

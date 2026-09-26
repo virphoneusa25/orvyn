@@ -1,6 +1,6 @@
 # Billing & Usage Architecture
 
-Usage **metering is live**; billing (plans, Stripe) is design-only.
+Usage metering is live. The credit wallet (included, purchased, reserved), versioned rate cards, rolling 5-hour and 7-day limits, reservations, top-up packs, and auto-recharge caps are implemented in `CreditLedger`. Stripe checkout is not connected: pack purchases are applied on the account immediately and the billing screen says so.
 
 ## Metering (implemented)
 

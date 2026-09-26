@@ -93,6 +93,7 @@ export class UsageService {
   private events: UsageEvent[] = [];
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
+  private sinks: Array<(event: UsageEvent) => void> = [];
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -116,6 +117,10 @@ export class UsageService {
    * persists every subsequent event. Structural type avoids a circular import
    * with LocalStore.
    */
+  onRecord(fn: (event: UsageEvent) => void): void {
+    this.sinks.push(fn);
+  }
+
   attachStore(store: UsageStore): void {
     this.store = store;
     const persisted = store.loadRecentUsage(MAX_EVENTS);
@@ -170,6 +175,11 @@ export class UsageService {
     this.rollMonth();
     this.monthCount++;
     this.store?.saveUsageEvent(event);
+    for (const sink of this.sinks) {
+      try { sink(event); } catch (err) {
+        console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
+      }
+    }
 
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
