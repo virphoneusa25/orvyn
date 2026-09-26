@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
+import { SkillsPage } from "./SkillsPage";
 import { UsageStatsPage } from "./UsageStatsPage";
 import logo from "../assets/logo-lockup.png";
 import mark from "../assets/icon.png";
@@ -156,6 +157,8 @@ export function SettingsScreen({
           />
         ) : section === "usage" ? (
           <UsageStatsPage />
+        ) : section === "skills" ? (
+          <SkillsPage />
         ) : (
           <section>
             <h1>{NAV.flatMap((g) => g.items).find((i) => i.id === section)?.label}</h1>

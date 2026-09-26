@@ -1529,6 +1529,19 @@ v1Router.get("/skills/registry", (_req, res) => {
   res.json({ skills: skillRegistry.list() });
 });
 
+v1Router.patch("/skills/registry/:id", (req, res) => {
+  if (typeof req.body?.enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled must be true or false." });
+  }
+  try {
+    const skill = skillRegistry.setEnabled(String(req.params.id), req.body.enabled);
+    res.json({ skill });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not update the skill.";
+    res.status(404).json({ error: message });
+  }
+});
+
 v1Router.get("/skills", (req, res) => {
   const t = requireTenant(req);
   seedValidatedSkills(t.localStore);

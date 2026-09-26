@@ -15,6 +15,9 @@ export interface SkillPackage {
   validated: true;
   builtin: true;
   installed: true;
+  category: string;
+  version: string;
+  source: string;
   dir: string;
   instructions: string;
 }
@@ -50,7 +53,7 @@ function stepsFromMarkdown(markdown: string): string[] {
 function readPackage(dir: string): SkillPackage {
   const metaPath = path.join(dir, "skill.json");
   const bodyPath = path.join(dir, "SKILL.md");
-  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as Partial<SkillPackage>;
+  const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as Partial<SkillPackage> & { category?: unknown; version?: unknown };
   const instructions = fs.readFileSync(bodyPath, "utf8");
   const steps = stepsFromMarkdown(instructions);
   if (!meta.id || !meta.name) throw new Error(`Skill package ${dir} is missing id or name.`);
@@ -69,6 +72,9 @@ function readPackage(dir: string): SkillPackage {
     validated: true,
     builtin: true,
     installed: true,
+    category: typeof meta.category === "string" && meta.category.trim() ? meta.category.trim() : "General",
+    version: typeof meta.version === "string" && meta.version.trim() ? meta.version.trim() : "1.0.0",
+    source: "built-in",
     dir,
     instructions,
   };
