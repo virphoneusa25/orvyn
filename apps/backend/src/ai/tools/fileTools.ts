@@ -1,14 +1,23 @@
 // apps/backend/src/ai/tools/fileTools.ts
 import { promises as fs } from "fs";
 import * as path from "path";
-import { AITool, ToolResult } from "../ToolTypes";
+import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
 
 import { resolveSafePath } from "../../execution/pathSafety";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 
-// Every file tool resolves paths against a project root and refuses to
+// Every file tool resolves paths against the run workspace and refuses to
 // escape it — this is the project-isolation boundary for Agent mode.
 export function resolveSafe(projectRoot: string, relativePath: string): string {
   return resolveSafePath(projectRoot, relativePath);
+}
+
+function rootFor(registeredRoot: string, context?: ToolExecutionContext): string {
+  return workspaceRootFor(registeredRoot, context);
+}
+
+function resolveInWorkspace(registeredRoot: string, relativePath: string, context?: ToolExecutionContext): string {
+  return resolveSafePath(rootFor(registeredRoot, context), relativePath);
 }
 
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);
@@ -16,16 +25,16 @@ const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage"
 export function makeReadFileTool(projectRoot: string): AITool {
   return {
     name: "read_file",
-    description: "Read the contents of a file within the current project.",
+    description: "Read a file inside this run's workspace. Pass a relative path such as index.html. Host paths and .. are refused.",
     parameters: {
       type: "object",
       properties: { path: { type: "string" } },
       required: ["path"],
     },
     defaultPermission: "allowed",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const target = resolveSafe(projectRoot, String(args.path));
+        const target = resolveInWorkspace(projectRoot, String(args.path), context);
         const content = await fs.readFile(target, "utf-8");
         return { ok: true, output: content };
       } catch (err: any) {
@@ -38,15 +47,15 @@ export function makeReadFileTool(projectRoot: string): AITool {
 export function makeListDirectoryTool(projectRoot: string): AITool {
   return {
     name: "list_directory",
-    description: "List files and folders at a path within the current project.",
+    description: "List files and folders inside this run's workspace. Paths are relative to that workspace.",
     parameters: {
       type: "object",
       properties: { path: { type: "string", default: "." } },
     },
     defaultPermission: "allowed",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const target = resolveSafe(projectRoot, String(args.path ?? "."));
+        const target = resolveInWorkspace(projectRoot, String(args.path ?? "."), context);
         const entries = await fs.readdir(target, { withFileTypes: true });
         const filtered = entries
           .filter((e) => !IGNORE_DIRS.has(e.name))
@@ -71,9 +80,9 @@ export function makeWriteFileTool(projectRoot: string): AITool {
     },
     // Matches the master spec: write access defaults to "ask", not "allowed".
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const target = resolveSafe(projectRoot, String(args.path));
+        const target = resolveInWorkspace(projectRoot, String(args.path), context);
         let existed = false;
         try { await fs.access(target); existed = true; } catch { /* new file */ }
         await fs.mkdir(path.dirname(target), { recursive: true });
@@ -124,9 +133,9 @@ export function makeSearchFilesTool(projectRoot: string): AITool {
       required: ["query"],
     },
     defaultPermission: "allowed",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const results = await searchFiles(projectRoot, String(args.query));
+        const results = await searchFiles(rootFor(projectRoot, context), String(args.query));
         return { ok: true, output: results.join("\n") || "(no matches)" };
       } catch (err: any) {
         return { ok: false, error: err.message };
@@ -151,9 +160,9 @@ export function makeEditFileTool(projectRoot: string): AITool {
       required: ["path", "old_string", "new_string"],
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const target = resolveSafe(projectRoot, String(args.path));
+        const target = resolveInWorkspace(projectRoot, String(args.path), context);
         const oldString = String(args.old_string);
         const newString = String(args.new_string);
         if (!oldString) return { ok: false, error: "old_string must not be empty" };
@@ -199,9 +208,9 @@ export function makeDeleteFileTool(projectRoot: string): AITool {
       required: ["path"],
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const target = resolveSafe(projectRoot, String(args.path));
+        const target = resolveInWorkspace(projectRoot, String(args.path), context);
         const stat = await fs.stat(target);
         if (stat.isDirectory()) return { ok: false, error: "Refusing to delete a directory — delete files individually" };
         await fs.unlink(target);
@@ -226,13 +235,45 @@ export function makeMoveFileTool(projectRoot: string): AITool {
       required: ["from", "to"],
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
-        const src = resolveSafe(projectRoot, String(args.from));
-        const dest = resolveSafe(projectRoot, String(args.to));
+        const src = resolveInWorkspace(projectRoot, String(args.from), context);
+        const dest = resolveInWorkspace(projectRoot, String(args.to), context);
         await fs.mkdir(path.dirname(dest), { recursive: true });
         await fs.rename(src, dest);
         return { ok: true, output: `Moved ${args.from} → ${args.to}` };
+      } catch (err: any) {
+        return { ok: false, error: err.message };
+      }
+    },
+  };
+}
+
+export function makeApplyPatchTool(projectRoot: string): AITool {
+  return {
+    name: "apply_patch",
+    description: "Replace a file inside this run's workspace. The path is relative to the workspace. Host paths and .. are refused.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string", description: "Full new contents of the file" },
+        patch: { type: "string", description: "Full new contents when content is omitted" },
+      },
+      required: ["path"],
+    },
+    defaultPermission: "ask",
+    async execute(args, context): Promise<ToolResult> {
+      try {
+        const target = resolveInWorkspace(projectRoot, String(args.path), context);
+        const body = args.content != null ? String(args.content) : args.patch != null ? String(args.patch) : "";
+        if (!body) return { ok: false, error: "apply_patch needs content or patch, and the path must stay inside the workspace." };
+        if (/(^|\n)(?:\+\+\+|---)\s+\S*\.\.([\\/]|$)/.test(body)) {
+          return { ok: false, error: "Patch escapes the project root — refused" };
+        }
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, body, "utf-8");
+        return { ok: true, output: `PATCHED ${args.path}` };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }

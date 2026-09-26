@@ -43,6 +43,8 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
   list_symbols: ["READ"],
   get_diagnostics: ["READ", "EXECUTE"],
   write_file: ["WRITE"],
+  create_file: ["WRITE"],
+  apply_patch: ["WRITE"],
   edit_file: ["WRITE"],
   move_file: ["WRITE"],
   delete_file: ["DELETE"],

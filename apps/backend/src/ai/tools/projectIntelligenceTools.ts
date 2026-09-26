@@ -2,6 +2,8 @@
 // Snippets are retrieval hints. ORION must read the live file before editing.
 
 import type { AITool, ToolResult } from "../ToolTypes";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
+import { resolveSafePath } from "../../execution/pathSafety";
 import type { IndexService } from "../../indexing/IndexService";
 import type { HybridSearch } from "../../indexing/HybridSearch";
 
@@ -38,14 +40,16 @@ export function makeSearchCodebaseTool(index: IndexService, projectRoot: string)
       required: ["query"],
     },
     defaultPermission: "allowed",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       const query = String(args.query ?? "").trim();
       if (!query) return { ok: false, error: "query is required" };
-      if (index.getStats().status === "idle") {
-        await index.build(projectRoot).catch(() => undefined);
-      }
       const limit = Math.min(20, Math.max(1, Number(args.limit) || 8));
       try {
+        const root = workspaceRootFor(projectRoot, context);
+        if (args.path) resolveSafePath(root, String(args.path));
+        if (index.getStats().status === "idle") {
+          await index.build(root).catch(() => undefined);
+        }
         const hits = await index.searchHybrid(query, limit * 2);
         const scoped = hits.filter((h) => {
           if (args.path && !h.path.replace(/\\/g, "/").startsWith(String(args.path).replace(/\\/g, "/"))) return false;

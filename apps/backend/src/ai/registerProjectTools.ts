@@ -10,6 +10,7 @@ import {
   makeEditFileTool,
   makeDeleteFileTool,
   makeMoveFileTool,
+  makeApplyPatchTool,
 } from "./tools/fileTools";
 import { makeSearchCodeTool } from "./tools/searchCodeTool";
 import {
@@ -100,7 +101,9 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeListSymbolsTool(projectRoot));
   tenant.indexService.bindProject(projectRoot);
   g.register(makeWriteFileTool(projectRoot));
+  g.registerAlias("create_file", "write_file");
   g.register(makeEditFileTool(projectRoot));
+  g.register(makeApplyPatchTool(projectRoot));
   g.register(makeMoveFileTool(projectRoot));
   g.register(makeDeleteFileTool(projectRoot));
 

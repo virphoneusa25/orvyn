@@ -48,7 +48,10 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   onOutput?: (chunk: string) => void;
   executionTarget?: string;
+  /** Local project workspace for this run. Not an SSH host and not the desktop filesystem. */
   workspaceRoot?: string;
+  /** Stable workspace id for this run. */
+  workspaceId?: string;
   /** The model's tool call id, carried into the result envelope. */
   toolUseId?: string;
   /** The run and tenant making the call (browser sessions are per run). */

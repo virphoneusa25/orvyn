@@ -185,6 +185,8 @@ export function isTerminal(status: RunStatus): boolean {
 export interface Run {
   id: string;
   projectRoot: string;
+  /** Stable workspace this run's project file tools are bound to. */
+  workspaceId?: string;
   status: RunStatus;
   createdAt: number;
   events: AgentEvent[];
@@ -333,6 +335,13 @@ export class RunStore {
     this.log(id, { t: "run", projectRoot, createdAt: run.createdAt, status });
     this.evictOldRuns();
     return run;
+  }
+
+  /** Attach the durable workspace id. projectRoot is already set by create(). */
+  bindWorkspace(runId: string, workspaceId: string): void {
+    const run = this.runs.get(runId);
+    if (!run || !workspaceId) return;
+    run.workspaceId = workspaceId;
   }
 
   /**

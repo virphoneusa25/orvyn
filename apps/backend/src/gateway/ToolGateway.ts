@@ -9,6 +9,7 @@ import { AITool, ToolExecutionContext, ToolPermission, ToolRegistry, ToolResult 
 import { AgentRole, PermissionEngine } from "./PermissionEngine";
 import { applyProfile, PermissionProfile } from "./PermissionProfiles";
 import { cloudFilesystemDecision } from "./executionBoundary";
+import { assertInsideWorkspace, isProjectWorkspaceTool, workspaceRootFor } from "../execution/workspaceBinding";
 import { buildToolResultEnvelope } from "./toolResultEnvelope";
 
 export class ToolGateway {
@@ -91,7 +92,20 @@ export class ToolGateway {
     if (!verdict.allowed) {
       return wrap({ ok: false, error: verdict.reason ?? "Denied by capability policy" }, true);
     }
-    if (/^(write_file|read_file|edit_file|delete_file)$/.test(toolName)) {
+    if (isProjectWorkspaceTool(toolName)) {
+      let root = "";
+      try {
+        root = workspaceRootFor(undefined, context);
+      } catch (err) {
+        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err) }, true);
+      }
+      try {
+        assertInsideWorkspace(root, toolName, args ?? {});
+      } catch (err) {
+        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err) }, true);
+      }
+    }
+    if (/^(write_file|read_file|edit_file|delete_file|create_file|apply_patch)$/.test(toolName)) {
       const decision = cloudFilesystemDecision(
         context?.executionTarget,
         String(args.path ?? args.file ?? ""),

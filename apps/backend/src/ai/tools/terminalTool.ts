@@ -1,6 +1,7 @@
 // apps/backend/src/ai/tools/terminalTool.ts
 import { spawn } from "child_process";
 import { AITool, ToolResult } from "../ToolTypes";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 import { isServiceCommand, runService } from "../../services/ServiceManager";
 
 // Per the master spec, ALL terminal access requires approval — this is not
@@ -134,11 +135,12 @@ export function makeTerminalTool(projectRoot: string): AITool {
       }
       const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
       // A dev server never "finishes". It becomes a service that outlives the run.
+      const cwd = workspaceRootFor(projectRoot, context);
       if (isServiceCommand(finalCommand)) {
-        const { result } = await runService({ command: finalCommand, cwd: projectRoot, projectRoot, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
+        const { result } = await runService({ command: finalCommand, cwd, projectRoot: cwd, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
         return result;
       }
-      return runStreaming(finalCommand, projectRoot, context?.onOutput, context?.signal);
+      return runStreaming(finalCommand, cwd, context?.onOutput, context?.signal);
     },
   };
 }

@@ -589,6 +589,7 @@ v1Router.post("/chat/completions", async (req, res) => {
       _regTools(tc, preflight.projectRoot);
       const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
         composerMode: chip,
+        workspaceId: preflight.workspaceId,
         workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
         onProjectFile: (rel: string) => { tc.sessions.rememberFiles(preflight.workspaceId, [rel]); },
       });
@@ -778,6 +779,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
       ...(preflight.status === "resolved"
         ? {
+            workspaceId: preflight.workspaceId,
             workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }
@@ -1186,6 +1188,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
       ...(preflight.status === "resolved"
         ? {
+            workspaceId: preflight.workspaceId,
             workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }

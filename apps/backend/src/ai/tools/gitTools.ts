@@ -1,6 +1,8 @@
 // apps/backend/src/ai/tools/gitTools.ts
 import { execFile } from "child_process";
 import { AITool, ToolResult } from "../ToolTypes";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
+import { resolveSafePath } from "../../execution/pathSafety";
 
 function runGit(projectRoot: string, args: string[]): Promise<ToolResult> {
   return new Promise((resolve) => {
@@ -17,7 +19,7 @@ export function makeGitStatusTool(projectRoot: string): AITool {
     description: "Show the working tree status (git status --short).",
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed", // read-only, cannot mutate the repo
-    execute: () => runGit(projectRoot, ["status", "--short"]),
+    execute: (_args, context) => runGit(workspaceRootFor(projectRoot, context), ["status", "--short"]),
   };
 }
 
@@ -27,7 +29,7 @@ export function makeGitDiffTool(projectRoot: string): AITool {
     description: "Show unstaged changes (git diff).",
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed",
-    execute: () => runGit(projectRoot, ["diff"]),
+    execute: (_args, context) => runGit(workspaceRootFor(projectRoot, context), ["diff"]),
   };
 }
 
@@ -43,11 +45,12 @@ export function makeGitLogTool(projectRoot: string): AITool {
       },
     },
     defaultPermission: "allowed",
-    execute: (args) => {
+    execute: (args, context) => {
+      const root = workspaceRootFor(projectRoot, context);
       const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 200);
       const gitArgs = ["log", "--oneline", "--decorate", `-n${limit}`];
-      if (args.path) gitArgs.push("--", String(args.path));
-      return runGit(projectRoot, gitArgs);
+      if (args.path) gitArgs.push("--", resolveSafePath(root, String(args.path)));
+      return runGit(root, gitArgs);
     },
   };
 }
@@ -58,7 +61,7 @@ export function makeGitBranchTool(projectRoot: string): AITool {
     description: "List branches (git branch -a) with the current one marked.",
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed",
-    execute: () => runGit(projectRoot, ["branch", "-a", "--no-color"]),
+    execute: (_args, context) => runGit(workspaceRootFor(projectRoot, context), ["branch", "-a", "--no-color"]),
   };
 }
 
@@ -77,7 +80,7 @@ export function makeGitCheckoutTool(projectRoot: string): AITool {
       required: ["branch"],
     },
     defaultPermission: "ask",
-    execute: (args) => {
+    execute: (args, context) => {
       const branch = String(args.branch ?? "").trim();
       // Refuse anything that isn't a plain branch name; "git checkout -- ." or
       // pathspecs would silently discard local work.
@@ -85,7 +88,7 @@ export function makeGitCheckoutTool(projectRoot: string): AITool {
         return Promise.resolve({ ok: false, error: `Invalid branch name "${branch}"` });
       }
       const gitArgs = args.create === true ? ["checkout", "-b", branch] : ["checkout", branch];
-      return runGit(projectRoot, gitArgs);
+      return runGit(workspaceRootFor(projectRoot, context), gitArgs);
     },
   };
 }
@@ -102,10 +105,11 @@ export function makeGitCommitTool(projectRoot: string): AITool {
       required: ["message"],
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
-      const addResult = await runGit(projectRoot, ["add", "-A"]);
+    async execute(args, context): Promise<ToolResult> {
+      const root = workspaceRootFor(projectRoot, context);
+      const addResult = await runGit(root, ["add", "-A"]);
       if (!addResult.ok) return addResult;
-      return runGit(projectRoot, ["commit", "-m", String(args.message)]);
+      return runGit(root, ["commit", "-m", String(args.message)]);
     },
   };
 }

@@ -8,6 +8,8 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
 import { execCapture } from "./execCapture";
+import { resolveSafePath } from "../../execution/pathSafety";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 
 const RUN_TIMEOUT_MS = 5 * 60_000;
 const MAX_OUTPUT = 20_000;
@@ -35,9 +37,8 @@ function clip(s: string): string {
 }
 
 async function runTypecheck(projectRoot: string, project?: string): Promise<ToolResult> {
-  const tsconfig = project
-    ? path.join(projectRoot, project, "tsconfig.json")
-    : path.join(projectRoot, "tsconfig.json");
+  const base = project ? resolveSafePath(projectRoot, project) : projectRoot;
+  const tsconfig = path.join(base, "tsconfig.json");
   if (!(await exists(tsconfig))) {
     return {
       ok: false,
@@ -63,7 +64,7 @@ export function makeGetDiagnosticsTool(projectRoot: string): AITool {
       },
     },
     defaultPermission: "allowed",
-    execute: (args) => runTypecheck(projectRoot, args.project ? String(args.project) : undefined),
+    execute: (args, context) => runTypecheck(workspaceRootFor(projectRoot, context), args.project ? String(args.project) : undefined),
   };
 }
 
@@ -78,7 +79,7 @@ export function makeRunTypecheckTool(projectRoot: string): AITool {
       },
     },
     defaultPermission: "ask",
-    execute: (args) => runTypecheck(projectRoot, args.project ? String(args.project) : undefined),
+    execute: (args, context) => runTypecheck(workspaceRootFor(projectRoot, context), args.project ? String(args.project) : undefined),
   };
 }
 
@@ -94,13 +95,14 @@ export function makeRunTestsTool(projectRoot: string): AITool {
       },
     },
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
-      const scripts = await packageScripts(projectRoot);
+    async execute(args, context): Promise<ToolResult> {
+      const root = workspaceRootFor(projectRoot, context);
+      const scripts = await packageScripts(root);
       const filter = args.filter ? String(args.filter) : "";
       let cmd: string | null = null;
       if (scripts.test && !/no test specified/i.test(scripts.test)) {
         cmd = filter ? `npm test -- ${filter}` : "npm test";
-      } else if ((await exists(path.join(projectRoot, "pytest.ini"))) || (await exists(path.join(projectRoot, "pyproject.toml")))) {
+      } else if ((await exists(path.join(root, "pytest.ini"))) || (await exists(path.join(root, "pyproject.toml")))) {
         cmd = filter ? `python -m pytest -k "${filter}"` : "python -m pytest";
       }
       if (!cmd) {
@@ -109,7 +111,7 @@ export function makeRunTestsTool(projectRoot: string): AITool {
           error: "Not applicable: no test runner found (package.json has no real `test` script and no pytest config exists). Do not add a test setup unless the user asked for one.",
         };
       }
-      const out = await execCapture(cmd, projectRoot, RUN_TIMEOUT_MS);
+      const out = await execCapture(cmd, root, RUN_TIMEOUT_MS);
       const text = clip(`${out.stdout}\n${out.stderr}`.trim());
       const report = `$ ${cmd}\nexit ${out.code}\n\n${text}`;
       // A failing suite is a failed tool call. Reporting it as success let a
@@ -126,12 +128,13 @@ export function makeRunLinterTool(projectRoot: string): AITool {
     description: "Run the project's linter (package.json `lint` script). Reports problems; never auto-fixes.",
     parameters: { type: "object", properties: {} },
     defaultPermission: "ask",
-    async execute(): Promise<ToolResult> {
-      const scripts = await packageScripts(projectRoot);
+    async execute(_args, context): Promise<ToolResult> {
+      const root = workspaceRootFor(projectRoot, context);
+      const scripts = await packageScripts(root);
       if (!scripts.lint) {
         return { ok: false, error: "Not applicable: no `lint` script in package.json, so there is no linter to run. Do not add one unless the user asked for it." };
       }
-      const out = await execCapture("npm run lint", projectRoot, RUN_TIMEOUT_MS);
+      const out = await execCapture("npm run lint", root, RUN_TIMEOUT_MS);
       const text = clip(`${out.stdout}\n${out.stderr}`.trim());
       return { ok: true, output: `$ npm run lint\nexit ${out.code}\n\n${text}` };
     },

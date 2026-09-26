@@ -16,6 +16,7 @@ import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 
 export interface SshHostConfig {
   alias: string;
@@ -65,7 +66,7 @@ export function makeSshExecTool(projectRoot: string): AITool {
     // Remote execution is exactly as dangerous as the terminal tool — every
     // call requires approval, regardless of mode or "Allow for Mission".
     defaultPermission: "ask",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       const alias = String(args.host ?? "").trim();
       const command = String(args.command ?? "").trim();
       if (!alias || !command) {
@@ -74,7 +75,8 @@ export function makeSshExecTool(projectRoot: string): AITool {
 
       let hosts: SshHostConfig[];
       try {
-        hosts = await loadSshHosts(projectRoot);
+        // The allowlist lives in the project workspace. The command itself runs on the remote host.
+        hosts = await loadSshHosts(workspaceRootFor(projectRoot, context));
       } catch (err: any) {
         return {
           ok: false,

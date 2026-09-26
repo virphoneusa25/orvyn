@@ -5,6 +5,7 @@
 // the run finishes, and stops only when asked.
 
 import { AITool, ToolResult } from "../ToolTypes";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 import { runService, serviceManager, type ServiceRecord } from "../../services/ServiceManager";
 
 function line(r: ServiceRecord): string {
@@ -26,7 +27,8 @@ export function makeStartProcessTool(projectRoot: string): AITool {
     async execute(args, context): Promise<ToolResult> {
       const command = String(args.command ?? "").trim();
       if (!command) return { ok: false, error: "command is required" };
-      const { result } = await runService({ command, cwd: projectRoot, projectRoot, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
+      const root = workspaceRootFor(projectRoot, context);
+      const { result } = await runService({ command, cwd: root, projectRoot: root, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
       return result;
     },
   };

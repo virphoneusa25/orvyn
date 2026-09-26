@@ -51,6 +51,7 @@ import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } f
 import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
+import { projectToolContext } from "../execution/workspaceBinding";
 import { normalizeKnownFile, workspaceModelNote } from "./workspacePreflight";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
@@ -100,6 +101,7 @@ export interface ExecutionSpec {
   organizationId?: string;
   userId?: string;
   projectId?: string | null;
+  workspaceId?: string | null;
   targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
   targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
   fallbackReason?: string;
@@ -130,6 +132,7 @@ interface RunState {
   controller: AbortController;
   toolsEnabled: boolean;
   projectRoot: string;
+  workspaceId?: string;
   /** Tools the user approved for the rest of this run. */
   approvedTools: Set<string>;
   cancelled: boolean;
@@ -238,6 +241,8 @@ export interface RunOptions {
   workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean };
   /** Persists written paths onto the workspace so a later empty resolve is a mismatch. */
   onProjectFile?: (relativePath: string) => void;
+  /** Durable workspace id. File tools resolve inside projectRoot, not a host path the model picks. */
+  workspaceId?: string;
 }
 
 /**
@@ -913,6 +918,7 @@ export class StreamingAgentRuntime {
           return this.modelService.router.resolve("agent");
         })();
     this.store.create(runId, projectRoot);
+    if (options?.workspaceId) this.store.bindWorkspace(runId, options.workspaceId);
 
     // Mode controls tool permissions as well as prompting, so a read-only
     // mode genuinely cannot write even if the model tries.
@@ -979,6 +985,7 @@ export class StreamingAgentRuntime {
       controller: new AbortController(),
       toolsEnabled: def.toolsEnabled,
       projectRoot,
+      ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
       approvedTools: new Set(),
       cancelled: false,
       toolCalls: 0,
@@ -2336,15 +2343,14 @@ export class StreamingAgentRuntime {
             runId,
           },
           () =>
-            this.tools.execute(call.name, call.arguments, "coder", {
+            this.tools.execute(call.name, call.arguments, "coder", projectToolContext(state, {
               signal: state.controller.signal,
               executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
-              workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
               toolUseId: call.id,
               runId,
               tenantId: state.execution?.tenantId || undefined,
               onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
-            })
+            }))
         );
         // A tool that ignores the abort signal must not keep the run alive.
         result = await Promise.race([
@@ -2399,7 +2405,7 @@ export class StreamingAgentRuntime {
       // gateway builds it; a result that changed after (artifact check) or
       // came from outside the gateway (cloud MCP) gets a fresh one.
       const toolArgs = (call.arguments ?? {}) as Record<string, unknown>;
-      const workspaceRoot = state.execution?.remoteProjectRoot || state.projectRoot;
+      const workspaceRoot = state.projectRoot;
       const envelopeFor = (r: ToolResult): ToolResultEnvelope =>
         r.envelope && (r.envelope.status === "success") === r.ok && r.envelope.modelPayload === (r.ok ? String(r.output ?? "") : String(r.error ?? "") || "Tool execution failed")
           ? { ...r.envelope, toolUseId: call.id }
@@ -2596,13 +2602,12 @@ export class StreamingAgentRuntime {
       testBuild: evidence.testBuildEvidence.length,
       browser: evidence.browserEvidence.length,
     });
-    const context = {
+    const context = projectToolContext(state, {
       signal: state.controller.signal,
       executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
-      workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
       runId,
       tenantId: state.execution?.tenantId || undefined,
-    };
+    });
     let seq = 0;
     const verifier = new VerificationRuntime({
       provider,
@@ -2656,7 +2661,7 @@ export class StreamingAgentRuntime {
       args: (call.arguments ?? {}) as Record<string, unknown>,
       result: { ok: false, error },
       toolUseId: call.id,
-      workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
+      workspaceRoot: state.projectRoot,
       blocked: true,
     }));
   }

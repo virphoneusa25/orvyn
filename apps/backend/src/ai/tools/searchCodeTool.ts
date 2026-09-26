@@ -5,6 +5,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
 import { resolveSafe } from "./fileTools";
+import { workspaceRootFor } from "../../execution/workspaceBinding";
 
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn", ".next", "release"]);
 const SKIP_EXT = new Set([
@@ -30,12 +31,13 @@ export function makeSearchCodeTool(projectRoot: string): AITool {
       required: ["pattern"],
     },
     defaultPermission: "allowed",
-    async execute(args): Promise<ToolResult> {
+    async execute(args, context): Promise<ToolResult> {
       try {
         const pattern = String(args.pattern ?? "");
         if (!pattern) return { ok: false, error: "pattern is required" };
+        const bound = workspaceRootFor(projectRoot, context);
         const rel = String(args.path ?? ".");
-        const root = resolveSafe(projectRoot, rel);
+        const root = resolveSafe(bound, rel);
         const glob = args.glob ? String(args.glob) : undefined;
         const insensitive = args.case_insensitive === true;
         const max = Math.min(200, Math.max(1, Number(args.max_results) || 50));
@@ -44,7 +46,7 @@ export function makeSearchCodeTool(projectRoot: string): AITool {
         if (rg !== null) {
           return { ok: true, output: rg || "(no matches)" };
         }
-        const fallback = await walkGrep(root, projectRoot, pattern, { glob, insensitive, max });
+        const fallback = await walkGrep(root, bound, pattern, { glob, insensitive, max });
         return { ok: true, output: fallback || "(no matches)" };
       } catch (err: any) {
         return { ok: false, error: err.message };
