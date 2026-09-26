@@ -120,7 +120,7 @@ test("usage stats roll tokens, cache, and streaks and skip failed calls", () => 
   const t0 = Date.UTC(2026, 8, 10, 12);
   db.setPlan("u1", "pro", t0);
   db.charge({
-    userId: "u1", type: "model", model: "ORVYN-5.3", lane: "utility",
+    userId: "u1", type: "model", model: "ORVYN-5.3", lane: "utility", provider: "orvyn", runId: "run_stats",
     inputTokens: 1_000, cachedInputTokens: 250, outputTokens: 100, providerCostUsd: 0.05, now: t0,
   });
   db.charge({
@@ -139,6 +139,9 @@ test("usage stats roll tokens, cache, and streaks and skip failed calls", () => 
   assert.ok(stats.days[0].models["ORVYN-5.3"].credits > 0);
   assert.equal(stats.days[0].tools.model.tokens, 1_100);
   assert.equal(stats.days[0].tools.search, undefined);
+  assert.equal(stats.activity.longestSessionMs, 0);
+  assert.equal(stats.tasks["General chat"], 1_100);
+  assert.equal(stats.providers.orvyn, 1_100);
   db.close();
 });
 

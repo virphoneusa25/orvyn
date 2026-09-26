@@ -46,6 +46,16 @@ function addPart(bucket: Record<string, Part>, key: string, credits: number, tok
   bucket[key] = part;
 }
 
+/** Maps a billed lane onto the App usage task list. Unknown work stays in Other. */
+function taskFor(type: string, lane: string): string {
+  if (type === "image" || lane === "image" || lane === "image_pro") return "Content creation";
+  if (type === "search" || lane === "search" || lane === "deep") return "Research & analysis";
+  if (lane === "build" || lane === "server" || lane === "advanced") return "Coding & development";
+  if (type === "compute" || lane === "compute") return "Data analysis";
+  if (type === "model" || lane === "auto" || lane === "utility") return "General chat";
+  return "Other";
+}
+
 function longestStreak(days: string[]): number {
   let best = 0;
   let run = 0;
@@ -402,21 +412,38 @@ export class CreditLedger {
     const rows = this.db.prepare(
       `SELECT created_at AS at, COALESCE(input_tokens, 0) AS inputTokens, COALESCE(cached_input_tokens, 0) AS cachedTokens,
               COALESCE(output_tokens, 0) AS outputTokens, credits_charged AS credits,
-              COALESCE(model, 'ORVYN') AS model, COALESCE(type, 'model') AS type
+              COALESCE(model, 'ORVYN') AS model, COALESCE(type, 'model') AS type, COALESCE(lane, 'auto') AS lane,
+              COALESCE(provider, 'Other') AS provider, session_id AS sessionId, run_id AS runId
        FROM usage_events WHERE user_id = ? AND ok = 1 ORDER BY created_at ASC`,
-    ).all(userId) as { at: number; inputTokens: number; cachedTokens: number; outputTokens: number; credits: number; model: string; type: string }[];
+    ).all(userId) as {
+      at: number; inputTokens: number; cachedTokens: number; outputTokens: number; credits: number;
+      model: string; type: string; lane: string; provider: string; sessionId: string | null; runId: string | null;
+    }[];
     let totalTokens = 0;
     let peakTokens = 0;
     let cachedTokens = 0;
     let inputTokens = 0;
     const byDay = new Map<string, DayBucket>();
     const daySet = new Set<string>();
+    const providers: Record<string, number> = {};
+    const tasks: Record<string, number> = {};
+    const sessions = new Map<string, { min: number; max: number }>();
     for (const row of rows) {
       const tokens = row.inputTokens + row.outputTokens;
       totalTokens += tokens;
       peakTokens = Math.max(peakTokens, tokens);
       cachedTokens += row.cachedTokens;
       inputTokens += row.inputTokens;
+      providers[row.provider] = (providers[row.provider] ?? 0) + tokens;
+      const task = taskFor(row.type, row.lane);
+      tasks[task] = (tasks[task] ?? 0) + tokens;
+      const sessionKey = row.sessionId || row.runId;
+      if (sessionKey) {
+        const span = sessions.get(sessionKey) ?? { min: row.at, max: row.at };
+        span.min = Math.min(span.min, row.at);
+        span.max = Math.max(span.max, row.at);
+        sessions.set(sessionKey, span);
+      }
       const key = dayKey(row.at);
       daySet.add(key);
       const bucket = byDay.get(key) ?? emptyDay();
@@ -430,6 +457,8 @@ export class CreditLedger {
     }
     const days = [...daySet].sort();
     const span = rows.length > 1 ? rows[rows.length - 1].at - rows[0].at : 0;
+    let longestSessionMs = 0;
+    for (const session of sessions.values()) longestSessionMs = Math.max(longestSessionMs, session.max - session.min);
     return {
       refreshedAt: now,
       plan: wallet.plan,
@@ -437,10 +466,13 @@ export class CreditLedger {
       purchasedBalance: wallet.purchasedBalance,
       windows: wallet.windows,
       cache: { cachedTokens, inputTokens },
+      providers,
+      tasks,
       activity: {
         totalTokens,
         peakTokens,
         durationMs: span,
+        longestSessionMs,
         currentStreakDays: streakEnding(days, now),
         longestStreakDays: longestStreak(days),
       },

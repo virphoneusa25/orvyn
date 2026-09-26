@@ -19,7 +19,9 @@ interface Stats {
   purchasedBalance?: number;
   windows: { fiveHour: WindowRow; sevenDay: WindowRow; cycle: WindowRow };
   cache?: { cachedTokens: number; inputTokens: number };
-  activity: { totalTokens: number; peakTokens: number; durationMs: number; currentStreakDays: number; longestStreakDays: number };
+  providers?: Record<string, number>;
+  tasks?: Record<string, number>;
+  activity: { totalTokens: number; peakTokens: number; durationMs: number; longestSessionMs?: number; currentStreakDays: number; longestStreakDays: number };
   days: DayRow[];
 }
 
@@ -65,7 +67,7 @@ function when(ts?: number): string {
 function refreshed(ts?: number): string {
   if (!ts) return "—";
   const d = new Date(ts);
-  const date = d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return `${date}, ${time}`;
 }
@@ -135,7 +137,7 @@ export function UsageStatsPage() {
     <div className="usage-page">
       <div className="usage-page__head">
         <div className="usage-page__title">
-          <h1>Usage & Stats</h1>
+          <h1>Usage stats</h1>
           <div className="usage-pills" role="tablist">
             <button type="button" role="tab" aria-selected={tab === "app"} className={tab === "app" ? "is-on" : ""} onClick={() => setTab("app")}>App usage</button>
             <button type="button" role="tab" aria-selected={tab === "plan"} className={tab === "plan" ? "is-on" : ""} onClick={() => setTab("plan")}>Individual Plan</button>
@@ -150,8 +152,8 @@ export function UsageStatsPage() {
       </div>
       {error && <p className="usage-error">{error}</p>}
       {loading && !stats && <p className="usage-muted">Loading usage…</p>}
-      {tab === "plan" ? (
-        <PlanCard stats={stats} />
+      {tab === "app" ? (
+        <AppUsage stats={stats} days={days} heat={heat} setHeat={setHeat} range={range} setRange={setRange} />
       ) : (
         <>
           <div className="usage-meters">
@@ -191,7 +193,7 @@ export function UsageStatsPage() {
           <h2>Activity</h2>
           <div className="usage-activity">
             <Stat icon="doc" tone="blue" value={compact(stats?.activity.totalTokens ?? 0)} label="Total tokens" />
-            <Stat icon="bars" tone="purple" value={compact(stats?.activity.peakTokens ?? 0)} label="Peak tokens" title="Largest single model call" />
+            <Stat icon="bars" tone="purple" value={compact(stats?.activity.peakTokens ?? 0)} label="Peak tokens" hint="Largest single model call" />
             <Stat icon="clock" tone="cyan" value={duration(stats?.activity.durationMs ?? 0)} label="Total usage duration" />
             <Stat icon="flame" tone="orange" value={`${stats?.activity.currentStreakDays ?? 0} d`} label="Current streak" />
             <Stat icon="trophy" tone="amber" value={`${stats?.activity.longestStreakDays ?? 0} d`} label="Longest streak" />
@@ -258,20 +260,219 @@ export function UsageStatsPage() {
   );
 }
 
-function PlanCard({ stats }: { stats: Stats | null }) {
-  const cycle = stats?.windows.cycle;
+const MODEL_COLORS = ["#3b82f6", "#a78bfa", "#34d399", "#fb923c", "#f87171", "#22d3ee"];
+const TASKS: { name: string; icon: string; color: string }[] = [
+  { name: "General chat", icon: "chat", color: "#a78bfa" },
+  { name: "Coding & development", icon: "code", color: "#60a5fa" },
+  { name: "Research & analysis", icon: "search", color: "#34d399" },
+  { name: "Content creation", icon: "pen", color: "#fb923c" },
+  { name: "Data analysis", icon: "db", color: "#22d3ee" },
+  { name: "Other", icon: "dots", color: "#94a3b8" },
+];
+
+function providerLabel(id: string): string {
+  const key = id.toLowerCase();
+  if (key === "orvyn" || key === "default") return "ORVYN";
+  if (key === "anthropic") return "Anthropic";
+  if (key === "openai") return "OpenAI";
+  if (key === "other" || key === "others") return "Others";
+  return id;
+}
+
+function shareLabel(n: number, total: number): string {
+  if (total <= 0 || n <= 0) return "0%";
+  return `${((n / total) * 100).toFixed(1)}%`;
+}
+
+function AppUsage({
+  stats, days, heat, setHeat, range, setRange,
+}: {
+  stats: Stats | null;
+  days: DayRow[];
+  heat: "daily" | "weekly" | "cumulative";
+  setHeat: (id: "daily" | "weekly" | "cumulative") => void;
+  range: 7 | 30 | 90;
+  setRange: (n: 7 | 30 | 90) => void;
+}) {
+  const total = stats?.activity.totalTokens ?? 0;
+  const providers = Object.entries(stats?.providers ?? {}).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  const providerTotal = providers.reduce((n, [, v]) => n + v, 0);
+  const models = modelTotals(days);
   return (
-    <section className="usage-card">
-      <b>{stats?.plan ? `${stats.plan.label} · ${stats.plan.priceLabel}` : "Individual plan"}</b>
-      <p className="settings-lead">Included credits reset at the end of the billing cycle. Purchased credits stay on the wallet.</p>
-      <div className="usage-activity">
-        <Stat icon="box" tone="purple" value={cycle ? compact(Math.max(0, cycle.limit - cycle.used)) : "—"} label="Credits remaining" />
-        <Stat icon="doc" tone="blue" value={cycle ? compact(cycle.limit) : "—"} label="Included this cycle" />
-        <Stat icon="coin" tone="green" value={stats ? compact(stats.purchasedBalance ?? 0) : "—"} label="Purchased credits" />
-        <Stat icon="cal" tone="cyan" value={when(cycle?.resetAt)} label="Cycle resets" />
+    <>
+      <section className="usage-card usage-activity-card">
+        <div className="usage-activity">
+          <Stat icon="doc" tone="blue" value={compact(total)} label="Total tokens" hint="Tokens from successful model calls" />
+          <Stat icon="bars" tone="blue" value={compact(stats?.activity.peakTokens ?? 0)} label="Peak tokens" hint="Largest single model call" />
+          <Stat icon="clock" tone="blue" value={duration(stats?.activity.longestSessionMs ?? 0)} label="Longest session" />
+          <Stat icon="bolt" tone="blue" value={`${stats?.activity.currentStreakDays ?? 0} d`} label="Current streak" />
+          <Stat icon="trophy" tone="purple" value={`${stats?.activity.longestStreakDays ?? 0} d`} label="Longest streak" />
+        </div>
+      </section>
+
+      <section className="usage-card">
+        <div className="usage-card__top">
+          <div>
+            <b>Token activity</b>
+            <p className="usage-muted">Each square represents a day. Brighter colors indicate higher token usage.</p>
+          </div>
+          <div className="usage-pills">
+            {(["daily", "weekly", "cumulative"] as const).map((id) => (
+              <button key={id} type="button" className={heat === id ? "is-on" : ""} onClick={() => setHeat(id)}>{id[0].toUpperCase() + id.slice(1)}</button>
+            ))}
+          </div>
+        </div>
+        <Heatmap days={days} mode={heat} monthsBelow />
+      </section>
+
+      <section className="usage-card">
+        <div className="usage-card__top">
+          <div>
+            <b>Daily token trend by model</b>
+            <p className="usage-muted">Tokens processed per day, split by model.</p>
+          </div>
+          <div className="usage-pills">
+            {([7, 30, 90] as const).map((n) => (
+              <button key={n} type="button" className={range === n ? "is-on" : ""} onClick={() => setRange(n)}>Last {n} days</button>
+            ))}
+          </div>
+        </div>
+        <ModelTrend days={fillDays(days, range, stats?.refreshedAt)} />
+      </section>
+
+      <div className="usage-split">
+        <section className="usage-card">
+          <div className="usage-card__top">
+            <b>Model usage <Info text="Share of tokens by model" /></b>
+            <span className="usage-muted">Total: {compact(total)} tokens</span>
+          </div>
+          <div className="usage-donut-row">
+            <Donut slices={models.map((m, i) => ({ value: m.tokens, color: MODEL_COLORS[i % MODEL_COLORS.length] }))} center={compact(total)} caption="tokens" />
+            <ul className="usage-share">
+              {models.map((m, i) => (
+                <li key={m.name}>
+                  <i style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
+                  <span>{m.name}</span>
+                  <b>{compact(m.tokens)}</b>
+                  <em>{shareLabel(m.tokens, total)}</em>
+                </li>
+              ))}
+              {models.length === 0 && <li className="usage-muted">No model usage yet.</li>}
+            </ul>
+          </div>
+        </section>
+
+        <section className="usage-card">
+          <div className="usage-card__top"><b>Provider distribution <Info text="Share of tokens by provider" /></b></div>
+          <div className="usage-donut-col">
+            <Donut slices={providers.map(([name, value], i) => ({ value, color: MODEL_COLORS[i % MODEL_COLORS.length] }))} center={compact(providerTotal)} caption="tokens" />
+            <ul className="usage-legend usage-legend--block">
+              {providers.map(([name, value], i) => (
+                <li key={name}><i style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} /> {providerLabel(name)} <em>{shareLabel(value, providerTotal)}</em></li>
+              ))}
+              {providers.length === 0 && <li className="usage-muted">No provider usage yet.</li>}
+            </ul>
+          </div>
+        </section>
+
+        <section className="usage-card">
+          <div className="usage-card__top"><b>Task type usage <Info text="Share of tokens by the lane that ran the call" /></b></div>
+          <ul className="usage-tasks">
+            {TASKS.map((task) => {
+              const n = stats?.tasks?.[task.name] ?? 0;
+              const ratio = total > 0 ? n / total : 0;
+              return (
+                <li key={task.name}>
+                  <Glyph name={task.icon} />
+                  <span>{task.name}</span>
+                  <div className="usage-taskbar"><i style={{ width: `${Math.round(ratio * 100)}%`, background: task.color }} /></div>
+                  <em>{shareLabel(n, total)}</em>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       </div>
-    </section>
+    </>
   );
+}
+
+function modelTotals(days: DayRow[]): { name: string; tokens: number }[] {
+  const totals = new Map<string, number>();
+  for (const day of days) {
+    for (const [name, part] of Object.entries(day.models)) totals.set(name, (totals.get(name) ?? 0) + part.tokens);
+  }
+  return [...totals.entries()].map(([name, tokens]) => ({ name, tokens })).filter((m) => m.tokens > 0).sort((a, b) => b.tokens - a.tokens).slice(0, 6);
+}
+
+function Donut({ slices, center, caption }: { slices: { value: number; color: string }[]; center: string; caption: string }) {
+  const total = slices.reduce((n, s) => n + s.value, 0);
+  const r = 42;
+  const c = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <svg className="usage-donut" viewBox="0 0 120 120" role="img" aria-label={`${center} ${caption}`}>
+      <circle cx="60" cy="60" r={r} fill="none" stroke="#1c2638" strokeWidth="14" />
+      {total > 0 && slices.map((s, i) => {
+        const len = (s.value / total) * c;
+        const node = (
+          <circle key={i} cx="60" cy="60" r={r} fill="none" stroke={s.color} strokeWidth="14" strokeLinecap="butt"
+            strokeDasharray={`${Math.max(0, len - 1)} ${c}`} strokeDashoffset={-offset} transform="rotate(-90 60 60)" />
+        );
+        offset += len;
+        return node;
+      })}
+      <text x="60" y="58" textAnchor="middle" className="usage-donut__value">{center}</text>
+      <text x="60" y="74" textAnchor="middle" className="usage-donut__caption">{caption}</text>
+    </svg>
+  );
+}
+
+function ModelTrend({ days }: { days: DayRow[] }) {
+  const ranked = modelTotals(days).slice(0, 5);
+  const max = Math.max(0, ...days.flatMap((d) => ranked.map((m) => d.models[m.name]?.tokens ?? 0)));
+  const yMax = max <= 0 ? 0 : niceCeil(max);
+  const w = 640;
+  const h = 180;
+  const pad = { l: 44, r: 8, t: 12, b: 28 };
+  const xAt = (i: number) => pad.l + (days.length < 2 ? 0 : (i / (days.length - 1)) * (w - pad.l - pad.r));
+  const yAt = (n: number) => pad.t + (yMax <= 0 ? 1 : 1 - n / yMax) * (h - pad.t - pad.b);
+  const ticks = yMax <= 0 ? [0] : [yMax, yMax / 2, 0];
+  return (
+    <div>
+      <svg className="usage-lines" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Daily token trend by model">
+        {ticks.map((n) => (
+          <g key={n}>
+            <line x1={pad.l} x2={w - pad.r} y1={yAt(n)} y2={yAt(n)} stroke="#1c2638" />
+            <text x={pad.l - 8} y={yAt(n) + 3} textAnchor="end" className="usage-lines__label">{compact(n)}</text>
+          </g>
+        ))}
+        {ranked.map((model, series) => {
+          const pts = days.map((d, i) => `${xAt(i)},${yAt(d.models[model.name]?.tokens ?? 0)}`).join(" ");
+          return <polyline key={model.name} fill="none" stroke={MODEL_COLORS[series % MODEL_COLORS.length]} strokeWidth="2.5" points={pts} />;
+        })}
+        {days.map((d, i) => (labelEvery(days.length, i) ? (
+          <text key={d.day} x={xAt(i)} y={h - 8} textAnchor="middle" className="usage-lines__label">{shortDay(d.day)}</text>
+        ) : null))}
+      </svg>
+      <div className="usage-legend usage-legend--center">
+        {ranked.map((model, i) => (
+          <span key={model.name}><i style={{ background: MODEL_COLORS[i % MODEL_COLORS.length], borderRadius: 99 }} /> {model.name}</span>
+        ))}
+        {ranked.length === 0 && <span>No tokens in this range.</span>}
+      </div>
+    </div>
+  );
+}
+
+function niceCeil(n: number): number {
+  if (n <= 1) return 1;
+  const pow = 10 ** Math.floor(Math.log10(n));
+  return Math.ceil(n / pow) * pow;
+}
+
+function Info({ text }: { text: string }) {
+  return <span className="usage-info" title={text}>i</span>;
 }
 
 function Meter(props: { icon: string; tone: string; title: string; value: string; when: string; bar: number; color: string; foot: string; dot?: string }) {
@@ -292,19 +493,19 @@ function Meter(props: { icon: string; tone: string; title: string; value: string
   );
 }
 
-function Stat({ icon, tone, value, label, title }: { icon: string; tone: string; value: string; label: string; title?: string }) {
+function Stat({ icon, tone, value, label, hint }: { icon: string; tone: string; value: string; label: string; hint?: string }) {
   return (
-    <div className="usage-stat" title={title}>
+    <div className="usage-stat">
       <Glyph name={icon} tone={tone} />
       <div>
         <b>{value}</b>
-        <span>{label}</span>
+        <span>{label}{hint && <Info text={hint} />}</span>
       </div>
     </div>
   );
 }
 
-function Heatmap({ days, mode }: { days: DayRow[]; mode: "daily" | "weekly" | "cumulative" }) {
+function Heatmap({ days, mode, monthsBelow = false }: { days: DayRow[]; mode: "daily" | "weekly" | "cumulative"; monthsBelow?: boolean }) {
   const map = new Map(days.map((d) => [d.day, d.tokens]));
   const today = new Date();
   const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
@@ -330,11 +531,14 @@ function Heatmap({ days, mode }: { days: DayRow[]; mode: "daily" | "weekly" | "c
     }
     return "";
   });
+  const monthRow = (
+    <div className={`usage-heat__months${monthsBelow ? " is-below" : ""}`}>
+      {months.map((m, i) => <span key={i}>{m}</span>)}
+    </div>
+  );
   return (
     <div className="usage-heat">
-      <div className="usage-heat__months">
-        {months.map((m, i) => <span key={i}>{m}</span>)}
-      </div>
+      {!monthsBelow && monthRow}
       <div className="usage-heat__body">
         <div className="usage-heat__days">{"Mon Tue Wed Thu Fri Sat Sun".split(" ").map((d) => <span key={d}>{d}</span>)}</div>
         <div className="usage-heat__grid">
@@ -349,6 +553,7 @@ function Heatmap({ days, mode }: { days: DayRow[]; mode: "daily" | "weekly" | "c
           <span>Less activity</span>
         </div>
       </div>
+      {monthsBelow && monthRow}
     </div>
   );
 }
@@ -492,6 +697,11 @@ function Glyph({ name, tone }: { name: string; tone?: string }) {
     : name === "flame" ? "M12 3s6 5 6 10a6 6 0 1 1-12 0c0-3 2-5 3-7 0 2 1 3 3 3 0-3 0-6 0-6z"
     : name === "db" ? "M12 3c5 0 8 1.6 8 3.5S17 10 12 10 4 8.4 4 6.5 7 3 12 3zM4 6.5V12c0 1.9 3 3.5 8 3.5s8-1.6 8-3.5V6.5M4 12v5.5C4 19.4 7 21 12 21s8-1.6 8-3.5V12"
     : name === "coin" ? "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v10M9.5 9.5c.6-.8 1.5-1.2 2.5-1.2 1.6 0 2.5.9 2.5 2s-.8 1.8-2.5 2-2.5.8-2.5 2 1 2 2.5 2c1 0 1.9-.4 2.5-1.2"
+    : name === "chat" ? "M5 6h14v9H8l-3 3z"
+    : name === "code" ? "M9 8 5 12l4 4M15 8l4 4-4 4"
+    : name === "search" ? "M11 6a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM20 20l-3.5-3.5"
+    : name === "pen" ? "M4 20l4.5-1L19 8.5 15.5 5 5 15.5z"
+    : name === "dots" ? "M6 12h.01M12 12h.01M18 12h.01"
     : "M8 21h8M12 17a5 5 0 0 0 5-5c0-4-5-9-5-9s-5 5-5 9a5 5 0 0 0 5 5z";
   return (
     <span className={tone ? `usage-glyph usage-glyph--${tone}` : "usage-glyph"}>

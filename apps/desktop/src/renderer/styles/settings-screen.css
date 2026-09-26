@@ -412,6 +412,33 @@
   margin: 0; color: #8b95ad; font-size: 13px;
 }
 .usage-health__dates { display: flex; justify-content: space-between; margin-left: 50px; }
+.usage-activity-card { margin-top: 16px; }
+.usage-card__top p { margin: 4px 0 0; }
+.usage-heat__months.is-below { margin: 8px 0 0 40px; }
+.usage-info {
+  display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 6px;
+  border: 1px solid #3a465e; border-radius: 50%; color: #8b95ad; font-size: 9px; font-style: normal; vertical-align: 1px;
+}
+.usage-split { display: grid; grid-template-columns: 1.2fr 0.9fr 1.15fr; gap: 12px; }
+.usage-donut { width: 148px; height: 148px; flex-shrink: 0; }
+.usage-donut__value { fill: #e7eefc; font-size: 18px; font-weight: 700; }
+.usage-donut__caption { fill: #8b95ad; font-size: 10px; }
+.usage-donut-row, .usage-donut-col { display: flex; align-items: center; gap: 16px; }
+.usage-donut-col { flex-direction: column; align-items: flex-start; }
+.usage-share { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+.usage-share li, .usage-tasks li { display: grid; align-items: center; gap: 8px; color: #d5def0; font-size: 12px; }
+.usage-share li { grid-template-columns: 8px minmax(0, 1fr) auto auto; }
+.usage-share i, .usage-legend--block i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.usage-share b { color: #e7eefc; font-weight: 650; }
+.usage-share em, .usage-tasks em, .usage-legend--block em { color: #8b95ad; font-style: normal; }
+.usage-legend--block { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.usage-legend--center { justify-content: center; }
+.usage-lines { width: 100%; height: 210px; display: block; }
+.usage-lines__label { fill: #8b95ad; font-size: 11px; }
+.usage-tasks { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.usage-tasks li { grid-template-columns: 16px minmax(0, 1fr) 92px auto; }
+.usage-taskbar { height: 6px; border-radius: 99px; background: #1c2638; overflow: hidden; }
+.usage-taskbar i { display: block; height: 100%; border-radius: 99px; min-width: 0; }
 
 @media (max-width: 1100px) {
   .settings-screen { grid-template-columns: 1fr; }
@@ -419,6 +446,7 @@
   .settings-grid, .settings-fields, .settings-meters, .usage-meters, .usage-trends { grid-template-columns: 1fr; }
   .usage-activity { grid-template-columns: 1fr 1fr; }
   .usage-page__head { align-items: flex-start; flex-direction: column; }
+  .usage-split { grid-template-columns: 1fr; }
   .usage-heat__body { grid-template-columns: 28px minmax(0, 1fr); }
   .usage-heat__scale { grid-column: 1 / -1; flex-direction: row; max-width: none; justify-content: flex-end; }
 }
