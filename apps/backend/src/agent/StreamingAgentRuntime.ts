@@ -229,6 +229,8 @@ interface RunState {
   capabilityNudges: number;
   /** Records a project file on the session workspace after a successful write. */
   onProjectFile?: (relativePath: string) => void;
+  /** The model already streamed a final answer. It stays hidden until verification finishes. */
+  heldFinal?: boolean;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -2042,6 +2044,19 @@ export class StreamingAgentRuntime {
           });
           return { kind: "continue", reason: "reply announced a next step without doing it" };
         }
+        // The streamed sentence is not the final answer yet. Verification still
+        // has to finish; the same text is published from complete() afterward.
+        const willVerify = isImplementationTask(collectVerificationEvidence(
+          state.instruction,
+          this.store.get(runId)?.events ?? [],
+          { website: Boolean(state.website) || undefined }
+        ));
+        if (streamedText && willVerify) {
+          this.store.emit(runId, "message.retracted", { reason: "final answer waits for verification" });
+          state.heldFinal = true;
+        } else {
+          state.heldFinal = false;
+        }
         return { kind: "verify" };
       },
 
@@ -2109,7 +2124,7 @@ export class StreamingAgentRuntime {
       complete: (_turn, { content, streamedText }) => {
         if (state.cancelled) return;
         const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
-        const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts);
+        const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts, this.store.get(runId)?.events ?? []);
         if (claimCheck.blocked) grounded.blocked = true;
         const wantedFile = looksLikeFileDeliverableRequest(state.instruction);
         if (wantedFile && state.createdArtifacts.length === 0) {
@@ -2126,7 +2141,7 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "message.grounded", { content: copy, blocked: true });
           this.emitNarration(runId, copy, false);
         } else {
-          this.emitNarration(runId, content, streamedText);
+          this.emitNarration(runId, content, streamedText && !state.heldFinal);
         }
         if (state.intent.requiresFrontend) {
           const published = publishRememberedSite(runId);

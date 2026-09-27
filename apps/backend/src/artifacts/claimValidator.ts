@@ -55,8 +55,16 @@ export function filesGeneratedCopy(artifacts: GroundedArtifact[]): string {
   return `Saved ${names} in Files → Generated (virtual file storage). Preview or download it from the card — that is the real file.`;
 }
 
-export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[]): { text: string; blocked: boolean } {
+export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[], events: ClaimEvent[] = []): { text: string; blocked: boolean } {
   const list = artifacts.filter((a) => a.artifactId && a.name);
+  // A website or source edit is saved in the workspace. Mentioning a download
+  // card must not erase that answer as if no file existed.
+  if (list.length === 0 && changeEvidence(events)) {
+    const invented = inventedFilenames(text, []);
+    if (invented.length === 0 && !SANDBOX_PATH.test(text) && !/sandbox\/artifacts/i.test(text)) {
+      return { text, blocked: false };
+    }
+  }
   if (list.length > 0) {
     const invented = inventedFilenames(text, list);
     const leakedPath = SANDBOX_PATH.test(text) || /sandbox\/artifacts/i.test(text);
@@ -103,6 +111,7 @@ function visualEvidence(events: ClaimEvent[]): boolean {
 
 function changeEvidence(events: ClaimEvent[]): boolean {
   return events.some((event) =>
+    event.type === "file.created" ||
     event.type === "file.edit" ||
     event.type === "file.changed" ||
     (event.type === "tool.completed" && /edit_file|write_file|deploy/i.test(toolName(event)))

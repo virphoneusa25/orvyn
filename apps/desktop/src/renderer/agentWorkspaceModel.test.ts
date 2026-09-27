@@ -217,6 +217,20 @@ test("review summary and ORION terminal sessions derive from events", () => {
   assert.equal(cmds[0]!.command, "npm test");
   assert.match(cmds[0]!.output, /174 passing/);
   assert.equal(cmds[0]!.running, false);
+  const served = extractOrionCommands([
+    ev("tool.started", { callId: "p1", tool: "start_process" }, 1),
+    ev("tool.completed", { callId: "p1", tool: "start_process", preview: "Service svc_1 is running: python3 -m http.server 8080 --bind 0.0.0.0\nNo URL printed yet." }, 2),
+    ev("tool.started", { callId: "c1", tool: "terminal" }, 3),
+    ev("terminal.started", { callId: "c1", command: "curl -s -o /dev/null -w index.html http://localhost:8080/index.html" }, 4),
+    ev("terminal.output", { callId: "c1", data: "index.html: 200\n" }, 5),
+    ev("terminal.completed", { callId: "c1", exitOk: true }, 6),
+  ]);
+  assert.deepEqual(served.map((row) => row.command), [
+    "python3 -m http.server 8080 --bind 0.0.0.0",
+    "curl -s -o /dev/null -w index.html http://localhost:8080/index.html",
+  ]);
+  assert.match(served[1]!.output, /200/);
+  assert.equal(served.some((row) => row.command === "command"), false);
   const switched = nextWorkspaceLayout(
     { open: true, width: 520, activeTab: "changes", followOrion: true },
     derived.activity

@@ -209,14 +209,33 @@ test("a one-page website is written, served, and checked before the final answer
   assert.ok(phases.includes("completed"));
 
   const said = bubbles(events);
-  assert.ok(said.length >= 1 && said.length <= 3, said.join(" | "));
+  assert.ok(said.length >= 1 && said.length <= 6, said.join(" | "));
   assert.equal(said.some((line) => /Let me check|folder is empty|I'll now create|supply the path/i.test(line)), false);
+  assert.equal(said.filter((line) => /page is not ready yet/i.test(line)).length <= 2, true);
   const finalAt = events.map((e) => e.type).lastIndexOf("message.completed");
   const before = events.slice(0, finalAt);
   assert.ok(before.some((e) => e.type === "file.created" && String(e.data?.path ?? "").endsWith("index.html")));
   assert.ok(before.some((e) => e.type === "preview.available"));
   assert.ok(before.some((e) => e.type === "browser.completed"));
   assert.ok(before.some((e) => e.type === "verification.completed" && e.data?.verdict === "PASS"));
+
+  let buf = "";
+  let bufAt = -1;
+  let visibleStart = -1;
+  events.forEach((event, index) => {
+    if (event.type === "message.delta") {
+      if (!buf) bufAt = index;
+      buf += String(event.data?.content ?? "");
+    } else if (event.type === "message.retracted") {
+      buf = "";
+      bufAt = -1;
+    } else if (event.type === "message.completed" && buf.trim()) {
+      visibleStart = bufAt;
+      buf = "";
+    }
+  });
+  const verifyAt = events.findIndex((event) => event.type === "verification.completed" && event.data?.verdict === "PASS");
+  assert.ok(visibleStart > verifyAt, "the visible final starts after verification");
 });
 
 test("repeated website narration fails without claiming the site exists", async () => {

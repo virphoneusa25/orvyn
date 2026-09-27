@@ -163,6 +163,14 @@ test("claim validator blocks generated claims without artifactId", () => {
   const workspace = groundAssistantClaims("Wrote hello.txt. It contains hello world.", []);
   assert.equal(workspace.blocked, false);
   assert.match(workspace.text, /hello world/);
+  const site = groundAssistantClaims(
+    "Done. The site is in the workspace; download cards: index.html and styles.css.",
+    [],
+    [{ type: "file.created", data: { path: "index.html" } }, { type: "tool.completed", data: { tool: "write_file" } }]
+  );
+  assert.equal(site.blocked, false);
+  assert.match(site.text, /index\.html/);
+  assert.doesNotMatch(site.text, /No file was saved/);
 });
 
 test("file-producing tools cannot return ok without artifactId", () => {

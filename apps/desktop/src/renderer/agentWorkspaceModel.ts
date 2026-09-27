@@ -597,28 +597,50 @@ export function reconstructWorkspace(events: WorkspaceEvent[], opts?: { projectN
   return deriveAgentWorkspace(events, opts);
 }
 
+function commandLine(value: unknown): string {
+  const line = String(value ?? "").split("\n")[0]!.trim();
+  if (!line || line === "command") return "";
+  return line.slice(0, 160);
+}
+
 export function extractOrionCommands(events: WorkspaceEvent[]): { id: string; command: string; output: string; running: boolean }[] {
   const cmds: { id: string; command: string; output: string; running: boolean }[] = [];
   const byId = new Map<string, { id: string; command: string; output: string; running: boolean }>();
+  const upsert = (id: string, command: string, running: boolean) => {
+    if (!command) return;
+    const existing = byId.get(id);
+    if (existing) {
+      existing.command = command;
+      existing.running = running;
+      return;
+    }
+    const row = { id, command, output: "", running };
+    byId.set(id, row);
+    cmds.push(row);
+  };
   for (const e of events) {
     const data = e.data ?? {};
     const tool = String(data.tool ?? "");
-    if (e.type === "terminal.started" || (e.type === "tool.started" && tool === "terminal")) {
-      const id = String(e.id ?? data.taskId ?? cmds.length);
-      const command = String(data.command ?? data.preview ?? "command").split("\n")[0]!.slice(0, 120);
-      const row = { id, command, output: "", running: true };
-      byId.set(id, row);
-      cmds.push(row);
+    const callId = String(data.callId ?? data.taskId ?? e.id ?? cmds.length);
+    const nested = (data.input ?? data.args) as { command?: unknown } | undefined;
+    if (e.type === "terminal.started" || (e.type === "tool.started" && (tool === "terminal" || tool === "run_command"))) {
+      upsert(callId, commandLine(data.command ?? nested?.command), true);
+    }
+    if ((e.type === "tool.completed" || e.type === "tool.started") && tool === "start_process") {
+      const preview = String(data.preview ?? "");
+      const matched = preview.match(/is running:\s*([^\n]+)/);
+      upsert(callId, commandLine(matched?.[1] ?? nested?.command ?? data.command), e.type !== "tool.completed");
     }
     if (e.type === "terminal.output") {
-      const last = cmds[cmds.length - 1];
-      if (last) last.output = (last.output + String(data.chunk ?? data.output ?? "")).slice(-12000);
+      const chunk = String(data.chunk ?? data.output ?? (typeof data.data === "string" ? data.data : ""));
+      const row = byId.get(String(data.callId ?? "")) ?? cmds[cmds.length - 1];
+      if (row && chunk) row.output = (row.output + chunk).slice(-12000);
     }
-    if (e.type === "terminal.completed" || (e.type === "tool.completed" && tool === "terminal")) {
-      const last = cmds[cmds.length - 1];
-      if (last) {
-        last.running = false;
-        if (data.output || data.preview) last.output = (last.output + String(data.output ?? data.preview ?? "")).slice(-12000);
+    if (e.type === "terminal.completed" || (e.type === "tool.completed" && (tool === "terminal" || tool === "run_command"))) {
+      const row = byId.get(String(data.callId ?? "")) ?? cmds[cmds.length - 1];
+      if (row) {
+        row.running = false;
+        if (data.output || data.preview) row.output = (row.output + String(data.output ?? data.preview ?? "")).slice(-12000);
       }
     }
   }
