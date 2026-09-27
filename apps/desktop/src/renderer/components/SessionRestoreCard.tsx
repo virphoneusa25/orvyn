@@ -28,10 +28,15 @@ export function SessionRestoreCard({ sessionId, refreshKey }: { sessionId: strin
       </div>
     );
   }
-  if (!state || !state.runs.length || (!state.files.length && !state.preview && !state.artifacts.length)) return null;
+  if (!state) return null;
   const root = state.session.projectRoot;
-  const project = root ? root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : "Cloud workspace";
+  const named = state.session.title && !/^new conversation$/i.test(state.session.title)
+    ? state.session.title
+    : root ? root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : "Cloud workspace";
+  const project = named && !/^ws_[a-z0-9]+$/i.test(named) ? named : (state.session.title || "Project");
   const files = state.files.filter((f) => f.operation !== "delete");
+  if (!state.runs.length && !files.length && !state.preview && !state.artifacts.length) return null;
+  const previewDown = Boolean(state.preview && !state.preview.available);
   return (
     <div className="session-restore" data-testid="session-restore" data-project-root={root ?? ""}>
       <div className="session-restore__head">
@@ -39,11 +44,13 @@ export function SessionRestoreCard({ sessionId, refreshKey }: { sessionId: strin
         <span className="session-restore__meta">
           {state.runs.length} {state.runs.length === 1 ? "run" : "runs"} · {files.length} {files.length === 1 ? "file" : "files"}
         </span>
+        {files.length > 0 && previewDown && <span className="session-restore__meta" data-testid="project-restored">Project restored</span>}
         {state.preview && (
           state.preview.available
             ? <button className="session-restore__preview" data-testid="session-preview" data-url={state.preview.url}
-                onClick={() => openArtifactInContext({ tab: "preview", url: state.preview!.url })}>Open preview</button>
-            : <span className="session-restore__meta">Preview no longer available</span>
+                onClick={() => openArtifactInContext({ tab: "preview", url: state.preview!.url })}>Open Preview</button>
+            : <button className="session-restore__preview" data-testid="preview-stopped" type="button"
+                onClick={() => openArtifactInContext({ tab: "preview" })}>Preview stopped</button>
         )}
       </div>
       {files.length > 0 && (

@@ -248,6 +248,9 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.match(note, /Do not say the workspace is empty/);
   assert.match(note, /Do not say the earlier files did not persist/);
   assert.match(note, /Do not say there is no project folder/);
+  assert.match(note, /Do not say the site does not exist/);
+  assert.match(note, /The project exists/);
+  assert.match(note, /republish it from these files/);
   assert.doesNotMatch(note, /just provisioned/);
   assert.doesNotMatch(note, /has no project files yet/);
 

@@ -157,7 +157,8 @@ export function workspaceModelNote(identity: { created: boolean; restored: boole
     lines.push(
       `This chat is restored in its existing workspace. These project files are already here: ${known.join(", ")}.`,
       `Read ${known.join(" and ")} before changing the project, then edit those files in place.`,
-      "Do not say the workspace is empty. Do not say the earlier files did not persist. Do not say there is no project folder. Do not start a second project."
+      "Do not say the workspace is empty. Do not say the earlier files did not persist. Do not say there is no project folder. Do not say the site does not exist. Do not start a second project.",
+      "The project exists. A stopped preview is not a missing project. If the preview is not running, republish it from these files."
     );
   } else if (identity.restored) {
     lines.push("This chat is restored in its existing workspace. Read the files already there and modify that project. Do not say the workspace is empty. Do not say there is no project folder. Do not start a second project.");

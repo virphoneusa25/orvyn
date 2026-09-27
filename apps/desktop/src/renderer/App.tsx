@@ -218,7 +218,10 @@ export function App() {
         projectRoot,
         created: false,
         restored: true,
+        projectName: restored?.projectName ?? chat.title ?? null,
         files: restored?.files,
+        runs: restored?.runs,
+        artifacts: restored?.artifacts,
         preview: restored?.preview,
       };
     });

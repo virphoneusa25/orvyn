@@ -4,7 +4,11 @@ import { withWrittenFiles } from "./filesPanelModel.ts";
 import {
   NEW_WORKSPACE_LABEL,
   NO_WORKSPACE_LABEL,
+  OPEN_PREVIEW_LABEL,
+  PREVIEW_STOPPED_LABEL,
+  PROJECT_RESTORED_LABEL,
   isUntrustedWorkbenchRoot,
+  previewUrlForSelection,
   projectWorkbench,
   sameWorkspace,
   shouldListDisk,
@@ -114,4 +118,44 @@ test("reopening the same conversation reconnects to the same project workspace",
   assert.equal(reopened.previewUrl, "http://127.0.0.1:43191");
   assert.equal(reopened.browserUrl, "http://127.0.0.1:43191");
   assert.equal(workspaceChromeLabel(reopened, "workspace", GUESSED, reopened.listRoot), "Workspace");
+  assert.equal(reopened.projectStatusLabel, PROJECT_RESTORED_LABEL);
+  assert.equal(reopened.previewStatusLabel, OPEN_PREVIEW_LABEL);
+  assert.equal(reopened.previewAvailable, true);
+  assert.equal(reopened.previewStopped, false);
+  assert.equal(previewUrlForSelection(reopened, false), null);
+  assert.equal(previewUrlForSelection(reopened, true), "http://127.0.0.1:43191");
+});
+
+test("a stopped preview leaves the project files and does not claim the site is gone", () => {
+  const session: WorkbenchSessionSnapshot = {
+    sessionId: "ses_1",
+    projectId: "proj_1",
+    workspaceId: "ws_1",
+    projectRoot: ROOT,
+    projectName: "Harbor",
+    created: false,
+    restored: true,
+    files: [
+      { path: "index.html", operation: "write" },
+      { path: "styles.css", operation: "write" },
+    ],
+    runs: [{ runId: "run_1", status: "completed", instruction: "Build a website", createdAt: 1 }],
+    artifacts: [{ artifactId: "art_1", name: "logo.png", mimeType: "image/png" }],
+    preview: { url: "http://127.0.0.1:43191", available: false },
+  };
+  const view = projectWorkbench({ events: [], session, guessedRoot: GUESSED });
+  assert.equal(view.projectName, "Harbor");
+  assert.equal(view.identity?.workspaceId, "ws_1");
+  assert.deepEqual(view.files.map((f) => f.path).sort(), ["index.html", "styles.css"]);
+  assert.equal(view.changes.length, 2);
+  assert.equal(view.runs[0]?.instruction, "Build a website");
+  assert.equal(view.artifacts[0]?.name, "logo.png");
+  assert.equal(view.projectStatusLabel, PROJECT_RESTORED_LABEL);
+  assert.equal(view.previewStatusLabel, PREVIEW_STOPPED_LABEL);
+  assert.equal(view.previewAvailable, false);
+  assert.equal(view.previewUrl, null);
+  assert.equal(view.previewSavedUrl, "http://127.0.0.1:43191");
+  assert.equal(previewUrlForSelection(view, true), null);
+  assert.equal(view.previewOpensAutomatically, false);
+  assert.doesNotMatch(`${view.projectStatusLabel} ${view.previewStatusLabel}`, /does not exist/i);
 });

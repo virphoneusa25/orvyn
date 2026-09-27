@@ -6,6 +6,23 @@ import { toProjectRelative } from "./filesPanelModel.ts";
 
 export const NO_WORKSPACE_LABEL = "No workspace yet";
 export const NEW_WORKSPACE_LABEL = "New workspace";
+export const PROJECT_RESTORED_LABEL = "Project restored";
+export const PREVIEW_STOPPED_LABEL = "Preview stopped";
+export const OPEN_PREVIEW_LABEL = "Open Preview";
+
+export interface WorkbenchRunSummary {
+  runId: string;
+  status: string;
+  instruction?: string;
+  createdAt?: number;
+}
+
+export interface WorkbenchArtifact {
+  artifactId: string;
+  name: string;
+  mimeType?: string;
+  runId?: string;
+}
 
 export interface WorkbenchIdentity {
   sessionId: string;
@@ -23,7 +40,10 @@ export interface WorkbenchSessionSnapshot {
   projectRoot: string | null;
   created?: boolean;
   restored?: boolean;
+  projectName?: string | null;
   files?: { path: string; operation: string }[];
+  runs?: WorkbenchRunSummary[];
+  artifacts?: WorkbenchArtifact[];
   preview?: { url: string; available?: boolean } | null;
 }
 
@@ -43,8 +63,22 @@ export interface WorkbenchSurface {
   changes: WorkbenchChange[];
   changeFiles: WorkspaceFile[];
   commands: { id: string; command: string; output: string; running: boolean }[];
+  /** URL of a preview that is running. Null when the preview server is gone. */
   previewUrl: string | null;
-  /** Shared ORION/user browser target: the browser event, or the project preview. */
+  /** Last preview URL, including one whose server has stopped. */
+  previewSavedUrl: string | null;
+  /** True only when that preview is still being served. */
+  previewAvailable: boolean;
+  /** The project remains, and the previous preview server does not. */
+  previewStopped: boolean;
+  /** True when this preview URL came from the current run, so the tab may open itself. */
+  previewOpensAutomatically: boolean;
+  projectName: string | null;
+  runs: WorkbenchRunSummary[];
+  artifacts: WorkbenchArtifact[];
+  projectStatusLabel: typeof PROJECT_RESTORED_LABEL | null;
+  previewStatusLabel: typeof OPEN_PREVIEW_LABEL | typeof PREVIEW_STOPPED_LABEL | null;
+  /** Shared ORION/user browser target: the browser event, or a running project preview. */
   browserUrl: string | null;
   summary: { files: number; additions: number; deletions: number };
 }
@@ -176,14 +210,44 @@ function collectMutations(events: WorkspaceEvent[], session: WorkbenchSessionSna
   return map;
 }
 
-function projectPreview(events: WorkspaceEvent[], session: WorkbenchSessionSnapshot | null | undefined): string | null {
-  let url: string | null = null;
+function projectPreview(events: WorkspaceEvent[], session: WorkbenchSessionSnapshot | null | undefined): {
+  url: string | null;
+  savedUrl: string | null;
+  available: boolean;
+  stopped: boolean;
+  automatic: boolean;
+} {
+  let live: string | null = null;
   for (const e of events) {
-    if ((e.type === "preview.available" || e.type === "preview.updated") && typeof e.data?.url === "string" && e.data.url) url = e.data.url;
+    if ((e.type === "preview.available" || e.type === "preview.updated") && typeof e.data?.url === "string" && e.data.url) live = e.data.url;
   }
-  if (url) return url;
-  const saved = session?.preview?.url;
-  return saved ? saved : null;
+  if (live) return { url: live, savedUrl: live, available: true, stopped: false, automatic: true };
+  const saved = session?.preview?.url?.trim() || null;
+  if (!saved) return { url: null, savedUrl: null, available: false, stopped: false, automatic: false };
+  if (session?.preview?.available === false) {
+    return { url: null, savedUrl: saved, available: false, stopped: true, automatic: false };
+  }
+  return { url: saved, savedUrl: saved, available: true, stopped: false, automatic: false };
+}
+
+/** The running preview URL, only after the Preview tab is selected. A stopped preview stays closed. */
+export function previewUrlForSelection(
+  surface: Pick<WorkbenchSurface, "previewAvailable" | "previewSavedUrl" | "previewUrl">,
+  selected: boolean
+): string | null {
+  if (!selected || !surface.previewAvailable) return null;
+  return surface.previewSavedUrl || surface.previewUrl;
+}
+
+export function restoredProjectName(session: { projectName?: string | null; title?: string | null; projectRoot?: string | null } | null | undefined): string | null {
+  const explicit = session?.projectName?.trim();
+  if (explicit) return explicit;
+  const title = session?.title?.trim();
+  if (title && !/^new conversation$/i.test(title)) return title;
+  const root = String(session?.projectRoot ?? "").replace(/[\\/]+$/, "");
+  const base = root.split(/[\\/]/).pop() ?? "";
+  if (base && !/^ws_[a-z0-9]+$/i.test(base)) return base;
+  return title || null;
 }
 
 function browserTarget(events: WorkspaceEvent[]): string | null {
@@ -243,6 +307,15 @@ export function projectWorkbench(input: {
       changeFiles: [],
       commands: extractOrionCommands(events),
       previewUrl: null,
+      previewSavedUrl: null,
+      previewAvailable: false,
+      previewStopped: false,
+      previewOpensAutomatically: false,
+      projectName: null,
+      runs: [],
+      artifacts: [],
+      projectStatusLabel: null,
+      previewStatusLabel: null,
       browserUrl: browserTarget(events),
       summary: { files: 0, additions: 0, deletions: 0 },
     };
@@ -258,14 +331,17 @@ export function projectWorkbench(input: {
   }
   const fileKind = (kind: string): WorkspaceFile["kind"] =>
     kind === "create" ? "created" : kind === "delete" ? "deleted" : "modified";
-  const previewUrl = projectPreview(events, input.session);
-  const browserUrl = browserTarget(events) || previewUrl;
+  const preview = projectPreview(events, input.session);
+  const browserUrl = browserTarget(events) || preview.url;
+  const projectFiles = changes.filter((c) => c.kind !== "delete");
+  const projectName = restoredProjectName(input.session);
+  const restoredProject = status === "restored" && (projectFiles.length > 0 || Boolean(input.session?.workspaceId));
   return {
     status,
     label: status === "created" ? NEW_WORKSPACE_LABEL : "Workspace",
     identity,
     listRoot: identity.projectRoot,
-    files: changes.filter((c) => c.kind !== "delete").map((c) => ({ path: c.path, kind: fileKind(c.kind) })),
+    files: projectFiles.map((c) => ({ path: c.path, kind: fileKind(c.kind) })),
     changes,
     changeFiles: changes.map((c) => ({
       path: c.path,
@@ -275,7 +351,20 @@ export function projectWorkbench(input: {
       status: c.kind === "create" ? "Created" : c.kind === "delete" ? "Deleted" : "Modified",
     })),
     commands: extractOrionCommands(events),
-    previewUrl,
+    previewUrl: preview.url,
+    previewSavedUrl: preview.savedUrl,
+    previewAvailable: preview.available,
+    previewStopped: preview.stopped,
+    previewOpensAutomatically: preview.automatic,
+    projectName,
+    runs: input.session?.runs ?? [],
+    artifacts: input.session?.artifacts ?? [],
+    projectStatusLabel: restoredProject ? PROJECT_RESTORED_LABEL : null,
+    previewStatusLabel: preview.available && preview.savedUrl
+      ? OPEN_PREVIEW_LABEL
+      : preview.stopped
+        ? PREVIEW_STOPPED_LABEL
+        : null,
     browserUrl,
     summary: { files: changes.length, additions, deletions },
   };

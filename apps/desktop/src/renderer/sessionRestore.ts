@@ -9,11 +9,27 @@ export interface SessionGet {
 
 interface SessionRecord {
   sessionId?: string;
+  title?: string | null;
   projectId?: string | null;
   workspaceId?: string | null;
   projectRoot?: string | null;
   runIds?: string[];
   activeRunId?: string | null;
+}
+
+interface StateFile {
+  path?: string;
+  operation?: string;
+  runId?: string;
+  at?: number;
+}
+
+interface StateBody {
+  session?: { title?: string | null; projectRoot?: string | null };
+  runs?: { runId?: string; status?: string; instruction?: string; createdAt?: number }[];
+  files?: StateFile[];
+  artifacts?: { artifactId?: string; name?: string; mimeType?: string; runId?: string }[];
+  preview?: { url?: string; available?: boolean; runId?: string } | null;
 }
 
 /**
@@ -39,16 +55,31 @@ export async function restoreWorkSessionFromBackend(opts: {
       failSessionRestore(chatId, gen);
       return "failed";
     }
-    const stateBody = stateRes.ok ? stateRes.body as { files?: CanonicalWorkSession["files"]; preview?: { url?: string; available?: boolean } | null } : null;
+    const stateBody = stateRes.ok ? stateRes.body as StateBody | null : null;
+    const files = (stateBody?.files ?? [])
+      .filter((file): file is StateFile & { path: string } => Boolean(file?.path))
+      .map((file) => ({ path: file.path, operation: file.operation || "write", runId: file.runId, at: file.at }));
+    const runs = (stateBody?.runs ?? [])
+      .filter((run) => Boolean(run?.runId))
+      .map((run) => ({ runId: String(run.runId), status: String(run.status ?? ""), instruction: run.instruction, createdAt: run.createdAt }));
+    const artifacts = (stateBody?.artifacts ?? [])
+      .filter((item) => Boolean(item?.artifactId))
+      .map((item) => ({ artifactId: String(item.artifactId), name: String(item.name ?? ""), mimeType: item.mimeType, runId: item.runId }));
+    const title = stateBody?.session?.title || session.title || null;
     const canonical: CanonicalWorkSession = {
       sessionId: session.sessionId,
       projectId: session.projectId ?? null,
       workspaceId: session.workspaceId ?? null,
       projectRoot: session.projectRoot ?? null,
+      projectName: title,
       runIds: session.runIds ?? [],
       activeRunId: session.activeRunId ?? null,
-      files: stateBody?.files,
-      preview: stateBody?.preview?.url ? { url: stateBody.preview.url, available: stateBody.preview.available } : null,
+      files,
+      runs,
+      artifacts,
+      preview: stateBody?.preview?.url
+        ? { url: stateBody.preview.url, available: stateBody.preview.available, runId: stateBody.preview.runId }
+        : null,
     };
     const applied = completeSessionRestore(chatId, gen, canonical);
     if (applied) return "ready";

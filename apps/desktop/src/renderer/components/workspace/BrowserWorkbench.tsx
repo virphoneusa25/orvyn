@@ -15,6 +15,7 @@ export function BrowserWorkbench({
   addressFocusToken,
   liveVersion = 0,
   updating = false,
+  previewStopped = false,
 }: {
   kind: "browser" | "preview";
   projectName?: string | null;
@@ -26,6 +27,8 @@ export function BrowserWorkbench({
   addressFocusToken?: number;
   liveVersion?: number;
   updating?: boolean;
+  /** The project is restored and its preview server is not running. */
+  previewStopped?: boolean;
 }) {
   const api = window.orvyn.browser;
   const [state, setState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
@@ -238,9 +241,11 @@ export function BrowserWorkbench({
         </div>
       )}
 
-      {start ? (
+      {kind === "preview" && previewStopped && !requestedUrl ? (
+        <RestoredPreview />
+      ) : start ? (
         <StartPage recents={state.recents} onGo={(u) => void go(u)} native={hasNative} draft={draft} setDraft={setDraft} />
-      ) : tab?.error ? (
+      ) : tab?.error && !(kind === "preview" && previewStopped) ? (
         <ErrorPage tab={tab} local={kind === "preview"} onRetry={() => void go(tab.url)} />
       ) : (
         <div style={{ flex: 1, minHeight: 0, display: "flex", justifyContent: "center", background: "#070b14" }}>
@@ -291,6 +296,15 @@ export function BrowserWorkbench({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function RestoredPreview() {
+  return (
+    <div data-testid="preview-stopped-panel" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 28, textAlign: "center" }}>
+      <div style={emptyTitle()}>Project restored</div>
+      <div style={emptyBody()}>Preview stopped. The project files are still here. ORION can publish this preview again.</div>
     </div>
   );
 }

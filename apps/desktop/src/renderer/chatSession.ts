@@ -246,10 +246,13 @@ export interface CanonicalWorkSession {
   projectId: string | null;
   workspaceId: string | null;
   projectRoot: string | null;
+  projectName?: string | null;
   runIds: string[];
   activeRunId: string | null;
-  files?: { path: string; operation: string }[];
-  preview?: { url: string; available?: boolean } | null;
+  files?: { path: string; operation: string; runId?: string; at?: number }[];
+  runs?: { runId: string; status: string; instruction?: string; createdAt?: number }[];
+  artifacts?: { artifactId: string; name: string; mimeType?: string; runId?: string }[];
+  preview?: { url: string; available?: boolean; runId?: string } | null;
 }
 
 const restoreState = new Map<string, SessionRestoreState>();

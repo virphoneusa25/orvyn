@@ -539,7 +539,7 @@ export function FilesInspector({
           {!unbound && location === "local" && projectRoot && localError && <p className="ofp-empty">{localError}</p>}
           {!unbound && location !== "local" && loadError && <p className="ofp-empty">{loadError}</p>}
           {!unbound && visibleNodes.length === 0 && (location !== "local" || !localError) && !loadError && (
-            <p className="ofp-empty">{searching ? "No files match your search." : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : location === "cloud" ? "The cloud workspace is empty. Files ORION creates appear here." : "This folder is empty."}</p>
+            <p className="ofp-empty">{searching ? "No files match your search." : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : workspaceStatus === "restored" ? "Project restored" : location === "cloud" ? "No project files yet. Files ORION creates appear here." : "This folder is empty."}</p>
           )}
           {renderNodes(visibleNodes, 0)}
         </section>

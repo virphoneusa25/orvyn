@@ -5,6 +5,8 @@
 // newest live preview. Reopening a conversation restores this whole picture,
 // so the user continues the same project instead of starting over.
 
+import * as fs from "fs";
+import * as path from "path";
 import type { AgentEvent, RunStore } from "../agent/events";
 import { summarizeRuns, sessionRuns, type ThreadRunSummary } from "../agent/runThread";
 import { readPublishedFile } from "../agent/sitePreview";
@@ -45,6 +47,52 @@ export interface SessionState {
 }
 
 const FILE_OPS = new Set(["write", "edit", "delete", "move"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage"]);
+
+/** Project files currently on disk. This is the project, not a live preview. */
+export function listWorkspaceFiles(root: string, limit = 200): string[] {
+  if (!root || !fs.existsSync(root)) return [];
+  const found: string[] = [];
+  const visit = (dir: string, rel: string, depth: number): void => {
+    if (depth > 6 || found.length >= limit) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= limit) return;
+      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name) || entry.isSymbolicLink()) continue;
+      const child = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(path.join(dir, entry.name), child, depth + 1);
+      else if (entry.isFile()) found.push(child);
+    }
+  };
+  visit(root, "", 0);
+  return found.sort();
+}
+
+/**
+ * Event history plus files that are still in the workspace directory.
+ * A delete is dropped when the file is on disk again. A file on disk with
+ * no event is still part of the project.
+ */
+export function mergeDiskProjectFiles(files: SessionFile[], root: string | null | undefined): SessionFile[] {
+  const onDisk = root ? listWorkspaceFiles(root) : [];
+  const disk = new Set(onDisk);
+  const byPath = new Map<string, SessionFile>();
+  for (const file of files) {
+    if (!file.path) continue;
+    if (file.operation === "delete" && disk.has(file.path)) continue;
+    byPath.set(file.path, file);
+  }
+  for (const rel of onDisk) {
+    if (byPath.has(rel)) continue;
+    byPath.set(rel, { path: rel, operation: "write", runId: "", at: 0 });
+  }
+  return [...byPath.values()];
+}
 
 /** The published site id in a preview URL: …/api/v1/sites/<id>/ */
 export function previewSiteId(url: string): string | null {
@@ -85,13 +133,15 @@ export function sessionState(sessions: WorkSessionStore, store: RunStore, sessio
   const runs = sessionRuns(store, session.runIds).map((r) => ({ id: r.id, events: r.events }));
   const out = collectSessionOutputs(runs);
   const siteId = out.preview ? previewSiteId(out.preview.url) : null;
+  const previewAvailable = Boolean(siteId && readPublishedFile(siteId, "index.html"));
   return {
     session,
     runs: summarizeRuns(store, session.runIds),
     activeRunId: session.activeRunId,
     messageCount: sessions.messageSummary(session.sessionId).messageCount,
-    files: out.files,
+    files: mergeDiskProjectFiles(out.files, session.projectRoot),
     artifacts: out.artifacts,
-    preview: out.preview ? { ...out.preview, available: Boolean(siteId && readPublishedFile(siteId, "index.html")) } : null,
+    // available means the preview server is still serving. Files can exist when this is false.
+    preview: out.preview ? { ...out.preview, available: previewAvailable } : null,
   };
 }

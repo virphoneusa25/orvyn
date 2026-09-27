@@ -42,7 +42,7 @@ import {
 } from "../../workbenchModel";
 import { isFabricatedGeneratedPath } from "../../workbenchFileAccess";
 import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle, workspaceChromeStatus } from "../../workbenchEnvironment";
-import { projectWorkbench, shouldListDisk, workspaceChromeLabel, type WorkbenchSessionSnapshot, type WorkbenchSurface } from "../../workbenchBinding";
+import { previewUrlForSelection, projectWorkbench, shouldListDisk, workspaceChromeLabel, type WorkbenchSessionSnapshot, type WorkbenchSurface } from "../../workbenchBinding";
 import { readComposerDefaults } from "../../composerSettings";
 import { isCloudBackend, getConnectionConfig } from "../../connection";
 import { DocumentsPanel } from "../DocumentsPanel";
@@ -149,7 +149,7 @@ export function AgentWorkspace({
     return derived.previews.length > 0 ? 1 : 0;
   }, [events, derived.previews.length]);
 
-  const previewUrl = surface.previewUrl
+  const previewUrl = (surface.previewOpensAutomatically ? surface.previewUrl : null)
     || (surface.status === "none" ? undefined : derived.previews[derived.previews.length - 1]?.url)
     || undefined;
   const reconciled = useMemo(() => reconcileWorkbenchTabs({
@@ -381,6 +381,13 @@ export function AgentWorkspace({
   function activate(tab: WorkbenchTab, manual = false) {
     if (manual) setFollow((s) => applyManualTab(s));
     setPlusOpen(false);
+    if ((tab.kind === "preview" || tab.id === "preview") && !tab.url) {
+      const saved = previewUrlForSelection(surface, true);
+      if (saved) {
+        void openBrowserSurface("preview", saved);
+        return;
+      }
+    }
       if (tab.id === "browser" && !browserState.tabs.some((t) => t.kind === "browser")) {
       void openBrowserSurface("browser");
       return;
@@ -641,6 +648,7 @@ export function AgentWorkspace({
               requestedUrl={active?.url}
               liveVersion={previewVersion}
               updating={running && active?.kind === "preview"}
+              previewStopped={surface.previewStopped && !active?.url}
               sessionId={activeNative?.id}
               surfaceActive={browserish && !plusOpen && !portsOpen}
               onTabs={setBrowserState}
@@ -764,6 +772,20 @@ function previewFace(tab: WorkbenchTab): { text: string; port: string | null } {
   return { text, port };
 }
 
+function RestoreStrip({ surface }: { surface: WorkbenchSurface }) {
+  if (!surface.projectStatusLabel && !surface.previewStatusLabel && surface.runs.length === 0) return null;
+  const newest = [...surface.runs].reverse().find((run) => run.instruction);
+  return (
+    <div data-testid="workbench-restore" style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", padding: "8px 12px", borderBottom: "1px solid var(--orvyn-border-soft)", fontSize: 12, color: "var(--orvyn-text-secondary)" }}>
+      {surface.projectName && <strong style={{ color: "var(--orvyn-text)" }}>{surface.projectName}</strong>}
+      {surface.projectStatusLabel && <span data-testid="project-restored">{surface.projectStatusLabel}</span>}
+      {surface.previewStatusLabel && <span data-testid="preview-status">{surface.previewStatusLabel}</span>}
+      {surface.runs.length > 0 && <span>{surface.runs.length === 1 ? "1 run" : `${surface.runs.length} runs`}</span>}
+      {newest?.instruction && <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{newest.instruction}</span>}
+    </div>
+  );
+}
+
 function matchingNativeTab(state: WorkbenchBrowserState, tab: WorkbenchTab) {
   if (tab.nativeId) {
     const byNative = state.tabs.find((t) => t.id === tab.nativeId);
@@ -812,6 +834,8 @@ function WorkbenchBody({
 }) {
   if (tab.kind === "changes") {
     return (
+      <>
+      <RestoreStrip surface={surface} />
       <ChangesView
         files={surface.changeFiles}
         diffs={surface.changes}
@@ -819,13 +843,22 @@ function WorkbenchBody({
         selected={tab.path ?? derived.activity?.file}
         onSelect={() => { /* stay on Changes; the split shows the diff */ }}
       />
+      </>
     );
   }
   if (tab.kind === "files") {
+    const artifacts = [
+      ...derived.artifacts,
+      ...surface.artifacts
+        .filter((item) => !derived.artifacts.some((have) => have.artifactId === item.artifactId))
+        .map((item) => ({ path: item.name || item.artifactId, kind: "artifact" as const, artifactId: item.artifactId, mimeType: item.mimeType })),
+    ];
     return (
+      <>
+      <RestoreStrip surface={surface} />
       <FilesInspector
         files={surface.changeFiles}
-        artifacts={derived.artifacts}
+        artifacts={artifacts}
         projectRoot={projectRoot}
         workspaceStatus={surface.status}
         writtenPaths={surface.files.map((f) => f.path)}
@@ -837,6 +870,7 @@ function WorkbenchBody({
         onPreviewArtifact={onOpenArtifact}
         onOpenChanges={onOpenDiff}
       />
+      </>
     );
   }
   if (tab.kind === "diff") {

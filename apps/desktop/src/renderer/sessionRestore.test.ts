@@ -13,10 +13,12 @@ import {
   resetChatStoreForTests,
   seedChatCacheForTests,
   sessionRestoreState,
+  restoredWorkSession,
   setSessionMirror,
   type BackendMessageLike,
 } from "./chatSession.ts";
 import { restoreWorkSessionFromBackend, type SessionGet } from "./sessionRestore.ts";
+import { OPEN_PREVIEW_LABEL, PREVIEW_STOPPED_LABEL, PROJECT_RESTORED_LABEL, previewUrlForSelection, projectWorkbench } from "./workbenchBinding.ts";
 
 const SESSION = "ses_1";
 const CANON = {
@@ -147,5 +149,92 @@ test("a failed session fetch does not allow a follow-up", async () => {
   assert.equal(followUpRunBinding(), null);
   assert.match(agentRunRestoreError() ?? "", /could not be restored/i);
   assert.equal(getActiveChat()?.projectId, "proj_stale");
+  resetChatStoreForTests();
+});
+
+const ROOT = "/data/tenants/t1/workspaces/ws_9";
+
+function websiteState(previewAvailable: boolean) {
+  return {
+    session: { ...CANON, title: "Harbor", projectRoot: ROOT },
+    runs: [{ runId: "run_b", status: "completed", instruction: "Build a website", createdAt: 20 }],
+    activeRunId: "run_b",
+    files: [
+      { path: "index.html", operation: "write", runId: "run_a", at: 11 },
+      { path: "styles.css", operation: "write", runId: "run_a", at: 12 },
+    ],
+    artifacts: [{ artifactId: "art_1", name: "logo.png", mimeType: "image/png", runId: "run_a" }],
+    preview: { url: "http://127.0.0.1:43191", available: previewAvailable, runId: "run_b" },
+  };
+}
+
+async function reopenWebsite(previewAvailable: boolean) {
+  (globalThis as { window?: unknown }).window = {
+    orvyn: { chats: { save: async () => {}, load: async () => ({ sessions: [] }) } },
+  };
+  resetChatStoreForTests();
+  seedChatCacheForTests([{
+    id: "chat_old",
+    title: "Harbor",
+    createdAt: 1,
+    updatedAt: 2,
+    messages: [],
+    sessionId: SESSION,
+  }]);
+  installMirror(async (path) => {
+    if (path.endsWith("/messages")) return { ok: true, body: { messages: MESSAGES } };
+    if (path.endsWith("/state")) return { ok: true, body: websiteState(previewAvailable) };
+    if (path.endsWith(`/sessions/${encodeURIComponent(SESSION)}`)) {
+      return { ok: true, body: { session: { ...CANON, title: "Harbor", projectRoot: ROOT } } };
+    }
+    return { ok: false, body: null };
+  });
+  assert.equal(await openChatSession("chat_old"), "ready");
+  const restored = restoredWorkSession("chat_old");
+  assert.ok(restored);
+  return projectWorkbench({
+    events: [],
+    session: {
+      sessionId: restored.sessionId,
+      projectId: restored.projectId,
+      workspaceId: restored.workspaceId,
+      projectRoot: restored.projectRoot,
+      projectName: restored.projectName,
+      created: false,
+      restored: true,
+      files: restored.files,
+      runs: restored.runs,
+      artifacts: restored.artifacts,
+      preview: restored.preview,
+    },
+  });
+}
+
+test("reopening a website restores files, and a live preview opens only when selected", async () => {
+  const view = await reopenWebsite(true);
+  assert.equal(view.projectName, "Harbor");
+  assert.equal(view.identity?.workspaceId, CANON.workspaceId);
+  assert.equal(view.identity?.projectRoot, ROOT);
+  assert.deepEqual(view.files.map((f) => f.path).sort(), ["index.html", "styles.css"]);
+  assert.equal(view.changes.length, 2);
+  assert.equal(view.runs[0]?.instruction, "Build a website");
+  assert.equal(view.artifacts[0]?.name, "logo.png");
+  assert.equal(view.previewAvailable, true);
+  assert.equal(view.previewStatusLabel, OPEN_PREVIEW_LABEL);
+  assert.equal(view.previewOpensAutomatically, false);
+  assert.equal(previewUrlForSelection(view, false), null);
+  assert.equal(previewUrlForSelection(view, true), "http://127.0.0.1:43191");
+  resetChatStoreForTests();
+});
+
+test("reopening a website whose preview stopped still shows the project files", async () => {
+  const view = await reopenWebsite(false);
+  assert.deepEqual(view.files.map((f) => f.path).sort(), ["index.html", "styles.css"]);
+  assert.equal(view.projectStatusLabel, PROJECT_RESTORED_LABEL);
+  assert.equal(view.previewStatusLabel, PREVIEW_STOPPED_LABEL);
+  assert.equal(view.previewAvailable, false);
+  assert.equal(view.previewUrl, null);
+  assert.equal(previewUrlForSelection(view, true), null);
+  assert.doesNotMatch(`${view.projectStatusLabel} ${view.previewStatusLabel}`, /does not exist/i);
   resetChatStoreForTests();
 });
