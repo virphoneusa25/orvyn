@@ -41,10 +41,12 @@ import {
   resolveFilesLocation,
   toProjectRelative,
   typeLabel,
+  withWrittenFiles,
   type ChangedFile,
   type FilesLocation,
   type TreeNode,
 } from "../../filesPanelModel";
+import { NEW_WORKSPACE_LABEL, NO_WORKSPACE_LABEL } from "../../workbenchBinding";
 import { IconChevronRight, IconCloud, IconFolder, IconMonitor, IconSearch } from "../Icons";
 import { FileTypeIcon } from "../FileTypeIcon";
 
@@ -75,10 +77,19 @@ export function FilesInspector({
   onOpenFile,
   onPreviewArtifact,
   onOpenChanges,
+  workspaceStatus = "restored",
+  writtenPaths = [],
+  listDisk = true,
 }: {
   files: WorkspaceFile[];
   artifacts: WorkspaceFile[];
   projectRoot: string | null;
+  /** none: no project. created: a workspace was just provisioned. restored: the session's workspace. */
+  workspaceStatus?: "none" | "created" | "restored";
+  /** Files the run wrote. Shown even before a directory listing returns. */
+  writtenPaths?: string[];
+  /** List the Electron folder only when it is this project root. */
+  listDisk?: boolean;
   /** user: the person asked for this file (Open in the chat). Following ORION only selects it. */
   focus?: { path?: string; fileName?: string; artifactId?: string; user?: boolean } | null;
   activePath?: string | null;
@@ -100,7 +111,8 @@ export function FilesInspector({
   const [viewOverride, setViewOverride] = useState<FilesLocation | null>(null);
   useEffect(() => { setViewOverride(null); }, [projectRoot, environment]);
   const location: FilesLocation = canSwitch && viewOverride ? viewOverride : derivedLocation;
-  const localProject = location === "local" && Boolean(projectRoot);
+  const unbound = workspaceStatus === "none" || !projectRoot;
+  const localProject = location === "local" && Boolean(projectRoot) && listDisk && !unbound;
 
   // --- Local Worker state (only meaningful when a cloud backend drives this computer)
   const [workerState, setWorkerState] = useState<WorkerState>(null);
@@ -113,6 +125,8 @@ export function FilesInspector({
     return () => { alive = false; window.clearInterval(t); };
   }, [location, cloudBackend]);
   const copy = locationCopy(location, { projectRoot, workerState: cloudBackend ? workerState : "ready" });
+  const whereTitle = unbound ? NO_WORKSPACE_LABEL : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.title;
+  const whereDetail = unbound ? NO_WORKSPACE_LABEL : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.detail;
 
   // --- ORION's changes this run
   const changed = useMemo(() => changedByOrion(files, projectRoot), [files, projectRoot]);
@@ -128,6 +142,7 @@ export function FilesInspector({
   const [locations, setLocations] = useState<Array<{ id?: string; label?: string; files?: Record<string, unknown>[] }>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (unbound) { setLocations([]); setLoadError(null); return; }
     let alive = true;
     const usableRoot = location === "local" ? null : resolveProjectFetchRoot(projectRoot, cloudBackend);
     const suffix = usableRoot ? `?projectRoot=${encodeURIComponent(usableRoot)}` : "";
@@ -136,7 +151,7 @@ export function FilesInspector({
       .then((d) => { if (alive) { setLocations(Array.isArray(d.locations) ? d.locations : []); setLoadError(null); } })
       .catch(() => { if (alive) setLoadError("Could not reach ORVYN Cloud to list files."); });
     return () => { alive = false; };
-  }, [projectRoot, location, cloudBackend, artifacts.length, files.length]);
+  }, [projectRoot, location, cloudBackend, artifacts.length, files.length, unbound]);
 
   const extras = useMemo(
     () => artifacts.map((f) => ({
@@ -415,9 +430,12 @@ export function FilesInspector({
   }
 
   // --- Tree rendering
-  const rootNodes: TreeNode[] = location === "local"
-    ? withChildren(dirCache[""] ?? [], dirCache)
-    : cloudTree;
+  const listedNodes: TreeNode[] = unbound
+    ? []
+    : location === "local"
+      ? withChildren(dirCache[""] ?? [], dirCache)
+      : cloudTree;
+  const rootNodes = withWrittenFiles(listedNodes, unbound ? [] : writtenPaths);
   const visibleNodes = filterTree(rootNodes, query);
   const searching = query.trim().length > 0;
   const fileCount = countFiles(rootNodes);
@@ -459,13 +477,13 @@ export function FilesInspector({
   }
 
   return (
-    <div data-testid="workbench-files" className={`ofp ofp--${location}`}>
+    <div data-testid="workbench-files" data-workspace-status={unbound ? "none" : workspaceStatus} data-project-root={projectRoot ?? ""} className={`ofp ofp--${location}`}>
       <div className="ofp-scroll">
         <div className="ofp-where" data-testid="files-location" data-location={location}>
           <span className="ofp-where__icon">{location === "cloud" ? <IconCloud size={17} /> : <IconMonitor size={17} />}</span>
           <span className="ofp-where__text">
-            <b>{copy.title}</b>
-            <span className="ofp-where__path" title={copy.detail}>{copy.detail}</span>
+            <b data-testid="files-workspace-label">{whereTitle}</b>
+            <span className="ofp-where__path" title={whereDetail}>{whereDetail}</span>
           </span>
           <span className={`ofp-where__state ofp-tone-${copy.tone}`}><i />{copy.state}</span>
         </div>
@@ -517,11 +535,11 @@ export function FilesInspector({
 
         <section aria-label={location === "cloud" ? "Cloud workspace files" : "Project files"}>
           <div className="ofp-sec"><span>{location === "cloud" ? "Cloud workspace" : "Project"}</span><span>{fileCount ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}</span></div>
-          {location === "local" && !projectRoot && <p className="ofp-empty">Open a project folder to see its files here.</p>}
-          {location === "local" && projectRoot && localError && <p className="ofp-empty">{localError}</p>}
-          {location !== "local" && loadError && <p className="ofp-empty">{loadError}</p>}
-          {visibleNodes.length === 0 && (location !== "local" || (projectRoot && !localError)) && !loadError && (
-            <p className="ofp-empty">{searching ? "No files match your search." : location === "cloud" ? "The cloud workspace is empty. Files ORION creates appear here." : "This folder is empty."}</p>
+          {unbound && <p className="ofp-empty" data-testid="files-workspace-empty">{NO_WORKSPACE_LABEL}</p>}
+          {!unbound && location === "local" && projectRoot && localError && <p className="ofp-empty">{localError}</p>}
+          {!unbound && location !== "local" && loadError && <p className="ofp-empty">{loadError}</p>}
+          {!unbound && visibleNodes.length === 0 && (location !== "local" || !localError) && !loadError && (
+            <p className="ofp-empty">{searching ? "No files match your search." : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : location === "cloud" ? "The cloud workspace is empty. Files ORION creates appear here." : "This folder is empty."}</p>
           )}
           {renderNodes(visibleNodes, 0)}
         </section>

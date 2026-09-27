@@ -123,6 +123,32 @@ export interface TreeNode {
 const sortNodes = (a: TreeNode, b: TreeNode) =>
   a.dir === b.dir ? a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) : a.dir ? -1 : 1;
 
+function flattenFiles(nodes: TreeNode[]): Array<{ path: string; bytes?: number }> {
+  const out: Array<{ path: string; bytes?: number }> = [];
+  const walk = (list: TreeNode[]) => {
+    for (const n of list) {
+      if (n.dir) walk(n.children ?? []);
+      else out.push({ path: n.path, bytes: n.bytes });
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+/** Disk listing plus files the run already wrote, so a slow or wrong folder
+ *  listing cannot hide index.html the moment it is created. */
+export function withWrittenFiles(disk: TreeNode[], written: string[]): TreeNode[] {
+  const flat = flattenFiles(disk);
+  const have = new Set(flat.map((f) => f.path));
+  for (const raw of written) {
+    const path = toProjectRelative(raw).replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!path || have.has(path)) continue;
+    flat.push({ path });
+    have.add(path);
+  }
+  return buildTree(flat);
+}
+
 /** Folder tree from flat relative paths (Cloud listings are flat). */
 export function buildTree(entries: Array<{ path: string; bytes?: number }>): TreeNode[] {
   const root: TreeNode = { name: "", path: "", dir: true, children: [] };

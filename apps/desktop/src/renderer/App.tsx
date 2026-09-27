@@ -39,8 +39,9 @@ import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConn
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats } from "./chatSession";
+import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats, bindChatWorkspace } from "./chatSession";
 import { fetchSessionState, sameRoot, syncSessions } from "./sessionsApi";
+import type { WorkbenchSessionSnapshot } from "./workbenchBinding";
 import { pickReattachRun } from "./appReattach";
 import {
   appGridTemplateColumns,
@@ -191,15 +192,48 @@ export function App() {
   const workspaceRootRef = useRef<string | null>(workspaceRoot);
   workspaceRootRef.current = workspaceRoot;
   const restoredChat = useRef<string | null>(null);
+  const [sessionWorkspace, setSessionWorkspace] = useState<WorkbenchSessionSnapshot | null>(null);
   useEffect(() => subscribeChat(() => {
     const chat = getActiveChat();
-    if (!chat?.sessionId || restoredChat.current === chat.id) return;
+    if (!chat?.sessionId) {
+      if (!chat) setSessionWorkspace(null);
+      return;
+    }
+    if (chat.workspaceId && chat.projectId && chat.projectRoot) {
+      const sessionId = chat.sessionId;
+      const projectId = chat.projectId;
+      const workspaceId = chat.workspaceId;
+      const projectRoot = chat.projectRoot;
+      setSessionWorkspace((prev) => {
+        if (prev && prev.sessionId === sessionId && prev.workspaceId === workspaceId && prev.projectRoot === projectRoot) return prev;
+        return { sessionId, projectId, workspaceId, projectRoot, created: false, restored: true };
+      });
+    }
+    if (restoredChat.current === chat.id) return;
     restoredChat.current = chat.id;
     void (async () => {
       const state = await fetchSessionState(chat.sessionId!);
-      const root = state?.session.projectRoot;
+      if (!state || getActiveChat()?.id !== chat.id) return;
+      const root = state.session.projectRoot;
+      const projectId = state.session.projectId;
+      const workspaceId = state.session.workspaceId;
+      if (root && projectId && workspaceId) {
+        setSessionWorkspace({
+          sessionId: state.session.sessionId,
+          projectId,
+          workspaceId,
+          projectRoot: root,
+          created: false,
+          restored: true,
+          files: state.files,
+          preview: state.preview,
+        });
+        bindChatWorkspace(chat.id, { sessionId: state.session.sessionId, projectId, workspaceId, projectRoot: root, created: false });
+      }
       if (!root || sameRoot(root, workspaceRootRef.current)) return;
       // A Cloud workspace path is not a folder on this computer: openPath says no.
+      // The Workbench still uses the session root above, so a failed open does not
+      // leave Files on a guessed empty directory.
       const next = await window.orvyn.project.openPath(root).catch(() => null);
       if (next && getActiveChat()?.id === chat.id) setWorkspace(next);
     })();
@@ -219,6 +253,26 @@ export function App() {
   const inlineEdit = useInlineEdit(openFile?.path);
   // The single run view every surface derives from.
   const agentRun = useAgentRun(workspaceRoot, { attachRunId: activeRunId });
+  const workspaceEventKey = useRef("");
+  useEffect(() => {
+    const ev = [...agentRun.events].reverse().find((e) => e.type === "workspace.resolved");
+    const data = ev?.data;
+    if (!data || typeof data.projectRoot !== "string" || typeof data.projectId !== "string" || typeof data.workspaceId !== "string") return;
+    const sessionId = typeof data.sessionId === "string" ? data.sessionId : getActiveChat()?.sessionId ?? "";
+    const key = [sessionId, data.projectId, data.workspaceId, data.projectRoot].join("|");
+    if (workspaceEventKey.current === key) return;
+    workspaceEventKey.current = key;
+    const chat = getActiveChat();
+    if (chat) {
+      bindChatWorkspace(chat.id, {
+        sessionId: sessionId || undefined,
+        projectId: data.projectId,
+        workspaceId: data.workspaceId,
+        projectRoot: data.projectRoot,
+        created: data.created === true && data.restored !== true,
+      });
+    }
+  }, [agentRun.events]);
   // Auto-open the Workbench when a run is active or desktop events flow —
   // the user should never have to hunt for the panel toggle when ORION works.
   const runIsActive = agentRun.status === "running" || agentRun.status === "awaiting_approval" || agentRun.status === "queued";
@@ -1049,6 +1103,7 @@ export function App() {
               runId={agentRun.runId}
               projectRoot={workspaceRoot}
               projectName={projectName}
+              session={sessionWorkspace}
               layout={chrome.layout}
               onLayout={(patch) => chrome.setWorkspaceLayout(patch)}
               onOpenFile={(p) => {

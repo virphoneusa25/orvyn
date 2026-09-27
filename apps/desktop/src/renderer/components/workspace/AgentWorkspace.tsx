@@ -41,6 +41,7 @@ import {
 } from "../../workbenchModel";
 import { isFabricatedGeneratedPath } from "../../workbenchFileAccess";
 import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle, workspaceChromeStatus } from "../../workbenchEnvironment";
+import { projectWorkbench, shouldListDisk, workspaceChromeLabel, type WorkbenchSessionSnapshot, type WorkbenchSurface } from "../../workbenchBinding";
 import { readComposerDefaults } from "../../composerSettings";
 import { isCloudBackend, getConnectionConfig } from "../../connection";
 import { DocumentsPanel } from "../DocumentsPanel";
@@ -90,6 +91,7 @@ export function AgentWorkspace({
   runId,
   projectRoot,
   projectName,
+  session = null,
   layout,
   onLayout,
   onOpenFile,
@@ -99,11 +101,17 @@ export function AgentWorkspace({
   runId?: string | null;
   projectRoot: string | null;
   projectName?: string | null;
+  /** Restored WorkSession identity. Live workspace.resolved events override it. */
+  session?: WorkbenchSessionSnapshot | null;
   layout: DesktopLayoutState;
   onLayout: (patch: Partial<DesktopLayoutState>) => void;
   onOpenFile: (path: string) => void;
 }) {
   const derived = useMemo(() => deriveAgentWorkspace(events, { projectName }), [events, projectName]);
+  const surface = useMemo(() => projectWorkbench({ events, session, guessedRoot: projectRoot }), [events, session, projectRoot]);
+  const boundRoot = surface.listRoot;
+  const headerLabel = workspaceChromeLabel(surface, projectName, projectRoot, boundRoot);
+  const listDisk = shouldListDisk(boundRoot, projectRoot);
   const review = useMemo(() => deriveReviewSummary(events, derived), [events, derived]);
   const running = runStatus === "running" || runStatus === "streaming" || runStatus === "working";
   const [follow, setFollow] = useState<FollowController>(() => initialFollowState(running && layout.followOrion !== false));
@@ -131,7 +139,7 @@ export function AgentWorkspace({
     cloudBackend: isCloudBackend(getConnectionConfig().backendUrl),
   });
   const eventText = events.map((e) => String(e.data?.output ?? e.data?.preview ?? e.data?.chunk ?? "")).join("\n");
-  const ports = useWorkbenchPorts({ environment, runId, projectRoot, eventText });
+  const ports = useWorkbenchPorts({ environment, runId, projectRoot: boundRoot, eventText });
 
   const previewVersion = useMemo(() => {
     const updates = events.filter((e) => e.type === "preview.available").length;
@@ -139,7 +147,9 @@ export function AgentWorkspace({
     return derived.previews.length > 0 ? 1 : 0;
   }, [events, derived.previews.length]);
 
-  const previewUrl = derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined;
+  const previewUrl = surface.previewUrl
+    || (surface.status === "none" ? undefined : derived.previews[derived.previews.length - 1]?.url)
+    || undefined;
   const reconciled = useMemo(() => reconcileWorkbenchTabs({
     openTabIds: layout.openTabIds,
     activeTabId: layout.activeTabId,
@@ -194,7 +204,8 @@ export function AgentWorkspace({
   useEffect(() => {
     const api = window.orvyn.browser;
     if (!api) return;
-    const latest = derived.previews[derived.previews.length - 1];
+    const latestUrl = previewUrl;
+    const latest = latestUrl ? { url: latestUrl } : undefined;
     if (!latest?.url) return;
     const previewTab = parseWorkbenchTab(previewTabId(latest.url));
     const revealPreview = () => {
@@ -224,7 +235,7 @@ export function AgentWorkspace({
       setBrowserState(state);
       revealPreview();
     });
-  }, [derived.previews, browserState.tabs]);
+  }, [previewUrl, browserState.tabs]);
 
   useEffect(() => {
     if (!followApplies(follow)) return;
@@ -461,7 +472,7 @@ export function AgentWorkspace({
               data-testid="workbench-project"
               style={{ fontSize: 13, fontWeight: 600, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
             >
-              {projectName?.trim() || "Workspace"}
+              {headerLabel}
             </span>
             <span data-testid="workbench-status" style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>
               {workspaceChromeStatus(environment)}
@@ -618,7 +629,7 @@ export function AgentWorkspace({
           <div style={{ display: browserish ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0 }}>
             <BrowserWorkbench
               kind={active?.kind === "preview" ? "preview" : "browser"}
-              projectName={projectName}
+              projectName={headerLabel}
               orionStatus={derived.activity?.tab === "browser" || derived.activity?.tab === "preview" ? derived.activity.line : null}
               requestedUrl={active?.url}
               liveVersion={previewVersion}
@@ -633,7 +644,7 @@ export function AgentWorkspace({
             <div style={{ display: active?.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
               <DesktopView
                 active={active?.kind === "desktop"}
-                projectRoot={projectRoot}
+                projectRoot={boundRoot}
                 runId={runId}
                 cursor={derived.browser.cursor}
                 status={derived.activity?.tab === "desktop" ? derived.activity.line : null}
@@ -648,7 +659,9 @@ export function AgentWorkspace({
               review={review}
               runStatus={runStatus}
               runId={runId}
-              projectRoot={projectRoot}
+              projectRoot={boundRoot}
+              surface={surface}
+              listDisk={listDisk}
               environment={environment}
               ports={ports.ports}
               filesFocus={filesFocus}
@@ -741,6 +754,8 @@ function WorkbenchBody({
   runStatus,
   runId,
   projectRoot,
+  surface,
+  listDisk,
   environment,
   ports,
   filesFocus,
@@ -756,6 +771,8 @@ function WorkbenchBody({
   runStatus: string;
   runId?: string | null;
   projectRoot: string | null;
+  surface: WorkbenchSurface;
+  listDisk: boolean;
   environment: ReturnType<typeof resolveWorkbenchEnvironment>;
   ports: { port: number; command?: string; status: string }[];
   filesFocus?: { path?: string; fileName?: string; artifactId?: string; user?: boolean } | null;
@@ -767,9 +784,9 @@ function WorkbenchBody({
   if (tab.kind === "changes") {
     return (
       <ChangesView
-        files={derived.files}
-        diffs={derived.diffs}
-        summary={derived.changeSummary}
+        files={surface.changeFiles}
+        diffs={surface.changes}
+        summary={surface.summary}
         selected={tab.path ?? derived.activity?.file}
         onSelect={() => { /* stay on Changes; the split shows the diff */ }}
       />
@@ -778,9 +795,12 @@ function WorkbenchBody({
   if (tab.kind === "files") {
     return (
       <FilesInspector
-        files={derived.files}
+        files={surface.changeFiles}
         artifacts={derived.artifacts}
         projectRoot={projectRoot}
+        workspaceStatus={surface.status}
+        writtenPaths={surface.files.map((f) => f.path)}
+        listDisk={listDisk}
         environment={environment}
         focus={filesFocus}
         activePath={derived.activity?.file}
@@ -792,7 +812,7 @@ function WorkbenchBody({
   }
   if (tab.kind === "diff") {
     return (
-      <DiffInspector diffs={derived.diffs} selectedPath={tab.path ?? derived.activity?.file} onSelect={onOpenDiff} />
+      <DiffInspector diffs={surface.changes} selectedPath={tab.path ?? derived.activity?.file} onSelect={onOpenDiff} />
     );
   }
   if (tab.kind === "file") return <FileEditorView path={tab.path} />;

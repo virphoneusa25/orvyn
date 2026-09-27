@@ -53,6 +53,10 @@ export interface ChatSession {
   modelId?: string;
   projectRoot?: string;
   projectName?: string;
+  /** Canonical WorkSession binding. The Workbench lists this workspace, not a guessed folder. */
+  projectId?: string;
+  workspaceId?: string;
+  workspaceCreated?: boolean;
   /** The run this chat created or is linked to (if any): its newest run. */
   runId?: string;
   /** The durable backend WorkSession this chat is a view of (authoritative). */
@@ -341,6 +345,32 @@ export function linkChatToRun(id: string, runId: string | undefined, missionId?:
   }
 }
 
+/** Remember the resolved workspace on the chat so reopening the conversation reconnects to it. */
+export function bindChatWorkspace(chatId: string, binding: {
+  sessionId?: string;
+  projectId: string;
+  workspaceId: string;
+  projectRoot: string;
+  created?: boolean;
+}): void {
+  const s = sessions.find((x) => x.id === chatId);
+  if (!s) return;
+  const created = binding.created === true;
+  const unchanged = s.projectId === binding.projectId
+    && s.workspaceId === binding.workspaceId
+    && s.projectRoot === binding.projectRoot
+    && s.workspaceCreated === created
+    && (!binding.sessionId || s.sessionId === binding.sessionId);
+  if (binding.sessionId) s.sessionId = binding.sessionId;
+  s.projectId = binding.projectId;
+  s.workspaceId = binding.workspaceId;
+  s.projectRoot = binding.projectRoot;
+  s.workspaceCreated = created;
+  if (unchanged) return;
+  persist();
+  emit();
+}
+
 export function setChatProject(id: string, projectRoot: string | null, projectName: string | null): void {
   const s = sessions.find((x) => x.id === id);
   if (s) {
@@ -531,6 +561,8 @@ export interface BackendSessionLike {
   status: string;
   pinned: boolean;
   projectRoot: string | null;
+  projectId?: string | null;
+  workspaceId?: string | null;
   createdAt: number;
   updatedAt: number;
   messageCount?: number;
@@ -608,7 +640,9 @@ export function mergeBackendSessions(list: BackendSessionLike[]): void {
     local.updatedAt = Math.max(local.updatedAt, b.updatedAt);
     local.pinned = b.pinned;
     local.archived = b.status === "archived";
-    if (b.projectRoot && !local.projectRoot) local.projectRoot = b.projectRoot;
+    if (b.projectRoot) local.projectRoot = b.projectRoot;
+    if (b.projectId) local.projectId = b.projectId;
+    if (b.workspaceId) local.workspaceId = b.workspaceId;
     if (typeof b.messageCount === "number") local.remoteMessageCount = b.messageCount;
     if (typeof b.lastMessage === "string") local.remotePreview = b.lastMessage;
     changed = true;

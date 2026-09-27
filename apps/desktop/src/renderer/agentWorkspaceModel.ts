@@ -235,6 +235,10 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
       switchTab: !complete || type === "desktop.failed",
     };
   }
+  if (type === "file.created") {
+    const path = filePath(data);
+    return { line: path ? `Writing ${path}` : "Writing files", priority: 70, tab: "files", file: path || undefined };
+  }
   if (type === "file.edit") {
     const path = filePath(data);
     return { line: path ? `Editing ${path}` : "Editing files", priority: 70, tab: "diff", file: path || undefined };
@@ -341,6 +345,13 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "file.read") {
       const path = filePath(data);
       if (path && !files.has(path)) files.set(path, { path, kind: "read", status: "Read" });
+    }
+    if (type === "file.created") {
+      const path = filePath(data);
+      if (path) {
+        const existing = files.get(path);
+        if (!existing || existing.kind === "read") files.set(path, { path, kind: "created", status: "Created" });
+      }
     }
     if (type === "file.edit") {
       const preview = data.preview as WorkspaceDiff | undefined;

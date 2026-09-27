@@ -19,14 +19,15 @@ export function TerminalInspector({
   const active = commands[commands.length - 1];
   const title = environmentLabel || (environment === "cloud" ? "Terminal · Cloud Worker" : environment === "sandbox" ? "Terminal · Sandbox" : "Terminal · Local");
 
-  const showLocal = session === "local" || (!active && term.sessionId);
+  const showOrion = session !== "local" && commands.length > 0;
+  const showLocal = !showOrion && (session === "local" || Boolean(term.sessionId));
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)" }}>
         <span style={{ fontSize: 12, fontWeight: 650, color: "var(--orvyn-text)" }}>{title}</span>
         <select
-          value={showLocal && !active ? "local" : session}
+          value={showOrion ? "orion" : showLocal ? "local" : session}
           onChange={(e) => setSession(e.target.value as "orion" | "local")}
           style={{
             background: "var(--orvyn-surface-2)",
@@ -37,7 +38,7 @@ export function TerminalInspector({
             padding: "3px 6px",
           }}
         >
-          {active && <option value="orion">Terminal 1 · ORION</option>}
+          {commands.length > 0 && <option value="orion">Terminal 1 · ORION</option>}
           {environment !== "cloud" && environment !== "sandbox" && <option value="local">This environment</option>}
         </select>
         {active && (
@@ -51,8 +52,9 @@ export function TerminalInspector({
           <button style={ghostBtn()} onClick={() => setCleared(true)}>Clear</button>
         </span>
       </div>
-      {session === "orion" && active ? (
-        <pre
+      {showOrion ? (
+        <div
+          data-testid="workbench-terminal-commands"
           style={{
             flex: 1,
             overflow: "auto",
@@ -65,8 +67,13 @@ export function TerminalInspector({
             whiteSpace: "pre-wrap",
           }}
         >
-          {cleared ? "" : active.output || (active.running ? "Running…" : "No output captured.")}
-        </pre>
+          {cleared ? "" : commands.map((row) => (
+            <div key={row.id} data-command={row.command} style={{ marginBottom: 12 }}>
+              <div style={{ color: "var(--orvyn-text)" }}>$ {row.command}{row.running ? " · Running…" : ""}</div>
+              {row.output ? <div>{row.output}</div> : null}
+            </div>
+          ))}
+        </div>
       ) : term.sessionId || term.busy ? (
         <TerminalView term={term} />
       ) : (
