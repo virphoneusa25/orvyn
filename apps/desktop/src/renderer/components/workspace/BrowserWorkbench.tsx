@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { WorkbenchBrowserRecent, WorkbenchBrowserState, WorkbenchBrowserTab } from "../../orvyn-bridge";
-import { IconExternal, IconGlobe, IconMore, IconRefresh } from "../Icons";
-import { emptyBody, emptyTitle, ghostBtn } from "./workspaceChrome";
+import { IconCheck, IconChevronDown, IconExternal, IconGlobe, IconMore, IconPhone, IconRefresh, IconStar } from "../Icons";
+import { emptyBody, emptyTitle, ghostBtn, openExternalSafe } from "./workspaceChrome";
+import "./workbenchChrome.css";
 
 export function BrowserWorkbench({
   kind,
@@ -32,6 +33,7 @@ export function BrowserWorkbench({
   const [menu, setMenu] = useState(false);
   const [deviceMenu, setDeviceMenu] = useState(false);
   const [device, setDevice] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [copied, setCopied] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [stopped, setStopped] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -99,6 +101,10 @@ export function BrowserWorkbench({
   }, [api]);
 
   useEffect(() => {
+    if (requestedUrl) setDraft((cur) => cur || requestedUrl);
+  }, [requestedUrl]);
+
+  useEffect(() => {
     if (kind !== "preview" || !autoRefresh || liveVersion <= 0) return;
     const previous = seenVersion.current;
     seenVersion.current = liveVersion;
@@ -128,6 +134,7 @@ export function BrowserWorkbench({
 
   const tab = activeTab(state);
   const start = !tab?.url;
+  const addressValue = draft || requestedUrl || "";
 
   async function go(raw: string) {
     if (!api || !hasNative) return;
@@ -151,56 +158,69 @@ export function BrowserWorkbench({
   return (
     <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
       {!fullscreen && (
-      <div data-testid="preview-controls" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderBottom: "1px solid var(--orvyn-border-soft)", flexShrink: 0 }}>
-        <button title="Back" aria-label="Back" disabled={!tab?.canGoBack} style={ghostBtn()} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
-        <button title="Forward" aria-label="Forward" disabled={!tab?.canGoForward} style={ghostBtn()} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
-        <button title={tab?.loading ? "Stop" : "Refresh"} aria-label="Refresh" style={ghostBtn()} onClick={() => tab && void api?.reload(tab.id).then(apply)}>
-          {tab?.loading ? "■" : <IconRefresh size={12} />}
+      <div data-testid="preview-controls" className="wb-navrow">
+        <button className="wb-icon" title="Back" aria-label="Back" disabled={!tab?.canGoBack} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
+        <button className="wb-icon" title="Forward" aria-label="Forward" disabled={!tab?.canGoForward} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
+        <button className="wb-icon" title={tab?.loading ? "Stop" : "Refresh"} aria-label="Refresh" onClick={() => tab && void api?.reload(tab.id).then(apply)}>
+          {tab?.loading ? "■" : <IconRefresh size={15} />}
+        </button>
+        <button
+          className="wb-icon"
+          title={copied ? "Copied" : "Copy URL"}
+          aria-label="Copy URL"
+          disabled={!addressValue}
+          onClick={() => {
+            if (!addressValue) return;
+            void navigator.clipboard?.writeText(addressValue).then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            });
+          }}
+        >
+          {copied ? <IconCheck size={15} /> : <IconStar size={15} />}
         </button>
         <form
-          style={{ flex: 1, minWidth: 0 }}
+          style={{ flex: 1, minWidth: 0, display: "flex" }}
           onSubmit={(e) => {
             e.preventDefault();
-            void go(draft);
+            void go(draft || requestedUrl || "");
           }}
         >
           <input
             ref={address}
             data-testid="workbench-address"
+            className="wb-url"
             value={draft}
+            title={addressValue}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Search or enter URL"
-            style={{
-              width: "100%",
-              background: "var(--orvyn-surface-2)",
-              border: "1px solid var(--orvyn-border-soft)",
-              borderRadius: 6,
-              color: "var(--orvyn-text)",
-              fontSize: 12,
-              padding: "5px 8px",
-              fontFamily: "var(--font-mono)",
-            }}
           />
         </form>
-        <button title="Open in new tab" aria-label="Open in new tab" style={ghostBtn()} disabled={!tab?.url} onClick={() => tab && void api?.openExternal(tab.id)}>
-          <IconExternal size={12} />
+        <button className="wb-icon" title="Open in new tab" aria-label="Open in new tab" disabled={!tab?.url && !requestedUrl} onClick={() => {
+          if (tab) void api?.openExternal(tab.id);
+          else if (requestedUrl) void openExternalSafe(requestedUrl);
+        }}>
+          <IconExternal size={15} />
         </button>
-        <div style={{ position: "relative" }}>
-          <button title="Responsive preview" aria-label="Responsive preview" style={ghostBtn()} onClick={() => { setDeviceMenu((v) => !v); setMenu(false); }}>
-            {device === "mobile" ? "Mobile" : device === "tablet" ? "Tablet" : "Desktop"}
+        <div className="wb-device">
+          <button className="wb-icon" title="Responsive preview" aria-label="Responsive preview" onClick={() => { setDeviceMenu((v) => !v); setMenu(false); }}>
+            <IconPhone size={15} />
+          </button>
+          <button className="wb-icon" title="Device size" aria-label="Device size" onClick={() => { setDeviceMenu((v) => !v); setMenu(false); }}>
+            <IconChevronDown size={14} />
           </button>
           {deviceMenu && (
-            <div style={{ position: "absolute", right: 0, top: 28, zIndex: 30, minWidth: 140, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
+            <div className="wb-menu">
               {(["desktop", "tablet", "mobile"] as const).map((id) => (
                 <MenuItem key={id} label={id[0].toUpperCase() + id.slice(1)} onClick={() => { setDevice(id); setDeviceMenu(false); }} />
               ))}
             </div>
           )}
         </div>
-        <div style={{ position: "relative" }}>
-          <button title="More" aria-label="More" style={ghostBtn()} onClick={() => { setMenu((v) => !v); setDeviceMenu(false); }}><IconMore size={12} /></button>
+        <div className="wb-device">
+          <button className="wb-icon" title="More" aria-label="More" onClick={() => { setMenu((v) => !v); setDeviceMenu(false); }}><IconMore size={15} /></button>
           {menu && (
-            <div style={{ position: "absolute", right: 0, top: 28, zIndex: 30, minWidth: 180, background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border)", borderRadius: 8, padding: 4 }}>
+            <div className="wb-menu">
               <MenuItem label={expanded ? "Collapse" : "Expand"} onClick={() => { setFullscreen(false); setExpanded((v) => !v); setMenu(false); }} />
               <MenuItem label="Full screen" onClick={() => { setExpanded(true); setFullscreen(true); setMenu(false); }} />
               {tab?.controlOwner === "orion" && <MenuItem label="Take control" onClick={() => { void api?.takeControl(tab.id).then(apply); setMenu(false); }} />}

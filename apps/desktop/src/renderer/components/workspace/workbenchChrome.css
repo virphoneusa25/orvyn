@@ -1,0 +1,226 @@
+/* Two-row Workbench chrome: tab bar, then browser toolbar. No native scrollbars. */
+
+.wb-tabrow {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  min-width: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 0 2px 0 4px;
+  container-type: inline-size;
+  container-name: workbench;
+  background: #0c1018;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  position: relative;
+  z-index: 4;
+}
+
+.wb-tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: calc(100% - 168px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.wb-tabs::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
+}
+
+.wb-tab {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: #8b95a8;
+  font-size: 13px;
+  font-weight: 450;
+  padding: 0 10px;
+  height: 36px;
+  min-width: 0;
+  max-width: 240px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+}
+
+.wb-tab:hover {
+  color: #d5dbe6;
+}
+
+.wb-tab[data-active="true"] {
+  color: #f4f7fb;
+}
+
+.wb-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.wb-port {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: #c5cedd;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-livedot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  flex-shrink: 0;
+}
+
+.wb-tab-close {
+  flex-shrink: 0;
+  opacity: 0;
+  font-size: 13px;
+  line-height: 1;
+  margin-left: 2px;
+  color: inherit;
+}
+
+.wb-tab:hover .wb-tab-close,
+.wb-tab[data-active="true"] .wb-tab-close {
+  opacity: 0.65;
+}
+
+.wb-plus {
+  flex-shrink: 0;
+}
+
+.wb-tabtools {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  gap: 0;
+}
+
+.wb-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #8b95a8;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.wb-icon:hover:not(:disabled) {
+  color: #e8edf5;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wb-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.wb-icon[data-active="true"] {
+  color: #c4b5fd;
+  background: rgba(124, 92, 255, 0.16);
+}
+
+.wb-navrow {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  min-width: 0;
+  flex-shrink: 0;
+  gap: 1px;
+  padding: 0 4px 0 2px;
+  background: #0c1018;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: visible;
+}
+
+.wb-url {
+  flex: 1 1 auto;
+  min-width: 120px;
+  height: 26px;
+  margin: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #c5cedd;
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wb-url:hover,
+.wb-url:focus {
+  background: rgba(255, 255, 255, 0.045);
+  outline: none;
+}
+
+.wb-url::placeholder {
+  color: #667085;
+}
+
+.wb-device {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.wb-menu {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  z-index: 30;
+  min-width: 160px;
+  background: #141a26;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+@container workbench (max-width: 640px) {
+  .wb-tab[data-kind="environment"] .wb-tab-label,
+  .wb-tab[data-kind="terminal"] .wb-tab-label {
+    display: none;
+  }
+  .wb-tab[data-kind="environment"],
+  .wb-tab[data-kind="terminal"] {
+    padding: 0 8px;
+    max-width: none;
+  }
+}
+
+@container workbench (max-width: 520px) {
+  .wb-tab[data-kind="changes"] .wb-tab-label {
+    display: none;
+  }
+  .wb-tab {
+    max-width: 140px;
+    padding: 0 8px;
+  }
+}

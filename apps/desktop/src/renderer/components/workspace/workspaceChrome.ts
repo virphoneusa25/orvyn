@@ -62,17 +62,18 @@ export function ghostBtn(): React.CSSProperties {
   };
 }
 
+/** Flat IDE tab. Active state is brighter text, not a pill or heavy underline. */
 export function tabBtn(active: boolean): React.CSSProperties {
   return {
-    background: active ? "linear-gradient(180deg, rgba(34,211,238,0.16), rgba(124,92,255,0.10))" : "transparent",
+    background: "transparent",
     border: "none",
-    boxShadow: active ? "inset 0 -2px 0 #67e8f9" : "inset 0 -2px 0 transparent",
-    borderRadius: active ? "7px 7px 0 0" : 0,
-    color: active ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
-    fontSize: 12.5,
-    fontWeight: active ? 600 : 500,
-    padding: "0 12px",
-    height: 34,
+    boxShadow: "none",
+    borderRadius: 0,
+    color: active ? "#f4f7fb" : "#8b95a8",
+    fontSize: 13,
+    fontWeight: active ? 500 : 450,
+    padding: "0 10px",
+    height: 36,
     minWidth: 0,
     cursor: "pointer",
     display: "inline-flex",

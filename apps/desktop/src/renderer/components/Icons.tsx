@@ -344,3 +344,22 @@ export const IconLayout = (p: IconProps) => (
     <path d="M12 4.5v15" />
   </Svg>
 );
+
+export const IconStar = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m12 3.8 2.2 4.6 5 .7-3.6 3.5.9 5.1L12 15.4 7.5 17.7l.9-5.1L4.8 9.1l5-.7L12 3.8z" />
+  </Svg>
+);
+
+export const IconChevronDown = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Svg>
+);
+
+export const IconPhone = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="7" y="3" width="10" height="18" rx="2" />
+    <path d="M11 18h2" />
+  </Svg>
+);

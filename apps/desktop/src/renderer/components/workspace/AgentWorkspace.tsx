@@ -80,7 +80,8 @@ import { useWorkbenchPorts } from "./useWorkbenchPorts";
 import { WorkbenchLauncher } from "./WorkbenchLauncher";
 import { WORKBENCH_Z, WorkbenchPopover } from "./WorkbenchOverlay";
 import { usePlusQuery, WorkbenchPlusMenu } from "./WorkbenchPlusMenu";
-import { headerIconBtn, splitHandle, tabBtn } from "./workspaceChrome";
+import { splitHandle } from "./workspaceChrome";
+import "./workbenchChrome.css";
 
 export function AgentWorkspacePanel(props: Parameters<typeof AgentWorkspace>[0]) {
   return <AgentWorkspace {...props} />;
@@ -482,119 +483,105 @@ export function AgentWorkspace({
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div
           data-testid="workbench-header"
-          title={headerLabel}
-          style={{
-            display: "flex",
-            alignItems: "stretch",
-            height: 36,
-            gap: 4,
-            padding: "0 4px 0 0",
-            borderBottom: "1px solid var(--orvyn-border-soft)",
-            minWidth: 0,
-            flexShrink: 0,
-            position: "relative",
-            zIndex: WORKBENCH_Z.tabbar,
-            background: "rgba(8,12,22,0.55)",
-          }}
+          className="wb-tabrow"
+          style={{ zIndex: WORKBENCH_Z.tabbar }}
         >
-          <div
-            data-testid={WORKBENCH_TABBAR_TEST_ID}
-            style={{
-              display: "flex",
-              alignItems: "stretch",
-              flex: 1,
-              minWidth: 0,
-              overflow: "hidden",
+          <div data-testid={WORKBENCH_TABBAR_TEST_ID} className="wb-tabs" title={headerLabel}>
+            {tabs.map((t) => {
+              const native = matchingNativeTab(browserState, t);
+              const selected = t.id === activeId;
+              const face = t.kind === "preview" ? previewFace(t) : { text: t.title, port: null as string | null };
+              const showClose = tabShowsClose(t);
+              return (
+                <button
+                  key={t.id}
+                  data-tab={t.id}
+                  data-kind={t.kind}
+                  data-active={selected ? "true" : "false"}
+                  data-closable={showClose ? "true" : "false"}
+                  className="wb-tab"
+                  title={t.url || t.fullTitle || t.title}
+                  onClick={() => activate(t, true)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1 && showClose) close(t.id);
+                  }}
+                >
+                  <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
+                  <span className="wb-tab-label">{face.text}</span>
+                  {face.port && <span className="wb-port" data-testid="preview-port">{face.port}</span>}
+                  {t.kind === "preview" && previewVersion > 0 && !face.port && (
+                    <span className="wb-livedot" data-testid="preview-live" title="Live" />
+                  )}
+                  {showClose && (
+                    <span
+                      className="wb-tab-close"
+                      data-tab-close={t.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        close(t.id);
+                      }}
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            ref={plusBtnRef}
+            data-testid="workbench-plus"
+            className="wb-icon wb-plus"
+            data-active={plusOpen ? "true" : "false"}
+            title="Open tool"
+            onClick={() => {
+              setPlusOpen((v) => !v);
+              setPortsOpen(false);
+              plusQuery.setQuery("");
             }}
           >
-            <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", flex: 1, minWidth: 0, scrollbarWidth: "thin" }}>
-              {tabs.map((t) => {
-                const native = matchingNativeTab(browserState, t);
-                const selected = t.id === activeId;
-                return (
-                  <button
-                    key={t.id}
-                    data-tab={t.id}
-                    data-closable={t.closable ? "true" : "false"}
-                    title={t.fullTitle || t.title}
-                    onClick={() => activate(t, true)}
-                    onAuxClick={(e) => {
-                      if (e.button === 1 && t.closable) close(t.id);
-                    }}
-                    style={tabBtn(selected)}
-                  >
-                    <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 180 }}>{t.title}</span>
-                    {t.kind === "preview" && previewVersion > 0 && (
-                      <span data-testid="preview-live" style={{ flexShrink: 0, fontSize: 10, fontWeight: 650, color: "#6ee7b7", background: "rgba(52,211,153,0.12)", borderRadius: 999, padding: "1px 6px" }}>Live</span>
-                    )}
-                    {t.closable && (
-                      <span
-                        data-tab-close={t.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          close(t.id);
-                        }}
-                        style={{ flexShrink: 0, opacity: 0.7, fontSize: 13, lineHeight: 1, marginLeft: 2 }}
-                      >
-                        ×
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <span data-testid="workbench-status" title={workspaceChromeStatus(environment)} style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+            <IconPlus size={15} />
+          </button>
+          <WorkbenchPopover open={plusOpen} anchor={plusBtnRef.current} onClose={() => setPlusOpen(false)} testId="workbench-plus-menu" width={280}>
+            <WorkbenchPlusMenu
+              query={plusQuery.query}
+              onQuery={plusQuery.setQuery}
+              onSelect={(id, kind) => {
+                setPlusOpen(false);
+                if (kind === "subscriptions" || kind === "side-chat") return;
+                if (kind === "browser") void openBrowserSurface("browser");
+                else if (kind === "terminal" && tabs.some((t) => t.kind === "terminal")) {
+                  const next = parseWorkbenchTab(nextTerminalTabId(tabs));
+                  next.title = terminalTitle(environment, tabs.filter((t) => t.kind === "terminal").length + 1);
+                  activate(next, true);
+                } else activate(parseWorkbenchTab(id), true);
+              }}
+            />
+          </WorkbenchPopover>
+          <span data-testid="workbench-status" className="wb-tabtools" title={workspaceChromeStatus(environment)}>
+            <button
+              ref={portsBtnRef}
+              data-testid="workbench-ports-btn"
+              className="wb-icon"
+              data-active={portsOpen ? "true" : "false"}
+              title="Ports"
+              onClick={() => { setPortsOpen((v) => !v); setPlusOpen(false); }}
+            >
+              <IconPlug size={15} />
+            </button>
             <button
               data-testid="workbench-follow"
+              className="wb-icon"
+              data-active={followActive || follow.paused ? "true" : "false"}
               title={follow.paused ? "Resume Follow ORION" : "Follow ORION"}
-              style={{ ...headerIconBtn(followActive || follow.paused, "violet"), opacity: follow.paused ? 0.5 : 1 }}
+              style={{ opacity: follow.paused ? 0.5 : 1 }}
               onClick={() => {
                 const next = follow.paused ? resumeFollow() : toggleFollow(follow);
                 setFollow(next);
                 onLayout({ followOrion: next.followOrion });
               }}
             >
-              <IconCrosshair size={14} />
-            </button>
-            <button
-              ref={plusBtnRef}
-              data-testid="workbench-plus"
-              title="Open tool"
-              style={headerIconBtn(plusOpen, "cyan")}
-              onClick={() => {
-                setPlusOpen((v) => !v);
-                setPortsOpen(false);
-                plusQuery.setQuery("");
-              }}
-            >
-              <IconPlus size={14} />
-            </button>
-            <WorkbenchPopover open={plusOpen} anchor={plusBtnRef.current} onClose={() => setPlusOpen(false)} testId="workbench-plus-menu" width={280}>
-              <WorkbenchPlusMenu
-                query={plusQuery.query}
-                onQuery={plusQuery.setQuery}
-                onSelect={(id, kind) => {
-                  setPlusOpen(false);
-                  if (kind === "subscriptions" || kind === "side-chat") return;
-                  if (kind === "browser") void openBrowserSurface("browser");
-                  else if (kind === "terminal" && tabs.some((t) => t.kind === "terminal")) {
-                    const next = parseWorkbenchTab(nextTerminalTabId(tabs));
-                    next.title = terminalTitle(environment, tabs.filter((t) => t.kind === "terminal").length + 1);
-                    activate(next, true);
-                  } else activate(parseWorkbenchTab(id), true);
-                }}
-              />
-            </WorkbenchPopover>
-            <button
-              ref={portsBtnRef}
-              data-testid="workbench-ports-btn"
-              title="Ports"
-              style={headerIconBtn(portsOpen, "cyan")}
-              onClick={() => { setPortsOpen((v) => !v); setPlusOpen(false); }}
-            >
-              <IconPlug size={14} />
+              <IconCrosshair size={15} />
             </button>
             <WorkbenchPopover
               open={portsOpen}
@@ -618,19 +605,24 @@ export function AgentWorkspace({
                 onClose={() => setPortsOpen(false)}
               />
             </WorkbenchPopover>
-            <button title="Expand Workbench" style={headerIconBtn(layout.expandedPreview, "cyan")} onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}>
-              <IconExpand size={14} />
+            <button
+              className="wb-icon"
+              data-active={layout.expandedPreview ? "true" : "false"}
+              title="Expand Workbench"
+              onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}
+            >
+              <IconExpand size={15} />
             </button>
             <button
               data-testid="workbench-close"
+              className="wb-icon"
               title="Close panel"
-              style={headerIconBtn(false)}
               onClick={() => {
                 void window.orvyn.browser?.setVisible(false);
                 onLayout({ rightPanelOpen: false });
               }}
             >
-              <IconClose size={14} />
+              <IconClose size={15} />
             </button>
           </span>
         </div>
@@ -739,7 +731,7 @@ function TabGlyph({
   const Icon = TAB_ICONS[tab.kind] ?? IconFile;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, position: "relative" }}>
-      <Icon size={13} />
+      <Icon size={15} />
       {tab.kind === "desktop" && desktopLive && (
         <span title="Desktop live" style={{ position: "absolute", top: -2, right: -3, width: 5, height: 5, borderRadius: 99, background: "var(--orvyn-cyan)" }} />
       )}
@@ -748,6 +740,30 @@ function TabGlyph({
       )}
     </span>
   );
+}
+
+const CORE_TAB_IDS = new Set(["files", "changes", "terminal", "environment", "desktop", "browser", "preview"]);
+
+function tabShowsClose(tab: WorkbenchTab): boolean {
+  if (!tab.closable || tab.kind === "preview") return false;
+  return !CORE_TAB_IDS.has(tab.id);
+}
+
+function previewFace(tab: WorkbenchTab): { text: string; port: string | null } {
+  let port: string | null = null;
+  if (tab.url) {
+    try {
+      const u = new URL(tab.url);
+      if (u.port) port = `:${u.port}`;
+    } catch {
+      port = null;
+    }
+  }
+  const candidate = tab.fullTitle && !/^https?:\/\//i.test(tab.fullTitle) ? tab.fullTitle : tab.title;
+  const stripped = candidate.replace(/\s+:\d+$/, "").trim();
+  const generic = !stripped || stripped === "Preview" || /^ORVYN\b/i.test(stripped);
+  const text = generic ? "Preview" : stripped.length > 22 ? `${stripped.slice(0, 21)}…` : stripped;
+  return { text, port };
 }
 
 function matchingNativeTab(state: WorkbenchBrowserState, tab: WorkbenchTab) {
