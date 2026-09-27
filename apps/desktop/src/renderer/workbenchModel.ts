@@ -172,7 +172,7 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
     return { id, kind: "terminal", title: `Terminal ${n}`, closable: true };
   }
   const pinned: Record<string, WorkbenchTab> = {
-    preview: { id: "preview", kind: "preview", title: "Preview", closable: true },
+    preview: { id: "preview", kind: "preview", title: "Preview", closable: false },
     changes: { id: "changes", kind: "changes", title: "Changes", closable: false },
     desktop: { id: "desktop", kind: "desktop", title: "Desktop", closable: true },
     browser: { id: "browser", kind: "browser", title: "Browser", closable: true },
@@ -203,24 +203,24 @@ export interface WorkbenchBrowserSeed {
   url?: string;
 }
 
-/** Pinned tools stay in this order. Dynamic tabs follow in groups. */
+/** One row: Preview, Files, Changes, Terminal, Environment, then dynamic pages. */
 const PINNED_RANK: Record<string, number> = {
-  changes: 0,
   files: 1,
-  terminal: 2,
-  browser: 3,
-  desktop: 4,
-  environment: 5,
+  changes: 2,
+  terminal: 3,
+  environment: 4,
+  browser: 5,
+  desktop: 6,
 };
 
 export function workbenchTabRank(id: string): number {
-  if (id === "terminal" || id.startsWith("terminal:")) return 2;
-  if (id === "browser" || id.startsWith("browser:")) return 3;
+  if (id === "preview" || id.startsWith("preview:")) return 0;
+  if (id === "terminal" || id.startsWith("terminal:")) return 3;
+  if (id === "browser" || id.startsWith("browser:")) return 5;
   if (id in PINNED_RANK) return PINNED_RANK[id]!;
-  if (id === "review" || id === "plan" || id === "docs") return 6;
-  if (id.startsWith("file:")) return 7;
-  if (id.startsWith("diff:")) return 8;
-  if (id === "preview" || id.startsWith("preview:")) return 9;
+  if (id === "review" || id === "plan" || id === "docs") return 7;
+  if (id.startsWith("file:")) return 8;
+  if (id.startsWith("diff:")) return 9;
   if (id.startsWith("artifact:")) return 10;
   return 11;
 }

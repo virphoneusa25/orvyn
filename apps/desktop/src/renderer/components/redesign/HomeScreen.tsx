@@ -5,7 +5,6 @@
 import React, { useRef, useState } from "react";
 import { HeroBackdrop } from "./HeroBackdrop";
 import { Icon } from "./icons";
-import { TopBar } from "./Shell";
 import { AddMenu, AddPlusButton, ComposerChips, attachmentsFromChips, composerTriggerKey, contextNoteFromChips, type ComposerChip } from "../AddMenu";
 import {
   ComposerModePills,
@@ -116,13 +115,9 @@ function summaryLine(missions: MissionSummary[]): string {
 export function HomeScreen(props: HomeScreenProps) {
   const {
     userName,
-    workspaceName,
-    status,
     missions,
     systems,
     starters = ["Diagnose a failing service", "Tail logs on a server", "Review a pull request", "Plan a deploy"],
-    agentName = "ORION",
-    agentRole = "orchestrator",
     animateHero = true,
   } = props;
 
@@ -160,14 +155,6 @@ export function HomeScreen(props: HomeScreenProps) {
 
   return (
     <div className="ov-column">
-      <TopBar
-        crumbs={[workspaceName, "Home"]}
-        status={status}
-        onOpenCommand={props.onOpenCommand}
-        onReconnectCloud={props.onReconnectCloud}
-        onOpenNotifications={props.onOpenNotifications}
-      />
-
       <main className="ov-home" data-home-layout="centered">
         {/* ── Hero ── */}
         <section className="ov-hero" aria-label="Start a mission">

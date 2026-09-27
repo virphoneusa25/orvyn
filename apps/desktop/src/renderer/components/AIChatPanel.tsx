@@ -20,7 +20,7 @@ import {
 import { WorkspaceState } from "../orvyn-bridge";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
-import { ORION_THINKING_TEXT, OrionThinkingIndicator } from "./OrionThinkingIndicator";
+import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { isRunFinished, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
@@ -405,18 +405,14 @@ export function AIChatPanel({
           overflow: "visible",
         }}
       >
-        {live && (agent.status === "running" || agent.status === "awaiting_approval") && (
-          <div
-            style={{
-              fontSize: 11.5,
-              color: "var(--accent)",
-              marginBottom: 6,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <OrionThinkingIndicator motion={live === "Thinking…" ? "thinking" : "tool"} message={live === "Thinking…" ? ORION_THINKING_TEXT : live} />
+        {agent.events.length === 0 && (
+          <div style={{ fontSize: 11.5, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <OrbStatusSlot
+              active={agent.status === "running" || agent.status === "awaiting_approval"}
+              failed={agent.status === "error"}
+              motion={orbMotionForLabel(live ?? "")}
+              message={!live || live === "Thinking…" ? (orbMotionForLabel(live ?? "") === "tool" ? ORION_WORKING_TEXT : ORION_THINKING_TEXT) : live}
+            />
           </div>
         )}
         <div

@@ -117,7 +117,7 @@ test("an empty Workbench has no tabs, and opened tools share one row", () => {
     openTabIds: ["files", "terminal", "browser", "changes"],
     activeTabId: "files",
   });
-  assert.deepEqual(tools.map((t) => t.id), ["changes", "files", "terminal", "browser"]);
+  assert.deepEqual(tools.map((t) => t.id), ["files", "changes", "terminal", "browser"]);
   assert.equal(new Set(tools.map((t) => t.kind)).size, 4);
   const withFiles = assembleWorkbenchTabs({
     openTabIds: ["files", fileTabId("index.html"), fileTabId("styles.css")],
@@ -136,7 +136,7 @@ test("dynamic preview, diff, and browser pages stay on the same tab list", () =>
     activeTabId: "changes",
     browserTabs: [{ id: "page-1", kind: "browser", title: "VirPhone Website", url: "https://virphone.example" }],
   });
-  assert.deepEqual(tabs.map((t) => t.kind), ["changes", "browser", "diff", "preview"]);
+  assert.deepEqual(tabs.map((t) => t.kind), ["preview", "changes", "browser", "diff"]);
   assert.equal(tabs.find((t) => t.kind === "browser")?.title, "VirPhone Website");
   assert.equal(tabs.filter((t) => t.id === "changes").length, 1);
 });
@@ -207,15 +207,15 @@ test("restored tab ids drop duplicates and keep tool order", () => {
     diffTabId("index.html"),
   ]);
   assert.deepEqual(ids, [
-    "changes",
+    previewTabId("http://127.0.0.1:43191"),
     "files",
+    "changes",
     "terminal",
+    "environment",
     "browser:tab1",
     "desktop",
-    "environment",
     "file:index.html",
     "diff:index.html",
-    previewTabId("http://127.0.0.1:43191"),
   ]);
   assert.equal(resolveActiveWorkbenchTabId(ids.map((id) => parseWorkbenchTab(id)), "browser"), "browser:tab1");
 });

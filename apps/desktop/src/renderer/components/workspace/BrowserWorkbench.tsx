@@ -250,9 +250,11 @@ export function BrowserWorkbench({
           data-testid="preview-footer"
           style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderTop: "1px solid var(--orvyn-border-soft)", fontSize: 11, color: "var(--orvyn-text-secondary)", flexShrink: 0 }}
         >
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: tab?.url && !stopped ? "#34d399" : "#64748b", flexShrink: 0 }} />
-          <span>{tab?.url && !stopped ? `Live Preview (v${Math.max(liveVersion, 1)})` : stopped ? "Preview stopped" : "Preview"}</span>
-          {updating && autoRefresh && !stopped && <span style={{ color: "var(--orvyn-text-muted)" }}>Updating after file changes</span>}
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: tab?.url && !stopped ? "#34d399" : "#64748b", boxShadow: tab?.url && !stopped ? "0 0 8px #34d399" : "none", flexShrink: 0 }} />
+          <span style={{ fontWeight: 650 }}>{tab?.url && !stopped ? `Live Preview (v${Math.max(liveVersion, 1)})` : stopped ? "Preview stopped" : "Preview"}</span>
+          {tab?.url && !stopped && autoRefresh && (
+            <span style={{ color: "var(--orvyn-text-muted)" }}>Updating after file changes</span>
+          )}
           <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
             <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
             Auto Refresh

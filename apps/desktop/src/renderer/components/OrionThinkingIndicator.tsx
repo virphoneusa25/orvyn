@@ -13,7 +13,7 @@ export function orbMotionForLabel(label: string): OrbMotion {
   const low = label.toLowerCase();
   if (low.includes("error") || low.includes("failed")) return "error";
   if (low.startsWith("waiting") || low.startsWith("stopping") || low.includes("queued")) return "waiting";
-  if (low.includes("verif") || low.includes("check") || low.includes("running") || low.includes("writing") || low.includes("creating") || low.includes("updating")) return "tool";
+  if (low.includes("working") || low.includes("verif") || low.includes("check") || low.includes("running") || low.includes("writing") || low.includes("creating") || low.includes("updating")) return "tool";
   return "thinking";
 }
 
@@ -23,7 +23,8 @@ function genericThinking(message: string): boolean {
 }
 
 function StatusLine({ motion, message }: { motion: OrbMotion; message: string }) {
-  if (motion === "tool" && genericThinking(message)) {
+  if (motion === "done") return null;
+  if (motion === "tool" && (genericThinking(message) || message === ORION_WORKING_TEXT)) {
     return (
       <>
         <strong className="orion-status__name">ORION</strong> is working...
@@ -36,7 +37,7 @@ function StatusLine({ motion, message }: { motion: OrbMotion; message: string })
   if (motion === "error") {
     return <>{genericThinking(message) ? "Something went wrong" : message}</>;
   }
-  if (motion === "tool" || (motion === "done" && !genericThinking(message))) {
+  if (motion === "tool") {
     return <>{message}</>;
   }
   return (
@@ -67,4 +68,36 @@ export function OrionThinkingIndicator({
       {detail ? <span className="orion-status__detail">{detail}</span> : null}
     </div>
   );
+}
+
+/** Keeps the orb through a short success flash or error fade after the live state ends. */
+export function OrbStatusSlot({
+  active,
+  failed = false,
+  motion = "thinking",
+  message,
+  detail,
+}: {
+  active: boolean;
+  failed?: boolean;
+  motion?: OrbMotion;
+  message?: string;
+  detail?: React.ReactNode;
+}) {
+  const [linger, setLinger] = React.useState<null | "done" | "error">(null);
+  const was = React.useRef(active);
+  React.useEffect(() => {
+    if (was.current && !active) {
+      const next = failed ? "error" : "done";
+      setLinger(next);
+      const t = window.setTimeout(() => setLinger(null), next === "error" ? 720 : 280);
+      was.current = false;
+      return () => window.clearTimeout(t);
+    }
+    was.current = active;
+    if (active) setLinger(null);
+  }, [active, failed]);
+  if (active) return <OrionThinkingIndicator motion={motion} message={message} detail={detail} />;
+  if (!linger) return null;
+  return <OrionThinkingIndicator motion={linger} message={linger === "error" ? message : ""} />;
 }

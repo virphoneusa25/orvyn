@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
-import { ORION_THINKING_TEXT, OrionThinkingIndicator } from "./OrionThinkingIndicator";
+import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 import { LiveActivity, MissionPlan } from "./MissionPlan";
 import { isRunFinished, RunUsage, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
@@ -136,20 +136,14 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
         </button>
       )}
 
-      {live && busy && (
-        <div
-          style={{
-            padding: "6px 12px",
-            fontSize: 11.5,
-            color: "var(--accent)",
-            borderTop: "1px solid var(--border)",
-            background: "var(--bg-elevated)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <OrionThinkingIndicator motion={live === "Thinking…" ? "thinking" : "tool"} message={live === "Thinking…" ? ORION_THINKING_TEXT : live} />
+      {run.events.length === 0 && (
+        <div style={{ padding: busy ? "6px 12px" : 0, fontSize: 11.5 }}>
+          <OrbStatusSlot
+            active={busy}
+            failed={run.status === "error"}
+            motion={orbMotionForLabel(live ?? "")}
+            message={!live || live === "Thinking…" ? (orbMotionForLabel(live ?? "") === "tool" ? ORION_WORKING_TEXT : ORION_THINKING_TEXT) : live}
+          />
         </div>
       )}
 

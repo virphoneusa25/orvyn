@@ -2,16 +2,26 @@
 // Sidebar (full + collapsed rail), top bar, and status footer.
 // Sidebar takes the same `view` / `onChange` contract as the existing
 // Navigation component, so it can replace it in App.tsx.
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { ViewId } from "../Navigation";
 import { Icon, IconName } from "./icons";
 import type { EngineStatus, UsageInfo, UserInfo, WorkspaceInfo } from "./types";
 import orvynMark from "../../assets/icon.png";
+import { getDesktopLayout, setDesktopLayout, WORKBENCH_VIEWS } from "../../desktopLayout";
+import type { AgentWorkspaceTab } from "../../agentWorkspaceModel";
+import { describeConnection } from "../../connectionState";
+import { getConnectionFacts, onConnectionFacts } from "../../connectionRuntime";
+import { readComposerDefaults } from "../../composerSettings";
+import { customerModelName } from "../../presentationReducer";
+
+type WorkbenchNav = "files" | "changes" | "terminal" | "browser" | "environment";
 
 interface NavEntry {
-  id: ViewId;
+  id: ViewId | WorkbenchNav;
   label: string;
   icon: IconName;
+  /** Workbench tabs stay on the mission and open the right-hand pane. */
+  workbench?: WorkbenchNav;
 }
 
 const NAV: { label: string; items: NavEntry[] }[] = [
@@ -19,7 +29,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
     label: "",
     items: [
       { id: "home", label: "Home", icon: "home" },
-      { id: "chats", label: "Chats", icon: "globe" },
+      { id: "chats", label: "Chats", icon: "chat" },
       { id: "missions", label: "Missions", icon: "missions" },
       { id: "automations", label: "Automations", icon: "bolt" },
     ],
@@ -28,32 +38,24 @@ const NAV: { label: string; items: NavEntry[] }[] = [
     label: "Workspace",
     items: [
       { id: "editor", label: "Code", icon: "code" },
-      { id: "terminal", label: "Terminal", icon: "terminal" },
-      { id: "browser", label: "Browser", icon: "globe" },
+      { id: "terminal", label: "Terminal", icon: "terminal", workbench: "terminal" },
+      { id: "browser", label: "Browser", icon: "globe", workbench: "browser" },
+      { id: "files", label: "Files", icon: "folder", workbench: "files" },
+      { id: "changes", label: "Changes", icon: "git", workbench: "changes" },
     ],
   },
   {
-    label: "Infrastructure",
+    label: "Resources",
     items: [
-      { id: "servers", label: "Servers", icon: "server" },
-      { id: "containers", label: "Containers", icon: "box" },
-      { id: "databases", label: "Databases", icon: "database" },
-    ],
-  },
-  {
-    label: "Intelligence",
-    items: [
-      { id: "agents", label: "Agents", icon: "agent" },
-      { id: "models", label: "Models", icon: "cpu" },
-      { id: "tools", label: "Tools & MCP", icon: "plug" },
-      { id: "memory", label: "Memory", icon: "database" },
-      { id: "learning", label: "Learning", icon: "cpu" },
+      { id: "tools", label: "MCP Servers", icon: "plug" },
       { id: "skills", label: "Skills", icon: "spark" },
+      { id: "models", label: "AI Models", icon: "cpu" },
+      { id: "environment", label: "Environments", icon: "server", workbench: "environment" },
     ],
   },
 ];
 
-const RAIL: NavEntry[] = [
+const RAIL: { id: ViewId; label: string; icon: IconName }[] = [
   { id: "home", label: "Home", icon: "home" },
   { id: "missions", label: "Missions", icon: "missions" },
   { id: "editor", label: "Code", icon: "code" },
@@ -77,28 +79,48 @@ export interface SidebarProps {
   onOpenUsage?: () => void;
 }
 
+function openWorkbenchTab(tab: WorkbenchNav) {
+  const current = getDesktopLayout();
+  const openTabIds = current.openTabIds.includes(tab) ? current.openTabIds : [...current.openTabIds, tab];
+  setDesktopLayout({
+    rightPanelOpen: true,
+    activeTab: tab as AgentWorkspaceTab,
+    activeTabId: tab,
+    openTabIds,
+  });
+  document.dispatchEvent(new CustomEvent("orvyn:context-open", { detail: { tab } }));
+}
+
 export function Sidebar(props: SidebarProps) {
-  const { view, onChange, workspace, user, usage, missionsNeedingYou = 0 } = props;
+  const { view, onChange, workspace, missionsNeedingYou = 0 } = props;
+  const [cloudLabel, setCloudLabel] = useState("Local mode");
+  const [cloudOn, setCloudOn] = useState(false);
+  const [modelLine, setModelLine] = useState("Auto");
+  useEffect(() => onConnectionFacts((facts) => {
+    const viewState = describeConnection(facts);
+    const on = viewState.signedIn && viewState.modeLabel === "Cloud";
+    setCloudOn(on);
+    setCloudLabel(on ? "Cloud Connected" : viewState.modeLabel === "Cloud" ? "Cloud offline" : "Local mode");
+  }), []);
+  useEffect(() => {
+    const sync = () => {
+      const model = readComposerDefaults().modelId;
+      setModelLine(!model || model === "auto" ? "Auto" : customerModelName(model) || "Auto");
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, [view]);
+
   return (
     <nav className="ov-sidebar" aria-label="Primary">
-      <div className="ov-brand">
-        <img src={orvynMark} alt="" />
-        <span>ORVYN</span>
-      </div>
-
-      <button type="button" className="ov-workspace" onClick={props.onSwitchWorkspace}>
-        <span className="ov-workspace__badge">{workspace.name.charAt(0).toUpperCase()}</span>
+      <button type="button" className="ov-workspace" onClick={props.onSwitchWorkspace ?? (() => onChange("projects"))}>
+        <span className="ov-workspace__badge">{(workspace.name || "W").charAt(0).toUpperCase()}</span>
         <span className="ov-workspace__text">
           <span className="ov-workspace__name">{workspace.name}</span>
-          <span className="ov-workspace__sub">{workspace.subtitle}</span>
+          <span className="ov-workspace__sub">{workspace.subtitle || "Personal Workspace"}</span>
         </span>
         <Icon name="chevronsUpDown" size={14} strokeWidth={2} />
-      </button>
-
-      <button type="button" className="ov-new-mission" onClick={props.onNewMission}>
-        <Icon name="plus" size={15} strokeWidth={2.2} />
-        New mission
-        <span className="ov-kbd">Ctrl N</span>
       </button>
 
       <div className="ov-nav">
@@ -110,8 +132,15 @@ export function Sidebar(props: SidebarProps) {
                 key={it.id}
                 type="button"
                 className="ov-nav__item"
-                aria-current={view === it.id ? "page" : undefined}
-                onClick={() => onChange(it.id)}
+                aria-current={!it.workbench && view === it.id ? "page" : undefined}
+                onClick={() => {
+                  if (it.workbench) {
+                    openWorkbenchTab(it.workbench);
+                    if (!WORKBENCH_VIEWS.has(view)) onChange("home");
+                    return;
+                  }
+                  onChange(it.id as ViewId);
+                }}
               >
                 <Icon name={it.icon} size={17} />
                 <span>{it.label}</span>
@@ -124,37 +153,19 @@ export function Sidebar(props: SidebarProps) {
         ))}
       </div>
 
-      <div className="ov-usage">
-        <div className="ov-usage__row">
-          <span className="ov-usage__label">Tokens this cycle</span>
-          <span className="ov-usage__value">{usage.valueLabel}</span>
-        </div>
-        <div className="ov-meter">
-          <div style={{ width: `${Math.min(100, Math.max(0, usage.percent))}%` }} />
-        </div>
-        <div className="ov-usage__foot">
-          <span>{usage.limitLabel}</span>
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              props.onOpenUsage?.();
-            }}
-          >
-            Usage →
-          </a>
-        </div>
-      </div>
-
-      <div className="ov-user">
-        <span className="ov-avatar">{user.name.charAt(0).toUpperCase()}</span>
-        <span className="ov-user__text">
-          <span className="ov-user__name">{user.name}</span>
-          <span className="ov-user__sub">{user.subtitle}</span>
+      <button type="button" className="ov-model" onClick={() => onChange("models")}>
+        <span className="ov-model__mark">A</span>
+        <span className="ov-model__text">
+          <span className="ov-model__name">{modelLine}</span>
+          <span className="ov-model__sub">{modelLine === "Auto" ? "Best model for your task" : "Active model"}</span>
         </span>
-        <button type="button" className="ov-icon-btn" aria-label="Settings" onClick={props.onOpenSettings}>
-          <Icon name="settings" size={16} />
-        </button>
+      </button>
+      <div className="ov-sidefoot">
+        <span className="ov-sidefoot__cloud">
+          <span className="ov-dot ov-dot--sm" style={{ background: cloudOn ? "var(--ov-green)" : "var(--ov-faint)" }} />
+          {cloudLabel}
+        </span>
+        <span>v0.1.0</span>
       </div>
     </nav>
   );

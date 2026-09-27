@@ -23,7 +23,7 @@ import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icon
 import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
-import { ORION_THINKING_TEXT, OrionThinkingIndicator, orbMotionForLabel } from "./OrionThinkingIndicator";
+import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 
 export interface AgentEvent {
   id: string;
@@ -215,6 +215,12 @@ export function AgentActivityList({
   // tool lifecycles collapse into single rows that update in place.
   const items = React.useMemo(() => groupResearch(reducePresentation(events, status)), [events, status]);
   const live = status === "running" || status === "awaiting_approval" || status === "verifying";
+  const toolLive = items.some((item) => (item.kind === "tool" && item.status === "running") || (item.kind === "workgroup" && item.status === "running") || (item.kind === "research" && item.steps.some((st) => st.status === "running")));
+
+  const liveStatus = [...items].reverse().find((item) => item.kind === "status" && (item.ephemeral || (item.thought && !item.thought.endTs && (status === "running" || status === "awaiting_approval"))));
+  const liveLabel = liveStatus && liveStatus.kind === "status" ? liveStatus.label : "";
+  const motion = status === "awaiting_approval" ? "waiting" : toolLive || orbMotionForLabel(liveLabel) === "tool" ? "tool" : orbMotionForLabel(liveLabel);
+  const slotMessage = motion === "thinking" ? ORION_THINKING_TEXT : motion === "tool" && (liveLabel === "Thinking…" || liveLabel === ORION_WORKING_TEXT || liveLabel.length === 0) ? ORION_WORKING_TEXT : liveLabel;
 
   return (
     <>
@@ -235,14 +241,7 @@ export function AgentActivityList({
           case "workgroup":
             return <WorkGroupRow key={item.key} group={item} />;
           case "status":
-            if (item.ephemeral) {
-              const motion = orbMotionForLabel(item.label);
-              return (
-                <div key={item.key} className="activity-thinking">
-                  <OrionThinkingIndicator motion={motion} message={motion === "thinking" ? ORION_THINKING_TEXT : item.label} />
-                </div>
-              );
-            }
+            if (item.ephemeral) return null;
             // Thought rows: while one is the live activity (no endTs, run
             // still streaming) it reads as an active state — "Working…" with
             // the pulse. Once real activity follows, it becomes the quiet
@@ -259,13 +258,7 @@ export function AgentActivityList({
                     : `${Math.round(durMs / 60_000)} minutes`
                 : undefined;
               if (!live && !item.thought.summary) return null;
-              if (live) {
-                return (
-                  <div key={item.key} className="activity-thinking" title={item.thought.summary ?? "Working"}>
-                    <OrionThinkingIndicator motion="thinking" />
-                  </div>
-                );
-              }
+              if (live) return null;
               return (
                 <div
                   key={item.key}
@@ -329,6 +322,12 @@ export function AgentActivityList({
             return null;
         }
       })}
+      <OrbStatusSlot
+        active={live && (Boolean(liveStatus) || toolLive)}
+        failed={status === "error" || status === "failed"}
+        motion={motion}
+        message={slotMessage}
+      />
     </>
   );
 }

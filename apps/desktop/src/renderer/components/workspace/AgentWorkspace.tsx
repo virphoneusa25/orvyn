@@ -482,31 +482,70 @@ export function AgentWorkspace({
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div
           data-testid="workbench-header"
+          title={headerLabel}
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: "stretch",
             height: 36,
-            gap: 8,
-            padding: "0 6px 0 12px",
+            gap: 4,
+            padding: "0 4px 0 0",
             borderBottom: "1px solid var(--orvyn-border-soft)",
             minWidth: 0,
             flexShrink: 0,
             position: "relative",
             zIndex: WORKBENCH_Z.tabbar,
+            background: "rgba(8,12,22,0.55)",
           }}
         >
-          <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", lineHeight: 1.15 }}>
-            <span
-              data-testid="workbench-project"
-              style={{ fontSize: 13, fontWeight: 600, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              {headerLabel}
-            </span>
-            <span data-testid="workbench-status" style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>
-              {workspaceChromeStatus(environment)}
-            </span>
+          <div
+            data-testid={WORKBENCH_TABBAR_TEST_ID}
+            style={{
+              display: "flex",
+              alignItems: "stretch",
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", flex: 1, minWidth: 0, scrollbarWidth: "thin" }}>
+              {tabs.map((t) => {
+                const native = matchingNativeTab(browserState, t);
+                const selected = t.id === activeId;
+                return (
+                  <button
+                    key={t.id}
+                    data-tab={t.id}
+                    data-closable={t.closable ? "true" : "false"}
+                    title={t.fullTitle || t.title}
+                    onClick={() => activate(t, true)}
+                    onAuxClick={(e) => {
+                      if (e.button === 1 && t.closable) close(t.id);
+                    }}
+                    style={tabBtn(selected)}
+                  >
+                    <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 180 }}>{t.title}</span>
+                    {t.kind === "preview" && previewVersion > 0 && (
+                      <span data-testid="preview-live" style={{ flexShrink: 0, fontSize: 10, fontWeight: 650, color: "#6ee7b7", background: "rgba(52,211,153,0.12)", borderRadius: 999, padding: "1px 6px" }}>Live</span>
+                    )}
+                    {t.closable && (
+                      <span
+                        data-tab-close={t.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          close(t.id);
+                        }}
+                        style={{ flexShrink: 0, opacity: 0.7, fontSize: 13, lineHeight: 1, marginLeft: 2 }}
+                      >
+                        ×
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+          <span data-testid="workbench-status" title={workspaceChromeStatus(environment)} style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
             <button
               data-testid="workbench-follow"
               title={follow.paused ? "Resume Follow ORION" : "Follow ORION"}
@@ -594,58 +633,6 @@ export function AgentWorkspace({
               <IconClose size={14} />
             </button>
           </span>
-        </div>
-        <div
-          data-testid={WORKBENCH_TABBAR_TEST_ID}
-          style={{
-            display: tabs.length > 0 ? "flex" : "none",
-            alignItems: "stretch",
-            height: tabs.length > 0 ? 34 : 0,
-            borderBottom: tabs.length > 0 ? "1px solid var(--orvyn-border-soft)" : "none",
-            minWidth: 0,
-            flexShrink: 0,
-            position: "relative",
-            zIndex: WORKBENCH_Z.tabbar,
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", flex: 1, minWidth: 0, scrollbarWidth: "thin" }}>
-            {tabs.map((t) => {
-              const native = matchingNativeTab(browserState, t);
-              const selected = t.id === activeId;
-              return (
-                <button
-                  key={t.id}
-                  data-tab={t.id}
-                  data-closable={t.closable ? "true" : "false"}
-                  title={t.fullTitle || t.title}
-                  onClick={() => activate(t, true)}
-                  onAuxClick={(e) => {
-                    if (e.button === 1 && t.closable) close(t.id);
-                  }}
-                  style={tabBtn(selected)}
-                >
-                  <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 180 }}>{t.title}</span>
-                  {t.id === "preview" && previewVersion > 0 && (
-                    <span data-testid="preview-live" style={{ flexShrink: 0, fontSize: 10, fontWeight: 650, color: "#6ee7b7" }}>Live</span>
-                  )}
-                  {t.closable && (
-                    <span
-                      data-tab-close={t.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        close(t.id);
-                      }}
-                      style={{ flexShrink: 0, opacity: 0.7, fontSize: 13, lineHeight: 1, marginLeft: 2 }}
-                    >
-                      ×
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative", zIndex: WORKBENCH_Z.content }}>
           {emptyWorkbench && (

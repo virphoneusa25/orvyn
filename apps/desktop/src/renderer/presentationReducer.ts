@@ -84,6 +84,8 @@ export interface WorkGroupItem {
   durationMs?: number;
   items: ToolItem[];
   ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
+  /** Preview revisions that landed with this group, e.g. "Preview updated (v3)". */
+  notes?: string[];
 }
 
 export interface AssistantItem {
@@ -395,7 +397,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       case "route.escalated": {
         flushAssistant(false);
-        const model = String(e.data.modelId ?? "").split(/[:/]/).pop() ?? "";
+        const model = customerModelName(e.data.modelId);
         items.push({ kind: "status", key: e.id, label: `Switched to a stronger model${model ? ` (${model})` : ""}: ${String(e.data.reason ?? "the work stalled")}`.slice(0, 160), ephemeral: false, tone: "working" });
         continue;
       }
@@ -403,7 +405,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         // A cheaper helper model took a look-around step (per-step routing).
         if (!e.data.accepted) continue;
         flushAssistant(false);
-        const model = String(e.data.modelId ?? "").split(/[:/]/).pop() ?? "";
+        const model = customerModelName(e.data.modelId);
         items.push({ kind: "status", key: e.id, label: `Light step on a cheaper model${model ? ` (${model})` : ""}: gathering only`, ephemeral: false, tone: "working" });
         continue;
       }
@@ -414,8 +416,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "model.unavailable": {
         flushAssistant(false);
-        const name = (id: unknown) => String(id ?? "").split(/[:/]/).pop() ?? "";
-        items.push({ kind: "status", key: e.id, label: `${name(e.data.modelId)} isn't available on this account — continuing with ${name(e.data.fallback)}`, ephemeral: false, tone: "working" });
+        items.push({ kind: "status", key: e.id, label: `${customerModelName(e.data.modelId) || "That model"} isn't available on this account — continuing with ${customerModelName(e.data.fallback) || "another model"}`, ephemeral: false, tone: "working" });
         continue;
       }
       case "capability.installed": {
@@ -750,7 +751,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
 
       case "model.capability.blocked": {
         flushAssistant(false);
-        const model = String(e.data.modelId ?? e.data.provider ?? "Selected model");
+        const model = customerModelName(e.data.modelId ?? e.data.provider) || "Selected model";
         const pinned = Boolean(e.data.pinned);
         const vision = e.data.capability === "vision";
         items.push({
@@ -770,7 +771,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({
           kind: "status",
           key: e.id,
-          label: `Model · Switched to ${String(e.data.actualModel ?? "a compatible model")} for visual verification`,
+          label: `Model · Switched to ${customerModelName(e.data.actualModel) || "a compatible model"} for visual verification`,
           ephemeral: false,
           tone: "working",
         });
@@ -819,7 +820,6 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "status", key: e.id, label: "Desktop · Verification passed", ephemeral: false });
         continue;
       case "preview.updated":
-        continue;
       case "preview.available":
         flushAssistant(false);
         previewRev += 1;
@@ -884,16 +884,57 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
     }
   }
   const last = items[items.length - 1];
-  if (active && (!last || (last.kind !== "status" && !(last.kind === "assistant" && last.streaming))) &&
-      !items.some(it => it.kind === "tool" && it.status === "running")) {
+  const toolRunning = items.some((it) => it.kind === "tool" && it.status === "running");
+  if (active && (!last || (last.kind !== "status" && !(last.kind === "assistant" && last.streaming)))) {
     items.push({ kind: "status", key: "live-status", ephemeral: true, tone: "working",
-      label: runStatus === "awaiting_approval" ? "Waiting for your approval" : runStatus === "queued" ? "Waiting to start…" : runStatus === "cancelling" ? "Stopping…" : "Thinking…" });
+      label: runStatus === "awaiting_approval" ? "Waiting for your approval" : runStatus === "queued" ? "Waiting to start…" : runStatus === "cancelling" ? "Stopping…" : toolRunning ? "ORION is working..." : "Thinking…" });
   }
 
   // Phase pass: consecutive same-class operations roll into one WorkGroup —
   // "✓ Inspected project · 18 files" — so a mission reads as a conversation,
   // not a scroll of rows. Assistant text and other items close the group.
-  return phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral));
+  // Preview revisions fold into the edit group instead of extra chat rows.
+  return attachPreviewNotes(phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral)));
+}
+
+/** Customer-facing model name. Infrastructure ids and provider paths stay internal. */
+export function customerModelName(id: unknown): string {
+  const raw = String(id ?? "").trim();
+  if (!raw) return "";
+  const tail = raw.split(/[:/]/).filter(Boolean).pop() ?? raw;
+  const known: Record<string, string> = {
+    "kimi-k2p7-code": "Kimi Code",
+    "glm-5p3": "GLM 5.3",
+    "glm-5p3-flash": "GLM 5.3 Flash",
+    "deepseek-v4p1-flash": "DeepSeek Flash",
+    "deepseek-v3.2": "DeepSeek",
+    "claude-sonnet-5": "Claude Sonnet",
+    "gpt-5.6-luna": "GPT",
+    "gpt-5.6-sol": "GPT",
+    "minimax-m2.5": "MiniMax",
+  };
+  const key = tail.toLowerCase();
+  if (known[key]) return known[key];
+  const head = raw.split(":")[0] ?? "";
+  if (/^(fw|ci|openrouter|mistral|gemini|openai|anthropic)$/i.test(head) || /accounts\/|fireworks|openrouter/i.test(raw)) {
+    return tail.replace(/[-_.]+/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  }
+  return raw.length > 32 ? tail : raw;
+}
+
+function attachPreviewNotes(items: PresentationItem[]): PresentationItem[] {
+  const out: PresentationItem[] = [];
+  for (const it of items) {
+    if (it.kind === "status" && it.label.startsWith("Preview updated")) {
+      const prev = out[out.length - 1];
+      if (prev && prev.kind === "workgroup" && prev.type === "edits") {
+        prev.notes = [...(prev.notes ?? []), it.label];
+        continue;
+      }
+    }
+    out.push(it);
+  }
+  return out;
 }
 
 /** One download card per file. A later write of the same path replaces the card. */

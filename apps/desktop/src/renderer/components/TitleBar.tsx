@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from "react";
 import appIcon from "../assets/icon.png";
 import { AccountCluster } from "./AccountCluster";
 import type { TranscriptInput } from "../shareTranscript";
+import { apiUrl, authHeaders, healthUrl } from "../connection";
 
 export interface MenuItem {
   label?: string;
@@ -55,7 +56,43 @@ export function TitleBar({
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [accountPlan, setAccountPlan] = useState<string | null>(null);
+  const [accountCredits, setAccountCredits] = useState<string | null>(null);
+  const [engineLive, setEngineLive] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void fetch(healthUrl())
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (alive) setEngineLive(Boolean(body && (body.status === "ok" || body.status === "healthy" || body.ok === true)));
+      })
+      .catch(() => {
+        if (alive) setEngineLive(false);
+      });
+    void fetch(apiUrl("/billing"), { headers: authHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!alive || !body?.wallet) return;
+        const plan = typeof body.wallet.plan?.label === "string" ? body.wallet.plan.label : null;
+        const cycle = body.wallet.windows?.cycle;
+        const used = Number(cycle?.used);
+        const limit = Number(cycle?.limit);
+        const available = Number(body.wallet.availableBalance);
+        const credits = Number.isFinite(used) && Number.isFinite(limit) && limit > 0
+          ? `${Math.round(used).toLocaleString()} / ${Math.round(limit).toLocaleString()}`
+          : Number.isFinite(available)
+            ? `${Math.round(available).toLocaleString()} credits`
+            : null;
+        setAccountPlan(plan);
+        setAccountCredits(credits);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     window.orvyn.window.isMaximized().then(setMaximized);
@@ -251,26 +288,23 @@ export function TitleBar({
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 6 }} className="no-drag">
         <AccountCluster onOpenSettings={onOpenSettings} onSwitchWorkspace={onSwitchWorkspace} />
-        {planLabel && (
+        {(accountPlan || planLabel) && (
           <span
             data-testid="title-plan"
             style={{
               fontSize: 11,
               fontWeight: 600,
-              color: "#fff",
-              background: "var(--orvyn-purple)",
-              borderRadius: 999,
-              padding: "3px 11px",
+              color: "var(--orvyn-text-secondary)",
               whiteSpace: "nowrap",
             }}
           >
-            {planLabel}
+            {accountPlan || planLabel}
           </span>
         )}
-        {usageLabel && (
+        {(accountCredits || usageLabel) && (
           <span
             data-testid="title-credits"
-            title={usageTitle ?? usageLabel}
+            title={usageTitle ?? accountCredits ?? usageLabel ?? ""}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -280,11 +314,34 @@ export function TitleBar({
               background: "var(--orvyn-surface-2)",
               border: "1px solid var(--orvyn-border-soft)",
               borderRadius: 999,
-              padding: "3px 11px",
+              padding: "3px 10px",
               whiteSpace: "nowrap",
             }}
           >
-            {usageLabel}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="1.7">
+              <path d="M13 2 4 14h7l-1 8 9-12h-7z" strokeLinejoin="round" />
+            </svg>
+            {accountCredits || usageLabel}
+          </span>
+        )}
+        {engineLive && (
+          <span
+            data-testid="title-live"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: 11,
+              fontWeight: 650,
+              color: "#bbf7d0",
+              background: "rgba(52,211,153,0.12)",
+              border: "1px solid rgba(52,211,153,0.35)",
+              borderRadius: 999,
+              padding: "2px 8px",
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
+            Live
           </span>
         )}
         <button

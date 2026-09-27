@@ -4,6 +4,10 @@
   gap: 8px;
   min-height: 22px;
   max-width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
   color: var(--ov-text, var(--orvyn-text, #e8eaf3));
   animation: orion-status-in 220ms ease;
 }
@@ -20,7 +24,7 @@
 }
 .orion-status__name {
   font-weight: 700;
-  color: #f5f7ff;
+  color: #f7f9ff;
 }
 .orion-status__detail {
   font-size: 11px;
@@ -35,14 +39,58 @@
   flex: 0 0 22px;
   overflow: visible;
 }
+.opo::before,
+.opo::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.opo::before {
+  inset: -5px -7px;
+  border: 2.5px solid transparent;
+  border-top-color: #ffffff;
+  border-right-color: #7af0ff;
+  border-bottom-color: rgba(167, 139, 250, 0.15);
+  filter: blur(0.2px) drop-shadow(0 0 2px #67e8f9);
+  animation: opo-spin 4.6s linear infinite;
+}
+.opo::after {
+  inset: -6px -2px -3px -6px;
+  border: 2px solid transparent;
+  border-left-color: #f5d0fe;
+  border-bottom-color: #e879f9;
+  border-top-color: rgba(255, 255, 255, 0.2);
+  filter: blur(0.35px);
+  animation: opo-spin 6.2s linear infinite reverse;
+}
 .opo__atmo {
   position: absolute;
   inset: -8px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(170, 140, 255, 0.55) 0%, rgba(80, 190, 255, 0.28) 36%, rgba(120, 40, 180, 0.05) 58%, transparent 70%);
-  filter: blur(0.4px);
+  background: radial-gradient(circle, rgba(196, 181, 253, 0.42) 0%, rgba(34, 211, 238, 0.28) 34%, rgba(168, 85, 247, 0.08) 58%, transparent 72%);
   animation: opo-atmo 3.2s ease-in-out infinite;
   pointer-events: none;
+}
+.opo__conic {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  -webkit-mask: radial-gradient(circle, transparent 22%, #000 40%, #000 78%, transparent 90%);
+  mask: radial-gradient(circle, transparent 22%, #000 40%, #000 78%, transparent 90%);
+}
+.opo__conic-a {
+  background: conic-gradient(from 12deg, transparent 0 8%, #ffffff 18%, #7af0ff 30%, transparent 44%, #e879f9 60%, #ffffff 72%, transparent 84%, #67e8f9 94%, transparent 100%);
+  animation: opo-spin 4.6s linear infinite;
+  filter: blur(0.25px);
+}
+.opo__conic-b {
+  background: conic-gradient(from 200deg, transparent 0 14%, #f0fdff 28%, #c084fc 42%, transparent 56%, #22d3ee 74%, #ffffff 84%, transparent 100%);
+  animation: opo-spin 6.2s linear infinite reverse;
+  filter: blur(0.4px);
 }
 .opo__svg {
   position: relative;
@@ -56,106 +104,103 @@
   animation: opo-breathe 2.4s ease-in-out infinite;
 }
 .opo__blob {
-  transform-origin: 34px 34px;
+  transform-origin: 36px 36px;
   animation: opo-blob 3.8s linear infinite;
 }
 .opo__blob-b {
-  transform-origin: 26px 28px;
+  transform-origin: 24px 26px;
   animation-duration: 5.1s;
   animation-direction: reverse;
 }
-.opo__spec {
-  opacity: 0.92;
-}
+.opo__spec { opacity: 0.95; }
+.opo__spec-b { opacity: 0.7; }
 .opo__spin {
   transform-box: fill-box;
   transform-origin: center;
 }
-.opo__spin-a {
-  animation: opo-spin 11s linear infinite;
-}
+.opo__spin-a { animation: opo-spin 9.4s linear infinite; }
 .opo__spin-b {
   animation: opo-spin-b 6.2s linear infinite reverse;
-  opacity: 0.82;
+  opacity: 0.9;
 }
-.opo__path {
-  fill: none;
-}
+.opo__path { fill: none; }
 .opo__path-a {
-  stroke-dasharray: 58 42;
+  stroke-dasharray: 46 54;
   animation: opo-dash 4.6s linear infinite;
 }
 .opo__path-b {
-  stroke-dasharray: 48 52;
+  stroke-dasharray: 38 62;
   animation: opo-dash 6.2s linear infinite reverse;
 }
 .opo__path-c {
-  stroke-dasharray: 30 70;
+  stroke-dasharray: 22 78;
   animation: opo-dash 3.4s linear infinite;
-}
-.opo__flash {
-  display: none;
 }
 
 .opo--tool .opo__path-a { animation-duration: 2.2s; }
 .opo--tool .opo__path-b { animation-duration: 2.9s; }
 .opo--tool .opo__path-c { animation-duration: 1.7s; }
-.opo--tool .opo__spin-a { animation-duration: 6.4s; }
-.opo--tool .opo__spin-b { animation-duration: 3.6s; }
+.opo--tool .opo__spin-a { animation-duration: 5.2s; }
+.opo--tool .opo__spin-b { animation-duration: 3.4s; }
+.opo--tool .opo__conic-a { animation-duration: 2.4s; }
+.opo--tool .opo__conic-b { animation-duration: 3.1s; }
 .opo--tool .opo__blob { animation-duration: 2.1s; }
 .opo--tool .opo__core { animation-duration: 1.5s; }
-.opo--tool .opo__atmo { animation-duration: 1.8s; opacity: 1; }
-.opo--tool { filter: brightness(1.18); }
+.opo--tool .opo__atmo { animation-duration: 1.8s; }
+.opo--tool { filter: brightness(1.22) saturate(1.12); }
 
 .opo--waiting .opo__path-a { animation-duration: 9.2s; }
 .opo--waiting .opo__path-b { animation-duration: 12.4s; }
 .opo--waiting .opo__path-c { animation-duration: 8s; }
 .opo--waiting .opo__spin-a { animation-duration: 22s; }
 .opo--waiting .opo__spin-b { animation-duration: 16s; }
+.opo--waiting .opo__conic-a { animation-duration: 14s; }
+.opo--waiting .opo__conic-b { animation-duration: 18s; }
 .opo--waiting .opo__blob { animation-duration: 8s; }
 .opo--waiting .opo__core { animation-duration: 4.8s; }
-.opo--waiting .opo__atmo { opacity: 0.65; }
+.opo--waiting .opo__atmo { opacity: 0.6; }
 
 .orion-status--error .opo {
   animation: opo-error 720ms ease forwards;
 }
-.orion-status--done .opo__atmo {
+.orion-status--done .opo__atmo,
+.orion-status--done .opo__conic-a {
   animation: opo-flash 260ms ease forwards;
 }
 
 @keyframes opo-breathe {
   0%, 100% { transform: scale(0.96); }
-  50% { transform: scale(1.05); }
+  50% { transform: scale(1.06); }
 }
 @keyframes opo-blob {
-  0% { transform: rotate(0deg) scale(1); }
-  50% { transform: rotate(180deg) scale(1.14); }
-  100% { transform: rotate(360deg) scale(1); }
+  0% { transform: rotate(0deg) translate(0, 0) scale(1); }
+  50% { transform: rotate(180deg) translate(1px, -1px) scale(1.16); }
+  100% { transform: rotate(360deg) translate(0, 0) scale(1); }
 }
 @keyframes opo-spin {
   to { transform: rotate(360deg); }
 }
 @keyframes opo-spin-b {
-  0% { transform: rotate(0deg) scale(1); }
-  50% { transform: rotate(-180deg) scale(1.08); }
-  100% { transform: rotate(-360deg) scale(1); }
+  0% { transform: rotate(18deg) scale(1); }
+  50% { transform: rotate(-162deg) scale(1.06); }
+  100% { transform: rotate(-342deg) scale(1); }
 }
 @keyframes opo-dash {
   to { stroke-dashoffset: -100; }
 }
 @keyframes opo-atmo {
-  0%, 100% { opacity: 0.62; transform: scale(0.92); }
-  50% { opacity: 1; transform: scale(1.06); }
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 0.95; transform: scale(1.05); }
 }
 @keyframes opo-error {
   0% { filter: none; opacity: 1; }
-  40% { filter: hue-rotate(-42deg) saturate(1.45); opacity: 1; }
-  100% { filter: hue-rotate(-24deg) saturate(1.1); opacity: 0; }
+  35% { filter: hue-rotate(-38deg) saturate(1.5) brightness(1.15); opacity: 1; }
+  100% { filter: hue-rotate(-18deg) saturate(1.05); opacity: 0; }
 }
 @keyframes opo-flash {
   0% { opacity: 0.7; filter: brightness(1); }
-  35% { opacity: 1; filter: brightness(1.8); }
-  100% { opacity: 0; filter: brightness(1.2); }
+  30% { opacity: 1; filter: brightness(2); }
+  100% { opacity: 0; filter: brightness(1.3); }
 }
 @keyframes orion-status-in {
   from { opacity: 0; }
@@ -166,7 +211,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .opo::before,
+  .opo::after,
   .opo__atmo,
+  .opo__conic-a,
+  .opo__conic-b,
   .opo__core,
   .opo__blob,
   .opo__blob-b,
@@ -183,6 +232,6 @@
   .opo__path-a,
   .opo__path-b,
   .opo__path-c {
-    stroke-dashoffset: 0;
+    stroke-dashoffset: 12;
   }
 }

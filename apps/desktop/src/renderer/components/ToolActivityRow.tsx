@@ -178,6 +178,12 @@ export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
             <span>{editProgressLine(item)}</span>
           </div>
         ))}
+        {(group.notes ?? []).map((note) => (
+          <div key={note} className="site-progress__line">
+            <span className="site-progress__mark" aria-hidden="true">↻</span>
+            <span>{note}</span>
+          </div>
+        ))}
       </div>
     );
   }

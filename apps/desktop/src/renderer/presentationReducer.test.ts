@@ -460,8 +460,8 @@ test("website file writes collapse into one structure group and preview updates 
   const group = items.find((i) => i.kind === "workgroup") as WgItem;
   assert.equal(group.title, "Created website structure");
   assert.deepEqual(group.items.map((i) => i.fileName), ["index.html", "styles.css", "app.js"]);
-  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
-  assert.deepEqual(labels.filter((l) => l.startsWith("Preview updated")), ["Preview updated (v1)", "Preview updated (v2)"]);
+  assert.deepEqual(group.notes, ["Preview updated (v1)", "Preview updated (v2)"]);
+  assert.equal(items.some((i) => i.kind === "status" && String((i as { label?: string }).label).startsWith("Preview updated")), false);
 });
 
 test("an internal credit warning is not a chat interruption", () => {
