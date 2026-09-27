@@ -24,6 +24,7 @@ services:
       ORVYN_CLOUD_MODE: "true"
       ORVYN_PUBLIC_URL: "https://staging.orvyn.virphoneusa.com"
       ORVYN_STAGING_URL: "https://staging.orvyn.virphoneusa.com"
+      # Durable sessions and provisioned workspaces. Not the mission sandbox.
       ORVYN_DATA_DIR: /data
       ORVYN_PROJECTS_DIR: /projects
       ORVYN_PG_URL: "postgres://orvyn_staging:${STAGING_PG_PASSWORD:-orvyn_staging}@postgres-staging:5432/orvyn_staging"
@@ -110,6 +111,7 @@ services:
       ORVYN_WORKER_NAME: staging-worker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Ephemeral mission sandboxes. Canonical workspaces stay on staging-data.
       - staging-workspaces:/opt/orvyn/workspaces-staging
     depends_on:
       backend-staging:

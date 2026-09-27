@@ -20,6 +20,7 @@ services:
     environment:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
+      # Persistent volume: sessions, and tenants/<id>/workspaces/<id> project files.
       - ORVYN_DATA_DIR=/data
       # Control-plane service connections (internal network only)
       - ORVYN_PG_URL=postgres://orvyn:${ORVYN_PG_PASSWORD:-orvyn_dev}@postgres:5432/orvyn

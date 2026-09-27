@@ -6,9 +6,11 @@
 
 import { Router } from "express";
 import { randomUUID } from "crypto";
+import * as fs from "fs";
 import type { RunStore } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
+import { readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
 import {
   assertTrustedMission,
@@ -42,6 +44,8 @@ interface PendingJob {
   userId?: string;
   projectId?: string | null;
   workspace?: string;
+  /** Durable project directory on the control plane. The worker sandbox is not this path. */
+  canonicalProjectRoot?: string;
   assignedTo?: string;
   createdAt: number;
   /**
@@ -58,7 +62,40 @@ const jobQueue: PendingJob[] = [];
 /** Tenant bound when a job was queued. Survives removal from the queue so late events still land in the right store. */
 const runTenants = new Map<string, string>();
 const runMissions = new Map<string, MissionIdentity>();
+/** Run id → real path of the durable workspace on this control plane. */
+const canonicalRoots = new Map<string, string>();
 const WORKSPACE_ROOT = process.env.ORVYN_WORKSPACE_DIR || "/opt/orvyn/workspaces";
+
+function bindCanonicalRoot(runId: string, candidate: string | undefined): string {
+  const raw = String(candidate ?? "").trim();
+  if (!raw) return "";
+  try {
+    if (!fs.existsSync(raw) || !fs.statSync(raw).isDirectory()) return "";
+    const real = fs.realpathSync(raw);
+    canonicalRoots.set(runId, real);
+    return real;
+  } catch {
+    return "";
+  }
+}
+
+/** Files the worker should stage. `canonical` is false when this run has no durable directory. */
+export function listCanonicalFiles(runId: string): { canonical: boolean; files: WorkspaceFile[] } {
+  const root = canonicalRoots.get(runId);
+  if (!root) return { canonical: false, files: [] };
+  return { canonical: true, files: readWorkspaceTree(root) };
+}
+
+/** Write worker sandbox bytes back onto the durable workspace. Does not delete missing files. */
+export function applyCanonicalSync(runId: string, files: WorkspaceFile[]): { ok: true; written: string[] } | { ok: false; error: string } {
+  const root = canonicalRoots.get(runId);
+  if (!root) return { ok: false, error: "no canonical workspace for this run" };
+  return { ok: true, written: writeWorkspaceTree(root, Array.isArray(files) ? files : []) };
+}
+
+export function canonicalRootForRun(runId: string): string | undefined {
+  return canonicalRoots.get(runId);
+}
 
 function rememberTenant(runId: string, tenantId?: string, identity?: MissionIdentity): void {
   if (tenantId) runTenants.set(runId, tenantId);
@@ -93,11 +130,12 @@ export function workerStats(): { online: number; total: number } {
 }
 
 /**
- * Queues an executor job: the worker prepares an isolated mission container
- * for `runId` (transferring the project from its local `projectRoot`) and
- * then serves tool RPC requests until the control-plane run finishes.
+ * Queues an executor job. `projectRoot` is a path the worker may copy if it
+ * exists on that machine. `canonicalProjectRoot` is the durable workspace on
+ * this control plane (ORVYN_DATA_DIR). The worker stages that tree over HTTP
+ * and syncs changes back before its sandbox is removed.
  */
-export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string): void {
+export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string, canonicalProjectRoot?: string): void {
   const mission = assertTrustedMission({
     ...(typeof identity === "string" ? { tenantId: identity } : identity ?? {}),
     runId,
@@ -107,11 +145,13 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
     projectId: typeof identity === "string" ? null : identity?.projectId ?? null,
   });
   rememberTenant(runId, mission.tenantId, mission);
+  const canonical = bindCanonicalRoot(runId, canonicalProjectRoot || projectRoot);
   jobQueue.push({
     runId,
     missionId: `mission_${runId.slice(0, 8)}`,
     instruction: "",
     projectRoot,
+    canonicalProjectRoot: canonical,
     tenantId: mission.tenantId,
     organizationId: mission.organizationId,
     userId: mission.userId,
@@ -213,6 +253,28 @@ export function workerRouter(
     }
   });
 
+  // ── Canonical workspace: stage out, sync back ────────────────────────
+  // The worker sandbox is ephemeral. These endpoints are the only copy
+  // path for a remote worker that cannot see ORVYN_DATA_DIR.
+  r.get("/workspace/:runId/files", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.json(listCanonicalFiles(req.params.runId));
+  });
+
+  r.post("/workspace/:runId/sync", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const files = Array.isArray(req.body?.files) ? req.body.files as WorkspaceFile[] : [];
+    const applied = applyCanonicalSync(req.params.runId, files);
+    if (!applied.ok) return res.status(409).json(applied);
+    res.json(applied);
+  });
+
   // ── Tool RPC: worker polls for the next tool request ─────────────────
   // The response also tells the worker when the control-plane run has
   // finished, so it can collect artifacts and clean the container up. The
@@ -309,6 +371,7 @@ export function workerRouter(
     });
 
     rememberTenant(runId, tenantId, mission);
+    const canonical = bindCanonicalRoot(runId, String(req.body?.canonicalProjectRoot ?? projectRoot ?? ""));
     try {
       const store = getRunStore(tenantId);
       if (!store.get(runId)) {
@@ -322,6 +385,7 @@ export function workerRouter(
       missionId: missionId || `mission_${Date.now().toString(36)}`,
       instruction,
       projectRoot,
+      canonicalProjectRoot: canonical,
       mode,
       tenantId: mission.tenantId,
       organizationId: mission.organizationId,

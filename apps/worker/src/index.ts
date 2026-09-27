@@ -47,6 +47,8 @@ interface JobAssignment {
   userId?: string;
   projectId?: string | null;
   workspace?: string;
+  /** Durable project on the control plane. Never delete this path. */
+  canonicalProjectRoot?: string;
   identity?: {
     tenantId: string;
     organizationId: string;
@@ -84,7 +86,7 @@ interface CommandResult {
 
 // ── Control-plane communication ───────────────────────────────────────────
 
-async function cp(pathname: string, method = "GET", body?: unknown): Promise<any> {
+async function cp(pathname: string, method = "GET", body?: unknown, timeoutMs = 10_000): Promise<any> {
   return new Promise((resolve, reject) => {
     const url = new URL(pathname, CONTROL_PLANE);
     const payload = body ? JSON.stringify(body) : undefined;
@@ -103,7 +105,7 @@ async function cp(pathname: string, method = "GET", body?: unknown): Promise<any
         catch { resolve({}); }
       });
     });
-    req.setTimeout(10_000, () => { req.destroy(); reject(new Error("timeout")); });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("timeout")); });
     req.on("error", reject);
     if (payload) req.write(payload);
     req.end();
@@ -131,6 +133,98 @@ function trustedJob(job: JobAssignment): JobAssignment {
   sanitizeSegment(tenantId);
   sanitizeSegment(job.runId);
   return { ...job, tenantId };
+}
+
+const SKIP_SYNC_DIRS = new Set(["node_modules", ".git"]);
+
+function relativeWorkspacePath(filePath: string): string {
+  const rel = String(filePath ?? "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+  if (!rel || rel === ".") return "";
+  const parts = rel.split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || SKIP_SYNC_DIRS.has(part))) return "";
+  return parts.join("/");
+}
+
+function pathsOverlap(a: string, b: string): boolean {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return left === right || left.startsWith(right + path.sep) || right.startsWith(left + path.sep);
+}
+
+/** True when `sandbox` is a mission directory we are allowed to delete. */
+function ephemeralSandboxDeletable(sandbox: string, canonical?: string): boolean {
+  const root = path.resolve(WORKSPACE_DIR);
+  const resolved = path.resolve(sandbox);
+  if (resolved === root || !resolved.startsWith(root + path.sep)) return false;
+  if (canonical && pathsOverlap(resolved, canonical)) return false;
+  return true;
+}
+
+function removeEphemeralSandbox(sandbox: string, canonical?: string): void {
+  if (!ephemeralSandboxDeletable(sandbox, canonical)) {
+    console.error(`[worker] refused to delete workspace path ${sandbox}`);
+    return;
+  }
+  fs.rmSync(path.resolve(sandbox), { recursive: true, force: true });
+}
+
+function materializeWorkspace(sandbox: string, files: Array<{ path?: string; contentBase64?: string }>): string[] {
+  const base = path.resolve(sandbox);
+  const written: string[] = [];
+  for (const file of files) {
+    const rel = relativeWorkspacePath(String(file.path ?? ""));
+    if (!rel) continue;
+    const target = path.resolve(base, rel);
+    if (target !== base && !target.startsWith(base + path.sep)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, Buffer.from(String(file.contentBase64 ?? ""), "base64"));
+    written.push(rel);
+  }
+  return written;
+}
+
+function snapshotWorkspace(sandbox: string): Array<{ path: string; contentBase64: string }> {
+  const base = path.resolve(sandbox);
+  const files: Array<{ path: string; contentBase64: string }> = [];
+  if (!fs.existsSync(base)) return files;
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (SKIP_SYNC_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const abs = path.join(dir, entry.name);
+      const rel = relativeWorkspacePath(path.relative(base, abs));
+      if (!rel) continue;
+      if (fs.statSync(abs).size > 20 * 1024 * 1024) continue;
+      files.push({ path: rel, contentBase64: fs.readFileSync(abs).toString("base64") });
+    }
+  };
+  walk(base);
+  return files;
+}
+
+async function stageCanonicalIntoSandbox(runId: string, sandbox: string): Promise<boolean> {
+  const pulled = await cp(`/api/v1/worker/workspace/${encodeURIComponent(runId)}/files`, "GET", undefined, 60_000);
+  if (!pulled || pulled.canonical !== true || !Array.isArray(pulled.files)) return false;
+  const written = materializeWorkspace(sandbox, pulled.files);
+  await emitEvent(runId, "workspace.staged", { files: written.length });
+  return true;
+}
+
+async function syncSandboxToCanonical(runId: string, sandbox: string): Promise<boolean> {
+  if (!fs.existsSync(sandbox)) return false;
+  const files = snapshotWorkspace(sandbox);
+  const res = await cp(`/api/v1/worker/workspace/${encodeURIComponent(runId)}/sync`, "POST", { files }, 60_000);
+  if (!res || res.ok !== true) {
+    console.warn(`[worker] canonical sync rejected for ${runId}: ${res?.error || "unknown"}`);
+    return false;
+  }
+  await emitEvent(runId, "workspace.synced", { files: Array.isArray(res.written) ? res.written.length : files.length });
+  return true;
 }
 
 function workspaceFor(job: JobAssignment): string {
@@ -477,14 +571,37 @@ async function executeJob(raw: JobAssignment): Promise<void> {
   let containerId = "";
   const cancelTimer = startCancelPolling(runId);
 
+  const workspace = workspaceFor(job);
+  const canonical = String(job.canonicalProjectRoot ?? "");
+  let synced = false;
+  const syncBack = async (): Promise<void> => {
+    if (synced || !canonical) return;
+    try {
+      synced = await syncSandboxToCanonical(runId, workspace);
+    } catch (e: any) {
+      console.warn(`[worker] canonical sync failed for ${runId}: ${e.message}`);
+    }
+  };
+
   try {
     // The control-plane runtime owns run.started and run.completed — the
     // worker never claims either. It only reports its own lifecycle.
     await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing remote mission container" });
 
-    const workspace = workspaceFor(job);
+    if (!ephemeralSandboxDeletable(workspace, canonical)) {
+      throw new Error("refusing to use the canonical workspace as the mission sandbox");
+    }
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.mkdirSync(workspace, { recursive: true });
+
+    // Canonical project → ephemeral sandbox. The control plane reads
+    // ORVYN_DATA_DIR; this worker does not need that volume mounted.
+    let canonicalStaged = false;
+    try {
+      canonicalStaged = await stageCanonicalIntoSandbox(runId, workspace);
+    } catch (e: any) {
+      console.warn(`[worker] canonical stage failed for ${runId}: ${e.message}`);
+    }
 
     const create = await docker([
       "create", "--name", containerName,
@@ -519,7 +636,8 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     const foreign = /^[A-Za-z]:[\\/]/.test(source) || source.startsWith("\\\\");
     const workspaceRoot = path.resolve(WORKSPACE_DIR);
     const isParentWorkspace = Boolean(source) && path.resolve(source) === workspaceRoot;
-    if (source && !foreign && !isParentWorkspace) {
+    // A staged canonical tree is the project. Do not overlay some other folder.
+    if (!canonicalStaged && source && !foreign && !isParentWorkspace) {
       await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Transferring project to remote workspace" });
       const transferred = await transferProject(containerId, source);
       await emitEvent(runId, "tool.completed", {
@@ -547,6 +665,9 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     await pollForToolRequests(runId, containerId);
     console.log("[worker] tool RPC loop ended for " + runId);
 
+    // Sandbox bytes go back to the durable workspace before anything is removed.
+    await syncBack();
+
     // Collect artifacts BEFORE cleanup — real files from the run.
     const artifacts = await collectArtifacts(runId);
     await emitEvent(runId, "artifacts.collected", { files: artifacts });
@@ -564,13 +685,14 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     console.error(`[worker] executeJob FAILED: ${runId}: ${err.message}`);
   } finally {
     stopCancelPolling(cancelTimer);
+    try { await syncBack(); } catch { /* already logged */ }
     if (containerId) {
       const rm = await docker(["rm", "-f", containerId]);
       console.log(`[worker] cleanup container ${containerId.slice(0, 12)}: code=${rm.code}`);
     }
     activeContainers.delete(runId);
     cancelledRuns.delete(runId);
-    try { fs.rmSync(workspaceFor(job), { recursive: true, force: true }); } catch {}
+    try { removeEphemeralSandbox(workspace, canonical); } catch {}
     jobIdentity.delete(runId);
     console.log(`[worker] executeJob DONE: ${runId} tenant=${job.tenantId} (worker alive: yes)`);
   }

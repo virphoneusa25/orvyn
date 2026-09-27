@@ -221,9 +221,17 @@ export class WorkSessionStore {
     return w;
   }
 
+  /** Release the SQLite handle so a restarted backend can reopen the same files. */
+  close(): void {
+    this.db.close();
+  }
+
   /**
-   * A new per-chat workspace directory under the tenant data dir.
-   * The directory is created here; callers must not invent a second folder.
+   * A new per-chat workspace directory under the tenant data dir:
+   * `<ORVYN_DATA_DIR>/tenants/<tenantId>/workspaces/<workspaceId>`.
+   * On ORVYN Cloud that data dir is a persistent volume. This directory is
+   * the canonical project. A worker sandbox may copy it and must copy
+   * changes back; the sandbox is not the stored project.
    */
   provisionWorkspace(): { workspaceId: string; projectId: string; projectRoot: string } {
     const workspaceId = id("ws");

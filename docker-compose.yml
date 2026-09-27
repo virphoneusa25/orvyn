@@ -24,8 +24,9 @@ services:
     environment:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
-      # SQLite tenant stores (accounts, missions, usage/billing records) must
-      # outlive image rebuilds — losing usage events loses money.
+      # SQLite tenant stores AND provisioned project workspaces
+      # (tenants/<tenantId>/workspaces/<workspaceId>) must outlive image
+      # rebuilds and container restarts. Mission sandboxes are not this store.
       - ORVYN_DATA_DIR=/data
     volumes:
       - orvyn-data:/data

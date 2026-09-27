@@ -1108,7 +1108,7 @@ export class StreamingAgentRuntime {
         fallbackReason: execution.fallbackReason,
         remoteProjectRoot: execution.remoteProjectRoot ?? "",
         note: actual === "ovh_worker"
-          ? "Tools execute on a remote worker inside an isolated mission container. No local fallback."
+          ? "Tools execute on a remote worker inside an isolated mission container. Changed files are copied back to the Cloud workspace before that container is removed."
           : actual === "local_sandbox"
             ? "Tools execute in a local Docker sandbox. Project stays on this machine."
             : label === "Cloud"
@@ -1122,7 +1122,7 @@ export class StreamingAgentRuntime {
           userId: execution.userId ?? "",
           projectId: execution.projectId ?? null,
           runId,
-        });
+        }, projectRoot);
       }
     } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.executionLabel === "Cloud") {
       // Cloud workspace on the control plane (no project folder): say so, so

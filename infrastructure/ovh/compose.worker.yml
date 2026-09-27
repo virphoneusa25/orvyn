@@ -34,8 +34,10 @@ services:
       # Worker needs Docker to spawn mission containers (siblings, not nested).
       # Mission containers themselves NEVER receive this socket.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Workspace shared with mission containers — mounted at the SAME path
-      # inside and outside so sibling containers reference the identical path.
+      # Ephemeral mission sandboxes only, mounted at the same path the
+      # worker passes to sibling containers. The canonical project stays on
+      # the control-plane ORVYN_DATA_DIR volume and is synced over the API
+      # before this directory is removed.
       - /opt/orvyn/workspaces:/opt/orvyn/workspaces
     depends_on:
       backend:
