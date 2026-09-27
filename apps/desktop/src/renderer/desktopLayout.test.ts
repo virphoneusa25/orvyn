@@ -126,6 +126,23 @@ test("workbench tabs, selected tab, width, and recent URLs survive restart", () 
   const stored = persistableLayout(parsed);
   assert.equal(stored.activeTabId, parsed.activeTabId);
   assert.deepEqual(stored.recentUrls, parsed.recentUrls);
+  const restored = parseDesktopLayout(stored);
+  assert.deepEqual(restored.openTabIds, parsed.openTabIds);
+  assert.equal(restored.activeTabId, parsed.activeTabId);
+});
+
+test("restoring a workspace collapses duplicate file and preview tabs", () => {
+  const parsed = parseDesktopLayout({
+    rightPanelOpen: true,
+    activeTab: "files",
+    activeTabId: "file:./index.html",
+    openTabIds: ["browser", "browser:tab1", "file:./index.html", "file:index.html", "preview:http://127.0.0.1:43191/", "preview:http://127.0.0.1:43191", "changes"],
+  });
+  assert.deepEqual(parsed.openTabIds, ["changes", "browser:tab1", "file:index.html", "preview:http://127.0.0.1:43191"]);
+  assert.equal(parsed.activeTabId, "file:index.html");
+  const again = parseDesktopLayout(persistableLayout(parsed));
+  assert.deepEqual(again.openTabIds, parsed.openTabIds);
+  assert.equal(again.activeTabId, parsed.activeTabId);
 });
 
 test("maximize and collapse keep workbench tabs intact", () => {

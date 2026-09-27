@@ -1,7 +1,7 @@
 // One Workbench. Legacy inspector* keys cannot remount a second column.
 
 import { isAgentWorkspaceTab, type AgentWorkspaceTab } from "./agentWorkspaceModel.ts";
-import { parseWorkbenchTab } from "./workbenchModel.ts";
+import { aliasActiveTabId, canonicalizeOpenTabIds, parseWorkbenchTab } from "./workbenchModel.ts";
 
 export const DESKTOP_LAYOUT_KEY = "orvyn:desktop-layout";
 
@@ -117,7 +117,8 @@ function safeTabId(value: unknown, fallback: string): string {
 
 function safeTabIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [...DEFAULT_DESKTOP_LAYOUT.openTabIds];
-  return value.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length < 400).slice(0, 24);
+  const ids = value.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length < 400);
+  return canonicalizeOpenTabIds(ids).slice(0, 24);
 }
 
 function migrateActiveTab(rec: Record<string, unknown>): AgentWorkspaceTab {
@@ -143,7 +144,8 @@ export function parseDesktopLayout(raw: unknown): DesktopLayoutState {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_DESKTOP_LAYOUT };
   const rec = raw as Record<string, unknown>;
   const activeTab = migrateActiveTab(rec);
-  const activeTabId = safeTabId(rec.activeTabId ?? rec.activeTab, activeTab);
+  const openTabIds = safeTabIds(rec.openTabIds);
+  const activeTabId = aliasActiveTabId(safeTabId(rec.activeTabId ?? rec.activeTab, activeTab), openTabIds);
   return {
     rightPanelOpen: rec.rightPanelOpen === true,
     bottomTerminalOpen: rec.bottomTerminalOpen === true,
@@ -152,7 +154,7 @@ export function parseDesktopLayout(raw: unknown): DesktopLayoutState {
     agentPanelWidth: migrateWidth(rec),
     activeTab,
     activeTabId,
-    openTabIds: safeTabIds(rec.openTabIds),
+    openTabIds,
     previewUrl: safeUrl(rec.previewUrl),
     browserUrl: safeUrl(rec.browserUrl),
     recentUrls: Array.isArray(rec.recentUrls) ? rec.recentUrls.map(safeUrl).filter(Boolean).slice(0, 8) : [],

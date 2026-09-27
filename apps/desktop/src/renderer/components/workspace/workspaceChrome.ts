@@ -73,7 +73,6 @@ export function tabBtn(active: boolean): React.CSSProperties {
     fontWeight: active ? 600 : 500,
     padding: "0 10px",
     height: 34,
-    maxWidth: 168,
     minWidth: 0,
     cursor: "pointer",
     display: "inline-flex",

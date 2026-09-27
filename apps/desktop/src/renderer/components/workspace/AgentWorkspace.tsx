@@ -23,17 +23,19 @@ import {
 } from "../../desktopLayout";
 import {
   artifactTabId,
-  assembleWorkbenchTabs,
   closeTab,
   diffTabId,
   fileTabId,
   followWorkbenchTab,
   nextTerminalTabId,
   parseWorkbenchTab,
-  resolveActiveWorkbenchTabId,
+  previewTabId,
+  reconcileWorkbenchTabs,
   upsertTab,
+  urlsMatch,
   WORKBENCH_TABBAR_TEST_ID,
   WORKBENCH_TEST_ID,
+  workbenchTabCloseEffect,
   type WorkbenchTab,
   type WorkbenchTabKind,
 } from "../../workbenchModel";
@@ -137,14 +139,22 @@ export function AgentWorkspace({
     return derived.previews.length > 0 ? 1 : 0;
   }, [events, derived.previews.length]);
 
-  const tabs = useMemo(() => assembleWorkbenchTabs({
+  const previewUrl = derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined;
+  const reconciled = useMemo(() => reconcileWorkbenchTabs({
     openTabIds: layout.openTabIds,
     activeTabId: layout.activeTabId,
-    previewUrl: derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined,
+    previewUrl,
     browserTabs: browserState.tabs,
-  }), [layout.openTabIds, layout.activeTabId, layout.previewUrl, derived.previews, browserState.tabs]);
-
-  const activeId = resolveActiveWorkbenchTabId(tabs, layout.activeTabId);
+  }), [layout.openTabIds, layout.activeTabId, previewUrl, browserState.tabs]);
+  const tabs = reconciled.tabs;
+  const activeId = reconciled.activeId;
+  const openKey = layout.openTabIds.join("\n");
+  const reconciledKey = reconciled.openTabIds.join("\n");
+  useEffect(() => {
+    if (reconciledKey === openKey && activeId === layout.activeTabId) return;
+    if (!openKey && !layout.activeTabId) return;
+    onLayout({ openTabIds: reconciled.openTabIds, activeTabId: activeId });
+  }, [reconciledKey, openKey, activeId, layout.activeTabId, onLayout]);
   const active = tabs.find((t) => t.id === activeId);
   const emptyWorkbench = !active;
   const overlay = shouldOverlayAgentPanel(viewportWidth);
@@ -186,12 +196,12 @@ export function AgentWorkspace({
     if (!api) return;
     const latest = derived.previews[derived.previews.length - 1];
     if (!latest?.url) return;
-    const previewTab = { id: "preview", kind: "preview" as const, title: "Preview", closable: false, url: latest.url };
+    const previewTab = parseWorkbenchTab(previewTabId(latest.url));
     const revealPreview = () => {
       if (!followApplies(followRef.current)) return;
       activate(previewTab, false);
     };
-    const existing = browserState.tabs.find((t) => t.kind === "preview");
+    const existing = browserState.tabs.find((t) => urlsMatch(t.url, latest.url)) ?? browserState.tabs.find((t) => t.kind === "preview");
     if (existing) {
       if (!urlsMatch(existing.url, latest.url)) {
         const key = `nav:${latest.url}`;
@@ -240,11 +250,17 @@ export function AgentWorkspace({
       // center of the window while the user is reading the chat.
       setFilesFocus({ path: activity.file, fileName: activity.file, artifactId: activity.artifactId, user: false });
     }
-    if (next.id === activeId) return;
-    onLayout({
-      activeTabId: next.id,
-      activeTab: next.kind === "file" || next.kind === "artifact" ? "files" : (next.kind as DesktopLayoutState["activeTab"]),
+    const merged = reconcileWorkbenchTabs({
       openTabIds: upsertTab(tabs, next).map((t) => t.id),
+      activeTabId: next.id,
+      previewUrl: next.url ?? previewUrl,
+      browserTabs: browserState.tabs,
+    });
+    if (merged.activeId === activeId && merged.openTabIds.join("\n") === tabs.map((t) => t.id).join("\n")) return;
+    onLayout({
+      activeTabId: merged.activeId,
+      activeTab: next.kind === "file" || next.kind === "artifact" ? "files" : (next.kind as DesktopLayoutState["activeTab"]),
+      openTabIds: merged.openTabIds,
       previewUrl: next.url ?? layout.previewUrl,
     });
   }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId]);
@@ -329,11 +345,17 @@ export function AgentWorkspace({
       void openBrowserSurface("browser");
       return;
     }
+    const merged = reconcileWorkbenchTabs({
+      openTabIds: upsertTab(tabs, tab).map((t) => t.id),
+      activeTabId: tab.id,
+      previewUrl: tab.url ?? previewUrl,
+      browserTabs: browserState.tabs,
+    });
     onLayout({
       rightPanelOpen: true,
-      activeTabId: tab.id,
+      activeTabId: merged.activeId,
       activeTab: tab.kind === "file" || tab.kind === "artifact" || tab.kind === "preview" ? (tab.kind === "preview" ? "preview" : "files") : (tab.kind as DesktopLayoutState["activeTab"]),
-      openTabIds: upsertTab(tabs, tab).map((t) => t.id),
+      openTabIds: merged.openTabIds,
       previewUrl: tab.url ?? layout.previewUrl,
       expandedPreview: false,
     });
@@ -352,19 +374,34 @@ export function AgentWorkspace({
       setBrowserState(state);
     }
     const native = state.tabs.find((t) => t.id === state.activeId) ?? existing ?? state.tabs[0];
-    const tab: WorkbenchTab = native?.kind === "preview" || kind === "preview"
-      ? { id: "preview", kind: "preview", title: "Preview", closable: false, url: native?.url || url }
-      : native
-        ? { id: `browser:${native.id}`, kind: "browser", title: native.title || "Browser", closable: true, url: native.url }
-        : parseWorkbenchTab(kind);
+    const pageUrl = native?.url || url;
+    const previewTarget = kind === "preview" || (pageUrl && previewUrl && urlsMatch(pageUrl, previewUrl));
+    const tab: WorkbenchTab = previewTarget && pageUrl
+      ? parseWorkbenchTab(previewTabId(pageUrl))
+      : native && native.kind !== "preview"
+        ? { id: `browser:${native.id}`, kind: "browser", title: native.title || "Browser", fullTitle: native.title || native.url, closable: true, url: native.url, nativeId: native.id }
+        : pageUrl && kind === "preview"
+          ? parseWorkbenchTab(previewTabId(pageUrl))
+          : parseWorkbenchTab(kind);
     activate(tab, true);
   }
 
   function close(id: string) {
-    const native = matchingNativeTab(browserState, tabs.find((t) => t.id === id) ?? parseWorkbenchTab(id));
-    if (native) void window.orvyn.browser?.close(native.id).then(setBrowserState);
+    const tab = tabs.find((t) => t.id === id) ?? parseWorkbenchTab(id);
+    const effect = workbenchTabCloseEffect(tab);
+    if (effect.closeNativeView) {
+      const native = matchingNativeTab(browserState, tab);
+      if (native && native.kind !== "preview") void window.orvyn.browser?.close(native.id).then(setBrowserState);
+    }
     const next = closeTab(tabs, id, activeId);
-    onLayout({ openTabIds: next.tabs.map((t) => t.id), activeTabId: next.activeId });
+    const neighbor = next.tabs.find((t) => t.id === next.activeId);
+    onLayout({
+      openTabIds: next.tabs.map((t) => t.id),
+      activeTabId: next.activeId,
+      activeTab: neighbor
+        ? neighbor.kind === "file" || neighbor.kind === "artifact" ? "files" : neighbor.kind === "preview" ? "preview" : (neighbor.kind as DesktopLayoutState["activeTab"])
+        : layout.activeTab,
+    });
   }
 
   const width = layout.expandedPreview
@@ -542,7 +579,7 @@ export function AgentWorkspace({
                   key={t.id}
                   data-tab={t.id}
                   data-closable={t.closable ? "true" : "false"}
-                  title={t.title}
+                  title={t.fullTitle || t.title}
                   onClick={() => activate(t, true)}
                   onAuxClick={(e) => {
                     if (e.button === 1 && t.closable) close(t.id);
@@ -550,7 +587,7 @@ export function AgentWorkspace({
                   style={tabBtn(selected)}
                 >
                   <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.title}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, maxWidth: 180 }}>{t.title}</span>
                   {t.id === "preview" && previewVersion > 0 && (
                     <span data-testid="preview-live" style={{ flexShrink: 0, fontSize: 10, fontWeight: 650, color: "#6ee7b7" }}>Live</span>
                   )}
@@ -686,16 +723,14 @@ function TabGlyph({
 }
 
 function matchingNativeTab(state: WorkbenchBrowserState, tab: WorkbenchTab) {
+  if (tab.nativeId) {
+    const byNative = state.tabs.find((t) => t.id === tab.nativeId);
+    if (byNative) return byNative;
+  }
   if (tab.id.startsWith("browser:")) return state.tabs.find((t) => t.id === tab.id.slice("browser:".length));
-  if (tab.kind === "preview" && tab.url) return state.tabs.find((t) => t.kind === "preview" && urlsMatch(t.url, tab.url!));
+  if (tab.url) return state.tabs.find((t) => urlsMatch(t.url, tab.url));
   if (tab.id === "browser") return state.tabs.find((t) => t.kind === "browser" && !t.url) ?? state.tabs.find((t) => t.kind === "browser");
   return undefined;
-}
-
-function urlsMatch(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
-  const norm = (u: string) => u.replace(/\/$/, "");
-  return norm(a) === norm(b);
 }
 
 function WorkbenchBody({
