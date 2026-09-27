@@ -9,7 +9,7 @@
 
 /** Sentences that promise work the model has not done yet. */
 const PENDING =
-  /(?:^|[\s,;:—-])(?:next|now|then|first|after that|afterwards)?[,\s]*(?:i['’]ll|i will|i am going to|i['’]m going to|let me|i need to|i should|i['’]ll now|i will now|going to)\s+(?:now\s+)?(?:read|open|run|check|verify|create|write|edit|update|fix|test|build|start|install|look|inspect|search|list|execute|call|use|try|confirm|continue|proceed|deploy|restart|fetch|navigate|take|capture|generate|add|apply|re-?run|re-?check|compare|review|make|save|delete|move|copy|launch|connect)\b/i;
+  /(?:^|[\s,;:—-])(?:next|now|then|first|after that|afterwards)?[,\s]*(?:i['’]ll|i will|i am going to|i['’]m going to|let me|i need to|i should|i['’]ll now|i will now|going to)\s+(?:now\s+)?(?:read|open|run|check|verify|create|write|edit|update|fix|test|build|start|install|look|inspect|search|list|execute|call|use|try|confirm|continue|proceed|deploy|restart|fetch|navigate|take|capture|generate|add|apply|supply|re-?run|re-?check|compare|review|make|save|delete|move|copy|launch|connect)\b/i;
 
 /** Wording that hands control back to the user — a legitimate stop. */
 const ASKS_USER =
@@ -25,11 +25,13 @@ function lastSentence(text: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-/**
- * True when a tool-less reply ends by promising further work the agent itself
- * should do — i.e. the run is NOT finished. Conservative: questions to the user
- * and outcome reports always count as a real stop.
- */
+/** The user has to do something only they can do. A website build does not stop for "should I?". */
+export function handsBackToUser(text: string): boolean {
+  const tail = lastSentence(text ?? "");
+  if (!tail || !ASKS_USER.test(tail)) return false;
+  return /\b(i need (?:you|your)|please (?:confirm|provide|tell|share|connect|choose|approve)|waiting for you)\b/i.test(tail);
+}
+
 export function announcesPendingWork(text: string): boolean {
   const t = (text ?? "").trim();
   if (!t) return false;

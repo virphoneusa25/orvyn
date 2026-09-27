@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideBuildRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand } from "./websiteMission";
+import { decideBuildRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom } from "./websiteMission";
 
 test("the first build failure stays on the current model", () => {
   const d = decideBuildRepair(emptyWebsiteMission(), "error TS2322");
@@ -26,6 +26,39 @@ test("repeated build failures reach Sol and then stop", () => {
   mission.buildAttempts = 6;
   const stop = decideBuildRepair(mission, "npm ERR! missing script");
   assert.equal(stop.budgetExceeded, true);
+});
+
+test("a website build is not the same as writing a file named index.html", () => {
+  assert.equal(isWebsiteImplementation("Build a simple one-page website with a hero, services, and contact section."), true);
+  assert.equal(isWebsiteImplementation("Create index.html containing Hello World."), false);
+});
+
+test("a website moves inspect, write, preview, then browser before it is complete", () => {
+  const mission = emptyWebsiteMission();
+  assert.equal(syncWebsitePhase(mission, websiteEvidenceFrom([])), "planning");
+  assert.match(websiteActionPrompt("planning"), /list_directory/);
+  const inspected = syncWebsitePhase(mission, websiteEvidenceFrom([
+    { type: "tool.completed", data: { tool: "list_directory" } },
+  ]));
+  assert.equal(inspected, "implementing");
+  assert.match(websiteActionPrompt(inspected), /write_file/);
+  const wrote = syncWebsitePhase(mission, websiteEvidenceFrom([
+    { type: "tool.completed", data: { tool: "list_directory" } },
+    { type: "file.created", data: { path: "index.html" } },
+  ]));
+  assert.equal(wrote, "starting");
+  const served = syncWebsitePhase(mission, websiteEvidenceFrom([
+    { type: "file.created", data: { path: "index.html" } },
+    { type: "preview.available", data: { url: "https://preview.example/s/1" } },
+  ]));
+  assert.equal(served, "browser_verification");
+  assert.match(websiteActionPrompt(served), /browser_open/);
+  const done = syncWebsitePhase(mission, websiteEvidenceFrom([
+    { type: "file.created", data: { path: "index.html" } },
+    { type: "preview.available", data: { url: "https://preview.example/s/1" } },
+    { type: "browser.completed", data: { tool: "browser_screenshot" } },
+  ]));
+  assert.equal(done, "completed");
 });
 
 test("build commands and fingerprints are stable", () => {

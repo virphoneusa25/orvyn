@@ -31,7 +31,7 @@ test("an empty project still writes the site at the root", () => {
   const layout = planWebsiteLayout("build a simple website for virphone", []);
   assert.equal(layout.directory, null);
   assert.deepEqual(layout.protectedFiles, []);
-  assert.match(layout.prompt, /Call write_file for index.html/);
+  assert.match(layout.prompt, /write_file for index.html/);
   assert.equal(siteWriteRefusal(layout, "write_file", "index.html"), null);
 });
 

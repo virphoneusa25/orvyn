@@ -47,7 +47,9 @@ export type ToolBatchResult =
 export type FinalAnswerDecision =
   /** Not a real final answer (only announced work, or never used a tool): work continues. */
   | { kind: "continue"; reason: string }
-  | { kind: "verify" };
+  | { kind: "verify" }
+  /** The model kept describing work after the nudge budget. The run fails; it does not complete. */
+  | { kind: "stop"; outcome: "failed"; reason: string };
 
 export type VerificationDecision =
   | { kind: "approved" }
@@ -132,6 +134,10 @@ export async function runAgentTurns(policy: AgentTurnPolicy): Promise<AgentLoopO
     if (final.kind === "continue") {
       record({ kind: "continue", tools, reason: final.reason }, started);
       continue;
+    }
+    if (final.kind === "stop") {
+      record({ kind: "stopped", tools, reason: final.reason }, started);
+      return end(final.outcome, final.reason);
     }
 
     const verdict = await policy.verify(turn, reply);

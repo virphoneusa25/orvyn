@@ -46,7 +46,7 @@ import {
 } from "./runCapabilities";
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
-import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, type WebsiteMissionState } from "./websiteMission";
+import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
 import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } from "./sitePreview";
 import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
@@ -72,7 +72,7 @@ import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
 import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
-import { announcesPendingWork, CONTINUATION_PROMPT, MAX_CONTINUATION_NUDGES } from "./continuation";
+import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINUATION_NUDGES } from "./continuation";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
@@ -1668,6 +1668,10 @@ export class StreamingAgentRuntime {
       // the app no longer inserts a scripted sentence here.
       if (introductionFor(state.instruction, state.intent.informational)) {
         this.store.emit(runId, "plan.created", { steps: planSteps(state.intent) });
+        if (state.website && isWebsiteImplementation(state.instruction)) {
+          this.speak(runId, introductionFor(state.instruction, false)!);
+          this.store.emit(runId, "website.phase", { phase: state.website.phase });
+        }
       }
       this.enterPhase(runId, "acting");
     }
@@ -1792,35 +1796,37 @@ export class StreamingAgentRuntime {
           if (chunk.delta) {
             // Language guard: decide on the first bytes. A Chinese reply is
             // abandoned (nothing emitted yet) and regenerated in English —
-            // the center stream never shows Chinese prose.
+            // the center stream never shows Chinese prose. A tool call on
+            // this same chunk is still recorded below; done must not drop it.
             if (!langChecked) {
               langBuffer += chunk.delta;
-              if (langBuffer.trim().length < 8 && !chunk.done) continue;
-              langChecked = true;
-              if (isMostlyChinese(langBuffer)) {
-                const retry = await generateEnglish(provider, {
-                  messages,
-                  tools: tools(),
-                  reasoningEffort: state.reasoningEffort,
-                });
-                const text = String(retry?.content ?? "");
-                for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
-                  this.store.emit(runId, "message.delta", { content: piece });
+              const ready = langBuffer.trim().length >= 8 || Boolean(chunk.done) || Boolean(chunk.toolCall);
+              if (ready) {
+                langChecked = true;
+                if (isMostlyChinese(langBuffer)) {
+                  const retry = await generateEnglish(provider, {
+                    messages,
+                    tools: tools(),
+                    reasoningEffort: state.reasoningEffort,
+                  });
+                  const text = String(retry?.content ?? "");
+                  for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
+                    this.store.emit(runId, "message.delta", { content: piece });
+                  }
+                  content = text;
+                  streamedText = text.length > 0;
+                  for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
+                  break;
                 }
-                content = text;
-                streamedText = text.length > 0;
-                for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
-                break;
+                if (langBuffer) this.store.emit(runId, "message.delta", { content: langBuffer });
+                content += langBuffer;
+                streamedText = true;
               }
-              if (langBuffer) this.store.emit(runId, "message.delta", { content: langBuffer });
-              content += langBuffer;
+            } else {
+              content += chunk.delta;
               streamedText = true;
-              if (chunk.done) break;
-              continue;
+              this.store.emit(runId, "message.delta", { content: chunk.delta });
             }
-            content += chunk.delta;
-            streamedText = true;
-            this.store.emit(runId, "message.delta", { content: chunk.delta });
           }
           if (chunk.toolCall) streamedCalls.push(chunk.toolCall);
           if (chunk.reasoning) reasoning = chunk.reasoning;
@@ -1882,9 +1888,13 @@ export class StreamingAgentRuntime {
           ...(reasoning ? { reasoningContent: reasoning } : {}),
           toolCalls: calls,
         });
-        // Narration ("I'll check the auth flow first…") closes as its own
-        // utterance so the UI can pin it above the tool card.
-        this.emitNarration(runId, content, streamedText);
+        // A website run already has one intro. Tool turns stay on the tool
+        // cards — a sentence beside every call is not another chat message.
+        if (isWebsiteImplementation(state.instruction)) {
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "tool progress stays on the tool card" });
+        } else {
+          this.emitNarration(runId, content, streamedText);
+        }
 
         // Tool-call runaway guard, checked before the batch so no call is
         // left unanswered by stopping mid-batch.
@@ -1922,6 +1932,7 @@ export class StreamingAgentRuntime {
           state.handoffModelId = undefined;
         }
         this.enterPhase(runId, "observing");
+        this.noteWebsiteProgress(runId, state);
         this.speakProgress(runId);
         if (outcome === "cancelled") return cancelled();
         if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
@@ -1933,6 +1944,37 @@ export class StreamingAgentRuntime {
       },
 
       onFinalAnswer: (_turn, { content, streamedText }) => {
+        if (state.website) this.noteWebsiteProgress(runId, state);
+        const websiteWork = Boolean(state.website) && isWebsiteImplementation(state.instruction);
+        const websiteEvidence = websiteWork ? websiteEvidenceFrom(this.store.get(runId)?.events ?? []) : null;
+        const websiteMissing = Boolean(
+          websiteEvidence && !(websiteEvidence.wrotePage && websiteEvidence.preview && websiteEvidence.browserOpened)
+        );
+        // A website that is not on disk yet, served, and opened in the browser
+        // is not finished — send the same agent back to the next phase.
+        if (
+          websiteMissing &&
+          state.toolsEnabled &&
+          (mode === "agent" || mode === "multitask") &&
+          !handsBackToUser(content)
+        ) {
+          if (state.continuationNudges >= MAX_CONTINUATION_NUDGES) {
+            if (streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
+            const reason = `Stopped after ${MAX_CONTINUATION_NUDGES} attempts. The model described the next step without calling a tool.`;
+            fail(reason);
+            return { kind: "stop", outcome: "failed", reason };
+          }
+          state.continuationNudges += 1;
+          state.actionNudges += 1;
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
+          messages.push({ role: "assistant", content: content || "" });
+          messages.push({ role: "user", content: websiteActionPrompt(state.website!.phase) });
+          this.store.emit(runId, "agent.continue", {
+            reason: "Reply announced a next step without doing it",
+            attempt: state.continuationNudges,
+          });
+          return { kind: "continue", reason: "reply announced a next step without doing it" };
+        }
         // An action request answered without ever using a tool: nudge once.
         if (
           state.toolsEnabled &&
@@ -1979,13 +2021,19 @@ export class StreamingAgentRuntime {
         // back…") is not a final answer — send the same agent back to work.
         if (
           state.toolsEnabled &&
-          state.toolCalls > 0 &&
-          state.continuationNudges < MAX_CONTINUATION_NUDGES &&
+          (state.toolCalls > 0 || looksLikeActionRequest(state.instruction)) &&
           (mode === "agent" || mode === "multitask") &&
           announcesPendingWork(content)
         ) {
+          if (state.continuationNudges >= MAX_CONTINUATION_NUDGES) {
+            if (streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
+            const reason = `Stopped after ${MAX_CONTINUATION_NUDGES} attempts. The model described the next step without calling a tool.`;
+            fail(reason);
+            return { kind: "stop", outcome: "failed", reason };
+          }
           state.continuationNudges += 1;
-          this.emitNarration(runId, content, streamedText);
+          if (isWebsiteImplementation(state.instruction) && streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
+          else this.emitNarration(runId, content, streamedText);
           messages.push({ role: "assistant", content: content || "" });
           messages.push({ role: "user", content: CONTINUATION_PROMPT });
           this.store.emit(runId, "agent.continue", {
@@ -2502,6 +2550,11 @@ export class StreamingAgentRuntime {
           envelope: envelopeForEvent(envelope),
         });
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
+        if (call.name === "browser_open" || call.name === "browser_navigate" || call.name === "browser_screenshot") {
+          const argsUrl = String((call.arguments as { url?: unknown })?.url ?? "");
+          const sessionUrl = String((result.meta?.browserSession as { url?: unknown } | undefined)?.url ?? "");
+          this.store.emit(runId, "browser.completed", { tool: call.name, url: argsUrl || sessionUrl });
+        }
         const shot = result.meta?.screenshot as { b64?: string; mediaType?: string } | undefined;
         if (shot?.b64) {
           screenshots.push({ b64: shot.b64, mediaType: shot.mediaType || "image/png", name: `${call.name}.jpg` });
@@ -2664,6 +2717,13 @@ export class StreamingAgentRuntime {
       workspaceRoot: state.projectRoot,
       blocked: true,
     }));
+  }
+
+  private noteWebsiteProgress(runId: string, state: RunState): void {
+    if (!state.website || !isWebsiteImplementation(state.instruction)) return;
+    const before = state.website.phase;
+    const phase = syncWebsitePhase(state.website, websiteEvidenceFrom(this.store.get(runId)?.events ?? []));
+    if (phase !== before) this.store.emit(runId, "website.phase", { phase });
   }
 
   private noteWebsiteFailure(runId: string, state: RunState, tool: string, command: string, error: string): void {

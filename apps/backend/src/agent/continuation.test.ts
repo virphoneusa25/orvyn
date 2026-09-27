@@ -8,6 +8,9 @@ test("a reply that promises the next step is not a final answer", () => {
     "The file is written. Now let me run the tests.",
     "I've updated app.js. Let me run it again to check the new output.",
     "Install finished. I will now start the dev server.",
+    "I'll create index.html now",
+    "I need to supply the path and content.",
+    "Let me check.",
     "Tests failed on line 12. I'm going to fix the assertion and re-run.",
   ]) {
     assert.equal(announcesPendingWork(text), true, text);

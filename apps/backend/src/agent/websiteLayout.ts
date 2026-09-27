@@ -13,7 +13,7 @@ const SITE = /\b(website|web\s*site|landing\s*page|homepage|home\s*page)\b/i;
 const REPLACE = /\b(replace|overwrite|redo|start over|from scratch)\b/i;
 
 const ROOT_PROMPT =
-  "This run is a website. Call write_file for index.html and its stylesheet. Do not open the sandbox desktop and do not start a shell server. The preview URL is the rendered site.";
+  "This run is a website. Inspect the workspace, then call write_file for index.html and its stylesheet at the workspace root, then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server. The preview URL is the rendered site.";
 
 export interface WebsiteLayout {
   /** Relative folder for the new site. Null when this run writes at the project root. */
@@ -76,7 +76,7 @@ export function planWebsiteLayout(instruction: string, existing: string[]): Webs
   return {
     directory,
     protectedFiles: existing,
-    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet. Do not open the sandbox desktop and do not start a shell server. The preview URL is the new site.`,
+    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet, then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server. The preview URL is the new site.`,
   };
 }
 

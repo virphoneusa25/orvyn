@@ -28,7 +28,7 @@ export function selectToolNames(
     if (SERVICE.test(name) && !intent.requiresTerminal && !intent.requiresFrontend && intent.category !== "server" && intent.category !== "deploy") {
       return false;
     }
-    if (BROWSER.test(name) && !intent.requiresBrowser && intent.category !== "browser") return false;
+    if (BROWSER.test(name) && !intent.requiresBrowser && !intent.requiresFrontend && intent.category !== "browser") return false;
     if (DESKTOP.test(name) && !intent.requiresDesktop && intent.category !== "desktop") return false;
     if (ARTIFACT.test(name) && !intent.requiresArtifact && intent.category !== "artifact") return false;
     if (MCP.test(name) && !intent.requiresExternalIntegration && intent.category !== "integration") return false;
