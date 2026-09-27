@@ -1350,7 +1350,7 @@ v1Router.get("/files/read", async (req, res) => {
       return res.json({
         artifact: publicArtifact(t.artifactService, record),
         content: textish ? bytes.toString("utf-8") : undefined,
-        dataUrl: !textish && record.mimeType.startsWith("image/")
+        dataUrl: record.mimeType.startsWith("image/")
           ? `data:${record.mimeType};base64,${bytes.toString("base64")}`
           : undefined,
       });

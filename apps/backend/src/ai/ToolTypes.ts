@@ -1,5 +1,6 @@
 // apps/backend/src/ai/ToolTypes.ts
 import type { ToolResultEnvelope } from "../gateway/toolResultEnvelope";
+import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
 
 export type ToolPermission = "allowed" | "ask" | "denied";
 
@@ -31,6 +32,7 @@ export interface ToolResult {
   envelope?: ToolResultEnvelope;
   /** Structured side-channel (capability.required, activation). Never secrets. */
   meta?: Record<string, unknown>;
+  projectFileEvidence?: ProjectFileEvidence;
   /** Persisted file-producing results. Success requires artifactId on each entry. */
   artifacts?: Array<{
     artifactId: string;
@@ -41,6 +43,7 @@ export interface ToolResult {
     previewUrl?: string;
     downloadUrl?: string;
     kind?: string;
+    projectFileEvidence?: ProjectFileEvidence;
   }>;
 }
 

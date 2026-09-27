@@ -349,6 +349,7 @@ export class ArtifactService {
         path: diskPath,
         media_type: mimeType,
         project_root: input.projectRoot,
+        project_id: input.projectId,
         run_id: input.runId,
         chat_id: input.chatId,
         source_tool: input.sourceTool,
@@ -480,7 +481,10 @@ export class ArtifactService {
     const row = this.store.getArtifact(id);
     if (!row) throw new Error(`Unknown artifact "${id}"`);
     const record = this.toRecord(row);
+    if (record.tenantId !== this.tenantId || record.status !== "ready") throw new Error(`Unknown artifact "${id}"`);
     const bytes = await fs.readFile(record.diskPath!);
+    if (bytes.length !== record.size || sha256Hex(bytes) !== record.sha256) throw new Error("Artifact bytes failed integrity verification.");
+    validateBytes(record.name, record.mimeType, bytes);
     record.size = bytes.length;
     record.bytes = bytes.length;
     return { record, bytes };
@@ -619,7 +623,9 @@ export class ArtifactService {
 
   async filesTree(projectRoot?: string | null): Promise<{ locations: FilesLocation[] }> {
     await this.ensureRoots();
-    const all = this.listArtifacts();
+    const all = (await Promise.all(this.listArtifacts().map(async (a) => {
+      try { await this.read(a.artifactId); return a; } catch { return null; }
+    }))).filter((a): a is ArtifactRecord => a !== null);
     const generated = all.filter((a) => a.kind === "generated");
     const downloads = all.filter((a) => a.kind === "download");
     const uploads = all.filter((a) => a.kind === "upload");
@@ -629,7 +635,7 @@ export class ArtifactService {
       locations: [
         { id: "project", label: "Project", files: project },
         { id: "generated", label: "Generated", files: generated.map((a) => this.asFile(a, "Generated")) },
-        { id: "recents", label: "Recents", files: this.recents(24).map((a) => this.asFile(a, a.kind === "generated" ? "Generated" : "Artifact")) },
+        { id: "recents", label: "Recents", files: all.sort((a, b) => b.createdAt - a.createdAt).slice(0, 24).map((a) => this.asFile(a, a.kind === "generated" ? "Generated" : "Artifact")) },
         { id: "downloads", label: "Downloads", files: downloads.map((a) => this.asFile(a, "Download")) },
         { id: "artifacts", label: "Run Artifacts", files: runArts.map((a) => this.asFile(a, "Run")) },
         { id: "uploads", label: "Uploads", files: uploads.map((a) => this.asFile(a, "Upload")) },

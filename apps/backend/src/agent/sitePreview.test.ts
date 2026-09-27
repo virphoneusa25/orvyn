@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { createServer } from "http";
 import express from "express";
-import { applySiteEdit, composeSiteDocument, hasSiteFile, PREVIEW_CACHE_CONTROL, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, composeSiteDocument, hasSiteFile, PREVIEW_CACHE_CONTROL, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { siteRouter } from "../routes/sites";
 
 test("a preview is only the directory the agent wrote", () => {
@@ -109,6 +109,16 @@ test("preview responses send the newest css and do not cache it", async () => {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("a generated project image is served beside the published page", () => {
+  const runId = "run-binary-hero";
+  const png = Buffer.from("89504e470d0a1a0a", "hex");
+  rememberSiteFile(runId, "index.html", '<style>main{background:url("public/hero.png")}</style><main>Site</main>');
+  rememberSiteBinary(runId, "public/hero.png", png);
+  const published = publishRememberedSite(runId)!;
+  assert.ok(published.files.includes("public/hero.png"));
+  assert.deepEqual(readPublishedFile(published.id, "public/hero.png")?.body, png);
 });
 
 test("a fixed script replaces the broken one in the preview (the page is never rewritten in place)", () => {

@@ -170,6 +170,22 @@ test("followed tab opens Preview for localhost automation", () => {
   assert.deepEqual(parseActiveTab("preview:http://localhost:43173"), { tab: "preview", previewUrl: "http://localhost:43173" });
 });
 
+test("a completed website keeps its live preview in front of project files", () => {
+  const url = "https://orvyn.example/api/v1/sites/site-1/";
+  const derived = deriveAgentWorkspace([
+    ev("file.edit", { path: "index.html" }, 1),
+    ev("files.ready", { name: "index.html", location: "workspace" }, 2),
+    ev("preview.available", { url }, 3),
+    ev("file.edit", { path: "styles.css" }, 4),
+    ev("files.ready", { name: "styles.css", location: "workspace" }, 5),
+    ev("preview.available", { url }, 6),
+    ev("run.completed", {}, 7),
+  ]);
+  assert.equal(derived.activity?.tab, "preview");
+  assert.equal(derived.activity?.previewUrl, url);
+  assert.equal(derived.artifacts.length, 0);
+});
+
 test("cursor overlay clamps coordinates and keeps click kind", () => {
   assert.equal(cursorOverlayStyle(null), null);
   const pos = cursorOverlayStyle({ x: 4000, y: -20, kind: "click" }, { width: 800, height: 600 });

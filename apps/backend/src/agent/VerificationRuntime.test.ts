@@ -177,6 +177,15 @@ test("evidence is collected from envelopes: changed files, tests, browser", () =
   assert.equal(ev.lastChangeSequence, 1);
 });
 
+test("follow-up verification records only successful before and after edits", () => {
+  const env = { toolName: "edit_file", status: "success", userSummary: "edited", structuredData: {}, evidence: [{ type: "file", file: "styles.css", operation: "edit" }] };
+  const evidence = collectVerificationEvidence("Make the hero animation slower", [
+    { type: "tool.input", sequence: 1, data: { callId: "edit-1", input: { path: "styles.css", old_string: "animation: drift 18s", new_string: "animation: drift 45s" } } },
+    { type: "tool.completed", sequence: 2, data: { callId: "edit-1", tool: "edit_file", envelope: env } },
+  ]);
+  assert.deepEqual(evidence.editTransitions, [{ path: "styles.css", before: "animation: drift 18s", after: "animation: drift 45s" }]);
+});
+
 test("a check that does not apply to the project is not a failure (no tsconfig, no test script)", () => {
   const na = (tool: string, msg: string, sd: Record<string, unknown> = {}) => ({ tool, envelope: { toolName: tool, status: "error", userSummary: tool, modelPayload: msg, structuredData: sd, evidence: [] } });
   const ev = collectVerificationEvidence("Build a small landing page", [

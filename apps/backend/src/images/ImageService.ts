@@ -1,9 +1,12 @@
 // apps/backend/src/images/ImageService.ts
 import { promises as fs } from "fs";
+import path from "path";
 import { ModelService } from "../services/ModelService";
 import type { ArtifactService } from "../artifacts/ArtifactService";
 import { sanitizeArtifactName } from "../artifacts/ArtifactService";
 import { validateBytes } from "../artifacts/bytes";
+import { verifyProjectFile, type ProjectFileEvidence } from "../artifacts/projectFileEvidence";
+import { resolveSafePath } from "../execution/pathSafety";
 import { selectImageModel } from "../models/selectModel";
 import { FireworksKontextProvider } from "./fireworksKontext";
 
@@ -33,6 +36,7 @@ export interface GeneratedImage {
   downloadUrl: string;
   previewUrl?: string;
   revisedPrompt?: string;
+  projectFileEvidence?: ProjectFileEvidence;
 }
 
 function sniffImage(bytes: Buffer): { mime: string; ext: string } | null {
@@ -92,6 +96,10 @@ export class ImageService {
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
     if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
+    if (req.projectRoot) {
+      const workspace = await fs.stat(req.projectRoot).catch(() => null);
+      if (!workspace?.isDirectory()) throw new Error("Project workspace is unavailable for image generation; no project image was created.");
+    }
     const listed = typeof this.modelService.registry.list === "function" ? this.modelService.registry.list() : [];
     const imageModels = listed.filter((p) => p.config.capabilities.image);
     const imageChoice = selectImageModel({
@@ -193,6 +201,19 @@ export class ImageService {
       if (!back.bytes.length || back.record.sha256 !== rec.sha256) {
         throw new Error("Image artifact read-back failed. No file was saved.");
       }
+      let projectFileEvidence: ProjectFileEvidence | undefined;
+      if (req.projectRoot) {
+        const relativePath = `public/${rec.name}`;
+        try {
+          const destination = resolveSafePath(req.projectRoot, relativePath);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.writeFile(destination, bytes);
+          projectFileEvidence = await verifyProjectFile(req.projectRoot, relativePath, bytes);
+        } catch (error) {
+          await this.artifacts.deleteArtifact(rec.artifactId);
+          throw error;
+        }
+      }
       const pub = this.artifacts.toToolResult(rec);
       images.push({
         filename: rec.name,
@@ -204,6 +225,7 @@ export class ImageService {
         downloadUrl: pub.downloadUrl ?? `/artifacts/${rec.artifactId}/download`,
         previewUrl: pub.previewUrl,
         revisedPrompt: item.revisedPrompt,
+        projectFileEvidence,
       });
     }
     if (images.length === 0) throw new Error("The image model returned no images");

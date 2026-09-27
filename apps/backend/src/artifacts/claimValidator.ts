@@ -52,11 +52,15 @@ export function inventedFilenames(text: string, artifacts: GroundedArtifact[]): 
 export function filesGeneratedCopy(artifacts: GroundedArtifact[]): string {
   const names = artifacts.filter((a) => a.artifactId && a.name).map((a) => a.name).join(", ");
   if (!names) return "No file was saved. There is nothing in Files → Generated.";
-  return `Saved ${names} in Files → Generated (virtual file storage). Preview or download it from the card — that is the real file.`;
+  return `A downloadable copy of ${names} is in Files → Generated.`;
 }
 
-export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[], events: ClaimEvent[] = []): { text: string; blocked: boolean } {
+export function groundAssistantClaims(text: string, artifacts: GroundedArtifact[], events: ClaimEvent[] = [], projectFiles: Array<{ path: string; name: string }> = []): { text: string; blocked: boolean } {
   const list = artifacts.filter((a) => a.artifactId && a.name);
+  const projectNames = new Set(projectFiles.map((f) => f.name.toLowerCase()));
+  const projectFileNames = (String(text || "").match(FILENAME) ?? []).map((n) => n.toLowerCase());
+  const validProjectClaim = projectFileNames.length > 0 && projectFileNames.every((n) => projectNames.has(n));
+  if (validProjectClaim && !/files\s*→\s*generated|download(?:able)?|attached/i.test(text)) return { text, blocked: false };
   // A website or source edit is saved in the workspace. Mentioning a download
   // card must not erase that answer as if no file existed.
   if (list.length === 0 && changeEvidence(events)) {

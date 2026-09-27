@@ -50,6 +50,8 @@ export interface VerificationEvidence {
   toolEvidence: ToolEvidence[];
   testBuildEvidence: TestBuildEvidence[];
   browserEvidence: BrowserEvidence[];
+  /** Successful edits made in this run, with their actual before and after text. */
+  editTransitions?: { path: string; before: string; after: string }[];
   /** Pages the run published (the verifier can open them in the browser). */
   previewUrls: string[];
   /** Sequence of the last file change; evidence older than this is stale. */
@@ -155,13 +157,24 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
   const testBuild: TestBuildEvidence[] = [];
   const browser: BrowserEvidence[] = [];
   const previews = new Set<string>();
+  const editInputs = new Map<string, Record<string, unknown>>();
+  const editTransitions: NonNullable<VerificationEvidence["editTransitions"]> = [];
   let lastChange = 0;
   for (const e of events) {
     const seq = Number(e.sequence ?? 0);
     if (e.type === "preview.available" && typeof e.data?.url === "string") previews.add(e.data.url);
+    if (e.type === "tool.input" && typeof e.data?.callId === "string" && e.data.input && typeof e.data.input === "object") {
+      editInputs.set(e.data.callId, e.data.input);
+    }
     if (e.type !== "tool.completed" && e.type !== "tool.failed") continue;
     const env = e.data?.envelope;
     const tool = String(e.data?.tool ?? env?.toolName ?? "");
+    if (e.type === "tool.completed" && tool === "edit_file") {
+      const input = editInputs.get(String(e.data?.callId ?? ""));
+      if (input && typeof input.path === "string" && typeof input.old_string === "string" && typeof input.new_string === "string") {
+        editTransitions.push({ path: input.path, before: input.old_string.slice(0, 600), after: input.new_string.slice(0, 600) });
+      }
+    }
     if (!env) continue;
     toolEvidence.push({ tool, status: env.status, summary: env.userSummary, sequence: seq, evidence: env.evidence ?? [] });
     if (env.status === "success") {
@@ -201,6 +214,7 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
     toolEvidence,
     testBuildEvidence: testBuild,
     browserEvidence: browser,
+    editTransitions,
     previewUrls: [...previews],
     lastChangeSequence: lastChange,
     website: opts.website ?? changedFiles.some((f) => /\.html?$/i.test(f.path)),
@@ -358,6 +372,7 @@ function verifierPrompt(evidence: VerificationEvidence, deterministic: { finding
     "1. You may only READ and VERIFY: read files, search, run tests or builds, open the site in the browser, take screenshots. Never write, edit, delete, or run other commands.",
     "2. Be adversarial. Check the work against the goal, not against the agent's summary.",
     "3. Base every finding on a tool result you got here or on the evidence below.",
+    "For follow-up changes, the successful edit transitions below show this run's before and after. Git HEAD may predate earlier missions; do not use its diff as the before state for this run.",
     "4. For a website, open the page in the browser and check console and network errors.",
     "5. Start your final answer with exactly one line: VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL.",
     "6. Then list findings as short bullets (what is wrong, which file, what you saw).",
@@ -366,6 +381,9 @@ function verifierPrompt(evidence: VerificationEvidence, deterministic: { finding
     "",
     "Changed files:",
     ...(evidence.changedFiles.length ? evidence.changedFiles.map((f) => `- ${f.path} (${f.operation})`) : ["- none"]),
+    "",
+    "Successful edits in this run (before => after):",
+    ...(evidence.editTransitions?.length ? evidence.editTransitions.slice(-8).map((edit) => `- ${edit.path}: ${JSON.stringify(edit.before)} => ${JSON.stringify(edit.after)}`) : ["- none"]),
     "",
     "Test and build runs:",
     ...(evidence.testBuildEvidence.length ? evidence.testBuildEvidence.map((t) => `- ${t.command}: ${t.ok ? "passed" : `failed${t.exitCode !== null ? ` (exit ${t.exitCode})` : ""}`}`) : ["- none"]),

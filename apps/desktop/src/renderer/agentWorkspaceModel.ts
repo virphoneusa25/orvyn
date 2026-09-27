@@ -383,7 +383,7 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
       const name = String(data.name ?? data.path ?? data.preview ?? "document");
       artifacts.set(name, { path: name, kind: "artifact", status: "Artifact" });
     }
-    if (type === "artifact.created" || type === "files.ready" || (type === "tool.completed" && (tool === "generate_image" || data.artifactId))) {
+    if (type === "artifact.created" || (type === "files.ready" && data.location !== "workspace") || (type === "tool.completed" && (tool === "generate_image" || data.artifactId))) {
       const name = String(data.name ?? data.filename ?? data.artifactName ?? data.path ?? "");
       if (name) {
         const prev = artifacts.get(name);
@@ -429,7 +429,10 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "approval.resolved") waitingApproval = false;
 
     let routed = routeEvent(e);
-    if ((type === "run.completed" || type === "mission.completed") && artifacts.size > 0) {
+    if ((type === "run.completed" || type === "mission.completed") && previews.size > 0) {
+      const last = [...previews.values()].at(-1)!;
+      routed = { line: `Preview ${last.url}`, priority: 96, tab: "preview", previewUrl: last.url, switchTab: true };
+    } else if ((type === "run.completed" || type === "mission.completed") && artifacts.size > 0) {
       const first = [...artifacts.values()][0];
       routed = {
         line: `${first.path} is in Files → Generated`,
@@ -449,7 +452,7 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
   const finished = events.some((e) => e.type === "run.completed" || e.type === "mission.completed");
   const blocked = events.some((e) => e.type === "run.blocked" || e.type === "resource.required");
   const reviewable = diffs.length > 0 && artifacts.size === 0;
-  if (finished && reviewable && !blocked) {
+  if (finished && reviewable && !blocked && previews.size === 0) {
     latest = { line: "Review ready", priority: 75, tab: "review", switchTab: true };
   }
 

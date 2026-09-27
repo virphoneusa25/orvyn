@@ -6,7 +6,19 @@
 
 import { AITool, ToolResult } from "../ToolTypes";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
-import { runService, serviceManager, type ServiceRecord } from "../../services/ServiceManager";
+import { portAnswers, runService, serviceManager, type ServiceRecord } from "../../services/ServiceManager";
+
+export async function chooseAvailablePreviewCommand(command: string, busy: (port: number) => Promise<boolean> = portAnswers): Promise<{ command: string; changedFrom?: number; port?: number }> {
+  if (!/\b(?:http-server|vite|serve)\b/i.test(command)) return { command };
+  const match = /(^|\s)(-p|--port)\s+(\d{2,5})(?=\s|$)/i.exec(command);
+  if (!match) return { command };
+  const requested = Number(match[3]);
+  if (requested < 1024 || requested > 65515 || !(await busy(requested))) return { command };
+  for (let port = requested + 1; port <= Math.min(requested + 20, 65535); port++) {
+    if (!(await busy(port))) return { command: command.replace(match[0], `${match[1]}${match[2]} ${port}`), changedFrom: requested, port };
+  }
+  return { command };
+}
 
 function line(r: ServiceRecord): string {
   const age = Math.round((Date.now() - r.startedAt) / 1000);
@@ -28,8 +40,11 @@ export function makeStartProcessTool(projectRoot: string): AITool {
       const command = String(args.command ?? "").trim();
       if (!command) return { ok: false, error: "command is required" };
       const root = workspaceRootFor(projectRoot, context);
-      const { result } = await runService({ command, cwd: root, projectRoot: root, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
-      return result;
+      const selected = await chooseAvailablePreviewCommand(command);
+      const { result } = await runService({ command: selected.command, cwd: root, projectRoot: root, onOutput: context?.onOutput, readyTimeoutMs: 90_000 });
+      return result.ok && selected.changedFrom
+        ? { ...result, output: `Port ${selected.changedFrom} was busy; preview started on ${selected.port}.\n${result.output ?? ""}` }
+        : result;
     },
   };
 }

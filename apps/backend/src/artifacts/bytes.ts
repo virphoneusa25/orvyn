@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { DOMParser } from "@xmldom/xmldom";
 
 export const MAX_ARTIFACT_BYTES = 12 * 1024 * 1024;
 
@@ -51,6 +52,19 @@ export function validateBytes(name: string, declaredMime: string, bytes: Buffer)
   if (ext === ".webp" || declaredMime === "image/webp") {
     if (bytes.length < 12 || !bytes.subarray(8, 12).equals(WEBP)) throw new Error("Declared WebP is not a WebP (bad file signature).");
     return "image/webp";
+  }
+  if (ext === ".svg" || declaredMime === "image/svg+xml") {
+    const svg = bytes.toString("utf-8").replace(/^\uFEFF/, "").trim();
+    if (!svg) throw new Error("Declared SVG is empty.");
+    let invalid = "";
+    const doc = new DOMParser({ errorHandler: {
+      warning: () => undefined,
+      error: (message: string) => { invalid = message; },
+      fatalError: (message: string) => { invalid = message; },
+    } }).parseFromString(svg, "image/svg+xml");
+    const closedRoot = /<\/svg\s*>\s*$/i.test(svg) || /<svg\b[^>]*\/\s*>\s*$/i.test(svg);
+    if (invalid || !closedRoot || doc.documentElement?.localName?.toLowerCase() !== "svg") throw new Error(`Declared SVG is not parseable XML with an SVG root${invalid ? `: ${invalid}` : "."}`);
+    return "image/svg+xml";
   }
   return declaredMime || "application/octet-stream";
 }

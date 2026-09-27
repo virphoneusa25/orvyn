@@ -1,4 +1,5 @@
 import type { ToolResult } from "../ai/ToolTypes";
+import type { ProjectFileEvidence } from "./projectFileEvidence";
 
 export const FILE_PRODUCING_TOOLS = new Set([
   "generate_image",
@@ -17,6 +18,7 @@ export interface ToolArtifactResult {
   previewUrl?: string;
   downloadUrl?: string;
   kind?: string;
+  projectFileEvidence?: ProjectFileEvidence;
 }
 
 export function publicUrls(artifactId: string, previewable = false): { downloadUrl: string; previewUrl?: string } {
@@ -67,6 +69,7 @@ export function parsePersistedArtifacts(raw: string | undefined, extra?: ToolArt
         previewUrl: a.previewUrl ? String(a.previewUrl) : undefined,
         downloadUrl: a.downloadUrl ?? a.downloadPath ?? `/artifacts/${artifactId}/download`,
         kind: a.kind ? String(a.kind) : undefined,
+        projectFileEvidence: a.projectFileEvidence,
       });
     }
   } catch {

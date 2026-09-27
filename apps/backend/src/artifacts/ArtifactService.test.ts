@@ -134,6 +134,19 @@ test("storage unavailable cannot produce an artifactId", async () => {
   }
 });
 
+test("corrupt or empty stored images are not served or listed as generated", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-art-"));
+  const store = new LocalStore("tenant-a", dir);
+  const svc = new ArtifactService("tenant-a", store, dir);
+  try {
+    const rec = await svc.persistArtifact({ name: "hero.png", bytes: MINIMAL_PNG, kind: "generated" });
+    await fs.writeFile(rec.diskPath!, Buffer.alloc(0));
+    await assert.rejects(svc.previewArtifact(rec.artifactId), /integrity|zero-byte/);
+    const tree = await svc.filesTree();
+    assert.equal(tree.locations.find((l) => l.id === "generated")?.files.length, 0);
+  } finally { store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test("ZIP persist has PK signature", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-art-"));
   const store = new LocalStore("tenant-a", dir);

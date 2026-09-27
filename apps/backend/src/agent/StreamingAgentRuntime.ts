@@ -49,7 +49,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
-import { applySiteEdit, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
@@ -90,6 +90,10 @@ import { COMPUTER_USE_TOOLS } from "../computerUse/computerUseTools";
 import { runWithComputerContext } from "../computerUse/context";
 import { readComputerUsePolicy } from "../computerUse/modelPolicy";
 import { auditComputerUse } from "../computerUse/capabilityMatrix";
+import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
+import { sha256Hex } from "../artifacts/bytes";
+import { promises as fs } from "fs";
+import { resolveSafePath } from "../execution/pathSafety";
 
 /** Where a run's tools execute. LOCAL is the default; OVH_WORKER forces
  *  remote execution with NO local fallback — if the worker cannot serve the
@@ -181,6 +185,7 @@ interface RunState {
   previousProfile?: "SAFE" | "BALANCED" | "AUTONOMOUS";
   /** Persisted artifacts created this run — the only names ORION may claim. */
   createdArtifacts: GroundedArtifact[];
+  projectFileEvidence: ProjectFileEvidence[];
   instruction: string;
   intent: TaskIntent;
   exposedTools: Set<string> | null;
@@ -411,7 +416,7 @@ export class StreamingAgentRuntime {
       if (!rec || rec.status !== "ready") continue;
       try {
         const { bytes, record } = await this.artifacts.read(art.artifactId);
-        if (!bytes.length || (record.sha256 && record.sha256 !== rec.sha256)) continue;
+        if (!bytes.length || (record.sha256 && sha256Hex(bytes) !== rec.sha256)) continue;
         ready.push({
           artifactId: rec.artifactId,
           name: rec.name,
@@ -421,6 +426,7 @@ export class StreamingAgentRuntime {
           previewUrl: art.previewUrl ?? `/artifacts/${rec.artifactId}/preview`,
           downloadUrl: art.downloadUrl ?? `/artifacts/${rec.artifactId}/download`,
           kind: rec.kind,
+          projectFileEvidence: art.projectFileEvidence,
         });
       } catch {
         /* not ready */
@@ -575,6 +581,35 @@ export class StreamingAgentRuntime {
     } catch {
       /* the download card still exists; the next turn can recover project files that did land */
     }
+  }
+
+  /** Show an existing homepage before the model makes its first edit. */
+  private async seedExistingSite(runId: string, state: RunState): Promise<string | null> {
+    if (!state.intent.requiresFrontend || state.websiteLayout?.directory || state.websiteLayout?.stack !== "static") return null;
+    const read = async (path: string): Promise<string | null> => {
+      const result = await this.tools.execute("read_file", { path }, "coder", {
+        signal: state.controller.signal,
+        runId,
+        workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
+        executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+      });
+      return result.ok && typeof result.output === "string" && result.output.trim() ? result.output : null;
+    };
+    const html = await read("index.html");
+    if (!html) return null;
+    rememberSiteFile(runId, "index.html", html);
+    const refs = [...html.matchAll(/<(?:link|script|img)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
+      .map((match) => match[1]!.split(/[?#]/)[0]!.replace(/^\/?(?:\.\/)?/, ""))
+      .filter((ref) => /\.(css|js|svg)$/i.test(ref) && !ref.includes(".."));
+    for (const ref of [...new Set(refs)].slice(0, 20)) {
+      const body = await read(ref);
+      if (body) rememberSiteFile(runId, ref, body);
+    }
+    const published = publishRememberedSite(runId);
+    if (!published) return null;
+    this.store.emit(runId, "preview.available", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs], label: "Live preview" });
+    void this.verifyPublishedPreview(runId, published.url);
+    return published.url;
   }
 
   /** web_search is registered and not denied (Plan/Research modes keep it; nothing turns it off silently). */
@@ -1046,14 +1081,8 @@ export class StreamingAgentRuntime {
       }
     }
 
-    const runCaps = summarizeCapabilities(
-      this.tools.list().map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
-      { modelTools: provider.supportsTools(), executionLabel: executionLabelFor(execution) }
-    );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const modeOverlay = composerModeOverlay(options?.composerMode, mode);
-    const gapNotes = capabilityGapNotes(instruction, runCaps);
-    const intent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const intent = routeIntent;
     const scope = {
       tenantId: execution?.tenantId || "local",
       organizationId: execution?.organizationId || "",
@@ -1073,6 +1102,12 @@ export class StreamingAgentRuntime {
     const exposed = def.toolsEnabled
       ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent, { repositoryDetected: workspace.repositoryDetected }))
       : null;
+    const runCaps = summarizeCapabilities(
+      this.tools.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
+      { modelTools: def.toolsEnabled && provider.supportsTools(), executionLabel: executionLabelFor(execution) }
+    );
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     this.runs.set(runId, {
       controller: new AbortController(),
@@ -1098,6 +1133,7 @@ export class StreamingAgentRuntime {
       ...(accessMode ? { accessMode } : {}),
       previousProfile,
       createdArtifacts: [],
+      projectFileEvidence: [],
       instruction,
       intent,
       exposedTools: exposed,
@@ -1266,6 +1302,9 @@ export class StreamingAgentRuntime {
           // to produce a greeting instead of an investigation.
           workspaceAnchor(execution, options?.workspaceIdentity),
           intent.requiresFrontend ? (this.runs.get(runId)?.websiteLayout?.prompt ?? "") : "",
+          intent.requiresFrontend
+            ? "Write the site in useful increments so the live preview updates while the user watches. Once its URL is available, call desktop_start with that URL to show the sandbox desktop, and inspect the result with browser tools. If no sandbox is available, continue with browser verification."
+            : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
           "You may request several independent tools in one turn — they are executed together, which is faster than one per turn.",
@@ -1354,6 +1393,30 @@ export class StreamingAgentRuntime {
         if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
           await this.awaitRemoteReady(runId);
           this.mountRemoteTools(runId);
+        }
+        // A follow-up publishes a new preview under a new run id. Rehydrate
+        // verified project images from durable artifact storage so existing
+        // CSS background URLs keep resolving after the first run or a restart.
+        if (this.artifacts) {
+          const priorImages = this.artifacts.listArtifacts({ projectRoot })
+            .filter((a) => a.projectRoot === projectRoot && a.kind === "generated" && a.mimeType.startsWith("image/"));
+          for (const image of priorImages) {
+            try {
+              const evidence = image.runId ? this.store.get(image.runId)?.events.find((e) =>
+                e.type === "file.evidence" && e.data?.name === image.name && e.data?.sha256 === image.sha256
+              ) : undefined;
+              const projectPath = typeof evidence?.data?.path === "string"
+                ? evidence.data.path
+                : image.sourceTool === "write_file" || image.sourceTool === "edit_file" ? null : `public/${image.name}`;
+              if (!projectPath) continue;
+              const { bytes } = await this.artifacts.read(image.artifactId);
+              rememberSiteBinary(runId, projectPath, bytes);
+            } catch { /* a missing artifact cannot be used in the preview */ }
+          }
+        }
+        if (state) {
+          const existingPreview = await this.seedExistingSite(runId, state);
+          if (existingPreview) messages[0].content += `\n\nThe existing homepage is already live at ${existingPreview}. Keep its preview updated while editing, and use browser and sandbox desktop tools to inspect it.`;
         }
         const codeContext = await this.relevantCode(instruction);
         if (codeContext) {
@@ -1466,7 +1529,7 @@ export class StreamingAgentRuntime {
     ]);
     state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
     state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));
-    registerRemoteTools(this.tools, toolRpc, runId);
+    registerRemoteTools(this.tools, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(this.tools.registry, state.mode);
@@ -1770,6 +1833,7 @@ export class StreamingAgentRuntime {
     }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
+      requiresFrontend: state.intent.requiresFrontend,
       requestedModelId: state.requestedModelId ?? "auto",
       actualModelId: provider.config.id,
       provider: provider.config.provider,
@@ -2215,10 +2279,10 @@ export class StreamingAgentRuntime {
       complete: (_turn, { content, streamedText }) => {
         if (state.cancelled) return;
         const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
-        const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts, this.store.get(runId)?.events ?? []);
+        const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts, this.store.get(runId)?.events ?? [], state.projectFileEvidence);
         if (claimCheck.blocked) grounded.blocked = true;
         const wantedFile = looksLikeFileDeliverableRequest(state.instruction);
-        if (wantedFile && state.createdArtifacts.length === 0) {
+        if (wantedFile && state.createdArtifacts.length === 0 && state.projectFileEvidence.length === 0) {
           const rewrite = grounded.blocked
             ? grounded.text
             : "No file was saved. Generation or persistence failed, so there is nothing to download and nothing in Files → Generated.";
@@ -2229,8 +2293,9 @@ export class StreamingAgentRuntime {
           this.emitNarration(runId, grounded.text, false);
         } else if (state.createdArtifacts.length > 0 && !/files\s*→\s*generated/i.test(content)) {
           const copy = filesGeneratedCopy(state.createdArtifacts);
-          this.store.emit(runId, "message.grounded", { content: copy, blocked: true });
-          this.emitNarration(runId, copy, false);
+          const answer = `${grounded.text.trim()} ${copy}`.trim();
+          this.store.emit(runId, "message.grounded", { content: answer, blocked: true });
+          this.emitNarration(runId, answer, false);
         } else {
           this.emitNarration(runId, content, streamedText && !state.heldFinal);
         }
@@ -2334,17 +2399,6 @@ export class StreamingAgentRuntime {
         replies.set(call.id, siteRefusal);
         continue;
       }
-
-      if (state.intent.requiresFrontend && !state.intent.requiresDesktop && (call.name.startsWith("desktop_") || call.name.startsWith("computer."))) {
-        const folder = state.websiteLayout?.directory;
-        const message = folder
-          ? `Do not open the sandbox desktop. Write the new site under ${folder}/. Do not replace site files that were already written.`
-          : "Do not open the sandbox desktop. Write index.html and the stylesheet. The preview URL is the rendered site.";
-        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
-        replies.set(call.id, message);
-        continue;
-      }
-
       if (/^git_/.test(call.name) && !state.repositoryDetected) {
         const message = "Git tools are unavailable because preflight did not find a repository.";
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
@@ -2540,6 +2594,9 @@ export class StreamingAgentRuntime {
           | { query?: string; reason?: string; recommendedServers?: unknown[] }
           | undefined;
         const activated = Array.isArray(result.meta.activated) ? result.meta.activated : [];
+        for (const name of activated) {
+          if (typeof name === "string" && this.isKnownTool(name)) state.exposedTools?.add(name);
+        }
         const asked = String((call.arguments as { query?: string })?.query ?? "").trim();
         if (required && asked) {
           // Something to install: ORVYN asks the user once and installs it (below, after this batch).
@@ -2560,6 +2617,30 @@ export class StreamingAgentRuntime {
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       result = requirePersistedArtifacts(call.name, result);
+      if (result.ok && (call.name === "write_file" || call.name === "edit_file") && result.projectFileEvidence &&
+          /\.(svg|png|jpe?g|webp)$/i.test(result.projectFileEvidence.name) && this.artifacts) {
+        let bytes: Buffer | null = null;
+        if (call.name === "write_file") bytes = Buffer.from(String((call.arguments as Record<string, unknown>).content ?? ""), "utf-8");
+        else if (state.execution?.location === "LOCAL_HOST" || state.execution?.location === "LOCAL_SANDBOX" || state.execution?.location === "OVH_WORKER") {
+          const read = await toolRpc.execute(runId, "read_file", { path: result.projectFileEvidence.path }).catch(() => null);
+          if (read?.ok) bytes = Buffer.from(String(read.output ?? ""), "utf-8");
+        } else {
+          bytes = await fs.readFile(resolveSafePath(state.projectRoot, result.projectFileEvidence.path)).catch(() => null);
+        }
+        if (bytes && bytes.length === result.projectFileEvidence.size && sha256Hex(bytes) === result.projectFileEvidence.sha256) {
+          try {
+            const rec = await this.artifacts.persistArtifact({
+              name: result.projectFileEvidence.name, bytes, kind: "generated", overwrite: true,
+              projectRoot: state.projectRoot, projectId: state.execution?.projectId ?? null,
+              runId, sourceTool: "write_file",
+            });
+            result = { ...result, artifacts: [{ ...this.artifacts.toToolResult(rec), projectFileEvidence: result.projectFileEvidence }] };
+          } catch (err: any) {
+            // The project write remains real; only the optional Generated card failed.
+            this.store.emit(runId, "run.diagnostics", { reason: `Generated attachment unavailable: ${err.message}` });
+          }
+        }
+      }
       // Every result reaching the model and the chat carries an envelope. The
       // gateway builds it; a result that changed after (artifact check) or
       // came from outside the gateway (cloud MCP) gets a fresh one.
@@ -2598,8 +2679,12 @@ export class StreamingAgentRuntime {
             if (remembered) state.onProjectFile?.(remembered);
           }
         }
+        if (result.projectFileEvidence && !result.artifacts?.length) {
+          state.projectFileEvidence.push(result.projectFileEvidence);
+          this.store.emit(runId, "file.evidence", { ...result.projectFileEvidence });
+        }
         const raw = envelope.modelPayload;
-        const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? await this.verifiedPersisted(result) : [];
+        const persisted = FILE_PRODUCING_TOOLS.has(call.name) || result.artifacts?.length ? await this.verifiedPersisted(result) : [];
         if (FILE_PRODUCING_TOOLS.has(call.name) && persisted.length === 0) {
           state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
           anySucceeded = false;
@@ -2610,6 +2695,17 @@ export class StreamingAgentRuntime {
         }
         if (persisted.length > 0) {
           for (const art of persisted) {
+            if (art.projectFileEvidence && art.mimeType?.startsWith("image/") && this.artifacts) {
+              try {
+                const { bytes } = await this.artifacts.read(art.artifactId);
+                rememberSiteBinary(runId, art.projectFileEvidence.path, bytes);
+                this.republishPreview(runId, [art.projectFileEvidence.path]);
+              } catch { /* artifact validation below remains authoritative */ }
+            }
+            if (art.projectFileEvidence) {
+              state.projectFileEvidence.push(art.projectFileEvidence);
+              this.store.emit(runId, "file.evidence", { ...art.projectFileEvidence });
+            }
             state.createdArtifacts.push({ artifactId: art.artifactId, name: art.name, mimeType: art.mimeType });
             this.store.emit(runId, "artifact.created", {
               artifactId: art.artifactId,

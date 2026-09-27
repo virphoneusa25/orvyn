@@ -9,6 +9,7 @@ export function BrowserWorkbench({
   projectName,
   orionStatus,
   requestedUrl,
+  buildFiles = [],
   sessionId,
   surfaceActive = true,
   onTabs,
@@ -16,11 +17,13 @@ export function BrowserWorkbench({
   liveVersion = 0,
   updating = false,
   previewStopped = false,
+  preparing = false,
 }: {
   kind: "browser" | "preview";
   projectName?: string | null;
   orionStatus?: string | null;
   requestedUrl?: string;
+  buildFiles?: string[];
   sessionId?: string;
   surfaceActive?: boolean;
   onTabs: (state: WorkbenchBrowserState) => void;
@@ -29,6 +32,7 @@ export function BrowserWorkbench({
   updating?: boolean;
   /** The project is restored and its preview server is not running. */
   previewStopped?: boolean;
+  preparing?: boolean;
 }) {
   const api = window.orvyn.browser;
   const [state, setState] = useState<WorkbenchBrowserState>({ tabs: [], recents: [], activeId: null });
@@ -241,7 +245,14 @@ export function BrowserWorkbench({
         </div>
       )}
 
-      {kind === "preview" && previewStopped && !requestedUrl ? (
+      {kind === "preview" && preparing && !requestedUrl ? (
+        <div data-testid="workbench-preview-building" style={{ flex: 1, overflowY: "auto", padding: 28, color: "var(--orvyn-text)" }}>
+          <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>Building your website</div>
+          <div style={{ fontSize: 13, color: "var(--orvyn-text-muted)", marginBottom: 24 }}>The live page will appear here as soon as its first version is ready. Changes will update here while ORION works.</div>
+          {buildFiles.length > 0 && <div style={{ fontSize: 12, color: "var(--orvyn-cyan)", marginBottom: 10 }}>Files updated</div>}
+          {buildFiles.slice(0, 8).map((file) => <div key={file} style={{ fontSize: 12, padding: "8px 10px", marginBottom: 6, border: "1px solid var(--orvyn-border-soft)", borderRadius: 6 }}>{file}</div>)}
+        </div>
+      ) : kind === "preview" && previewStopped && !requestedUrl ? (
         <RestoredPreview />
       ) : start ? (
         <StartPage recents={state.recents} onGo={(u) => void go(u)} native={hasNative} draft={draft} setDraft={setDraft} />
@@ -409,4 +420,3 @@ function MenuItem({ label, onClick }: { label: string; onClick: () => void }) {
 function activeTab(state: WorkbenchBrowserState): WorkbenchBrowserTab | undefined {
   return state.tabs.find((t) => t.id === state.activeId) ?? state.tabs[0];
 }
-

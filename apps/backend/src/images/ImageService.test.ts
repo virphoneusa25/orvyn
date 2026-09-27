@@ -119,3 +119,20 @@ test("second generate with same name does not overwrite", async () => {
   store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+test("coding image generation saves the same bytes in the project and Generated storage", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-img-"));
+  const projectRoot = path.join(dir, "site");
+  await fs.mkdir(projectRoot);
+  const store = new LocalStore("tenant-a", dir);
+  const artifacts = new ArtifactService("tenant-a", store, dir);
+  try {
+    const images = new ImageService(modelService([{ b64: MINIMAL_PNG.toString("base64") }]), artifacts);
+    const out = await images.generate({ prompt: "hero", filename: "hero.png", projectRoot });
+    const img = out.images[0];
+    assert.equal(img.projectFileEvidence?.path, "public/hero.png");
+    assert.equal(img.projectFileEvidence?.sha256, img.sha256);
+    assert.deepEqual(await fs.readFile(path.join(projectRoot, "public", "hero.png")), MINIMAL_PNG);
+    assert.deepEqual((await artifacts.read(img.artifactId)).bytes, MINIMAL_PNG);
+  } finally { store.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

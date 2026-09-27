@@ -36,6 +36,7 @@ function saveRoot(id: string, dir: string): void {
 const publishedIds = new Map<string, string>();
 const revisions = new Map<string, number>();
 const remembered = new Map<string, Map<string, string>>();
+const rememberedBinary = new Map<string, Map<string, Buffer>>();
 let publicOrigin = (process.env.ORVYN_PUBLIC_ORIGIN || "").replace(/\/$/, "");
 
 const TYPES: Record<string, string> = {
@@ -82,6 +83,15 @@ export function rememberSiteFile(runId: string, relPath: string, content: string
   const bag = remembered.get(runId) ?? new Map<string, string>();
   bag.set(rel, content);
   remembered.set(runId, bag);
+}
+
+/** A verified project image used by the page must be present in the published preview. */
+export function rememberSiteBinary(runId: string, relPath: string, bytes: Buffer): void {
+  const rel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!rel || rel.includes("..") || !bytes.length) return;
+  const bag = rememberedBinary.get(runId) ?? new Map<string, Buffer>();
+  bag.set(rel, Buffer.from(bytes));
+  rememberedBinary.set(runId, bag);
 }
 
 /** A site file already remembered for this run (ORION wrote or read it). */
@@ -199,6 +209,11 @@ export function publishRememberedSite(runId: string, changedFiles: string[] = []
     mkdirSync(join(abs, ".."), { recursive: true });
     writeFileSync(abs, rel === pageKey && composed ? composed : content);
   }
+  for (const [rel, bytes] of rememberedBinary.get(runId) ?? []) {
+    const abs = join(dir, rel);
+    mkdirSync(join(abs, ".."), { recursive: true });
+    writeFileSync(abs, bytes);
+  }
   const pageDir = pageKey && pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/")) : "";
   const root = pageDir ? join(dir, pageDir) : dir;
   const id = existingId ?? randomUUID();
@@ -210,7 +225,7 @@ export function publishRememberedSite(runId: string, changedFiles: string[] = []
   return {
     id,
     url: previewUrl(id),
-    files: [...bag.keys()],
+    files: [...bag.keys(), ...(rememberedBinary.get(runId)?.keys() ?? [])],
     revision,
     changedFiles,
     first: !existingId,

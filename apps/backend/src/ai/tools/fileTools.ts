@@ -5,6 +5,7 @@ import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
 
 import { resolveSafePath } from "../../execution/pathSafety";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
+import { verifyProjectFile } from "../../artifacts/projectFileEvidence";
 
 // Every file tool resolves paths against the run workspace and refuses to
 // escape it — this is the project-isolation boundary for Agent mode.
@@ -86,9 +87,11 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         let existed = false;
         try { await fs.access(target); existed = true; } catch { /* new file */ }
         await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target, String(args.content), "utf-8");
+        const expected = Buffer.from(String(args.content), "utf-8");
+        await fs.writeFile(target, expected);
+        const projectFileEvidence = await verifyProjectFile(projectRoot, String(args.path), expected);
         const lines = String(args.content).split("\n").length;
-        return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines)` };
+        return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines, ${projectFileEvidence.size} bytes, sha256 ${projectFileEvidence.sha256})`, projectFileEvidence };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }
@@ -184,12 +187,15 @@ export function makeEditFileTool(projectRoot: string): AITool {
           };
         }
         const next = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
-        await fs.writeFile(target, next, "utf-8");
+        const expected = Buffer.from(next, "utf-8");
+        await fs.writeFile(target, expected);
+        const projectFileEvidence = await verifyProjectFile(projectRoot, String(args.path), expected);
         const applied = replaceAll ? count : 1;
         const added = next.split("\n").length - original.split("\n").length;
         return {
           ok: true,
           output: `EDITED ${args.path} — ${applied} replacement${applied === 1 ? "" : "s"} (${added >= 0 ? "+" : "−"}${Math.abs(added)} lines)`,
+          projectFileEvidence,
         };
       } catch (err: any) {
         return { ok: false, error: err.message };

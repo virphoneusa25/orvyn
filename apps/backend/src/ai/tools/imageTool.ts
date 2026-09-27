@@ -50,6 +50,7 @@ export function makeGenerateImageTool(
           downloadUrl: img.downloadUrl,
           previewUrl: img.previewUrl,
           kind: "generated",
+          projectFileEvidence: img.projectFileEvidence,
         }));
         return {
           ok: true,

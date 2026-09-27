@@ -134,6 +134,17 @@ test("server tasks do not see image tools, and code tasks do not see ssh", () =>
   assert.ok(codeTools.includes("read_file"));
 });
 
+test("website work exposes browser and virtual desktop tools", () => {
+  const intent = inferTaskIntent("Build a simple animated website for a customer");
+  const names = selectToolNames(["write_file", "browser_open", "browser_screenshot", "desktop_start", "desktop_screenshot", "ssh_exec"], intent);
+  assert.ok(names.includes("browser_open"));
+  assert.ok(names.includes("browser_screenshot"));
+  assert.ok(names.includes("desktop_start"));
+  assert.ok(names.includes("desktop_screenshot"));
+  assert.equal(names.includes("ssh_exec"), false);
+  assert.equal(inferTaskIntent("make the hero animation slower").requiresFrontend, true);
+});
+
 test("a website run is not finished until the agent writes a page", () => {
   const blocked = evaluateCompletionGates({
     instruction: "Build a Joomla website",
@@ -177,6 +188,16 @@ test("a website run is not finished until the agent writes a page", () => {
     ],
   });
   assert.equal(localhost.ok, false);
+});
+
+test("a hero image request requires a verified project image, not CSS gradients", () => {
+  const artifacts = [{ artifactId: "art_hero", name: "hero.png", mimeType: "image/png" }];
+  const prompt = "can you add a hero image in the background";
+  const gradients = evaluateCompletionGates({ instruction: prompt, artifacts, events: [{ type: "file.edit", data: { path: "styles.css" } }] });
+  assert.equal(gradients.ok, false);
+  assert.match(gradients.reasons.join(" "), /image file exists in the project/);
+  const file = evaluateCompletionGates({ instruction: prompt, artifacts, events: [{ type: "file.evidence", data: { path: "public/hero.png", mimeType: "image/png", size: 42, exists: true, readable: true } }] });
+  assert.equal(file.ok, true);
 });
 
 test("a server run cannot complete without a remote result", () => {

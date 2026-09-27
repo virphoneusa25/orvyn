@@ -12,6 +12,9 @@
 import { AITool, ToolResult } from "../ai/ToolTypes";
 import { diffLines } from "../composer/diff";
 import type { ToolRpcChannel } from "./ToolRpc";
+import { sha256Hex, validateBytes } from "../artifacts/bytes";
+import { mediaTypeForName } from "../artifacts/ArtifactService";
+import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
 
 /**
  * Per-request ceiling for a remote tool call. File ops are fast; commands
@@ -91,6 +94,15 @@ async function readRemote(rpc: ToolRpcChannel, runId: string, path: string): Pro
   }
 }
 
+function remoteFileEvidence(projectRoot: string, filePath: string, content: string): ProjectFileEvidence {
+  const path = filePath.replace(/\\/g, "/");
+  const name = path.split("/").pop() || path;
+  const bytes = Buffer.from(content, "utf-8");
+  const mimeType = mediaTypeForName(name);
+  if (mimeType.startsWith("image/")) validateBytes(name, mimeType, bytes);
+  return { projectRoot, path, name, mimeType, size: bytes.length, exists: true, readable: true, sha256: sha256Hex(bytes), createdAt: new Date().toISOString() };
+}
+
 /**
  * Registers remote versions of ORION's core coding tools into the
  * ToolGateway. Called when executionLocation is OVH_WORKER.
@@ -100,7 +112,8 @@ async function readRemote(rpc: ToolRpcChannel, runId: string, path: string): Pro
 export function registerRemoteTools(
   gateway: { register(tool: AITool): void },
   rpc: ToolRpcChannel,
-  runId: string
+  runId: string,
+  projectRoot = "remote-workspace"
 ): void {
   gateway.register(makeRemoteTool(
     "read_file",
@@ -126,7 +139,10 @@ export function registerRemoteTools(
       const result = await raw();
       if (!result.ok) return result;
       const after = await readRemote(rpc, runId, String(args.path ?? ""));
-      return { ...result, edit: after !== null ? toToolResultEdit(String(args.path ?? ""), "create", "", after) : undefined };
+      if (after === null || after !== String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
+      try {
+        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), "create", "", after) };
+      } catch (err: any) { return { ok: false, error: err.message }; }
     }
   ));
 
@@ -152,10 +168,12 @@ export function registerRemoteTools(
       const before = await readRemote(rpc, runId, path);
       const result = await raw();
       if (!result.ok) return result;
-      if (before === null) return result;
+      if (before === null) return { ok: false, error: "Remote project file before-state unavailable." };
       const after = await readRemote(rpc, runId, path);
-      if (after === null) return result;
-      return { ...result, edit: toToolResultEdit(path, "modify", before, after) };
+      if (after === null) return { ok: false, error: "Remote project file read-back failed." };
+      try {
+        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, path, after), edit: toToolResultEdit(path, "modify", before, after) };
+      } catch (err: any) { return { ok: false, error: err.message }; }
     }
   ));
 

@@ -44,6 +44,7 @@ export type AgentEventType =
   | "file.read"
   | "file.created"
   | "file.edit"
+  | "file.evidence"
   | "terminal.started"
   | "terminal.output"
   | "terminal.completed"

@@ -46,8 +46,9 @@ test("tenant A cannot read tenant B project, chat, or guessed ids", async () => 
 
   const prevData = process.env.ORVYN_DATA_DIR;
   process.env.ORVYN_DATA_DIR = dir;
+  let tm: TenantManager | undefined;
   try {
-    const tm = new TenantManager();
+    tm = new TenantManager();
     const tenantA = tm.ensureOrgTenant(pa);
     const tenantB = tm.ensureOrgTenant(pb);
     assert.equal(tenantA.id, pa.tenantId);
@@ -56,6 +57,10 @@ test("tenant A cannot read tenant B project, chat, or guessed ids", async () => 
     const runA = tenantA.runStore.create(`run_${pa.userId}`, pa.tenantId);
     assert.equal(tenantB.runStore.get(runA.id), undefined);
   } finally {
+    for (const tenant of tm?.list() ?? []) {
+      tenant.sessions.close();
+      tenant.localStore.close();
+    }
     if (prevData === undefined) delete process.env.ORVYN_DATA_DIR;
     else process.env.ORVYN_DATA_DIR = prevData;
   }

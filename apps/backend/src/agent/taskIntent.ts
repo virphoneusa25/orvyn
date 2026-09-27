@@ -58,7 +58,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
-  const frontend = has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server)\b/i);
+  const frontend = has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server|hero (?:image|animation|background|section)|(?:site|page) background)\b/i);
   const code =
     mode === "code" ||
     has(goal, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|file)\b/i);
@@ -102,12 +102,12 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
       (has(goal, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
         (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
     requiresTerminal: terminal && !informational,
-    requiresBrowser: browser,
-    requiresDesktop: desktop,
+    requiresBrowser: browser || frontend,
+    requiresDesktop: desktop || frontend,
     requiresArtifact: artifact,
     requiresExternalIntegration: integration,
     requiresFrontend: frontend,
-    requiresBrowserVerification: frontend && has(goal, /\b(show|verify|responsive|browser|preview|screenshot)\b/i),
+    requiresBrowserVerification: frontend,
     successCriteria: success,
     informational,
   };

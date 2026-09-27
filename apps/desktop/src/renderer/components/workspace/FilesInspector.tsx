@@ -67,6 +67,26 @@ interface PreviewState {
 
 type WorkerState = "ready" | "degraded" | "offline" | null;
 
+function AuthenticatedThumbnail({ url, name }: { url: string; name: string }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    let owned: string | null = null;
+    setObjectUrl(null);
+    fetch(apiUrl(url), { headers: authHeaders(), signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Thumbnail unavailable");
+        const blob = await response.blob();
+        if (!blob.size || !blob.type.startsWith("image/")) throw new Error("Invalid thumbnail");
+        owned = URL.createObjectURL(blob);
+        if (!controller.signal.aborted) setObjectUrl(owned);
+      })
+      .catch(() => { if (!controller.signal.aborted) setObjectUrl(null); });
+    return () => { controller.abort(); if (owned) URL.revokeObjectURL(owned); };
+  }, [url]);
+  return objectUrl ? <img src={objectUrl} alt={name} loading="lazy" /> : <span className="ofp-tile__ext">{typeLabel(name)}</span>;
+}
+
 export function FilesInspector({
   files,
   artifacts,
@@ -390,13 +410,15 @@ export function FilesInspector({
     setSaved(null);
     try {
       let base64 = "";
+      let originalBlob: Blob | null = null;
       if (selection.kind === "item") {
         const id = selection.item.artifactId || preview?.artifactId;
         const url = selection.item.downloadUrl || (id ? `/artifacts/${id}/download` : null);
         if (!url) throw new Error("This file has no download yet.");
         const r = await fetch(apiUrl(url), { headers: authHeaders() });
         if (!r.ok) throw new Error("ORVYN Cloud did not return the file.");
-        base64 = await blobToBase64(await r.blob());
+        originalBlob = await r.blob();
+        base64 = await blobToBase64(originalBlob);
       } else if (preview?.url?.startsWith("data:")) {
         base64 = preview.url.slice(preview.url.indexOf(",") + 1);
       } else if (preview?.text != null) {
@@ -410,9 +432,11 @@ export function FilesInspector({
         else if (!res.canceled) setSaved({ error: res.error || "The file was not saved." });
       } else {
         const a = document.createElement("a");
-        a.href = `data:application/octet-stream;base64,${base64}`;
+        const objectUrl = originalBlob ? URL.createObjectURL(originalBlob) : null;
+        a.href = objectUrl ?? `data:application/octet-stream;base64,${base64}`;
         a.download = selName;
         a.click();
+        if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
         setSaved({ path: `Downloads\\${selName}` });
       }
     } catch (err: any) {
@@ -557,12 +581,12 @@ export function FilesInspector({
                   onClick={() => { setSelection({ kind: "item", item: g }); setSaved(null); centerFileView.open(); }}
                 >
                   <span className="ofp-tile__art">
-                    {previewKind(g.mimeType, g.name) === "image" && g.previewUrl
-                      ? <img src={apiUrl(g.previewUrl)} alt="" loading="lazy" />
+                    {previewKind(g.mimeType, g.name) === "image" && g.previewUrl && g.bytes !== 0
+                      ? <AuthenticatedThumbnail url={g.previewUrl} name={g.name} />
                       : <span className="ofp-tile__ext">{typeLabel(g.name, g.mimeType)}</span>}
                   </span>
                   <span className="ofp-tile__name" title={g.name}>{g.name}</span>
-                  <span className="ofp-tile__meta">{formatBytes(g.bytes) || typeLabel(g.name, g.mimeType)}</span>
+                  <span className="ofp-tile__meta">{g.bytes === 0 ? "Empty file" : formatBytes(g.bytes) || typeLabel(g.name, g.mimeType)}</span>
                 </button>
               ))}
             </div>

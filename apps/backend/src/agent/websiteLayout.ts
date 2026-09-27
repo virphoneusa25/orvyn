@@ -13,7 +13,7 @@ const SITE = /\b(website|web\s*site|landing\s*page|homepage|home\s*page)\b/i;
 const REPLACE = /\b(replace|overwrite|redo|start over|from scratch)\b/i;
 
 const ROOT_PROMPT =
-  "This run is a website. Inspect the workspace, then call write_file for index.html and its stylesheet at the workspace root. Start with a navigation and hero shell plus a base stylesheet so the preview can show a styled page, then add the remaining sections to those same files. Keep the canonical names index.html, styles.css, and script.js. Do not create index-2.html or any numbered copy. The preview URL is created once and updates in place. Then open the shared browser on that preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server.";
+  "This run is a website. Inspect the workspace, then call write_file for index.html and its stylesheet at the workspace root. Start with a navigation and hero shell plus a base stylesheet so the preview can show a styled page, then add the remaining sections to those same files. Keep the canonical names index.html, styles.css, and script.js. Do not create index-2.html or any numbered copy. The preview URL is created once and updates in place. Open the shared browser on that preview and screenshot it. Use desktop_start with the preview URL to show the sandbox desktop when available. Call the tool in the same turn. Do not describe a step you are not taking. Do not start a shell server.";
 
 const NUMBERED_SITE = /^(.*\/)?(index|styles|style|script|app|main)-(\d+)\.(html|css|js|mjs)$/i;
 
@@ -46,7 +46,7 @@ export function detectSiteStack(root: string): SiteStack {
 
 function frameworkPrompt(stack: Exclude<SiteStack, "static">): string {
   const name = stack === "next" ? "Next.js" : "Vite";
-  return `This project is a ${name} app. Do not publish a separate static site and do not create numbered html copies. Start the development script once with start_process. Use that one URL in the browser. Edit the existing source so the same server shows the change. Do not start a second server. Call the tool in the same turn. Do not describe a step you are not taking.`;
+  return `This project is a ${name} app. Do not publish a separate static site and do not create numbered html copies. Start the development script once with start_process. Use that one URL in the browser and in desktop_start when the sandbox desktop is available. Edit the existing source so the same server shows the change. Do not start a second server. Call the tool in the same turn. Do not describe a step you are not taking.`;
 }
 
 export interface WebsiteLayout {
@@ -114,7 +114,7 @@ export function planWebsiteLayout(instruction: string, existing: string[], stack
   return {
     directory,
     protectedFiles: existing,
-    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet, starting with a shell and base CSS, then adding sections to those same files. Do not create numbered copies. The preview URL is created once and updates in place. Then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server.`,
+    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet, starting with a shell and base CSS, then adding sections to those same files. Do not create numbered copies. The preview URL is created once and updates in place. Open the shared browser on the preview and screenshot it. Use desktop_start with the preview URL when the sandbox desktop is available. Call the tool in the same turn. Do not describe a step you are not taking. Do not start a shell server.`,
     stack: "static",
   };
 }

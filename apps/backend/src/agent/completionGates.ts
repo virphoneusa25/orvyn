@@ -115,6 +115,16 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
+  if (!failedGate && /\bhero\b[^.\n]{0,80}\bimage\b|\bimage\b[^.\n]{0,80}\bhero\b/i.test(input.instruction)) {
+    const imageFile = input.events.some((e) => e.type === "file.evidence" &&
+      /^image\//.test(String(e.data?.mimeType ?? "")) && Number(e.data?.size ?? 0) > 0 &&
+      e.data?.exists === true && e.data?.readable === true);
+    if (!imageFile) {
+      failedGate = "artifact";
+      reasons.push("No verified image file exists in the project workspace for the hero. Create or select a real image asset; CSS gradients alone do not satisfy this request.");
+    }
+  }
+
   // Keyword checks read the request's words, not its file names: "Create
   // local-test.txt" does not ask for a test run.
   const prose = input.instruction.replace(/[\w./\\-]+\.[A-Za-z0-9]{1,8}\b/g, " ");

@@ -14,6 +14,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@orvyn/ai-core": "file:../../packages/ai-core",
     "@pdf-lib/fontkit": "^1.1.1",
+    "@xmldom/xmldom": "^0.8.15",
     "cors": "^2.8.5",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",

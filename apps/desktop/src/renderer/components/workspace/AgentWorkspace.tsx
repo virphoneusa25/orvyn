@@ -116,6 +116,8 @@ export function AgentWorkspace({
   const listDisk = shouldListDisk(boundRoot, projectRoot);
   const review = useMemo(() => deriveReviewSummary(events, derived), [events, derived]);
   const running = runStatus === "running" || runStatus === "streaming" || runStatus === "working";
+  const websiteRun = events.some((event) => event.type === "run.started" && event.data?.requiresFrontend === true);
+  const previewPreparing = running && websiteRun && !events.some((event) => event.type === "preview.available");
   const [follow, setFollow] = useState<FollowController>(() => initialFollowState(running && layout.followOrion !== false));
   const [plusOpen, setPlusOpen] = useState(false);
   const [portsOpen, setPortsOpen] = useState(false);
@@ -265,9 +267,15 @@ export function AgentWorkspace({
     previewSeeded.current.add(key);
     void api.reload(plan.reloadId, { ignoreCache: true });
   }, [previewRevision, browserState.tabs, events, previewUrl]);
+  useEffect(() => {
+    if (previewUrl || !previewPreparing || !layout.followOrion || follow.paused || layout.activeTabId === "preview") return;
+    const tab = parseWorkbenchTab("preview");
+    onLayout({ rightPanelOpen: true, activeTab: "preview", activeTabId: tab.id, openTabIds: upsertTab(tabs, tab).map((item) => item.id) });
+  }, [previewUrl, previewPreparing, layout.followOrion, layout.activeTabId, follow.paused, tabs]);
 
   useEffect(() => {
     if (!followApplies(follow)) return;
+    if (previewPreparing && !previewUrl) return;
     const activity = derived.activity;
     if (!activity || activity.switchTab === false) return;
     const currentKind: AgentWorkspaceTab =
@@ -303,7 +311,7 @@ export function AgentWorkspace({
       openTabIds: merged.openTabIds,
       previewUrl: next.url ?? layout.previewUrl,
     });
-  }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId]);
+  }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId, previewPreparing]);
 
   useEffect(() => {
     const open = (e: Event) => {
@@ -649,6 +657,8 @@ export function AgentWorkspace({
               liveVersion={previewVersion}
               updating={running && active?.kind === "preview"}
               previewStopped={surface.previewStopped && !active?.url}
+              preparing={previewPreparing && !previewUrl}
+              buildFiles={derived.files.filter((file) => file.kind !== "read").map((file) => file.path)}
               sessionId={activeNative?.id}
               surfaceActive={browserish && !plusOpen && !portsOpen}
               onTabs={setBrowserState}
@@ -915,4 +925,3 @@ function WorkbenchBody({
     </div>
   );
 }
-
