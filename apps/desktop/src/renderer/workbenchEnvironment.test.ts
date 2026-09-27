@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle } from "./workbenchEnvironment.ts";
+import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle, workspaceChromeStatus } from "./workbenchEnvironment.ts";
 
 test("Workbench environment follows the current execution target", () => {
   assert.equal(resolveWorkbenchEnvironment({ executionActual: "local_host" }), "local");
@@ -9,4 +9,7 @@ test("Workbench environment follows the current execution target", () => {
   assert.equal(environmentLabel("cloud"), "Cloud");
   assert.equal(terminalTitle("cloud"), "Terminal · Cloud Worker");
   assert.equal(terminalTitle("sandbox", 2), "Terminal · Sandbox 2");
+  assert.equal(workspaceChromeStatus("local"), "Local Workspace");
+  assert.equal(workspaceChromeStatus("sandbox"), "Local Workspace");
+  assert.equal(workspaceChromeStatus("cloud"), "ORVYN Cloud");
 });

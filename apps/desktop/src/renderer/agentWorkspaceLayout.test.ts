@@ -9,8 +9,8 @@ import {
   visibleWorkspaceViews,
   workspaceMarkupContract,
 } from "./agentWorkspaceLayout.ts";
-import { followApplies, routeEvent, type WorkspaceEvent } from "./agentWorkspaceModel.ts";
-import { parseDesktopLayout, persistableLayout, toAgentWorkspaceLayout } from "./desktopLayout.ts";
+import { applyManualTab, followApplies, initialFollowState, resumeFollow, routeEvent, type WorkspaceEvent } from "./agentWorkspaceModel.ts";
+import { AGENT_PANEL_MIN, appGridTemplateColumns, CHAT_MIN, clampAgentPanelWidth, parseDesktopLayout, persistableLayout, SIDEBAR_WIDTH, toAgentWorkspaceLayout } from "./desktopLayout.ts";
 
 function ev(type: string, data: Record<string, unknown> = {}): WorkspaceEvent {
   return { id: type, type, timestamp: 1, data };
@@ -97,6 +97,37 @@ test("awaiting approval does not switch to Review and does not add a column", ()
   assert.equal(next.activeTab, "changes");
   assert.equal(next.columns, 1);
   assert.notEqual(next.activeTab, "review");
+});
+
+test("a manual Files click pauses Follow ORION so Browser cannot steal focus", () => {
+  let follow = applyManualTab(initialFollowState(true));
+  assert.equal(follow.paused, true);
+  assert.equal(followApplies(follow), false);
+  const browser = routeEvent(ev("browser.action", { tool: "browser_open", url: "https://virphone.example" }));
+  const held = nextWorkspaceLayout(
+    { open: true, width: 650, activeTab: "files", followOrion: follow.followOrion, followPaused: follow.paused },
+    browser
+  );
+  assert.equal(held.activeTab, "files");
+  assert.equal(held.columns, 1);
+  follow = resumeFollow();
+  assert.equal(followApplies(follow), true);
+  const resumed = nextWorkspaceLayout(
+    { open: true, width: 650, activeTab: "files", followOrion: follow.followOrion, followPaused: follow.paused },
+    browser
+  );
+  assert.equal(resumed.activeTab, "browser");
+  assert.equal(resumed.columns, 1);
+});
+
+test("resizing the Workbench keeps one panel and does not collapse chat", () => {
+  const width = clampAgentPanelWidth(1200, 1680);
+  assert.ok(width >= AGENT_PANEL_MIN);
+  assert.ok(1680 - SIDEBAR_WIDTH - width >= CHAT_MIN - 8);
+  const grid = appGridTemplateColumns({ workbenchOpen: true, overlay: false, workbenchWidth: width });
+  assert.match(grid, new RegExp(`minmax\\(${CHAT_MIN}px, 1fr\\)`));
+  assert.equal(countRightColumns({ rightPanelOpen: true }), 1);
+  assert.equal(agentPanelPlacement(1000, true), "overlay");
 });
 
 test("Follow ORION paused or off never changes tab or panel count", () => {

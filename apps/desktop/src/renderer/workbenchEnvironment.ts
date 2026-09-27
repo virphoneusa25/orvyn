@@ -22,6 +22,11 @@ export function environmentLabel(env: WorkbenchEnvironment): string {
   return "Local";
 }
 
+/** Short status under the project name in the Workbench header. */
+export function workspaceChromeStatus(env: WorkbenchEnvironment): "Local Workspace" | "ORVYN Cloud" {
+  return env === "cloud" ? "ORVYN Cloud" : "Local Workspace";
+}
+
 export function terminalTitle(env: WorkbenchEnvironment, index = 1): string {
   const base =
     env === "cloud" ? "Terminal · Cloud Worker" : env === "sandbox" ? "Terminal · Sandbox" : "Terminal · Local";

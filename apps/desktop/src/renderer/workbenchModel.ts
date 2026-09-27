@@ -151,6 +151,60 @@ export function upsertTab(tabs: WorkbenchTab[], tab: WorkbenchTab): WorkbenchTab
   return [...tabs, tab];
 }
 
+export interface WorkbenchBrowserSeed {
+  id: string;
+  kind: string;
+  title?: string;
+  url?: string;
+}
+
+/**
+ * Tabs that belong on the single Workbench row.
+ * Nothing is pinned until it is opened. Browser pages append on that same row.
+ */
+export function assembleWorkbenchTabs(input: {
+  openTabIds: string[];
+  activeTabId?: string;
+  previewUrl?: string;
+  browserTabs?: WorkbenchBrowserSeed[];
+}): WorkbenchTab[] {
+  const list: WorkbenchTab[] = [];
+  const seen = new Set<string>();
+  const pushId = (id: string) => {
+    if (!id || seen.has(id)) return;
+    const tab = parseWorkbenchTab(id);
+    if (!tab.id) return;
+    seen.add(tab.id);
+    list.push(tab);
+  };
+  for (const id of input.openTabIds) pushId(id);
+  if (input.activeTabId) pushId(input.activeTabId);
+  for (const page of input.browserTabs ?? []) {
+    if (page.kind !== "browser" || !page.id) continue;
+    const id = page.id.startsWith("browser:") ? page.id : `browser:${page.id}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const title = page.url ? truncateTabTitle(page.title || page.url) : page.title || "Browser";
+    list.push({ id, kind: "browser", title, closable: true, url: page.url });
+  }
+  const previewUrl = input.previewUrl?.trim();
+  return list.map((tab) => {
+    if (tab.id === "preview" && previewUrl) return { ...tab, url: previewUrl };
+    if (tab.kind !== "browser" || !tab.id.startsWith("browser:")) return tab;
+    const nativeId = tab.id.slice("browser:".length);
+    const page = input.browserTabs?.find((b) => b.id === nativeId || b.id === tab.id);
+    if (!page) return tab;
+    const title = page.url ? truncateTabTitle(page.title || page.url) : page.title || tab.title;
+    return { ...tab, title, url: page.url || tab.url };
+  });
+}
+
+export function resolveActiveWorkbenchTabId(tabs: WorkbenchTab[], activeTabId: string): string {
+  if (activeTabId && tabs.some((t) => t.id === activeTabId)) return activeTabId;
+  if (activeTabId.startsWith("preview:") && tabs.some((t) => t.id === "preview")) return "preview";
+  return tabs[0]?.id ?? "";
+}
+
 export function closeTab(tabs: WorkbenchTab[], id: string, activeId: string): { tabs: WorkbenchTab[]; activeId: string } {
   const next = tabs.filter((t) => t.id !== id || !t.closable);
   if (next.length === tabs.length) return { tabs, activeId };

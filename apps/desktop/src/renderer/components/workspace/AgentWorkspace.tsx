@@ -23,26 +23,43 @@ import {
 } from "../../desktopLayout";
 import {
   artifactTabId,
+  assembleWorkbenchTabs,
   closeTab,
   diffTabId,
   fileTabId,
   followWorkbenchTab,
   nextTerminalTabId,
   parseWorkbenchTab,
-  truncateTabTitle,
+  resolveActiveWorkbenchTabId,
   upsertTab,
-  WORKBENCH_CORE_TABS,
   WORKBENCH_TABBAR_TEST_ID,
   WORKBENCH_TEST_ID,
   type WorkbenchTab,
+  type WorkbenchTabKind,
 } from "../../workbenchModel";
 import { isFabricatedGeneratedPath } from "../../workbenchFileAccess";
-import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle } from "../../workbenchEnvironment";
+import { environmentLabel, resolveWorkbenchEnvironment, terminalTitle, workspaceChromeStatus } from "../../workbenchEnvironment";
 import { readComposerDefaults } from "../../composerSettings";
 import { isCloudBackend, getConnectionConfig } from "../../connection";
 import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
-import { IconClose, IconCrosshair, IconExpand, IconGlobe, IconLayout, IconPlug, IconPlus } from "../Icons";
+import {
+  IconCheck,
+  IconClose,
+  IconCrosshair,
+  IconExpand,
+  IconFile,
+  IconFolder,
+  IconGit,
+  IconGlobe,
+  IconImage,
+  IconList,
+  IconMonitor,
+  IconPlug,
+  IconPlus,
+  IconServer,
+  IconTerminal,
+} from "../Icons";
 import type { WorkbenchBrowserState } from "../../orvyn-bridge";
 import { ArtifactView } from "./ArtifactView";
 import { BrowserWorkbench } from "./BrowserWorkbench";
@@ -59,7 +76,7 @@ import { useWorkbenchPorts } from "./useWorkbenchPorts";
 import { WorkbenchLauncher } from "./WorkbenchLauncher";
 import { WORKBENCH_Z, WorkbenchPopover } from "./WorkbenchOverlay";
 import { usePlusQuery, WorkbenchPlusMenu } from "./WorkbenchPlusMenu";
-import { iconBtn, splitHandle, tabBtn } from "./workspaceChrome";
+import { headerIconBtn, splitHandle, tabBtn } from "./workspaceChrome";
 
 export function AgentWorkspacePanel(props: Parameters<typeof AgentWorkspace>[0]) {
   return <AgentWorkspace {...props} />;
@@ -100,6 +117,8 @@ export function AgentWorkspace({
   const [dragging, setDragging] = useState(false);
   const start = useRef({ x: 0, width: layout.agentPanelWidth });
   const previewSeeded = useRef(new Set<string>());
+  const followRef = useRef(follow);
+  followRef.current = follow;
   const desktopLive = events.some((e) => String(e.type).startsWith("desktop.") && e.type !== "desktop.completed" && e.type !== "desktop.failed");
 
   const executionActual = [...events].reverse().find((e) => e.type === "run.execution")?.data?.executionTargetActual
@@ -118,28 +137,14 @@ export function AgentWorkspace({
     return derived.previews.length > 0 ? 1 : 0;
   }, [events, derived.previews.length]);
 
-  const tabs = useMemo(() => {
-    const previewUrl = derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined;
-    const coreIds = new Set(WORKBENCH_CORE_TABS.map((t) => t.id));
-    let list: WorkbenchTab[] = WORKBENCH_CORE_TABS.map((t) => (t.id === "preview" && previewUrl ? { ...t, url: previewUrl } : { ...t }));
-    for (const id of layout.openTabIds) {
-      if (coreIds.has(id) || id.startsWith("preview:")) continue;
-      list = upsertTab(list, parseWorkbenchTab(id));
-    }
-    for (const t of browserState.tabs.filter((x) => x.kind === "browser")) {
-      list = upsertTab(list, {
-        id: `browser:${t.id}`,
-        kind: "browser",
-        title: t.url ? truncateTabTitle(t.title || t.url) : "Browser",
-        closable: true,
-        url: t.url,
-      });
-    }
-    return list;
-  }, [layout.openTabIds, layout.previewUrl, derived.previews, browserState.tabs]);
+  const tabs = useMemo(() => assembleWorkbenchTabs({
+    openTabIds: layout.openTabIds,
+    activeTabId: layout.activeTabId,
+    previewUrl: derived.previews[derived.previews.length - 1]?.url || layout.previewUrl || undefined,
+    browserTabs: browserState.tabs,
+  }), [layout.openTabIds, layout.activeTabId, layout.previewUrl, derived.previews, browserState.tabs]);
 
-  const wantedId = layout.activeTabId.startsWith("preview:") ? "preview" : layout.activeTabId;
-  const activeId = tabs.some((t) => t.id === wantedId) ? wantedId : "preview";
+  const activeId = resolveActiveWorkbenchTabId(tabs, layout.activeTabId);
   const active = tabs.find((t) => t.id === activeId);
   const emptyWorkbench = !active;
   const overlay = shouldOverlayAgentPanel(viewportWidth);
@@ -182,6 +187,10 @@ export function AgentWorkspace({
     const latest = derived.previews[derived.previews.length - 1];
     if (!latest?.url) return;
     const previewTab = { id: "preview", kind: "preview" as const, title: "Preview", closable: false, url: latest.url };
+    const revealPreview = () => {
+      if (!followApplies(followRef.current)) return;
+      activate(previewTab, false);
+    };
     const existing = browserState.tabs.find((t) => t.kind === "preview");
     if (existing) {
       if (!urlsMatch(existing.url, latest.url)) {
@@ -190,20 +199,20 @@ export function AgentWorkspace({
         previewSeeded.current.add(key);
         void api.navigate(existing.id, latest.url).then((state) => {
           setBrowserState(state);
-          activate(previewTab, false);
+          revealPreview();
         });
         return;
       }
       if (previewSeeded.current.has(latest.url)) return;
       previewSeeded.current.add(latest.url);
-      activate(previewTab, false);
+      revealPreview();
       return;
     }
     if (previewSeeded.current.has(latest.url)) return;
     previewSeeded.current.add(latest.url);
     void api.create("preview", latest.url).then((state) => {
       setBrowserState(state);
-      activate(previewTab, false);
+      revealPreview();
     });
   }, [derived.previews, browserState.tabs]);
 
@@ -369,6 +378,7 @@ export function AgentWorkspace({
       data-testid={WORKBENCH_TEST_ID}
       data-right-columns={countRightColumns({ rightPanelOpen: true })}
       data-active-tab={activeId}
+      data-follow-state={follow.paused ? "paused" : followActive ? "on" : "off"}
       style={{
         display: "flex",
         height: "100%",
@@ -394,20 +404,57 @@ export function AgentWorkspace({
         style={splitHandle(dragging)}
       />
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <div data-testid={WORKBENCH_TABBAR_TEST_ID} style={{ display: "flex", alignItems: "center", height: 36, borderBottom: "1px solid var(--orvyn-border-soft)", padding: "0 4px", minWidth: 0, position: "relative", zIndex: WORKBENCH_Z.tabbar }}>
-          <div style={{ display: "flex", alignItems: "center", overflowX: "auto", flex: 1, minWidth: 0 }}>
+        <div
+          data-testid="workbench-header"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            height: 36,
+            gap: 8,
+            padding: "0 6px 0 12px",
+            borderBottom: "1px solid var(--orvyn-border-soft)",
+            minWidth: 0,
+            flexShrink: 0,
+            position: "relative",
+            zIndex: WORKBENCH_Z.tabbar,
+          }}
+        >
+          <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", lineHeight: 1.15 }}>
+            <span
+              data-testid="workbench-project"
+              style={{ fontSize: 13, fontWeight: 600, color: "var(--orvyn-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {projectName?.trim() || "Workspace"}
+            </span>
+            <span data-testid="workbench-status" style={{ fontSize: 11, color: "var(--orvyn-text-muted)" }}>
+              {workspaceChromeStatus(environment)}
+            </span>
+          </div>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+            <button
+              data-testid="workbench-follow"
+              title={follow.paused ? "Resume Follow ORION" : "Follow ORION"}
+              style={{ ...headerIconBtn(followActive || follow.paused, "violet"), opacity: follow.paused ? 0.5 : 1 }}
+              onClick={() => {
+                const next = follow.paused ? resumeFollow() : toggleFollow(follow);
+                setFollow(next);
+                onLayout({ followOrion: next.followOrion });
+              }}
+            >
+              <IconCrosshair size={14} />
+            </button>
             <button
               ref={plusBtnRef}
               data-testid="workbench-plus"
-              title="Open Workbench tool"
-              style={iconBtn(plusOpen)}
+              title="Open tool"
+              style={headerIconBtn(plusOpen, "cyan")}
               onClick={() => {
                 setPlusOpen((v) => !v);
                 setPortsOpen(false);
                 plusQuery.setQuery("");
               }}
             >
-              <IconPlus size={13} />
+              <IconPlus size={14} />
             </button>
             <WorkbenchPopover open={plusOpen} anchor={plusBtnRef.current} onClose={() => setPlusOpen(false)} testId="workbench-plus-menu" width={280}>
               <WorkbenchPlusMenu
@@ -425,62 +472,11 @@ export function AgentWorkspace({
                 }}
               />
             </WorkbenchPopover>
-            {tabs.map((t) => {
-              const native = matchingNativeTab(browserState, t);
-              return (
-                <button
-                  key={t.id}
-                  data-tab={t.id}
-                  onClick={() => activate(t, true)}
-                  onAuxClick={(e) => {
-                    if (e.button === 1 && t.closable) close(t.id);
-                  }}
-                  style={{ ...tabBtn(t.id === activeId), height: 36, padding: "0 12px" }}
-                >
-                  {t.kind === "desktop" && desktopLive && (
-                    <span title="Desktop live" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--orvyn-cyan)", marginRight: 6, display: "inline-block" }} />
-                  )}
-                  {(t.kind === "browser" || t.kind === "preview") && (
-                    <span style={{ marginRight: 6, display: "inline-flex", alignItems: "center" }}>
-                      {native?.favicon ? <img src={native.favicon} alt="" width={12} height={12} /> : <IconGlobe size={12} />}
-                      {native?.loading && (
-                        <span title="Loading" style={{ width: 6, height: 6, borderRadius: 99, background: "var(--orvyn-cyan)", marginLeft: 4, display: "inline-block" }} />
-                      )}
-                    </span>
-                  )}
-                  {t.title}
-                  {t.id === "preview" && previewVersion > 0 && (
-                    <span data-testid="preview-live" style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, letterSpacing: 0.4, color: "#6ee7b7" }}>Live</span>
-                  )}
-                  {t.closable && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        close(t.id);
-                      }}
-                      style={{ marginLeft: 6, opacity: 0.65 }}
-                    >
-                      ×
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
-            {follow.paused && follow.followOrion && <span style={{ fontSize: 10, color: "var(--orvyn-yellow)" }}>Follow paused</span>}
-            <button title={follow.paused ? "Resume following ORION" : "Follow ORION"} style={iconBtn(followActive)} onClick={() => {
-              const next = follow.paused ? resumeFollow() : toggleFollow(follow);
-              setFollow(next);
-              onLayout({ followOrion: next.followOrion });
-            }}>
-              <IconCrosshair size={14} />
-            </button>
             <button
               ref={portsBtnRef}
               data-testid="workbench-ports-btn"
-              title="Ports and previews"
-              style={iconBtn(portsOpen)}
+              title="Ports"
+              style={headerIconBtn(portsOpen, "cyan")}
               onClick={() => { setPortsOpen((v) => !v); setPlusOpen(false); }}
             >
               <IconPlug size={14} />
@@ -507,19 +503,73 @@ export function AgentWorkspace({
                 onClose={() => setPortsOpen(false)}
               />
             </WorkbenchPopover>
-            <button title="Maximize Workbench" style={iconBtn(layout.expandedPreview)} onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}>
+            <button title="Expand Workbench" style={headerIconBtn(layout.expandedPreview, "cyan")} onClick={() => onLayout({ expandedPreview: !layout.expandedPreview })}>
               <IconExpand size={14} />
             </button>
-            <button title="Workbench layout" style={iconBtn()} onClick={() => onLayout({ agentPanelWidth: layout.agentPanelWidth >= 780 ? 520 : 780 })}>
-              <IconLayout size={14} />
-            </button>
-            <button title="Close Workbench" style={iconBtn()} onClick={() => {
-              void window.orvyn.browser?.setVisible(false);
-              onLayout({ rightPanelOpen: false });
-            }}>
-              <IconClose size={13} />
+            <button
+              data-testid="workbench-close"
+              title="Close panel"
+              style={headerIconBtn(false)}
+              onClick={() => {
+                void window.orvyn.browser?.setVisible(false);
+                onLayout({ rightPanelOpen: false });
+              }}
+            >
+              <IconClose size={14} />
             </button>
           </span>
+        </div>
+        <div
+          data-testid={WORKBENCH_TABBAR_TEST_ID}
+          style={{
+            display: tabs.length > 0 ? "flex" : "none",
+            alignItems: "stretch",
+            height: tabs.length > 0 ? 34 : 0,
+            borderBottom: tabs.length > 0 ? "1px solid var(--orvyn-border-soft)" : "none",
+            minWidth: 0,
+            flexShrink: 0,
+            position: "relative",
+            zIndex: WORKBENCH_Z.tabbar,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "stretch", overflowX: "auto", flex: 1, minWidth: 0, scrollbarWidth: "thin" }}>
+            {tabs.map((t) => {
+              const native = matchingNativeTab(browserState, t);
+              const selected = t.id === activeId;
+              return (
+                <button
+                  key={t.id}
+                  data-tab={t.id}
+                  data-closable={t.closable ? "true" : "false"}
+                  title={t.title}
+                  onClick={() => activate(t, true)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1 && t.closable) close(t.id);
+                  }}
+                  style={tabBtn(selected)}
+                >
+                  <TabGlyph tab={t} favicon={native?.favicon} loading={native?.loading} desktopLive={desktopLive} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{t.title}</span>
+                  {t.id === "preview" && previewVersion > 0 && (
+                    <span data-testid="preview-live" style={{ flexShrink: 0, fontSize: 10, fontWeight: 650, color: "#6ee7b7" }}>Live</span>
+                  )}
+                  {t.closable && (
+                    <span
+                      data-tab-close={t.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        close(t.id);
+                      }}
+                      style={{ flexShrink: 0, opacity: 0.7, fontSize: 13, lineHeight: 1, marginLeft: 2 }}
+                    >
+                      ×
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative", zIndex: WORKBENCH_Z.content }}>
           {emptyWorkbench && (
@@ -588,6 +638,50 @@ export function AgentWorkspace({
         </div>
       </div>
     </div>
+  );
+}
+
+const TAB_ICONS: Partial<Record<WorkbenchTabKind, React.ComponentType<{ size?: number }>>> = {
+  changes: IconGit,
+  files: IconFolder,
+  file: IconFile,
+  diff: IconGit,
+  terminal: IconTerminal,
+  browser: IconGlobe,
+  preview: IconGlobe,
+  desktop: IconMonitor,
+  environment: IconServer,
+  artifact: IconImage,
+  review: IconCheck,
+  plan: IconList,
+  docs: IconFile,
+};
+
+function TabGlyph({
+  tab,
+  favicon,
+  loading,
+  desktopLive,
+}: {
+  tab: WorkbenchTab;
+  favicon?: string;
+  loading?: boolean;
+  desktopLive: boolean;
+}) {
+  if ((tab.kind === "browser" || tab.kind === "preview") && favicon) {
+    return <img src={favicon} alt="" width={13} height={13} style={{ flexShrink: 0, borderRadius: 2 }} />;
+  }
+  const Icon = TAB_ICONS[tab.kind] ?? IconFile;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, position: "relative" }}>
+      <Icon size={13} />
+      {tab.kind === "desktop" && desktopLive && (
+        <span title="Desktop live" style={{ position: "absolute", top: -2, right: -3, width: 5, height: 5, borderRadius: 99, background: "var(--orvyn-cyan)" }} />
+      )}
+      {loading && (
+        <span title="Loading" style={{ position: "absolute", top: -2, right: -3, width: 5, height: 5, borderRadius: 99, background: "var(--orvyn-cyan)" }} />
+      )}
+    </span>
   );
 }
 

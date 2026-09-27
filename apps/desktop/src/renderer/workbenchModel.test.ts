@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   artifactTabId,
+  assembleWorkbenchTabs,
   closeTab,
   diffTabId,
   fileTabId,
@@ -10,6 +11,7 @@ import {
   parseWorkbenchTab,
   previewTabId,
   rememberUrl,
+  resolveActiveWorkbenchTabId,
   truncateTabTitle,
   upsertTab,
   workbenchMarkupContract,
@@ -100,6 +102,36 @@ test("pinned workbench tabs stay; closing the last dynamic tab does not open a s
   const next = closeTab([parseWorkbenchTab("files"), parseWorkbenchTab(fileTabId("src/App.tsx"))], fileTabId("src/App.tsx"), fileTabId("src/App.tsx"));
   assert.deepEqual(next.tabs.map((t) => t.id), ["files"]);
   assert.equal(next.activeId, "files");
+});
+
+test("an empty Workbench has no tabs, and opened tools share one row", () => {
+  assert.deepEqual(assembleWorkbenchTabs({ openTabIds: [], activeTabId: "" }), []);
+  const tools = assembleWorkbenchTabs({
+    openTabIds: ["files", "terminal", "browser", "changes"],
+    activeTabId: "files",
+  });
+  assert.deepEqual(tools.map((t) => t.id), ["files", "terminal", "browser", "changes"]);
+  assert.equal(new Set(tools.map((t) => t.kind)).size, 4);
+  const withFiles = assembleWorkbenchTabs({
+    openTabIds: ["files", fileTabId("index.html"), fileTabId("styles.css")],
+    activeTabId: fileTabId("styles.css"),
+  });
+  assert.deepEqual(withFiles.map((t) => t.id), ["files", "file:index.html", "file:styles.css"]);
+  assert.equal(withFiles.filter((t) => t.kind === "file").length, 2);
+  assert.equal(resolveActiveWorkbenchTabId(withFiles, fileTabId("styles.css")), "file:styles.css");
+  assert.equal(withFiles.filter((t) => t.kind === "file").every((t) => t.closable), true);
+  assert.equal(withFiles.find((t) => t.id === "files")?.closable, false);
+});
+
+test("dynamic preview, diff, and browser pages stay on the same tab list", () => {
+  const tabs = assembleWorkbenchTabs({
+    openTabIds: ["changes", diffTabId("index.html"), previewTabId("http://127.0.0.1:43191")],
+    activeTabId: "changes",
+    browserTabs: [{ id: "page-1", kind: "browser", title: "VirPhone Website", url: "https://virphone.example" }],
+  });
+  assert.deepEqual(tabs.map((t) => t.kind), ["changes", "diff", "preview", "browser"]);
+  assert.equal(tabs.find((t) => t.kind === "browser")?.title, "VirPhone Website");
+  assert.equal(tabs.filter((t) => t.id === "changes").length, 1);
 });
 
 test("DOM contract: one workbench, one tab bar, no inspector", () => {

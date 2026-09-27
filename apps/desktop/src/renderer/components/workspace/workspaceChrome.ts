@@ -23,17 +23,30 @@ export function emptyBody(): React.CSSProperties {
 }
 
 export function iconBtn(active = false): React.CSSProperties {
+  return headerIconBtn(active, "cyan");
+}
+
+/** 28px header control. Follow ORION uses the violet accent; selection uses cyan. */
+export function headerIconBtn(active = false, accent: "cyan" | "violet" = "cyan"): React.CSSProperties {
+  const background = !active
+    ? "transparent"
+    : accent === "violet"
+      ? "rgba(124,92,255,0.22)"
+      : "rgba(34,211,238,0.12)";
+  const color = !active ? "var(--orvyn-text-muted)" : accent === "violet" ? "#c4b5fd" : "var(--orvyn-cyan)";
   return {
-    background: active ? "rgba(108,92,255,0.16)" : "transparent",
+    background,
     border: "none",
-    color: active ? "var(--orvyn-cyan)" : "var(--orvyn-text-muted)",
-    width: 26,
-    height: 26,
+    color,
+    width: 28,
+    height: 28,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
     borderRadius: 6,
+    flexShrink: 0,
+    padding: 0,
   };
 }
 
@@ -51,21 +64,22 @@ export function ghostBtn(): React.CSSProperties {
 
 export function tabBtn(active: boolean): React.CSSProperties {
   return {
-    background: active ? "linear-gradient(180deg, rgba(124,92,255,0.28), rgba(34,211,238,0.1))" : "transparent",
+    background: active ? "rgba(34,211,238,0.08)" : "transparent",
     border: "none",
-    borderBottom: active ? "2px solid #7dd3fc" : "2px solid transparent",
-    boxShadow: active ? "inset 0 1px 0 rgba(196,181,253,0.45)" : "none",
-    borderRadius: active ? "7px 7px 0 0" : 0,
+    borderBottom: active ? "2px solid var(--orvyn-cyan, #22d3ee)" : "2px solid transparent",
+    borderRadius: 0,
     color: active ? "var(--orvyn-text)" : "var(--orvyn-text-muted)",
-    fontSize: 11.5,
-    fontWeight: active ? 650 : 500,
+    fontSize: 12.5,
+    fontWeight: active ? 600 : 500,
     padding: "0 10px",
-    height: "100%",
+    height: 34,
+    maxWidth: 168,
+    minWidth: 0,
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    whiteSpace: "nowrap",
+    flex: "0 0 auto",
   };
 }
 
