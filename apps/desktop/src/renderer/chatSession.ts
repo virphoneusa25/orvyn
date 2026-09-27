@@ -238,18 +238,125 @@ export function getActiveChat(): ChatSession | null {
   return active();
 }
 
-export function openChatSession(id: string): void {
-  const chat = sessions.find((s) => s.id === id);
-  if (chat) {
-    activeId = id;
-    emit();
-    // The backend holds the conversation; bring this chat up to date with it.
-    if (chat.sessionId) mirror?.load(chat.sessionId);
+/** Reconnect of one chat to its backend WorkSession. Not persisted — the session record is. */
+export type SessionRestoreState = "restoring" | "ready" | "failed";
+
+export interface CanonicalWorkSession {
+  sessionId: string;
+  projectId: string | null;
+  workspaceId: string | null;
+  projectRoot: string | null;
+  runIds: string[];
+  activeRunId: string | null;
+  files?: { path: string; operation: string }[];
+  preview?: { url: string; available?: boolean } | null;
+}
+
+const restoreState = new Map<string, SessionRestoreState>();
+const restoreGen = new Map<string, number>();
+const restoredView = new Map<string, CanonicalWorkSession>();
+
+export function sessionRestoreState(chatId: string | null = activeId): SessionRestoreState {
+  if (!chatId) return "ready";
+  const chat = sessions.find((s) => s.id === chatId);
+  if (!chat?.sessionId) return "ready";
+  return restoreState.get(chatId) ?? "restoring";
+}
+
+/** An agent run may start only after this chat's WorkSession has been fetched. */
+export function canStartAgentRun(chatId: string | null = activeId): boolean {
+  return sessionRestoreState(chatId) === "ready";
+}
+
+/** Why Send must stay disabled, or null when a follow-up may use this chat. */
+export function agentRunRestoreError(chatId: string | null = activeId): string | null {
+  const chat = chatId ? sessions.find((s) => s.id === chatId) : active();
+  if (!chat?.sessionId || canStartAgentRun(chat.id)) return null;
+  return sessionRestoreState(chat.id) === "failed"
+    ? "This conversation could not be restored. Reopen it to reconnect before sending."
+    : "Restoring this conversation. Send is available once it reconnects.";
+}
+
+/** Canonical ids a follow-up run must send. Null until restore is ready. */
+export function followUpRunBinding(chatId: string | null = activeId): { sessionId: string; projectId?: string; workspaceId?: string; projectRoot: string | null; previousRunId: string | null } | null {
+  const chat = chatId ? sessions.find((s) => s.id === chatId) : active();
+  if (!chat?.sessionId || !canStartAgentRun(chat.id)) return null;
+  return {
+    sessionId: chat.sessionId,
+    projectId: chat.projectId,
+    workspaceId: chat.workspaceId,
+    projectRoot: chat.projectRoot ?? null,
+    previousRunId: chat.runId ?? null,
+  };
+}
+
+export function restoredWorkSession(chatId: string | null = activeId): CanonicalWorkSession | null {
+  if (!chatId || sessionRestoreState(chatId) !== "ready") return null;
+  return restoredView.get(chatId) ?? null;
+}
+
+export function beginSessionRestore(chatId: string): number {
+  const gen = (restoreGen.get(chatId) ?? 0) + 1;
+  restoreGen.set(chatId, gen);
+  restoreState.set(chatId, "restoring");
+  emit();
+  return gen;
+}
+
+/** Write the backend session over the local cache. Stale generations are ignored. */
+export function completeSessionRestore(chatId: string, gen: number, canonical: CanonicalWorkSession): boolean {
+  if (restoreGen.get(chatId) !== gen) return false;
+  for (const s of sessions) {
+    if (s.id !== chatId && s.sessionId !== canonical.sessionId) continue;
+    s.sessionId = canonical.sessionId;
+    s.projectId = canonical.projectId ?? undefined;
+    s.workspaceId = canonical.workspaceId ?? undefined;
+    s.projectRoot = canonical.projectRoot ?? undefined;
+    s.runIds = [...canonical.runIds];
+    s.runId = canonical.activeRunId ?? canonical.runIds[canonical.runIds.length - 1];
   }
+  restoreState.set(chatId, "ready");
+  restoredView.set(chatId, canonical);
+  persist();
+  emit();
+  return true;
+}
+
+export function failSessionRestore(chatId: string, gen: number): void {
+  if (restoreGen.get(chatId) !== gen) return;
+  restoreState.set(chatId, "failed");
+  emit();
+}
+
+function noteSessionReady(chatId: string): void {
+  if (restoreState.get(chatId) === "restoring") return;
+  restoreState.set(chatId, "ready");
+}
+
+export function openChatSession(id: string): Promise<"ready" | "failed" | "none"> {
+  const chat = sessions.find((s) => s.id === id);
+  if (!chat) return Promise.resolve("none");
+  activeId = id;
+  emit();
+  if (!chat.sessionId) {
+    noteSessionReady(chat.id);
+    return Promise.resolve("none");
+  }
+  const gen = beginSessionRestore(chat.id);
+  if (!mirror?.restore) {
+    failSessionRestore(chat.id, gen);
+    return Promise.resolve("failed");
+  }
+  return mirror.restore(chat.sessionId, chat.id, gen);
 }
 
 /** Changes made here are mirrored to the backend session (which is authoritative). */
-type SessionMirror = { patch(sessionId: string, patch: { title?: string; status?: string; pinned?: boolean }): void; remove(sessionId: string): void; load(sessionId: string): void };
+type SessionMirror = {
+  patch(sessionId: string, patch: { title?: string; status?: string; pinned?: boolean }): void;
+  remove(sessionId: string): void;
+  load(sessionId: string): void;
+  restore?(sessionId: string, chatId: string, gen: number): Promise<"ready" | "failed">;
+};
 let mirror: SessionMirror | null = null;
 export function setSessionMirror(m: SessionMirror | null): void {
   mirror = m;
@@ -361,11 +468,13 @@ export function bindChatWorkspace(chatId: string, binding: {
     && s.projectRoot === binding.projectRoot
     && s.workspaceCreated === created
     && (!binding.sessionId || s.sessionId === binding.sessionId);
+  if (restoreState.get(s.id) === "restoring") return;
   if (binding.sessionId) s.sessionId = binding.sessionId;
   s.projectId = binding.projectId;
   s.workspaceId = binding.workspaceId;
   s.projectRoot = binding.projectRoot;
   s.workspaceCreated = created;
+  noteSessionReady(s.id);
   if (unchanged) return;
   persist();
   emit();
@@ -541,6 +650,7 @@ export function bindChatToRun(chatId: string, sessionId: string | undefined, run
   const session = sessions.find((s) => s.id === chatId);
   if (!session) return;
   if (sessionId) session.sessionId = sessionId;
+  noteSessionReady(session.id);
   // The run's instruction is a message of the conversation (the backend stored it with the same id).
   if (message?.id && !session.messages.some((m) => m.id === message.id)) session.messages = [...session.messages, message];
   if (runId) {
@@ -666,6 +776,27 @@ export function getChat(id: string): ChatSession | null {
 export function flushChats(): void {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   void window.orvyn?.chats?.save(snapshot()).catch(() => {});
+}
+
+/** Test hook: empty the in-memory cache the way a fresh process starts. */
+export function resetChatStoreForTests(): void {
+  sessions = [];
+  activeId = null;
+  loaded = false;
+  streaming = false;
+  streamingChatId = null;
+  restoreState.clear();
+  restoreGen.clear();
+  restoredView.clear();
+}
+
+/** Test hook: the on-disk cache after a restart, before the backend is asked. */
+export function seedChatCacheForTests(list: ChatSession[]): void {
+  sessions = list.map((s) => ({ ...s, messages: s.messages.map((m) => ({ ...m })) }));
+  activeId = null;
+  restoreState.clear();
+  restoreGen.clear();
+  restoredView.clear();
 }
 
 export function newChat(): void {

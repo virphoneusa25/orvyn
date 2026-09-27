@@ -12,7 +12,7 @@
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { noteActiveRunId } from "./connectionRuntime";
-import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, upsertAssistantActivity, retractAssistantText, type ChatMessage } from "./chatSession";
+import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, upsertAssistantActivity, retractAssistantText, agentRunRestoreError, followUpRunBinding, type ChatMessage } from "./chatSession";
 import { createSession } from "./sessionsApi";
 import { wsUrl } from "./connection";
 import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
@@ -136,15 +136,17 @@ function streamChatTurn(
  * again and the new reply replaces the old one (here and in the session).
  */
 export function regenerateLastReply(settings: Pick<OrvynCommand, "requestedModelId" | "reasoningEffort" | "projectRoot"> = { projectRoot: null }): boolean {
+  if (restoreBlock()) return false;
   const turn = beginRegenerate();
   if (!turn) return false;
+  const binding = followUpRunBinding();
   const chat = getActiveChat();
   streamChatTurn(
-    { prompt: turn.user.content, projectRoot: settings.projectRoot ?? null, requestedModelId: settings.requestedModelId, reasoningEffort: settings.reasoningEffort },
+    { prompt: turn.user.content, projectRoot: binding?.projectRoot ?? settings.projectRoot ?? null, requestedModelId: settings.requestedModelId, reasoningEffort: settings.reasoningEffort },
     turn.history,
     turn.user,
     turn.reply,
-    Promise.resolve(chat?.sessionId),
+    Promise.resolve(binding?.sessionId ?? chat?.sessionId),
     turn.replacedId,
   );
   return true;
@@ -211,7 +213,18 @@ export function isBuiltInWorkspace(root: string | null): boolean {
   return norm.includes("appdata") && norm.includes("@orvyn") && norm.endsWith("workspace");
 }
 
+function restoreBlock(): CommandOutcome | null {
+  const error = agentRunRestoreError();
+  return error ? { kind: "error", error } : null;
+}
+
 export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutcome> {
+  const blocked = restoreBlock();
+  if (blocked) return blocked;
+  const binding = followUpRunBinding();
+  if (binding) {
+    cmd = { ...cmd, projectRoot: binding.projectRoot, previousRunId: binding.previousRunId ?? cmd.previousRunId ?? null };
+  }
   const prompt = cmd.prompt.trim();
   const host = new URL(getConnectionConfig().backendUrl).hostname;
   const generatedFile = looksLikeGeneratedFileRequest(prompt);

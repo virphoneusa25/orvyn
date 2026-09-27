@@ -1,6 +1,7 @@
 // The backend's durable WorkSessions (authoritative for conversations).
 import { apiUrl, authHeaders } from "./connection";
 import { applyBackendMessages, getActiveChat, initChatHistory, mergeBackendSessions, setSessionMirror, type BackendMessageLike, type BackendSessionLike } from "./chatSession";
+import { restoreWorkSessionFromBackend } from "./sessionRestore";
 
 export async function fetchSessions(): Promise<BackendSessionLike[]> {
   const res = await fetch(apiUrl("/sessions"), { headers: authHeaders() });
@@ -77,6 +78,41 @@ export function sameRoot(a: string | null | undefined, b: string | null | undefi
   return Boolean(a && b) && norm(a!) === norm(b!);
 }
 
+/** The WorkSession record. Null when the backend has no such session. */
+export async function fetchSession(sessionId: string): Promise<BackendSessionLike | null> {
+  try {
+    const res = await fetch(apiUrl(`/sessions/${encodeURIComponent(sessionId)}`), { headers: authHeaders() });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { session?: BackendSessionLike };
+    return body.session ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Opening a chat: the backend WorkSession replaces the local cache, then a
+ * new agent run is allowed. Messages and the session record both have to load.
+ */
+export function restoreWorkSession(sessionId: string, chatId: string, gen: number): Promise<"ready" | "failed"> {
+  return restoreWorkSessionFromBackend({
+    sessionId,
+    chatId,
+    gen,
+    get: async (path) => {
+      try {
+        const res = await fetch(apiUrl(path), { headers: authHeaders() });
+        if (!res.ok) return { ok: false, body: null };
+        const body = await res.json();
+        if (path.endsWith("/messages")) applyBackendMessages(sessionId, (body as { messages?: BackendMessageLike[] }).messages ?? []);
+        return { ok: true, body };
+      } catch {
+        return { ok: false, body: null };
+      }
+    },
+  });
+}
+
 /** A session's messages, in order, merged into its chat. */
 export async function loadSessionMessages(sessionId: string): Promise<number> {
   try {
@@ -96,4 +132,5 @@ setSessionMirror({
   patch: (id, p) => void patchSession(id, p),
   remove: (id) => void deleteSession(id),
   load: (id) => void loadSessionMessages(id),
+  restore: (id, chatId, gen) => restoreWorkSession(id, chatId, gen),
 });

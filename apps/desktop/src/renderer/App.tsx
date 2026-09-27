@@ -39,8 +39,8 @@ import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConn
 import { describeConnection, heroStatusLine } from "./connectionState";
 import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
 import { WorkspaceState } from "./orvyn-bridge";
-import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats, bindChatWorkspace } from "./chatSession";
-import { fetchSessionState, sameRoot, syncSessions } from "./sessionsApi";
+import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats, bindChatWorkspace, sessionRestoreState, restoredWorkSession } from "./chatSession";
+import { sameRoot, syncSessions } from "./sessionsApi";
 import type { WorkbenchSessionSnapshot } from "./workbenchBinding";
 import { pickReattachRun } from "./appReattach";
 import {
@@ -191,52 +191,41 @@ export function App() {
   // follow-up runs there (not in whatever folder happens to be open).
   const workspaceRootRef = useRef<string | null>(workspaceRoot);
   workspaceRootRef.current = workspaceRoot;
-  const restoredChat = useRef<string | null>(null);
   const [sessionWorkspace, setSessionWorkspace] = useState<WorkbenchSessionSnapshot | null>(null);
   useEffect(() => subscribeChat(() => {
     const chat = getActiveChat();
-    if (!chat?.sessionId) {
-      if (!chat) setSessionWorkspace(null);
+    if (!chat) {
+      setSessionWorkspace(null);
       return;
     }
-    if (chat.workspaceId && chat.projectId && chat.projectRoot) {
-      const sessionId = chat.sessionId;
-      const projectId = chat.projectId;
-      const workspaceId = chat.workspaceId;
-      const projectRoot = chat.projectRoot;
-      setSessionWorkspace((prev) => {
-        if (prev && prev.sessionId === sessionId && prev.workspaceId === workspaceId && prev.projectRoot === projectRoot) return prev;
-        return { sessionId, projectId, workspaceId, projectRoot, created: false, restored: true };
-      });
+    // Local orvyn-chats.json is a cache. Do not bind the Workbench, or a
+    // follow-up, until this open has fetched the backend WorkSession.
+    if (!chat.sessionId || sessionRestoreState(chat.id) !== "ready") return;
+    const restored = restoredWorkSession(chat.id);
+    const projectId = restored?.projectId ?? chat.projectId ?? null;
+    const workspaceId = restored?.workspaceId ?? chat.workspaceId ?? null;
+    const projectRoot = restored?.projectRoot ?? chat.projectRoot ?? null;
+    if (!projectId || !workspaceId || !projectRoot) {
+      setSessionWorkspace(null);
+      return;
     }
-    if (restoredChat.current === chat.id) return;
-    restoredChat.current = chat.id;
-    void (async () => {
-      const state = await fetchSessionState(chat.sessionId!);
-      if (!state || getActiveChat()?.id !== chat.id) return;
-      const root = state.session.projectRoot;
-      const projectId = state.session.projectId;
-      const workspaceId = state.session.workspaceId;
-      if (root && projectId && workspaceId) {
-        setSessionWorkspace({
-          sessionId: state.session.sessionId,
-          projectId,
-          workspaceId,
-          projectRoot: root,
-          created: false,
-          restored: true,
-          files: state.files,
-          preview: state.preview,
-        });
-        bindChatWorkspace(chat.id, { sessionId: state.session.sessionId, projectId, workspaceId, projectRoot: root, created: false });
-      }
-      if (!root || sameRoot(root, workspaceRootRef.current)) return;
-      // A Cloud workspace path is not a folder on this computer: openPath says no.
-      // The Workbench still uses the session root above, so a failed open does not
-      // leave Files on a guessed empty directory.
-      const next = await window.orvyn.project.openPath(root).catch(() => null);
+    setSessionWorkspace((prev) => {
+      if (prev && prev.sessionId === chat.sessionId && prev.workspaceId === workspaceId && prev.projectRoot === projectRoot) return prev;
+      return {
+        sessionId: chat.sessionId!,
+        projectId,
+        workspaceId,
+        projectRoot,
+        created: false,
+        restored: true,
+        files: restored?.files,
+        preview: restored?.preview,
+      };
+    });
+    if (sameRoot(projectRoot, workspaceRootRef.current)) return;
+    void window.orvyn.project.openPath(projectRoot).then((next) => {
       if (next && getActiveChat()?.id === chat.id) setWorkspace(next);
-    })();
+    }).catch(() => undefined);
   }), []);
   // Home is the landing surface; Code and Terminal share the editor chrome;
   // the context panel rides along wherever work happens.

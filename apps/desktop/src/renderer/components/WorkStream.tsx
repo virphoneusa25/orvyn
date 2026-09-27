@@ -9,7 +9,7 @@
 // chain-of-thought. Detail lives in the Workbench.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, ensureChatForRun, type ChatMessage } from "../chatSession";
+import { getChatMessages, isChatStreaming, subscribeChat, newChat, getActiveChat, getActiveChatId, getActiveChatSettings, setActiveChatSetting, ensureChatForRun, canStartAgentRun, sessionRestoreState, type ChatMessage } from "../chatSession";
 import { partitionStreamMessages } from "../streamOrder";
 import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerModels, ComposerModePills, ComposerSubmitButton, ghostBtn, writeComposerDefault } from "./ComposerControls";
 import { ContextUsageMenu } from "./ContextUsageMenu";
@@ -297,7 +297,7 @@ export function WorkStream({
     const chipAtt = attachmentsFromChips(chips);
     const instruction = (text ?? prompt).trim();
     const outgoing = chipNote && !text ? `${instruction}\n\n${chipNote}` : instruction;
-    if (!instruction || busy) return;
+    if (!instruction || busy || !canStartAgentRun()) return;
     // While a run is active the instruction joins the DURABLE queue — the
     // backend RunStore holds it, so reconnects and restarts never lose it.
     if (runActive && !bypassQueue && run.runId) {
@@ -474,8 +474,9 @@ export function WorkStream({
   // Queue delivery: when the attached run settles, the next queued follow-up
   // goes out on its own — same pipeline, same conversation. The item is
   // marked delivered server-side; the rest stay queued for their turn.
+  const chatRestore = sessionRestoreState();
   useEffect(() => {
-    if (runActive || queue.length === 0 || busy) return;
+    if (runActive || queue.length === 0 || busy || chatRestore !== "ready") return;
     const next = queue[0];
     void fetch(apiUrl(`/agent/stream/runs/${next.runId}/queue/${next.id}/delivered`), {
       method: "POST",
@@ -485,7 +486,7 @@ export function WorkStream({
       .finally(() => void refreshQueue());
     deliver.current(next.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runActive, queue, busy]);
+  }, [runActive, queue, busy, chatRestore]);
   // The conversation's title. When a run is attached, the run IS the
   // conversation: its instruction names the work, and an unrelated chat
   // session from before must never leak its title (the "hi" bug) or its
@@ -953,8 +954,8 @@ export function WorkStream({
                 label="Send"
                 icon={<IconRocket size={13} />}
                 onClick={() => void send()}
-                disabled={!prompt.trim() || busy}
-                title="Send (Enter)"
+                disabled={!prompt.trim() || busy || !canStartAgentRun()}
+                title={sessionRestoreState() === "failed" ? "Could not restore this conversation" : sessionRestoreState() === "restoring" ? "Restoring conversation…" : "Send (Enter)"}
               />
             )}
           </div>

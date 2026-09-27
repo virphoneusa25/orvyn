@@ -5,15 +5,29 @@
 import React, { useEffect, useState } from "react";
 import { fetchSessionState, type SessionStateView } from "../sessionsApi";
 import { openArtifactInContext } from "../contextOpen";
+import { getActiveChatId, openChatSession, sessionRestoreState, subscribeChat, type SessionRestoreState } from "../chatSession";
 
 export function SessionRestoreCard({ sessionId, refreshKey }: { sessionId: string | null | undefined; refreshKey?: string }) {
   const [state, setState] = useState<SessionStateView | null>(null);
+  const [restore, setRestore] = useState<SessionRestoreState>(() => sessionRestoreState());
+  useEffect(() => subscribeChat(() => setRestore(sessionRestoreState())), []);
   useEffect(() => {
-    if (!sessionId) { setState(null); return; }
+    if (!sessionId || restore !== "ready") { setState(null); return; }
     let alive = true;
     void fetchSessionState(sessionId).then((s) => { if (alive) setState(s); });
     return () => { alive = false; };
-  }, [sessionId, refreshKey]);
+  }, [sessionId, refreshKey, restore]);
+  if (sessionId && restore === "restoring") {
+    return <div className="session-restore" data-testid="session-restore" data-restore="restoring">Restoring conversation…</div>;
+  }
+  if (sessionId && restore === "failed") {
+    return (
+      <div className="session-restore" data-testid="session-restore" data-restore="failed">
+        <span>Could not restore this conversation.</span>
+        <button type="button" onClick={() => { const id = getActiveChatId(); if (id) void openChatSession(id); }}>Retry</button>
+      </div>
+    );
+  }
   if (!state || !state.runs.length || (!state.files.length && !state.preview && !state.artifacts.length)) return null;
   const root = state.session.projectRoot;
   const project = root ? root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : "Cloud workspace";
