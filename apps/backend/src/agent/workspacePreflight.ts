@@ -55,8 +55,12 @@ export interface WorkspacePreflightInput {
   composerMode?: string;
   /** Folder the client claims. Empty, ".", and placeholders are ignored. */
   clientRoot?: string | null;
-  /** Only an explicit switch may leave the session's workspace. */
+  /** Leave the session workspace for a folder the user picked. */
   switchProject?: boolean;
+  /** Start a separate empty project. Does not reuse session.workspaceId. */
+  newProject?: boolean;
+  /** Start a separate project from this chat. Does not reuse session.workspaceId. */
+  forkProject?: boolean;
   cwd?: string;
 }
 
@@ -133,23 +137,36 @@ export function listWorkspaceFiles(root: string, limit = 200): string[] {
 function knownFilesIntact(root: string, known: string[]): boolean {
   if (!root || !existsSync(root)) return false;
   if (known.length === 0) return true;
-  return known.some((rel) => existsSync(path.join(root, rel)));
+  return known.every((rel) => {
+    try {
+      return statSync(path.join(root, rel)).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** What the model should hear. The absolute host path stays off this text. */
-export function workspaceModelNote(identity: { created: boolean; restored: boolean; fresh: boolean }): string {
+export function workspaceModelNote(identity: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] }): string {
+  const known = (identity.knownFiles ?? []).filter(Boolean);
   const lines = [
     "File tools take paths relative to this chat's workspace.",
     "Do not invent another project folder.",
   ];
-  if (identity.fresh) {
+  if (identity.restored && known.length > 0) {
     lines.push(
-      "This workspace was just provisioned for this chat and is empty. That is expected.",
+      `This chat is restored in its existing workspace. These project files are already here: ${known.join(", ")}.`,
+      `Read ${known.join(" and ")} before changing the project, then edit those files in place.`,
+      "Do not say the workspace is empty. Do not say the earlier files did not persist. Do not say there is no project folder. Do not start a second project."
+    );
+  } else if (identity.restored) {
+    lines.push("This chat is restored in its existing workspace. Read the files already there and modify that project. Do not say the workspace is empty. Do not say there is no project folder. Do not start a second project.");
+  } else if (identity.fresh) {
+    lines.push(
+      "This workspace was just provisioned for this chat and has no project files yet. That is expected.",
       "Write the requested project files here. For a new website, write index.html and its stylesheet at the workspace root.",
       "An empty new workspace is not an error. If list_directory is empty, create the files. Do not tell the user the project folder is missing."
     );
-  } else if (identity.restored) {
-    lines.push("This chat is restored in its existing workspace. Read the files already there and modify that project. Do not start a second project.");
   } else if (identity.created) {
     lines.push("This workspace belongs to this chat. Write the requested files here.");
   }
@@ -215,6 +232,36 @@ function adoptClient(sessions: WorkSessionStore, session: WorkSession, clientRoo
   return finish(sessions, session, { ...ws, projectRoot }, { created: ws.created, restored: !ws.created });
 }
 
+function explicitProjectChange(input: WorkspacePreflightInput): boolean {
+  return input.switchProject === true || input.newProject === true || input.forkProject === true;
+}
+
+/**
+ * The session already has a workspace. Stay on it.
+ * A client path does not mint another directory.
+ * Missing known files are a mismatch, not a blank project.
+ */
+function restoreOwnedWorkspace(
+  input: WorkspacePreflightInput,
+  session: WorkSession,
+  record: { workspaceId: string; projectId: string; projectRoot: string; knownFiles: string[] },
+  ctx: { cwd: string; virtualRoot: string }
+): WorkspacePreflightResult {
+  const stored = record.projectRoot;
+  const untrusted = isUntrustedProjectRoot(stored, ctx) || stored === "." || path.resolve(stored) === path.resolve(ctx.cwd);
+  const known = input.sessions.knownFiles(record.workspaceId);
+  input.sessions.bindWorkspace(session.sessionId, {
+    workspaceId: record.workspaceId,
+    projectId: record.projectId,
+    projectRoot: stored,
+  });
+  if (untrusted || (known.length > 0 && !knownFilesIntact(stored, known))) {
+    return mismatch(session, record.projectId, record.workspaceId, stored);
+  }
+  if (!existsSync(stored)) mkdirSync(stored, { recursive: true });
+  return finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: stored }, { created: false, restored: true });
+}
+
 /**
  * Resolve the workspace for one run.
  * Existing sessions keep their workspace. A wrong client path does not mint a new one.
@@ -228,8 +275,21 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
   const client = String(input.clientRoot ?? "").trim();
   const actionable = needsActionWorkspace(input.instruction, input.composerMode);
   const record = session.workspaceId ? input.sessions.getWorkspace(session.workspaceId) : undefined;
+  const leaving = explicitProjectChange(input);
 
-  if (!record && !actionable) return { status: "skipped" };
+  if (session.workspaceId && !record && !leaving) {
+    return mismatch(session, session.projectId ?? "", session.workspaceId, session.projectRoot ?? "");
+  }
+
+  if (record && !leaving) return restoreOwnedWorkspace(input, session, record, ctx);
+
+  if (record && input.switchProject && isTrustedExistingProject(client, ctx) && rootKey(path.resolve(client)) !== rootKey(record.projectRoot)) {
+    return adoptClient(input.sessions, session, client);
+  }
+
+  if (!record && !actionable && !leaving) return { status: "skipped" };
+
+  if (record && (input.newProject || input.forkProject)) return provision(input.sessions, session);
 
   if (!record) {
     if (isTrustedExistingProject(client, ctx)) return adoptClient(input.sessions, session, client);
@@ -249,34 +309,7 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
     return provision(input.sessions, session);
   }
 
-  if (input.switchProject && isTrustedExistingProject(client, ctx) && rootKey(path.resolve(client)) !== rootKey(record.projectRoot)) {
-    return adoptClient(input.sessions, session, client);
-  }
-
-  const stored = record.projectRoot;
-  const untrusted = isUntrustedProjectRoot(stored, ctx) || stored === "." || path.resolve(stored) === path.resolve(cwd);
-
-  if (!untrusted && knownFilesIntact(stored, record.knownFiles)) {
-    if (!existsSync(stored)) mkdirSync(stored, { recursive: true });
-    return finish(input.sessions, session, record, { created: false, restored: true });
-  }
-
-  if (record.knownFiles.length > 0) {
-    // Put the session back on the known workspace. Do not adopt the empty path.
-    input.sessions.bindWorkspace(session.sessionId, {
-      workspaceId: record.workspaceId,
-      projectId: record.projectId,
-      projectRoot: stored,
-    });
-    return mismatch(session, record.projectId, record.workspaceId, stored);
-  }
-
-  if (!untrusted) {
-    mkdirSync(stored, { recursive: true });
-    return finish(input.sessions, session, record, { created: false, restored: true });
-  }
-
-  return provision(input.sessions, session);
+  return restoreOwnedWorkspace(input, session, record, ctx);
 }
 
 export { normalizeKnownFile };

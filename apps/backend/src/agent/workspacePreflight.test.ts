@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { WorkSessionStore } from "../sessions/WorkSessionStore";
-import { makeWriteFileTool } from "../ai/tools/fileTools";
+import { makeReadFileTool, makeWriteFileTool } from "../ai/tools/fileTools";
 import { inspectWorkspace } from "./workspaceContext";
 import {
   WORKSPACE_STATE_MISMATCH,
@@ -175,6 +175,99 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
   assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
   assert.equal(readdirSync(wrong).length, 0);
   assert.equal(existsSync(join(created.projectRoot, "index.html")), false);
+});
+
+test("a reopened website follow-up edits the existing workspace and does not provision another", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-hero-"));
+  const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-hero-"));
+  const first = open(dir);
+  const created = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.session,
+    instruction: "Build a simple website.",
+    clientRoot: ".",
+    cwd,
+  });
+  assert.equal(created.status, "resolved");
+  if (created.status !== "resolved") return;
+  const html = "<!DOCTYPE html><html><head><link rel=\"stylesheet\" href=\"styles.css\"></head><body><h1>Harbor</h1></body></html>\n";
+  const css = "body { margin: 0; background: #fff; }\n";
+  await makeWriteFileTool(created.projectRoot).execute({ path: "index.html", content: html });
+  await makeWriteFileTool(created.projectRoot).execute({ path: "styles.css", content: css });
+  first.sessions.rememberFiles(created.workspaceId, ["index.html", "styles.css"]);
+  assert.deepEqual(first.sessions.getWorkspace(created.workspaceId)?.knownFiles, ["index.html", "styles.css"]);
+
+  const reopened = new WorkSessionStore("t1", dir);
+  const session = reopened.get(created.sessionId);
+  assert.ok(session?.workspaceId);
+  assert.equal(reopened.getWorkspace(session!.workspaceId!)?.projectRoot, created.projectRoot);
+  assert.deepEqual(reopened.knownFiles(session!.workspaceId!), ["index.html", "styles.css"]);
+
+  const blank = mkdtempSync(join(tmpdir(), "orvyn-blank-hero-"));
+  const follow = resolveRunWorkspace({
+    sessions: reopened,
+    tenantId: "t1",
+    session: session!,
+    instruction: "Add a hero image in the background.",
+    clientRoot: blank,
+    cwd,
+  });
+  assert.equal(follow.status, "resolved");
+  if (follow.status !== "resolved") return;
+  assert.equal(follow.workspaceId, created.workspaceId);
+  assert.equal(follow.projectId, created.projectId);
+  assert.equal(follow.projectRoot, created.projectRoot);
+  assert.equal(follow.sessionId, created.sessionId);
+  assert.equal(follow.created, false);
+  assert.equal(follow.restored, true);
+  assert.equal(follow.fresh, false);
+  assert.equal(exposeProjectTools(follow), true);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+  assert.equal(existsSync(join(blank, "index.html")), false);
+
+  const readHtml = await makeReadFileTool(follow.projectRoot).execute({ path: "index.html" });
+  const readCss = await makeReadFileTool(follow.projectRoot).execute({ path: "styles.css" });
+  assert.equal(readHtml.ok, true);
+  assert.equal(readCss.ok, true);
+  assert.match(String(readHtml.output), /Harbor/);
+  assert.match(String(readCss.output), /background/);
+
+  const edited = await makeWriteFileTool(follow.projectRoot).execute({
+    path: "index.html",
+    content: html.replace("<h1>Harbor</h1>", "<h1>Harbor</h1>\n<img alt=\"Hero\" src=\"hero.png\">"),
+  });
+  assert.equal(edited.ok, true);
+  assert.match(readFileSync(join(created.projectRoot, "index.html"), "utf8"), /hero\.png/);
+  assert.equal(readFileSync(join(created.projectRoot, "styles.css"), "utf8"), css);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+
+  const note = workspaceModelNote({ ...follow, knownFiles: reopened.knownFiles(follow.workspaceId) });
+  assert.match(note, /already here: index\.html, styles\.css/);
+  assert.match(note, /Read index\.html and styles\.css/);
+  assert.match(note, /Do not say the workspace is empty/);
+  assert.match(note, /Do not say the earlier files did not persist/);
+  assert.match(note, /Do not say there is no project folder/);
+  assert.doesNotMatch(note, /just provisioned/);
+  assert.doesNotMatch(note, /has no project files yet/);
+
+  rmSync(join(created.projectRoot, "styles.css"));
+  const mismatch = resolveRunWorkspace({
+    sessions: reopened,
+    tenantId: "t1",
+    session: reopened.get(created.sessionId)!,
+    instruction: "Add a hero image in the background.",
+    clientRoot: blank,
+    cwd,
+  });
+  assert.equal(mismatch.status, "mismatch");
+  if (mismatch.status !== "mismatch") return;
+  assert.equal(mismatch.code, WORKSPACE_STATE_MISMATCH);
+  assert.equal(exposeProjectTools(mismatch), false);
+  assert.equal(mismatch.workspaceId, created.workspaceId);
+  assert.equal(mismatch.projectRoot, created.projectRoot);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+  assert.equal(readdirSync(blank).length, 0);
 });
 
 test("an informational question does not allocate a workspace", () => {

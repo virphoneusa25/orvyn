@@ -571,7 +571,7 @@ v1Router.post("/chat/completions", async (req, res) => {
         instruction: message,
         composerMode: chip,
         clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
-        switchProject: req.body.switchProject === true,
+        ...projectChoice(req.body),
       });
       if (preflight.status === "mismatch") {
         return res.status(409).json({
@@ -590,7 +590,7 @@ v1Router.post("/chat/completions", async (req, res) => {
       const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
         composerMode: chip,
         workspaceId: preflight.workspaceId,
-        workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+        workspaceIdentity: workspaceRunIdentity(tc.sessions, preflight),
         onProjectFile: (rel: string) => { tc.sessions.rememberFiles(preflight.workspaceId, [rel]); },
       });
       tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot);
@@ -628,7 +628,26 @@ import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
 import { inferTaskIntent } from "../agent/taskIntent";
-import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace } from "../agent/workspacePreflight";
+import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace, type WorkspaceResolved } from "../agent/workspacePreflight";
+import type { WorkSessionStore } from "../sessions/WorkSessionStore";
+
+function projectChoice(body: { switchProject?: unknown; newProject?: unknown; forkProject?: unknown; projectAction?: unknown }): { switchProject: boolean; newProject: boolean; forkProject: boolean } {
+  const action = String(body.projectAction ?? "").trim().toLowerCase();
+  return {
+    switchProject: body.switchProject === true || action === "switch" || action === "switch project",
+    newProject: body.newProject === true || action === "new" || action === "new project",
+    forkProject: body.forkProject === true || action === "fork" || action === "fork project",
+  };
+}
+
+function workspaceRunIdentity(sessions: WorkSessionStore, preflight: WorkspaceResolved): { created: boolean; restored: boolean; fresh: boolean; knownFiles: string[] } {
+  return {
+    created: preflight.created,
+    restored: preflight.restored,
+    fresh: preflight.fresh,
+    knownFiles: sessions.knownFiles(preflight.workspaceId),
+  };
+}
 import { notePublicOrigin } from "../agent/sitePreview";
 
 // Start a run. Returns a runId immediately; the client then opens the SSE
@@ -658,7 +677,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     instruction,
     composerMode,
     clientRoot,
-    switchProject: req.body.switchProject === true,
+    ...projectChoice(req.body),
   });
   if (preflight.status === "mismatch") {
     return res.status(409).json({
@@ -780,7 +799,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
-            workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+            workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }
         : {}),
@@ -1153,7 +1172,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     instruction: goal,
     composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : "agent",
     clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
-    switchProject: req.body.switchProject === true,
+    ...projectChoice(req.body),
   });
   if (preflight.status === "mismatch") {
     return res.status(409).json({
@@ -1189,7 +1208,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
-            workspaceIdentity: { created: preflight.created, restored: preflight.restored, fresh: preflight.fresh },
+            workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }
         : {}),

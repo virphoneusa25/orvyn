@@ -243,7 +243,7 @@ export interface RunOptions {
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
   composerMode?: string;
   /** Set when workspace preflight already bound this run. */
-  workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean };
+  workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] };
   /** Persists written paths onto the workspace so a later empty resolve is a mismatch. */
   onProjectFile?: (relativePath: string) => void;
   /** Durable workspace id. File tools resolve inside projectRoot, not a host path the model picks. */
@@ -261,7 +261,7 @@ const FAILURE_CIRCUIT_BREAKER = 5;
 /** Workspace wording for the model. Host paths stay out of normal chat. */
 function workspaceAnchor(
   execution: ExecutionSpec | undefined,
-  identity?: { created: boolean; restored: boolean; fresh: boolean }
+  identity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] }
 ): string {
   if (execution?.location === "OVH_WORKER") {
     return "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
