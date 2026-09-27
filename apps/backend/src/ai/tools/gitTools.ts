@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 import { AITool, ToolResult } from "../ToolTypes";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
 import { resolveSafePath } from "../../execution/pathSafety";
+import { formatGitStatus, notARepository, parseGitStatusPorcelain } from "./gitStatus";
 
 function runGit(projectRoot: string, args: string[]): Promise<ToolResult> {
   return new Promise((resolve) => {
@@ -13,13 +14,39 @@ function runGit(projectRoot: string, args: string[]): Promise<ToolResult> {
   });
 }
 
+function gitStatusLog(event: "git.status.start" | "git.status.complete" | "git.status.error", extra: Record<string, unknown> = {}): void {
+  console.log(JSON.stringify({ event, ...extra }));
+}
+
 export function makeGitStatusTool(projectRoot: string): AITool {
   return {
     name: "git_status",
-    description: "Show the working tree status (git status --short).",
+    description: "Show the working tree status. Returns branch, clean, modified, staged, and untracked.",
     parameters: { type: "object", properties: {} },
     defaultPermission: "allowed", // read-only, cannot mutate the repo
-    execute: (_args, context) => runGit(workspaceRootFor(projectRoot, context), ["status", "--short"]),
+    execute: (_args, context) => {
+      const root = workspaceRootFor(projectRoot, context);
+      gitStatusLog("git.status.start");
+      return new Promise((resolve) => {
+        execFile("git", ["status", "--porcelain=v1", "-b"], { cwd: root, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+          const text = `${stdout || ""}\n${stderr || ""}`;
+          if (error && /not a git repository/i.test(text + (error.message || ""))) {
+            const snapshot = notARepository();
+            gitStatusLog("git.status.complete", { repository: false, clean: true });
+            resolve({ ok: true, output: formatGitStatus(snapshot), meta: { gitStatus: snapshot } });
+            return;
+          }
+          if (error) {
+            gitStatusLog("git.status.error", { message: (stderr || error.message).slice(0, 200) });
+            resolve({ ok: false, error: stderr || error.message });
+            return;
+          }
+          const snapshot = parseGitStatusPorcelain(stdout || "");
+          gitStatusLog("git.status.complete", { repository: true, clean: snapshot.clean, branch: snapshot.branch });
+          resolve({ ok: true, output: formatGitStatus(snapshot), meta: { gitStatus: snapshot } });
+        });
+      });
+    },
   };
 }
 

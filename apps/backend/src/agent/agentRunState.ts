@@ -68,7 +68,13 @@ function browserVerified(events: CompletionDecisionInput["events"]): boolean {
   const last = [...events].reverse().find((e) => e.type === "verification.completed");
   if (last) {
     const checks = (last.data?.checks as { name: string; status: string }[] | undefined) ?? [];
-    if (last.data?.verdict === "PASS" && checks.some((c) => c.name === "browser" && c.status === "pass")) return true;
+    const findings = (last.data?.findings as { severity?: string }[] | undefined) ?? [];
+    const browserPass = checks.some((c) => c.name === "browser" && c.status === "pass");
+    const otherFailed = checks.some((c) => c.status === "fail" && c.name !== "git status");
+    const blockers = findings.some((f) => f.severity === "blocker");
+    if (last.data?.verdict === "PASS" && browserPass) return true;
+    // Git being unavailable is a partial check. It does not erase a browser pass.
+    if (last.data?.verdict === "PARTIAL" && browserPass && !otherFailed && !blockers) return true;
   }
   return events.some((e) => e.type === "desktop.verification.passed");
 }

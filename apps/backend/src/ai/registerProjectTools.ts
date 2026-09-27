@@ -23,6 +23,7 @@ import {
 } from "./tools/projectIntelligenceTools";
 import { makeListSymbolsTool } from "./tools/symbolTools";
 import { makeTerminalTool } from "./tools/terminalTool";
+import { missingVerifierCapabilities } from "../agent/VerificationRuntime";
 import {
   makeGitStatusTool,
   makeGitDiffTool,
@@ -180,6 +181,10 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
     }
   }
   tenant.currentProjectRoot = projectRoot;
+  const missing = missingVerifierCapabilities(g.list().map((tool) => tool.name));
+  if (missing.length) {
+    console.error(JSON.stringify({ event: "verifier.capabilities.missing", missing }));
+  }
 }
 
 type ToolRegistrar = (tenant: Tenant, projectRoot: string) => void;

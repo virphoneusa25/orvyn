@@ -18,6 +18,7 @@ import { randomBytes } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
+import { computeWorkspaceFingerprint, type WorkspaceFingerprint } from "./workspaceFingerprint";
 
 export type WorkSessionStatus = "active" | "idle" | "archived";
 
@@ -187,9 +188,18 @@ function fromRow(r: Row): WorkSession {
 export interface WorkspaceRecord {
   workspaceId: string;
   projectId: string;
+  /** Stable id for this project tree. Physical mount paths can change. */
+  logicalWorkspaceId: string;
   projectRoot: string;
   knownFiles: string[];
+  storageType: string;
+  status: string;
+  branch?: string;
+  gitHead?: string;
+  fingerprint?: WorkspaceFingerprint;
 }
+
+export type { WorkspaceFingerprint };
 
 export class WorkSessionStore {
   private db: DatabaseSync;
@@ -207,7 +217,21 @@ export class WorkSessionStore {
     const cols = this.db.prepare(`PRAGMA table_info(session_messages)`).all() as { name: string }[];
     if (!cols.some((c) => c.name === "meta_json")) this.db.exec(`ALTER TABLE session_messages ADD COLUMN meta_json TEXT`);
     const wsCols = this.db.prepare(`PRAGMA table_info(workspaces)`).all() as { name: string }[];
-    if (!wsCols.some((c) => c.name === "known_files_json")) this.db.exec(`ALTER TABLE workspaces ADD COLUMN known_files_json TEXT`);
+    const addCol = (name: string, type: string) => {
+      if (!wsCols.some((c) => c.name === name)) this.db.exec(`ALTER TABLE workspaces ADD COLUMN ${name} ${type}`);
+    };
+    addCol("known_files_json", "TEXT");
+    addCol("logical_workspace_id", "TEXT");
+    addCol("storage_type", "TEXT");
+    addCol("status", "TEXT");
+    addCol("branch", "TEXT");
+    addCol("git_head", "TEXT");
+    addCol("fingerprint_json", "TEXT");
+    addCol("updated_at", "INTEGER");
+    addCol("last_opened_at", "INTEGER");
+    this.db.exec(`UPDATE workspaces SET logical_workspace_id = workspace_id WHERE logical_workspace_id IS NULL OR logical_workspace_id = ''`);
+    this.db.exec(`UPDATE workspaces SET storage_type = 'managed' WHERE storage_type IS NULL OR storage_type = ''`);
+    this.db.exec(`UPDATE workspaces SET status = 'ready' WHERE status IS NULL OR status = ''`);
   }
 
   /** The stable workspace (and project) for a folder; created the first time it is seen. */
@@ -216,8 +240,9 @@ export class WorkSessionStore {
     const hit = this.db.prepare(`SELECT workspace_id, project_id FROM workspaces WHERE root_key = ?`).get(key) as { workspace_id: string; project_id: string } | undefined;
     if (hit) return { workspaceId: hit.workspace_id, projectId: hit.project_id, created: false };
     const w = { workspaceId: id("ws"), projectId: id("proj"), created: true };
-    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json) VALUES (?, ?, ?, ?, ?, '[]')`)
-      .run(w.workspaceId, w.projectId, key, projectRoot, Date.now());
+    const now = Date.now();
+    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json, logical_workspace_id, storage_type, status, updated_at) VALUES (?, ?, ?, ?, ?, '[]', ?, 'local', 'ready', ?)`)
+      .run(w.workspaceId, w.projectId, key, projectRoot, now, w.workspaceId, now);
     return w;
   }
 
@@ -239,22 +264,74 @@ export class WorkSessionStore {
     const dir = path.join(this.dataDirectory, "tenants", this.tenantId, "workspaces", workspaceId);
     fs.mkdirSync(dir, { recursive: true });
     const projectRoot = fs.realpathSync(dir);
-    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json) VALUES (?, ?, ?, ?, ?, '[]')`)
-      .run(workspaceId, projectId, rootKey(projectRoot), projectRoot, Date.now());
+    const now = Date.now();
+    this.db.prepare(`INSERT INTO workspaces (workspace_id, project_id, root_key, project_root, created_at, known_files_json, logical_workspace_id, storage_type, status, updated_at) VALUES (?, ?, ?, ?, ?, '[]', ?, 'managed', 'ready', ?)`)
+      .run(workspaceId, projectId, rootKey(projectRoot), projectRoot, now, workspaceId, now);
     return { workspaceId, projectId, projectRoot };
   }
 
   getWorkspace(workspaceId: string): WorkspaceRecord | undefined {
-    const row = this.db.prepare(`SELECT workspace_id, project_id, project_root, known_files_json FROM workspaces WHERE workspace_id = ?`).get(workspaceId) as
-      | { workspace_id: string; project_id: string; project_root: string; known_files_json?: string | null }
+    const row = this.db.prepare(
+      `SELECT workspace_id, project_id, project_root, known_files_json, logical_workspace_id, storage_type, status, branch, git_head, fingerprint_json FROM workspaces WHERE workspace_id = ?`
+    ).get(workspaceId) as
+      | {
+          workspace_id: string;
+          project_id: string;
+          project_root: string;
+          known_files_json?: string | null;
+          logical_workspace_id?: string | null;
+          storage_type?: string | null;
+          status?: string | null;
+          branch?: string | null;
+          git_head?: string | null;
+          fingerprint_json?: string | null;
+        }
       | undefined;
     if (!row) return undefined;
+    let fingerprint: WorkspaceFingerprint | undefined;
+    try {
+      fingerprint = row.fingerprint_json ? JSON.parse(row.fingerprint_json) as WorkspaceFingerprint : undefined;
+    } catch {
+      fingerprint = undefined;
+    }
     return {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
+      logicalWorkspaceId: row.logical_workspace_id || row.workspace_id,
       projectRoot: row.project_root,
       knownFiles: parseKnownFiles(row.known_files_json),
+      storageType: row.storage_type || "managed",
+      status: row.status || "ready",
+      branch: row.branch || undefined,
+      gitHead: row.git_head || undefined,
+      fingerprint,
     };
+  }
+
+  /** Point the same logical workspace at a directory that actually has the project. */
+  relocateWorkspace(workspaceId: string, projectRoot: string): boolean {
+    const current = this.getWorkspace(workspaceId);
+    if (!current) return false;
+    if (!fs.existsSync(projectRoot) || !fs.statSync(projectRoot).isDirectory()) return false;
+    const real = fs.realpathSync(projectRoot);
+    const key = rootKey(real);
+    const other = this.db.prepare(`SELECT workspace_id FROM workspaces WHERE root_key = ? AND workspace_id != ?`).get(key, workspaceId) as { workspace_id: string } | undefined;
+    if (other) return false;
+    this.db.prepare(`UPDATE workspaces SET project_root = ?, root_key = ?, updated_at = ?, status = 'ready', last_opened_at = ? WHERE workspace_id = ?`)
+      .run(real, key, Date.now(), Date.now(), workspaceId);
+    return true;
+  }
+
+  persistFingerprint(workspaceId: string): WorkspaceFingerprint | undefined {
+    const current = this.getWorkspace(workspaceId);
+    if (!current) return undefined;
+    const fingerprint = computeWorkspaceFingerprint(current.projectId, current.logicalWorkspaceId, current.projectRoot, {
+      branch: current.branch,
+      head: current.gitHead,
+    });
+    this.db.prepare(`UPDATE workspaces SET fingerprint_json = ?, updated_at = ? WHERE workspace_id = ?`)
+      .run(JSON.stringify(fingerprint), Date.now(), workspaceId);
+    return fingerprint;
   }
 
   knownFiles(workspaceId: string): string[] {
@@ -270,7 +347,8 @@ export class WorkSessionStore {
       if (!rel || next.includes(rel)) continue;
       next.push(rel);
     }
-    this.db.prepare(`UPDATE workspaces SET known_files_json = ? WHERE workspace_id = ?`).run(JSON.stringify(next), workspaceId);
+    this.db.prepare(`UPDATE workspaces SET known_files_json = ?, updated_at = ? WHERE workspace_id = ?`).run(JSON.stringify(next), Date.now(), workspaceId);
+    this.persistFingerprint(workspaceId);
     return next;
   }
 

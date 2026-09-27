@@ -255,6 +255,23 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.doesNotMatch(note, /has no project files yet/);
 
   rmSync(join(created.projectRoot, "styles.css"));
+  const partial = resolveRunWorkspace({
+    sessions: reopened,
+    tenantId: "t1",
+    session: reopened.get(created.sessionId)!,
+    instruction: "Add a hero image in the background.",
+    clientRoot: blank,
+    cwd,
+  });
+  assert.equal(partial.status, "resolved");
+  if (partial.status !== "resolved") return;
+  assert.equal(partial.workspaceId, created.workspaceId);
+  assert.equal(partial.projectRoot, created.projectRoot);
+  assert.match(readFileSync(join(partial.projectRoot, "index.html"), "utf8"), /Harbor/);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+  assert.equal(readdirSync(blank).length, 0);
+
+  rmSync(join(created.projectRoot, "index.html"));
   const mismatch = resolveRunWorkspace({
     sessions: reopened,
     tenantId: "t1",
@@ -287,6 +304,100 @@ test("an informational question does not allocate a workspace", () => {
   assert.equal(skipped.status, "skipped");
   assert.equal(exposeProjectTools(skipped), false);
   assert.equal(existsSync(join(dir, "tenants")), false);
+});
+
+test("TEST consecutive — hero image then animate stays on the same workspace", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-anim-"));
+  const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-anim-"));
+  const first = open(dir);
+  const created = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.session,
+    instruction: "can you add a hero image in the background",
+    clientRoot: "C:\\Users\\builder\\site",
+    cwd,
+  });
+  assert.equal(created.status, "resolved");
+  if (created.status !== "resolved") return;
+  assert.equal(created.projectRoot.includes("C:"), false);
+  const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"10\" height=\"10\"/></svg>\n";
+  await makeWriteFileTool(created.projectRoot).execute({ path: "index.html", content: "<h1>Harbor</h1>\n<img src=\"public/virphone-hero.svg\">\n" });
+  await makeWriteFileTool(created.projectRoot).execute({ path: "public/virphone-hero.svg", content: svg });
+  first.sessions.rememberFiles(created.workspaceId, ["index.html", "public/virphone-hero.svg"]);
+
+  const restarted = new WorkSessionStore("t1", dir);
+  const session = restarted.get(created.sessionId)!;
+  const empty = mkdtempSync(join(tmpdir(), "orvyn-empty-anim-"));
+  const follow = resolveRunWorkspace({
+    sessions: restarted,
+    tenantId: "t1",
+    session,
+    instruction: "can you make the hero background animated",
+    clientRoot: empty,
+    cwd,
+  });
+  assert.equal(follow.status, "resolved");
+  if (follow.status !== "resolved") return;
+  assert.equal(follow.workspaceId, created.workspaceId);
+  assert.equal(follow.projectId, created.projectId);
+  assert.equal(follow.projectRoot, created.projectRoot);
+  assert.equal(follow.created, false);
+  const hero = await makeReadFileTool(follow.projectRoot).execute({ path: "public/virphone-hero.svg" });
+  assert.equal(hero.ok, true);
+  assert.match(String(hero.output), /<svg/);
+  const edited = await makeWriteFileTool(follow.projectRoot).execute({
+    path: "public/virphone-hero.svg",
+    content: svg.replace("<rect", "<rect class=\"drift\""),
+  });
+  assert.equal(edited.ok, true);
+  assert.match(readFileSync(join(created.projectRoot, "public", "virphone-hero.svg"), "utf8"), /drift/);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+  assert.equal(readdirSync(empty).length, 0);
+  const fp = restarted.getWorkspace(follow.workspaceId)?.fingerprint;
+  assert.ok(fp);
+  assert.ok((fp?.fileCount ?? 0) >= 2);
+  assert.equal(restarted.getWorkspace(follow.workspaceId)?.logicalWorkspaceId, follow.workspaceId);
+});
+
+test("TEST E — an empty first look recovers the persisted project instead of aborting", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-recover-"));
+  const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-recover-"));
+  const first = open(dir);
+  const created = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.session,
+    instruction: "Create index.html",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(created.status, "resolved");
+  if (created.status !== "resolved") return;
+  writeFileSync(join(created.projectRoot, "index.html"), "<h1>Keep</h1>\n");
+  first.sessions.rememberFiles(created.workspaceId, ["index.html"]);
+  const gone = mkdtempSync(join(tmpdir(), "orvyn-gone-"));
+  rmSync(gone, { recursive: true });
+  assert.equal(first.sessions.relocateWorkspace(created.workspaceId, gone), false);
+  const detached = mkdtempSync(join(tmpdir(), "orvyn-detached-"));
+  assert.equal(first.sessions.relocateWorkspace(created.workspaceId, detached), true);
+  assert.equal(existsSync(join(created.projectRoot, "index.html")), true);
+
+  const follow = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.sessions.get(created.sessionId)!,
+    instruction: "Change the heading.",
+    clientRoot: detached,
+    cwd,
+  });
+  assert.equal(follow.status, "resolved");
+  if (follow.status !== "resolved") return;
+  assert.equal(follow.workspaceId, created.workspaceId);
+  assert.equal(follow.created, false);
+  assert.match(readFileSync(join(follow.projectRoot, "index.html"), "utf8"), /Keep/);
+  assert.notEqual(follow.projectRoot, detached);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
 });
 
 test("a blank project root is not the backend process directory", () => {

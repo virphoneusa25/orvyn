@@ -182,6 +182,16 @@ function resolved(identity: WorkspaceIdentity): WorkspaceResolved {
   return { status: "resolved", ...identity };
 }
 
+function workspaceLog(event: string, fields: Record<string, string | number | boolean | undefined>): void {
+  const payload: Record<string, string | number | boolean> = { event };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === "") continue;
+    if (key === "projectRoot" || key === "path") continue;
+    payload[key] = value;
+  }
+  console.log(JSON.stringify(payload));
+}
+
 function mismatch(session: WorkSession, projectId: string, workspaceId: string, projectRoot: string): WorkspaceMismatch {
   return {
     status: "mismatch",
@@ -211,6 +221,13 @@ function finish(
   }
   const filesNow = listWorkspaceFiles(projectRoot);
   const fresh = filesNow.length === 0 && sessions.knownFiles(binding.workspaceId).length === 0;
+  sessions.persistFingerprint(binding.workspaceId);
+  workspaceLog("project.workspace.persist", {
+    projectId: binding.projectId,
+    workspaceId: binding.workspaceId,
+    conversationId: session.sessionId,
+    fileCount: filesNow.length,
+  });
   return resolved({
     sessionId: session.sessionId,
     projectId: binding.projectId,
@@ -237,10 +254,25 @@ function explicitProjectChange(input: WorkspacePreflightInput): boolean {
   return input.switchProject === true || input.newProject === true || input.forkProject === true;
 }
 
+function existingDirectory(raw: string): string | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  try {
+    if (!statSync(text).isDirectory()) return null;
+    return realpathSync(text);
+  } catch {
+    return null;
+  }
+}
+
+function managedWorkspaceDir(dataDir: string, tenantId: string, workspaceId: string): string {
+  return path.join(dataDir, "tenants", tenantId, "workspaces", workspaceId);
+}
+
 /**
- * The session already has a workspace. Stay on it.
+ * The session already has a workspace. Stay on that logical id.
  * A client path does not mint another directory.
- * Missing known files are a mismatch, not a blank project.
+ * An empty first look is recovered from the persisted tree before any abort.
  */
 function restoreOwnedWorkspace(
   input: WorkspacePreflightInput,
@@ -249,24 +281,90 @@ function restoreOwnedWorkspace(
   ctx: { cwd: string; virtualRoot: string }
 ): WorkspacePreflightResult {
   const stored = record.projectRoot;
-  const untrusted = isUntrustedProjectRoot(stored, ctx) || stored === "." || path.resolve(stored) === path.resolve(ctx.cwd);
   const known = input.sessions.knownFiles(record.workspaceId);
+  const managed = managedWorkspaceDir(input.sessions.dataDirectory, input.tenantId, record.workspaceId);
+  workspaceLog("project.workspace.resolve", {
+    projectId: record.projectId,
+    workspaceId: record.workspaceId,
+    conversationId: session.sessionId,
+    knownFiles: known.length,
+  });
   input.sessions.bindWorkspace(session.sessionId, {
     workspaceId: record.workspaceId,
     projectId: record.projectId,
     projectRoot: stored,
   });
-  if (untrusted || (known.length > 0 && !knownFilesIntact(stored, known))) {
+
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  const consider = (raw: string) => {
+    const dir = existingDirectory(raw);
+    if (!dir || seen.has(dir)) return;
+    const provisioned = isProvisionedWorkspace(dir, input.tenantId, input.sessions.dataDirectory);
+    if (!provisioned && isUntrustedProjectRoot(dir, ctx)) return;
+    seen.add(dir);
+    candidates.push(dir);
+  };
+  consider(stored);
+  consider(managed);
+
+  let chosen: { root: string; intact: boolean; fileCount: number } | null = null;
+  for (const root of candidates) {
+    const intact = known.length === 0 || knownFilesIntact(root, known);
+    const fileCount = listWorkspaceFiles(root).length;
+    if (intact) {
+      chosen = { root, intact: true, fileCount };
+      break;
+    }
+    if (!chosen && fileCount > 0) chosen = { root, intact: false, fileCount };
+  }
+
+  if (!chosen && known.length > 0) {
+    workspaceLog("project.workspace.recover", {
+      projectId: record.projectId,
+      workspaceId: record.workspaceId,
+      conversationId: session.sessionId,
+      recovered: false,
+    });
+    workspaceLog("project.workspace.mismatch", {
+      projectId: record.projectId,
+      workspaceId: record.workspaceId,
+      conversationId: session.sessionId,
+    });
     return mismatch(session, record.projectId, record.workspaceId, stored);
   }
-  if (!existsSync(stored)) mkdirSync(stored, { recursive: true });
-  return finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: stored }, { created: false, restored: true });
+
+  let root = chosen?.root ?? existingDirectory(stored) ?? "";
+  if (!root) {
+    if (known.length > 0) return mismatch(session, record.projectId, record.workspaceId, stored);
+    mkdirSync(managed, { recursive: true });
+    root = realpathSync(managed);
+    input.sessions.relocateWorkspace(record.workspaceId, root);
+  } else if (path.resolve(root) !== path.resolve(stored)) {
+    input.sessions.relocateWorkspace(record.workspaceId, root);
+    workspaceLog("project.workspace.mount", {
+      projectId: record.projectId,
+      workspaceId: record.workspaceId,
+      conversationId: session.sessionId,
+      remounted: true,
+    });
+  }
+
+  const recovered = !chosen?.intact || path.resolve(root) !== path.resolve(stored);
+  workspaceLog(recovered ? "project.workspace.recover" : "project.workspace.restore", {
+    projectId: record.projectId,
+    workspaceId: record.workspaceId,
+    conversationId: session.sessionId,
+    fileCount: chosen?.fileCount ?? listWorkspaceFiles(root).length,
+    recovered,
+  });
+  return finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: root }, { created: false, restored: true });
 }
 
 /**
  * Resolve the workspace for one run.
  * Existing sessions keep their workspace. A wrong client path does not mint a new one.
- * An existing workspace whose known files are gone is WORKSPACE_STATE_MISMATCH.
+ * An existing workspace whose files cannot be recovered is WORKSPACE_STATE_MISMATCH.
  */
 export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePreflightResult {
   const session = input.sessions.get(input.session.sessionId) ?? input.session;
@@ -294,19 +392,9 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
 
   if (!record) {
     if (isTrustedExistingProject(client, ctx)) return adoptClient(input.sessions, session, client);
-    if (client && looksLikeForeignAbsolutePath(client)) {
-      const ws = input.sessions.workspaceFor(client);
-      input.sessions.bindWorkspace(session.sessionId, { workspaceId: ws.workspaceId, projectId: ws.projectId, projectRoot: client });
-      return resolved({
-        sessionId: session.sessionId,
-        projectId: ws.projectId,
-        workspaceId: ws.workspaceId,
-        projectRoot: client,
-        created: ws.created,
-        restored: !ws.created,
-        fresh: false,
-      });
-    }
+    // A path from another machine is not a workspace this process can use.
+    // Provision one durable directory instead of storing an unreachable root.
+    if (client && looksLikeForeignAbsolutePath(client)) return provision(input.sessions, session);
     return provision(input.sessions, session);
   }
 

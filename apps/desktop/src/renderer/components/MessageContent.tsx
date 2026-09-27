@@ -58,6 +58,8 @@ function CodeBlock({ code, lang, onApply }: { code: string; lang: string; onAppl
         overflow: "hidden",
         margin: "10px 0",
         background: "var(--bg-app)",
+        maxWidth: "100%",
+        minWidth: 0,
       }}
     >
       <div
@@ -89,6 +91,10 @@ function CodeBlock({ code, lang, onApply }: { code: string; lang: string; onAppl
           margin: 0,
           padding: "10px 12px",
           overflowX: "auto",
+          maxWidth: "100%",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
           fontFamily: "var(--font-mono)",
           fontSize: 12.5,
           lineHeight: 1.6,
@@ -105,7 +111,7 @@ function CodeBlock({ code, lang, onApply }: { code: string; lang: string; onAppl
 function renderText(text: string, key: number) {
   const lines = text.split("\n");
   return (
-    <div key={key} className="selectable" style={{ lineHeight: 1.65 }}>
+    <div key={key} className="selectable" style={{ lineHeight: 1.65, minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word" }}>
       {lines.map((line, i) => {
         if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
 

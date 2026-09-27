@@ -103,6 +103,15 @@ function harness(root: string, turns: AIChunk[][]) {
   registry.register(makeReadFileTool(root));
   registry.register(makeWriteFileTool(root));
   registry.register({
+    name: "git_status",
+    description: "git status in the workspace",
+    parameters: { type: "object", properties: {} },
+    defaultPermission: "allowed",
+    async execute() {
+      return { ok: true, output: "{\"branch\":\"\",\"clean\":true,\"modified\":[],\"staged\":[],\"untracked\":[]}" };
+    },
+  });
+  registry.register({
     name: "browser_open",
     description: "Open the shared browser",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },

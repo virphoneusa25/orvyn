@@ -49,5 +49,13 @@ test("a website is not complete until the browser check passes", () => {
       { type: "verification.completed", data: { verdict: "FAIL", checks: [{ name: "browser", status: "fail" }] } },
     ],
   }), "continue", "only the latest verification counts");
+  assert.equal(decideCompletion({
+    instruction,
+    events: [
+      ...files,
+      { type: "preview.available", data: { url: "https://preview.example/s/1" } },
+      { type: "verification.completed", data: { verdict: "PARTIAL", checks: [{ name: "browser", status: "pass" }, { name: "git status", status: "fail" }], findings: [{ severity: "unverified", check: "git", message: "Git status unavailable" }] } },
+    ],
+  }), "completed", "a browser pass with only git unavailable still finishes");
   assert.equal(decideCompletion({ instruction: "Create hello.txt", events: [] }), "completed");
 });

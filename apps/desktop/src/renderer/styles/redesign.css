@@ -540,7 +540,7 @@
 .ov-msg__avatar--agent img { width: 15px; height: 17px; display: block; }
 .ov-msg__body { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; }
 .ov-msg__who { font-size: 12px; color: var(--ov-faint); }
-.ov-msg__text { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--ov-text-2); white-space: pre-wrap; }
+.ov-msg__text { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--ov-text-2); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 0; max-width: 100%; }
 .ov-msg--user .ov-msg__text { color: var(--ov-text); line-height: 1.55; }
 .ov-tool {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;

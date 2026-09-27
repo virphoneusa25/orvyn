@@ -52,7 +52,7 @@
 .stream-explore-title { color: var(--text-secondary); font-weight: 500; }
 .stream-thought { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 13px; color: var(--text-muted); }
 .stream-thought-label { font-weight: 500; }
-.user-pill { max-width: 78%; background: rgba(255,255,255,0.04); border: 1px solid var(--orvyn-border-soft, var(--border)); border-radius: 14px; padding: 7px 12px; font-size: 13.5px; line-height: 1.5; color: var(--orvyn-text, var(--text)); white-space: pre-wrap; }
+.user-pill { max-width: min(78%, 100%); background: rgba(255,255,255,0.04); border: 1px solid var(--orvyn-border-soft, var(--border)); border-radius: 14px; padding: 7px 12px; font-size: 13.5px; line-height: 1.5; color: var(--orvyn-text, var(--text)); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
 .activity-item.activity-edit strong { color: var(--text); }
 .activity-done .activity-target strong { color: var(--text); }
 .edit-plus { color: #3fb950; }
@@ -61,8 +61,25 @@
 
 /* ── Tool steps as single lines (matches the ORVYN site's app demo) ── */
 .activity-phase { margin: 6px 0 12px; display: grid; gap: 5px; }
+.chat-stream,
+.chat-stream__column,
+.chat-composer,
+.tool-line,
+.tool-line__row,
+.tool-line__live,
+.tool-line__error,
+.user-pill {
+  min-width: 0;
+  max-width: 100%;
+}
+.chat-stream {
+  overflow-x: hidden;
+}
+.chat-composer {
+  width: 100%;
+}
 .tool-line { display: block; list-style: none; animation: tool-line-in .28s ease-out both; }
-.tool-line__row { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 11px; border-radius: 9px; background: var(--bg-elevated); border: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); transition: border-color .2s, color .2s; }
+.tool-line__row { display: flex; align-items: center; gap: 9px; min-width: 0; max-width: 100%; overflow: hidden; padding: 7px 11px; border-radius: 9px; background: var(--bg-elevated); border: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); transition: border-color .2s, color .2s; }
 .tool-line__row.is-link { cursor: pointer; }
 .tool-line__row.is-link:hover { border-color: rgba(152, 164, 255, .35); }
 .tool-line--running > .tool-line__row, summary.tool-line--running .tool-line__row { border-color: rgba(152, 164, 255, .35); color: var(--text); }
@@ -71,15 +88,15 @@
 .tool-line__spin { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid rgba(152, 164, 255, .25); border-top-color: #98A4FF; animation: tool-line-spin .8s linear infinite; }
 .tool-line__icon { display: inline-grid; place-items: center; flex: none; color: var(--text-muted); }
 .tool-line__icon svg, .tool-line__icon img { width: 14px; height: 14px; }
-.tool-line__verb { white-space: nowrap; }
-.tool-line__target { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.tool-line__meta { margin-left: auto; font-style: normal; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); white-space: nowrap; }
+.tool-line__verb { white-space: nowrap; flex: none; }
+.tool-line__target { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; max-width: 100%; }
+.tool-line__meta { margin-left: auto; font-style: normal; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); white-space: nowrap; flex: none; max-width: 34%; overflow: hidden; text-overflow: ellipsis; }
 .tool-line--done .tool-line__meta { color: var(--text-secondary); }
 .tool-line--failed .tool-line__meta { color: var(--warning); }
 .tool-line__open { color: var(--text-muted); font-size: 11px; }
 .tool-line__meta + .tool-line__open { margin-left: 2px; }
 .tool-line__target + .tool-line__open, .tool-line__verb + .tool-line__open { margin-left: auto; }
-.tool-line__live { margin: 4px 0 0 34px; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border); background: rgba(0, 0, 0, .25); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+.tool-line__live { margin: 4px 0 0 34px; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border); background: rgba(0, 0, 0, .25); font-family: var(--font-mono); font-size: 11px; line-height: 1.55; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 100%; max-height: 180px; overflow-x: auto; overflow-y: auto; }
 .tool-line__live--full { max-height: 320px; }
 .tool-line__error { margin: 4px 0 0 34px; font-size: 11px; color: var(--danger); overflow-wrap: anywhere; }
 .tool-line__note { margin: 4px 0 0 34px; font-size: 11px; color: var(--text-muted); }

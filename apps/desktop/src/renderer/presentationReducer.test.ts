@@ -554,6 +554,24 @@ test("the verifier's verdict shows in the conversation: FAIL with its first find
   assert.equal(labels[1], "Verified: independent check passed");
 });
 
+test("a failed git_status check is partial verification, not a pass", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("verification.completed", {
+        verdict: "PASS",
+        findings: [{ check: "git", severity: "unverified", message: "Git status unavailable: Unknown tool: git_status" }],
+        checks: [{ name: "git status", status: "fail" }],
+        verifierTools: [{ tool: "git_status", ok: false }],
+      }),
+    ],
+    "completed"
+  );
+  const status = items.find((i) => i.kind === "status") as { label: string } | undefined;
+  assert.equal(status?.label, "Partial verification");
+  assert.notEqual(status?.label, "Verified: independent check passed");
+});
+
 test("verifier checks are their own labelled rows, and a verifier with no verdict is not shown as ORION's failure", () => {
   reset();
   const items = reducePresentation(

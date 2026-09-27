@@ -82,6 +82,19 @@ export interface VerificationResult {
 }
 
 /** What the verifier may call. Nothing here writes to the project. */
+/** Capabilities the verifier must be able to call. Names are the registry names. */
+export const REQUIRED_VERIFIER_CAPABILITIES = [
+  "browser_screenshot",
+  "browser_console_errors",
+  "browser_evidence",
+  "git_status",
+] as const;
+
+export function missingVerifierCapabilities(registered: Iterable<string>): string[] {
+  const have = new Set(registered);
+  return REQUIRED_VERIFIER_CAPABILITIES.filter((name) => !have.has(name));
+}
+
 export const VERIFIER_TOOLS = new Set([
   "read_file",
   "list_directory",
@@ -315,6 +328,14 @@ async function deterministicChecks(evidence: VerificationEvidence, tools: Verifi
     status: findings.some((x) => x.check === "browser" && x.severity === "blocker") ? "fail" : fresh.length ? "pass" : evidence.website ? "unverified" : "skip",
     detail: fresh.length ? `${fresh.length} observation(s) after the last change${lastState ? ` · ${lastState.consoleErrors ?? 0} console / ${lastState.networkErrors ?? 0} network errors` : ""}` : "no browser evidence after the last change",
   });
+
+  const git = await tools.execute("git_status", {});
+  if (!git.ok) {
+    findings.push({ severity: "unverified", check: "git", message: `Git status unavailable: ${git.error ?? "git_status failed"}` });
+    checks.push({ name: "git status", status: "fail", detail: String(git.error ?? "failed") });
+  } else {
+    checks.push({ name: "git status", status: "pass", detail: String(git.output ?? "").split("\n")[0] || "read" });
+  }
   return { findings, checks };
 }
 
@@ -405,8 +426,9 @@ export class VerificationRuntime {
 
     const blockers = det.findings.filter((f) => f.severity === "blocker");
     const unverified = det.findings.filter((f) => f.severity === "unverified");
+    const gitFailed = det.checks.some((c) => c.name === "git status" && c.status === "fail") || toolCalls.some((c) => c.tool === "git_status" && !c.ok);
     let verdict: VerificationVerdict =
-      blockers.length || modelVerdict === "FAIL" ? "FAIL" : unverified.length || modelVerdict === "PARTIAL" ? "PARTIAL" : "PASS";
+      blockers.length || modelVerdict === "FAIL" ? "FAIL" : unverified.length || modelVerdict === "PARTIAL" || gitFailed ? "PARTIAL" : "PASS";
     // A verifier that could not give a verdict certifies nothing, but it is not
     // a defect in the work either: the automatic checks stand, capped at PARTIAL.
     if (provider?.supportsTools() && modelVerdict === undefined && verdict === "PASS") verdict = "PARTIAL";

@@ -124,6 +124,43 @@ test("the verifier model is read-only: a write is blocked, and no verdict means 
   assert.equal(r3.verdict, "FAIL");
 });
 
+test("TEST F and G — unknown git_status cannot be a global pass", async () => {
+  const fixed = {
+    "index.html": "<html><body><h1>Hi</h1></body></html>",
+    "style.css": "h1{color:#222}",
+    "app.js": "document.querySelector('h1').textContent = 'Hello';\n",
+  };
+  const tools = {
+    execute: async (tool: string, args: Record<string, unknown>) => {
+      if (tool === "git_status") return { ok: false, error: "Unknown tool: git_status" };
+      if (tool === "read_file") {
+        const p = String(args.path);
+        return p in fixed ? { ok: true, output: fixed[p as keyof typeof fixed] } : { ok: false, error: "missing" };
+      }
+      return { ok: true, output: "" };
+    },
+  };
+  const provider = {
+    supportsTools: () => true,
+    supportsVision: () => false,
+    async generate(): Promise<AIResponse> {
+      return { content: "VERDICT: PASS\n- looks done", finishReason: "stop" };
+    },
+  } as never;
+  const clean = [{ tool: "browser_console_errors", sessionId: "bs_1", url: "https://x/", consoleErrors: 0, networkErrors: 0, sequence: 11 }];
+  const r = await new VerificationRuntime({
+    tools,
+    provider,
+    toolDefinitions: [{ name: "git_status", description: "git", parameters: { type: "object", properties: {} } }],
+  }).verify(evidence({ browserEvidence: clean, changedFiles: [{ path: "index.html", operation: "write" }] }));
+  assert.equal(r.toolCalls.some((c) => c.tool === "git_status"), true);
+  assert.equal(r.toolCalls.find((c) => c.tool === "git_status")?.ok, false);
+  assert.notEqual(r.verdict, "PASS");
+  assert.equal(r.verdict, "PARTIAL");
+  assert.match(r.findings.map((f) => f.message).join("\n"), /Git status unavailable/);
+  assert.doesNotMatch(r.findings.map((f) => f.message).join("\n"), /Verified: independent check passed/);
+});
+
 test("evidence is collected from envelopes: changed files, tests, browser", () => {
   const env = (tool: string, status: string, structuredData: Record<string, unknown>, evidence: unknown[] = []) => ({ tool, envelope: { toolName: tool, status, userSummary: tool, structuredData, evidence } });
   const ev = collectVerificationEvidence("goal", [

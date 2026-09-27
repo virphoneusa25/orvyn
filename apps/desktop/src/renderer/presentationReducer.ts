@@ -480,23 +480,30 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
 
       case "verification.completed": {
         const verdict = String(e.data.verdict ?? "");
-        const all = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string; check?: string }[]) : [];
+        const all = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string; check?: string; severity?: string }[]) : [];
+        const checks = Array.isArray(e.data.checks) ? (e.data.checks as { name?: string; status?: string }[]) : [];
+        const verifierTools = Array.isArray(e.data.verifierTools) ? (e.data.verifierTools as { tool?: string; ok?: boolean }[]) : [];
+        const failedRequired = checks.some((c) => c.status === "fail") || verifierTools.some((t) => t.ok === false && (t.tool === "git_status" || String(t.tool ?? "").startsWith("browser_")));
+        const shown = verdict === "PASS" && failedRequired ? "PARTIAL" : verdict;
         // The verifier's own trouble (no verdict) is not something ORION fixes.
         const findings = all.filter((f) => f.check !== "verifier-unavailable");
-        if (verdict !== "PASS" && findings.length === 0) {
+        if (shown !== "PASS" && findings.length === 0 && !failedRequired) {
           items.push({ kind: "status", key: e.id, label: "Checked by the automatic checks (the verifier model gave no verdict)", ephemeral: false, tone: "working" });
           continue;
         }
         const first = findings[0]?.message ? ` — ${String(findings[0].message).slice(0, 110)}` : "";
         const more = findings.length > 1 ? ` (+${findings.length - 1} more)` : "";
+        const blockers = findings.some((f) => f.severity === "blocker") || shown === "FAIL";
         items.push({
           kind: "status",
           key: e.id,
-          label: verdict === "PASS"
+          label: shown === "PASS"
             ? "Verified: independent check passed"
-            : `Verification ${verdict}${first}${more}. Fixing it before finishing.`,
+            : shown === "PARTIAL" && !blockers
+              ? "Partial verification"
+              : `Verification ${shown}${first}${more}. Fixing it before finishing.`,
           ephemeral: false,
-          tone: verdict === "PASS" ? "working" : "rework",
+          tone: shown === "PASS" ? "working" : "rework",
         });
         continue;
       }

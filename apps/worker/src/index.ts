@@ -412,6 +412,31 @@ async function remoteTerminal(containerId: string, command: string): Promise<Com
   return { ok: r.code === 0, output: r.stdout + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.code, stderr: r.stderr };
 }
 
+function parseGitPorcelain(text: string): { branch: string; clean: boolean; modified: string[]; staged: string[]; untracked: string[] } {
+  const modified: string[] = [];
+  const staged: string[] = [];
+  const untracked: string[] = [];
+  let branch = "";
+  for (const line of String(text || "").split(/\r?\n/)) {
+    if (!line) continue;
+    if (line.indexOf("##") === 0) {
+      const name = line.slice(2).trim().split("...")[0] || "";
+      branch = name.trim() === "HEAD (no branch)" ? "" : name.trim();
+      continue;
+    }
+    if (line.length < 4) continue;
+    const xy = line.slice(0, 2);
+    const file = line.slice(3).trim();
+    if (!file) continue;
+    if (xy === "??") untracked.push(file);
+    else {
+      if (xy.charAt(0) !== " " && xy.charAt(0) !== "?") staged.push(file);
+      if (xy.charAt(1) !== " ") modified.push(file);
+    }
+  }
+  return { branch, clean: modified.length + staged.length + untracked.length === 0, modified, staged, untracked };
+}
+
 /** Shell-safely quotes one argument for sh -c interpolation. */
 function shq(s: string): string {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -540,6 +565,48 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
           case "run_typecheck": {
             const r = await remoteTerminal(containerId, "npx --no-install tsc --noEmit 2>&1 || echo 'typescript not installed'");
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "git_status": {
+            console.log(JSON.stringify({ event: "git.status.start", runId }));
+            const r = await remoteTerminal(containerId, "git status --porcelain=v1 -b");
+            const text = (r.output || "") + (r.stderr || "");
+            if (/not a git repository/i.test(text)) {
+              const snapshot = { branch: "", clean: true, modified: [] as string[], staged: [] as string[], untracked: [] as string[] };
+              console.log(JSON.stringify({ event: "git.status.complete", runId, repository: false }));
+              result = { ok: true, output: JSON.stringify(snapshot), exitCode: 0 };
+              break;
+            }
+            if (!r.ok) {
+              console.log(JSON.stringify({ event: "git.status.error", runId }));
+              result = { ok: false, error: text.trim() || "git status failed", stderr: r.stderr, exitCode: r.exitCode };
+              break;
+            }
+            const snapshot = parseGitPorcelain(r.output || "");
+            console.log(JSON.stringify({ event: "git.status.complete", runId, repository: true, clean: snapshot.clean, branch: snapshot.branch }));
+            result = { ok: true, output: JSON.stringify(snapshot), exitCode: 0 };
+            break;
+          }
+          case "git_diff": {
+            const r = await remoteTerminal(containerId, "git diff");
+            result = r.ok || /not a git repository/i.test(r.output || "")
+              ? { ok: true, output: r.output || "(no diff)", exitCode: r.exitCode }
+              : { ok: false, error: (r.output || r.stderr || "git diff failed"), exitCode: r.exitCode };
+            break;
+          }
+          case "git_log": {
+            const limit = Math.min(Math.max(Number(req.arguments.limit) || 20, 1), 200);
+            const r = await remoteTerminal(containerId, "git log --oneline --decorate -n" + limit);
+            result = r.ok || /not a git repository/i.test(r.output || "")
+              ? { ok: true, output: r.output || "(no commits)", exitCode: r.exitCode }
+              : { ok: false, error: (r.output || r.stderr || "git log failed"), exitCode: r.exitCode };
+            break;
+          }
+          case "git_branch": {
+            const r = await remoteTerminal(containerId, "git branch -a --no-color");
+            result = r.ok || /not a git repository/i.test(r.output || "")
+              ? { ok: true, output: r.output || "(no branches)", exitCode: r.exitCode }
+              : { ok: false, error: (r.output || r.stderr || "git branch failed"), exitCode: r.exitCode };
             break;
           }
           default:

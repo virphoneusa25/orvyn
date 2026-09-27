@@ -26,6 +26,8 @@ import { routeSkills } from "../skills/SkillRouter";
 // resume without disturbing the run.
 
 import { randomUUID } from "crypto";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
+import path from "path";
 import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition, type TokenUsage } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
@@ -551,6 +553,30 @@ export class StreamingAgentRuntime {
     }
   }
 
+  /**
+   * A generated image used by the site also lives in the project tree.
+   * Virtual file storage keeps the download card. It is not the project file.
+   */
+  private async materializeGeneratedAsset(
+    state: RunState,
+    art: { artifactId: string; name: string; mimeType?: string }
+  ): Promise<void> {
+    if (!this.artifacts || !state.projectRoot || !art.artifactId || !art.name) return;
+    if (!existsSync(state.projectRoot)) return;
+    const base = art.name.split(/[/\\]/).pop() || "";
+    if (!/\.(svg|png|jpe?g|gif|webp)$/i.test(base)) return;
+    const rel = `public/${base}`;
+    try {
+      const loaded = await this.artifacts.read(art.artifactId);
+      const target = path.join(state.projectRoot, rel);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, loaded.bytes);
+      state.onProjectFile?.(rel);
+    } catch {
+      /* the download card still exists; the next turn can recover project files that did land */
+    }
+  }
+
   /** web_search is registered and not denied (Plan/Research modes keep it; nothing turns it off silently). */
   private webResearchAvailable(): boolean {
     try {
@@ -977,7 +1003,15 @@ export class StreamingAgentRuntime {
           return this.modelService.router.resolve("agent");
         })();
     this.store.create(runId, projectRoot);
-    if (options?.workspaceId) this.store.bindWorkspace(runId, options.workspaceId);
+    if (options?.workspaceId) {
+      this.store.bindWorkspace(runId, options.workspaceId);
+      console.log(JSON.stringify({
+        event: "mission.workspace.bind",
+        workspaceId: options.workspaceId,
+        runId,
+        provider: provider.config?.id,
+      }));
+    }
 
     // Mode controls tool permissions as well as prompting, so a read-only
     // mode genuinely cannot write even if the model tries.
@@ -2598,8 +2632,9 @@ export class StreamingAgentRuntime {
               name: art.name,
               location: "Files → Generated",
               virtualWorkspace: true,
-              message: `${art.name} is in Files → Generated (virtual file storage).`,
+              message: `${art.name} is in Files → Generated (virtual file storage). The project copy, when this is a site asset, is public/${art.name.split(/[/\\]/).pop()}.`,
             });
+            await this.materializeGeneratedAsset(state, art);
           }
         }
         // The model gets the clamped text, not the raw output: one oversized

@@ -546,15 +546,16 @@ export function WorkStream({
 
       {/* The stream: older turns, then this run's activity, then follow-ups.
           Newest text is always the last block so it sits at the bottom. */}
-      <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div className="chat-stream" style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0, maxWidth: "100%", display: "flex", flexDirection: "column" }}>
         <div
           ref={scroller}
+          className="chat-stream"
           onScroll={onStreamScroll}
-          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "14px 22px", minWidth: 0 }}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "14px 22px", minWidth: 0, maxWidth: "100%" }}
         >
           {/* Readable conversation measure: content never stretches edge to
               edge — the stream reads like a document, not a log viewer. */}
-          <div style={{ maxWidth: 880, margin: "0 auto", minWidth: 0 }}>
+          <div className="chat-stream__column" style={{ maxWidth: 880, margin: "0 auto", minWidth: 0, width: "100%" }}>
           {messages.length === 0 && run.events.length === 0 && (
             <div style={{ padding: "48px 0", textAlign: "center" }}>
               <img src={appIcon} alt="ORVYN" width={40} height={40} style={{ borderRadius: 11, opacity: 0.9 }} />
@@ -694,7 +695,7 @@ export function WorkStream({
       </div>
 
       {/* Sticky command composer — same pipeline as Home. */}
-      <div style={{ flexShrink: 0, padding: "10px 16px 12px", borderTop: "1px solid var(--orvyn-border-soft)" }}>
+      <div className="chat-composer" style={{ flexShrink: 0, width: "100%", maxWidth: "100%", minWidth: 0, padding: "10px 16px 12px", borderTop: "1px solid var(--orvyn-border-soft)" }}>
         {queue.length > 0 && (
           <div style={{ marginBottom: 8, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: "var(--orvyn-text-muted)", padding: "0 2px" }}>
@@ -1034,7 +1035,7 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
         {message.activity && message.activity.some((a) => a.kind !== "capability") && (
           <ResearchTimeline steps={stepsFromActivity(message.activity)} live={live} thinking={live && !message.content.trim()} startedAt={message.createdAt} />
         )}
-        <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: "var(--orvyn-text)", minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere" }}>
           {!message.content && live && message.activity?.length ? null : !message.content && live ? (
             <OrionThinkingIndicator />
           ) : (
