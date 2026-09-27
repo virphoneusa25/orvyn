@@ -818,6 +818,8 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         flushAssistant(false);
         items.push({ kind: "status", key: e.id, label: "Desktop · Verification passed", ephemeral: false });
         continue;
+      case "preview.updated":
+        continue;
       case "preview.available":
         flushAssistant(false);
         previewRev += 1;

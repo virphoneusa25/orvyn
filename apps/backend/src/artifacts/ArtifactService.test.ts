@@ -46,6 +46,12 @@ test("ArtifactService persist/list/read/delete, hash, files tree, restart", asyn
     assert.ok(recents?.files.some((f) => f.name === "virphone-logo.png"));
     const collision = await svc.persistArtifact({ name: "virphone-logo.png", kind: "generated", bytes: MINIMAL_PNG, mimeType: "image/png" });
     assert.equal(collision.name, "virphone-logo-2.png");
+    const page = await svc.persistArtifact({ name: "index.html", kind: "file", content: "<h1>one</h1>", keepName: true });
+    const pageAgain = await svc.persistArtifact({ name: "index.html", kind: "file", content: "<h1>two</h1>", keepName: true });
+    const pageThird = await svc.persistArtifact({ name: "index.html", kind: "file", content: "<h1>three</h1>", keepName: true });
+    assert.equal(page.name, "index.html");
+    assert.equal(pageAgain.name, "index.html");
+    assert.equal(pageThird.name, "index.html");
     const doc = await svc.persistArtifact({ name: "notes.md", kind: "document", content: "# Hello" });
     const read = await svc.read(doc.artifactId);
     assert.match(read.bytes.toString("utf-8"), /Hello/);

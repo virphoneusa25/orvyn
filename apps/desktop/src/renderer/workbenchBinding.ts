@@ -179,7 +179,7 @@ function collectMutations(events: WorkspaceEvent[], session: WorkbenchSessionSna
 function projectPreview(events: WorkspaceEvent[], session: WorkbenchSessionSnapshot | null | undefined): string | null {
   let url: string | null = null;
   for (const e of events) {
-    if (e.type === "preview.available" && typeof e.data?.url === "string" && e.data.url) url = e.data.url;
+    if ((e.type === "preview.available" || e.type === "preview.updated") && typeof e.data?.url === "string" && e.data.url) url = e.data.url;
   }
   if (url) return url;
   const saved = session?.preview?.url;

@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { AIChunk, AIRequest, AIResponse, ModelConfig } from "@orvyn/ai-core";
@@ -172,6 +172,8 @@ test("a one-page website is written, served, and checked before the final answer
     prose("I need to supply the path and content."),
     call("write-html", "write_file", { path: "index.html", content: PAGE }),
     call("write-css", "write_file", { path: "styles.css", content: CSS }),
+    call("write-2", "write_file", { path: "index-2.html", content: PAGE.replace("Harbor Studio", "Harbor Two") }),
+    call("write-3", "write_file", { path: "index-3.html", content: PAGE.replace("Harbor Studio", "Harbor Three") }),
     call("open-1", "browser_open", { url: "http://127.0.0.1:4570/preview" }),
     call("shot-1", "browser_screenshot", { url: "http://127.0.0.1:4570/preview" }),
     prose("Finished. The site is running and the Browser check passed."),
@@ -184,6 +186,9 @@ test("a one-page website is written, served, and checked before the final answer
 
   const html = readFileSync(join(root, "index.html"), "utf8");
   const css = readFileSync(join(root, "styles.css"), "utf8");
+  assert.match(html, /Harbor Three/);
+  assert.equal(existsSync(join(root, "index-2.html")), false);
+  assert.equal(existsSync(join(root, "index-3.html")), false);
   assert.match(html, /Hero/);
   assert.match(html, /Services/);
   assert.match(html, /Contact/);
@@ -194,7 +199,16 @@ test("a one-page website is written, served, and checked before the final answer
   assert.equal(invalid.length, 1, "one missing-content write is corrected, not looped");
   assert.equal(events.some((e) => e.type === "run.error" && /repeated the same invalid arguments/i.test(String(e.data?.message ?? ""))), false);
 
-  assert.ok(events.some((e) => e.type === "preview.available" && /^https?:\/\//.test(String(e.data?.url ?? ""))));
+  const available = events.filter((e) => e.type === "preview.available");
+  assert.equal(available.length, 1);
+  const previewUrl = String(available[0]?.data?.url ?? "");
+  assert.match(previewUrl, /^https?:\/\//);
+  const updates = events.filter((e) => e.type === "preview.updated");
+  assert.ok(updates.length >= 1);
+  assert.ok(updates.every((e) => e.data?.url === previewUrl));
+  const revisions = updates.map((e) => Number(e.data?.revision));
+  assert.deepEqual(revisions, [...revisions].sort((a, b) => a - b));
+  assert.equal(new Set(revisions).size, revisions.length);
   assert.ok(events.some((e) => e.type === "browser.completed" && e.data?.tool === "browser_open"));
   assert.ok(events.some((e) => e.type === "browser.completed" && e.data?.tool === "browser_screenshot"));
   const verification = [...events].reverse().find((e) => e.type === "verification.completed");

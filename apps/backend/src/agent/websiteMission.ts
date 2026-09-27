@@ -44,7 +44,7 @@ export function websiteEvidenceFrom(events: Array<{ type: string; data?: Record<
     const verifier = Boolean(event.data?.verifier);
     if (event.type === "tool.completed" && !verifier && INSPECT_TOOL.test(tool)) inspected = true;
     if ((event.type === "file.created" || event.type === "file.edit") && /\.(html|css|js|php)$/i.test(String(event.data?.path ?? ""))) wrotePage = true;
-    if (event.type === "preview.available" && String(event.data?.url ?? "")) preview = true;
+    if ((event.type === "preview.available" || event.type === "preview.updated") && String(event.data?.url ?? "")) preview = true;
     if (event.type === "browser.completed" || (event.type === "tool.completed" && !verifier && /^browser_/.test(tool))) browserOpened = true;
   }
   return { inspected, wrotePage, preview, browserOpened };
@@ -74,7 +74,7 @@ export function websiteActionPrompt(phase: WebsitePhase): string {
     case "planning":
       return "Continue now: inspect the workspace with list_directory. If the user asked for current references, call web_search first. Call the tool in this turn. Do not describe the step.";
     case "implementing":
-      return "Continue now: call write_file with both path and content for index.html and its stylesheet at the workspace root. Do not describe the step, and do not say the folder is empty instead of writing.";
+      return "Continue now: call write_file with both path and content. First write index.html (navigation and hero) and styles.css (base theme) if they are missing, then add sections by updating those same files. Do not create a numbered copy. Do not describe the step, and do not say the folder is empty instead of writing.";
     case "building":
     case "starting":
       return "Continue now: the page files exist. Do not start a shell server. The preview is published from those files. Call browser_open on the preview URL, then browser_screenshot. Do not describe the step.";

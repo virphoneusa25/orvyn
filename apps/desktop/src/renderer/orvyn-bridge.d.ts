@@ -91,7 +91,7 @@ export interface OrvynBridge {
     navigate(id: string, url: string): Promise<WorkbenchBrowserState>;
     back(id: string): Promise<WorkbenchBrowserState>;
     forward(id: string): Promise<WorkbenchBrowserState>;
-    reload(id: string): Promise<WorkbenchBrowserState>;
+    reload(id: string, opts?: { ignoreCache?: boolean }): Promise<WorkbenchBrowserState>;
     activate(id: string | null): Promise<WorkbenchBrowserState>;
     close(id: string): Promise<WorkbenchBrowserState>;
     setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<WorkbenchBrowserState>;

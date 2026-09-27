@@ -34,6 +34,7 @@ function saveRoot(id: string, dir: string): void {
   writeFileSync(rootIndex(), JSON.stringify(all));
 }
 const publishedIds = new Map<string, string>();
+const revisions = new Map<string, number>();
 const remembered = new Map<string, Map<string, string>>();
 let publicOrigin = (process.env.ORVYN_PUBLIC_ORIGIN || "").replace(/\/$/, "");
 
@@ -41,6 +42,7 @@ const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".php": "text/plain; charset=utf-8",
   ".xml": "application/xml",
   ".json": "application/json",
@@ -64,6 +66,15 @@ export function previewUrl(id: string): string {
   return `${base}/api/v1/sites/${id}/`;
 }
 
+/** Active preview responses must not be cached across file writes. */
+export const PREVIEW_CACHE_CONTROL = "no-store";
+
+const SITE_ASSET = /\.(html?|css|js|mjs|svg|png|jpe?g|webp|json|php)$/i;
+
+export function isSiteAssetPath(filePath: string): boolean {
+  return SITE_ASSET.test(filePath.replace(/\\/g, "/"));
+}
+
 /** Keep a file the agent just wrote, keyed by run, so the preview does not depend on the project disk. */
 export function rememberSiteFile(runId: string, relPath: string, content: string): void {
   const rel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -76,6 +87,26 @@ export function rememberSiteFile(runId: string, relPath: string, content: string
 /** A site file already remembered for this run (ORION wrote or read it). */
 export function hasSiteFile(runId: string, relPath: string): boolean {
   return remembered.get(runId)?.has(relPath.replace(/\\/g, "/").replace(/^\/+/, "")) ?? false;
+}
+
+export function rememberedSiteFiles(runId: string): string[] {
+  return [...(remembered.get(runId)?.keys() ?? [])];
+}
+
+export function forgetSiteFile(runId: string, relPath: string): void {
+  const rel = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  remembered.get(runId)?.delete(rel);
+}
+
+export function moveSiteFile(runId: string, fromPath: string, toPath: string): void {
+  const from = fromPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const to = toPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const bag = remembered.get(runId);
+  if (!bag || !from || !to || to.includes("..")) return;
+  const body = bag.get(from);
+  if (body === undefined) return;
+  bag.delete(from);
+  bag.set(to, body);
 }
 
 /**
@@ -93,13 +124,14 @@ export function applySiteEdit(runId: string, relPath: string, oldText: string, n
   return true;
 }
 
-/** Local refs written as "/styles.css" point at the site root: in a preview served under /sites/<id>/ they must be relative. */
-function relativizeRootRefs(html: string, pageKey: string, bag: Map<string, string>): string {
-  const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+/**
+ * The preview root is the folder that contains index.html, so a root-relative
+ * "/styles.css" is the file next to that page, not the API host root.
+ */
+function relativizeRootRefs(html: string, _pageKey: string, _bag: Map<string, string>): string {
   return html.replace(/(<(?:link|script|img|source)\b[^>]*?\s(?:href|src)\s*=\s*["'])\/(?!\/)([^"'?#]+)/gi, (m, lead: string, ref: string) => {
-    if (!bag.has(ref)) return m;
-    const rel = pageDir && ref.startsWith(pageDir) ? ref.slice(pageDir.length) : ref;
-    return `${lead}${"../".repeat(pageDir.split("/").filter(Boolean).length)}${rel}`;
+    if (/^(?:api|artifacts)\//i.test(ref)) return m;
+    return `${lead}${ref}`;
   });
 }
 
@@ -142,10 +174,23 @@ export function composeSiteDocument(runId: string): string | null {
   return html;
 }
 
+export interface PublishedSite {
+  id: string;
+  url: string;
+  files: string[];
+  revision: number;
+  changedFiles: string[];
+  /** True only the first time this run gets a preview URL. */
+  first: boolean;
+  /** True when nothing new was written, so the caller should not emit again. */
+  unchanged: boolean;
+}
+
 /** Write the remembered pages to one stable folder. Later files update that same URL. */
-export function publishRememberedSite(runId: string): { id: string; url: string; files: string[] } | null {
+export function publishRememberedSite(runId: string, changedFiles: string[] = []): PublishedSite | null {
   const bag = remembered.get(runId);
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
+  const existingId = publishedIds.get(runId);
   const composed = composeSiteDocument(runId);
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
   const dir = join(previewBase(), runId);
@@ -156,10 +201,21 @@ export function publishRememberedSite(runId: string): { id: string; url: string;
   }
   const pageDir = pageKey && pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/")) : "";
   const root = pageDir ? join(dir, pageDir) : dir;
-  const id = publishedIds.get(runId) ?? randomUUID();
+  const id = existingId ?? randomUUID();
+  const bump = !existingId || changedFiles.length > 0;
+  const revision = bump ? (revisions.get(runId) ?? 0) + 1 : (revisions.get(runId) ?? 1);
   publishedIds.set(runId, id);
+  revisions.set(runId, revision);
   saveRoot(id, root);
-  return { id, url: previewUrl(id), files: [...bag.keys()] };
+  return {
+    id,
+    url: previewUrl(id),
+    files: [...bag.keys()],
+    revision,
+    changedFiles,
+    first: !existingId,
+    unchanged: Boolean(existingId) && changedFiles.length === 0,
+  };
 }
 
 /** Publish a folder the agent wrote. Returns a URL only when that folder has a page. */

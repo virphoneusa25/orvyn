@@ -134,6 +134,7 @@ export type AgentEventType =
   | "desktop.verification.failed"
   | "desktop.verification.passed"
   | "preview.available"
+  | "preview.updated"
   | "mcp.connected"
   | "mcp.disconnected"
   | "mcp.error"

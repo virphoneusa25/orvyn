@@ -85,6 +85,8 @@ export interface PersistInput {
   sourceTool?: string | null;
   userId?: string | null;
   overwrite?: boolean;
+  /** Keep the requested filename. Workspace source files are not renamed to index-2.html. */
+  keepName?: boolean;
 }
 
 const KIND_SET = new Set<ArtifactKind>(["generated", "document", "download", "upload", "run", "file"]);
@@ -271,7 +273,7 @@ export class ArtifactService {
     if (!health.healthy) throw new Error(`Artifact storage unavailable: ${health.detail ?? "degraded"}`);
     await this.ensureRoots();
     const requested = sanitizeArtifactName(input.name);
-    const name = input.overwrite ? requested : this.uniqueName(requested);
+    const name = input.keepName || input.overwrite ? requested : this.uniqueName(requested);
     const id = `art_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     const kind = asKind(input.kind ?? "file");
     const raw = input.bytes ?? Buffer.from(input.content ?? "", "utf-8");

@@ -14,6 +14,7 @@ import {
   type FollowController,
 } from "../../agentWorkspaceModel";
 import { countRightColumns, followActiveTab } from "../../agentWorkspaceLayout";
+import { planPreviewRefresh } from "../../previewRefresh";
 import {
   AGENT_PANEL_MIN,
   clampAgentPanelWidth,
@@ -236,6 +237,33 @@ export function AgentWorkspace({
       revealPreview();
     });
   }, [previewUrl, browserState.tabs]);
+
+  const previewRevision = useMemo(() => {
+    let revision = 0;
+    for (const event of events) {
+      if (event.type !== "preview.updated") continue;
+      const next = Number(event.data?.revision ?? 0);
+      if (next > revision) revision = next;
+    }
+    return revision;
+  }, [events]);
+
+  useEffect(() => {
+    const api = window.orvyn.browser;
+    if (!api || !previewRevision) return;
+    const last = [...events].reverse().find((event) => event.type === "preview.updated");
+    const plan = planPreviewRefresh({
+      url: String(last?.data?.url ?? previewUrl ?? ""),
+      revision: previewRevision,
+      tabs: browserState.tabs,
+      followActive: followApplies(followRef.current),
+    });
+    if (!plan) return;
+    const key = `rev:${plan.revision}:${plan.reloadId}`;
+    if (previewSeeded.current.has(key)) return;
+    previewSeeded.current.add(key);
+    void api.reload(plan.reloadId, { ignoreCache: true });
+  }, [previewRevision, browserState.tabs, events, previewUrl]);
 
   useEffect(() => {
     if (!followApplies(follow)) return;

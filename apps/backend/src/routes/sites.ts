@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { readPublishedFile } from "../agent/sitePreview";
+import { PREVIEW_CACHE_CONTROL, readPublishedFile } from "../agent/sitePreview";
 
 export const siteRouter = Router();
 
@@ -10,6 +10,7 @@ function send(id: string, rel: string, res: import("express").Response): void {
     return;
   }
   res.setHeader("Content-Type", file.contentType);
+  res.setHeader("Cache-Control", PREVIEW_CACHE_CONTROL);
   res.send(file.body);
 }
 

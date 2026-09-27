@@ -47,8 +47,8 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
-import { applySiteEdit, hasSiteFile, publishRememberedSite, rememberSiteFile } from "./sitePreview";
-import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
+import { applySiteEdit, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteFile } from "./sitePreview";
+import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
 import { projectToolContext } from "../execution/workspaceBinding";
@@ -229,6 +229,9 @@ interface RunState {
   capabilityNudges: number;
   /** Records a project file on the session workspace after a successful write. */
   onProjectFile?: (relativePath: string) => void;
+  milestoneLayout?: boolean;
+  milestoneStyle?: boolean;
+  milestoneCheck?: boolean;
   /** The model already streamed a final answer. It stays hidden until verification finishes. */
   heldFinal?: boolean;
 }
@@ -435,7 +438,7 @@ export class StreamingAgentRuntime {
   /** Opens the right-hand preview for pages this run wrote, and lists those files. */
   private openAgentPreview(runId: string, filePath: unknown, content?: unknown): void {
     const rel = String(filePath ?? "").replace(/\\/g, "/");
-    if (!/\.(html|css|js|php)$/i.test(rel)) return;
+    if (!isSiteAssetPath(rel)) return;
     const name = rel.split("/").pop() || rel;
     if (typeof content === "string") {
       rememberSiteFile(runId, rel, content);
@@ -449,12 +452,56 @@ export class StreamingAgentRuntime {
       location: "workspace",
       message: `Created ${rel} (+${lines})`,
     });
-    const published = publishRememberedSite(runId);
-    if (published) {
-      this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
-      const st = this.runs.get(runId);
-      this.speakProgress(runId);
-      void this.verifyPublishedPreview(runId, published.url);
+    this.publishSitePreview(runId, [rel]);
+  }
+
+  /**
+   * One preview URL per run. The first usable index.html announces it.
+   * Later site files update that same URL and bump the revision.
+   * A framework app uses its dev server instead of this static preview.
+   */
+  private publishSitePreview(runId: string, changedFiles: string[]): void {
+    const state = this.runs.get(runId);
+    if (state?.websiteLayout?.stack && state.websiteLayout.stack !== "static") return;
+    const published = publishRememberedSite(runId, changedFiles);
+    if (!published || published.unchanged) return;
+    const payload = {
+      runId,
+      previewId: published.id,
+      url: published.url,
+      revision: published.revision,
+      changedFiles: published.changedFiles,
+    };
+    if (published.first) {
+      this.store.emit(runId, "preview.available", { ...payload, label: "Live preview" });
+    } else {
+      this.store.emit(runId, "preview.updated", payload);
+    }
+    this.speakWebsiteMilestone(runId);
+  }
+
+  /** One chat line when the layout, the theme, or the visual check actually changes. */
+  private speakWebsiteMilestone(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state?.website) return;
+    const files = rememberedSiteFiles(runId);
+    const hasPage = files.some((file) => /(^|\/)index\.html$/i.test(file));
+    const hasCss = files.some((file) => /\.css$/i.test(file));
+    const checked = (this.store.get(runId)?.events ?? []).some((event) => event.type === "browser.completed" && event.data?.tool === "browser_screenshot");
+    if (hasPage && hasCss && !state.milestoneStyle) {
+      state.milestoneStyle = true;
+      state.milestoneLayout = true;
+      this.speak(runId, "Core styling is in — I'm refining the remaining sections and responsive behavior.");
+      return;
+    }
+    if (hasPage && !state.milestoneLayout) {
+      state.milestoneLayout = true;
+      this.speak(runId, "Building the initial layout.");
+      return;
+    }
+    if (checked && hasCss && !state.milestoneCheck) {
+      state.milestoneCheck = true;
+      this.speak(runId, "The full page is rendered. I'm checking desktop and mobile now.");
     }
   }
 
@@ -482,6 +529,7 @@ export class StreamingAgentRuntime {
         sourceTool: "write_file",
         projectRoot: state.projectRoot,
         overwrite: Boolean(prior),
+        keepName: true,
       });
       if (!state.writtenDownloads) state.writtenDownloads = new Map();
       state.writtenDownloads.set(rel, rec.artifactId);
@@ -732,9 +780,8 @@ export class StreamingAgentRuntime {
   }
 
   /** Re-publish the run's remembered site (same URL) after its files changed. */
-  private republishPreview(runId: string): void {
-    const published = publishRememberedSite(runId);
-    if (published) this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
+  private republishPreview(runId: string, changedFiles: string[]): void {
+    this.publishSitePreview(runId, changedFiles);
   }
 
   /**
@@ -780,13 +827,23 @@ export class StreamingAgentRuntime {
       case "edit_file":
         this.store.emit(runId, "file.edit", { path: args.path, preview });
         // The preview follows edits too, not only whole-file writes.
-        if (applySiteEdit(runId, String(args.path ?? ""), String(args.old_string ?? ""), String(args.new_string ?? ""), args.replace_all === true)) this.republishPreview(runId);
+        if (applySiteEdit(runId, String(args.path ?? ""), String(args.old_string ?? ""), String(args.new_string ?? ""), args.replace_all === true)) {
+          this.republishPreview(runId, [String(args.path ?? "")]);
+        }
         break;
       case "delete_file":
-      case "move_file":
-        // The diff rides along so the UI can show what changed rather than
-        // just naming the file.
         this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview });
+        if (isSiteAssetPath(String(args.path ?? ""))) {
+          forgetSiteFile(runId, String(args.path));
+          this.republishPreview(runId, [String(args.path)]);
+        }
+        break;
+      case "move_file":
+        this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview });
+        if (isSiteAssetPath(String(args.from ?? "")) || isSiteAssetPath(String(args.to ?? ""))) {
+          moveSiteFile(runId, String(args.from ?? ""), String(args.to ?? ""));
+          this.republishPreview(runId, [String(args.to ?? args.from ?? "")]);
+        }
         break;
       case "terminal":
         this.store.emit(runId, "terminal.started", { callId: call.id, command: args.command });
@@ -1014,7 +1071,7 @@ export class StreamingAgentRuntime {
       gateRetries: 0,
       verifyRounds: 0,
       modelPinned: choice.pinned,
-      ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission(), websiteLayout: planWebsiteLayout(instruction, listExistingSiteFiles(projectRoot)) } : {}),
+      ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission(), websiteLayout: planWebsiteLayout(instruction, listExistingSiteFiles(projectRoot), detectSiteStack(projectRoot)) } : {}),
       composerMode: options?.composerMode,
       actionNudges: 0,
       phase: "preflight",
@@ -2143,10 +2200,7 @@ export class StreamingAgentRuntime {
         } else {
           this.emitNarration(runId, content, streamedText && !state.heldFinal);
         }
-        if (state.intent.requiresFrontend) {
-          const published = publishRememberedSite(runId);
-          if (published) this.store.emit(runId, "preview.available", { url: published.url, label: "Live preview" });
-        }
+        if (state.intent.requiresFrontend) this.publishSitePreview(runId, []);
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
         this.store.setStatus(runId, "completed");
       },
@@ -2203,6 +2257,14 @@ export class StreamingAgentRuntime {
 
     for (const call of calls) {
       if (state.cancelled) return "cancelled";
+      if (state.website && call.arguments && typeof call.arguments === "object") {
+        const args = call.arguments as Record<string, unknown>;
+        for (const key of ["path", "from", "to"]) {
+          if (typeof args[key] !== "string") continue;
+          const next = canonicalSiteSourcePath(args[key] as string);
+          if (next && next !== args[key]) args[key] = next;
+        }
+      }
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       const priorFailures = state.failedFingerprints.get(fingerprint) ?? 0;
@@ -2485,9 +2547,9 @@ export class StreamingAgentRuntime {
         // site: without it the preview had a page whose stylesheet 404'd.
         if (call.name === "read_file" && typeof result.output === "string" && !/…\(truncated\)\s*$/.test(result.output)) {
           const readPath = String((call.arguments as { path?: unknown })?.path ?? "");
-          if (/\.(html|css|js)$/i.test(readPath) && !hasSiteFile(runId, readPath) && !siteWriteRefusal(state.websiteLayout, "write_file", readPath)) {
+          if (isSiteAssetPath(readPath) && !hasSiteFile(runId, readPath) && !siteWriteRefusal(state.websiteLayout, "write_file", readPath)) {
             rememberSiteFile(runId, readPath, result.output);
-            this.republishPreview(runId);
+            this.republishPreview(runId, [readPath]);
           }
         }
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
@@ -2577,8 +2639,9 @@ export class StreamingAgentRuntime {
             this.store.emit(runId, "desktop.screenshot", { tool: call.name, sessionId: result.meta.sessionId, surface: result.meta.surface });
           }
         }
+        const workspacePath = written ? String(toolArgs.path ?? written.name) : "";
         replies.set(call.id, written
-          ? `${text}\n\nDownload card ready: ${written.name} (artifactId ${written.artifactId}). The chat shows this file for download. Mention that name. Do not invent a URL or a different filename.`
+          ? `${text}\n\nSaved ${workspacePath} in the workspace. The download card uses that same filename. Do not create a numbered copy such as index-2.html. Later changes must update ${workspacePath}.`
           : text);
         if (emptySearchResult(call.name, raw)) gaps.set(call.id, "search the web");
       } else {
@@ -2739,6 +2802,7 @@ export class StreamingAgentRuntime {
     const before = state.website.phase;
     const phase = syncWebsitePhase(state.website, websiteEvidenceFrom(this.store.get(runId)?.events ?? []));
     if (phase !== before) this.store.emit(runId, "website.phase", { phase });
+    this.speakWebsiteMilestone(runId);
   }
 
   private noteWebsiteFailure(runId: string, state: RunState, tool: string, command: string, error: string): void {

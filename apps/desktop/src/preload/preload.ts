@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld("orvyn", {
     navigate: (id: string, url: string) => ipcRenderer.invoke("browser:navigate", id, url),
     back: (id: string) => ipcRenderer.invoke("browser:back", id),
     forward: (id: string) => ipcRenderer.invoke("browser:forward", id),
-    reload: (id: string) => ipcRenderer.invoke("browser:reload", id),
+    reload: (id: string, opts?: { ignoreCache?: boolean }) => ipcRenderer.invoke("browser:reload", id, opts),
     activate: (id: string | null) => ipcRenderer.invoke("browser:activate", id),
     close: (id: string) => ipcRenderer.invoke("browser:close", id),
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>

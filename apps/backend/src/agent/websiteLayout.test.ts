@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal } from "./websiteLayout";
+import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal } from "./websiteLayout";
 
 test("a new website keeps an existing site and is written beside it", () => {
   const root = mkdtempSync(join(tmpdir(), "orvyn-site-"));
@@ -43,4 +43,26 @@ test("an explicit replace may overwrite, and a taken folder gets the next name",
   const next = planWebsiteLayout("build a website for virphone", ["sites/virphone/index.html", "sites/virphone/styles.css"]);
   assert.equal(next.directory, "sites/virphone-2");
   assert.match(siteWriteRefusal(next, "delete_file", "sites/virphone/index.html") ?? "", /already written/);
+});
+
+test("numbered website retries stay on the canonical file", () => {
+  assert.equal(canonicalSiteSourcePath("index.html"), "index.html");
+  assert.equal(canonicalSiteSourcePath("index-2.html"), "index.html");
+  assert.equal(canonicalSiteSourcePath("index-9.html"), "index.html");
+  assert.equal(canonicalSiteSourcePath("styles-3.css"), "styles.css");
+  assert.equal(canonicalSiteSourcePath("sites/carrier/script-4.js"), "sites/carrier/script.js");
+  assert.equal(canonicalSiteSourcePath("section-2.html"), "section-2.html");
+});
+
+test("a Vite project keeps its dev server instead of a second static site", () => {
+  const root = mkdtempSync(join(tmpdir(), "orvyn-vite-"));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ devDependencies: { vite: "5.4.0" } }));
+  writeFileSync(join(root, "index.html"), "<div id=\"app\"></div>");
+  assert.equal(detectSiteStack(root), "vite");
+  const layout = planWebsiteLayout("build a website for the carrier", ["index.html"], detectSiteStack(root));
+  assert.equal(layout.stack, "vite");
+  assert.equal(layout.directory, null);
+  assert.deepEqual(layout.protectedFiles, []);
+  assert.match(layout.prompt, /development script once/);
+  assert.equal(siteWriteRefusal(layout, "write_file", "index.html"), null);
 });

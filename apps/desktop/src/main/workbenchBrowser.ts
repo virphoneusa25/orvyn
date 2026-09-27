@@ -294,9 +294,10 @@ export class WorkbenchBrowserManager {
     return this.snapshot();
   }
 
-  reload(id: string): BrowserPublic {
+  reload(id: string, opts?: { ignoreCache?: boolean }): BrowserPublic {
     const guest = this.require(id);
     if (guest.tab.loading) guest.view.webContents.stop();
+    else if (opts?.ignoreCache) guest.view.webContents.reloadIgnoringCache();
     else guest.view.webContents.reload();
     return this.snapshot();
   }
@@ -822,7 +823,7 @@ export async function registerBrowserIpc(manager: WorkbenchBrowserManager): Prom
   ipcMain.handle("browser:navigate", (_e, id: string, url: string) => manager.navigate(String(id), String(url)));
   ipcMain.handle("browser:back", (_e, id: string) => manager.back(String(id)));
   ipcMain.handle("browser:forward", (_e, id: string) => manager.forward(String(id)));
-  ipcMain.handle("browser:reload", (_e, id: string) => manager.reload(String(id)));
+  ipcMain.handle("browser:reload", (_e, id: string, opts?: { ignoreCache?: boolean }) => manager.reload(String(id), opts));
   ipcMain.handle("browser:activate", (_e, id: string | null) => manager.activate(id ? String(id) : null));
   ipcMain.handle("browser:close", (_e, id: string) => manager.closeTab(String(id)));
   ipcMain.handle("browser:setBounds", (_e, bounds: BrowserBounds) => manager.setBounds(bounds ?? { x: 0, y: 0, width: 0, height: 0 }));

@@ -2,7 +2,7 @@
 // When a site exists, the new one is written under sites/<name>/ and the
 // earlier files stay where they are.
 
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 
 const SKIP = new Set(["node_modules", "dist", ".git", "previews", ".orvyn", "coverage", "build", "out"]);
@@ -13,13 +13,48 @@ const SITE = /\b(website|web\s*site|landing\s*page|homepage|home\s*page)\b/i;
 const REPLACE = /\b(replace|overwrite|redo|start over|from scratch)\b/i;
 
 const ROOT_PROMPT =
-  "This run is a website. Inspect the workspace, then call write_file for index.html and its stylesheet at the workspace root, then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server. The preview URL is the rendered site.";
+  "This run is a website. Inspect the workspace, then call write_file for index.html and its stylesheet at the workspace root. Start with a navigation and hero shell plus a base stylesheet so the preview can show a styled page, then add the remaining sections to those same files. Keep the canonical names index.html, styles.css, and script.js. Do not create index-2.html or any numbered copy. The preview URL is created once and updates in place. Then open the shared browser on that preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server.";
+
+const NUMBERED_SITE = /^(.*\/)?(index|styles|style|script|app|main)-(\d+)\.(html|css|js|mjs)$/i;
+
+/** index-9.html is a retry of index.html, not a second page. */
+export function canonicalSiteSourcePath(filePath: string): string {
+  const rel = normalizeSitePath(filePath);
+  const match = rel.match(NUMBERED_SITE);
+  if (!match) return rel;
+  return `${match[1] ?? ""}${match[2]}.${match[4]!.toLowerCase()}`;
+}
+
+export type SiteStack = "static" | "vite" | "next";
+
+/** Vite, Next, and similar apps keep their own dev server. An empty folder is a static site. */
+export function detectSiteStack(root: string): SiteStack {
+  if (!root) return "static";
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    if (deps.next) return "next";
+    if (deps.vite || deps["@vitejs/plugin-react"] || deps["react-scripts"] || deps.nuxt || deps.astro) return "vite";
+  } catch {
+    /* no package.json */
+  }
+  return "static";
+}
+
+function frameworkPrompt(stack: Exclude<SiteStack, "static">): string {
+  const name = stack === "next" ? "Next.js" : "Vite";
+  return `This project is a ${name} app. Do not publish a separate static site and do not create numbered html copies. Start the development script once with start_process. Use that one URL in the browser. Edit the existing source so the same server shows the change. Do not start a second server. Call the tool in the same turn. Do not describe a step you are not taking.`;
+}
 
 export interface WebsiteLayout {
   /** Relative folder for the new site. Null when this run writes at the project root. */
   directory: string | null;
   protectedFiles: string[];
   prompt: string;
+  stack: SiteStack;
 }
 
 /** index pages and the html/css/js beside them, a few folders down. Skips dependency trees. */
@@ -63,9 +98,12 @@ export function siteSlug(instruction: string): string {
   return words.slice(0, 3).join("-").slice(0, 40) || "site";
 }
 
-export function planWebsiteLayout(instruction: string, existing: string[]): WebsiteLayout {
+export function planWebsiteLayout(instruction: string, existing: string[], stack: SiteStack = "static"): WebsiteLayout {
+  if (stack !== "static") {
+    return { directory: null, protectedFiles: [], prompt: frameworkPrompt(stack), stack };
+  }
   if (!isNewWebsiteRequest(instruction) || existing.length === 0) {
-    return { directory: null, protectedFiles: [], prompt: ROOT_PROMPT };
+    return { directory: null, protectedFiles: [], prompt: ROOT_PROMPT, stack: "static" };
   }
   const base = siteSlug(instruction);
   const taken = (dir: string) => existing.some((file) => file === dir || file.startsWith(`${dir}/`));
@@ -76,7 +114,8 @@ export function planWebsiteLayout(instruction: string, existing: string[]): Webs
   return {
     directory,
     protectedFiles: existing,
-    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet, then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server. The preview URL is the new site.`,
+    prompt: `This run is a new website. These site files were already written and must stay as they are: ${shown}. Do not write_file, edit_file, or delete_file them. Write the new site under ${directory}/ as index.html and its stylesheet, starting with a shell and base CSS, then adding sections to those same files. Do not create numbered copies. The preview URL is created once and updates in place. Then open the shared browser on the preview and screenshot it. Call the tool in the same turn. Do not describe a step you are not taking. Do not open the sandbox desktop and do not start a shell server.`,
+    stack: "static",
   };
 }
 

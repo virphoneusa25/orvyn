@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { applySiteEdit, composeSiteDocument, hasSiteFile, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
+import { createServer } from "http";
+import express from "express";
+import { applySiteEdit, composeSiteDocument, hasSiteFile, PREVIEW_CACHE_CONTROL, publishAgentSite, publishRememberedSite, readPublishedFile, rememberSiteFile } from "./sitePreview";
+import { siteRouter } from "../routes/sites";
 
 test("a preview is only the directory the agent wrote", () => {
   const empty = mkdtempSync(join(tmpdir(), "orvyn-empty-"));
@@ -40,6 +43,72 @@ test("remembered pages publish without reading the project disk", () => {
   assert.equal(readPublishedFile(site!.id, "styles.css")?.contentType, "text/css; charset=utf-8");
   const again = publishRememberedSite("run-1");
   assert.equal(again?.url, site!.url);
+  assert.equal(again?.unchanged, true);
+  assert.equal(again?.revision, site!.revision);
+});
+
+test("html, css, and a repair share one preview and increasing revisions", () => {
+  const runId = "run-progressive";
+  const first = publishRememberedSite(runId, ["index.html"]);
+  assert.equal(first, null);
+  rememberSiteFile(runId, "index.html", "<html><head></head><body><h1>Shell</h1></body></html>");
+  const opened = publishRememberedSite(runId, ["index.html"])!;
+  assert.equal(opened.first, true);
+  assert.equal(opened.revision, 1);
+  rememberSiteFile(runId, "styles.css", "h1{color:white}");
+  const styled = publishRememberedSite(runId, ["styles.css"])!;
+  assert.equal(styled.url, opened.url);
+  assert.equal(styled.first, false);
+  assert.equal(styled.revision, 2);
+  assert.deepEqual(styled.changedFiles, ["styles.css"]);
+  assert.equal(readPublishedFile(styled.id, "styles.css")?.contentType, "text/css; charset=utf-8");
+  rememberSiteFile(runId, "index.html", "<html><head><link rel=\"stylesheet\" href=\"styles.css\"></head><body><h1>Shell</h1><section id=\"services\">Routes</section></body></html>");
+  const section = publishRememberedSite(runId, ["index.html"])!;
+  assert.equal(section.url, opened.url);
+  assert.equal(section.revision, 3);
+  assert.match(readPublishedFile(section.id, "index.html")?.body.toString() ?? "", /services/);
+});
+
+test("a nested page loads root-relative css from the same preview", () => {
+  const runId = "run-nested";
+  rememberSiteFile(runId, "sites/carrier/index.html", `<html><head><link rel="stylesheet" href="/styles.css"></head><body><h1>Carrier</h1></body></html>`);
+  rememberSiteFile(runId, "sites/carrier/styles.css", "h1 { color: navy; }");
+  const published = publishRememberedSite(runId, ["sites/carrier/index.html", "sites/carrier/styles.css"])!;
+  const page = readPublishedFile(published.id, "index.html")!.body.toString();
+  assert.match(page, /href="styles\.css"/);
+  assert.doesNotMatch(page, /href="\/styles\.css"/);
+  assert.equal(readPublishedFile(published.id, "styles.css")?.contentType, "text/css; charset=utf-8");
+  assert.match(readPublishedFile(published.id, "styles.css")?.body.toString() ?? "", /navy/);
+});
+
+test("preview responses send the newest css and do not cache it", async () => {
+  const runId = "run-http";
+  rememberSiteFile(runId, "index.html", `<html><head><link rel="stylesheet" href="/styles.css"></head><body><h1>Live</h1></body></html>`);
+  rememberSiteFile(runId, "styles.css", "h1 { color: red; }");
+  const published = publishRememberedSite(runId, ["index.html", "styles.css"])!;
+  const app = express();
+  app.use("/api/v1/sites", siteRouter);
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  try {
+    const css = await fetch(`http://127.0.0.1:${port}/api/v1/sites/${published.id}/styles.css`);
+    assert.equal(css.status, 200);
+    assert.match(css.headers.get("content-type") ?? "", /text\/css/);
+    assert.equal(css.headers.get("cache-control"), PREVIEW_CACHE_CONTROL);
+    assert.match(await css.text(), /red/);
+    const page = await fetch(`http://127.0.0.1:${port}/api/v1/sites/${published.id}/`);
+    assert.match(await page.text(), /href="styles\.css"/);
+    rememberSiteFile(runId, "styles.css", "h1 { color: blue; }");
+    const next = publishRememberedSite(runId, ["styles.css"])!;
+    assert.equal(next.url, published.url);
+    const updated = await fetch(`http://127.0.0.1:${port}/api/v1/sites/${published.id}/styles.css`);
+    assert.match(await updated.text(), /blue/);
+    assert.equal(updated.headers.get("cache-control"), PREVIEW_CACHE_CONTROL);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("a fixed script replaces the broken one in the preview (the page is never rewritten in place)", () => {
