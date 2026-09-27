@@ -3,6 +3,9 @@ dist/
 out/
 build/
 coverage/
+# The imported coverage skill is a package, not a test-coverage report.
+!resources/imported-skills/claude-skills/skills/coverage/
+!resources/imported-skills/claude-skills/skills/coverage/**
 .env
 .env.local
 .env.*.local
