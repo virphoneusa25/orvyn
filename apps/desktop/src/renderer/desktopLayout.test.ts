@@ -121,7 +121,7 @@ test("workbench tabs, selected tab, width, and recent URLs survive restart", () 
   });
   assert.equal(parsed.agentPanelWidth, 680);
   assert.equal(parsed.activeTabId, "preview:http://127.0.0.1:43191");
-  assert.deepEqual(parsed.openTabIds, ["preview:http://127.0.0.1:43191", "changes", "browser"]);
+  assert.deepEqual(parsed.openTabIds, ["changes", "preview:http://127.0.0.1:43191", "browser"]);
   assert.deepEqual(parsed.recentUrls, ["http://127.0.0.1:43191", "https://docs.example.com"]);
   const stored = persistableLayout(parsed);
   assert.equal(stored.activeTabId, parsed.activeTabId);
@@ -138,7 +138,7 @@ test("restoring a workspace collapses duplicate file and preview tabs", () => {
     activeTabId: "file:./index.html",
     openTabIds: ["browser", "browser:tab1", "file:./index.html", "file:index.html", "preview:http://127.0.0.1:43191/", "preview:http://127.0.0.1:43191", "changes"],
   });
-  assert.deepEqual(parsed.openTabIds, ["preview:http://127.0.0.1:43191", "changes", "browser:tab1", "file:index.html"]);
+  assert.deepEqual(parsed.openTabIds, ["changes", "preview:http://127.0.0.1:43191", "browser:tab1", "file:index.html"]);
   assert.equal(parsed.activeTabId, "file:index.html");
   const again = parseDesktopLayout(persistableLayout(parsed));
   assert.deepEqual(again.openTabIds, parsed.openTabIds);

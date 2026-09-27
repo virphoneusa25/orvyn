@@ -490,8 +490,8 @@ export function AgentWorkspace({
             {tabs.map((t) => {
               const native = matchingNativeTab(browserState, t);
               const selected = t.id === activeId;
-              const face = t.kind === "preview" ? previewFace(t) : { text: t.title, port: null as string | null };
-              const showClose = tabShowsClose(t);
+              const face = tabFace(t);
+              const showClose = true;
               return (
                 <button
                   key={t.id}
@@ -742,11 +742,9 @@ function TabGlyph({
   );
 }
 
-const CORE_TAB_IDS = new Set(["files", "changes", "terminal", "environment", "desktop", "browser", "preview"]);
-
-function tabShowsClose(tab: WorkbenchTab): boolean {
-  if (!tab.closable || tab.kind === "preview") return false;
-  return !CORE_TAB_IDS.has(tab.id);
+function tabFace(tab: WorkbenchTab): { text: string; port: string | null } {
+  if (tab.kind === "preview" || (tab.kind === "browser" && tab.url)) return previewFace(tab);
+  return { text: tab.title, port: null };
 }
 
 function previewFace(tab: WorkbenchTab): { text: string; port: string | null } {

@@ -102,13 +102,14 @@ test("artifact tabs carry ArtifactService identity, not a generated/ path", () =
   assert.equal(followWorkbenchTab("artifact", { name: "virphone-logo-2.png", artifactId: "art_logo2" }).artifactId, "art_logo2");
 });
 
-test("pinned workbench tabs stay; closing the last dynamic tab does not open a second pane", () => {
+test("any open workbench tab can be closed without opening a second pane", () => {
   const pinned = closeTab([parseWorkbenchTab("files")], "files", "files");
-  assert.equal(pinned.tabs.length, 1);
-  assert.equal(pinned.tabs[0].id, "files");
+  assert.equal(pinned.tabs.length, 0);
   const next = closeTab([parseWorkbenchTab("files"), parseWorkbenchTab(fileTabId("src/App.tsx"))], fileTabId("src/App.tsx"), fileTabId("src/App.tsx"));
   assert.deepEqual(next.tabs.map((t) => t.id), ["files"]);
   assert.equal(next.activeId, "files");
+  const preview = closeTab([parseWorkbenchTab(previewTabId("http://127.0.0.1:4693")), parseWorkbenchTab("desktop")], previewTabId("http://127.0.0.1:4693"), previewTabId("http://127.0.0.1:4693"));
+  assert.deepEqual(preview.tabs.map((t) => t.id), ["desktop"]);
 });
 
 test("an empty Workbench has no tabs, and opened tools share one row", () => {
@@ -127,7 +128,7 @@ test("an empty Workbench has no tabs, and opened tools share one row", () => {
   assert.equal(withFiles.filter((t) => t.kind === "file").length, 2);
   assert.equal(resolveActiveWorkbenchTabId(withFiles, fileTabId("styles.css")), "file:styles.css");
   assert.equal(withFiles.filter((t) => t.kind === "file").every((t) => t.closable), true);
-  assert.equal(withFiles.find((t) => t.id === "files")?.closable, false);
+  assert.equal(withFiles.find((t) => t.id === "files")?.closable, true);
 });
 
 test("dynamic preview, diff, and browser pages stay on the same tab list", () => {
@@ -136,7 +137,7 @@ test("dynamic preview, diff, and browser pages stay on the same tab list", () =>
     activeTabId: "changes",
     browserTabs: [{ id: "page-1", kind: "browser", title: "VirPhone Website", url: "https://virphone.example" }],
   });
-  assert.deepEqual(tabs.map((t) => t.kind), ["preview", "changes", "browser", "diff"]);
+  assert.deepEqual(tabs.map((t) => t.kind), ["changes", "preview", "browser", "diff"]);
   assert.equal(tabs.find((t) => t.kind === "browser")?.title, "VirPhone Website");
   assert.equal(tabs.filter((t) => t.id === "changes").length, 1);
 });
@@ -207,13 +208,13 @@ test("restored tab ids drop duplicates and keep tool order", () => {
     diffTabId("index.html"),
   ]);
   assert.deepEqual(ids, [
-    previewTabId("http://127.0.0.1:43191"),
+    "desktop",
     "files",
     "changes",
     "terminal",
     "environment",
+    previewTabId("http://127.0.0.1:43191"),
     "browser:tab1",
-    "desktop",
     "file:index.html",
     "diff:index.html",
   ]);

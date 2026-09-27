@@ -59,11 +59,11 @@ export const WORKBENCH_TABBAR_TEST_ID = "agent-workbench-tabbar";
 
 /** One row. These stay pinned; files, diffs, and browser pages append after them. */
 export const WORKBENCH_CORE_TABS: WorkbenchTab[] = [
-  { id: "preview", kind: "preview", title: "Preview", closable: false },
-  { id: "files", kind: "files", title: "Files", closable: false },
-  { id: "changes", kind: "changes", title: "Changes", closable: false },
+  { id: "preview", kind: "preview", title: "Preview", closable: true },
+  { id: "files", kind: "files", title: "Files", closable: true },
+  { id: "changes", kind: "changes", title: "Changes", closable: true },
   { id: "terminal", kind: "terminal", title: "Terminal", closable: true },
-  { id: "environment", kind: "environment", title: "Environment", closable: false },
+  { id: "environment", kind: "environment", title: "Environment", closable: true },
 ];
 
 /** Stable page identity. Trailing slashes and host case do not create a second tab. */
@@ -172,14 +172,14 @@ export function parseWorkbenchTab(id: string): WorkbenchTab {
     return { id, kind: "terminal", title: `Terminal ${n}`, closable: true };
   }
   const pinned: Record<string, WorkbenchTab> = {
-    preview: { id: "preview", kind: "preview", title: "Preview", closable: false },
-    changes: { id: "changes", kind: "changes", title: "Changes", closable: false },
+    preview: { id: "preview", kind: "preview", title: "Preview", closable: true },
+    changes: { id: "changes", kind: "changes", title: "Changes", closable: true },
     desktop: { id: "desktop", kind: "desktop", title: "Desktop", closable: true },
     browser: { id: "browser", kind: "browser", title: "Browser", closable: true },
-    files: { id: "files", kind: "files", title: "Files", closable: false },
+    files: { id: "files", kind: "files", title: "Files", closable: true },
     terminal: { id: "terminal", kind: "terminal", title: "Terminal", closable: true },
     review: { id: "review", kind: "review", title: "Review", closable: true },
-    environment: { id: "environment", kind: "environment", title: "Environment", closable: false },
+    environment: { id: "environment", kind: "environment", title: "Environment", closable: true },
     plan: { id: "plan", kind: "plan", title: "Plan", closable: true },
     docs: { id: "docs", kind: "docs", title: "Docs", closable: true },
   };
@@ -203,26 +203,25 @@ export interface WorkbenchBrowserSeed {
   url?: string;
 }
 
-/** One row: Preview, Files, Changes, Terminal, Environment, then dynamic pages. */
+/** Tool tabs stay on the left. The open page sits just before the plus. */
 const PINNED_RANK: Record<string, number> = {
-  files: 1,
-  changes: 2,
-  terminal: 3,
-  environment: 4,
-  browser: 5,
-  desktop: 6,
+  desktop: 1,
+  files: 2,
+  changes: 3,
+  terminal: 4,
+  environment: 5,
 };
 
 export function workbenchTabRank(id: string): number {
-  if (id === "preview" || id.startsWith("preview:")) return 0;
-  if (id === "terminal" || id.startsWith("terminal:")) return 3;
-  if (id === "browser" || id.startsWith("browser:")) return 5;
+  if (id === "terminal" || id.startsWith("terminal:")) return 4;
   if (id in PINNED_RANK) return PINNED_RANK[id]!;
-  if (id === "review" || id === "plan" || id === "docs") return 7;
-  if (id.startsWith("file:")) return 8;
-  if (id.startsWith("diff:")) return 9;
-  if (id.startsWith("artifact:")) return 10;
-  return 11;
+  if (id === "preview" || id.startsWith("preview:")) return 6;
+  if (id === "browser" || id.startsWith("browser:")) return 7;
+  if (id === "review" || id === "plan" || id === "docs") return 8;
+  if (id.startsWith("file:")) return 9;
+  if (id.startsWith("diff:")) return 10;
+  if (id.startsWith("artifact:")) return 11;
+  return 12;
 }
 
 export function orderWorkbenchTabs<T extends { id: string }>(tabs: T[]): T[] {

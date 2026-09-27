@@ -19,13 +19,14 @@
 
 .wb-tabs {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   min-width: 0;
   flex: 0 1 auto;
-  max-width: calc(100% - 168px);
+  max-width: calc(100% - 156px);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  gap: 2px;
 }
 
 .wb-tabs::-webkit-scrollbar {
@@ -37,19 +38,18 @@
 .wb-tab {
   background: transparent;
   border: none;
-  border-radius: 0;
+  border-radius: 8px;
   color: #8b95a8;
   font-size: 13px;
   font-weight: 450;
-  padding: 0 10px;
-  height: 36px;
-  min-width: 0;
-  max-width: 240px;
+  padding: 0 8px;
+  height: 28px;
+  max-width: 280px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
 .wb-tab:hover {
@@ -58,13 +58,14 @@
 
 .wb-tab[data-active="true"] {
   color: #f4f7fb;
+  background: #1b2333;
 }
 
 .wb-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  max-width: 168px;
 }
 
 .wb-port {
@@ -88,17 +89,27 @@
 }
 
 .wb-tab-close {
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  width: 0;
   opacity: 0;
-  font-size: 13px;
-  line-height: 1;
-  margin-left: 2px;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 14px;
+  margin-left: 0;
   color: inherit;
+  border-radius: 4px;
 }
 
 .wb-tab:hover .wb-tab-close,
 .wb-tab[data-active="true"] .wb-tab-close {
-  opacity: 0.65;
+  width: 16px;
+  margin-left: 4px;
+  opacity: 1;
+}
+
+.wb-tab-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .wb-plus {
@@ -201,26 +212,4 @@
   border-radius: 8px;
   padding: 4px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-}
-
-@container workbench (max-width: 640px) {
-  .wb-tab[data-kind="environment"] .wb-tab-label,
-  .wb-tab[data-kind="terminal"] .wb-tab-label {
-    display: none;
-  }
-  .wb-tab[data-kind="environment"],
-  .wb-tab[data-kind="terminal"] {
-    padding: 0 8px;
-    max-width: none;
-  }
-}
-
-@container workbench (max-width: 520px) {
-  .wb-tab[data-kind="changes"] .wb-tab-label {
-    display: none;
-  }
-  .wb-tab {
-    max-width: 140px;
-    padding: 0 8px;
-  }
 }
