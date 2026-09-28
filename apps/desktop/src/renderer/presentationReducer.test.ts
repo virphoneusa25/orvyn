@@ -604,3 +604,41 @@ test("a withdrawn reply (research first) is not shown as ORION's answer", async 
   assert.ok(!text.includes("Node.js 20 is the LTS"), text);
   assert.ok(text.includes("Searching the web."), text);
 });
+
+test("a failed exploration is marked superseded when verification passes", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "c1", tool: "search_code" }),
+      ev("tool.input", { callId: "c1", tool: "search_code", input: { query: "hero" } }),
+      ev("tool.failed", { callId: "c1", tool: "search_code", error: "no index" }),
+      ev("tool.started", { callId: "c2", tool: "read_file" }),
+      ev("tool.input", { callId: "c2", tool: "read_file", input: { path: "index.html" } }),
+      ev("tool.completed", { callId: "c2", tool: "read_file", preview: "<html>…" }),
+      ev("verification.completed", { verdict: "PASS", findings: [], checks: [{ name: "files", status: "pass" }], verifierTools: [] }),
+    ],
+    "completed"
+  );
+  const wgs = items.filter((i) => i.kind === "workgroup") as WgItem[];
+  const insp = wgs.find((w) => w.type === "inspection");
+  assert.ok(insp, "inspection group exists");
+  assert.equal(insp.status, "superseded", "failed exploration is superseded, not ✕, when verification passed");
+  assert.match(insp.summary ?? "", /optional — not needed for the verified result/);
+});
+
+test("a failed exploration stays failed when verification does not pass", () => {
+  reset();
+  const items = reducePresentation(
+    [
+      ev("tool.started", { callId: "c1", tool: "search_code" }),
+      ev("tool.input", { callId: "c1", tool: "search_code", input: { query: "hero" } }),
+      ev("tool.failed", { callId: "c1", tool: "search_code", error: "no index" }),
+      ev("verification.completed", { verdict: "FAIL", findings: [{ message: "broken", severity: "blocker" }], checks: [], verifierTools: [] }),
+    ],
+    "running"
+  );
+  const wgs = items.filter((i) => i.kind === "workgroup") as WgItem[];
+  const insp = wgs.find((w) => w.type === "inspection");
+  assert.ok(insp);
+  assert.equal(insp.status, "failed", "without a passing verification the failure stays a failure");
+});

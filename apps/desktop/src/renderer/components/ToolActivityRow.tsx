@@ -185,7 +185,9 @@ export function ToolActivityGroup({ group }: { group: GroupItem }) {
 }
 export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
   if (group.type === "inspection") {
-    const status = group.status === "running" ? "running" : group.status === "done" ? "done" : "failed";
+    // superseded: an exploration that failed while overall verification
+    // passed — optional, not a defect of the result.
+    const status = group.status === "running" ? "running" : group.status === "done" || group.status === "superseded" ? "done" : "failed";
     const single = group.items.length === 1 ? group.items[0] : null;
     if (single) return <div className="activity-phase"><ToolActivityRow item={single} /></div>;
     return (

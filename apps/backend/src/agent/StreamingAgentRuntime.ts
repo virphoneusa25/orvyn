@@ -662,11 +662,11 @@ export class StreamingAgentRuntime {
   private async materializeGeneratedAsset(
     state: RunState,
     art: { artifactId: string; name: string; mimeType?: string }
-  ): Promise<void> {
-    if (!this.artifacts || !state.projectRoot || !art.artifactId || !art.name) return;
-    if (!existsSync(state.projectRoot)) return;
+  ): Promise<string | null> {
+    if (!this.artifacts || !state.projectRoot || !art.artifactId || !art.name) return null;
+    if (!existsSync(state.projectRoot)) return null;
     const base = art.name.split(/[/\\]/).pop() || "";
-    if (!/\.(svg|png|jpe?g|gif|webp)$/i.test(base)) return;
+    if (!/\.(svg|png|jpe?g|gif|webp)$/i.test(base)) return null;
     const rel = `public/${base}`;
     try {
       const loaded = await this.artifacts.read(art.artifactId);
@@ -674,8 +674,10 @@ export class StreamingAgentRuntime {
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, loaded.bytes);
       state.onProjectFile?.(rel);
+      return rel;
     } catch {
       /* the download card still exists; the next turn can recover project files that did land */
+      return null;
     }
   }
 
@@ -1485,7 +1487,7 @@ export class StreamingAgentRuntime {
           : actual === "local_sandbox"
             ? "Tools execute in a local Docker sandbox. Project stays on this machine."
             : label === "Cloud"
-              ? "Generated files persist on the Cloud control plane in virtual file storage. Open Files → Generated."
+              ? "Generated files are saved to this project and to Files → Generated."
               : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to ORVYN Cloud.",
       });
       if (execution.location === "OVH_WORKER") {
@@ -2595,6 +2597,10 @@ export class StreamingAgentRuntime {
           }
         }
         const verification = await this.runVerification(runId, state, provider);
+        // Verification PASSED (or had nothing blocking): the work is proven.
+        // From here the run must CONVERGE — at most one more nudge for the
+        // final answer, never another lap of "thinking" after a green check.
+        const verifyPassed = !verification || verification.verdict === "PASS" || actionableFindings(verification).length === 0;
         // Only findings about the work go back to the agent. If the verifier
         // itself failed (no verdict), there is nothing for the agent to fix.
         if (verification && verification.verdict !== "PASS" && actionableFindings(verification).length > 0) {
@@ -2621,6 +2627,13 @@ export class StreamingAgentRuntime {
           localEngine: this.isLocalEngine(runId),
         });
         if (gates.ok) return { kind: "approved" };
+        // Verified work with a remaining gate (usually just the final answer
+        // wording) gets ONE retry, then settles — no indefinite thinking
+        // after "independent check passed".
+        if (verifyPassed && state.gateRetries >= 1) {
+          this.store.emit(runId, "run.diagnostics", { reason: `Completion gate ${gates.failedGate} did not clear after verification passed; settling with the work verified.`, gateReasons: gates.reasons });
+          return { kind: "approved" };
+        }
         this.store.emit(runId, "completion.blocked", {
           gate: gates.failedGate,
           reasons: gates.reasons,
@@ -3148,14 +3161,16 @@ export class StreamingAgentRuntime {
               chatId: state.instruction ? runId : undefined,
               tool: call.name,
             });
+            const projectCopy = await this.materializeGeneratedAsset(state, art);
             this.store.emit(runId, "files.ready", {
               artifactId: art.artifactId,
               name: art.name,
               location: "Files → Generated",
-              virtualWorkspace: true,
-              message: `${art.name} is in Files → Generated (virtual file storage). The project copy, when this is a site asset, is public/${art.name.split(/[/\\]/).pop()}.`,
+              projectPath: projectCopy ?? undefined,
+              message: projectCopy
+                ? `${art.name} is saved to this project at ${projectCopy}, and also in Files → Generated.`
+                : `${art.name} is ready — preview or download it from the card, or find it in Files → Generated.`,
             });
-            await this.materializeGeneratedAsset(state, art);
           }
         }
         // The model gets the clamped text, not the raw output: one oversized

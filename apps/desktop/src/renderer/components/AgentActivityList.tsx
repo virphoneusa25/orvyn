@@ -17,7 +17,7 @@ function finalAnswerText(events: AgentEvent[]): string {
   const grounded = [...events].reverse().find((e) => e.type === "message.grounded");
   return String(grounded?.data.content ?? text).trim();
 }
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
@@ -380,8 +380,16 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!item.artifactId) return null;
-  const typeLabel = fileTypeLabel(item.name);
-  const meta = [busy ? "Downloading…" : error || typeLabel, formatBytes(item.size)].filter(Boolean).join(" · ");
+  const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
+  const isImage = /^(png|jpe?g|webp|gif|svg|avif)$/.test(ext) || (item.mediaType ?? "").startsWith("image/");
+  const typeLabel = isImage ? `${ext.replace("jpeg", "jpg").toUpperCase()} Image` : fileTypeLabel(item.name);
+  const empty = item.size === 0;
+  const projectPath = item.projectPath || (item.path && item.path !== item.name ? item.path : "");
+  const meta = [busy ? "Downloading…" : error || (empty ? "Empty file" : typeLabel), formatBytes(item.size)].filter(Boolean).join(" · ");
+
+  function preview() {
+    openArtifactInContext({ tab: "preview", artifactId: item.artifactId, path: item.name, fileName: item.name });
+  }
   async function download() {
     if (!item.artifactId || busy) return;
     setBusy(true);
@@ -390,44 +398,93 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
       const r = await fetch(apiUrl(item.downloadPath || `/artifacts/${item.artifactId}/download`), { headers: authHeaders() });
       if (!r.ok) throw new Error("Download failed");
       const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = item.name;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      setError("Could not download. Try again.");
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Could not read the file"));
+        reader.readAsDataURL(blob);
+      });
+      // Desktop: native Save As with the original bytes and filename.
+      // Web (no bridge): the browser's own download.
+      const bridge = (window as unknown as { orvyn?: { files?: { saveAs?: (p: { defaultName: string; base64: string }) => Promise<{ ok: boolean; canceled?: boolean; error?: string }> } } }).orvyn?.files;
+      if (bridge?.saveAs) {
+        const saved = await bridge.saveAs({ defaultName: item.name, base64: dataUrl.slice(dataUrl.indexOf(",") + 1) });
+        if (!saved.ok && !saved.canceled) throw new Error(saved.error || "Could not save");
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = item.name;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (err: any) {
+      setError(String(err?.message ?? "Could not download. Try again."));
     } finally {
       setBusy(false);
     }
   }
+
   return (
-    <button
-      type="button"
-      onClick={() => void download()}
-      disabled={busy}
-      title={`Download ${item.name}`}
+    <div
       style={{
         ...card("var(--border)"),
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        width: "min(100%, 420px)",
+        gap: 12,
+        width: "min(100%, 440px)",
         textAlign: "left",
-        cursor: busy ? "wait" : "pointer",
         borderRadius: 12,
         padding: "10px 12px",
         color: "var(--text)",
       }}
+      data-testid="generated-asset-card"
     >
-      <IconFile />
+      <button
+        type="button"
+        onClick={preview}
+        disabled={empty}
+        title={empty ? "Empty file" : `Preview ${item.name}`}
+        data-testid="generated-asset-thumb"
+        style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 0, width: 72, height: 72, flexShrink: 0, overflow: "hidden", cursor: empty ? "not-allowed" : "pointer", background: "var(--bg-app)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      >
+        {empty ? <IconFile /> : isImage ? <ArtifactThumbnail artifactId={item.artifactId!} name={item.name} /> : <IconFile />}
+      </button>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{ display: "block", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
         <span style={{ display: "block", fontSize: 12, color: error ? "var(--danger, #F25F75)" : "var(--text-muted)" }}>{meta}</span>
+        <span style={{ display: "block", fontSize: 11.5, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {projectPath || (item.kindLabel === "generated" ? "Generated asset" : "Files → Generated")}
+        </span>
+        <span style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <button type="button" onClick={preview} disabled={empty} data-testid="generated-asset-preview" style={btn("var(--accent)")}>
+            Preview
+          </button>
+          <button type="button" onClick={() => void download()} disabled={busy || empty} data-testid="generated-asset-download" style={btn("transparent")}>
+            ↓ Download
+          </button>
+        </span>
       </span>
-    </button>
+    </div>
   );
+}
+
+/** The actual image, fetched with auth and shown at thumbnail size. */
+function ArtifactThumbnail({ artifactId, name }: { artifactId: string; name: string }) {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    setDataUrl(null);
+    fetch(apiUrl(`/files/read?id=${encodeURIComponent(artifactId)}`), { headers: authHeaders(), signal: controller.signal })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok || typeof d?.dataUrl !== "string") throw new Error("no image");
+        if (!controller.signal.aborted) setDataUrl(d.dataUrl);
+      })
+      .catch(() => { if (!controller.signal.aborted) setDataUrl(null); });
+    return () => controller.abort();
+  }, [artifactId]);
+  return dataUrl ? <img src={dataUrl} alt={name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <IconFile />;
 }
 
 export function CapabilityCard({ item, install, onInstalled }: {

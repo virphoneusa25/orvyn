@@ -80,7 +80,7 @@ export interface WorkGroupItem {
   type: "inspection" | "checks" | "edits" | "browser";
   title: string;
   summary?: string;
-  status: "running" | "done" | "warning" | "failed";
+  status: "running" | "done" | "warning" | "failed" | "superseded";
   durationMs?: number;
   items: ToolItem[];
   ctx?: "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
@@ -194,6 +194,8 @@ export interface AttachmentItem {
   name: string;
   artifactId?: string;
   path?: string;
+  /** The copy inside the user's project (e.g. public/hero.png), when one exists. */
+  projectPath?: string;
   mediaType?: string;
   downloadPath?: string;
   previewUrl?: string;
@@ -357,6 +359,8 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   const startTs = events.length > 0 ? events[0].timestamp : Date.now();
   let assistantSeq = 0;
   let textBuf = "";
+  /** verification.completed with PASS arrived: later finalize downgrades failed explorations. */
+  let verifyPassedSeen = false;
 
   /** Any real activity closes an open Thought row (fixes its duration). */
   const closeThought = (ts: number) => {
@@ -509,6 +513,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const verifierTools = Array.isArray(e.data.verifierTools) ? (e.data.verifierTools as { tool?: string; ok?: boolean }[]) : [];
         const failedRequired = checks.some((c) => c.status === "fail") || verifierTools.some((t) => t.ok === false && (t.tool === "git_status" || String(t.tool ?? "").startsWith("browser_")));
         const shown = verdict === "PASS" && failedRequired ? "PARTIAL" : verdict;
+        // A failed exploration step while the overall verification PASSED was
+        // not required for the result: the finalize pass marks it superseded
+        // so its ✕ does not contradict the green verification.
+        if (shown === "PASS") verifyPassedSeen = true;
         // The verifier's own trouble (no verdict) is not something ORION fixes.
         const findings = all.filter((f) => f.check !== "verifier-unavailable");
         if (shown !== "PASS" && findings.length === 0 && !failedRequired) {
@@ -685,13 +693,20 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "files.ready": {
         flushAssistant(false);
+        // The backend supplies a customer-facing message; the fallback keeps
+        // product language (no internal storage vocabulary).
         items.push({
           kind: "status",
           key: e.id,
-          label: String(e.data.message ?? `${e.data.name ?? "File"} is in Files → Generated (virtual file storage).`),
+          label: String(e.data.message ?? `${e.data.name ?? "File"} saved — available in Files → Generated.`),
           ephemeral: false,
           tone: "working",
         });
+        // The project copy path lands on the asset card for this artifact.
+        if (e.data.artifactId && typeof e.data.projectPath === "string") {
+          const target = items.find((it) => it.kind === "attachment" && it.artifactId === e.data.artifactId) as AttachmentItem | undefined;
+          if (target) target.projectPath = String(e.data.projectPath);
+        }
         continue;
       }
       case "message.grounded": {
@@ -952,7 +967,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
   // "✓ Inspected project · 18 files" — so a mission reads as a conversation,
   // not a scroll of rows. Assistant text and other items close the group.
   // Preview revisions fold into the edit group instead of extra chat rows.
-  return attachPreviewNotes(phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral)));
+  return attachPreviewNotes(phaseWorkGroups(dropStaleEphemeral(items).filter(it => active || it.kind !== "status" || !it.ephemeral), verifyPassedSeen));
 }
 
 /** Customer-facing model name. Infrastructure ids and provider paths stay internal. */
@@ -1139,12 +1154,22 @@ function makeWorkGroup(type: WorkGroupItem["type"], items: ToolItem[]): WorkGrou
 }
 
 /** Rolls consecutive same-class tool rows into single WorkGroups. */
-function phaseWorkGroups(items: PresentationItem[]): PresentationItem[] {
+function phaseWorkGroups(items: PresentationItem[], verifyPassed = false): PresentationItem[] {
   const out: PresentationItem[] = [];
   let buf: ToolItem[] = [];
   let cls: WorkGroupItem["type"] | null = null;
   const flush = () => {
-    if (buf.length > 0 && cls) out.push(makeWorkGroup(cls, buf));
+    if (buf.length > 0 && cls) {
+      const group = makeWorkGroup(cls, buf);
+      // A failed exploration while overall verification PASSED was not
+      // required for the result: superseded, not a defect of the work.
+      if (verifyPassed && group.type === "inspection" && (group.status === "failed" || group.status === "warning")) {
+        group.status = "superseded";
+        group.title = "Explore";
+        group.summary = [group.summary, "optional — not needed for the verified result"].filter(Boolean).join(" · ");
+      }
+      out.push(group);
+    }
     buf = [];
     cls = null;
   };

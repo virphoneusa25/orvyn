@@ -337,6 +337,12 @@ export function AgentWorkspace({
         return;
       }
       if (mapped === "browser" || mapped === "preview") {
+        // A generated asset previews in the artifact viewer (the right pane),
+        // not in a browser surface — no mission, no model call.
+        if (d?.artifactId) {
+          activate(parseWorkbenchTab(artifactTabId(d.fileName ?? d.path ?? "artifact", d.artifactId)), true);
+          return;
+        }
         void openBrowserSurface(mapped, d?.url ?? derived.activity?.previewUrl);
         return;
       }
