@@ -2458,7 +2458,19 @@ export class StreamingAgentRuntime {
           // the key: switch (same model elsewhere first), don't fail. Only when
           // nothing streamed, so no answer is duplicated and nothing is paid twice.
           const failure = classifyModelFailure(err);
-          if (failure && !state.cancelled && !content && streamedCalls.length === 0 && (state.failovers ?? 0) < 4) {
+          let failoverEligible = !content && streamedCalls.length === 0;
+          if (!failoverEligible && failure && !state.cancelled && state.toolCalls > 0 && /stream idle|aborted due to timeout|ETIMEDOUT/i.test(String(err?.message ?? err))) {
+            // A MID-MISSION stall (the idle watchdog / call timeout) with partial
+            // narration is not an answer — the work is still in flight. Retract
+            // the partial text and continue on a backup provider instead of
+            // stranding the run with a "Retry this request".
+            this.store.emit(runId, "message.retracted", { reason: "model stalled mid-run — continuing on a backup provider" });
+            content = "";
+            streamedText = false;
+            streamedCalls.length = 0;
+            failoverEligible = true;
+          }
+          if (failure && !state.cancelled && failoverEligible && (state.failovers ?? 0) < 4) {
             state.failovers = (state.failovers ?? 0) + 1;
             const next = this.failoverModel(runId, state, provider, failure, String(err?.message ?? err));
             if (next) {
