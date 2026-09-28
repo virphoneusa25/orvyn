@@ -4,7 +4,7 @@
 
 import { app } from "electron";
 import { spawn, ChildProcess } from "child_process";
-import { createWriteStream, openSync, writeFileSync, unlinkSync } from "fs";
+import { createWriteStream, openSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { randomBytes } from "crypto";
@@ -145,11 +145,25 @@ export class LocalWorkerManager {
 
   private acquireLock(): boolean {
     const lockPath = path.join(app.getPath("userData"), LOCK_NAME);
-    try {
+    const tryOpen = () => {
       this.lockFd = openSync(lockPath, "wx");
       writeFileSync(this.lockFd, String(process.pid));
       return true;
+    };
+    try {
+      return tryOpen();
     } catch {
+      // A lock left by an ORVYN that crashed or was force-quit: its process is
+      // gone, so take the lock over instead of never starting a worker again.
+      try {
+        const owner = Number(readFileSync(lockPath, "utf8").trim());
+        if (owner && owner !== process.pid && !processAlive(owner)) {
+          unlinkSync(lockPath);
+          return tryOpen();
+        }
+      } catch {
+        /* another window holds it */
+      }
       return false;
     }
   }
@@ -205,4 +219,14 @@ function killWorkerTree(child: ChildProcess): void {
     } catch { /* fall through */ }
   }
   child.kill();
+}
+
+/** True while a process with this pid exists. */
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM";
+  }
 }

@@ -238,6 +238,9 @@ async function main(): Promise<void> {
     if (n) console.log(`[local-worker] ${signal}: stopped ${n} service(s)`);
     setTimeout(() => process.exit(0), 200);
   };
+  // Started by the desktop app over IPC: when the app dies (crash, force-quit)
+  // this worker must not live on as an orphan that keeps claiming tasks.
+  if (typeof process.send === "function") process.once("disconnect", () => shutdown("app exited"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
   console.log(`[local-worker] ready ${WORKER_ID} → ${CONTROL_PLANE}`);
