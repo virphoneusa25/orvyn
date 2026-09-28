@@ -158,6 +158,7 @@ export type AgentEventType =
   | "model.fallback"
   | "resource.required"
   | "run.blocked"
+  | "write.guard"
   | "skills.routed";
 
 export interface AgentEvent {

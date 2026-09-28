@@ -60,6 +60,12 @@ export interface ToolExecutionContext {
   /** The run and tenant making the call (browser sessions are per run). */
   runId?: string;
   tenantId?: string;
+  /** Write-safety context: what the user asked for (task scope) and which
+   *  files this run has actually read. Authorization for a large rewrite is
+   *  granted by runtime policy from these facts — never by the model's own
+   *  assertion that a rewrite is intentional. */
+  taskScope?: "full_redesign" | "targeted" | "unknown";
+  filesReadThisRun?: Set<string>;
 }
 
 export interface AITool {

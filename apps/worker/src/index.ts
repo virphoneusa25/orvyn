@@ -363,14 +363,28 @@ async function remoteReadFile(runId: string, filePath: string, base64 = false): 
   }
 }
 
+/** Write-safety facts the CONTROL PLANE injects (runtime policy, not the
+ * model's say-so): what the user asked for and whether the run read the file. */
+interface RemoteGuard {
+  scope: "full_redesign" | "targeted" | "unknown";
+  wasRead: boolean;
+}
+
+/** Pops the injected guard context off the RPC args (never part of the tool schema). */
+function takeGuard(args: Record<string, unknown>): RemoteGuard | undefined {
+  const g = args.__orvynGuard as RemoteGuard | undefined;
+  delete args.__orvynGuard;
+  return g && typeof g === "object" ? g : undefined;
+}
+
 /** Writes a file into the mission workspace (binary-safe, no shell quoting). */
-async function remoteWriteFile(runId: string, filePath: string, content: string, append = false): Promise<CommandResult> {
+async function remoteWriteFile(runId: string, filePath: string, content: string, append = false, guard?: RemoteGuard): Promise<CommandResult> {
   const target = workspacePath(runId, filePath);
   if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
   try {
-    // Destructive-rewrite guard (same policy as the control plane): a write
-    // that would delete hundreds of lines from a substantial existing file
-    // is rejected — targeted changes must use edit_file.
+    // Write-safety guard (same policy as the control plane): a large
+    // replacement is graded — authorized only for a broad redesign the run
+    // READ first; otherwise steered to targeted edits / read-first.
     let oldLines = 0;
     try {
       const previous = fs.readFileSync(target, "utf8");
@@ -379,18 +393,28 @@ async function remoteWriteFile(runId: string, filePath: string, content: string,
     const newLines = content ? content.split("\n").length : 0;
     const deletions = oldLines - newLines;
     const threshold = Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300);
-    if (!append && oldLines >= 80 && deletions >= threshold) {
+    const large = !append && oldLines >= 80 && deletions >= threshold;
+    if (large && !(guard?.scope === "full_redesign" && guard.wasRead)) {
       return {
         ok: false,
         output: "",
         exitCode: 1,
-        stderr: `DESTRUCTIVE_REWRITE: this write would replace ${filePath} (${oldLines} lines) with ${newLines} lines — deleting ${deletions} lines. Use edit_file with exact old_string/new_string for targeted changes.`,
+        stderr: guard && !guard.wasRead
+          ? `READ_FIRST_BEFORE_REWRITE: replacing ${filePath} would delete ~${deletions} lines and this run has not read the current file. Read it first (read_file), then decide whether a full replacement or a targeted edit is right.`
+          : `DESTRUCTIVE_REWRITE: this write would replace ${filePath} (${oldLines} lines) with ${newLines} lines — deleting ${deletions} lines for a request that does not authorize a broad redesign. Use edit_file with exact old_string/new_string for targeted changes.`,
       };
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (append) fs.appendFileSync(target, content, "utf8");
     else fs.writeFileSync(target, content, "utf8");
     const bytesWritten = Buffer.byteLength(content, "utf8");
+    if (large) {
+      return {
+        ok: true,
+        output: JSON.stringify({ ok: true, path: filePath, bytesWritten, replaced: true, note: "full redesign authorized against the user's request; the pre-mission checkpoint can undo it" }),
+        exitCode: 0,
+      };
+    }
     return {
       ok: true,
       output: JSON.stringify({ ok: true, path: filePath, bytesWritten }),
@@ -405,7 +429,7 @@ async function remoteWriteFile(runId: string, filePath: string, content: string,
  * Exact find/replace edit — same semantics as the control-plane edit_file:
  * old_string must match exactly once unless replace_all is true.
  */
-async function remoteEditFile(runId: string, filePath: string, oldStr: string, newStr: string, replaceAll: boolean): Promise<CommandResult> {
+async function remoteEditFile(runId: string, filePath: string, oldStr: string, newStr: string, replaceAll: boolean, guard?: RemoteGuard): Promise<CommandResult> {
   const target = workspacePath(runId, filePath);
   if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
   if (!oldStr) return { ok: false, output: "", exitCode: 1, stderr: "old_string must not be empty" };
@@ -419,6 +443,17 @@ async function remoteEditFile(runId: string, filePath: string, oldStr: string, n
     const updated = replaceAll
       ? content.split(oldStr).join(newStr)
       : content.replace(oldStr, newStr);
+    // An edit whose old_string covers most of the file IS a replacement —
+    // same write-safety policy (no disguised full rewrites).
+    const oldLines = content.split("\n").length;
+    const newLines = updated.split("\n").length;
+    if (oldStr.length > Math.max(400, content.length * 0.6) && oldLines >= 80 && newLines - oldLines <= -Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300)) {
+      if (!(guard?.scope === "full_redesign")) {
+        return { ok: false, output: "", exitCode: 1, stderr: `DESTRUCTIVE_REWRITE: this edit replaces essentially all of ${filePath}. Use targeted old_string/new_string edits; a full rewrite needs the user to ask for a redesign.` };
+      }
+      fs.writeFileSync(target, updated, "utf8");
+      return { ok: true, output: `Replaced ${filePath} (${newLines} lines, was ${oldLines}) — full redesign authorized; the pre-mission checkpoint can undo it.`, exitCode: 0 };
+    }
     fs.writeFileSync(target, updated, "utf8");
     return { ok: true, output: "Edited " + filePath, exitCode: 0 };
   } catch (e: any) {
@@ -535,17 +570,20 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
             break;
           }
           case "write_file": {
-            const r = await remoteWriteFile(runId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""), req.arguments.append === true);
+            const guard = takeGuard(req.arguments);
+            const r = await remoteWriteFile(runId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""), req.arguments.append === true, guard);
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "edit_file": {
+            const guard = takeGuard(req.arguments);
             const r = await remoteEditFile(
               runId,
               String(req.arguments.path ?? ""),
               String(req.arguments.old_string ?? ""),
               String(req.arguments.new_string ?? ""),
-              req.arguments.replace_all === true
+              req.arguments.replace_all === true,
+              guard
             );
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;

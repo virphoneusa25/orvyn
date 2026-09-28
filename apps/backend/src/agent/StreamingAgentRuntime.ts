@@ -43,6 +43,7 @@ import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal, modelCallTimeoutMs, runStallTimeoutMs, streamIdleTimeoutMs } from "./modelTimeout";
+import { classifyTaskScope } from "./editScope";
 import { AgentMode, applyMode } from "./modes";
 import {
   capabilityGapNotes,
@@ -282,6 +283,10 @@ interface RunState {
   modelCallStartedAt?: number;
   /** Set when the stall watchdog force-aborts a hung call — the catch fails with it. */
   stallAbort?: string;
+  /** Project files this run actually read (write-safety evidence). */
+  filesRead: Set<string>;
+  /** What the user asked for, from the instruction — drives write-safety policy. */
+  taskScope: "full_redesign" | "targeted" | "unknown";
   creditsExceeded?: boolean;
   /** Failed tool calls in a row (a repair loop that is not working). */
   failureStreak: number;
@@ -1505,6 +1510,8 @@ export class StreamingAgentRuntime {
       recentToolSignatures: [],
       lastUsefulChangeAt: Date.now(),
       lastActivityAt: Date.now(),
+      filesRead: new Set<string>(),
+      taskScope: classifyTaskScope(instruction),
       failureStreak: 0,
       readOnlyStreak: 0,
       helperRejects: 0,
@@ -3075,6 +3082,16 @@ export class StreamingAgentRuntime {
       const terminalLike = call.name === "terminal" || call.name === "run_command";
       const remoteRun = state.execution?.location === "OVH_WORKER";
       if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
+      // Remote writes carry the runtime's write-safety facts (task scope +
+      // read evidence) so the worker's guard grades them identically to the
+      // control plane's. Authorization is runtime policy, never the model's say-so.
+      if (remoteRun && (call.name === "write_file" || call.name === "edit_file")) {
+        const writePath = String((call.arguments as { path?: unknown })?.path ?? "");
+        (call.arguments as Record<string, unknown>).__orvynGuard = {
+          scope: state.taskScope,
+          wasRead: writePath ? state.filesRead.has(writePath) : false,
+        };
+      }
       let result: ToolResult;
       // ── Canonical preview navigation guard ────────────────────────────────
       // Browser/computer-use navigation must receive an absolute http(s) URL —
@@ -3238,6 +3255,25 @@ export class StreamingAgentRuntime {
         // (npm test after a fix) is not an "identical retry": it is the repair
         // loop. Only unchanged retries stay blocked.
         if (WORKSPACE_CHANGING_TOOLS.has(call.name)) state.failedFingerprints.clear();
+        // Write-safety evidence: a file the run actually read may be rewritten
+        // under an authorized full-redesign scope.
+        if (call.name === "read_file") {
+          const readPath = String((call.arguments as { path?: unknown })?.path ?? "");
+          if (readPath) state.filesRead.add(readPath);
+        }
+        // A full-file replacement the guard AUTHORIZED (broad redesign the
+        // user asked for, file read first) gets its own truthful timeline
+        // card — never a silent self-approval.
+        if (result.meta?.writeGuard === "allow_with_checkpoint") {
+          this.store.emit(runId, "write.guard", {
+            decision: "allow_with_checkpoint",
+            path: result.meta.path,
+            oldLines: result.meta.oldLines,
+            newLines: result.meta.newLines,
+            scope: state.taskScope,
+            note: "Full redesign requested by the user; file was read first and the pre-mission checkpoint can undo it.",
+          });
+        }
         // A page file ORION read (e.g. an existing style.css) is part of the
         // site: without it the preview had a page whose stylesheet 404'd.
         if (call.name === "read_file" && typeof result.output === "string" && !/…\(truncated\)\s*$/.test(result.output)) {

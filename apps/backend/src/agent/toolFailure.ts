@@ -12,6 +12,7 @@ export const TOOL_ERROR_TYPES = [
   "PERMISSION_DENIED",
   "CAPABILITY_UNAVAILABLE",
   "RESOURCE_MISSING",
+  "WRITE_GUARD",
   "EXECUTION_FAILED",
   "TIMEOUT",
   "TRANSIENT_PROVIDER_ERROR",
@@ -159,6 +160,9 @@ const TRANSIENT_RE = /\b(ECONNRESET|ECONNREFUSED|EAI_AGAIN|EBUSY|socket hang up|
 /** A tool that already passed argument checks and then failed while running. */
 export function classifyExecutedToolFailure(error: string): ToolErrorType {
   const text = String(error ?? "");
+  // Write-safety interception (not a crash): the guard steered the agent to a
+  // targeted edit or a read-first. Rendered as a warning, never a fatal ✕.
+  if (/\b(DESTRUCTIVE_REWRITE|READ_FIRST_BEFORE_REWRITE|AUTHORIZED_REWRITE)\b/.test(text)) return "WRITE_GUARD";
   if (RESOURCE_MISSING_RE.test(text) && !/old_string not found/i.test(text)) return "RESOURCE_MISSING";
   if (PERMISSION_RE.test(text)) return "PERMISSION_DENIED";
   if (TIMEOUT_RE.test(text)) return "TIMEOUT";

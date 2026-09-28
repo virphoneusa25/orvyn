@@ -65,7 +65,7 @@ export function workspaceRootFor(registeredRoot: string | undefined, context?: {
 }
 
 export function projectToolContext(
-  run: { projectRoot: string; workspaceId?: string | null; runId?: string },
+  run: { projectRoot: string; workspaceId?: string | null; runId?: string; taskScope?: "full_redesign" | "targeted" | "unknown"; filesRead?: Set<string> },
   extra?: Omit<ToolExecutionContext, "workspaceRoot" | "workspaceId">
 ): ToolExecutionContext {
   return {
@@ -73,6 +73,8 @@ export function projectToolContext(
     workspaceRoot: String(run.projectRoot ?? ""),
     ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}),
     ...(run.runId ? { runId: run.runId } : {}),
+    ...(run.taskScope ? { taskScope: run.taskScope } : {}),
+    ...(run.filesRead ? { filesReadThisRun: run.filesRead } : {}),
   };
 }
 

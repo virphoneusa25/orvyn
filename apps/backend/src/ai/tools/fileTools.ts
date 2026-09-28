@@ -6,6 +6,7 @@ import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
 import { resolveSafePath } from "../../execution/pathSafety";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
 import { verifyProjectFile } from "../../artifacts/projectFileEvidence";
+import { decideWriteGuard, writeGuardError } from "../../agent/editScope";
 
 // Every file tool resolves paths against the run workspace and refuses to
 // escape it — this is the project-isolation boundary for Agent mode.
@@ -97,23 +98,29 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         const target = resolveInWorkspace(projectRoot, String(args.path), context);
         let existed = false;
         try { await fs.access(target); existed = true; } catch { /* new file */ }
-        // Destructive-rewrite guard: a write that would replace a substantial
-        // existing file with far less content (a "small task" deleting
-        // hundreds of lines) is rejected — targeted changes must use
-        // edit_file. Thresholds are generous so legitimate full rewrites of
-        // small files are never blocked.
+        // Write-safety guard (shared policy in agent/editScope.ts): a large
+        // replacement is graded against what the user asked for — a broad
+        // redesign the run has READ first is authorized with a checkpoint;
+        // anything else is steered to targeted edits or a read-first.
+        // Authorization comes from runtime policy (task scope + read facts),
+        // never from the model asserting the rewrite is intentional.
         const append = args.append === true && !args.content_base64;
         if (existed && !append && typeof args.content === "string" && !args.content_base64) {
           const previous = await fs.readFile(target, "utf8").catch(() => "");
           const oldLines = previous ? previous.split("\n").length : 0;
           const newLines = args.content.split("\n").length;
-          const deletions = oldLines - newLines;
-          const threshold = Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300);
-          if (oldLines >= 80 && deletions >= threshold) {
+          const guard = decideWriteGuard({ oldLines, newLines, wasRead: context?.filesReadThisRun?.has(String(args.path)) ?? false, taskScope: context?.taskScope ?? "unknown" });
+          if (guard.code) {
+            return { ok: false, error: writeGuardError(guard, String(args.path)), meta: { code: guard.code, path: String(args.path), oldLines, newLines, deletions: guard.deletions } };
+          }
+          if (guard.decision === "allow_with_checkpoint") {
+            await fs.writeFile(target, Buffer.from(String(args.content), "utf-8"));
+            const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), Buffer.from(String(args.content), "utf-8"));
             return {
-              ok: false,
-              error: `This write would replace ${args.path} (${oldLines} lines) with ${newLines} lines — deleting ${deletions} lines for what should be a targeted change. Use edit_file with the exact old_string/new_string instead. If a full rewrite is truly intended, apply it with edit_file using replace_all on the sections that change, or state the justification and rewrite deliberately section by section.`,
-              meta: { code: "DESTRUCTIVE_REWRITE", path: String(args.path), oldLines, newLines, deletions },
+              ok: true,
+              output: `REPLACED ${args.path} (${newLines} lines, was ${oldLines}) — full redesign authorized against the user's request; the pre-mission checkpoint can undo it.`,
+              projectFileEvidence,
+              meta: { code: "AUTHORIZED_REWRITE", writeGuard: "allow_with_checkpoint", path: String(args.path), oldLines, newLines, deletions: guard.deletions },
             };
           }
         }
@@ -224,6 +231,29 @@ export function makeEditFileTool(projectRoot: string): AITool {
           };
         }
         const next = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
+        // An edit whose old_string covers most of the file IS a replacement —
+        // the write-safety guard applies (no full-file rewrites disguised as
+        // "edits" on tasks that did not authorize them).
+        {
+          const oldLines = original.split("\n").length;
+          const newLines = next.split("\n").length;
+          const covering = oldString.length > Math.max(400, original.length * 0.6);
+          if (covering) {
+            const guard = decideWriteGuard({ oldLines, newLines, wasRead: true, taskScope: context?.taskScope ?? "unknown" });
+            if (guard.code) {
+              return { ok: false, error: writeGuardError(guard, String(args.path)), meta: { code: guard.code, path: String(args.path), oldLines, newLines, deletions: guard.deletions } };
+            }
+            const expected0 = Buffer.from(next, "utf-8");
+            await fs.writeFile(target, expected0);
+            const pf = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected0);
+            return {
+              ok: true,
+              output: `REPLACED ${args.path} (${newLines} lines, was ${oldLines}) — full redesign authorized against the user's request; the pre-mission checkpoint can undo it.`,
+              projectFileEvidence: pf,
+              meta: { code: "AUTHORIZED_REWRITE", writeGuard: "allow_with_checkpoint", path: String(args.path), oldLines, newLines, deletions: guard.deletions },
+            };
+          }
+        }
         const expected = Buffer.from(next, "utf-8");
         await fs.writeFile(target, expected);
         const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected);
@@ -314,9 +344,31 @@ export function makeApplyPatchTool(projectRoot: string): AITool {
         if (/(^|\n)(?:\+\+\+|---)\s+\S*\.\.([\\/]|$)/.test(body)) {
           return { ok: false, error: "Patch escapes the project root — refused" };
         }
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target, body, "utf-8");
-        return { ok: true, output: `PATCHED ${args.path}` };
+        // apply_patch REPLACES the whole file, so the write-safety guard
+        // applies identically to write_file — this must not be a bypass.
+        let existed = false;
+        try { await fs.access(target); existed = true; } catch { /* new file */ }
+        if (existed) {
+          const previous = await fs.readFile(target, "utf8").catch(() => "");
+          const oldLines = previous ? previous.split("\n").length : 0;
+          const newLines = body.split("\n").length;
+          const guard = decideWriteGuard({ oldLines, newLines, wasRead: context?.filesReadThisRun?.has(String(args.path)) ?? false, taskScope: context?.taskScope ?? "unknown" });
+          if (guard.code) {
+            return { ok: false, error: writeGuardError(guard, String(args.path)), meta: { code: guard.code, path: String(args.path), oldLines, newLines, deletions: guard.deletions } };
+          }
+          await fs.writeFile(target, body, "utf-8");
+          if (guard.decision === "allow_with_checkpoint") {
+            return {
+              ok: true,
+              output: `REPLACED ${args.path} (${newLines} lines, was ${oldLines}) — full redesign authorized against the user's request; the pre-mission checkpoint can undo it.`,
+              meta: { code: "AUTHORIZED_REWRITE", writeGuard: "allow_with_checkpoint", path: String(args.path), oldLines, newLines, deletions: guard.deletions },
+            };
+          }
+        } else {
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, body, "utf-8");
+        }
+        return { ok: true, output: `REPLACED ${args.path}` };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }

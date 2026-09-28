@@ -730,6 +730,23 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           items[at] = { kind: "status", key: item.key, label: "Correcting a malformed file-edit request…", ephemeral: true, tone: "rework" };
           continue;
         }
+        // A write the safety guard INTERCEPTED is not a mission failure: the
+        // row converts to an amber warning and ORION replans a targeted edit
+        // or (authorized redesign) a replacement follows with its own card.
+        if (item?.kind === "tool" && e.data.errorType === "WRITE_GUARD" && at !== undefined) {
+          const raw = String(e.data.error ?? "");
+          const readFirst = /READ_FIRST_BEFORE_REWRITE/.test(raw);
+          items[at] = {
+            kind: "status",
+            key: item.key,
+            label: readFirst
+              ? "Full-file rewrite intercepted — read the current file before replacing it"
+              : "Full-file rewrite intercepted by the write guard — replanning as a targeted edit",
+            ephemeral: false,
+            tone: "rework",
+          };
+          continue;
+        }
         if (item?.kind === "tool") {
           item.status = "failed";
           item.endedAt = e.timestamp;
@@ -744,6 +761,21 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             ephemeral: false,
           });
         }
+        continue;
+      }
+
+      case "write.guard": {
+        // A full-file replacement the runtime AUTHORIZED (the user asked for a
+        // broad redesign, the file was read first, a checkpoint exists) — its
+        // own truthful card, never a silent self-approval.
+        flushAssistant(false);
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: `Rewrite scope validated — full redesign of ${String(e.data?.path ?? "the file")} authorized (${e.data?.oldLines ?? "?"} → ${e.data?.newLines ?? "?"} lines, checkpoint protects it)`,
+          ephemeral: false,
+          tone: "working",
+        });
         continue;
       }
 

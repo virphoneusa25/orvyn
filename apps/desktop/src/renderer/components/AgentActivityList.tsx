@@ -363,6 +363,9 @@ export function approvalSummary(tool: string, input: unknown): string {
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   if (/^(terminal|run_command|start_process|run_tests|ssh_exec|remote_exec)$/.test(tool) && str(args.command)) return `$ ${str(args.command)}`.slice(0, 400);
   if (/^(write_file|edit_file|create_file)$/.test(tool) && str(args.path)) return `${tool === "edit_file" ? "Edit" : "Write"} ${str(args.path)}`;
+  // apply_patch REPLACES the whole file — the label must say so (audit and
+  // Undo semantics), and never read as external "approval" of a rewrite.
+  if (tool === "apply_patch" && str(args.path)) return `Replace ${str(args.path)}`;
   if (tool === "delete_file" && str(args.path)) return `Delete ${str(args.path)}`;
   if (tool === "move_file") return `Move ${str(args.from)} → ${str(args.to)}`;
   if (/^browser_/.test(tool) && str(args.url)) return `Open ${str(args.url)}`;
