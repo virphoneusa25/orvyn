@@ -142,6 +142,7 @@ export type AgentEventType =
   | "capability.required"
   | "capability.installed"
   | "model.unavailable"
+  | "model.failover"
   | "mcp.activation"
   | "model.capability.blocked"
   | "model.fallback"

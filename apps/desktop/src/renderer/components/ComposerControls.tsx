@@ -40,6 +40,8 @@ export interface ComposerModel {
   /** Present only when the model genuinely accepts a reasoning-effort
    *  control; keys are the levels it supports. */
   reasoningControl?: { param: string; levels: Partial<Record<"fast" | "standard" | "deep" | "max", string>> };
+  /** False for a provider's long tail: shown only when the filter matches it. */
+  featured?: boolean;
 }
 
 export const ACCESS_MODES: { id: AccessMode; label: string; description: string }[] = [
@@ -300,6 +302,7 @@ export function useComposerModels(): ComposerModel[] {
             capabilities: m.capabilities,
             contextWindow: m.contextWindow,
             reasoningControl: m.reasoningControl,
+            featured: m.featured !== false,
           }))
         );
       })
@@ -311,7 +314,18 @@ export function useComposerModels(): ComposerModel[] {
   return models;
 }
 
-function providerLabel(provider: string): string {
+/** Provider names by registry-id prefix (several providers share the OpenAI-compatible wire format). */
+const PROVIDER_BY_PREFIX: Record<string, string> = {
+  nebius: "Nebius",
+  fw: "Fireworks",
+  mistral: "Mistral",
+  openrouter: "OpenRouter",
+  gemini: "Google",
+};
+
+function providerLabel(provider: string, id = ""): string {
+  const prefix = id.includes(":") ? id.slice(0, id.indexOf(":")) : "";
+  if (PROVIDER_BY_PREFIX[prefix]) return PROVIDER_BY_PREFIX[prefix];
   if (provider === "openai-compatible") return "OpenAI-compatible";
   return provider ? provider[0].toUpperCase() + provider.slice(1) : "Other";
 }
@@ -336,12 +350,14 @@ export function ModelMenu({
     { id: "premium", name: "Premium", hint: "Hard problems only" },
   ];
   const q = filter.trim().toLowerCase();
+  // The curated set is listed; a provider's long tail appears when the filter matches it.
   const visible = q
-    ? agentModels.filter((m) => `${m.name} ${m.id} ${m.provider}`.toLowerCase().includes(q))
-    : agentModels;
+    ? agentModels.filter((m) => `${m.name} ${m.id} ${m.provider} ${providerLabel(m.provider, m.id)}`.toLowerCase().includes(q))
+    : agentModels.filter((m) => m.featured !== false || m.id === value);
+  const moreCount = q ? 0 : agentModels.length - visible.length;
   const groups = new Map<string, ComposerModel[]>();
   for (const m of visible) {
-    const key = providerLabel(m.provider);
+    const key = providerLabel(m.provider, m.id);
     groups.set(key, [...(groups.get(key) ?? []), m]);
   }
   const selected = models.find((m) => m.id === value);
@@ -365,7 +381,7 @@ export function ModelMenu({
     >
       {(close) => (
         <div>
-          {agentModels.length > 8 && (
+          {(agentModels.length > 8 || moreCount > 0) && (
             <input
               autoFocus
               value={filter}
@@ -441,6 +457,11 @@ export function ModelMenu({
               })}
             </div>
           ))}
+          {advanced && moreCount > 0 && (
+            <div style={{ padding: "6px 10px", fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>
+              {moreCount} more model{moreCount === 1 ? "" : "s"} — type in the filter to find them.
+            </div>
+          )}
           {visible.length === 0 && (
             <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--orvyn-text-muted)" }}>
               No models match{q ? ` “${filter.trim()}”` : ""}. Configure providers in the Model Manager.

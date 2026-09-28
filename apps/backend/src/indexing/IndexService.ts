@@ -411,6 +411,9 @@ export class IndexService {
     try {
       const raw = readFileSync(dest, "utf8");
       const payload = JSON.parse(raw) as { stats?: IndexStats; hashes?: [string, FileRecord][] };
+      // Indexed with another embedding model: those vectors live elsewhere; index again from scratch.
+      const model = (payload.stats as { embeddingModel?: string } | undefined)?.embeddingModel;
+      if (model && model !== this.embedderLabel) return;
       if (payload.hashes) this.fileHashes = new Map(payload.hashes);
       if (payload.stats && (payload.stats.status === "ready" || payload.stats.status === "stale" || payload.stats.status === "degraded")) {
         this.stats = { ...payload.stats, status: payload.stats.status === "ready" ? "stale" : payload.stats.status };

@@ -40,6 +40,9 @@ const MODELS = {
 const calls = []; // { model, user }
 /** Models the provider answers with 404 "Model not found" (an account without access). */
 const missing = new Set();
+/** Wire-model prefixes whose provider is down (HTTP 503). */
+const down = new Set();
+const NEBIUS = ["zai-org/GLM-5.3", "zai-org/GLM-5.3-Flash", "moonshotai/Kimi-K2.7-Code", "moonshotai/Kimi-K3", "Qwen/Qwen3.5-397B-A17B", "Qwen/Qwen3-30B-A3B-Instruct-2507", "deepseek-ai/DeepSeek-V4-Pro", "nvidia/Nemotron-3_5-Lightning"];
 
 function toolResultsSinceUser(msgs) {
   const i = msgs.map((m) => m.role).lastIndexOf("user");
@@ -85,9 +88,13 @@ const model = createServer((req, res) => {
   req.on("end", () => {
     if (req.url?.includes("/models")) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ data: ["scripted-agent", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", ...Object.values(MODELS)].map((id) => ({ id })) }));
+      return res.end(JSON.stringify({ data: ["scripted-agent", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "claude-sonnet-5", ...Object.values(MODELS), ...NEBIUS].map((id) => ({ id })) }));
     }
     let body = {}; try { body = JSON.parse(raw || "{}"); } catch {}
+    if ([...down].some((p) => String(body.model ?? "").startsWith(p))) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "Service Unavailable: upstream overloaded", type: "server_error" } }));
+    }
     if (missing.has(String(body.model ?? ""))) {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ error: { message: "Model not found, inaccessible, and/or not deployed", param: "model", code: "NOT_FOUND", type: "error" } }));
@@ -146,6 +153,7 @@ async function main() {
     MISTRAL_API_KEY: "scripted", MISTRAL_BASE_URL: M,
     OPENROUTER_API_KEY: "scripted", OPENROUTER_BASE_URL: M,
     GEMINI_API_KEY: "scripted", GEMINI_OPENAI_BASE_URL: M,
+    NEBIUS_API_KEY: "scripted", NEBIUS_BASE_URL: M, ORVYN_PROVIDER_COOLDOWN_SECONDS: "2",
     ORVYN_RUN_CREDITS_AUTO: "20",
   };
   delete env.ORVYN_CLOUD_MODE; delete env.ORVYN_PROJECTS_DIR; delete env.ORVYN_API_KEY; delete env.ORVYN_ALLOW_ULTRA_ESCALATION;
@@ -195,14 +203,40 @@ async function main() {
     ok(bc && bc.credits > 20, `the run was metered past the old internal budget (${bc?.credits} credits)`, JSON.stringify(bc ?? null));
     ok(!/credit budget/.test([...big.events].reverse().find((e) => e.type === "run.error")?.data?.message ?? ""), "…and was not stopped by it");
 
+    console.log("\n7a. Fireworks is down (HTTP 503): the same model runs on Nebius; nothing is billed twice");
+    down.add("accounts/fireworks/");
+    const outage = await runTask("Refactor utils.js into two files", { composerMode: "code" });
+    const fo = outage.events.find((e) => e.type === "model.failover");
+    ok(fo?.data?.modelId === `fw:${MODELS.kimi}` && fo.data.fallback === "nebius:moonshotai/Kimi-K2.7-Code" && fo.data.level === "same-model" && fo.data.failure === "provider",
+      "Kimi K2.7 Code on Fireworks answered 503; the run continued on Kimi K2.7 Code on Nebius", JSON.stringify(fo?.data ?? outage.events.filter((e) => e.type === "run.error").map((e) => e.data)));
+    ok(outage.status === "completed", "…and finished", outage.status);
+    const oc = lastCredits(outage.events);
+    ok(oc && oc.weight <= 4 && /provider: fw:/.test(oc.failoverReason ?? ""), "credits billed at the Code weight with the failover reason on the ledger", JSON.stringify(oc ?? null));
+    down.clear();
+    down.add("gemini-");
+    const chatOutage = await new Promise((resolveChat) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws/chat`);
+      let text = "";
+      sock.onopen = () => sock.send(JSON.stringify({ task: "chat", history: [], userMessage: "What should we name our foundation model family? Give me your recommendation.", context: { useRag: false } }));
+      sock.onmessage = (ev) => { const c = JSON.parse(ev.data); if (c.delta) text += c.delta; if (c.done) { sock.close(); resolveChat(text); } };
+      sock.onerror = () => resolveChat(text);
+      setTimeout(() => resolveChat(text), 15000);
+    });
+    ok(/^Answer from /.test(String(chatOutage).trim()) && !/gemini|Error|503/.test(String(chatOutage)), "a chat whose provider is down answers once, from another model", String(chatOutage));
+    down.clear();
+    await sleep(2500); // the cool-downs end
+
+    console.log("\n7b. A bad request is not a provider failure");
+    ok(!outage.events.some((e) => e.type === "model.failover" && e.data?.failure !== "provider"), "only provider failures triggered a failover");
+
     console.log("\n7. The Code agent's model is missing on the account (HTTP 404)");
     missing.add(MODELS.kimi);
     const lost = await runTask("Refactor utils.js into two files", { composerMode: "code" });
     const un = lost.events.find((e) => e.type === "model.unavailable");
-    ok(un?.data?.modelId === `fw:${MODELS.kimi}` && un.data.fallback === `fw:${MODELS.glm}`, "Kimi K2.7 Code answered 404; the run switched to GLM-5.3", JSON.stringify(un?.data ?? lost.events.filter((e) => e.type === "run.error").map((e) => e.data)));
+    ok(un?.data?.modelId === `fw:${MODELS.kimi}` && un.data.fallback === "nebius:moonshotai/Kimi-K2.7-Code", "Kimi K2.7 Code (Fireworks) answered 404; the run switched to the next Code model (Kimi K2.7 Code on Nebius)", JSON.stringify(un?.data ?? lost.events.filter((e) => e.type === "run.error").map((e) => e.data)));
     ok(lost.status === "completed", "…and finished instead of failing", lost.status);
     const next = await runTask("Refactor utils.js into two files", { composerMode: "code" });
-    ok(started(next.events).actualModelId === `fw:${MODELS.glm}` && !next.events.some((e) => e.type === "model.unavailable"), "the next Code run starts on GLM-5.3 directly", started(next.events).actualModelId);
+    ok(started(next.events).actualModelId === "nebius:moonshotai/Kimi-K2.7-Code" && !next.events.some((e) => e.type === "model.unavailable"), "the next Code run starts on the working Code model directly", started(next.events).actualModelId);
     missing.add(MODELS.gemini);
     const chat2 = await new Promise((resolveChat) => {
       const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws/chat`);
@@ -219,6 +253,7 @@ async function main() {
     server.kill("SIGKILL"); model.close();
   }
   if (failures) console.log("--- control plane log (tail) ---\n" + log.join("").slice(-1500));
+  if (process.env.ROUTING_LOG) (await import("node:fs")).writeFileSync(process.env.ROUTING_LOG, log.join(""));
   console.log(failures === 0 ? "\nROUTING: PASS" : `\nROUTING: FAIL (${failures} check(s))`);
   setTimeout(() => process.exit(failures === 0 ? 0 : 1), 300);
 }

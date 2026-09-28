@@ -12,7 +12,7 @@
 // preference, and the first one that is registered (its provider key is set)
 // serves the tier. With no new provider keys, ORVYN keeps today's models.
 
-import { isModelUnavailable } from "./modelAvailability";
+import { isRouteBlocked, providerHealthScore } from "./modelAvailability";
 
 export type RouteProfile = "code" | "server" | "auto" | "deep";
 
@@ -37,14 +37,14 @@ export interface TierDef {
 }
 
 export const TIERS: Record<Tier, TierDef> = {
-  utility: { tier: "utility", weight: 1, label: "Utility", candidates: ["mistral:mistral-small-4-0-26-03", "ci:gpt-5.6-luna", "fw:accounts/fireworks/models/glm-5p3-flash"] },
-  "code-helper": { tier: "code-helper", weight: 1, label: "Code helper", candidates: ["mistral:codestral-25-08"] },
-  auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["openrouter:deepseek/deepseek-v3.2", "fw:accounts/fireworks/models/deepseek-v4p1-flash"] },
-  agent: { tier: "agent", weight: 2, label: "Agent", candidates: ["openrouter:minimax/minimax-m2.5", "fw:accounts/fireworks/models/deepseek-v4p1-flash"] },
-  code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code"] },
-  advanced: { tier: "advanced", weight: 4, label: "Advanced", candidates: ["gemini:gemini-3.8-flash"] },
-  heavy: { tier: "heavy", weight: 6, label: "Heavy engineering", candidates: ["fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3"] },
-  deep: { tier: "deep", weight: 12, label: "Deep", candidates: ["ci:claude-sonnet-5"] },
+  utility: { tier: "utility", weight: 1, label: "Utility", candidates: ["mistral:mistral-small-4-0-26-03", "ci:gpt-5.6-luna", "fw:accounts/fireworks/models/glm-5p3-flash", "nebius:zai-org/GLM-5.3-Flash", "nebius:nvidia/Nemotron-3_5-Lightning"] },
+  "code-helper": { tier: "code-helper", weight: 1, label: "Code helper", candidates: ["mistral:codestral-25-08", "nebius:Qwen/Qwen3-30B-A3B-Instruct-2507"] },
+  auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["openrouter:deepseek/deepseek-v3.2", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:zai-org/GLM-5.3-Flash"] },
+  agent: { tier: "agent", weight: 2, label: "Agent", candidates: ["openrouter:minimax/minimax-m2.5", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:Qwen/Qwen3.5-397B-A17B"] },
+  code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
+  advanced: { tier: "advanced", weight: 4, label: "Advanced", candidates: ["gemini:gemini-3.8-flash", "nebius:moonshotai/Kimi-K3", "nebius:Qwen/Qwen3.5-397B-A17B"] },
+  heavy: { tier: "heavy", weight: 6, label: "Heavy engineering", candidates: ["fw:accounts/fireworks/models/glm-5p3", "nebius:zai-org/GLM-5.3", "mistral:zai-glm-5-3"] },
+  deep: { tier: "deep", weight: 12, label: "Deep", candidates: ["ci:claude-sonnet-5", "nebius:deepseek-ai/DeepSeek-V4-Pro"] },
   ultra: { tier: "ultra", weight: 25, label: "Ultra", candidates: ["ci:gpt-5.6-sol"] },
 };
 
@@ -130,11 +130,15 @@ const FAMILY_PREFIXES = ["nebius:"];
 
 function firstRegistered(tier: Tier, available: Set<string>, health: ModelHealthLike[]): string | null {
   const usable = (id: string) => {
-    if (!available.has(id) || isModelUnavailable(id)) return false;
+    if (!available.has(id) || isRouteBlocked(id)) return false;
     const h = health.find((x) => x.registryId === id);
     return !(h && h.failureRate >= 0.5);
   };
-  for (const id of TIERS[tier].candidates) if (usable(id)) return id;
+  // Candidates keep their order; a provider with a poor recent record drops behind healthy ones.
+  const ranked = TIERS[tier].candidates
+    .map((id, i) => ({ id, i, degraded: providerHealthScore(id) < 0.5 }))
+    .sort((a, b) => Number(a.degraded) - Number(b.degraded) || a.i - b.i);
+  for (const { id } of ranked) if (usable(id)) return id;
   const family = FAMILY[tier];
   if (family) {
     for (const id of [...available].sort()) {

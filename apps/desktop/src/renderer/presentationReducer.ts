@@ -419,6 +419,20 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         items.push({ kind: "status", key: e.id, label: `${customerModelName(e.data.modelId) || "That model"} isn't available on this account — continuing with ${customerModelName(e.data.fallback) || "another model"}`, ephemeral: false, tone: "working" });
         continue;
       }
+      case "model.failover": {
+        flushAssistant(false);
+        const sameModel = e.data.level === "same-model";
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: sameModel
+            ? `The model provider is busy — continuing on a backup provider`
+            : `${customerModelName(e.data.modelId) || "The model"} is busy — continuing with ${customerModelName(e.data.fallback) || "another model"}`,
+          ephemeral: false,
+          tone: "working",
+        });
+        continue;
+      }
       case "capability.installed": {
         const tools = Array.isArray(e.data.tools) ? e.data.tools.length : 0;
         items.push({ kind: "status", key: e.id, label: `Installed ${String(e.data.name ?? "the tool")}${tools ? ` · ${tools} new tool${tools === 1 ? "" : "s"}` : ""} — continuing`, ephemeral: false, tone: "working" });

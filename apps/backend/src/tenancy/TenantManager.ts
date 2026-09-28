@@ -16,7 +16,7 @@ import { defaultDataDir } from "../persistence/LocalStore";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { laneForUsage } from "../billing/plans";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
-import { ModelService } from "../services/ModelService";
+import { embedModelChoice, ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { HashingEmbedder, ModelEmbedder } from "../indexing/embeddings";
 import { NamespacedVectorStore } from "../indexing/NamespacedVectorStore";
@@ -86,13 +86,16 @@ export interface Tenant {
 function embedderFor(ms: ModelService) {
   try {
     const provider = ms.router.resolve("embedding");
-    const dims = Number(process.env.OPENAI_EMBED_DIMS) || 1536;
+    const chosen = embedModelChoice();
+    const dims = chosen?.id === provider.config.id ? chosen.dims : Number(process.env.OPENAI_EMBED_DIMS) || 1536;
     return {
       embedder: new ModelEmbedder(provider, dims),
       label: provider.config.id,
+      // An explicitly chosen embedder gets its own vector space (never mixed with another model's vectors).
+      space: chosen?.id === provider.config.id ? `-${provider.config.id.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_${dims}` : "",
     };
   } catch {
-    return { embedder: new HashingEmbedder(), label: "hash" };
+    return { embedder: new HashingEmbedder(), label: "hash", space: "" };
   }
 }
 
@@ -161,7 +164,7 @@ export class TenantManager {
         // Corrupt setting — ignore and keep env defaults.
       }
     }
-    const { embedder, label } = embedderFor(modelService);
+    const { embedder, label, space } = embedderFor(modelService);
     const toolRegistry = new ToolRegistry();
     const permissionEngine = new PermissionEngine();
     const tenant: Tenant = {
@@ -174,11 +177,11 @@ export class TenantManager {
         process.env.ORVYN_QDRANT_URL
           ? new QdrantVectorStore({
               url: process.env.ORVYN_QDRANT_URL,
-              collection: "orvyn_code",
+              collection: `orvyn_code${space}`,
               dimension: embedder.dimensions,
             }, id, "default")
-          : new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
-        new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}.json`)),
+          : new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}${space}.json`)),
+        new NamespacedVectorStore(pathJoin(defaultDataDir(), `vectors-${id}${space}.json`)),
       ), label, id),
       toolRegistry,
       permissionEngine,

@@ -2,7 +2,8 @@ import { CONVERSATION_STYLE } from "./conversationStyle";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
 import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
-import { isModelNotFound, isModelUnavailable, markModelUnavailable } from "../models/modelAvailability";
+import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
+import { sameModelElsewhere } from "../models/modelEquivalents";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
@@ -226,6 +227,14 @@ interface RunState {
   credits: number;
   creditBudget: number;
   creditWarned?: boolean;
+  /**
+   * Set when ORVYN switched models because a provider failed: the run keeps
+   * paying the weight it started on, never more for ORVYN's failover.
+   * Cleared by a real escalation (the work needed a stronger model).
+   */
+  billAtWeight?: number;
+  failoverReason?: string;
+  failovers?: number;
   creditNoteSent?: boolean;
   creditsExceeded?: boolean;
   /** Failed tool calls in a row (a repair loop that is not working). */
@@ -634,11 +643,17 @@ export class StreamingAgentRuntime {
    * safety limit may interrupt work.
    */
   private noteCredits(runId: string, state: RunState, modelId: string, usage: TokenUsage): void {
-    const spent = creditsFor(modelId, usage);
+    const full = creditsFor(modelId, usage);
+    const weight = weightFor(modelId);
+    const billed = state.billAtWeight !== undefined && state.billAtWeight < weight ? state.billAtWeight : weight;
+    const spent = weight > 0 ? (full * billed) / weight : 0;
     if (!spent) return;
     state.credits += spent;
     const budget = state.creditBudget;
-    this.store.emit(runId, "run.credits", { credits: Math.round(state.credits), budget, modelId, weight: weightFor(modelId), profile: state.route?.profile ?? "auto" });
+    this.store.emit(runId, "run.credits", {
+      credits: Math.round(state.credits), budget, modelId, weight: billed, profile: state.route?.profile ?? "auto",
+      ...(state.failoverReason ? { failoverReason: state.failoverReason } : {}),
+    });
     if (budget > 0 && !state.creditWarned && state.credits >= budget * 0.8) {
       state.creditWarned = true;
       this.store.emit(runId, "run.credits.warning", { credits: Math.round(state.credits), budget });
@@ -658,6 +673,8 @@ export class StreamingAgentRuntime {
     if (!provider?.config.capabilities.agent || !provider.supportsTools()) return false;
     state.route = next;
     state.handoffModelId = next.registryId;
+    state.billAtWeight = undefined;
+    state.failoverReason = undefined;
     this.store.emit(runId, "route.escalated", { tier: next.tier, modelId: next.registryId, reason, weight: next.weight });
     return true;
   }
@@ -681,37 +698,58 @@ export class StreamingAgentRuntime {
   }
 
   /**
-   * The current model is missing on the provider (not enabled for the key,
-   * retired, renamed). Skip it for a while and continue on the next model of
-   * the run's ladder — or, off the ladder, the default agent model.
+   * The current model failed before producing anything, for a reason another
+   * model or provider can fix:
+   *   - "model": the provider does not serve it (not enabled, retired,
+   *     renamed). Skip the model for hours.
+   *   - "provider"/"auth": the provider is rate-limited, down, slow, or the
+   *     key is refused. Skip the provider for a few minutes (longer for auth)
+   *     and run the SAME model on another provider when one serves it.
+   * Otherwise: another model of the same tier, then the tiers above it, then
+   * the default agent models. The run keeps paying its original weight.
    */
-  private fallbackForMissingModel(runId: string, state: RunState, current: AIModelProvider, reason: string): AIModelProvider | null {
-    markModelUnavailable(current.config.id, reason);
-    const ids = this.modelService.registry.list().map((p) => p.config.id);
+  private failoverModel(runId: string, state: RunState, current: AIModelProvider, kind: "model" | "provider" | "auth", reason: string): AIModelProvider | null {
+    if (kind === "model") markModelUnavailable(current.config.id, reason);
+    else markProviderFailure(current.config.id, kind, reason);
+    const registry = this.modelService.registry;
+    const ids = registry.list().map((p) => p.config.id);
     const usable = (p: AIModelProvider | undefined): p is AIModelProvider =>
-      Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isModelUnavailable(p.config.id));
+      Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isRouteBlocked(p.config.id));
     let next: AIModelProvider | undefined;
-    if (state.route) {
-      // Same tier first (another model for the same job), then the tiers above it.
+    let how: "same-model" | "same-tier" | "next-tier" | "emergency" = "same-model";
+    // Level 1: the same model on another provider.
+    if (kind !== "model") {
+      for (const id of sameModelElsewhere(current.config.id, (x) => Boolean(registry.get(x)))) {
+        const p = registry.get(id);
+        if (usable(p)) { next = p; break; }
+      }
+    }
+    // Level 2: an equivalent model — same tier first, then the tiers above it.
+    if (!next && state.route) {
       const hit = stepFrom(state.route.tiers, state.route.step, ids);
-      const candidate = hit ? this.modelService.registry.get(hit.registryId) : undefined;
+      const candidate = hit ? registry.get(hit.registryId) : undefined;
       if (hit && usable(candidate)) {
         next = candidate;
-        state.route = { ...state.route, step: hit.step, tier: hit.tier, registryId: hit.registryId, weight: TIERS[hit.tier].weight, reason: "The first model is not available on this account." };
+        how = hit.step === state.route.step ? "same-tier" : "next-tier";
+        state.route = { ...state.route, step: hit.step, tier: hit.tier, registryId: hit.registryId, weight: TIERS[hit.tier].weight, reason: kind === "model" ? "The first model is not available on this account." : "The first provider is not responding." };
       }
     }
+    // Level 3: emergency — any capable agent model.
     if (!next) {
+      how = "emergency";
       for (const tier of ["auto", "agent", "heavy", "code", "advanced", "deep"] as const) {
-        const id = TIERS[tier].candidates.find((c) => ids.includes(c) && usable(this.modelService.registry.get(c)));
-        if (id) { next = this.modelService.registry.get(id); break; }
+        const id = TIERS[tier].candidates.find((c) => ids.includes(c) && usable(registry.get(c)));
+        if (id) { next = registry.get(id); break; }
       }
     }
-    if (!next) {
-      next = this.modelService.registry.list().find((p) => usable(p));
-    }
+    if (!next) next = registry.list().find((p) => usable(p));
     if (!next) return null;
+    if (state.billAtWeight === undefined) state.billAtWeight = state.route?.weight ?? weightFor(current.config.id);
+    state.failoverReason = `${kind}: ${current.config.id} → ${next.config.id}`;
     state.actualModelId = next.config.id;
-    this.store.emit(runId, "model.unavailable", { modelId: current.config.id, fallback: next.config.id, reason: reason.slice(0, 240) });
+    const detail = { modelId: current.config.id, fallback: next.config.id, reason: reason.slice(0, 240), failure: kind, level: how };
+    this.store.emit(runId, kind === "model" ? "model.unavailable" : "model.failover", detail);
+    console.warn(JSON.stringify({ event: "model.failover", runId, ...detail }));
     return next;
   }
 
@@ -2008,14 +2046,18 @@ export class StreamingAgentRuntime {
           if (chunk.done) break;
         }
         } catch (err: any) {
-          // The provider says this model does not exist for the account: switch models, don't fail.
-          if (isModelNotFound(err) && !content && streamedCalls.length === 0) {
-            const next = this.fallbackForMissingModel(runId, state, provider, String(err?.message ?? err));
+          // The model is missing, or its provider is down/rate-limited/refusing
+          // the key: switch (same model elsewhere first), don't fail. Only when
+          // nothing streamed, so no answer is duplicated and nothing is paid twice.
+          const failure = classifyModelFailure(err);
+          if (failure && !state.cancelled && !content && streamedCalls.length === 0 && (state.failovers ?? 0) < 4) {
+            state.failovers = (state.failovers ?? 0) + 1;
+            const next = this.failoverModel(runId, state, provider, failure, String(err?.message ?? err));
             if (next) {
               provider = next;
-              return { kind: "retry", reason: `model unavailable: switched to ${next.config.id}` };
+              return { kind: "retry", reason: `${failure} failure: switched to ${next.config.id}` };
             }
-            return fail(`${provider.config.name || provider.config.id} is not available on this account, and no other model for this task is set up. Pick another model in Settings → Models.`, { desktopHealthy: true, code: "MODEL_UNAVAILABLE" });
+            if (failure === "model") return fail(`${provider.config.name || provider.config.id} is not available on this account, and no other model for this task is set up. Pick another model in Settings → Models.`, { desktopHealthy: true, code: "MODEL_UNAVAILABLE" });
           }
           const block = classifyProviderError(err, provider.config.provider);
           if (!block) throw err;
@@ -2026,6 +2068,7 @@ export class StreamingAgentRuntime {
           }
           return fail(providerBlockUserMessage(block, Boolean(state.requestedModelId)), { desktopHealthy: true, code: block.code });
         }
+        markProviderSuccess(provider.config.id);
 
         if (state.cancelled) return cancelled();
 

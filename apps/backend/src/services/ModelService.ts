@@ -13,6 +13,8 @@ import {
 } from "@orvyn/ai-core";
 import { UsageService } from "./UsageService";
 import { CERTIFIED_MODELS } from "../models/certifiedModels";
+import { markModelUnavailable } from "../models/modelAvailability";
+import { NEBIUS_CURATED, NEBIUS_EMBED_DIMS, NEBIUS_EMBED_MODEL } from "../models/modelEquivalents";
 
 function openaiDisplayName(id: string): string {
   if (id === "gpt-4o") return "OpenAI GPT-4o";
@@ -131,9 +133,17 @@ function nebiusEndpoint(): string {
   return (process.env.NEBIUS_BASE_URL?.trim() || "https://api.tokenfactory.nebius.com").replace(/\/v1\/?$/, "");
 }
 
-/** Nebius models registered at startup (the live catalog adds the rest). */
+/** Extra Nebius models to show in the model menu (NEBIUS_MODELS), besides the curated set. */
 function nebiusModelList(): string[] {
   return (process.env.NEBIUS_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+/** The embedding model ORVYN uses for memory and code search, when chosen explicitly. */
+export function embedModelChoice(env: NodeJS.ProcessEnv = process.env): { id: string; dims: number } | null {
+  const id = env.ORVYN_EMBED_MODEL?.trim();
+  if (!id) return null;
+  const dims = Number(env.ORVYN_EMBED_DIMS) || (id === `nebius:${NEBIUS_EMBED_MODEL}` ? NEBIUS_EMBED_DIMS : 1536);
+  return { id, dims };
 }
 
 function geminiConfig(id: string, apiKey: string, temperature: number): ModelConfig {
@@ -204,6 +214,8 @@ export class ModelService {
   public router = new ModelRouter(this.registry);
   /** Server-side usage metering — every provider registered here is wrapped. */
   public usage = new UsageService();
+  /** Registered, callable, but kept out of the model menu (a provider's long tail). */
+  private moreModels = new Set<string>();
 
   constructor() {
     // Seed with a mock model so the IDE is runnable with zero config.
@@ -301,11 +313,24 @@ export class ModelService {
       for (const m of [...OPENROUTER_MODELS, ...extra]) this.addModel(openAiCompatibleConfig("openrouter", "OpenRouter", endpoint, m.id, openRouterKey, m.temperature, m.context));
     }
 
-    // Nebius Token Factory (OpenAI-compatible): a global provider. Models listed
-    // in NEBIUS_MODELS register now; the live catalog is added in the background.
+    // Nebius Token Factory (OpenAI-compatible): a global provider. The curated
+    // set (models/modelEquivalents.ts) registers now and is what the model menu
+    // shows; the routing policy uses them by role and as the second provider
+    // for models Fireworks also serves. The rest of the account's catalog is
+    // registered in the background as "more models" (found by search only).
     const nebiusKey = process.env.NEBIUS_API_KEY?.trim();
     if (nebiusKey) {
-      for (const id of nebiusModelList()) this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), id, nebiusKey, 0.2, 131072));
+      for (const m of NEBIUS_CURATED) this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), m.id, nebiusKey, m.temperature, m.context));
+      for (const id of nebiusModelList()) if (!this.registry.get(`nebius:${id}`)) this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), id, nebiusKey, 0.2, 131072));
+      const embed = embedModelChoice();
+      if (embed?.id === `nebius:${NEBIUS_EMBED_MODEL}`) {
+        this.addModel({
+          ...openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), NEBIUS_EMBED_MODEL, nebiusKey, 0, 32768),
+          maxOutputTokens: 1,
+          streaming: false,
+          capabilities: { chat: false, code: false, agent: false, tools: false, vision: false, embeddings: true, completion: false, image: false },
+        });
+      }
       void this.refreshNebiusCatalog(nebiusKey);
     }
 
@@ -377,6 +402,11 @@ export class ModelService {
       this.router.setOverride("planner", ollamaId);
       this.router.setOverride("reviewer", ollamaId);
       this.router.setOverride("executor", ollamaId);
+    } else if (nebiusKey) {
+      const fast = "nebius:zai-org/GLM-5.3-Flash";
+      const coder = "nebius:moonshotai/Kimi-K2.7-Code";
+      for (const task of ["chat", "completion", "executor"] as const) this.router.setOverride(task, fast);
+      for (const task of ["code", "agent", "planner", "reviewer"] as const) this.router.setOverride(task, coder);
     } else {
       this.router.setOverride("chat", "orvyn-mock");
       this.router.setOverride("code", "orvyn-mock");
@@ -422,6 +452,15 @@ export class ModelService {
     // lists ids whose provider accepts the OpenAI-style reasoning_effort field
     // (append "+max" when the provider also honors a level above "high").
     // Models not listed expose no reasoning control — the composer shows Auto only.
+    // Embeddings for memory and code search: an explicit choice wins
+    // (ORVYN_EMBED_MODEL, e.g. nebius:Qwen/Qwen3-Embedding-8B). It is opt-in
+    // because a different embedder means a different vector space; the
+    // index for the new model is kept separately and rebuilt.
+    const embedChoice = embedModelChoice();
+    if (embedChoice && this.registry.get(embedChoice.id)?.config.capabilities.embeddings) {
+      this.router.setOverride("embedding", embedChoice.id);
+    }
+
     const effortDeclared = (process.env.ORVYN_REASONING_EFFORT_MODELS ?? "")
       .split(",").map((x) => x.trim()).filter(Boolean);
     for (const entry of effortDeclared) {
@@ -478,6 +517,8 @@ export class ModelService {
     return this.registry.list().map((p) => ({
       ...p.config,
       apiKey: p.config.apiKey ? "configured" : undefined,
+      /** False for a provider's long tail: callable and searchable, not listed in the menu. */
+      featured: !this.moreModels.has(p.config.id),
     }));
   }
 
@@ -510,7 +551,11 @@ export class ModelService {
     return results;
   }
 
-  /** Registers every chat model this Nebius account can call (embeddings and image models are skipped). */
+  /**
+   * Checks the curated Nebius set against the account's catalog (a curated
+   * model this account cannot call is skipped by routing) and registers the
+   * other chat models as "more models" (embeddings and image models skipped).
+   */
   async refreshNebiusCatalog(apiKey: string): Promise<number> {
     try {
       const res = await fetch(`${nebiusEndpoint()}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
@@ -526,9 +571,13 @@ export class ModelService {
         if (!id || /embed|bge|e5-|clip|flux|stable-diffusion|sdxl|whisper|tts|guard|rerank/i.test(id)) continue;
         if (this.registry.get(`nebius:${id}`)) continue;
         this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), id, apiKey, 0.2, 131072));
+        this.moreModels.add(`nebius:${id}`);
         added++;
       }
-      console.log(JSON.stringify({ event: "nebius.catalog", models: rows.length, added }));
+      const listed = new Set(rows.map((r) => String(r?.id ?? "")));
+      const missing = rows.length > 0 ? NEBIUS_CURATED.map((m) => m.id).filter((id) => !listed.has(id)) : [];
+      for (const id of missing) markModelUnavailable(`nebius:${id}`, "not in this Nebius account's model catalog");
+      console.log(JSON.stringify({ event: "nebius.catalog", models: rows.length, added, curatedMissing: missing }));
       return added;
     } catch (err: any) {
       console.warn(JSON.stringify({ event: "nebius.catalog.failed", error: String(err?.message ?? err).slice(0, 120) }));

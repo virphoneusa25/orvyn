@@ -249,6 +249,14 @@ v1Router.get("/models/health", async (req, res) => {
   res.json({ results: await requireTenant(req).modelService.healthCheckAll() });
 });
 
+// Live provider health from real traffic (success share, cool-downs after
+// 429/5xx/timeouts). The routing policy skips a cooling provider and runs the
+// same model on another provider first.
+v1Router.get("/models/providers/health", (req, res) => {
+  requireTenant(req);
+  res.json({ providers: providerHealthSnapshot() });
+});
+
 // "Test Model" button: round-trips a tiny real prompt through the model
 // (not just a health ping) and reports latency + a response snippet, so
 // the user can confirm the model is actually reachable and answering.
@@ -1664,6 +1672,7 @@ import { creditLedger } from "../billing/creditLedgerInstance";
 import { BillingLimitError } from "../billing/CreditLedger";
 import { packById, planById, type PackId, type PlanId } from "../billing/plans";
 import { DEFAULT_PRIVACY, bindTenantResource } from "../orgs/organization";
+import { providerHealthSnapshot } from "../models/modelAvailability";
 import { getHostDesktopState, setHostDesktopAllowed, takeHostControl, returnHostControl } from "../desktop/hostDesktopSession";
 
 const billing = new NullBillingProvider();

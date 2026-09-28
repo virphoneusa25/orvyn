@@ -1,5 +1,6 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
-import { isModelNotFound, isModelUnavailable, markModelUnavailable } from "../models/modelAvailability";
+import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
+import { sameModelElsewhere } from "../models/modelEquivalents";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
@@ -10,7 +11,7 @@ import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { startRoute } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall } from "@orvyn/ai-core";
+import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { ImageService } from "../images/ImageService";
@@ -249,10 +250,34 @@ export class Orchestrator {
       if (deep && (deep.config.capabilities as any).chat !== false) return deep;
     }
     const routed = this.modelService.router.resolve(req.task);
-    if (!isModelUnavailable(routed.config.id)) return routed;
-    // The routed model is missing on the provider: the next chat model that is not.
-    const other = this.modelService.registry.list().find((p) => !isModelUnavailable(p.config.id) && (p.config.capabilities as any).chat !== false && p.supportsTools());
-    return other ?? routed;
+    if (!isRouteBlocked(routed.config.id)) return routed;
+    // The routed model is missing, or its provider is cooling down: the same model elsewhere, else another chat model.
+    return this.chatAlternative(routed) ?? routed;
+  }
+
+  /** Same model on another provider first, then the Auto ladder, then any chat model with tools. */
+  private chatAlternative(current: AIModelProvider): AIModelProvider | undefined {
+    const registry = this.modelService.registry;
+    const ok = (p: AIModelProvider | undefined): p is AIModelProvider =>
+      Boolean(p && p.config.id !== current.config.id && p.config.id !== "orvyn-mock" && (p.config.capabilities as any).chat !== false && p.supportsTools() && !isRouteBlocked(p.config.id));
+    for (const id of sameModelElsewhere(current.config.id, (x) => Boolean(registry.get(x)))) {
+      const p = registry.get(id);
+      if (ok(p)) return p;
+    }
+    const route = startRoute({ profile: "auto", instruction: "", availableIds: registry.list().map((p) => p.config.id).filter((id) => id !== current.config.id) });
+    const routed = route.registryId ? registry.get(route.registryId) : undefined;
+    if (ok(routed)) return routed;
+    return registry.list().find((p) => ok(p));
+  }
+
+  /** A chat model call failed before anything was shown: mark it and pick where to retry. */
+  private chatFailover(current: AIModelProvider, kind: FailureClass, err: unknown): AIModelProvider | undefined {
+    const reason = String((err as Error)?.message ?? err);
+    if (kind === "model") markModelUnavailable(current.config.id, reason);
+    else markProviderFailure(current.config.id, kind, reason);
+    const next = this.chatAlternative(current);
+    console.warn(JSON.stringify({ event: "model.failover", surface: "chat", modelId: current.config.id, fallback: next?.config.id ?? null, failure: kind, reason: reason.slice(0, 200) }));
+    return next;
   }
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean }> {
@@ -260,7 +285,7 @@ export class Orchestrator {
       yield* this.streamGeneratedImage(req);
       return;
     }
-    const provider = this.resolveProvider(req);
+    let provider = this.resolveProvider(req);
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
@@ -320,7 +345,13 @@ export class Orchestrator {
         const calls: ToolCall[] = [];
         let buffered = "";
         let decided = round > 0;
+        // A provider failure before anything was shown retries this round on
+        // the same model elsewhere (or an equivalent); nothing is repeated.
+        let received = false;
+        for (let attempt = 0; ; attempt++) {
+        try {
         for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools })) {
+          if (chunk.toolCall || chunk.delta) received = true;
           if (chunk.toolCall) { calls.push(chunk.toolCall); continue; }
           if (chunk.done) break;
           if (!chunk.delta) continue;
@@ -345,6 +376,16 @@ export class Orchestrator {
             continue;
           }
           yield { delta: chunk.delta, done: false };
+        }
+        markProviderSuccess(provider.config.id);
+        break;
+        } catch (err) {
+          const kind = classifyModelFailure(err);
+          const next = !received && kind && attempt < 3 ? this.chatFailover(provider, kind, err) : undefined;
+          if (!next) throw err;
+          provider = next;
+          buffered = "";
+        }
         }
         if (!decided && buffered) yield { delta: buffered, done: false };
 

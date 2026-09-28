@@ -320,9 +320,13 @@ export class UsageService {
         let toolCalls = 0;
         try {
           // A stream may only be retried before the first chunk reaches the
-          // consumer — after that, replaying would duplicate output.
+          // consumer — after that, replaying would duplicate output. One quick
+          // retry covers a hiccup; a provider that keeps failing is handed to
+          // the caller, which fails over (same model on another provider,
+          // then an equivalent model) instead of waiting here forever.
           let yielded = false;
-          while (true) {
+          const maxAttempts = Math.max(1, Number(process.env.ORVYN_STREAM_RETRY_ATTEMPTS) || 2);
+          for (let attempt = 1; ; attempt++) {
             try {
               for await (const chunk of inner.stream(request)) {
                 yielded = true;
@@ -332,7 +336,7 @@ export class UsageService {
               }
               break;
             } catch (err: any) {
-              if (yielded || !isTransientError(err) || request.signal?.aborted) throw err;
+              if (yielded || !isTransientError(err) || request.signal?.aborted || attempt >= maxAttempts) throw err;
               console.warn(
                 `[model-retry] ${inner.config.id} stream failed before any output ` +
                   `(${String(err?.message ?? err).slice(0, 140)}); retrying`
