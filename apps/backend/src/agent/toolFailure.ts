@@ -20,8 +20,60 @@ export const TOOL_ERROR_TYPES = [
 
 export type ToolErrorType = (typeof TOOL_ERROR_TYPES)[number];
 
-/** Same tool and the same invalid arguments, this many times, then stop. */
-export const MALFORMED_CALL_LIMIT = 3;
+/**
+ * Same tool and the same invalid arguments, this many times, then that call is
+ * blocked: the first is answered with a repair request; an identical repeat
+ * means the repair did not happen, so it is not sent again.
+ */
+export const MALFORMED_CALL_LIMIT = 2;
+
+/** Plain words for the user; the schema detail stays in diagnostics. */
+export function friendlyArgumentFailure(tool: string, path?: string): string {
+  const target = path ? path.split("/").pop() : "";
+  const what = /\.css$/i.test(target ?? "") ? "stylesheet change" : /\.html?$/i.test(target ?? "") ? "page change" : target ? `change to ${target}` : "file change";
+  if (/^(write_file|edit_file|apply_edit|delete_file|move_file)$/.test(tool)) return `ORION couldn't apply the ${what} because the file-edit request was malformed.`;
+  return `ORION's ${tool} request was malformed.`;
+}
+
+/**
+ * The model's tool call arrived unreadable (cut off at the output limit, or
+ * not JSON). Nothing runs; the model gets one compact repair request.
+ */
+export function unreadableArgumentsPayload(input: {
+  tool: string;
+  reason: "truncated" | "invalid_json";
+  rawLength: number;
+  keys: string[];
+  path?: string;
+  schema?: ToolParameterSchema;
+  blocked?: boolean;
+}): { error: string; diagnostic: string; modelText: string } {
+  const required = requiredArgumentNames(input.tool, input.schema);
+  const diagnostic = `${input.tool}: arguments ${input.reason === "truncated" ? "cut off" : "not valid JSON"} after ${input.rawLength} characters (received keys: ${input.keys.join(", ") || "none"}).`;
+  const writeTool = input.tool === "write_file";
+  const guidance = input.blocked
+    ? `This exact ${input.tool} call is blocked. Take a different approach for this step.`
+    : input.reason === "truncated"
+      ? writeTool
+        ? `Your ${input.tool} call was cut off after ${input.rawLength} characters because your reply reached the output limit, so nothing was written. Do not resend the whole file in one call. Write it in parts: write_file {"path": "${input.path ?? "<file>"}", "content": "<first part, about 150 lines>"}, then write_file {"path": "${input.path ?? "<file>"}", "content": "<next part>", "append": true} for each next part. For an existing file, prefer edit_file with a small old_string/new_string.`
+        : `Your ${input.tool} call was cut off after ${input.rawLength} characters (the reply reached the output limit). Send it again with smaller arguments.`
+      : `Your ${input.tool} arguments were not valid JSON. Send them again as one JSON object with ${required.join(", ")}.`;
+  return {
+    error: friendlyArgumentFailure(input.tool, input.path),
+    diagnostic,
+    modelText: JSON.stringify({
+      ok: false,
+      code: "INVALID_TOOL_ARGUMENTS",
+      errorType: "INVALID_ARGUMENTS",
+      tool: input.tool,
+      reason: input.reason,
+      receivedKeys: input.keys,
+      expected: { required, properties: propertyTypes(input.tool, input.schema) },
+      retryable: !input.blocked,
+      guidance,
+    }),
+  };
+}
 
 const SKIP_DIR = new Set(["node_modules", ".git", "dist", "build", "coverage", ".orvyn"]);
 
@@ -72,6 +124,8 @@ export function invalidArgumentsPayload(input: {
     : `Call ${input.tool} again in this same run with ${required.join(", ") || "valid arguments"}. Supply every missing field. Do not switch models to avoid the arguments.`;
   const body: Record<string, unknown> = {
     ok: false,
+    code: "INVALID_TOOL_ARGUMENTS",
+    tool: input.tool,
     errorType: "INVALID_ARGUMENTS",
     missing: input.missing,
     retryable: !blocked,

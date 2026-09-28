@@ -72,16 +72,24 @@ export function makeListDirectoryTool(projectRoot: string): AITool {
   };
 }
 
+/** The write_file contract every route exposes (local, Local Worker, cloud worker). */
+export const WRITE_FILE_DESCRIPTION =
+  "Create a file, or fully overwrite one. Arguments: path (relative to the project, e.g. \"styles.css\") and content (the complete text). For an existing file prefer edit_file. For a large file, write it in parts: the first call without append, then append: true for each next part.";
+export const WRITE_FILE_PARAMETERS = {
+  type: "object",
+  properties: {
+    path: { type: "string", description: "File path relative to the project root, e.g. \"styles.css\" or \"css/site.css\"." },
+    content: { type: "string", description: "The file's text (or, with append: true, the next part of it)." },
+    append: { type: "boolean", description: "Add content to the end of the file instead of replacing it (for writing a large file in parts)." },
+  },
+  required: ["path", "content"],
+} as const;
+
 export function makeWriteFileTool(projectRoot: string): AITool {
   return {
     name: "write_file",
-    description:
-      "Create or fully overwrite a file. Prefer edit_file for changing an existing file — write_file clobbers the whole file.",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
+    description: WRITE_FILE_DESCRIPTION,
+    parameters: WRITE_FILE_PARAMETERS,
     // Matches the master spec: write access defaults to "ask", not "allowed".
     defaultPermission: "ask",
     async execute(args, context): Promise<ToolResult> {
@@ -94,7 +102,8 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         // hundreds of lines) is rejected — targeted changes must use
         // edit_file. Thresholds are generous so legitimate full rewrites of
         // small files are never blocked.
-        if (existed && typeof args.content === "string" && !args.content_base64) {
+        const append = args.append === true && !args.content_base64;
+        if (existed && !append && typeof args.content === "string" && !args.content_base64) {
           const previous = await fs.readFile(target, "utf8").catch(() => "");
           const oldLines = previous ? previous.split("\n").length : 0;
           const newLines = args.content.split("\n").length;
@@ -113,10 +122,13 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         // user attached (a logo, a photo) into the project, byte for byte.
         const binary = typeof args.content_base64 === "string" && args.content_base64.length > 0;
         const expected = binary ? Buffer.from(String(args.content_base64), "base64") : Buffer.from(String(args.content), "utf-8");
-        await fs.writeFile(target, expected);
-        const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected);
-        const lines = binary ? 1 : String(args.content).split("\n").length;
-        return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines, ${projectFileEvidence.size} bytes, sha256 ${projectFileEvidence.sha256})`, projectFileEvidence };
+        // append: the next part of a large file (the runtime's safe chunked write).
+        if (append) await fs.appendFile(target, expected);
+        else await fs.writeFile(target, expected);
+        const written = append ? await fs.readFile(target) : expected;
+        const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), written);
+        const lines = binary ? 1 : written.toString("utf8").split("\n").length;
+        return { ok: true, output: `${append ? "APPENDED TO" : existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines, ${projectFileEvidence.size} bytes, sha256 ${projectFileEvidence.sha256})`, projectFileEvidence };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }

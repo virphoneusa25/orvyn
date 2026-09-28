@@ -720,6 +720,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "tool.failed": {
         const at = toolIndex.get(String(e.data.callId ?? ""));
         const item = at !== undefined ? (items[at] as ToolItem | undefined) : undefined;
+        // A malformed call that ORION is correcting never ran: show that it is
+        // being fixed (not a red failure); the repaired call follows.
+        if (item?.kind === "tool" && e.data.errorType === "INVALID_ARGUMENTS" && e.data.recovering === true && at !== undefined) {
+          items[at] = { kind: "status", key: item.key, label: "Correcting a malformed file-edit request…", ephemeral: true, tone: "rework" };
+          continue;
+        }
         if (item?.kind === "tool") {
           item.status = "failed";
           item.endedAt = e.timestamp;

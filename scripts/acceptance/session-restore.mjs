@@ -64,7 +64,8 @@ function nextTurn(body) {
     return { text: "VERDICT: PASS\n- The page loads its stylesheet with no errors." };
   }
   const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
-  const lastUserIdx = msgs.map((m) => m.role).lastIndexOf("user");
+  // Runtime notes ([Runtime note] …) are the engine talking, not the user.
+  const lastUserIdx = msgs.map((m) => (m.role === "user" && String(m.content ?? "").startsWith("[Runtime note]") ? "note" : m.role)).lastIndexOf("user");
   const last = String(msgs[lastUserIdx]?.content ?? "");
   const since = toolResults(msgs.slice(lastUserIdx));
   if (!since.length) requests.push({ last, messages: msgs.map((m) => String(m.content ?? "")) });

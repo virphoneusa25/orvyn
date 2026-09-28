@@ -22,6 +22,18 @@ function openaiDisplayName(id: string): string {
   return `OpenAI ${id}`;
 }
 
+/**
+ * Output budget per reply. A whole stylesheet or page in one write_file call,
+ * plus a reasoning model's thinking, overflows 8k and the call arrives cut off.
+ * Long-context models get 16k (ORVYN_AGENT_MAX_OUTPUT_TOKENS to change); the
+ * adapter steps back to 8k if a server refuses.
+ */
+function agentOutputTokens(contextWindow: number): number {
+  const configured = Number(process.env.ORVYN_AGENT_MAX_OUTPUT_TOKENS);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return contextWindow >= 64000 ? 16384 : 8192;
+}
+
 function cheaperInferenceConfig(
   id: string,
   apiKey: string,
@@ -88,7 +100,7 @@ function fireworksConfig(
     endpoint: (process.env.FIREWORKS_BASE_URL?.trim() || "https://api.fireworks.ai/inference").replace(/\/v1\/?$/, ""),
     apiKey,
     contextWindow: lane?.contextWindow ?? 128000,
-    maxOutputTokens: image ? 1 : 8192,
+    maxOutputTokens: image ? 1 : agentOutputTokens(lane?.contextWindow ?? 128000),
     defaultTemperature: temperature,
     defaultTopP: 1,
     streaming: !image,
@@ -111,7 +123,7 @@ function openAiCompatibleConfig(prefix: string, label: string, endpoint: string,
   return {
     id: `${prefix}:${id}`, apiModelId: id, name: `${label} ${id.split("/").pop() ?? id}`, provider: "openai-compatible",
     endpoint: endpoint.replace(/\/v1\/?$/, ""),
-    apiKey, contextWindow, maxOutputTokens: 8192, defaultTemperature: temperature, defaultTopP: 1, streaming: true,
+    apiKey, contextWindow, maxOutputTokens: agentOutputTokens(contextWindow), defaultTemperature: temperature, defaultTopP: 1, streaming: true,
     capabilities: { chat: true, code: true, agent: true, tools: true, vision: false, embeddings: false, completion: true, image: false },
   };
 }

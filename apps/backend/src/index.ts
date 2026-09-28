@@ -252,7 +252,25 @@ wss.on("connection", (socket, req) => {
             userCreatedAt: Number(body.userCreatedAt) || undefined,
           })
         : null;
-      for await (const chunk of orchestrator.streamChat({ ...body, capabilityPrompt })) {
+      // A turn never hangs: a heartbeat every 10s tells the desktop the turn is
+      // alive (a reasoning model can think silently for a while), and if the
+      // model sends nothing for CHAT_STALL_MS the turn ends with a plain error
+      // and a Retry — never an endless "ORION is thinking…".
+      const stallMs = Number(process.env.ORVYN_CHAT_STALL_MS) || 150_000;
+      const beat = setInterval(() => { if (socket.readyState === 1) socket.send(JSON.stringify({ delta: "", heartbeat: true, done: false })); }, 10_000);
+      beat.unref?.();
+      let stalled = false;
+      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt })[Symbol.asyncIterator]();
+      const guarded = {
+        [Symbol.asyncIterator]() { return this; },
+        async next(): Promise<IteratorResult<any>> {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const stall = new Promise<IteratorResult<any>>((resolve) => { timer = setTimeout(() => { stalled = true; resolve({ done: false, value: { delta: "", done: true, error: "ORION stopped responding — the model sent nothing for a while. Retry the message." } }); }, stallMs); });
+          try { return await Promise.race([iterator.next(), stall]); } finally { clearTimeout(timer); }
+        },
+      };
+      try {
+      for await (const chunk of guarded) {
         socket.send(JSON.stringify(chunk));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
@@ -263,6 +281,10 @@ wss.on("connection", (socket, req) => {
         // Yield so each token can leave the process and paint in the UI
         // instead of arriving as one burst.
         await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      } finally {
+        clearInterval(beat);
+        if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
       recorder?.finish();
     } catch (err: any) {

@@ -364,7 +364,7 @@ async function remoteReadFile(runId: string, filePath: string, base64 = false): 
 }
 
 /** Writes a file into the mission workspace (binary-safe, no shell quoting). */
-async function remoteWriteFile(runId: string, filePath: string, content: string): Promise<CommandResult> {
+async function remoteWriteFile(runId: string, filePath: string, content: string, append = false): Promise<CommandResult> {
   const target = workspacePath(runId, filePath);
   if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
   try {
@@ -379,7 +379,7 @@ async function remoteWriteFile(runId: string, filePath: string, content: string)
     const newLines = content ? content.split("\n").length : 0;
     const deletions = oldLines - newLines;
     const threshold = Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300);
-    if (oldLines >= 80 && deletions >= threshold) {
+    if (!append && oldLines >= 80 && deletions >= threshold) {
       return {
         ok: false,
         output: "",
@@ -388,7 +388,8 @@ async function remoteWriteFile(runId: string, filePath: string, content: string)
       };
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, "utf8");
+    if (append) fs.appendFileSync(target, content, "utf8");
+    else fs.writeFileSync(target, content, "utf8");
     const bytesWritten = Buffer.byteLength(content, "utf8");
     return {
       ok: true,
@@ -534,7 +535,7 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
             break;
           }
           case "write_file": {
-            const r = await remoteWriteFile(runId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""));
+            const r = await remoteWriteFile(runId, String(req.arguments.path ?? ""), String(req.arguments.content ?? ""), req.arguments.append === true);
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }

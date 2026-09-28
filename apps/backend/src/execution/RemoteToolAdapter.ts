@@ -10,6 +10,7 @@
 // tool names + arguments + results.
 
 import { AITool, ToolResult } from "../ai/ToolTypes";
+import { WRITE_FILE_DESCRIPTION, WRITE_FILE_PARAMETERS } from "../ai/tools/fileTools";
 import { diffLines } from "../composer/diff";
 import type { ToolRpcChannel } from "./ToolRpc";
 import { sha256Hex, validateBytes } from "../artifacts/bytes";
@@ -125,23 +126,21 @@ export function registerRemoteTools(
 
   gateway.register(makeRemoteTool(
     "write_file",
-    "Write/create a file in the remote workspace",
-    {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
+    WRITE_FILE_DESCRIPTION,
+    WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
     "ask",
     rpc, runId,
     // Create diffs ride back with the result so file.edit events show real
     // content, not just a path.
     async (args, raw) => {
+      const append = args.append === true;
+      const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""))) ?? "" : "";
       const result = await raw();
       if (!result.ok) return result;
       const after = await readRemote(rpc, runId, String(args.path ?? ""));
-      if (after === null || after !== String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
+      if (after === null || after !== before + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
       try {
-        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), "create", "", after) };
+        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, after) };
       } catch (err: any) { return { ok: false, error: err.message }; }
     }
   ));

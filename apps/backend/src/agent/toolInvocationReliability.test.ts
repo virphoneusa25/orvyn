@@ -156,7 +156,7 @@ test("a write that omits path names path and then retries with both fields", asy
   assert.equal(h.store.get(runId)!.events.some((e) => e.type === "model.escalated"), false);
 });
 
-test("three invalid argument calls do not escalate, and the third identical call is blocked", async () => {
+test("invalid argument calls do not escalate; an identical repeat is blocked, replanned once, then stops", async () => {
   const same = { path: "index.html" };
   const h = harness([
     [
@@ -187,12 +187,16 @@ test("three invalid argument calls do not escalate, and the third identical call
   assert.equal(await settle(loop.store, stopped), "error");
   const errors = loop.store.get(stopped)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(errors.length, 3);
+  // 1st: a repair request. 2nd identical: blocked, one replan. 3rd identical: stop.
   assert.equal(errors[0]!.data.retryable, true);
-  assert.equal(errors[1]!.data.retryable, true);
-  assert.equal(errors[2]!.data.retryable, false);
+  assert.equal(errors[0]!.data.recovering, true);
+  assert.equal(errors[1]!.data.blocked, true);
+  assert.equal(errors[1]!.data.retryable, false);
   assert.equal(errors[2]!.data.blocked, true);
+  assert.ok(loop.store.get(stopped)!.events.some((e) => e.type === "agent.continue" && /replanning/.test(String(e.data?.reason))));
   const runError = loop.store.get(stopped)!.events.find((e) => e.type === "run.error")!;
-  assert.match(String(runError.data.message), /will not repeat that call/);
+  assert.match(String(runError.data.message), /malformed.*could not correct the request/);
+  assert.doesNotMatch(String(runError.data.message), /missing: path/);
   assert.equal(loop.store.get(stopped)!.events.some((e) => e.type === "route.escalated"), false);
   assert.equal(loop.heavy.requests.length, 0);
   assert.equal(loop.primary.requests.length, 3);

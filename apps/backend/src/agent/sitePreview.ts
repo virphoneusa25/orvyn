@@ -237,6 +237,11 @@ export function siteAssetRefs(runId: string): string[] {
   return [...refs].filter((r) => !skip?.has(r));
 }
 
+/** The text the preview currently holds for a file (for appending the next part of it). */
+export function siteFileText(runId: string, relPath: string): string | undefined {
+  return remembered.get(runId)?.get(relPath.replace(/\\/g, "/").replace(/^\/+/, ""));
+}
+
 export function rememberedSiteFiles(runId: string): string[] {
   return [...(remembered.get(runId)?.keys() ?? [])];
 }

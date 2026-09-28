@@ -118,9 +118,24 @@ function streamChatTurn(
         })
       );
     };
+    // No word from the backend for this long (not even its 10s heartbeat):
+    // the turn is dead — end it with a message instead of thinking forever.
+    let silence: ReturnType<typeof setTimeout> | undefined;
+    const armSilence = () => {
+      if (silence) clearTimeout(silence);
+      silence = setTimeout(() => {
+        appendAssistantDelta("\n\nORION stopped responding. Retry the message.");
+        finishAssistantTurn();
+        try { ws.close(); } catch { /* closed */ }
+      }, 60_000);
+    };
+    ws.addEventListener("open", armSilence);
+    ws.addEventListener("close", () => { if (silence) clearTimeout(silence); });
     ws.onmessage = (event) => {
+      armSilence();
       let chunk;
       try { chunk = JSON.parse(event.data); } catch { appendAssistantDelta("Could not read the server response. Please retry."); finishAssistantTurn(); ws.close(); return; }
+      if (chunk.heartbeat) return;
       if (chunk.activity) upsertAssistantActivity(chunk.activity);
       if (chunk.retract) retractAssistantText();
       if (chunk.error) appendAssistantDelta(chunk.error);

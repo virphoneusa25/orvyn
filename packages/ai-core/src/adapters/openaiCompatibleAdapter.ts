@@ -11,6 +11,7 @@ import {
   AIChunk,
   ModelConfig,
   ModelStatus,
+  ToolCall,
 } from "../types";
 
 /**
@@ -165,13 +166,8 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
       content: choice?.message?.content ?? "",
       reasoningContent: choice?.message?.reasoning_content || undefined,
       toolCalls: choice?.message?.tool_calls?.map((tc: any) => {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function?.arguments ?? "{}");
-        } catch {
-          args = {};
-        }
-        return { id: tc.id, name: fromWireToolName(tc.function?.name, request), arguments: args };
+        const parsed = parseToolArguments(rawArguments(tc), choice?.finish_reason);
+        return { id: tc.id, name: fromWireToolName(tc.function?.name ?? tc.name, request), arguments: parsed.args, ...(parsed.error ? { argumentsError: parsed.error } : {}) };
       }),
       finishReason: choice?.finish_reason === "tool_calls" ? "tool_call" : (choice?.finish_reason ?? "stop"),
       usage: data.usage
@@ -181,13 +177,14 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
   }
 
   async *stream(request: AIRequest): AsyncIterable<AIChunk> {
+    let maxTokens = request.maxOutputTokens ?? this.config.maxOutputTokens;
     const body = (includeUsage: boolean) =>
       JSON.stringify({
         model: this.wireModel(),
         messages: this.openaiMessages(request),
         temperature: request.temperature ?? this.config.defaultTemperature,
         top_p: request.topP ?? this.config.defaultTopP,
-        max_tokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
+        max_tokens: maxTokens,
         ...this.reasoningParam(request),
         tools: this.openaiTools(request),
         stream: true,
@@ -207,7 +204,16 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     // Same progressive fallback the image path uses: older/stricter servers
     // reject stream_options outright, and losing usage beats losing the reply.
     let res = await post(true);
-    if (res.status === 400) res = await post(false);
+    if (res.status === 400) {
+      // A server whose model allows fewer output tokens than asked says so:
+      // retry once at the common 8k ceiling rather than failing the turn.
+      const text = await res.clone().text().catch(() => "");
+      if (/max_tokens|max_completion_tokens|maximum.{0,40}tokens|output tokens/i.test(text) && maxTokens > 8192) {
+        maxTokens = 8192;
+        res = await post(true);
+      }
+      if (res.status === 400) res = await post(false);
+    }
 
     if (!res.ok || !res.body) {
       throw new Error(`Model "${this.config.id}" stream failed: HTTP ${res.status}: ${await res.text().catch(() => "")}`);
@@ -221,17 +227,14 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     let reasoningAcc = "";
     let usage: { promptTokens: number; completionTokens: number } | undefined;
 
+    let finishReason: string | undefined;
     const flushTools = function* () {
       for (const t of toolAcc) {
-        if (!t.id && !t.name) continue;
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(t.args || "{}");
-        } catch {
-          args = {};
-        }
-        yield { delta: "", toolCall: { id: t.id, name: fromWireToolName(t.name, request), arguments: args }, done: false } as AIChunk;
+        if (!t || (!t.id && !t.name)) continue;
+        const parsed = parseToolArguments(t.args, finishReason);
+        yield { delta: "", toolCall: { id: t.id, name: fromWireToolName(t.name, request), arguments: parsed.args, ...(parsed.error ? { argumentsError: parsed.error } : {}) }, done: false } as AIChunk;
       }
+      toolAcc.length = 0;
     };
 
     const ingestMessage = function* (message: { content?: unknown; tool_calls?: any[] } | undefined) {
@@ -246,8 +249,9 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
           const tc = message.tool_calls[i];
           if (!toolAcc[i]) toolAcc[i] = { id: "", name: "", args: "" };
           if (tc.id) toolAcc[i].id = tc.id;
-          if (tc.function?.name) toolAcc[i].name = tc.function.name;
-          if (tc.function?.arguments && !toolAcc[i].args) toolAcc[i].args = String(tc.function.arguments);
+          if (tc.function?.name ?? tc.name) toolAcc[i].name = tc.function?.name ?? tc.name;
+          const full = rawArguments(tc);
+          if (full && !toolAcc[i].args) toolAcc[i].args = full;
         }
       }
     };
@@ -278,6 +282,8 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
               completionTokens: json.usage.completion_tokens ?? 0,
             };
           }
+          const fr = json.choices?.[0]?.finish_reason;
+          if (typeof fr === "string" && fr) finishReason = fr;
           const delta = json.choices?.[0]?.delta;
           if (typeof delta?.reasoning_content === "string") reasoningAcc += delta.reasoning_content;
           const text = delta?.content ?? "";
@@ -287,11 +293,16 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
           }
           if (delta?.tool_calls) {
             for (const tc of delta.tool_calls) {
-              const i = tc.index ?? 0;
+              // No index: a new id starts a new call (never glue two calls' JSON together).
+              let i = typeof tc.index === "number" ? tc.index : Math.max(0, toolAcc.length - 1);
+              if (typeof tc.index !== "number" && tc.id && toolAcc[i]?.id && toolAcc[i]!.id !== tc.id) i = toolAcc.length;
               if (!toolAcc[i]) toolAcc[i] = { id: "", name: "", args: "" };
               if (tc.id) toolAcc[i].id = tc.id;
-              if (tc.function?.name) toolAcc[i].name += tc.function.name;
-              if (tc.function?.arguments) toolAcc[i].args += tc.function.arguments;
+              const name = tc.function?.name ?? tc.name;
+              // Some servers repeat the full name in every chunk; others stream it in pieces.
+              if (name) toolAcc[i].name = toolAcc[i].name && (toolAcc[i].name === name || name.startsWith(toolAcc[i].name)) ? name : toolAcc[i].name + name;
+              const piece = rawArguments(tc);
+              if (piece) toolAcc[i].args = typeof (tc.function?.arguments ?? tc.arguments) === "object" ? piece : toolAcc[i].args + piece;
             }
           }
           // Some servers (llama.cpp, a few vLLM builds) only put the assistant
@@ -399,6 +410,51 @@ export function wireToolName(name: string): string {
   const n = String(name ?? "");
   if (/^[A-Za-z0-9_-]{1,64}$/.test(n)) return n;
   return n.replace(/\./g, "__").replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+}
+
+/**
+ * A tool call's argument text, wherever the provider put it: OpenAI's
+ * function.arguments (a JSON string), or an already-parsed object, or the
+ * input / args / parameters / tool_input fields some servers use.
+ */
+export function rawArguments(tc: any): string {
+  const v = tc?.function?.arguments ?? tc?.arguments ?? tc?.function?.input ?? tc?.input ?? tc?.args ?? tc?.parameters ?? tc?.tool_input;
+  if (v === undefined || v === null) return "";
+  return typeof v === "string" ? v : JSON.stringify(v);
+}
+
+/**
+ * Reads a tool call's argument text. Never turns unreadable arguments into a
+ * valid-looking {}: an error says whether the text was cut off by the output
+ * limit or is not JSON, with the keys that did arrive (never the values).
+ */
+export function parseToolArguments(raw: string, finishReason?: string): { args: Record<string, unknown>; error?: NonNullable<ToolCall["argumentsError"]> } {
+  const text = String(raw ?? "").trim();
+  if (!text) return { args: {} };
+  const attempts = [
+    text,
+    text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""),
+    text.replace(/,\s*([}\]])/g, "$1"),
+  ];
+  for (const t of attempts) {
+    try {
+      let v: unknown = JSON.parse(t);
+      if (typeof v === "string") { try { v = JSON.parse(v); } catch { /* a plain string */ } }
+      if (v && typeof v === "object" && !Array.isArray(v)) return { args: v as Record<string, unknown> };
+    } catch { /* next */ }
+  }
+  const keys = [...text.matchAll(/"([A-Za-z_][\w]*)"\s*:/g)].map((m) => m[1]!).filter((k, i, a) => a.indexOf(k) === i).slice(0, 12);
+  const path = /"path"\s*:\s*"([^"\\]{1,300})"/.exec(text)?.[1];
+  let depth = 0; let inStr = false; let esc = false;
+  for (const ch of text) {
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') inStr = !inStr;
+    else if (!inStr && (ch === "{" || ch === "[")) depth++;
+    else if (!inStr && (ch === "}" || ch === "]")) depth--;
+  }
+  const truncated = finishReason === "length" || inStr || depth > 0;
+  return { args: {}, error: { reason: truncated ? "truncated" : "invalid_json", rawLength: text.length, keys, ...(path ? { path } : {}) } };
 }
 
 export function fromWireToolName(name: string | undefined, request: { tools?: { name: string }[] }): string {

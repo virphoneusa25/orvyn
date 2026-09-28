@@ -74,6 +74,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
 
 const RAIL: { id: ViewId; label: string; icon: IconName }[] = [
   { id: "home", label: "Home", icon: "home" },
+  { id: "projects", label: "Projects", icon: "folder" },
   { id: "missions", label: "Missions", icon: "missions" },
   { id: "editor", label: "Code", icon: "code" },
   { id: "terminal", label: "Terminal", icon: "terminal" },

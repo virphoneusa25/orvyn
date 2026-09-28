@@ -65,6 +65,13 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Set when the provider's argument text could not be read. `arguments` is
+   * then empty and MUST NOT be executed as if the model sent no arguments:
+   * "truncated" — the reply hit its output limit mid-call; "invalid_json" —
+   * the text is not JSON. Never fabricated into a valid-looking `{}`.
+   */
+  argumentsError?: { reason: "truncated" | "invalid_json"; rawLength: number; keys: string[]; path?: string };
 }
 
 export interface AIResponse {

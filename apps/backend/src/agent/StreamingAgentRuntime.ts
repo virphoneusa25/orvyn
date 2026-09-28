@@ -56,7 +56,7 @@ import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
 import { buildCapabilityManifest, manifestPrompt, resolveCapabilityNeed, type CapabilityManifest } from "./capabilityManifest";
-import { siteAssetRefs, noteUnreadable, BINARY_ASSET } from "./sitePreview";
+import { siteAssetRefs, noteUnreadable, BINARY_ASSET, siteFileText } from "./sitePreview";
 import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, missingLinkedAssets, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { getActivePreviewTarget, invalidPreviewUrlResult, notePreviewTargetStatus, resolveNavigationTarget, setActivePreviewTarget } from "./previewTarget";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
@@ -71,6 +71,8 @@ import { internalPathRefusal, selectToolNames, shellServerRefusal, validateToolA
 import { defaultDataDir } from "../persistence/LocalStore";
 import {
   MALFORMED_CALL_LIMIT,
+  friendlyArgumentFailure,
+  unreadableArgumentsPayload,
   classifyExecutedToolFailure,
   countsTowardModelEscalation,
   executedFailurePayload,
@@ -173,6 +175,11 @@ interface RunState {
   malformedFingerprints: Map<string, number>;
   /** Set when the same invalid call has been repeated enough times to stop the run. */
   argumentLoopStop?: string;
+  /** Tools whose last call failed validation (the next valid call is the repair). */
+  pendingRepairs: Set<string>;
+  /** One replan after a blocked malformed call; a second block stops the run. */
+  argumentReplanUsed?: boolean;
+  argumentReplanNote?: string;
   /** Remote execution spec; when OVH_WORKER the coding tools route over Tool RPC. */
   execution?: ExecutionSpec;
   /** Local tools replaced by remote variants for this run (restored on settle). */
@@ -217,6 +224,8 @@ interface RunState {
   completingAssets?: boolean;
   /** Latest preview check; an older check finishing late never overrides a newer one. */
   previewCheckSeq?: number;
+  /** Stopped by the progress watchdog. */
+  stalled?: boolean;
   /** Repair rounds spent on a failing preview check. */
   previewRepairs?: number;
   previousRunIds?: string[];
@@ -1183,7 +1192,8 @@ export class StreamingAgentRuntime {
       case "write_file":
         this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
-        this.openAgentPreview(runId, args.path, args.content);
+        // A part appended to a large file: the preview holds the whole file so far.
+        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? "")}` : args.content);
         break;
       case "edit_file":
         this.store.emit(runId, "file.edit", { path: args.path, preview });
@@ -1424,6 +1434,7 @@ export class StreamingAgentRuntime {
       extraProviderCalls: 0,
       failedFingerprints: new Map(),
       malformedFingerprints: new Map(),
+      pendingRepairs: new Set(),
       execution,
       mode,
       reasoningEffort: options?.reasoningEffort ?? "auto",
@@ -1631,6 +1642,12 @@ export class StreamingAgentRuntime {
     // Deliberately not awaited: the caller gets a runId synchronously and
     // subscribes to events. Errors are surfaced as run.error events.
     void (async () => {
+      // Progress watchdog: a run that shows no activity at all (no event) for
+      // ORVYN_RUN_STALL_MS while it claims to be working ends as a recoverable
+      // error with a plain message — never an endless "thinking".
+      const stallMs = Number(process.env.ORVYN_RUN_STALL_MS) || 300_000;
+      const watchdog = setInterval(() => this.checkStalled(runId, stallMs), Math.min(30_000, Math.max(1_000, Math.floor(stallMs / 4))));
+      watchdog.unref?.();
       const state = this.runs.get(runId);
       try {
         const toolNames = this.toolDefinitions(state?.exposedTools ?? null).map((t) => t.name);
@@ -1790,6 +1807,7 @@ export class StreamingAgentRuntime {
           this.store.setStatus(runId, "error");
         }
       } finally {
+        clearInterval(watchdog);
         this.teardownRemote(runId);
         try {
           this.onRunSettled?.(runId);
@@ -2023,7 +2041,31 @@ export class StreamingAgentRuntime {
     return result.next;
   }
 
+  /** No event for stallMs while working: stop the run, say why, keep the work. */
+  private checkStalled(runId: string, stallMs: number): void {
+    const run = this.store.get(runId);
+    const state = this.runs.get(runId);
+    if (!run || !state || state.cancelled || state.stalled) return;
+    if (!["running", "verifying", "queued"].includes(String(run.status))) return;
+    const last = run.events[run.events.length - 1];
+    const lastAt = Number((last as { timestamp?: number } | undefined)?.timestamp ?? 0) || Date.now();
+    if (Date.now() - lastAt < stallMs) return;
+    state.stalled = true;
+    const waitingOnWorker = Boolean(state.execution && ["OVH_WORKER", "LOCAL_HOST", "LOCAL_SANDBOX"].includes(String(state.execution.location))) && !run.events.some((e) => e.type === "sandbox.ready" || String(e.type) === "local.ready" || e.type === "tool.started");
+    const message = waitingOnWorker
+      ? "The worker failed to start — ORION never got a ready signal. Your project was not changed. Retry, or check the worker in Settings."
+      : `ORION stopped making progress (no activity for ${Math.round(stallMs / 60_000)} minutes), so the run was stopped. Your changes so far are saved — Retry to continue.`;
+    this.store.emit(runId, "run.stalled", { stallMs, phase: state.phase, waitingOnWorker });
+    this.store.emit(runId, "run.error", { message, code: waitingOnWorker ? "WORKER_START_FAILED" : "RUN_STALLED", actions: ["retry", "cancel"] });
+    this.store.setStatus(runId, "error");
+    if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
+    for (const [callId, p] of this.pending) if (p.runId === runId) { this.pending.delete(callId); p.resolve(false); }
+    state.controller.abort();
+  }
+
   private finishCancelled(runId: string, steps: number): void {
+    // A stalled run was already settled as an error (with its reason).
+    if (this.runs.get(runId)?.stalled) return;
     const run = this.store.get(runId);
     if (run?.events.some((event) => event.type === "run.cancelled")) {
       this.store.setStatus(runId, "cancelled");
@@ -2418,6 +2460,11 @@ export class StreamingAgentRuntime {
         const outcome = await this.executeToolCalls(runId, state, calls, messages, provider);
         if (state.websiteBlocked) return fail(state.websiteBlocked);
         if (state.argumentLoopStop) return fail(state.argumentLoopStop);
+        if (state.argumentReplanNote) {
+          messages.push({ role: "user", content: state.argumentReplanNote });
+          this.store.emit(runId, "agent.continue", { reason: "replanning a step whose tool call was malformed" });
+          state.argumentReplanNote = undefined;
+        }
         // Three real tool failures in a row: the current model is stuck — climb one step.
         // INVALID_ARGUMENTS is a correctable schema mistake and does not climb by itself.
         const batch = (this.store.get(runId)?.events ?? []).filter((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && calls.some((c) => c.id === e.data?.callId));
@@ -2809,34 +2856,62 @@ export class StreamingAgentRuntime {
 
       const spec = this.tools.list().find((t) => t.name === call.name);
       const schema = spec?.parameters as ToolParameterSchema | undefined;
-      const validated = validateToolArguments(call.name, call.arguments, schema);
-      if (!validated.ok) {
-        const seen = (state.malformedFingerprints.get(fingerprint) ?? 0) + 1;
-        state.malformedFingerprints.set(fingerprint, seen);
+      // Metadata only (never file contents): which keys, how big.
+      const argMeta = {
+        tool: call.name,
+        keys: Object.keys(call.arguments ?? {}),
+        contentBytes: typeof (call.arguments as { content?: unknown })?.content === "string" ? Buffer.byteLength(String((call.arguments as { content?: unknown }).content)) : 0,
+        payloadBytes: Buffer.byteLength(JSON.stringify(call.arguments ?? {})),
+        provider: provider?.config.provider ?? "",
+        model: provider?.config.id ?? "",
+      };
+      // Unreadable arguments (cut off at the output limit, or not JSON): never
+      // treated as "the model sent {}". Nothing runs; one compact repair request.
+      const argErr = (call as ToolCall).argumentsError;
+      const validated = argErr ? null : validateToolArguments(call.name, call.arguments, schema);
+      if (argErr || (validated && !validated.ok)) {
+        const key = argErr ? `${call.name}:unreadable:${argErr.reason}:${argErr.rawLength}:${argErr.path ?? ""}` : fingerprint;
+        const seen = (state.malformedFingerprints.get(key) ?? 0) + 1;
+        state.malformedFingerprints.set(key, seen);
         const blocked = seen >= MALFORMED_CALL_LIMIT;
-        const feedback = invalidArgumentsPayload({
-          tool: call.name,
-          missing: validated.missing,
-          invalid: validated.invalid,
-          schema,
-          blocked,
-        });
+        const missing = validated && !validated.ok ? validated.missing : [];
+        const invalid = validated && !validated.ok ? validated.invalid : [];
+        const feedback = argErr
+          ? unreadableArgumentsPayload({ tool: call.name, reason: argErr.reason, rawLength: argErr.rawLength, keys: argErr.keys, path: argErr.path, schema, blocked })
+          : (() => { const f = invalidArgumentsPayload({ tool: call.name, missing, invalid, schema, blocked }); return { error: friendlyArgumentFailure(call.name, String((call.arguments as { path?: unknown })?.path ?? "") || undefined), diagnostic: f.error, modelText: f.modelText }; })();
+        state.pendingRepairs.add(call.name);
+        this.store.emit(runId, "tool.validation_failed", { callId: call.id, ...argMeta, missing, invalid, reason: argErr?.reason ?? "missing_or_invalid", rawLength: argErr?.rawLength, attempt: seen, blocked });
+        console.warn(JSON.stringify({ event: "tool.validation_failed", runId, ...argMeta, missing, invalid, reason: argErr?.reason ?? "missing_or_invalid", rawLength: argErr?.rawLength, attempt: seen, blocked }));
         this.store.emit(runId, "tool.failed", {
           callId: call.id,
           tool: call.name,
+          // The user sees plain words; the schema detail is diagnostics.
           error: feedback.error,
+          diagnostic: feedback.diagnostic,
           errorType: "INVALID_ARGUMENTS",
-          missing: validated.missing,
-          invalid: validated.invalid,
-          retryable: feedback.retryable,
+          missing,
+          invalid,
+          retryable: !blocked,
           blocked,
+          recovering: !blocked || !state.argumentReplanUsed,
           envelope: this.refusalEnvelope(state, call, feedback.error),
         });
         replies.set(call.id, feedback.modelText);
-        if (blocked && !state.argumentLoopStop) state.argumentLoopStop = feedback.error;
+        if (blocked) {
+          // The repair did not happen (the same bad call again). One replan of
+          // this step; a second block ends the run truthfully.
+          if (!state.argumentReplanUsed) {
+            state.argumentReplanUsed = true;
+            state.argumentReplanNote = `REPLAN: the ${call.name} call for this step is blocked (${feedback.diagnostic}). Do this step a different way: ${call.name === "write_file" ? "write the file in smaller parts with write_file + append: true, or change an existing file with edit_file" : "use different arguments or another tool"}. Do not send that call again.`;
+          } else if (!state.argumentLoopStop) {
+            state.argumentLoopStop = `ORION stopped: ${feedback.error} It could not correct the request after a repair and a replan.`;
+          }
+        }
         continue;
       }
-      call.arguments = validated.args;
+      call.arguments = validated!.ok ? validated!.args : call.arguments;
+      this.store.emit(runId, "tool.validated", { callId: call.id, ...argMeta });
+      if (state.pendingRepairs.delete(call.name)) this.store.emit(runId, "tool.repaired", { callId: call.id, tool: call.name });
 
       const permission = this.tools.getPermission(call.name);
       if (permission === "denied") {
