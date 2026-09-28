@@ -320,7 +320,7 @@ test("TEST consecutive — hero image then animate stays on the same workspace",
   });
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
-  assert.equal(created.projectRoot.includes("C:"), false);
+  assert.equal(created.projectRoot.startsWith(join(dir, "tenants", "t1", "workspaces")), true);
   const svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"10\" height=\"10\"/></svg>\n";
   await makeWriteFileTool(created.projectRoot).execute({ path: "index.html", content: "<h1>Harbor</h1>\n<img src=\"public/virphone-hero.svg\">\n" });
   await makeWriteFileTool(created.projectRoot).execute({ path: "public/virphone-hero.svg", content: svg });

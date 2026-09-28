@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -55,7 +55,7 @@ function page(): string {
 
 const WIDTHS = [1920, 1600, 1440, 1366, 1280, 1024];
 
-test("long tool commands do not widen the conversation", () => {
+test("long tool commands do not widen the conversation", { skip: !existsSync("/opt/google/chrome/chrome") }, () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-overflow-"));
   const chrome = "/opt/google/chrome/chrome";
   for (const width of WIDTHS) {

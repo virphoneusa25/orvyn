@@ -9,7 +9,7 @@ const SKIP = new Set(["node_modules", "dist", ".git", "previews", ".orvyn", "cov
 const PAGE = /^index\.(html|php)$/i;
 const ASSET = /\.(html|css|js|php)$/i;
 const CREATE = /\b(build|create|make|design|generate)\b/i;
-const SITE = /\b(website|web\s*site|landing\s*page|homepage|home\s*page)\b/i;
+const SITE = /\b(website|web\s*site|landing\s*page)\b/i;
 const REPLACE = /\b(replace|overwrite|redo|start over|from scratch)\b/i;
 
 const ROOT_PROMPT =

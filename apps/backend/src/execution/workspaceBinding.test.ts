@@ -59,7 +59,7 @@ test("read and create stay inside the run workspace, and escapes are refused", a
   assert.equal(viaAlias.ok, true, viaAlias.error);
   assert.equal(readFileSync(join(workspace, "also.txt"), "utf8"), "alias\n");
 
-  const pwd = await gateway.execute("terminal", { command: "pwd" }, "coder", ctx);
+  const pwd = await gateway.execute("terminal", { command: process.platform === "win32" ? "cd" : "pwd" }, "coder", ctx);
   assert.equal(pwd.ok, true, pwd.error);
   assert.equal(resolve(String(pwd.output).trim()), realpathSync(workspace));
 

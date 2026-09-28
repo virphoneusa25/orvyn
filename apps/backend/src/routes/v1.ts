@@ -40,10 +40,12 @@ v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string
 // ── Services (dev servers ORION started) ─────────────────────────────────
 // "local": on the user's computer, reported by the Local Worker.
 // "cloud": on this host (an ORVYN Cloud workspace, or the same-host backend).
-function hostServicesFor(t: { id: string; currentProjectRoot?: string | null }): ServiceRecord[] {
+function hostServicesFor(t: { id: string; currentProjectRoot?: string | null; sessions: WorkSessionStore }): ServiceRecord[] {
   const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
   return serviceManager.list().filter((s) =>
-    s.tenantId === t.id || isVirtualWorkspace(s.projectRoot, t.id) || (!cloudHost && (!s.tenantId || s.projectRoot === t.currentProjectRoot))
+    s.tenantId === t.id || isVirtualWorkspace(s.projectRoot, t.id)
+      || isProvisionedWorkspace(s.projectRoot, t.id, t.sessions.dataDirectory)
+      || (!cloudHost && (!s.tenantId || s.projectRoot === t.currentProjectRoot))
   );
 }
 
@@ -96,7 +98,9 @@ v1Router.use(async (req, res, next) => {
     const runStart = req.method === "POST" && (req.path === "/agent/stream/runs" || req.path === "/agent/orchestrate");
     const clientMachineRoot = runStart
       && typeof req.body?.projectRoot === "string"
-      && looksLikeForeignAbsolutePath(req.body.projectRoot.trim());
+      && (looksLikeForeignAbsolutePath(req.body.projectRoot.trim())
+        || ((process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR))
+          && /^[A-Za-z]:[\\/]/.test(req.body.projectRoot.trim())));
     // Stream and mission runs resolve their own workspace. Rewriting an empty
     // root here used to land every chat in one shared virtual folder.
     if (!runStart && !forcedRemote && !clientMachineRoot && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
@@ -698,11 +702,20 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       ? "ovh_worker"
       : "auto";
   const resolvedRoot = boundRoot;
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
+  // The control plane cannot stat a desktop-owned path. Preflight keeps its
+  // durable session workspace, while execution must still target that path on
+  // the registered Local Worker.
+  const explicitClientRoot = typeof req.body.projectRoot === "string" ? req.body.projectRoot.trim() : "";
+  const desktopProjectRoot = explicitClientRoot &&
+    (looksLikeForeignAbsolutePath(explicitClientRoot)
+      || (cloudHost && /^[A-Za-z]:[\\/]/.test(explicitClientRoot)))
+    ? explicitClientRoot
+    : "";
   const managedWorkspace = Boolean(resolvedRoot) && isProvisionedWorkspace(resolvedRoot, t.id, t.sessions.dataDirectory);
   const virtualWorkspace = managedWorkspace || (Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id));
-  const hasLocalProject = Boolean(resolvedRoot) && !virtualWorkspace;
+  const hasLocalProject = Boolean(desktopProjectRoot) || (Boolean(resolvedRoot) && !virtualWorkspace);
   const hints = classifyExecutionHints(String(req.body.instruction ?? req.body.goal ?? ""), String(req.body.composerMode ?? req.body.mode ?? "auto"));
-  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
   const routed = routeExecutionTarget({
     requested: requestedTarget,
     mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
@@ -722,6 +735,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   // Auto must not demand the desktop Local Worker or an OVH sandbox for a logo.
   const controlPlaneVirtual =
     requestedTarget === "auto" &&
+    !desktopProjectRoot &&
     (virtualWorkspace || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
@@ -753,7 +767,11 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     ? "LOCAL"
     : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
   const clientProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
-  const remoteProjectRoot = location === "OVH_WORKER" ? cloudWorkerSourcePath(clientProjectRoot) : boundRoot;
+  const remoteProjectRoot = location === "OVH_WORKER"
+    ? cloudWorkerSourcePath(clientProjectRoot)
+    : (location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && desktopProjectRoot
+      ? desktopProjectRoot
+      : boundRoot;
   const executionLabel = controlPlaneVirtual && cloudHost
     ? "Cloud"
     : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud";

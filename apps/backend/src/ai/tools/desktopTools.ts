@@ -2,9 +2,9 @@
 //
 // When a Docker sandbox desktop exists for the tenant, every tool drives
 // that real X11 desktop via docker exec (frames from `import`, input via
-// `xdotool`) — there is no hidden second desktop. The Playwright browser
-// path below is the local-dev fallback only, used when the sandbox runtime
-// is unavailable.
+// `xdotool`) — there is no hidden second desktop. When Docker is unavailable,
+// desktop tools report that clearly; separate browser tools can still verify
+// the page without claiming to be the visible sandbox desktop.
 //
 // Ownership is exclusive: when the user owns the session, agent input is
 // refused; when ORION owns it, user input is refused by the route layer.
@@ -35,15 +35,12 @@ import {
 } from "../../desktop/sandboxDesktop";
 
 function playwrightGuard(projectRoot: string, tenantId: string, runId: string | undefined, fn: (session: DesktopSession, args: Record<string, unknown>) => Promise<ToolResult>) {
-  return async (args: Record<string, unknown>): Promise<ToolResult> => {
-    if (!playwrightAvailable()) return { ok: false, error: PLAYWRIGHT_MISSING };
-    const session = getDesktopSession(tenantId, runId, projectRoot) ?? createDesktopSession({ tenantId, projectRoot, runId });
-    try {
-      return await fn(session, args);
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    }
-  };
+  // A background Playwright page is not the sandbox desktop visible in the
+  // Workbench. Keep the desktop tools honest when Docker is unavailable.
+  return async (_args: Record<string, unknown>): Promise<ToolResult> => ({
+    ok: false,
+    error: "Sandbox desktop unavailable on this host. Use browser tools for page verification.",
+  });
 }
 
 function withAgentLock(session: DesktopSession, run: () => Promise<ToolResult>): Promise<ToolResult> {

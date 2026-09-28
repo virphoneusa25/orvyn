@@ -205,8 +205,8 @@ async function main() {
       ok(pre.executionTarget === "local_host", "preflight agrees: local_host", JSON.stringify(pre));
       ok(workerLog.some((w) => w.runId === a.runId && w.tool === "write_file"), "the laptop's Local Worker executed write_file", JSON.stringify(workerLog.filter((w) => w.runId === a.runId)));
       ok(existsSync(join(laptopDir, "local-test.txt")), "local-test.txt exists in the laptop project folder");
-      const stray = [...find(projectsDir, "local-test.txt"), ...find(dataDir, "local-test.txt"), ...find(backendCwd, "local-test.txt")];
-      ok(stray.length === 0, "no copy on the control plane", stray.join(", "));
+      const stray = [...find(projectsDir, "local-test.txt"), ...find(join(dataDir, "tenants", "default", "workspaces"), "local-test.txt"), ...find(backendCwd, "local-test.txt")];
+      ok(stray.length === 0, "no project copy on the control plane", stray.join(", "));
     }
 
     console.log(`\nTEST B — no project, cloud workspace`);
@@ -216,7 +216,7 @@ async function main() {
       const x = exec(b.events);
       console.log(`        execution: ${JSON.stringify({ requested: x.executionTargetRequested, actual: x.executionTargetActual, location: x.location, label: x.executionLabel, root: x.remoteProjectRoot })}`);
       ok(b.status === "completed", "run completes", `status=${b.status} ${tail(b.events)}`);
-      const cloud = [...find(projectsDir, "cloud-test.txt"), ...find(dataDir, "cloud-test.txt")];
+      const cloud = [...find(projectsDir, "cloud-test.txt"), ...find(join(dataDir, "tenants", "default", "workspaces"), "cloud-test.txt")];
       ok(cloud.length === 1, "cloud-test.txt exists exactly once in the cloud workspace", cloud.join(", ") || "(not found)");
       ok(!existsSync(join(laptopDir, "cloud-test.txt")), "nothing written to the laptop folder");
       ok(!workerLog.some((w) => w.runId === b.runId), "the Local Worker was not used");

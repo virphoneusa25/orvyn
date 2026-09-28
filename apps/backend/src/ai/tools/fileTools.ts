@@ -89,7 +89,7 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         await fs.mkdir(path.dirname(target), { recursive: true });
         const expected = Buffer.from(String(args.content), "utf-8");
         await fs.writeFile(target, expected);
-        const projectFileEvidence = await verifyProjectFile(projectRoot, String(args.path), expected);
+        const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected);
         const lines = String(args.content).split("\n").length;
         return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines, ${projectFileEvidence.size} bytes, sha256 ${projectFileEvidence.sha256})`, projectFileEvidence };
       } catch (err: any) {
@@ -189,7 +189,7 @@ export function makeEditFileTool(projectRoot: string): AITool {
         const next = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
         const expected = Buffer.from(next, "utf-8");
         await fs.writeFile(target, expected);
-        const projectFileEvidence = await verifyProjectFile(projectRoot, String(args.path), expected);
+        const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected);
         const applied = replaceAll ? count : 1;
         const added = next.split("\n").length - original.split("\n").length;
         return {

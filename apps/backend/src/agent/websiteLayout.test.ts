@@ -35,6 +35,12 @@ test("an empty project still writes the site at the root", () => {
   assert.equal(siteWriteRefusal(layout, "write_file", "index.html"), null);
 });
 
+test("adding a hero asset updates the existing homepage", () => {
+  const layout = planWebsiteLayout("Create virphone-hero.svg and add it as the homepage hero background.", ["index.html", "styles.css"]);
+  assert.equal(layout.directory, null);
+  assert.equal(siteWriteRefusal(layout, "edit_file", "index.html"), null);
+});
+
 test("an explicit replace may overwrite, and a taken folder gets the next name", () => {
   const replace = planWebsiteLayout("replace the website with a virphone site", ["index.html"]);
   assert.equal(replace.directory, null);
