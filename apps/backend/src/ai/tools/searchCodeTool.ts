@@ -42,9 +42,18 @@ export function makeSearchCodeTool(projectRoot: string): AITool {
         const insensitive = args.case_insensitive === true;
         const max = Math.min(200, Math.max(1, Number(args.max_results) || 50));
 
-        const rg = await ripgrep(root, pattern, { glob, insensitive, max });
+        // `path` may name one file (search_code in styles.css): search that
+        // file from its folder instead of spawning inside a file (ENOTDIR).
+        const stat = await fs.stat(root).catch(() => null);
+        if (!stat) return { ok: false, error: `No such file or folder: ${rel}` };
+        const isFile = stat.isFile();
+        const cwd = isFile ? path.dirname(root) : root;
+        const target = isFile ? path.basename(root) : ".";
+        const rg = await ripgrep(cwd, pattern, { glob, insensitive, max, target });
         if (rg !== null) {
-          return { ok: true, output: rg || "(no matches)" };
+          const prefix = path.relative(bound, cwd).replace(/\\/g, "/");
+          const lines = rg ? rg.split("\n").map((l) => (isFile ? `${path.relative(bound, root).replace(/\\/g, "/")}:${l}` : prefix ? `${prefix}/${l.replace(/^\.\//, "")}` : l.replace(/^\.\//, ""))) : [];
+          return { ok: true, output: lines.join("\n") || "(no matches)" };
         }
         const fallback = await walkGrep(root, bound, pattern, { glob, insensitive, max });
         return { ok: true, output: fallback || "(no matches)" };
@@ -58,14 +67,20 @@ export function makeSearchCodeTool(projectRoot: string): AITool {
 function ripgrep(
   cwd: string,
   pattern: string,
-  opts: { glob?: string; insensitive: boolean; max: number }
+  opts: { glob?: string; insensitive: boolean; max: number; target?: string }
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const args = ["--line-number", "--no-heading", "--color", "never", "--max-count", String(opts.max)];
     if (opts.insensitive) args.push("-i");
     if (opts.glob) args.push("--glob", opts.glob);
-    args.push("--", pattern, ".");
-    const child = spawn("rg", args, { cwd, windowsHide: true });
+    args.push("--", pattern, opts.target ?? ".");
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("rg", args, { cwd, windowsHide: true });
+    } catch {
+      resolve(null);
+      return;
+    }
     let stdout = "";
     let settled = false;
     child.stdout?.on("data", (d) => {
@@ -146,6 +161,15 @@ async function walkGrep(
     }
   }
 
+  const top = await fs.stat(dir).catch(() => null);
+  if (top?.isFile()) {
+    try {
+      const text = await fs.readFile(dir, "utf-8");
+      const rel = path.relative(projectRoot, dir);
+      text.split(/\r?\n/).forEach((line, i) => { if (hits.length < opts.max && regex.test(line)) hits.push(`${rel}:${i + 1}:${line}`); });
+    } catch { /* unreadable */ }
+    return hits.join("\n");
+  }
   await walk(dir);
   return hits.join("\n");
 }

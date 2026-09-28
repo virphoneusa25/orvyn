@@ -100,6 +100,7 @@ export function FilesInspector({
   workspaceStatus = "restored",
   writtenPaths = [],
   listDisk = true,
+  sessionId = null,
 }: {
   files: WorkspaceFile[];
   artifacts: WorkspaceFile[];
@@ -110,6 +111,8 @@ export function FilesInspector({
   writtenPaths?: string[];
   /** List the Electron folder only when it is this project root. */
   listDisk?: boolean;
+  /** This conversation: Generated shows only the files its runs made. */
+  sessionId?: string | null;
   /** user: the person asked for this file (Open in the chat). Following ORION only selects it. */
   focus?: { path?: string; fileName?: string; artifactId?: string; user?: boolean } | null;
   activePath?: string | null;
@@ -165,13 +168,16 @@ export function FilesInspector({
     if (unbound) { setLocations([]); setLoadError(null); return; }
     let alive = true;
     const usableRoot = location === "local" ? null : resolveProjectFetchRoot(projectRoot, cloudBackend);
-    const suffix = usableRoot ? `?projectRoot=${encodeURIComponent(usableRoot)}` : "";
+    const query = new URLSearchParams();
+    if (usableRoot) query.set("projectRoot", usableRoot);
+    if (sessionId) query.set("sessionId", sessionId);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
     fetch(apiUrl("/files" + suffix), { headers: authHeaders() })
       .then((r) => r.json())
       .then((d) => { if (alive) { setLocations(Array.isArray(d.locations) ? d.locations : []); setLoadError(null); } })
       .catch(() => { if (alive) setLoadError("Could not reach ORVYN Cloud to list files."); });
     return () => { alive = false; };
-  }, [projectRoot, location, cloudBackend, artifacts.length, files.length, unbound]);
+  }, [projectRoot, location, cloudBackend, artifacts.length, files.length, unbound, sessionId]);
 
   const extras = useMemo(
     () => artifacts.map((f) => ({

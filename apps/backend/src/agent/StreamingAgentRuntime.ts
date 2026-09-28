@@ -50,7 +50,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
-import { applySiteEdit, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
@@ -203,6 +203,9 @@ interface RunState {
   website?: WebsiteMissionState;
   /** Where a new website is written, and which existing pages it must not replace. */
   websiteLayout?: WebsiteLayout;
+  /** Project files this conversation's workspace already has (from earlier runs). */
+  knownProjectFiles?: string[];
+  completingAssets?: boolean;
   /** Workspace path → artifact id for the download card of a file this run wrote. */
   writtenDownloads?: Map<string, string>;
   handoffModelId?: string;
@@ -476,6 +479,7 @@ export class StreamingAgentRuntime {
       message: `Created ${rel} (+${lines})`,
     });
     this.publishSitePreview(runId, [rel]);
+    if (/\.html?$/i.test(rel)) void this.completeSiteAssets(runId);
   }
 
   /**
@@ -598,18 +602,71 @@ export class StreamingAgentRuntime {
     }
   }
 
-  /** Show an existing homepage before the model makes its first edit. */
-  private async seedExistingSite(runId: string, state: RunState): Promise<string | null> {
-    if (!state.intent.requiresFrontend || state.websiteLayout?.directory || state.websiteLayout?.stack !== "static") return null;
-    const read = async (path: string): Promise<string | null> => {
+  /** The project is a plain static site: a homepage and no package.json. */
+  private isStaticSite(runId: string, state: RunState): boolean {
+    const files = [...(state.knownProjectFiles ?? []), ...rememberedSiteFiles(runId)];
+    return files.some((f) => /(^|\/)index\.html$/i.test(f)) && !files.some((f) => /(^|\/)package\.json$/i.test(f));
+  }
+
+  /** Reads one project file through the run's tools (on the user's computer for Local runs). */
+  private async readSiteFile(runId: string, state: RunState, path: string): Promise<string | null> {
+    try {
       const result = await this.tools.execute("read_file", { path }, "coder", {
         signal: state.controller.signal,
         runId,
         workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
         executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
       });
-      return result.ok && typeof result.output === "string" && result.output.trim() ? result.output : null;
-    };
+      return result.ok && typeof result.output === "string" && result.output.trim() && !/…\(truncated\)\s*$/.test(result.output) ? result.output : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The preview has a page whose stylesheet or script this run has not
+   * touched (a follow-up that only read or edited index.html): read those
+   * files from the project so the preview is the styled site, not bare HTML.
+   */
+  private async completeSiteAssets(runId: string): Promise<void> {
+    const state = this.runs.get(runId);
+    if (!state || state.completingAssets) return;
+    const files = rememberedSiteFiles(runId);
+    const pageKey = files.find((f) => /(^|\/)index\.html$/i.test(f));
+    if (!pageKey) return;
+    const html = composeSiteDocumentSource(runId, pageKey);
+    if (!html) return;
+    const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+    const refs = [...html.matchAll(/<(?:link|script|img)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
+      .map((m) => m[1]!.split(/[?#]/)[0]!)
+      .filter((ref) => !/^(?:[a-z]+:)?\/\//i.test(ref) && !ref.startsWith("data:") && /\.(css|js|mjs|svg)$/i.test(ref) && !ref.includes(".."))
+      .map((ref) => (ref.startsWith("/") ? ref.slice(1) : `${pageDir}${ref.replace(/^\.\//, "")}`));
+    const missing = [...new Set(refs)].filter((ref) => !hasSiteFile(runId, ref)).slice(0, 20);
+    if (!missing.length) return;
+    state.completingAssets = true;
+    try {
+      const added: string[] = [];
+      for (const ref of missing) {
+        const body = await this.readSiteFile(runId, state, ref);
+        if (body && !hasSiteFile(runId, ref)) {
+          rememberSiteFile(runId, ref, body);
+          added.push(ref);
+        }
+      }
+      if (added.length) this.republishPreview(runId, added);
+    } finally {
+      state.completingAssets = false;
+    }
+  }
+
+  /** Show an existing homepage before the model makes its first edit. */
+  private async seedExistingSite(runId: string, state: RunState): Promise<string | null> {
+    // A website task, or any follow-up in a workspace that already has a
+    // homepage ("show it in preview", "yes"): the preview opens with the site.
+    const knownSite = (state.knownProjectFiles ?? []).some((f) => /^index\.html$/i.test(f));
+    if (!state.intent.requiresFrontend && !knownSite) return null;
+    if (state.websiteLayout && (state.websiteLayout.directory || state.websiteLayout.stack !== "static")) return null;
+    const read = (path: string) => this.readSiteFile(runId, state, path);
     const html = await read("index.html");
     if (!html) return null;
     rememberSiteFile(runId, "index.html", html);
@@ -1187,6 +1244,7 @@ export class StreamingAgentRuntime {
       modelPinned: choice.pinned,
       ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission(), websiteLayout: planWebsiteLayout(instruction, listExistingSiteFiles(projectRoot), detectSiteStack(projectRoot)) } : {}),
       composerMode: options?.composerMode,
+      knownProjectFiles: options?.workspaceIdentity?.knownFiles ?? [],
       actionNudges: 0,
       phase: "preflight",
       repositoryDetected: workspace.repositoryDetected,
@@ -2450,7 +2508,7 @@ export class StreamingAgentRuntime {
         continue;
       }
 
-      const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend);
+      const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend, this.isStaticSite(runId, state));
       if ((call.name === "terminal" || call.name === "run_command" || call.name === "start_process") && shellRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, shellRefusal) });
         replies.set(call.id, shellRefusal);
@@ -2730,6 +2788,7 @@ export class StreamingAgentRuntime {
           if (isSiteAssetPath(readPath) && !hasSiteFile(runId, readPath) && !siteWriteRefusal(state.websiteLayout, "write_file", readPath)) {
             rememberSiteFile(runId, readPath, result.output);
             this.republishPreview(runId, [readPath]);
+            if (/\.html?$/i.test(readPath)) await this.completeSiteAssets(runId);
           }
         }
         if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {

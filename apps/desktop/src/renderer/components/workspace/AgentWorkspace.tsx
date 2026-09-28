@@ -280,7 +280,16 @@ export function AgentWorkspace({
     if (!activity || activity.switchTab === false) return;
     const currentKind: AgentWorkspaceTab =
       !active ? "changes" : active.kind === "file" || active.kind === "artifact" ? "files" : (active.kind as AgentWorkspaceTab);
-    const nextKind = followActiveTab(activity, currentKind);
+    let nextKind = followActiveTab(activity, currentKind);
+    // A website with a live preview: writing its pages and styles updates the
+    // preview, so the preview stays in front (like watching the site being
+    // built); the file is still selected in Files.
+    const siteFile = /\.(html?|css|js|mjs|svg)$/i.test(String(activity.file ?? ""));
+    if (previewUrl && siteFile && (nextKind === "files" || nextKind === "diff")) {
+      setFilesFocus({ path: activity.file, fileName: activity.file, artifactId: activity.artifactId, user: false });
+      if (currentKind === "preview") return;
+      nextKind = "preview";
+    }
     const native = activity.previewUrl
       ? browserState.tabs.find((t) => urlsMatch(t.url, activity.previewUrl!))
       : browserState.activeId
@@ -311,7 +320,7 @@ export function AgentWorkspace({
       openTabIds: merged.openTabIds,
       previewUrl: next.url ?? layout.previewUrl,
     });
-  }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId, previewPreparing]);
+  }, [derived.activity, follow, activeId, browserState.tabs, browserState.activeId, previewPreparing, previewUrl]);
 
   useEffect(() => {
     const open = (e: Event) => {
@@ -875,6 +884,7 @@ function WorkbenchBody({
         workspaceStatus={surface.status}
         writtenPaths={surface.files.map((f) => f.path)}
         listDisk={listDisk}
+        sessionId={String([...events].reverse().find((e) => e.type === "run.session")?.data?.sessionId ?? "") || null}
         environment={environment}
         focus={filesFocus}
         activePath={derived.activity?.file}

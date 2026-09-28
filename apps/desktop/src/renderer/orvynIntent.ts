@@ -75,12 +75,22 @@ export function needsWebResearch(prompt: string): boolean {
   return CURRENT_INFO.test(text);
 }
 
-/** Intent-first classification for every command. */
-export function classifyIntent(prompt: string, mode: CommandMode): CommandIntent {
+/** A question about the work in front of the user: its files, styles, preview, pages. */
+const ABOUT_THE_PROJECT = /\b(css|styles?(?:heet)?|script\.js|index\.html|[\w-]+\.(?:html?|css|js|ts|tsx|json|py)|preview|the (?:site|website|page|homepage|app|project|code|files?|folder|build|server|header|footer|hero|nav(?:bar)?|form|layout|section|button|images?|logo)|(?:my|our|this) (?:site|website|page|app|project|code)|where (?:is|are|did)|did you (?:create|write|make|add|build|save|change|update))\b/i;
+
+/**
+ * Intent-first classification for every command. `ctx.followsRun`: this chat
+ * already has a run with a workspace, so a question about the project goes to
+ * ORION with its tools (it can look at the files) instead of plain chat,
+ * which cannot see them and would guess.
+ */
+export function classifyIntent(prompt: string, mode: CommandMode, ctx: { followsRun?: boolean } = {}): CommandIntent {
   const trimmed = prompt.trim();
 
   // Absolute guard first: pure greetings/tiny-talk are chat, always.
   if (GREETING_ONLY.test(trimmed)) return "chat";
+
+  if (ctx.followsRun && mode !== "research" && ABOUT_THE_PROJECT.test(trimmed)) return "code";
 
   // Polite action requests still need tools, even when phrased as a question.
   // "Can you log in to my server?" is work, not a capability question.

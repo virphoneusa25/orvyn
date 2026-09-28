@@ -94,6 +94,11 @@ export function rememberSiteBinary(runId: string, relPath: string, bytes: Buffer
   rememberedBinary.set(runId, bag);
 }
 
+/** The page as remembered (not composed), for finding the files it links. */
+export function composeSiteDocumentSource(runId: string, pageKey: string): string | null {
+  return remembered.get(runId)?.get(pageKey) ?? null;
+}
+
 /** A site file already remembered for this run (ORION wrote or read it). */
 export function hasSiteFile(runId: string, relPath: string): boolean {
   return remembered.get(runId)?.has(relPath.replace(/\\/g, "/").replace(/^\/+/, "")) ?? false;

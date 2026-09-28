@@ -584,6 +584,7 @@ v1Router.post("/chat/completions", async (req, res) => {
         composerMode: chip,
         clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
         ...projectChoice(req.body),
+        filesOnClient: filesOnClient(tc, session, req.body),
       });
       if (preflight.status === "mismatch") {
         return res.status(409).json({
@@ -652,6 +653,27 @@ function projectChoice(body: { switchProject?: unknown; newProject?: unknown; fo
   };
 }
 
+/**
+ * The project's files live on the user's computer: the client names a folder
+ * on its own machine, or this conversation's last run executed on the Local
+ * Worker. The control plane cannot see those files, so its empty copy of the
+ * workspace is expected and must not stop a follow-up.
+ */
+function filesOnClient(t: { runStore: { get(id: string): { events: { type: string; data: any }[] } | undefined } }, session: { runIds?: string[] } | undefined, body: { projectRoot?: unknown; remoteProjectRoot?: unknown }): boolean {
+  const root = typeof body.projectRoot === "string" ? body.projectRoot.trim() : "";
+  const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
+  if (root && (looksLikeForeignAbsolutePath(root) || (cloudHost && /^[A-Za-z]:[\\/]/.test(root)))) return true;
+  for (const id of [...(session?.runIds ?? [])].reverse()) {
+    const run = t.runStore.get(id);
+    if (!run) continue;
+    const exec = [...run.events].reverse().find((e) => e.type === "run.execution");
+    if (!exec) continue;
+    const onWorker = "remoteProjectRoot" in (exec.data ?? {}) && ["local_host", "local_sandbox"].includes(String(exec.data?.executionTargetActual ?? ""));
+    return onWorker;
+  }
+  return false;
+}
+
 function workspaceRunIdentity(sessions: WorkSessionStore, preflight: WorkspaceResolved): { created: boolean; restored: boolean; fresh: boolean; knownFiles: string[] } {
   return {
     created: preflight.created,
@@ -690,6 +712,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     composerMode,
     clientRoot,
     ...projectChoice(req.body),
+    filesOnClient: filesOnClient(t, session, req.body),
   });
   if (preflight.status === "mismatch") {
     return res.status(409).json({
@@ -1199,6 +1222,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : "agent",
     clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
     ...projectChoice(req.body),
+    filesOnClient: filesOnClient(t, missionSession, req.body),
   });
   if (preflight.status === "mismatch") {
     return res.status(409).json({
@@ -1360,7 +1384,11 @@ v1Router.get("/files", async (req, res) => {
     const root = requested && looksLikeForeignAbsolutePath(requested)
       ? t.artifactService.virtualRoot()
       : requested;
-    res.json(await t.artifactService.filesTree(root));
+    // One conversation's view: Generated lists what its runs made, not every
+    // image this account ever generated.
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId : "";
+    const runIds = sessionId ? t.sessions.get(sessionId)?.runIds : undefined;
+    res.json(await t.artifactService.filesTree(root, runIds ? { runIds: new Set(runIds) } : {}));
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

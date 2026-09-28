@@ -933,11 +933,19 @@ export function customerModelName(id: unknown): string {
     "gpt-5.6-luna": "GPT",
     "gpt-5.6-sol": "GPT",
     "minimax-m2.5": "MiniMax",
+    "glm-5.3": "GLM 5.3",
+    "glm-5.3-flash": "GLM 5.3 Flash",
+    "kimi-k2.7-code": "Kimi Code",
+    "kimi-k3": "Kimi K3",
+    "deepseek-v4-pro": "DeepSeek Pro",
+    "qwen3.5-397b-a17b": "Qwen 3.5",
+    "qwen3-30b-a3b-instruct-2507": "Qwen 3 Fast",
+    "nemotron-3_5-lightning": "Nemotron Lightning",
   };
   const key = tail.toLowerCase();
   if (known[key]) return known[key];
   const head = raw.split(":")[0] ?? "";
-  if (/^(fw|ci|openrouter|mistral|gemini|openai|anthropic)$/i.test(head) || /accounts\/|fireworks|openrouter/i.test(raw)) {
+  if (/^(fw|ci|openrouter|mistral|gemini|openai|anthropic|nebius)$/i.test(head) || /accounts\/|fireworks|openrouter/i.test(raw)) {
     return tail.replace(/[-_.]+/g, " ").replace(/\b[a-z]/g, (c) => c.toUpperCase());
   }
   return raw.length > 32 ? tail : raw;

@@ -173,6 +173,24 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
   assert.equal(after?.projectId, created.projectId);
   assert.equal(after?.projectRoot, created.projectRoot);
   assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1);
+
+  // The same follow-up for a project whose files live on the user's computer
+  // (Local Worker): the server's empty copy is expected, so the run continues
+  // in the same workspace instead of stopping.
+  const onClient = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.sessions.get(created.sessionId)!,
+    instruction: "Add an animated hero background.",
+    clientRoot: "C:\\Users\\someone\\ORVYN\\site",
+    cwd,
+    filesOnClient: true,
+  });
+  assert.equal(onClient.status, "resolved");
+  if (onClient.status !== "resolved") return;
+  assert.equal(onClient.workspaceId, created.workspaceId);
+  assert.equal(onClient.restored, true);
+  assert.equal(readdirSync(join(dir, "tenants", "t1", "workspaces")).length, 1, "no second workspace");
   assert.equal(readdirSync(wrong).length, 0);
   assert.equal(existsSync(join(created.projectRoot, "index.html")), false);
 });

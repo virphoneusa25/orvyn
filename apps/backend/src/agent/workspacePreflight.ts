@@ -62,6 +62,12 @@ export interface WorkspacePreflightInput {
   /** Start a separate project from this chat. Does not reuse session.workspaceId. */
   forkProject?: boolean;
   cwd?: string;
+  /**
+   * The project's files live on the user's computer (a desktop folder run by
+   * the Local Worker). This server cannot see them, so an empty server-side
+   * copy is expected, never a mismatch.
+   */
+  filesOnClient?: boolean;
 }
 
 /** A file-producing task. Informational chat does not allocate a workspace. */
@@ -319,6 +325,15 @@ function restoreOwnedWorkspace(
     if (!chosen && fileCount > 0) chosen = { root, intact: false, fileCount };
   }
 
+  if (!chosen && known.length > 0 && input.filesOnClient) {
+    // The files are on the user's computer: keep this workspace identity and
+    // let the Local Worker work on them there.
+    mkdirSync(managed, { recursive: true });
+    const root = existingDirectory(stored) ?? realpathSync(managed);
+    workspaceLog("project.workspace.restore", { projectId: record.projectId, workspaceId: record.workspaceId, conversationId: session.sessionId, onClient: true });
+    return finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: root }, { created: false, restored: true });
+  }
+
   if (!chosen && known.length > 0) {
     workspaceLog("project.workspace.recover", {
       projectId: record.projectId,
@@ -336,7 +351,7 @@ function restoreOwnedWorkspace(
 
   let root = chosen?.root ?? existingDirectory(stored) ?? "";
   if (!root) {
-    if (known.length > 0) return mismatch(session, record.projectId, record.workspaceId, stored);
+    if (known.length > 0 && !input.filesOnClient) return mismatch(session, record.projectId, record.workspaceId, stored);
     mkdirSync(managed, { recursive: true });
     root = realpathSync(managed);
     input.sessions.relocateWorkspace(record.workspaceId, root);
@@ -376,7 +391,7 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
   const record = session.workspaceId ? input.sessions.getWorkspace(session.workspaceId) : undefined;
   const leaving = explicitProjectChange(input);
 
-  if (session.workspaceId && !record && !leaving) {
+  if (session.workspaceId && !record && !leaving && !input.filesOnClient) {
     return mismatch(session, session.projectId ?? "", session.workspaceId, session.projectRoot ?? "");
   }
 

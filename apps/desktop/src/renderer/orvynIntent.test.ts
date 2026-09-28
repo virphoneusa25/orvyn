@@ -108,3 +108,12 @@ test("auto: questions go to chat (which researches on its own); research assignm
   assert.equal(classifyIntent("Create hello.txt", "auto"), "code");
   assert.equal(classifyIntent("Build a landing page with the newest iPhone prices", "auto"), "code", "build work stays an agent run (it researches inside the run)");
 });
+
+test("a question about the project in a chat that already built it goes to ORION (it can look), not plain chat", () => {
+  for (const q of ["Where is the CSS to the preveiw?", "Did you create styles.css?", "Why is the hero section blank?", "What's in index.html?"]) {
+    assert.equal(classifyIntent(q, "auto", { followsRun: true }), "code", q);
+  }
+  assert.equal(classifyIntent("Where is the CSS to the preveiw?", "auto"), "chat", "without a project it stays chat");
+  assert.equal(classifyIntent("What is the capital of France?", "auto", { followsRun: true }), "chat");
+  assert.equal(classifyIntent("hi", "auto", { followsRun: true }), "chat");
+});

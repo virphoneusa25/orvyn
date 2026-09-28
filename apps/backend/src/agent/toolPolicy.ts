@@ -61,10 +61,18 @@ export function requiredArgumentNames(name: string, schema?: ToolParameterSchema
 /** Static file servers a model reaches for to "preview" a plain site. Framework dev servers (vite, next, npm run dev) are not here. */
 const STATIC_SERVER = /\bpython3?\s+-m\s+(http\.server|SimpleHTTPServer)\b|\bhttp\.server\b|which python|\bnpx\s+(-y\s+)?(serve|http-server|live-server|lite-server)\b|(^|[\s;&|])(http-server|live-server|lite-server)\b|(^|[\s;&|])serve\s+(-[lp]|\.|--)|\bphp\s+-S\b|\bbusybox\s+httpd\b/i;
 
-export function shellServerRefusal(command: string, frontend: boolean): string | null {
-  if (!frontend) return null;
-  if (!STATIC_SERVER.test(command)) return null;
-  return "Do not start a local web server for this site. ORVYN publishes a live preview from the files you write (it updates as they change) and opens it for the user; a localhost server dies with the process and cannot be shared. Call write_file for index.html, its stylesheet and script. Do not replace site files that were already written.";
+/** A hand-written Node server for a plain static site (ORVYN's preview already serves it). */
+const NODE_STATIC_SERVER = /\bnode\s+(\S*\/)?\.orvyn\/|\bnode\s+(\S*\/)?(serve|static-?server|preview-?server|preview)\.m?js\b|\bnode\s+-e\s+.*createServer.*\.listen\(/i;
+
+/**
+ * `staticSite`: the project is a plain site (an index.html and no
+ * package.json), so even a hand-written Node server only duplicates the
+ * preview ORVYN already serves.
+ */
+export function shellServerRefusal(command: string, frontend: boolean, staticSite = false): string | null {
+  if (!frontend && !staticSite) return null;
+  if (!STATIC_SERVER.test(command) && !(staticSite && NODE_STATIC_SERVER.test(command))) return null;
+  return "Do not start a web server for this site. ORVYN already publishes the live preview from the project files (it updates as they change) and shows it in the Preview tab; a localhost server cannot be opened by the user and dies with the process. To change the site, call write_file or edit_file on its files. To show it, tell the user it is in the Preview tab. Do not probe ports or processes.";
 }
 
 export function validateToolArguments(

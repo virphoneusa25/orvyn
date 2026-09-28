@@ -236,7 +236,7 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
   }
   if (!prompt) return { kind: "error", error: "Empty command" };
 
-  switch (classifyIntent(cmd.prompt, cmd.mode)) {
+  switch (classifyIntent(cmd.prompt, cmd.mode, { followsRun: Boolean(binding?.previousRunId) })) {
     case "chat":
       return runChat(cmd);
     case "research":

@@ -621,9 +621,10 @@ export class ArtifactService {
     };
   }
 
-  async filesTree(projectRoot?: string | null): Promise<{ locations: FilesLocation[] }> {
+  async filesTree(projectRoot?: string | null, scope: { runIds?: Set<string> } = {}): Promise<{ locations: FilesLocation[] }> {
     await this.ensureRoots();
-    const all = (await Promise.all(this.listArtifacts().map(async (a) => {
+    const inScope = (a: ArtifactRecord) => !scope.runIds || (Boolean(a.runId) && scope.runIds.has(String(a.runId))) || (a.kind === "upload" && !a.runId);
+    const all = (await Promise.all(this.listArtifacts().filter(inScope).map(async (a) => {
       try { await this.read(a.artifactId); return a; } catch { return null; }
     }))).filter((a): a is ArtifactRecord => a !== null);
     const generated = all.filter((a) => a.kind === "generated");

@@ -180,8 +180,8 @@ async function main() {
       [2, "assistant", "2 + 2 = 4.", "chat"],
       [3, "user", M2, "run"],
       [4, "assistant", "Created hello.txt.", "run"],
-      [5, "user", Q3, "chat"],
-      [6, "assistant", "I created hello.txt with the text Hello.", "chat"],
+      [5, "user", Q3, "run"], // a question about what was built goes to ORION with its tools
+      [6, "assistant", "I created hello.txt with the text Hello.", "run"],
     ];
     ok(JSON.stringify(shape) === JSON.stringify(want), "the backend stored all six messages in order (sequence 1-6, roles, run links)", JSON.stringify(shape));
     ok(msgs.every((m) => /^msg_/.test(m.messageId) && m.sessionId === sessionId && m.createdAt > 0) && new Set(msgs.map((m) => m.messageId)).size === 6, "each has its own messageId, the sessionId and a createdAt");

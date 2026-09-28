@@ -227,6 +227,13 @@ test("a website cannot be served with python", () => {
   for (const cmd of ["npm run dev", "npx vite", "npm install", "node server.js"]) {
     assert.equal(shellServerRefusal(cmd, true), null, cmd);
   }
+  // A plain static site (index.html, no package.json): a hand-written Node
+  // server only duplicates ORVYN's preview, even on a follow-up turn.
+  for (const cmd of ['cd "$(pwd)" && nohup node .orvyn/serve.js > /tmp/x.log 2>&1 &', "node serve.js", "node -e \"require('http').createServer(h).listen(8080)\""]) {
+    assert.ok(shellServerRefusal(cmd, false, true), cmd);
+  }
+  assert.equal(shellServerRefusal("node .orvyn/serve.js", false, false), null, "a Node project may run its own server");
+  assert.equal(shellServerRefusal("node server.js", false, true), null, "server.js may be the app itself");
 });
 
 test("a local dev server is not a remote server task, and gets the service tools", () => {
