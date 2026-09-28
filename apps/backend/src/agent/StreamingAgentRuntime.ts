@@ -16,6 +16,8 @@ import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifact
 import { evaluateCompletionGates } from "./completionGates";
 import { collectRunEvidence, introductionFor, planSteps, progressFor, type RunEvidence } from "./conversationCoordinator";
 import { assessRenderedPage } from "./browserVerification";
+import { checkPreview } from "./previewCheck";
+import { runOutcome } from "./runOutcome";
 import { canEnterPhase, type RunPhase } from "./agentRunState";
 import { routeSkills } from "../skills/SkillRouter";
 // apps/backend/src/agent/StreamingAgentRuntime.ts
@@ -52,6 +54,8 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
+import { buildCapabilityManifest, manifestPrompt, resolveCapabilityNeed, type CapabilityManifest } from "./capabilityManifest";
+import { siteAssetRefs, noteUnreadable, BINARY_ASSET } from "./sitePreview";
 import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, missingLinkedAssets, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
@@ -209,6 +213,10 @@ interface RunState {
   /** Project files this conversation's workspace already has (from earlier runs). */
   knownProjectFiles?: string[];
   completingAssets?: boolean;
+  /** Latest preview check; an older check finishing late never overrides a newer one. */
+  previewCheckSeq?: number;
+  /** Repair rounds spent on a failing preview check. */
+  previewRepairs?: number;
   previousRunIds?: string[];
   /** Workspace path → artifact id for the download card of a file this run wrote. */
   writtenDownloads?: Map<string, string>;
@@ -669,9 +677,9 @@ export class StreamingAgentRuntime {
   }
 
   /** Reads one project file through the run's tools (on the user's computer for Local runs). */
-  private async readSiteFile(runId: string, state: RunState, path: string): Promise<string | null> {
+  private async readSiteFile(runId: string, state: RunState, path: string, encoding?: "base64"): Promise<string | null> {
     try {
-      const result = await this.tools.execute("read_file", { path }, "coder", {
+      const result = await this.tools.execute("read_file", { path, ...(encoding ? { encoding } : {}) }, "coder", {
         signal: state.controller.signal,
         runId,
         workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
@@ -684,39 +692,47 @@ export class StreamingAgentRuntime {
   }
 
   /**
-   * The preview has a page whose stylesheet or script this run has not
-   * touched (a follow-up that only read or edited index.html): read those
-   * files from the project so the preview is the styled site, not bare HTML.
+   * The preview has a page whose stylesheet, script, image or font this run
+   * has not touched (a follow-up that only edited index.html, a hero image
+   * referenced from the CSS): read those files from the project — wherever it
+   * lives, the Local Worker included — so the preview is the real styled site.
    */
   private async completeSiteAssets(runId: string): Promise<void> {
+    const added = await this.fetchSiteAssets(runId);
+    if (added.length) this.republishPreview(runId, added);
+  }
+
+  /** Reads the page's missing linked files from the project into the preview. Returns what was added. */
+  private async fetchSiteAssets(runId: string): Promise<string[]> {
     const state = this.runs.get(runId);
-    if (!state || state.completingAssets) return;
-    const files = rememberedSiteFiles(runId);
-    const pageKey = files.find((f) => /(^|\/)index\.html$/i.test(f));
-    if (!pageKey) return;
-    const html = composeSiteDocumentSource(runId, pageKey);
-    if (!html) return;
-    const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
-    const refs = [...html.matchAll(/<(?:link|script|img)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
-      .map((m) => m[1]!.split(/[?#]/)[0]!)
-      .filter((ref) => !/^(?:[a-z]+:)?\/\//i.test(ref) && !ref.startsWith("data:") && /\.(css|js|mjs|svg)$/i.test(ref) && !ref.includes(".."))
-      .map((ref) => (ref.startsWith("/") ? ref.slice(1) : `${pageDir}${ref.replace(/^\.\//, "")}`));
-    const missing = [...new Set(refs)].filter((ref) => !hasSiteFile(runId, ref)).slice(0, 20);
-    if (!missing.length) return;
+    if (!state || state.completingAssets) return [];
     state.completingAssets = true;
+    const added: string[] = [];
     try {
-      const added: string[] = [];
-      for (const ref of missing) {
-        const body = await this.readSiteFile(runId, state, ref);
-        if (body && !hasSiteFile(runId, ref)) {
-          rememberSiteFile(runId, ref, body);
-          added.push(ref);
+      // Two passes: the page's own links, then url()s inside stylesheets just fetched.
+      for (let pass = 0; pass < 2; pass++) {
+        const missing = siteAssetRefs(runId).filter((ref) => !hasSiteFile(runId, ref)).slice(0, 30);
+        if (!missing.length) break;
+        let got = 0;
+        for (const ref of missing) {
+          if (BINARY_ASSET.test(ref)) {
+            const b64 = await this.readSiteFile(runId, state, ref, "base64");
+            if (b64 && /^[A-Za-z0-9+/=\s]+$/.test(b64)) {
+              if (!hasSiteFile(runId, ref)) { rememberSiteBinary(runId, ref, Buffer.from(b64, "base64")); added.push(ref); got++; }
+            } else noteUnreadable(runId, ref);
+          } else {
+            const body = await this.readSiteFile(runId, state, ref);
+            if (body) {
+              if (!hasSiteFile(runId, ref)) { rememberSiteFile(runId, ref, body); added.push(ref); got++; }
+            } else noteUnreadable(runId, ref);
+          }
         }
+        if (!got) break;
       }
-      if (added.length) this.republishPreview(runId, added);
     } finally {
       state.completingAssets = false;
     }
+    return added;
   }
 
   /** Show an existing homepage before the model makes its first edit. */
@@ -730,7 +746,9 @@ export class StreamingAgentRuntime {
     const knownSite = inherited.some((f) => /(^|\/)index\.html$/i.test(f)) || (state.knownProjectFiles ?? []).some((f) => /^index\.html$/i.test(f));
     if (!state.intent.requiresFrontend && !knownSite) return null;
     let early: ReturnType<typeof publishRememberedSite> = null;
-    if (inherited.some((f) => /(^|\/)index\.html$/i.test(f))) {
+    // Only when the inherited site is complete: never open it as bare HTML.
+    if (inherited.some((f) => /(^|\/)index\.html$/i.test(f))) await this.completeSiteAssets(runId);
+    if (inherited.some((f) => /(^|\/)index\.html$/i.test(f)) && !missingLinkedAssets(runId).some((ref) => !this.sourceHasFile(runId, ref))) {
       early = this.publishSite(runId);
       if (early) this.store.emit(runId, "preview.available", { runId, previewId: early.id, url: early.url, revision: early.revision, changedFiles: inherited, label: "Live preview" });
     }
@@ -738,13 +756,13 @@ export class StreamingAgentRuntime {
     const html = await read("index.html");
     if (!html) return early?.url ?? null;
     rememberSiteFile(runId, "index.html", html);
-    const refs = [...html.matchAll(/<(?:link|script|img)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
-      .map((match) => match[1]!.split(/[?#]/)[0]!.replace(/^\/?(?:\.\/)?/, ""))
-      .filter((ref) => /\.(css|js|svg)$/i.test(ref) && !ref.includes(".."));
-    for (const ref of [...new Set(refs)].slice(0, 20)) {
+    // The project's current stylesheets, scripts, images and fonts — the
+    // preview opens as the real styled site, never bare HTML.
+    for (const ref of siteAssetRefs(runId).filter((r) => !BINARY_ASSET.test(r))) {
       const body = await read(ref);
       if (body) rememberSiteFile(runId, ref, body);
     }
+    const refs = [...siteAssetRefs(runId), ...(await this.fetchSiteAssets(runId))];
     const published = this.publishSite(runId, early ? ["index.html", ...refs] : []);
     if (!published) return early?.url ?? null;
     if (early) this.store.emit(runId, "preview.updated", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs] });
@@ -879,6 +897,21 @@ export class StreamingAgentRuntime {
     return next;
   }
 
+  /** The capability manifest from the tools this run really has (remote tools included). */
+  private capabilityManifest(runId: string, state: RunState): CapabilityManifest {
+    return buildCapabilityManifest(this.tools.list(), (n) => this.tools.getPermission(n), {
+      projectRoot: state.execution?.remoteProjectRoot || state.projectRoot,
+      location: state.execution?.targetActual ?? state.execution?.location ?? "local",
+    });
+  }
+
+  /** Files this run changed, from its own file.edit events (not narration). */
+  private filesChangedCount(runId: string): number {
+    const paths = new Set<string>();
+    for (const e of this.store.get(runId)?.events ?? []) if (e.type === "file.edit" && e.data?.path) paths.add(String(e.data.path));
+    return paths.size;
+  }
+
   private isKnownTool(name: string): boolean {
     return this.tools.list().some((t) => t.name === name);
   }
@@ -893,11 +926,22 @@ export class StreamingAgentRuntime {
       return `ORVYN already handled a tool to ${query} in this run. Do not say the tool is unavailable; finish with the tools you have.`;
     }
     state.capabilityQueries.add(query);
-    // Work ORION's own tools already do (edit the site, write files, run a
-    // command, check the page) is never a missing tool: no card, carry on.
-    const builtIn = builtInToolsFor(query, (n) => this.isKnownTool(n));
-    if (builtIn.length) {
-      return `You already have the tools for this: ${builtIn.join(", ")}. Do not look for or install another tool. Do the task with them now.`;
+    // Resolve against the real registry: work ORION's core tools do (edit the
+    // site, write files, run a command, check the page) is never a missing
+    // tool; a permission switched off is said as such; an installed MCP tool
+    // is used. Only a genuinely external need reaches the Marketplace card.
+    const manifest = this.capabilityManifest(runId, state);
+    const need = resolveCapabilityNeed(query, manifest, (n) => this.isKnownTool(n), { filesChanged: this.filesChangedCount(runId) });
+    this.store.emit(runId, "capability.resolved", { query, kind: need.kind, tools: "tools" in need ? need.tools : [] });
+    if (need.kind === "native") {
+      return `You already have ORVYN's core tools for this: ${need.tools.join(", ")}. They are not MCP tools and need no install. Do not look for another tool. Do the task with them now.`;
+    }
+    if (need.kind === "permission") {
+      this.store.emit(runId, "permission.required", { scope: "workspace.write", message: need.message, query });
+      return `${need.message} Tell the user exactly that in one sentence (not that a tool is missing), then stop.`;
+    }
+    if (need.kind === "installed") {
+      return `Installed MCP tools already cover this: ${need.tools.join(", ")}. Use them now.`;
     }
     type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean };
     let servers: Candidate[] = [];
@@ -1030,22 +1074,49 @@ export class StreamingAgentRuntime {
     return this.runs.get(runId)?.execution?.location !== "OVH_WORKER";
   }
 
-  private async verifyPublishedPreview(runId: string, url: string): Promise<void> {
+  private async verifyPublishedPreview(runId: string, url: string, announce = false): Promise<boolean> {
     if (/localhost|127\.0\.0\.1/i.test(url) && !this.isLocalEngine(runId)) {
-      this.store.emit(runId, "browser.verification.failed", { url, issues: ["A cloud preview cannot be a localhost address."] });
-      return;
+      this.store.emit(runId, "browser.verification.failed", { url, kind: "preview", issues: ["A cloud preview cannot be a localhost address."] });
+      this.store.emit(runId, "preview.failed", { url, issues: ["A cloud preview cannot be a localhost address."] });
+      return false;
     }
+    const state = this.runs.get(runId);
+    const seq = state ? (state.previewCheckSeq = (state.previewCheckSeq ?? 0) + 1) : 0;
     try {
+      // The page and every stylesheet, script, image and font it links —
+      // loaded, with the right type — and, with a browser, real computed styles.
+      const check = await checkPreview(url, { browser: true });
       const response = await fetch(url);
       const html = await response.text();
-      const result = assessRenderedPage(url, response.status, html, { localEngine: this.isLocalEngine(runId) });
-      this.store.emit(runId, result.passed ? "browser.verification.passed" : "browser.verification.failed", { ...result });
-      if (!result.passed) {
-        this.speak(runId, `The preview is up, but the page is not ready yet. ${result.issues[0] ?? "I'm checking it again."}`);
+      const content = assessRenderedPage(url, response.status, html, { localEngine: this.isLocalEngine(runId) });
+      // A newer check started meanwhile (the site changed again): it decides.
+      if (state && seq !== state.previewCheckSeq) return check.passed && content.passed;
+      const issues = [...check.issues, ...content.issues.filter((i) => !check.issues.includes(i))];
+      const passed = check.passed && content.passed;
+      const detail = { ...content, kind: "preview", passed, issues, assets: check.assets.map(({ path, kind, status, contentType, ok, required }) => ({ path, kind, status, contentType, ok, required })), stylesheetsLoaded: check.stylesheetsLoaded, styled: check.styled, browser: check.browser };
+      this.store.emit(runId, passed ? "browser.verification.passed" : "browser.verification.failed", detail);
+      this.store.emit(runId, passed ? "preview.verified" : "preview.failed", { url, issues, assets: detail.assets, browser: check.browser });
+      if (!passed && announce) {
+        this.speak(runId, `The preview is up, but it is not right yet: ${issues.slice(0, 2).join("; ")}. I'm fixing that.`);
       }
+      return passed;
     } catch {
-      this.store.emit(runId, "browser.verification.failed", { url, issues: ["The preview URL did not load."] });
+      this.store.emit(runId, "browser.verification.failed", { url, kind: "preview", issues: ["The preview URL did not load."] });
+      this.store.emit(runId, "preview.failed", { url, issues: ["The preview URL did not load."] });
+      return false;
     }
+  }
+
+  /** The latest preview, checked now (before the run may call itself done). Null when this run has no preview. */
+  private async checkLatestPreview(runId: string): Promise<{ passed: boolean; issues: string[] } | null> {
+    const events = this.store.get(runId)?.events ?? [];
+    const latest = [...events].reverse().find((e) => e.type === "preview.available" || e.type === "preview.updated");
+    const url = String(latest?.data?.url ?? "");
+    if (!url) return null;
+    await this.completeSiteAssets(runId);
+    const passed = await this.verifyPublishedPreview(runId, url, true);
+    const last = [...(this.store.get(runId)?.events ?? [])].reverse().find((e) => e.type === "preview.verified" || e.type === "preview.failed");
+    return { passed, issues: (last?.data?.issues as string[] | undefined) ?? [] };
   }
 
   // Maps a tool call onto the richer domain events the UI renders as cards,
@@ -1571,6 +1642,14 @@ export class StreamingAgentRuntime {
         if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
           const remote = await this.awaitRemoteReady(runId);
           if (remote) this.mountRemoteTools(runId);
+        }
+        // The facts the model plans against: which core tools this run has
+        // (after remote tools were mounted), what permissions allow, which MCP
+        // tools are installed. Never guessed from tool names.
+        if (state) {
+          const manifest = this.capabilityManifest(runId, state);
+          messages[0].content += `\n\n${manifestPrompt(manifest)}`;
+          this.store.emit(runId, "capability.manifest", manifest as unknown as Record<string, unknown>);
         }
         // A follow-up publishes a new preview under a new run id. Rehydrate
         // verified project images from durable artifact storage so existing
@@ -2428,6 +2507,24 @@ export class StreamingAgentRuntime {
       verify: async (_turn, reply) => {
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
+        // The site changed and has a live preview: it must load as the styled
+        // site (page, stylesheets, scripts, images → 200 with the right type)
+        // before anything is called verified. A broken asset goes back to the
+        // agent with the exact file; after two repair attempts the run ends
+        // as Partial — never as a green Preview/Verify.
+        const siteChanged = (this.store.get(runId)?.events ?? []).some((e) => (e.type === "file.edit" || e.type === "file.created") && /\.(html?|css|m?js|svg)$/i.test(String(e.data?.path ?? "")));
+        if (siteChanged) {
+          const pv = await this.checkLatestPreview(runId);
+          if (pv && !pv.passed && (state.previewRepairs ?? 0) < 2) {
+            state.previewRepairs = (state.previewRepairs ?? 0) + 1;
+            this.store.emit(runId, "completion.blocked", { gate: "preview", reasons: pv.issues, retries: state.previewRepairs });
+            this.enterPhase(runId, "repairing");
+            this.store.setStatus(runId, "running");
+            messages.push({ role: "assistant", content: reply.content || "" });
+            messages.push({ role: "user", content: `PREVIEW CHECK FAILED — the live preview does not load as the styled site:\n- ${pv.issues.slice(0, 8).join("\n- ")}\nFix the cause in the project files (a wrong path or file name in a <link>/<script>/<img>/url(), a file that was never written, a typo). Use your file tools; do not start a server. Then finish.` });
+            return { kind: "retry", reason: `preview check: ${pv.issues[0] ?? "failed"}` };
+          }
+        }
         const verification = await this.runVerification(runId, state, provider);
         // Only findings about the work go back to the agent. If the verifier
         // itself failed (no verdict), there is nothing for the agent to fix.
@@ -2510,7 +2607,13 @@ export class StreamingAgentRuntime {
           this.emitNarration(runId, content, streamedText && !state.heldFinal);
         }
         if (state.intent.requiresFrontend) this.publishSitePreview(runId, []);
-        this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length });
+        const outcome = runOutcome(this.store.get(runId)?.events ?? []);
+        this.store.emit(runId, "run.outcome", { ...outcome });
+        // The answer never outruns the evidence: say plainly what is not done.
+        // (A tool waiting on the install card was already asked for in ORION's own answer.)
+        const unsaid = outcome.reasons.filter((r) => !r.startsWith("Needs a tool"));
+        if (unsaid.length) this.speak(runId, `Not fully done yet — ${unsaid.join(" ")}`);
+        this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length, outcome: outcome.outcome });
         this.store.setStatus(runId, "completed");
       },
 
@@ -3073,7 +3176,10 @@ export class StreamingAgentRuntime {
   private async runVerification(runId: string, state: RunState, provider: AIModelProvider) {
     // The site is shown by now even if a linked file never got written (the
     // verifier then reports the missing file instead of an empty preview).
-    if (!(this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available")) this.publishSitePreview(runId, [], { force: true });
+    if (!(this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available")) {
+      await this.completeSiteAssets(runId);
+      this.publishSitePreview(runId, [], { force: true });
+    }
     const events = this.store.get(runId)?.events ?? [];
     const evidence = collectVerificationEvidence(state.instruction, events, { website: Boolean(state.website) || undefined });
     if (!isImplementationTask(evidence)) return null;

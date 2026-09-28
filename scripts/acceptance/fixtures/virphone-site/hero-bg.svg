@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b1b38"/>
+      <stop offset="55%" stop-color="#141428"/>
+      <stop offset="100%" stop-color="#0f0f1a"/>
+    </linearGradient>
+    <radialGradient id="glowPink" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff2e63" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ff2e63" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowTeal" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#08d9d6" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#08d9d6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#ff2e63" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#08d9d6" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#sky)"/>
+
+  <circle cx="240" cy="180" r="420" fill="url(#glowPink)"/>
+  <circle cx="1380" cy="720" r="460" fill="url(#glowTeal)"/>
+
+  <g fill="url(#bar)">
+    <rect x="60"   y="640" width="26" height="180" rx="13"/>
+    <rect x="120"  y="560" width="26" height="260" rx="13"/>
+    <rect x="180"  y="690" width="26" height="130" rx="13"/>
+    <rect x="240"  y="500" width="26" height="320" rx="13"/>
+    <rect x="300"  y="620" width="26" height="200" rx="13"/>
+    <rect x="360"  y="430" width="26" height="390" rx="13"/>
+    <rect x="420"  y="600" width="26" height="220" rx="13"/>
+    <rect x="480"  y="520" width="26" height="300" rx="13"/>
+    <rect x="540"  y="660" width="26" height="160" rx="13"/>
+    <rect x="600"  y="470" width="26" height="350" rx="13"/>
+    <rect x="660"  y="610" width="26" height="210" rx="13"/>
+    <rect x="720"  y="540" width="26" height="280" rx="13"/>
+    <rect x="780"  y="680" width="26" height="140" rx="13"/>
+    <rect x="840"  y="490" width="26" height="330" rx="13"/>
+    <rect x="900"  y="630" width="26" height="190" rx="13"/>
+    <rect x="960"  y="450" width="26" height="370" rx="13"/>
+    <rect x="1020" y="590" width="26" height="230" rx="13"/>
+    <rect x="1080" y="520" width="26" height="300" rx="13"/>
+    <rect x="1140" y="670" width="26" height="150" rx="13"/>
+    <rect x="1200" y="480" width="26" height="340" rx="13"/>
+    <rect x="1260" y="620" width="26" height="200" rx="13"/>
+    <rect x="1320" y="560" width="26" height="260" rx="13"/>
+    <rect x="1380" y="700" width="26" height="120" rx="13"/>
+    <rect x="1440" y="510" width="26" height="310" rx="13"/>
+    <rect x="1500" y="650" width="26" height="170" rx="13"/>
+  </g>
+
+  <g stroke="#08d9d6" stroke-opacity="0.12" fill="none" stroke-width="2">
+    <path d="M0 300 C 200 220, 400 380, 600 300 S 1000 220, 1200 300 S 1500 380, 1600 300"/>
+    <path d="M0 360 C 200 280, 400 440, 600 360 S 1000 280, 1200 360 S 1500 440, 1600 360"/>
+  </g>
+</svg>

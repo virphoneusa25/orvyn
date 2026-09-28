@@ -22,6 +22,8 @@ export interface ChatActivity {
   /** Search: the result sites (for Sources). */
   found?: { url: string; title: string; snippet?: string }[];
   error?: string;
+  /** Handoff: the self-contained instruction the task run starts with. */
+  prompt?: string;
   /** Capability: why ORION needs it and the MCP servers that provide it. */
   reason?: string;
   servers?: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean }[];
@@ -45,6 +47,20 @@ export const CHAT_CAPABILITY_TOOL: ToolDefinition = {
   description: "Find an MCP tool that gives you a capability you do not have in this chat (email, GitHub, a database, a calendar, a browser, a better web search…). ORVYN shows the user a card to install it.",
   parameters: { type: "object", properties: { query: { type: "string", description: "What you need to do, e.g. 'search the web', 'send email'" } }, required: ["query"] },
 };
+
+/** Project work from the chat: ORVYN starts a task that has the core file, shell, git and browser tools. */
+export const CHAT_TASK_TOOL: ToolDefinition = {
+  name: "start_project_task",
+  description: "Do work in the user's project: edit, create or delete files, change the website, add an attached file, run commands, git, check the live preview. ORVYN starts a task with its core file, terminal, git and browser tools (no install needed). Write a complete instruction: resolve 'it', 'this' or '?' from the conversation.",
+  parameters: { type: "object", properties: { instruction: { type: "string", description: "The full task, e.g. 'Add an animated gradient background to the hero section of index.html'" } }, required: ["instruction"] },
+};
+
+/** What the chat can do, stated as fact (so project work is never mistaken for a missing MCP tool). */
+export const CHAT_MANIFEST = [
+  "CAPABILITIES (facts from ORVYN): the user's project has ORVYN core tools — read/create/edit/delete files, shell, git, live preview and browser checks. They are not MCP tools and never need installing.",
+  "In this chat you reach them with start_project_task. Any request to change, build, fix or check the project (including follow-ups like 'yes', 'do it', '?') → call start_project_task with a complete instruction, then tell the user in one short sentence that you're doing it.",
+  "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a database server, a calendar…). Never call it for project files, the website, the preview or the terminal.",
+].join("\n");
 
 export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   {

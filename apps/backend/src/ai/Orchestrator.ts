@@ -2,8 +2,9 @@ import { CONVERSATION_STYLE } from "../agent/conversationStyle";
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "../agent/capabilityGap";
+import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
-import { CHAT_CAPABILITY_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -211,6 +212,23 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
 }
 
 /** Tools every task run has (the chat itself has only web tools). */
+/**
+ * The instruction a handed-off task starts with: the model's own instruction,
+ * or — when it is vague ("this task") or the user only said "?"/"yes" — the
+ * user's last real request from the conversation.
+ */
+export function handoffPrompt(instruction: string, req: Pick<ChatTurnRequest, "userMessage" | "history">): string {
+  const substantive = (t: string) => t.replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean).length >= 4 && !/^(yes|yeah|ok|okay|sure|do it|go ahead|please|continue)\b/i.test(t.trim());
+  if (instruction && substantive(instruction) && !/^(this|the) task$/i.test(instruction.trim())) return instruction;
+  if (substantive(req.userMessage)) return req.userMessage;
+  const history = [...(req.history ?? [])].reverse();
+  for (const m of history) {
+    const text = typeof m.content === "string" ? m.content : Array.isArray(m.content) ? (m.content as any[]).map((p) => p?.text ?? "").join(" ") : "";
+    if (m.role === "user" && substantive(text)) return text;
+  }
+  return instruction || req.userMessage;
+}
+
 const TASK_TOOLS = new Set(["read_file", "edit_file", "write_file", "list_directory", "search_code", "terminal", "run_command", "run_tests", "browser_open", "browser_screenshot"]);
 
 /** "Use this logo" with an image attached: the user's image, not a new one. */
@@ -300,9 +318,9 @@ export class Orchestrator {
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
     const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
-    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
+    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, CHAT_TASK_TOOL, CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
     const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
-    if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}` });
+    if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${CHAT_MANIFEST}` });
     let toolCallsUsed = 0;
     let nudged = false;
     let capabilityNudged = false;
@@ -319,10 +337,11 @@ export class Orchestrator {
         requested.set(query, note);
         return note;
       }
-      // Work ORION's task tools do (edit the site, add the attached logo, run
-      // a command): no marketplace card — hand it to a real task run now.
-      if (builtInToolsFor(query, (n) => TASK_TOOLS.has(n)).length) {
-        const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query, startedAt: Date.now(), endedAt: Date.now() };
+      // Work ORVYN's core tools do (edit the site, add the attached logo, run
+      // a command) — anything that names no outside service — is never a
+      // Marketplace card: hand it to a real task run now.
+      if (!needsExternalTool(query) || builtInToolsFor(query, (n) => TASK_TOOLS.has(n)).length) {
+        const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query, prompt: handoffPrompt(query, req), startedAt: Date.now(), endedAt: Date.now() };
         yield { delta: "", activity: handoff, done: false };
         const note = `ORVYN is starting this as a task in the user's project right now, where ORION has file, terminal and browser tools. Do not ask for a tool or say one is missing. Tell the user in one short sentence that you are doing it now — then stop.`;
         requested.set(query, note);
@@ -428,11 +447,21 @@ export class Orchestrator {
           yield { delta: "", done: true };
           return;
         }
-        const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || isInstalledTool(n);
+        const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || n === "start_project_task" || isInstalledTool(n);
         const turnCalls = unwrapParallelCalls(calls, known);
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
           toolCallsUsed++;
+          if (call.name === "start_project_task") {
+            const instruction = String((call.arguments as { instruction?: string })?.instruction ?? "").trim();
+            if (!requested.has("task")) {
+              const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query: instruction || req.userMessage, prompt: handoffPrompt(instruction, req), startedAt: Date.now(), endedAt: Date.now() };
+              yield { delta: "", activity: handoff, done: false };
+              requested.set("task", "started");
+            }
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "ORVYN started this as a task in the user's project (core file, terminal, git and browser tools). Tell the user in one short sentence that you're doing it now — then stop." });
+            continue;
+          }
           if (call.name === "search_capabilities") {
             const query = String((call.arguments as { query?: string })?.query ?? "").trim() || "this task";
             const note = yield* requestCapability.call(this, query);

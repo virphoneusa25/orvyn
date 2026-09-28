@@ -15,7 +15,7 @@ import { ModelMenu, ReasoningMenu, AccessMenu, ExecutionTargetMenu, useComposerM
 import { ContextUsageMenu } from "./ContextUsageMenu";
 import type { ReasoningEffort, AccessMode, ExecutionTargetSetting } from "./ComposerControls";
 import { apiUrl, authHeaders } from "../connection";
-import { submitOrvynCommand, regenerateLastReply } from "../orvynCommand";
+import { chatAttachmentsForHandoff, submitOrvynCommand, regenerateLastReply } from "../orvynCommand";
 import { COMPOSER_HANDOFF_EVENT, takeComposerHandoff } from "../composerHandoff";
 import { MessageContent } from "./MessageContent";
 import { AgentActivityList, CapabilityCard, ChangesPill, RunFooter } from "./AgentActivityList";
@@ -373,7 +373,7 @@ export function WorkStream({
       void (async () => {
         try {
           const outcome = await submitOrvynCommand({
-            prompt: text, mode: "code", forceTask: true, source: "CHAT", projectRoot, previousRunId: run.runId, attachments: [],
+            prompt: text, mode: "code", forceTask: true, source: "CHAT", projectRoot, previousRunId: run.runId, attachments: chatAttachmentsForHandoff(),
             requestedModelId, reasoningEffort, permissionMode: accessMode, executionTarget,
           });
           if (outcome.kind === "error") throw new Error(outcome.error);
@@ -1006,10 +1006,14 @@ function missionCopy(instruction: string | undefined, fallback: string | undefin
 function StageChip({ name, state }: { name: string; state: StageState }) {
   const active = state === "active";
   const done = state === "done";
+  // A check that failed, or a run that ended short of its goal, says so.
+  const bad = state === "failed" || state === "partial";
+  const label = state === "partial" ? "Partial" : name;
   return (
     <span
       data-stage={name}
       data-state={state}
+      title={state === "failed" ? `${name} failed` : state === "partial" ? "Finished, but not every check passed" : undefined}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -1022,13 +1026,15 @@ function StageChip({ name, state }: { name: string; state: StageState }) {
           ? "linear-gradient(90deg, rgba(124,92,255,0.42), rgba(34,211,238,0.28))"
           : done
             ? "rgba(52,211,153,0.12)"
-            : "rgba(255,255,255,0.04)",
-        color: active ? "#f3fbff" : done ? "#6ee7b7" : "rgba(232,234,243,0.42)",
-        border: active ? "1px solid rgba(125,211,252,0.65)" : "1px solid rgba(255,255,255,0.04)",
+            : bad
+              ? "rgba(251,191,36,0.12)"
+              : "rgba(255,255,255,0.04)",
+        color: active ? "#f3fbff" : done ? "#6ee7b7" : bad ? "#fbbf24" : "rgba(232,234,243,0.42)",
+        border: active ? "1px solid rgba(125,211,252,0.65)" : bad ? "1px solid rgba(251,191,36,0.35)" : "1px solid rgba(255,255,255,0.04)",
       }}
     >
-      {done ? "✓" : null}
-      {name}
+      {done ? "✓" : bad ? "⚠" : null}
+      {label}
     </span>
   );
 }
@@ -1085,7 +1091,7 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
         </div>
         {/* Work that needs the project's tools: the chat hands it to a real task run. */}
         {(message.activity ?? []).filter((a) => a.kind === "handoff").map((a) => (
-          <HandoffRow key={a.id} id={a.id} prompt={question ?? ""} />
+          <HandoffRow key={a.id} id={a.id} prompt={a.prompt || question || ""} />
         ))}
         {/* ORION needs a tool it does not have: the install card, never "the tool isn't available". */}
         {(message.activity ?? []).filter((a) => a.kind === "capability").map((a) => (

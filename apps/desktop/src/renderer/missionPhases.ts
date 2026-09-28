@@ -38,7 +38,7 @@ export function phaseOfTool(tool: string, input: Record<string, any> | undefined
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 
 export type StageName = "Plan" | "Research" | "Build" | "Preview" | "Verify" | "Complete";
-export type StageState = "pending" | "active" | "done";
+export type StageState = "pending" | "active" | "done" | "failed" | "partial";
 export const MISSION_STAGES: StageName[] = ["Plan", "Research", "Build", "Preview", "Verify", "Complete"];
 
 export interface MissionStageView {
@@ -66,9 +66,14 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
   let research = false;
   let build = false;
   let preview = false;
+  // Preview passes only when the page AND its stylesheets, scripts and images
+  // loaded (preview.verified); a bare publish is not a pass.
+  let previewCheck: "none" | "passed" | "failed" = "none";
   let verifyStarted = false;
-  let verifyPassed = false;
+  let verdict: "none" | "PASS" | "FAIL" | "PARTIAL" = "none";
+  let desktopVerified = false;
   let anyTool = false;
+  let outcome: "complete" | "partial" | null = null;
 
   for (const e of events) {
     if (e.type === "tool.input") inputs.set(String(e.data?.callId ?? ""), (e.data?.input ?? {}) as Record<string, any>);
@@ -86,12 +91,19 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
       }
     } else if (e.type === "preview.available") {
       preview = true;
+    } else if (e.type === "preview.verified") {
+      previewCheck = "passed";
+    } else if (e.type === "preview.failed") {
+      previewCheck = "failed";
     } else if (e.type === "verification.started") {
       verifyStarted = true;
     } else if (e.type === "verification.completed") {
-      if (e.data?.verdict === "PASS") verifyPassed = true;
-    } else if (e.type === "browser.verification.passed" || e.type === "desktop.verification.passed") {
-      verifyPassed = true;
+      const v = String(e.data?.verdict ?? "");
+      verdict = v === "PASS" ? "PASS" : v === "FAIL" ? "FAIL" : "PARTIAL";
+    } else if (e.type === "desktop.verification.passed") {
+      desktopVerified = true;
+    } else if (e.type === "run.outcome") {
+      outcome = e.data?.outcome === "partial" ? "partial" : "complete";
     }
   }
 
@@ -102,33 +114,51 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
     if (BUILD_TOOLS.test(name)) buildOpen = true;
   }
 
+  const verifyPassed = verdict === "PASS" || (verdict === "none" && desktopVerified);
   const live = !["completed", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
   const finishedOk = runStatus === "completed";
+  const finishedBad = ["error", "failed", "blocked"].includes(runStatus);
   let active: StageName | null = null;
   if (live) {
-    if (verifyStarted && !verifyPassed) active = "Verify";
+    if (verifyStarted && verdict === "none") active = "Verify";
     else if (buildOpen) active = "Build";
     else if (researchOpen) active = "Research";
-    else if (preview && !verifyPassed) active = "Preview";
+    else if (preview && previewCheck !== "passed") active = "Preview";
     else if (!anyTool) active = "Plan";
     else if (build) active = "Build";
     else if (research) active = "Research";
     else active = "Plan";
   }
 
+  const previewFailed = preview && previewCheck === "failed" && !live;
+  const verifyFailed = verdict === "FAIL" || (verdict === "PARTIAL" && !live && !verifyPassed);
+  const partial = finishedOk && (outcome === "partial" || previewFailed || verifyFailed);
   const done: Record<StageName, boolean> = {
     Plan: anyTool || preview || verifyStarted || finishedOk,
     Research: research && !researchOpen,
     Build: build && !buildOpen,
-    Preview: preview,
+    Preview: preview && previewCheck === "passed",
     Verify: verifyPassed,
-    Complete: finishedOk,
+    Complete: finishedOk && !partial,
+  };
+  const failed: Partial<Record<StageName, boolean>> = {
+    Preview: previewFailed,
+    Verify: verifyFailed,
+    Complete: finishedBad,
   };
 
   return {
     stages: MISSION_STAGES.map((name) => ({
       name,
-      state: active === name ? "active" : done[name] ? "done" : "pending",
+      state: active === name
+        ? "active"
+        : name === "Complete" && partial
+          ? "partial"
+          : failed[name]
+            ? "failed"
+            : done[name]
+              ? "done"
+              : "pending",
     })),
   };
 }

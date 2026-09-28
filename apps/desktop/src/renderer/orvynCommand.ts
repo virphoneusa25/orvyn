@@ -49,7 +49,16 @@ export type CommandOutcome =
 /** Starts a chat turn into the shared session — returns IMMEDIATELY. The
  *  user bubble renders the moment this is called; ORION's reply streams in
  *  from the WebSocket afterwards. Never make the caller wait on the model. */
+/** Files attached to recent chat turns, so a chat that hands work to a task passes them on (the logo the user attached). */
+const recentChatAttachments: Attachment[] = [];
+export function chatAttachmentsForHandoff(): Attachment[] {
+  return [...recentChatAttachments];
+}
+
 function runChat(cmd: OrvynCommand): CommandOutcome {
+  if (cmd.attachments?.length) {
+    recentChatAttachments.splice(0, recentChatAttachments.length, ...cmd.attachments);
+  }
   const history = startUserTurn(cmd.prompt, { mode: "chat", attachments: cmd.attachments?.map((a) => ({ path: a.name, kind: a.kind })) });
   // Every chat is a durable backend WorkSession, even before it starts a run.
   // The turn is sent with the session and message ids, and the backend stores

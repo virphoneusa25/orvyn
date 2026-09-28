@@ -559,6 +559,26 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       }
 
+      // Writing is switched off for this workspace: said as a permission, never as a missing tool.
+      case "permission.required": {
+        closeThought(e.timestamp);
+        items.push({ kind: "status", key: e.id, label: String(e.data.message ?? "ORVYN needs permission to modify this workspace."), ephemeral: false, tone: "working" });
+        continue;
+      }
+      // The live preview did not load as the styled site: show exactly what failed.
+      case "preview.failed": {
+        const issues = Array.isArray(e.data.issues) ? (e.data.issues as string[]) : [];
+        const label = `Preview check: ${issues.slice(0, 2).join("; ") || "the page did not load as the styled site"}`.slice(0, 180);
+        const prior = items.findIndex((it) => it.kind === "status" && it.key.startsWith("pvcheck-"));
+        if (prior >= 0) items.splice(prior, 1);
+        items.push({ kind: "status", key: `pvcheck-${e.id}`, label, ephemeral: false, tone: "working" });
+        continue;
+      }
+      case "preview.verified": {
+        const prior = items.findIndex((it) => it.kind === "status" && it.key.startsWith("pvcheck-"));
+        if (prior >= 0) items.splice(prior, 1);
+        continue;
+      }
       case "capability.required": {
         closeThought(e.timestamp);
         items.push({

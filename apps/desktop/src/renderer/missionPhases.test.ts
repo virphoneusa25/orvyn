@@ -93,3 +93,25 @@ test("mission header stages follow real events and do not invent completion", ()
   const idle = deriveMissionStages([], "idle")!;
   assert.deepEqual(idle.stages.map((s) => s.state), ["pending", "pending", "pending", "pending", "pending", "pending"]);
 });
+
+test("Preview passes only when its assets loaded; a broken stylesheet is never a green Preview/Verify/Complete", () => {
+  const base = [
+    { type: "run.started", data: {} },
+    { type: "tool.started", data: { callId: "w", tool: "edit_file" } },
+    { type: "tool.completed", data: { callId: "w", tool: "edit_file" } },
+    { type: "preview.available", data: { url: "https://x/api/v1/sites/a/" } },
+  ];
+  const state = (evs: any[], status: string) => Object.fromEntries(deriveMissionStages(evs, status)!.stages.map((s) => [s.name, s.state]));
+  // Published but not checked: not done.
+  assert.equal(state(base, "running").Preview, "active");
+  // Assets loaded + verifier PASS + outcome complete: all green.
+  const good = state([...base, { type: "preview.verified", data: {} }, { type: "verification.completed", data: { verdict: "PASS" } }, { type: "run.outcome", data: { outcome: "complete" } }], "completed");
+  assert.deepEqual([good.Preview, good.Verify, good.Complete], ["done", "done", "done"]);
+  // Stylesheet 404: Preview failed, Complete partial — even if something claimed a browser pass.
+  const broken = state([...base, { type: "browser.verification.passed", data: {} }, { type: "preview.failed", data: { issues: ["styles.css → 404"] } }, { type: "verification.completed", data: { verdict: "FAIL" } }, { type: "run.outcome", data: { outcome: "partial" } }], "completed");
+  assert.deepEqual([broken.Build, broken.Preview, broken.Verify, broken.Complete], ["done", "failed", "failed", "partial"]);
+  // An HTTP-only browser.verification.passed is not Verify.
+  assert.equal(state([...base, { type: "browser.verification.passed", data: {} }], "running").Verify, "pending");
+  // A run that errored: Complete failed.
+  assert.equal(state(base, "error").Complete, "failed");
+});

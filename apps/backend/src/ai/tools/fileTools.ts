@@ -36,6 +36,9 @@ export function makeReadFileTool(projectRoot: string): AITool {
     async execute(args, context): Promise<ToolResult> {
       try {
         const target = resolveInWorkspace(projectRoot, String(args.path), context);
+        // encoding "base64" (not offered to the model): ORVYN reading an image
+        // or font the live preview needs, byte for byte.
+        if (args.encoding === "base64") return { ok: true, output: (await fs.readFile(target)).toString("base64") };
         const content = await fs.readFile(target, "utf-8");
         return { ok: true, output: content };
       } catch (err: any) {

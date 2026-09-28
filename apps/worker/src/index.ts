@@ -352,11 +352,11 @@ function workspacePath(runId: string, relative: string): string | null {
 }
 
 /** Reads a file from the mission workspace (the container's /workspace). */
-async function remoteReadFile(runId: string, filePath: string): Promise<CommandResult> {
+async function remoteReadFile(runId: string, filePath: string, base64 = false): Promise<CommandResult> {
   const target = workspacePath(runId, filePath);
   if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
   try {
-    const content = fs.readFileSync(target, "utf8");
+    const content = base64 ? fs.readFileSync(target).toString("base64") : fs.readFileSync(target, "utf8");
     return { ok: true, output: content, exitCode: 0 };
   } catch (e: any) {
     return { ok: false, output: "", exitCode: 1, stderr: e.code === "ENOENT" ? `File not found: ${filePath}` : e.message };
@@ -510,7 +510,7 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
         let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string };
         switch (req.tool) {
           case "read_file": {
-            const r = await remoteReadFile(runId, String(req.arguments.path ?? ""));
+            const r = await remoteReadFile(runId, String(req.arguments.path ?? ""), req.arguments.encoding === "base64");
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }

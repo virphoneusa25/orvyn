@@ -60,6 +60,18 @@ const TYPES: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".txt": "text/plain; charset=utf-8",
+  ".map": "application/json",
+  ".webmanifest": "application/manifest+json",
   ".md": "text/plain; charset=utf-8",
 };
 
@@ -77,6 +89,23 @@ export function previewUrl(id: string): string {
 
 /** Active preview responses must not be cached across file writes. */
 export const PREVIEW_CACHE_CONTROL = "no-store";
+
+/**
+ * Root-absolute project URLs ("/styles.css", url(/img/hero.svg)) point at the
+ * site's own root when it is served under a path prefix. Protocol-relative
+ * ("//cdn…"), absolute, data: and already-prefixed URLs are left alone.
+ */
+export function rebaseRootUrls(text: string, prefix: string, kind: "html" | "css"): string {
+  const root = prefix.replace(/\/+$/, "");
+  const fix = (url: string) => (url.startsWith("/") && !url.startsWith("//") && !url.startsWith(root + "/") ? `${root}${url}` : url);
+  const css = (t: string) => t.replace(/url\(\s*(["']?)(\/[^"')\s]*)\1\s*\)/gi, (_m, q: string, url: string) => `url(${q}${fix(url)}${q})`);
+  if (kind === "css") return css(text);
+  return css(
+    text
+      .replace(/(\s(?:href|src|poster|action|data-src)\s*=\s*)(["'])(\/[^"']*)\2/gi, (_m, attr: string, q: string, url: string) => `${attr}${q}${fix(url)}${q}`)
+      .replace(/(\ssrcset\s*=\s*)(["'])([^"']*)\2/gi, (_m, attr: string, q: string, list: string) => `${attr}${q}${list.split(",").map((part) => part.trim().replace(/^(\S+)/, (u) => fix(u))).join(", ")}${q}`)
+  );
+}
 
 const SITE_ASSET = /\.(html?|css|js|mjs|svg|png|jpe?g|webp|json|php)$/i;
 
@@ -156,7 +185,56 @@ export function inheritSiteFiles(runId: string, fromRunIds: string[], siteKey?: 
 
 /** A site file already remembered for this run (ORION wrote or read it). */
 export function hasSiteFile(runId: string, relPath: string): boolean {
-  return remembered.get(runId)?.has(relPath.replace(/\\/g, "/").replace(/^\/+/, "")) ?? false;
+  const key = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  return (remembered.get(runId)?.has(key) ?? false) || (rememberedBinary.get(runId)?.has(key) ?? false);
+}
+
+/** Assets served as bytes (read from the project as base64). */
+export const BINARY_ASSET = /\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|mp4|webm)$/i;
+const ASSET = /\.(css|m?js|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|mp4|webm|json|webmanifest)$/i;
+/** Linked files the project does not have (a real 404): not fetched again, reported by the check. */
+const unreadable = new Map<string, Set<string>>();
+export function noteUnreadable(runId: string, rel: string): void {
+  const set = unreadable.get(runId) ?? new Set<string>();
+  set.add(rel);
+  unreadable.set(runId, set);
+}
+export function unreadableAssets(runId: string): string[] {
+  return [...(unreadable.get(runId) ?? [])];
+}
+
+/** "../img/a.png" from "css/site.css" → "img/a.png"; null when it leaves the site. */
+function resolveRef(fromDir: string, ref: string): string | null {
+  const clean = ref.split(/[?#]/)[0]!.trim();
+  if (!clean || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(clean) || /^(data|blob|mailto|tel|javascript):/i.test(clean)) return null;
+  const parts = (clean.startsWith("/") ? clean.slice(1) : `${fromDir}${clean}`).split("/");
+  const out: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") { if (!out.length) return null; out.pop(); continue; }
+    out.push(part);
+  }
+  const joined = out.join("/");
+  try { return decodeURIComponent(joined); } catch { return joined; }
+}
+
+/** Every local file the page needs to render: stylesheets, scripts, images, fonts, CSS url()s. */
+export function siteAssetRefs(runId: string): string[] {
+  const bag = remembered.get(runId);
+  if (!bag) return [];
+  const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
+  if (!pageKey) return [];
+  const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+  const html = composeSiteDocumentSource(runId, pageKey) ?? bag.get(pageKey) ?? "";
+  const refs = new Set<string>();
+  const add = (dir: string, ref: string) => { const r = resolveRef(dir, ref); if (r && ASSET.test(r)) refs.add(r); };
+  for (const m of html.matchAll(/<(?:link|script|img|source|video|audio|image|use)\b[^>]*?\s(?:href|src|poster|xlink:href)\s*=\s*["']([^"']+)["']/gi)) add(pageDir, m[1]!);
+  for (const m of html.matchAll(/\ssrcset\s*=\s*["']([^"']+)["']/gi)) for (const part of m[1]!.split(",")) add(pageDir, part.trim().split(/\s+/)[0] ?? "");
+  const cssUrls = (text: string, dir: string) => { for (const m of text.matchAll(/url\(\s*["']?([^"')\s]+)["']?\s*\)/gi)) add(dir, m[1]!); for (const m of text.matchAll(/@import\s+["']([^"']+)["']/gi)) add(dir, m[1]!); };
+  cssUrls(html, pageDir);
+  for (const [name, text] of bag) if (/\.css$/i.test(name)) cssUrls(text, name.includes("/") ? name.slice(0, name.lastIndexOf("/") + 1) : "");
+  const skip = unreadable.get(runId);
+  return [...refs].filter((r) => !skip?.has(r));
 }
 
 export function rememberedSiteFiles(runId: string): string[] {
@@ -273,7 +351,8 @@ export function missingLinkedAssets(runId: string): string[] {
     .map((m) => m[1]!.split(/[?#]/)[0]!)
     .filter((ref) => !/^(?:[a-z]+:)?\/\//i.test(ref) && !ref.startsWith("data:") && /\.(css|m?js)$/i.test(ref) && !ref.includes(".."))
     .map((ref) => (ref.startsWith("/") ? ref.slice(1) : `${pageDir}${ref.replace(/^\.\//, "")}`));
-  return [...new Set(refs)].filter((ref) => !bag.has(ref));
+  const skip = unreadable.get(runId);
+  return [...new Set(refs)].filter((ref) => !bag.has(ref) && !skip?.has(ref));
 }
 
 /** Write the remembered pages to one stable folder. Later files update that same URL. */

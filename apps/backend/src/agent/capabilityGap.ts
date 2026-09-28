@@ -16,7 +16,8 @@ import type { ToolCall } from "@orvyn/ai-core";
 
 export const CAPABILITY_RULE = [
   "MISSING TOOLS: Never tell the user a tool is unavailable, missing, not working, or that you could not do something because of a tool.",
-  "If you need a capability you do not have (web search, a browser, email, GitHub, a database, a calendar, anything), call search_capabilities with what you need.",
+  "If you need an OUTSIDE service you have no tool for (web search, email, GitHub, a database server, a calendar, a CRM…), call search_capabilities with what you need.",
+  "Reading, writing, creating or deleting project files, shell commands, git and the live preview are ORVYN core tools — never search for or ask to install a tool for them.",
   "When it finds an MCP server to install, ORVYN shows the user an install card. Tell the user in one or two sentences what you need, why, and that installing it from the card lets you finish; then stop and wait.",
   "Use a tool you already have first when one can do the job (for example fetch_url on a known site when web_search fails).",
 ].join("\n");
@@ -86,6 +87,9 @@ export function capabilityGapFor(input: { toolName: string; error: string; unkno
   const name = String(input.toolName ?? "");
   const error = String(input.error ?? "");
   if (input.unknownTool || /^Unknown tool\b/i.test(error)) return capabilityForToolName(name);
+  // A core tool (files, shell, git) that failed is a workspace, worker or
+  // permission problem — never a missing Marketplace tool.
+  if (/^(read_file|write_file|edit_file|apply_edit|delete_file|move_file|rename_file|list_directory|list_files|search_code|search_files|terminal|run_command|run_tests|run_typecheck|run_linter|start_process|stop_process|git_[a-z]+)$/.test(name)) return null;
   if (name === "web_search" && (WEB_GAP.test(error) || MISSING.test(error))) return "search the web";
   if (name === "fetch_url" && MISSING.test(error)) return "browse the web";
   if (/^(browser_|computer[._]|desktop_)/.test(name) && MISSING.test(error)) return "control a browser";
@@ -118,6 +122,16 @@ export function claimsToolUnavailable(text: string): boolean {
  * ("edit the VirPhone website" → edit_file, write_file). Empty when the
  * capability is something new (email, GitHub, a database, web search).
  */
+/**
+ * Only work that reaches an outside service needs a new (MCP) tool. Anything
+ * else — "this task", "the hero", "add an animation", "fix it" — is work in
+ * the user's project, which ORION's own file/terminal/browser tools do.
+ */
+const EXTERNAL = /\b(e-?mails?|gmail|outlook|inbox|sms|text messages?|slack|discord|teams|telegram|whatsapp|github|gitlab|bitbucket|jira|linear|asana|trello|notion|confluence|google|drive|sheets|docs|calendar|database|postgres(?:ql)?|mysql|mongo(?:db)?|redis|sqlite|supabase|firebase|stripe|paypal|payments?|twilio|aws|azure|gcp|s3|cloudflare|vercel|netlify|figma|salesforce|hubspot|crm|zendesk|shopify|api|webhooks?|weather|maps?|search the web|web search|search online|the internet|browse the web|news|youtube|twitter|x\.com|linkedin|facebook|instagram|dropbox|box|sharepoint|onedrive|zapier)\b/;
+export function needsExternalTool(query: string): boolean {
+  return EXTERNAL.test(String(query ?? "").toLowerCase());
+}
+
 export function builtInToolsFor(query: string, known: (name: string) => boolean): string[] {
   const q = String(query ?? "").toLowerCase();
   if (/\b(email|gmail|github|slack|calendar|database|postgres|mysql|jira|notion|stripe|twilio|search the web|web search|google)\b/.test(q)) return [];
@@ -129,5 +143,7 @@ export function builtInToolsFor(query: string, known: (name: string) => boolean)
   ];
   const out = new Set<string>();
   for (const [re, tools] of groups) if (re.test(q)) for (const t of tools) if (known(t)) out.add(t);
+  // Nothing outside the project named: it is project work, whatever the wording.
+  if (!out.size && !needsExternalTool(q)) for (const t of ["read_file", "edit_file", "write_file", "terminal", "browser_open"]) if (known(t)) out.add(t);
   return [...out];
 }
