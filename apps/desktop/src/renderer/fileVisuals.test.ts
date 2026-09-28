@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { artifactVisualFor, fileIconKeyFor, visualLabelFor } from "./fileVisuals";
+import { artifactVisualFor, fileIconKeyFor, visualLabelFor } from "./fileVisuals.ts";
 
 // ── Extension mapping ────────────────────────────────────────────────────────
 
