@@ -2277,6 +2277,9 @@ export class StreamingAgentRuntime {
           looksLikeActionRequest(state.instruction)
         ) {
           state.actionNudges += 1;
+          // The answer is redone with tools: withdraw the first one, so the
+          // user never sees two answers.
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "answer redone with tools" });
           messages.push({
             role: "user",
             content:

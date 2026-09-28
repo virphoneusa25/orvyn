@@ -18,7 +18,7 @@ import { apiUrl, authHeaders } from "../connection";
 import { submitOrvynCommand, regenerateLastReply } from "../orvynCommand";
 import { COMPOSER_HANDOFF_EVENT, takeComposerHandoff } from "../composerHandoff";
 import { MessageContent } from "./MessageContent";
-import { AgentActivityList, CapabilityCard, RunFooter } from "./AgentActivityList";
+import { AgentActivityList, CapabilityCard, ChangesPill, RunFooter } from "./AgentActivityList";
 import "./ConversationActivity.css";
 import { Attachment } from "./AttachmentBar";
 import { IconPlus, IconRocket } from "./Icons";
@@ -547,6 +547,7 @@ export function WorkStream({
       {/* The stream: older turns, then this run's activity, then follow-ups.
           Newest text is always the last block so it sits at the bottom. */}
       <div className="chat-stream" style={{ position: "relative", flex: 1, minHeight: 0, minWidth: 0, maxWidth: "100%", display: "flex", flexDirection: "column" }}>
+        <ChangesPill events={run.events} />
         <div
           ref={scroller}
           className="chat-stream"
@@ -630,7 +631,7 @@ export function WorkStream({
 
         {/* Stall honesty: an active run with no events for 30s says so,
             instead of silently looking frozen. */}
-        {runActive && stalled && (
+        {runActive && stalled && run.status !== "awaiting_approval" && (
           <div style={{ fontSize: 11.5, color: "var(--orvyn-text-muted)", fontStyle: "italic", margin: "6px 0" }}>
             Still working… (no new activity for {Math.round((Date.now() - run.lastEventAt) / 1000)}s)
           </div>

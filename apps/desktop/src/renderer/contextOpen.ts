@@ -4,7 +4,7 @@
 // Every clickable row — tool rows, work groups, file chips — goes through
 // openArtifactInContext(). AgentWorkspace is the listener.
 
-export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview";
+export type ContextTab = "plan" | "files" | "diff" | "terminal" | "browser" | "review" | "documents" | "desktop" | "preview" | "changes";
 
 export interface ArtifactTarget {
   tab: ContextTab;

@@ -5,11 +5,20 @@ import { FileTypeIcon as BrandFileTypeIcon } from "./FileTypeIcon";
 import { IconFile, IconSearch, IconTerminal, IconGlobe, IconWrench } from "./Icons";
 import "./ConversationActivity.css";
 
+// Quiet, one-line steps like a coding assistant's log: "Terminal  npm test",
+// "Read  index.html", "Edited  styles.css".
 const LABELS: Record<ToolOp, [string, string]> = {
   read: ["Reading", "Read"], create: ["Writing", "Wrote"], edit: ["Editing", "Edited"],
-  delete: ["Deleting", "Deleted"], search: ["Searching", "Searched"], terminal: ["Running", "Ran"],
-  browser: ["Using browser", "Used browser"], git: ["Checking Git", "Checked Git"],
-  test: ["Running tests", "Ran tests"], web: ["Researching", "Researched"], other: ["Using tool", "Used tool"],
+  delete: ["Deleting", "Deleted"], search: ["Searching", "Search"], terminal: ["Running", "Terminal"],
+  browser: ["Browsing", "Browser"], git: ["Checking Git", "Git"],
+  test: ["Running tests", "Tests"], web: ["Researching", "Web"], other: ["Working", "Tool"],
+};
+
+/** "Terminal · 2 commands", "Read · 3 files" — consecutive steps of one kind. */
+const GROUP_NOUN: Record<ToolOp, [string, string]> = {
+  read: ["file", "files"], create: ["file", "files"], edit: ["file", "files"], delete: ["file", "files"],
+  search: ["search", "searches"], terminal: ["command", "commands"], browser: ["action", "actions"],
+  git: ["check", "checks"], test: ["run", "runs"], web: ["source", "sources"], other: ["step", "steps"],
 };
 
 /** One icon authority: the brand glyph set (official-style language marks,
@@ -103,45 +112,74 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
     : LABELS[item.op][running ? 0 : 1];
   const target = item.fileName ?? (command ? (item.label || "Preparing command…") : item.label);
   const meta = failed
-    ? (item.status === "stopped" ? "stopped" : item.detail && item.detail !== "Command failed" ? item.detail : "failed")
+    ? (item.status === "stopped" ? "stopped" : item.detail && item.detail !== "Command failed" ? item.detail : "")
     : running
       ? (generating ? "working…" : "")
-      : item.detail ?? "";
+      : /^(done|completed?|ok|success|exit 0|command completed)$/i.test(String(item.detail ?? "").trim()) ? "" : item.detail ?? "";
   // A command that ran and reported failing tests is a finding, not a crash:
   // amber like the site's "2 failing", with the result as the meta.
   const warn = failed && item.op === "terminal" && /failing|exit \d/.test(meta);
   const open = item.ctx
     ? () => openArtifactInContext({ tab: item.ctx!, path: item.fileName ? `${item.path ?? ""}${item.fileName}` : undefined, fileName: item.fileName, op: item.op, url: item.url })
     : undefined;
-  return <div className={`tool-line tool-line--${item.status}${warn ? " tool-line--warn" : ""}`}>
+  // Clicking the row shows its output or error (quiet by default); ↗ opens the file or page.
+  const expandable = Boolean((item.output && !running) || (item.error && failed && !warn));
+  const toggle = expandable ? () => setExpanded((on) => !on) : open;
+  return <div className={`tool-line tool-line--${item.status}${warn ? " tool-line--warn" : ""}${expanded ? " is-expanded" : ""}`}>
     <div
-      className={`tool-line__row${open ? " is-link" : ""}`}
-      onClick={open}
-      role={open ? "button" : undefined}
-      tabIndex={open ? 0 : undefined}
-      onKeyDown={open ? (e) => { if (e.key === "Enter") open(); } : undefined}
-      title={item.fileName ? `${item.path ?? ""}${item.fileName}` : target}
+      className={`tool-line__row${toggle ? " is-link" : ""}`}
+      onClick={toggle}
+      role={toggle ? "button" : undefined}
+      aria-expanded={expandable ? expanded : undefined}
+      tabIndex={toggle ? 0 : undefined}
+      onKeyDown={toggle ? (e) => { if (e.key === "Enter") toggle(); } : undefined}
+      title={failed && item.error ? item.error : item.fileName ? `${item.path ?? ""}${item.fileName}` : target}
     >
-      <span className="tool-line__state"><StateIcon status={item.status} warn={warn} /></span>
-      <span className="tool-line__icon">{item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}</span>
+      <span className="tool-line__icon">{running ? <i className="tool-line__spin" aria-hidden="true" /> : item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}</span>
       <span className="tool-line__verb">{verb}</span>
       {item.verifier && <span className="tool-line__by" title="Independent read-only check, not ORION's own work">verifier</span>}
       {target && <code className="tool-line__target">{target}</code>}
       {meta && <em className="tool-line__meta">{meta}</em>}
       {item.condensed && <span className="tool-line__by" data-testid="tool-condensed" title={`The output was ${item.condensed.fromChars.toLocaleString()} characters; ORION read a ${item.condensed.toChars.toLocaleString()}-character digest${item.condensed.digested ? " made by a cheaper model" : ""} (errors and warnings kept verbatim). You see the full output here.`}>digest for ORION</span>}
-      {open && <span className="tool-line__open" aria-label="Open">↗</span>}
+      {(failed || warn) && <span className="tool-line__state" title={item.error || meta}><StateIcon status={item.status} warn={warn} /></span>}
+      {open && <span className="tool-line__open" role="button" aria-label="Open" onClick={(e) => { e.stopPropagation(); open(); }}>↗</span>}
     </div>
     {item.toolName === "generate_image" && running && <ImageSketch name={item.fileName} />}
     {item.output && running && (
       <pre className="tool-line__live" aria-live="polite">{liveTail(item.output)}</pre>
     )}
-    {item.error && failed && !warn && <div className="tool-line__error">{item.error}</div>}
-    {item.output && !running && <>
-      <button className="tool-line__toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Hide output" : "Output"}</button>
-      {expanded && <><pre className="tool-line__live tool-line__live--full">{item.output}</pre>{item.outputTruncated && <div className="tool-line__note">Showing the last portion of the output.</div>}</>}
-    </>}
+    {expanded && item.error && failed && !warn && <div className="tool-line__error">{item.error}</div>}
+    {expanded && item.output && !running && <><pre className="tool-line__live tool-line__live--full">{item.output}</pre>{item.outputTruncated && <div className="tool-line__note">Showing the last portion of the output.</div>}</>}
   </div>;
 }
+/**
+ * Consecutive steps of one kind as one quiet row: "Terminal · 2 commands".
+ * While one runs, the row reads "Running <its target>". Click to see each step.
+ */
+export function ToolRunGroup({ items }: { items: ToolItem[] }) {
+  const op = items[0]!.op;
+  const running = items.find((i) => i.status === "running");
+  const failedCount = items.filter((i) => i.status === "failed" || i.status === "stopped").length;
+  const [noun, nouns] = GROUP_NOUN[op];
+  const done = LABELS[op][1];
+  const target = running ? (running.fileName ?? running.label ?? "") : "";
+  return (
+    <details className={`activity-phase tool-line-group tool-run-group${running ? " is-running" : ""}`} data-testid="tool-run-group">
+      <summary className={`tool-line tool-line--${running ? "running" : failedCount ? "failed" : "done"}`}>
+        <span className="tool-line__row is-link">
+          <span className="tool-line__icon">{running ? <i className="tool-line__spin" aria-hidden="true" /> : <ActivityIcon op={op} />}</span>
+          <span className="tool-line__verb">{running ? LABELS[op][0] : done}</span>
+          {running
+            ? target && <code className="tool-line__target">{target}</code>
+            : <span className="tool-line__count">· {items.length} {items.length === 1 ? noun : nouns}</span>}
+          {failedCount > 0 && !running && <em className="tool-line__meta tool-line__meta--failed">{failedCount} failed</em>}
+        </span>
+      </summary>
+      <div className="tool-line-group__items">{items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>
+    </details>
+  );
+}
+
 export function ToolActivityGroup({ group }: { group: GroupItem }) {
   return <details className="activity-group"><summary>{group.items.length} file operations</summary>{group.items.map(item => <ToolActivityRow key={item.key} item={item} />)}</details>;
 }
@@ -154,11 +192,10 @@ export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
       <details className="activity-phase tool-line-group">
         <summary className={`tool-line tool-line--${status}`}>
           <span className="tool-line__row">
-            <span className="tool-line__state"><StateIcon status={status} /></span>
-            <span className="tool-line__icon"><IconSearch size={14} /></span>
-            <span className="tool-line__verb">{group.status === "running" ? "Exploring" : "Explored"}</span>
-            {group.summary && <code className="tool-line__target">{group.summary}</code>}
-            <em className="tool-line__meta">details ▾</em>
+            <span className="tool-line__icon">{status === "running" ? <i className="tool-line__spin" aria-hidden="true" /> : <IconSearch size={14} />}</span>
+            <span className="tool-line__verb">{group.status === "running" ? "Exploring" : "Explore"}</span>
+            {group.summary && <span className="tool-line__count">· {group.summary}</span>}
+            {status === "failed" && <span className="tool-line__state"><StateIcon status="failed" /></span>}
           </span>
         </summary>
         <div className="tool-line-group__items">{group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>

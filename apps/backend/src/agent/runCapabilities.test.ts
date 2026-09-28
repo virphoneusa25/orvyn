@@ -81,6 +81,12 @@ test("chat describes mounted tools and an empty registry stays honest", () => {
 test("action detection nudges engineering work and leaves capability questions alone", () => {
   assert.equal(looksLikeActionRequest("hi, what can you actually do? Can you co-work yet?"), false);
   assert.equal(looksLikeActionRequest("explain this project"), false);
+  // Questions about the work are answered, not treated as new work.
+  assert.equal(looksLikeActionRequest("Thanks, what did you create?"), false);
+  assert.equal(looksLikeActionRequest("Where is the CSS for the preview?"), false);
+  assert.equal(looksLikeActionRequest("Did you add tests for the login?"), false);
+  assert.equal(looksLikeActionRequest("Can you create a contact page?"), true);
+  assert.equal(looksLikeActionRequest("Create hello.txt"), true);
   assert.equal(looksLikeActionRequest("Fix the login bug and run the tests"), true);
   assert.equal(looksLikeActionRequest("Generate a virphone logo png"), true);
   assert.equal(looksLikeActionRequest("Inspect the authentication system"), true);

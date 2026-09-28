@@ -22,7 +22,9 @@ import { MessageContent } from "./MessageContent";
 import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icons";
 import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
-import { ToolActivityRow, ToolActivityGroup, WorkGroupRow } from "./ToolActivityRow";
+import { ToolActivityRow, ToolActivityGroup, ToolRunGroup, WorkGroupRow } from "./ToolActivityRow";
+import { changeTotals, groupToolRuns } from "../streamRows";
+import { openArtifactInContext } from "../contextOpen";
 import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 
 export interface AgentEvent {
@@ -201,6 +203,25 @@ function groupResearch(items: ReturnType<typeof reducePresentation>): Array<Retu
   return out;
 }
 
+/** "Changes +52 −3" at the top of the stream; opens the Changes tab. */
+export function ChangesPill({ events }: { events: AgentEvent[] }) {
+  const totals = changeTotals(events);
+  if (totals.files === 0) return null;
+  return (
+    <button
+      type="button"
+      className="changes-pill"
+      data-testid="changes-pill"
+      title={`${totals.files} file${totals.files === 1 ? "" : "s"} changed — open Changes`}
+      onClick={() => openArtifactInContext({ tab: "changes" })}
+    >
+      <span>Changes</span>
+      <span className="changes-pill__add">+{totals.additions}</span>
+      <span className="changes-pill__del">−{totals.deletions}</span>
+    </button>
+  );
+}
+
 export function AgentActivityList({
   events,
   status,
@@ -213,7 +234,7 @@ export function AgentActivityList({
   // RAW EVENTS → presentation items → rows. Raw event names, timestamps,
   // task/mission/agent internals and reviewer text never render directly;
   // tool lifecycles collapse into single rows that update in place.
-  const items = React.useMemo(() => groupResearch(reducePresentation(events, status)), [events, status]);
+  const items = React.useMemo(() => groupToolRuns(groupResearch(reducePresentation(events, status))), [events, status]);
   const live = status === "running" || status === "awaiting_approval" || status === "verifying";
   const toolLive = items.some((item) => (item.kind === "tool" && item.status === "running") || (item.kind === "workgroup" && item.status === "running") || (item.kind === "research" && item.steps.some((st) => st.status === "running")));
 
@@ -236,6 +257,8 @@ export function AgentActivityList({
             return <ResearchTimeline key={item.key} steps={item.steps} live={live && item.steps.some((st) => st.status === "running")} />;
           case "tool":
             return <ToolActivityRow key={item.key} item={item} />;
+          case "toolrun":
+            return <ToolRunGroup key={item.key} items={item.items} />;
           case "group":
             return <ToolActivityGroup key={item.key} group={item} />;
           case "workgroup":
@@ -257,16 +280,18 @@ export function AgentActivityList({
                     ? `${Math.round(durMs / 1000)} seconds`
                     : `${Math.round(durMs / 60_000)} minutes`
                 : undefined;
-              if (!live && !item.thought.summary) return null;
               if (live) return null;
+              if (!dur && !item.thought.summary) return null;
+              // "Thought · 5 seconds": a quiet marker. The summary is a safe
+              // one-line status label (never private reasoning), shown on hover.
               return (
                 <div
                   key={item.key}
                   className="stream-thought"
-                  title={item.thought.summary ?? "Worked"}
+                  title={item.thought.summary ?? "Thought"}
                 >
-                  <span aria-hidden="true">✦</span>
-                  <span className="stream-thought-label">{item.thought.summary || "Working"}</span>
+                  <span aria-hidden="true" className="stream-thought-icon">✦</span>
+                  <span className="stream-thought-label">Thought</span>
                   {dur ? <span>· {dur}</span> : null}
                 </div>
               );
@@ -280,22 +305,9 @@ export function AgentActivityList({
               );
             }
             return (
-              <div
-                key={item.key}
-                style={{
-                  fontSize: 11.5,
-                  margin: "6px 0",
-                  color:
-                    item.tone === "stopped"
-                      ? "var(--text-muted)"
-                      : item.tone === "rework"
-                        ? "var(--warning, #F5B942)"
-                        : "var(--text-muted)",
-                  fontStyle: "italic",
-                }}
-              >
-                {item.tone === "rework" ? "↻ " : ""}
-                {item.label}
+              <div key={item.key} className={`stream-status${item.tone === "rework" ? " is-rework" : ""}`}>
+                <span aria-hidden="true" className="stream-status__icon">{item.tone === "rework" ? "↻" : "·"}</span>
+                <span>{item.label}</span>
               </div>
             );
           case "summary":
@@ -330,6 +342,19 @@ export function AgentActivityList({
       />
     </>
   );
+}
+
+/** What the step will do, in words: "$ npm test", "Write notes.md" — not raw JSON. */
+export function approvalSummary(tool: string, input: unknown): string {
+  const args = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  if (/^(terminal|run_command|start_process|run_tests|ssh_exec|remote_exec)$/.test(tool) && str(args.command)) return `$ ${str(args.command)}`.slice(0, 400);
+  if (/^(write_file|edit_file|create_file)$/.test(tool) && str(args.path)) return `${tool === "edit_file" ? "Edit" : "Write"} ${str(args.path)}`;
+  if (tool === "delete_file" && str(args.path)) return `Delete ${str(args.path)}`;
+  if (tool === "move_file") return `Move ${str(args.from)} → ${str(args.to)}`;
+  if (/^browser_/.test(tool) && str(args.url)) return `Open ${str(args.url)}`;
+  const first = Object.values(args).find((v) => typeof v === "string") as string | undefined;
+  return `${tool.replace(/^mcp\./, "").replace(/[._]/g, " ")}${first ? ` ${first}` : ""}`.slice(0, 400);
 }
 
 function formatBytes(n?: number): string {
@@ -381,6 +406,7 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
         cursor: busy ? "wait" : "pointer",
         borderRadius: 12,
         padding: "10px 12px",
+        color: "var(--text)",
       }}
     >
       <IconFile />
@@ -502,6 +528,16 @@ function ApprovalCard({
     const filled = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v.trim()));
     Promise.resolve(onApprove(item.key, approved, scope, approved && Object.keys(filled).length ? filled : undefined)).finally(() => setBusy(false));
   };
+  // Answered: one quiet line ("Approved  $ npm test"); the step's own row follows.
+  if (item.settled && !item.install) {
+    return (
+      <div className="stream-status" data-testid="approval-settled" title={approvalSummary(item.tool, item.input)}>
+        <span aria-hidden="true" className="stream-status__icon" style={{ color: item.approved ? "var(--success)" : "var(--danger)" }}>{item.approved ? "✓" : "✕"}</span>
+        <span>{item.approved ? "Approved" : "Denied"}</span>
+        <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{approvalSummary(item.tool, item.input)}</code>
+      </div>
+    );
+  }
   if (item.install) {
     const need = item.install.secrets ?? [];
     const missing = need.some((n) => !secrets[n]?.trim());
@@ -558,7 +594,7 @@ function ApprovalCard({
         </div>
       ) : (
         <code style={{ ...mono(), display: "block", marginBottom: 8, whiteSpace: "pre-wrap" }}>
-          {item.tool}({JSON.stringify(item.input).slice(0, 400)})
+          {approvalSummary(item.tool, item.input)}
         </code>
       )}
       {item.settled ? (

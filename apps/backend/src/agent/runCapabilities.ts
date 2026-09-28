@@ -179,6 +179,10 @@ const ACTION =
 export function looksLikeActionRequest(instruction: string): boolean {
   const t = instruction.trim();
   if (t.length < 8) return false;
+  // A question about the work ("Thanks, what did you create?", "Where is the
+  // CSS?", "Did you add tests?") asks for an answer, not new work.
+  const asked = t.replace(/^(thanks|thank you|ok|okay|great|cool|nice)[,.! ]+/i, "");
+  if (/\?\s*$/.test(asked) && /^(what|where|which|who|when|why|did|do|does|have|has|was|were|is|are|how (many|much|long))\b/i.test(asked) && !/\b(can|could|would|will) you\b|\bplease\b/i.test(asked)) return false;
   if (/^(hi+|hello+|hey+|thanks|thank you|what can you|what do you|who are you|explain|why|how does|how do|tell me about)\b/i.test(t)) {
     return ACTION.test(t) && /\b(create|fix|generate|edit|run|build|deploy|inspect|implement|install|write)\b/i.test(t);
   }
