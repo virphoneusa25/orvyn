@@ -12,6 +12,7 @@
 
 import { AITool, ToolResult } from "../ToolTypes";
 import { playwrightAvailable, PLAYWRIGHT_MISSING, ensureBrowserSession, getBrowserSession, captureBrowserFrame } from "./browserTools";
+import { healthCheckPreviewUrl } from "../../agent/previewTarget";
 import {
   beginAgentAction,
   createDesktopSession,
@@ -68,14 +69,47 @@ function sandboxOwnerError(s: SandboxDesktopSession): ToolResult | null {
 
 // ── Sandbox implementations (the REAL desktop) ────────────────────────────
 
+/**
+ * Never open the desktop browser on a target that is not actually serving:
+ * health-check the URL first (expect 200 + HTML). One retry after a short
+ * wait covers a preview that was published a moment ago and is still
+ * settling — beyond that the failure is real and must be reported.
+ */
+async function waitForHealthyPreview(url: string, settleMs = 1500): Promise<ToolResult | null> {
+  if (!/^https?:\/\//i.test(url)) return null; // file:// and others are not preview-health-checked
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, settleMs));
+    const health = await healthCheckPreviewUrl(url, 6000);
+    if (health.ok) return null;
+    if (attempt === 1) {
+      return {
+        ok: false,
+        error: `The page is not reachable at ${url}: ${health.error ?? `HTTP ${health.status}`} — the preview is not ready, so the desktop browser was NOT opened against it. Fix the preview (the site files must produce a page that serves 200 text/html) and navigate again.`,
+        meta: { code: "PREVIEW_NOT_READY", target: url, status: health.status, contentType: health.contentType },
+      };
+    }
+  }
+  return null;
+}
+
 async function sbStart(tenantId: string, projectRoot: string, runId?: string, url?: string): Promise<ToolResult> {
   if (!(await dockerAvailable())) return { ok: false, error: "no-sandbox" };
   try {
+    if (url) {
+      const unhealthy = await waitForHealthyPreview(url);
+      if (unhealthy) return unhealthy;
+    }
+    // Idempotent: one desktop session per tenant. A second desktop_start
+    // (the model verifying again) reuses the live session instead of
+    // spawning a duplicate container.
     let s = sandboxFor(tenantId);
     if (!s) s = await startSandboxDesktop({ tenantId, projectRoot, runId, url });
     if (s.status === "error") return { ok: false, error: s.error ?? "Desktop failed to start." };
-    if (url) await sandboxNavigate(s, url);
-    return { ok: true, output: `Desktop session ${s.id} ready (${s.width}×${s.height}).` };
+    if (url) {
+      const nav = await sandboxNavigate(s, url);
+      if (!nav.ok) return { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle } };
+    }
+    return { ok: true, output: `Desktop session ${s.id} ready (${s.width}×${s.height}).${url ? ` Opened ${url}.` : ""}` };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -134,8 +168,13 @@ export function makeDesktopOpenUrlTool(projectRoot: string, tenantId: string, ru
       if (s) {
         const blocked = sandboxOwnerError(s);
         if (blocked) return blocked;
-        const ok = await sandboxNavigate(s, String(args.url));
-        return ok ? { ok: true, output: `Desktop opened ${args.url}` } : { ok: false, error: "Navigation failed." };
+        const url = String(args.url);
+        const unhealthy = await waitForHealthyPreview(url);
+        if (unhealthy) return unhealthy;
+        const nav = await sandboxNavigate(s, url);
+        return nav.ok
+          ? { ok: true, output: `Desktop opened ${url}${nav.pageTitle ? ` — "${nav.pageTitle}"` : ""}.` }
+          : { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle } };
       }
       return playwrightGuard(projectRoot, tenantId, runId, async (session, a) =>
         withAgentLock(session, async () => {

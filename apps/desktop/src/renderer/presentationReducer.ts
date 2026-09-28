@@ -829,9 +829,15 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       }
       case "desktop.started":
-      case "desktop.ready":
         flushAssistant(false);
         items.push({ kind: "status", key: e.id, label: "Computer use · Starting Desktop", ephemeral: false, tone: "working" });
+        continue;
+      case "desktop.ready":
+        flushAssistant(false);
+        // One desktop_start emits desktop.started AND desktop.ready; both
+        // saying "Starting Desktop" read as a duplicate startup. ready is the
+        // settled state, so it gets its own label.
+        items.push({ kind: "status", key: e.id, label: "Computer use · Desktop session live", ephemeral: false });
         continue;
       case "desktop.screenshot":
         flushAssistant(false);

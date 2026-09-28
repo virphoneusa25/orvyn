@@ -58,6 +58,7 @@ import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFing
 import { buildCapabilityManifest, manifestPrompt, resolveCapabilityNeed, type CapabilityManifest } from "./capabilityManifest";
 import { siteAssetRefs, noteUnreadable, BINARY_ASSET } from "./sitePreview";
 import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, missingLinkedAssets, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
+import { getActivePreviewTarget, invalidPreviewUrlResult, notePreviewTargetStatus, resolveNavigationTarget, setActivePreviewTarget } from "./previewTarget";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
@@ -252,6 +253,20 @@ interface RunState {
   failoverReason?: string;
   failovers?: number;
   creditNoteSent?: boolean;
+  /** Runtime notes for the model (preview URL announcements, loop warnings).
+   * Drained onto the next model turn as [Runtime note] messages. */
+  pendingNotes: string[];
+  /** Whether the canonical preview URL has been announced to the model. */
+  previewUrlAnnounced?: boolean;
+  /** Recent successful tool signatures — identical repeats with no useful
+   * change between them are a loop, not progress. */
+  recentToolSignatures: string[];
+  /** ms timestamp of the last workspace-changing success (write/edit/delete/move). */
+  lastUsefulChangeAt: number;
+  /** Identical-call loop detected once and the model warned; a repeat stops. */
+  loopWarned?: boolean;
+  /** Set by runaway guards; beforeTurn stops the run truthfully. */
+  forceStopReason?: string;
   creditsExceeded?: boolean;
   /** Failed tool calls in a row (a repair loop that is not working). */
   failureStreak: number;
@@ -524,12 +539,30 @@ export class StreamingAgentRuntime {
       revision: published.revision,
       changedFiles: published.changedFiles,
     };
+    // THE canonical preview target for this run. Every consumer — the Preview
+    // pane (preview.available), browser tools, computer-use desktop
+    // navigation, screenshot/DOM/console/network verification — must use this
+    // absolute URL. Navigation guards reject anything reconstructed from a
+    // filename or relative path.
+    setActivePreviewTarget(runId, { siteId: published.id, url: published.url, revision: published.revision, status: "ready" });
     if (published.first) {
       this.store.emit(runId, "preview.available", { ...payload, label: "Live preview" });
     } else {
       this.store.emit(runId, "preview.updated", payload);
     }
+    this.announcePreviewUrl(runId, state, published.url);
     this.speakWebsiteMilestone(runId);
+  }
+
+  /** Tell the MODEL the canonical live preview URL exactly once per run — the
+   * event stream only reaches the UI; without this the agent never learns the
+   * absolute URL and "verifies" against file names like index.html. */
+  private announcePreviewUrl(runId: string, state: RunState | undefined, url: string): void {
+    if (!state || state.previewUrlAnnounced) return;
+    state.previewUrlAnnounced = true;
+    state.pendingNotes.push(
+      `The live preview is published at ${url}\nUse THIS absolute URL for every verification step: desktop_start/desktop_open_url and browser tools navigate to it directly. Never navigate to a file name or relative path such as "index.html" — that is not a URL.`
+    );
   }
 
   /** This chat's one preview address, and the project folder it can read linked files from. */
@@ -751,7 +784,10 @@ export class StreamingAgentRuntime {
     if (inherited.some((f) => /(^|\/)index\.html$/i.test(f))) await this.completeSiteAssets(runId);
     if (inherited.some((f) => /(^|\/)index\.html$/i.test(f)) && !missingLinkedAssets(runId).some((ref) => !this.sourceHasFile(runId, ref))) {
       early = this.publishSite(runId);
-      if (early) this.store.emit(runId, "preview.available", { runId, previewId: early.id, url: early.url, revision: early.revision, changedFiles: inherited, label: "Live preview" });
+      if (early) {
+        setActivePreviewTarget(runId, { siteId: early.id, url: early.url, revision: early.revision, status: "ready" });
+        this.store.emit(runId, "preview.available", { runId, previewId: early.id, url: early.url, revision: early.revision, changedFiles: inherited, label: "Live preview" });
+      }
     }
     const read = (path: string) => this.readSiteFile(runId, state, path);
     const html = await read("index.html");
@@ -766,6 +802,7 @@ export class StreamingAgentRuntime {
     const refs = [...siteAssetRefs(runId), ...(await this.fetchSiteAssets(runId))];
     const published = this.publishSite(runId, early ? ["index.html", ...refs] : []);
     if (!published) return early?.url ?? null;
+    setActivePreviewTarget(runId, { siteId: published.id, url: published.url, revision: published.revision, status: "ready" });
     if (early) this.store.emit(runId, "preview.updated", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs] });
     else this.store.emit(runId, "preview.available", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs], label: "Live preview" });
     void this.verifyPublishedPreview(runId, published.url);
@@ -1109,6 +1146,7 @@ export class StreamingAgentRuntime {
       const detail = { ...content, kind: "preview", passed, issues, assets: check.assets.map(({ path, kind, status, contentType, ok, required }) => ({ path, kind, status, contentType, ok, required })), stylesheetsLoaded: check.stylesheetsLoaded, styled: check.styled, browser: check.browser };
       this.store.emit(runId, passed ? "browser.verification.passed" : "browser.verification.failed", detail);
       this.store.emit(runId, passed ? "preview.verified" : "preview.failed", { url, issues, assets: detail.assets, browser: check.browser });
+      notePreviewTargetStatus(runId, passed ? "ready" : "failed");
       if (!passed && announce) {
         this.speak(runId, `The preview is up, but it is not right yet: ${issues.slice(0, 2).join("; ")}. I'm fixing that.`);
       }
@@ -1413,6 +1451,9 @@ export class StreamingAgentRuntime {
       route: choice.route,
       credits: 0,
       creditBudget: choice.route && !choice.pinned ? runCreditBudget(choice.route.profile) : runCreditBudget("auto"),
+      pendingNotes: [],
+      recentToolSignatures: [],
+      lastUsefulChangeAt: Date.now(),
       failureStreak: 0,
       readOnlyStreak: 0,
       helperRejects: 0,
@@ -1565,7 +1606,7 @@ export class StreamingAgentRuntime {
           workspaceAnchor(execution, options?.workspaceIdentity),
           intent.requiresFrontend ? (this.runs.get(runId)?.websiteLayout?.prompt ?? "") : "",
           intent.requiresFrontend
-            ? "Write the site in useful increments so the live preview updates while the user watches. Once its URL is available, call desktop_start with that URL to show the sandbox desktop, and inspect the result with browser tools. If no sandbox is available, continue with browser verification."
+            ? "Write the site in useful increments so the live preview updates while the user watches. When the live preview URL is announced, open THAT absolute URL (https://…) with desktop_start and inspect the result with browser tools — never a file name like index.html, which is not a URL. If no sandbox is available, continue with browser verification."
             : "",
           "Investigate with search_codebase, find_symbol, and find_file first. Do not start with recursive list_directory or grep.",
           "Search snippets are retrieval hints, not source of truth. Always read_file the live file before editing.",
@@ -2181,19 +2222,25 @@ export class StreamingAgentRuntime {
           const f = fail(`Stopped after ${FAILURE_CIRCUIT_BREAKER} consecutive tool failures without recovery.`);
           return { outcome: f.outcome, reason: f.reason };
         }
+        if (state.forceStopReason) {
+          const f = fail(state.forceStopReason, { code: "LOOP_DETECTED" });
+          return { outcome: f.outcome, reason: f.reason };
+        }
         steps = turn;
         // Runaway guards (spec §45): stop the run with a clear reason before
-        // the next model call rather than failing opaquely mid-mission.
+        // the next model call rather than failing opaquely mid-mission. The
+        // customer message stays human; the environment-variable detail rides
+        // in `detail` for admins and logs.
         const capRequests = runCap("ORVYN_RUN_MAX_MODEL_REQUESTS");
         if (capRequests > 0 && state.modelCalls >= capRequests) {
-          const f = fail(`Run budget exceeded — model requests: ${state.modelCalls}/${capRequests}. Set ORVYN_RUN_MAX_MODEL_REQUESTS higher (0 disables).`);
+          const f = fail("This run reached its execution limit before it could finish. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `model requests: ${state.modelCalls}/${capRequests} (ORVYN_RUN_MAX_MODEL_REQUESTS)` });
           return { outcome: f.outcome, reason: f.reason };
         }
         const capTokens = runCap("ORVYN_RUN_MAX_TOKENS");
         const runUsage = this.store.get(runId)?.usage;
         const spent = runUsage ? runUsage.promptTokens + runUsage.completionTokens : 0;
         if (capTokens > 0 && spent >= capTokens) {
-          const f = fail(`Run budget exceeded — tokens: ${spent}/${capTokens}. Set ORVYN_RUN_MAX_TOKENS higher (0 disables).`);
+          const f = fail("This run reached its execution limit before verification completed. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `tokens: ${spent}/${capTokens} (ORVYN_RUN_MAX_TOKENS)` });
           return { outcome: f.outcome, reason: f.reason };
         }
         state.modelCalls++;
@@ -2223,6 +2270,13 @@ export class StreamingAgentRuntime {
         const steerList = this.store.takeSteer(runId);
         if (steerList.length > 0) {
           messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${steerList.join(" | ")}` });
+        }
+        // Runtime notes (canonical preview URL announcement, loop warnings)
+        // ride the next model turn too — they are facts the agent must have.
+        if (state.pendingNotes.length > 0) {
+          for (const note of state.pendingNotes.splice(0, state.pendingNotes.length)) {
+            messages.push({ role: "user", content: `[Runtime note] ${note}` });
+          }
         }
         // Per-step routing: after a run of look-only steps, a cheaper helper
         // takes the next look. It may only gather; anything else is discarded
@@ -2353,7 +2407,7 @@ export class StreamingAgentRuntime {
         // left unanswered by stopping mid-batch.
         const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
         if (capTools > 0 && state.toolCalls >= capTools) {
-          return fail(`Run budget exceeded — tool calls: ${state.toolCalls}/${capTools}. Set ORVYN_RUN_MAX_TOOL_CALLS higher (0 disables).`);
+          return fail("This run reached its execution limit before it could finish. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `tool calls: ${state.toolCalls}/${capTools} (ORVYN_RUN_MAX_TOOL_CALLS)` });
         }
         state.toolCalls += calls.length;
 
@@ -2866,7 +2920,27 @@ export class StreamingAgentRuntime {
       const remoteRun = state.execution?.location === "OVH_WORKER";
       if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
       let result: ToolResult;
-      if (call.name.startsWith("mcp.") && remoteRun) {
+      // ── Canonical preview navigation guard ────────────────────────────────
+      // Browser/computer-use navigation must receive an absolute http(s) URL —
+      // the run's live preview URL. A file name like "index.html" is never
+      // opened in a browser: with a published preview the target is redirected
+      // to the canonical URL; without one the call fails structurally.
+      const NAV_TOOLS = new Set(["desktop_start", "desktop_open_url", "browser_open", "browser_navigate"]);
+      let navRedirectedFrom = "";
+      let navBlocked: ToolResult | null = null;
+      if (NAV_TOOLS.has(call.name)) {
+        const args = (call.arguments ?? {}) as Record<string, unknown>;
+        const resolution = resolveNavigationTarget(runId, args.url, { allowFile: call.name === "desktop_open_url" && String(args.url ?? "").startsWith("file:") });
+        if (resolution.ok && resolution.redirectedFrom) {
+          navRedirectedFrom = resolution.redirectedFrom;
+          args.url = resolution.url;
+        } else if (!resolution.ok) {
+          navBlocked = invalidPreviewUrlResult(resolution);
+        }
+      }
+      if (navBlocked) {
+        result = navBlocked;
+      } else if (call.name.startsWith("mcp.") && remoteRun) {
         // Cloud runs never fall back to a desktop stdio process. Remote HTTP
         // MCP is mediated by the Cloud MCP Gateway on the control plane.
         if (!this.cloudMcpInvoke) {
@@ -2988,6 +3062,22 @@ export class StreamingAgentRuntime {
       if (result.ok) {
         state.failedFingerprints.delete(fingerprint);
         anySucceeded = true;
+        // Loop detection: identical successful calls with no useful change
+        // between them are churn, not progress. Warn once, then stop.
+        if (WORKSPACE_CHANGING_TOOLS.has(call.name)) state.lastUsefulChangeAt = Date.now();
+        state.recentToolSignatures.push(fingerprint);
+        if (state.recentToolSignatures.length > 24) state.recentToolSignatures.shift();
+        const window8 = state.recentToolSignatures.slice(-8);
+        const repeats = window8.filter((s) => s === fingerprint).length;
+        if (repeats >= 3 && Date.now() - state.lastUsefulChangeAt > 90_000) {
+          if (!state.loopWarned) {
+            state.loopWarned = true;
+            state.pendingNotes.push(`LOOP_DETECTED: you executed "${call.name}" with identical arguments ${repeats} times and the workspace has not changed since. Do NOT repeat the same call. Change strategy with different arguments, or finish with what the evidence already shows.`);
+            this.store.emit(runId, "run.diagnostics", { loopDetected: call.name, repeats, windowCalls: window8.length });
+          } else if (repeats >= 5) {
+            state.forceStopReason = `Stopped: "${call.name}" was repeated identically ${repeats} times with no workspace change after a loop warning.`;
+          }
+        }
         // After the workspace changes, re-running a command that failed before
         // (npm test after a fix) is not an "identical retry": it is the repair
         // loop. Only unchanged retries stay blocked.
@@ -3106,9 +3196,12 @@ export class StreamingAgentRuntime {
           }
         }
         const workspacePath = written ? String(toolArgs.path ?? written.name) : "";
+        const navNote = navRedirectedFrom
+          ? `\n\n[Navigation guard] The requested target "${navRedirectedFrom}" was not a URL, so the run's live preview URL was used instead (${getActivePreviewTarget(runId)?.url}). Always navigate to that absolute URL.`
+          : "";
         replies.set(call.id, written
-          ? `${text}\n\nSaved ${workspacePath} in the workspace. The download card uses that same filename. Do not create a numbered copy such as index-2.html. Later changes must update ${workspacePath}.`
-          : text);
+          ? `${text}${navNote}\n\nSaved ${workspacePath} in the workspace. The download card uses that same filename. Do not create a numbered copy such as index-2.html. Later changes must update ${workspacePath}.`
+          : `${text}${navNote}`);
         if (emptySearchResult(call.name, raw)) gaps.set(call.id, "search the web");
       } else {
         state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);

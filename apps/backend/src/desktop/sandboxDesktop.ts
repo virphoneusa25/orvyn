@@ -14,6 +14,7 @@
 
 import { spawn, exec } from "child_process";
 import { createHash, randomUUID } from "crypto";
+import { isErrorPageTitle } from "../agent/previewTarget";
 
 export type SandboxControlOwner = "orion" | "user" | "none";
 
@@ -666,8 +667,17 @@ export async function sandboxLaunchApp(
   return r.code === 0;
 }
 
-export async function sandboxNavigate(session: SandboxDesktopSession, url: string): Promise<boolean> {
-  if (session.status !== "ready") return false;
+/** Navigation outcomes carry the reason: an error page in the desktop browser
+ * (Firefox "Server Not Found", DNS failures) is a FAILED navigation, so the
+ * agent never spends turns inspecting a browser error page. */
+export interface SandboxNavigationResult {
+  ok: boolean;
+  error?: string;
+  pageTitle?: string;
+}
+
+export async function sandboxNavigate(session: SandboxDesktopSession, url: string): Promise<SandboxNavigationResult> {
+  if (session.status !== "ready") return { ok: false, error: `Desktop is ${session.status}.` };
   const titled = async (name: string) => (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${name}' | head -1`])).stdout.toString().trim();
   let title = (await titled("Chromium")) ? "Chromium" : (await titled("Firefox")) ? "Firefox" : "";
   if (!title) {
@@ -675,6 +685,8 @@ export async function sandboxNavigate(session: SandboxDesktopSession, url: strin
     await new Promise((res) => setTimeout(res, 2500));
     title = (await titled("Chromium")) ? "Chromium" : "Firefox";
   }
+  const win = (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${title}' | head -1`])).stdout.toString().trim();
+  if (!win) return { ok: false, error: `No browser window is open on the desktop (looked for ${title}).` };
   const r = await dockerExec(session.containerId, [
     "xdotool", "search", "--name", title, "windowactivate", "--sync",
     "key", "--clearmodifiers", "ctrl+l",
@@ -683,8 +695,20 @@ export async function sandboxNavigate(session: SandboxDesktopSession, url: strin
   await dockerExec(session.containerId, ["xdotool", "type", "--delay", "20", "--clearmodifiers", url]);
   await new Promise((res) => setTimeout(res, 200));
   await dockerExec(session.containerId, ["xdotool", "key", "Return"]);
+  // Wait for the page to settle, then read the window title: Firefox and
+  // Chromium both put the page (or error-page) title in it.
+  await new Promise((res) => setTimeout(res, 2500));
+  const pageTitle = (await dockerExec(session.containerId, ["sh", "-c", `xdotool getwindowname ${win} 2>/dev/null`])).stdout.toString().trim();
   session.url = url;
-  return r.code === 0;
+  if (r.code !== 0) return { ok: false, error: "Could not focus the desktop browser address bar.", pageTitle };
+  if (isErrorPageTitle(pageTitle)) {
+    return {
+      ok: false,
+      pageTitle,
+      error: `The desktop browser could not load ${url} — it is showing an error page ("${pageTitle}"). The page did not render; do not inspect or screenshot this error page. Check that the URL is the run's live preview URL and that it responds 200.`,
+    };
+  }
+  return { ok: true, pageTitle };
 }
 
 function runningDesktopContainer(): Promise<string | null> {

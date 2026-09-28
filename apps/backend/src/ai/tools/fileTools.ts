@@ -89,6 +89,25 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         const target = resolveInWorkspace(projectRoot, String(args.path), context);
         let existed = false;
         try { await fs.access(target); existed = true; } catch { /* new file */ }
+        // Destructive-rewrite guard: a write that would replace a substantial
+        // existing file with far less content (a "small task" deleting
+        // hundreds of lines) is rejected — targeted changes must use
+        // edit_file. Thresholds are generous so legitimate full rewrites of
+        // small files are never blocked.
+        if (existed && typeof args.content === "string" && !args.content_base64) {
+          const previous = await fs.readFile(target, "utf8").catch(() => "");
+          const oldLines = previous ? previous.split("\n").length : 0;
+          const newLines = args.content.split("\n").length;
+          const deletions = oldLines - newLines;
+          const threshold = Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300);
+          if (oldLines >= 80 && deletions >= threshold) {
+            return {
+              ok: false,
+              error: `This write would replace ${args.path} (${oldLines} lines) with ${newLines} lines — deleting ${deletions} lines for what should be a targeted change. Use edit_file with the exact old_string/new_string instead. If a full rewrite is truly intended, apply it with edit_file using replace_all on the sections that change, or state the justification and rewrite deliberately section by section.`,
+              meta: { code: "DESTRUCTIVE_REWRITE", path: String(args.path), oldLines, newLines, deletions },
+            };
+          }
+        }
         await fs.mkdir(path.dirname(target), { recursive: true });
         // content_base64 (not offered to the model): ORVYN saving a file the
         // user attached (a logo, a photo) into the project, byte for byte.

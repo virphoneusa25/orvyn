@@ -368,6 +368,25 @@ async function remoteWriteFile(runId: string, filePath: string, content: string)
   const target = workspacePath(runId, filePath);
   if (!target) return { ok: false, output: "", exitCode: 1, stderr: "path escapes the workspace" };
   try {
+    // Destructive-rewrite guard (same policy as the control plane): a write
+    // that would delete hundreds of lines from a substantial existing file
+    // is rejected — targeted changes must use edit_file.
+    let oldLines = 0;
+    try {
+      const previous = fs.readFileSync(target, "utf8");
+      oldLines = previous ? previous.split("\n").length : 0;
+    } catch { /* new file */ }
+    const newLines = content ? content.split("\n").length : 0;
+    const deletions = oldLines - newLines;
+    const threshold = Number(process.env.ORVYN_MAX_UNINTENDED_DELETIONS || 300);
+    if (oldLines >= 80 && deletions >= threshold) {
+      return {
+        ok: false,
+        output: "",
+        exitCode: 1,
+        stderr: `DESTRUCTIVE_REWRITE: this write would replace ${filePath} (${oldLines} lines) with ${newLines} lines — deleting ${deletions} lines. Use edit_file with exact old_string/new_string for targeted changes.`,
+      };
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, content, "utf8");
     const bytesWritten = Buffer.byteLength(content, "utf8");

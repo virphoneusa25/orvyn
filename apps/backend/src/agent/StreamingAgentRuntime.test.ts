@@ -333,7 +333,9 @@ test("stops with a clear error when the run's model-request budget is spent", as
     const run = h.store.get(runId)!;
     const budgetError = run.events.find((e) => e.type === "run.error");
     assert.ok(budgetError, "a budget exhaustion must surface as run.error");
-    assert.match(String(budgetError.data.message), /Run budget exceeded — model requests: 1\/1/);
+    assert.match(String(budgetError.data.message), /reached its execution limit/);
+    // The env-var detail rides in `detail` for admins, not the customer message.
+    assert.match(String(budgetError.data.detail), /model requests: 1\/1/);
   } finally {
     if (previous === undefined) delete process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
     else process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = previous;
@@ -357,7 +359,8 @@ test("stops with a clear error when the run's tool-call budget is spent", async 
     const run = h.store.get(runId)!;
     const budgetError = run.events.find((e) => e.type === "run.error");
     assert.ok(budgetError, "a budget exhaustion must surface as run.error");
-    assert.match(String(budgetError.data.message), /Run budget exceeded — tool calls/);
+    assert.match(String(budgetError.data.message), /reached its execution limit/);
+    assert.match(String(budgetError.data.detail), /tool calls: 1\/1/);
     // The turn that tripped the cap must not leave unanswered tool calls.
     const requests = h.provider.requests;
     const last = requests[requests.length - 1];

@@ -10,8 +10,22 @@ import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import { AITool, ToolExecutionContext, ToolResult } from "../ToolTypes";
 import { workbenchBrowserCommand } from "../../desktop/electronBrowserTarget";
+import { invalidPreviewUrlResult, resolveNavigationTarget } from "../../agent/previewTarget";
 
 let browserTenantId = "";
+
+/**
+ * Canonical-preview navigation rule (same resolver as the runtime guard): a
+ * browser verification target must be an absolute http(s) URL. A file name
+ * like "index.html" is redirected to the run's live preview URL when one
+ * exists, otherwise the call fails structurally — it is never typed into a
+ * browser.
+ */
+function checkNavigationTarget(raw: unknown, context?: ToolExecutionContext): { ok: true; url: string; redirectedFrom?: string } | { ok: false; result: ToolResult } {
+  const resolution = resolveNavigationTarget(String(context?.runId ?? ""), raw, { allowFile: true });
+  if (resolution.ok) return resolution;
+  return { ok: false, result: invalidPreviewUrlResult(resolution) };
+}
 
 export function setBrowserToolTenant(tenantId: string): void {
   browserTenantId = tenantId;
@@ -314,6 +328,12 @@ async function gotoWithRecovery(page: any, rawUrl: string): Promise<string> {
   }
 }
 
+function appendRedirectNote(result: ToolResult, redirectedFrom?: string): ToolResult {
+  if (!redirectedFrom || !result.ok) return result;
+  const note = `\n[Navigation guard] "${redirectedFrom}" is not a URL; the run's live preview URL was used instead. Always navigate to that absolute URL.`;
+  return { ...result, output: `${String(result.output ?? "")}${note}` };
+}
+
 const sessionIdParam = { type: "string", description: "browserSessionId from browser_open (optional: defaults to this run's session)" };
 
 export function makeBrowserOpenTool(projectRoot: string): AITool {
@@ -327,15 +347,17 @@ export function makeBrowserOpenTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args, context) => {
-      const url = args.url ? String(args.url) : "";
+      const nav = checkNavigationTarget(args.url, context);
+      if (!nav.ok) return nav.result;
+      const url = nav.url;
       const visible = await workbench(context, { op: "open", url });
-      if (visible) return sessionResult(visible, `Opened ${url || "a blank tab"} in the Workbench Browser.`);
+      if (visible) return appendRedirectNote(sessionResult(visible, `Opened ${url || "a blank tab"} in the Workbench Browser.`), nav.redirectedFrom);
       const missing = needPlaywright();
       if (missing) return missing;
       const s = await openSession(projectRoot);
       if (url) await gotoWithRecovery(s.page, url);
       s.actions.push({ action: "open", url, timestamp: Date.now() });
-      return { ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+      return appendRedirectNote({ ok: true, output: `Browser session started${url ? ` at ${url}` : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) }, nav.redirectedFrom);
     }),
   };
 }
@@ -351,9 +373,11 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
     },
     defaultPermission: "ask",
     execute: guard(async (args, context) => {
-      const url = String(args.url);
+      const nav = checkNavigationTarget(args.url, context);
+      if (!nav.ok) return nav.result;
+      const url = nav.url;
       const visible = await workbench(context, { op: "navigate", url, sessionId: args.sessionId });
-      if (visible) return sessionResult(visible, `Navigated to ${url}.`);
+      if (visible) return appendRedirectNote(sessionResult(visible, `Navigated to ${url}.`), nav.redirectedFrom);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
@@ -361,7 +385,7 @@ export function makeBrowserNavigateTool(projectRoot: string): AITool {
       // Errors describe the page being looked at: a new page starts clean.
       if (bg) { bg.consoleErrors.length = 0; bg.failedRequests.length = 0; }
       const finalUrl = await gotoWithRecovery(page, url);
-      return { ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+      return appendRedirectNote({ ok: true, output: `Now at ${finalUrl} — title: ${await page.title()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) }, nav.redirectedFrom);
     }),
   };
 }
