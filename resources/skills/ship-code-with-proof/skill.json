@@ -1,21 +1,35 @@
 {
-  "id": "skill_code_with_tests",
+  "id": "builtin-ship-code-with-proof",
   "slug": "ship-code-with-proof",
   "name": "Ship code with proof",
   "version": "1.0.0",
-  "description": "Edit the project, then prove the change with tests before claiming done.",
-  "category": "General",
+  "description": "Make a code change and prove it works before reporting done. Proof means: tests pass, or a build exits 0, or the feature is verified in a running app. Never claim success from code inspection alone.",
+  "category": "engineering",
   "publisher": "ORVYN",
-  "source": "built-in",
+  "source": "builtin",
   "builtIn": true,
   "trusted": true,
-  "triggers": ["fix", "test", "refactor", "typecheck", "lint", "failing tests"],
-  "taskDomains": ["code"],
+  "triggers": [
+    "fix the bug",
+    "implement the feature",
+    "refactor",
+    "add a test",
+    "ship the code",
+    "make the change",
+    "write the code",
+    "fix the tests"
+  ],
+  "taskDomains": ["engineering", "code"],
   "runModes": ["agent"],
-  "requiredTools": ["read_file", "edit_file", "run_tests", "run_typecheck"],
-  "optionalTools": [],
-  "permissionsRequired": [],
-  "validation": { "rule": "run_tests or test.completed passed" },
-  "tags": ["code", "tests"],
+  "requiredTools": ["edit_file", "run_tests"],
+  "optionalTools": ["read_file", "write_file", "terminal", "run_typecheck", "run_linter"],
+  "permissionsRequired": [
+    { "id": "edit_file", "reason": "Applies the code change" },
+    { "id": "run_tests", "reason": "Proves the change works" }
+  ],
+  "validation": {
+    "rule": "After the edit, run_tests or run_typecheck or a terminal command exits 0. Attach the actual command output to the report — never claim success without observed evidence."
+  },
+  "tags": ["engineering", "code", "testing", "verification"],
   "scope": "builtin"
 }
