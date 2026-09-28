@@ -52,6 +52,21 @@ rsync -az -e "$RSH" \
   "$ROOT/.env.example" \
   "$HOST:$REMOTE/"
 
+# Model provider keys from the deploy environment (GitHub secrets) go into the
+# server's .env, which deploys otherwise never touch. Values travel on stdin,
+# never on a command line.
+for name in NEBIUS_API_KEY; do
+  value="${!name:-}"
+  [[ -n "$value" ]] || continue
+  printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -euo pipefail
+cd '$REMOTE'
+touch .env && chmod 600 .env
+value=\$(cat)
+{ grep -v '^$name=' .env || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .env.tmp
+mv .env.tmp .env && chmod 600 .env"
+  echo "Set $name in the server .env"
+done
+
 echo "Rebuilding backend + worker on $HOST"
 "${SSH[@]}" "$HOST" "set -euo pipefail
 cd '$REMOTE'

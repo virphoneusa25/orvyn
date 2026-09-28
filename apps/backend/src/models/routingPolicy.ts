@@ -111,12 +111,35 @@ export interface RouteStep {
 
 export interface ModelHealthLike { registryId: string; failureRate: number }
 
+/**
+ * Global providers with a live catalog (Nebius) serve a tier when none of its
+ * named candidates is registered: the same model family, matched by name.
+ */
+const FAMILY: Record<Tier, RegExp | null> = {
+  utility: /(llama-?3\.[1-3]-8b|qwen3?-?(4|8|14)b|gemma|mistral-small)/i,
+  "code-helper": /(qwen.*coder.*(30b|32b)|codestral|devstral)/i,
+  auto: /deepseek-(v3|chat)(?!.*r1)/i,
+  agent: /(minimax|gpt-oss-120b|qwen3-?235b)/i,
+  code: /(kimi-?k2|qwen3?-?coder-?480b)/i,
+  advanced: /(qwen3-?235b|llama-?4-?maverick|gpt-oss-120b)/i,
+  heavy: /glm-?4\.?[5-9]|glm-?5/i,
+  deep: /(deepseek-r1|kimi.*thinking|qwen3.*thinking)/i,
+  ultra: null,
+};
+const FAMILY_PREFIXES = ["nebius:"];
+
 function firstRegistered(tier: Tier, available: Set<string>, health: ModelHealthLike[]): string | null {
-  for (const id of TIERS[tier].candidates) {
-    if (!available.has(id) || isModelUnavailable(id)) continue;
+  const usable = (id: string) => {
+    if (!available.has(id) || isModelUnavailable(id)) return false;
     const h = health.find((x) => x.registryId === id);
-    if (h && h.failureRate >= 0.5) continue;
-    return id;
+    return !(h && h.failureRate >= 0.5);
+  };
+  for (const id of TIERS[tier].candidates) if (usable(id)) return id;
+  const family = FAMILY[tier];
+  if (family) {
+    for (const id of [...available].sort()) {
+      if (FAMILY_PREFIXES.some((p) => id.startsWith(p)) && family.test(id) && usable(id)) return id;
+    }
   }
   return null;
 }
@@ -179,6 +202,9 @@ export function escalate(route: RouteStep, availableIds: string[], health: Model
 /** The weight of whatever model served a call (unknown models count as Auto). */
 export function weightFor(registryId: string): number {
   for (const def of Object.values(TIERS)) if (def.candidates.includes(registryId)) return def.weight;
+  if (FAMILY_PREFIXES.some((p) => registryId.startsWith(p))) {
+    for (const def of Object.values(TIERS)) if (FAMILY[def.tier]?.test(registryId)) return def.weight;
+  }
   return TIERS.auto.weight;
 }
 

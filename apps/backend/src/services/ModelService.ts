@@ -127,6 +127,15 @@ const OPENROUTER_MODELS: { id: string; context: number; temperature: number }[] 
   { id: "minimax/minimax-m2.5", context: 205000, temperature: 0.2 },
 ];
 
+function nebiusEndpoint(): string {
+  return (process.env.NEBIUS_BASE_URL?.trim() || "https://api.tokenfactory.nebius.com").replace(/\/v1\/?$/, "");
+}
+
+/** Nebius models registered at startup (the live catalog adds the rest). */
+function nebiusModelList(): string[] {
+  return (process.env.NEBIUS_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+}
+
 function geminiConfig(id: string, apiKey: string, temperature: number): ModelConfig {
   // Gemini exposes an OpenAI-compatible endpoint, allowing ORVYN to use the
   // same proven streaming/tool-call path instead of a nonfunctional placeholder.
@@ -290,6 +299,14 @@ export class ModelService {
       const endpoint = process.env.OPENROUTER_BASE_URL?.trim() || "https://openrouter.ai/api";
       const extra = (process.env.OPENROUTER_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean).map((id) => ({ id, context: 128000, temperature: 0.3 }));
       for (const m of [...OPENROUTER_MODELS, ...extra]) this.addModel(openAiCompatibleConfig("openrouter", "OpenRouter", endpoint, m.id, openRouterKey, m.temperature, m.context));
+    }
+
+    // Nebius Token Factory (OpenAI-compatible): a global provider. Models listed
+    // in NEBIUS_MODELS register now; the live catalog is added in the background.
+    const nebiusKey = process.env.NEBIUS_API_KEY?.trim();
+    if (nebiusKey) {
+      for (const id of nebiusModelList()) this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), id, nebiusKey, 0.2, 131072));
+      void this.refreshNebiusCatalog(nebiusKey);
     }
 
     const geminiKey = (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY)?.trim();
@@ -491,6 +508,32 @@ export class ModelService {
       }))
     );
     return results;
+  }
+
+  /** Registers every chat model this Nebius account can call (embeddings and image models are skipped). */
+  async refreshNebiusCatalog(apiKey: string): Promise<number> {
+    try {
+      const res = await fetch(`${nebiusEndpoint()}/v1/models`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) {
+        console.warn(JSON.stringify({ event: "nebius.catalog.failed", status: res.status }));
+        return 0;
+      }
+      const data = await res.json();
+      const rows: { id?: string }[] = Array.isArray(data.data) ? data.data : [];
+      let added = 0;
+      for (const row of rows) {
+        const id = String(row?.id ?? "");
+        if (!id || /embed|bge|e5-|clip|flux|stable-diffusion|sdxl|whisper|tts|guard|rerank/i.test(id)) continue;
+        if (this.registry.get(`nebius:${id}`)) continue;
+        this.addModel(openAiCompatibleConfig("nebius", "Nebius", nebiusEndpoint(), id, apiKey, 0.2, 131072));
+        added++;
+      }
+      console.log(JSON.stringify({ event: "nebius.catalog", models: rows.length, added }));
+      return added;
+    } catch (err: any) {
+      console.warn(JSON.stringify({ event: "nebius.catalog.failed", error: String(err?.message ?? err).slice(0, 120) }));
+      return 0;
+    }
   }
 
   /** Kontext stays registered only when this Fireworks account actually deploys it. */

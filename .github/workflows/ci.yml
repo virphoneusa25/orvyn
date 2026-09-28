@@ -125,6 +125,8 @@ jobs:
       - name: Deploy to OVH
         env:
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          # Model provider keys: written into the server's .env on deploy (never into the image or git).
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
         run: |
           if [ -z "$OVH_SSH_PRIVATE_KEY" ]; then
             # Fail loudly: a green job that deployed nothing hid for days that
