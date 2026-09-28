@@ -184,10 +184,13 @@ function dropMemoryFrame(id: string): void {
 const startsInFlight = new Map<string, Promise<SandboxDesktopSession>>();
 
 /**
- * One desktop per tenant. The Desktop pane, desktop_start and
- * computer_open_app can all ask at once; they share the session that is
- * already running or starting instead of each creating a container.
+ * One active desktop per tenant. Calls within a mission share its screen;
+ * a different run gets a fresh container so missions do not share UI state.
  */
+export function reusesSandboxRun(existingRunId: string | undefined, requestedRunId: string | undefined): boolean {
+  return !requestedRunId || existingRunId === requestedRunId;
+}
+
 export async function startSandboxDesktop(opts: {
   tenantId: string;
   projectRoot?: string;
@@ -197,10 +200,13 @@ export async function startSandboxDesktop(opts: {
   height?: number;
 }): Promise<SandboxDesktopSession> {
   const existing = findSandboxSession(opts.tenantId);
-  if (existing && existing.status !== "error") return existing;
+  if (existing && existing.status !== "error" && reusesSandboxRun(existing.runId, opts.runId)) return existing;
   const pending = startsInFlight.get(opts.tenantId);
   if (pending) return pending;
-  const job = createSandboxDesktop(opts).finally(() => startsInFlight.delete(opts.tenantId));
+  const job = (async () => {
+    if (existing && existing.status !== "ended") await stopSandboxDesktop(existing);
+    return createSandboxDesktop(opts);
+  })().finally(() => startsInFlight.delete(opts.tenantId));
   startsInFlight.set(opts.tenantId, job);
   return job;
 }
@@ -646,28 +652,28 @@ export async function sandboxLaunchApp(
   session: SandboxDesktopSession,
   app: "terminal" | "files" | "chromium" | "editor" | "settings",
 ): Promise<boolean> {
-  const cmds: Record<string, string[]> = {
-    terminal: ["lxterminal", "--working-directory=/workspace"],
-    files: ["thunar", "/workspace"],
-    chromium: ["sh", "-c", "if command -v firefox-esr >/dev/null; then exec firefox-esr --new-window file:///usr/share/orvyn/home.html; fi; exec chromium --no-sandbox --disable-dev-shm-usage --start-maximized"],
-    editor: ["sh", "-c", "if command -v code >/dev/null; then exec code --no-sandbox --disable-gpu /workspace; fi; exec geany /workspace"],
-    settings: ["lxappearance"],
+  const commands: Record<string, string> = {
+    terminal: "/usr/local/bin/orvyn-launch terminal",
+    files: "/usr/local/bin/orvyn-launch files",
+    chromium: "/usr/local/bin/orvyn-launch browser",
+    editor: "/usr/local/bin/orvyn-launch editor",
+    settings: "lxappearance",
   };
-  const cmd = cmds[app];
-  if (!cmd) return false;
+  const command = commands[app];
+  if (!command) return false;
   noteDesktopUse(session.id);
-  const r = await dockerExec(session.containerId, ["sh", "-c", `nohup ${cmd.join(" ")} >/dev/null 2>&1 &`]);
+  const r = await dockerExec(session.containerId, ["sh", "-c", `nohup ${command} >/dev/null 2>&1 &`]);
   return r.code === 0;
 }
 
 export async function sandboxNavigate(session: SandboxDesktopSession, url: string): Promise<boolean> {
   if (session.status !== "ready") return false;
   const titled = async (name: string) => (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${name}' | head -1`])).stdout.toString().trim();
-  let title = (await titled("Firefox")) ? "Firefox" : (await titled("Chromium")) ? "Chromium" : "";
+  let title = (await titled("Chromium")) ? "Chromium" : (await titled("Firefox")) ? "Firefox" : "";
   if (!title) {
-    await dockerExec(session.containerId, ["sh", "-c", "if command -v firefox-esr >/dev/null; then nohup firefox-esr --new-window >/dev/null 2>&1 &; else nohup chromium --no-sandbox --disable-dev-shm-usage --start-maximized >/dev/null 2>&1 &; fi"]);
+    await dockerExec(session.containerId, ["sh", "-c", "nohup /usr/local/bin/orvyn-launch browser >/dev/null 2>&1 &"]);
     await new Promise((res) => setTimeout(res, 2500));
-    title = (await titled("Firefox")) ? "Firefox" : "Chromium";
+    title = (await titled("Chromium")) ? "Chromium" : "Firefox";
   }
   const r = await dockerExec(session.containerId, [
     "xdotool", "search", "--name", title, "windowactivate", "--sync",
@@ -703,7 +709,7 @@ export async function openSiteOnDesktop(html: string): Promise<{ url: string } |
   if (session && session.status === "ready") {
     await sandboxNavigate(session, url);
   } else {
-    await dockerExec(containerId, ["sh", "-c", `nohup firefox-esr --new-window '${url}' >/dev/null 2>&1 &`]);
+    await dockerExec(containerId, ["sh", "-c", `nohup /usr/local/bin/orvyn-launch browser '${url}' >/dev/null 2>&1 &`]);
   }
   return { url };
 }

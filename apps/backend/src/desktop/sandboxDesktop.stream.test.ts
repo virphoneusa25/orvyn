@@ -6,6 +6,7 @@ import {
   DESKTOP_IDLE_MS,
   frameStreamCommand,
   orphanDesktopIds,
+  reusesSandboxRun,
 } from "./sandboxDesktop";
 import { desktopAppName } from "../computerUse/DesktopSessionService";
 
@@ -51,6 +52,12 @@ test("only this backend's desktops (and unlabelled old ones) count as orphans", 
   const rows = ["aaa\tproduction", "bbb\tstaging", "ccc\t", "ddd\t<no value>"].join("\n");
   assert.deepEqual(orphanDesktopIds(rows, "production"), ["aaa", "ccc", "ddd"]);
   assert.deepEqual(orphanDesktopIds(rows, "staging"), ["bbb", "ccc", "ddd"]);
+});
+
+test("a new mission gets a new sandbox while the current mission keeps its desktop", () => {
+  assert.equal(reusesSandboxRun("run-a", "run-a"), true);
+  assert.equal(reusesSandboxRun("run-a", "run-b"), false);
+  assert.equal(reusesSandboxRun("run-a", undefined), true);
 });
 
 test("a desktop is idle only with no viewers, no user control and nothing recent", () => {

@@ -1,16 +1,9 @@
 // apps/backend/src/routes/desktop.ts
 //
-// Desktop session routes. Two backends:
-//   1. SANDBOX (Docker + Xvfb + openbox + Chromium) — the TRUE visual
-//      desktop, available when Docker runs (OVH backend, CI).
-//   2. PLAYWRIGHT viewport — Chromium page screenshots, the local-dev
-//      fallback when Docker is unavailable (Windows desktop).
-//
-// Both share the same session model, control ownership, input mapping,
-// and audit events. The DesktopView UI is backend-agnostic.
+// Desktop session routes. The visible desktop is the Docker Linux sandbox;
+// browser verification uses separate browser tools when Docker is unavailable.
 
 import { Router } from "express";
-import { randomUUID } from "crypto";
 import { requireTenant } from "../middleware/tenant";
 import { playwrightAvailable, getBrowserSession } from "../ai/tools/browserTools";
 import {
@@ -38,7 +31,6 @@ import {
   type SandboxDesktopSession,
   type FrameQuality,
 } from "../desktop/sandboxDesktop";
-import { defaultDataDir } from "../persistence/LocalStore";
 import { setElectronBrowserTarget } from "../desktop/electronBrowserTarget";
 
 async function hasDocker(): Promise<boolean> {
@@ -368,27 +360,23 @@ export function desktopRouter(): Router {
     const png = await captureSandboxScreenshot(sandbox);
     if (!png) return res.status(409).json({ error: "Desktop frame not yet available." });
 
-    const fs = await import("fs");
-    const path = await import("path");
-    const dir = path.join(defaultDataDir(), "desktop-shots", t.id);
-    fs.mkdirSync(dir, { recursive: true });
     const name = `desktop-${sandbox.id}-${Date.now()}.png`;
-    const file = path.join(dir, name);
-    fs.writeFileSync(file, png);
-
-    const artifact = {
-      id: `shot_${randomUUID().slice(0, 12)}`,
-      projectRoot: projectRoot || null,
-      runId: sandbox.runId ?? null,
-      kind: "screenshot",
-      name,
-      path: file,
-      mediaType: "image/png",
-    };
-    try { t.localStore.saveArtifact(artifact); } catch { /* persistence best-effort */ }
+    let artifact;
+    try {
+      artifact = await t.artifactService.create({
+        name,
+        kind: "generated",
+        bytes: png,
+        mediaType: "image/png",
+        projectRoot: sandbox.projectRoot ?? projectRoot ?? undefined,
+        runId: sandbox.runId,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: `Screenshot could not be saved: ${err.message}` });
+    }
     if (sandbox.runId && t.runStore.get(sandbox.runId)) {
       try {
-        t.runStore.emit(sandbox.runId, "desktop.screenshot", { name, path: file, sessionId: sandbox.id });
+        t.runStore.emit(sandbox.runId, "desktop.screenshot", { name, artifactId: artifact.id, sessionId: sandbox.id });
       } catch { /* audit best-effort */ }
     }
     res.json({ ok: true, artifact });
