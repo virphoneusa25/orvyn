@@ -29,7 +29,7 @@ const HTML = '<!doctype html><html><head><meta charset="utf-8"><title>VirPhone</
 const CSS = ".container{max-width:960px;margin:0 auto}body{background:#0b1220;color:#fff;font-family:system-ui}";
 const JS = "document.documentElement.dataset.ready='1';";
 
-const seen = { tools: new Set(), refused: "", search: "" };
+const seen = { tools: new Set(), refused: "", search: "", logoPath: "", offeredGenerate: false, handoffNote: "" };
 
 function toolResultsSinceUser(msgs) {
   const i = msgs.map((m) => m.role).lastIndexOf("user");
@@ -39,7 +39,8 @@ function toolResultsSinceUser(msgs) {
 function nextTurn(body) {
   const msgs = body.messages ?? [];
   const system = String(msgs[0]?.content ?? "");
-  const user = String([...msgs].reverse().find((m) => m.role === "user" && !/^(Budget note|\[)/.test(String(m.content)))?.content ?? "");
+  const textOf = (c) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => p?.text ?? "").join(" ") : "");
+  const user = textOf([...msgs].reverse().find((m) => m.role === "user" && !/^(Budget note|\[)/.test(textOf(m.content)))?.content);
   if (system.includes("ORVYN VERIFIER")) {
     // The independent verifier opens the published page before it passes it.
     const url = (system.match(/Published page: (\S+)/) ?? [])[1];
@@ -54,6 +55,13 @@ function nextTurn(body) {
   const since = toolResultsSinceUser(msgs);
   const shell = tools.includes("terminal") ? "terminal" : tools.includes("run_command") ? "run_command" : null;
   if (!tools.length) return { text: "OK." };
+  // The chat (web tools only) asked to edit the site: it looks for a tool.
+  if (/Chat: edit the header/.test(user) && !tools.includes("write_file")) {
+    const got = msgs.filter((m) => m.role === "tool");
+    if (!got.length && tools.includes("search_capabilities")) return { text: "", call: { name: "search_capabilities", args: { query: "edit the VirPhone website header" } } };
+    seen.handoffNote = String(got[0]?.content ?? "");
+    return { text: "I'm doing it now." };
+  }
   if (/Build a simple VirPhone website/.test(user)) {
     // Gate nudges arrive as new user turns: count this run's tool results, not only the last turn's.
     const since = msgs.filter((m) => m.role === "tool");
@@ -75,6 +83,14 @@ function nextTurn(body) {
     }
     seen.search = String(since[since.length - 1]?.content ?? "");
     return { text: "The site is in the Preview tab." };
+  }
+  if (/use this logo/i.test(user)) {
+    const note = JSON.stringify(msgs).match(/saved in the project as ([^\s)\\]+)\)/);
+    if (process.env.PF_DEBUG) console.error("LOGO", since.length, JSON.stringify(msgs).match(/.{80}attached.{160}/)?.[0]);
+    seen.logoPath = note ? note[1] : "";
+    if (since.length === 0 && seen.logoPath) return { text: "Adding your logo.", call: { name: "edit_file", args: { path: "index.html", old_text: "<h1>VirPhone</h1>", new_text: `<h1><img src="${seen.logoPath}" alt="VirPhone"></h1>` } } };
+    if (tools.includes("generate_image")) seen.offeredGenerate = true;
+    return { text: "Your logo is on the page." };
   }
   if (/Where is the CSS/i.test(user)) {
     if (since.length === 0) return { text: "Looking.", call: { name: "read_file", args: { path: "styles.css" } } };
@@ -173,6 +189,37 @@ async function main() {
 
     console.log("\n4. search_code on one file");
     ok(/styles\.css:1:\.container/.test(seen.search) && !/ENOTDIR/.test(seen.search), "search_code {path: \"styles.css\"} found the rule", seen.search.slice(0, 200));
+
+    console.log("\n4b. One preview address per chat; never shown before its stylesheet");
+    const buildFirst = build.events.find((e) => e.type === "preview.available");
+    ok(Boolean(buildFirst) && String(buildFirst.data?.url) === url, "the follow-up shows the site at the same preview address as the build", `${buildFirst?.data?.url} vs ${url}`);
+    const firstSeq = build.events.findIndex((e) => e.type === "preview.available");
+    const cssWrite = build.events.findIndex((e) => e.type === "file.edit" && /styles\.css$/.test(String(e.data?.path ?? "")));
+    ok(cssWrite >= 0 && firstSeq > cssWrite, "the build's preview appeared only once styles.css existed (never bare HTML)", `preview@${firstSeq} css@${cssWrite}`);
+
+    console.log("\n4c. 'Can you use this logo?' with the logo attached");
+    const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6364f8ff3f0005fe02fea7d6a4f70000000049454e44ae426082", "hex");
+    const logo = await runTask("Can you use this logo for virphone?", { sessionId, previousRunId: follow.runId, attachments: [{ kind: "image", name: "VirPhone_New_Logo.png", mediaType: "image/png", b64: png.toString("base64") }] });
+    ok(logo.status === "completed", "the logo run finished", `${logo.status} ${JSON.stringify(logo.events.filter((e) => /error|failed/.test(e.type)).map((e) => [e.type, e.data?.tool, e.data?.error ?? e.data?.message]).slice(-4))}`);
+    ok(seen.logoPath === "assets/VirPhone_New_Logo.png", "the attached logo was saved into the project and ORION was told its path", seen.logoPath);
+    const logoUrls = logo.events.filter((e) => e.type === "preview.available" || e.type === "preview.updated").map((e) => String(e.data?.url ?? "")).filter(Boolean);
+    const logoUrl = logoUrls[logoUrls.length - 1] ?? "";
+    const served = logoUrl ? await fetch(new URL("assets/VirPhone_New_Logo.png", logoUrl)) : null;
+    const bytes = served?.ok ? Buffer.from(await served.arrayBuffer()) : Buffer.alloc(0);
+    ok(bytes.equals(png), "the preview serves the user's own logo, byte for byte", `${served?.status} ${bytes.length}`);
+    ok(logoUrl === url, "still the same preview address", `${logoUrl} vs ${url}`);
+
+    console.log("\n4d. The chat asked for a tool to edit the website: handed to a task, no marketplace card");
+    const acts = await new Promise((resolveChat) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws/chat`);
+      const found = [];
+      sock.onopen = () => sock.send(JSON.stringify({ task: "chat", history: [], userMessage: "Chat: edit the header of my site?", context: { useRag: false } }));
+      sock.onmessage = (ev) => { const c = JSON.parse(ev.data); if (c.activity) found.push(c.activity.kind); if (c.done) { sock.close(); resolveChat(found); } };
+      sock.onerror = () => resolveChat(found);
+      setTimeout(() => resolveChat(found), 15000);
+    });
+    ok(acts.includes("handoff") && !acts.includes("capability"), "the chat handed the work to a task run (no 'Find a tool' card)", JSON.stringify(acts));
+    ok(/starting this as a task/i.test(seen.handoffNote), "ORION was told the task is starting", seen.handoffNote.slice(0, 160));
 
     console.log("\n5. A question about the project in the same chat");
     const ask = await runTask("Where is the CSS to the preview?", { sessionId, previousRunId: follow.runId });

@@ -114,3 +114,32 @@ export function validateToolArguments(
   }
   return { ok: false, error: parts.join(" "), errorType: "INVALID_ARGUMENTS", missing, invalid, retryable: true };
 }
+
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * ORVYN's own folders are not the project: the engine's data directory
+ * (other workspaces, published previews, databases) and a project's
+ * `.orvyn/` folder (checkpoints, internal state). Reading, searching or
+ * changing them is refused; the preview is ORVYN's job, not the model's.
+ */
+export function internalPathRefusal(tool: string, args: Record<string, unknown>, ctx: { dataDir: string; projectRoot: string }): string | null {
+  const message = "That is ORVYN's own internal storage, not part of the project. Do not read, search or change it. The live preview is published and served by ORVYN from the project files; to change the site, edit the project files. To check the site, use the browser tools on the preview URL.";
+  const paths = ["path", "from", "to", "directory", "dir", "cwd"].map((k) => String(args[k] ?? "")).filter(Boolean);
+  if (paths.some((p) => /(^|[\\/])\.orvyn([\\/]|$)/.test(p.replace(/^\.\//, "")))) return message;
+  if (tool === "search_code" || tool === "search_files") {
+    const q = String(args.pattern ?? args.query ?? "");
+    if (/^\.?orvyn\b|checkpoints/.test(q) && !/\.(css|js|html?)\b/.test(q)) return message;
+  }
+  const command = String(args.command ?? "");
+  if (command) {
+    if (/(^|[\s'"/])\.orvyn\/(checkpoints|state|runs|sessions)|previews\/roots\.json/.test(command)) return message;
+    const data = ctx.dataDir.replace(/[\\/]+$/, "");
+    if (data && data.length > 1) {
+      const root = ctx.projectRoot.replace(/[\\/]+$/, "");
+      const hits = command.match(new RegExp(escapeRe(data) + "(?:[\\\\/][^\\s'\"`;|&)]*)?", "g")) ?? [];
+      if (hits.some((hit) => !(root && (hit === root || hit.startsWith(root + "/") || hit.startsWith(root + "\\"))))) return message;
+    }
+  }
+  return null;
+}

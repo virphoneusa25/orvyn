@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { inferTaskIntent } from "./taskIntent";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
-import { selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
+import { internalPathRefusal, selectToolNames, shellServerRefusal, validateToolArguments } from "./toolPolicy";
 import { evaluateCompletionGates } from "./completionGates";
 
 const scope = { tenantId: "tenant-a", organizationId: "org-a", projectId: "proj-1" };
@@ -246,4 +246,26 @@ test("a local dev server is not a remote server task, and gets the service tools
   assert.ok(names.includes("read_process_logs"));
   assert.ok(!names.includes("ssh_exec"));
   assert.equal(inferTaskIntent("ssh into the server and check uptime").category, "server");
+});
+
+test("ORVYN's own storage is off limits; the project is not", () => {
+  const ctx = { dataDir: "/data", projectRoot: "/data/tenants/t1/workspaces/ws_1" };
+  for (const [tool, args] of [
+    ["read_file", { path: ".orvyn/checkpoints/0000" }],
+    ["list_directory", { path: ".orvyn" }],
+    ["search_code", { pattern: ".orvyn" }],
+    ["terminal", { command: "cat /data/previews/roots.json | head -50" }],
+    ["terminal", { command: "rm /data/previews/eef953af/styles.css" }],
+    ["terminal", { command: "ls /data/tenants/other-user/workspaces" }],
+  ] as const) {
+    assert.ok(internalPathRefusal(tool, args as Record<string, unknown>, ctx), `${tool} ${JSON.stringify(args)}`);
+  }
+  for (const [tool, args] of [
+    ["read_file", { path: "styles.css" }],
+    ["terminal", { command: "ls -la /data/tenants/t1/workspaces/ws_1/css" }],
+    ["terminal", { command: "npm test" }],
+    ["search_code", { pattern: "hero" }],
+  ] as const) {
+    assert.equal(internalPathRefusal(tool, args as Record<string, unknown>, ctx), null, `${tool} ${JSON.stringify(args)}`);
+  }
 });

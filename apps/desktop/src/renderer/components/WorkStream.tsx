@@ -365,6 +365,28 @@ export function WorkStream({
   }
   deliver.current = (text: string) => void send(text);
 
+  // The chat handed work to a task run (it needs file/terminal/browser tools).
+  React.useEffect(() => {
+    const onHandoff = (e: Event) => {
+      const text = String((e as CustomEvent<{ prompt?: string }>).detail?.prompt ?? "").trim();
+      if (!text) return;
+      void (async () => {
+        try {
+          const outcome = await submitOrvynCommand({
+            prompt: text, mode: "code", forceTask: true, source: "CHAT", projectRoot, previousRunId: run.runId, attachments: [],
+            requestedModelId, reasoningEffort, permissionMode: accessMode, executionTarget,
+          });
+          if (outcome.kind === "error") throw new Error(outcome.error);
+          if (outcome.kind !== "chat") { ensureChatForRun(text, outcome.runId); onRunStarted(outcome.runId); }
+        } catch (err: any) {
+          setError(err.message);
+        }
+      })();
+    };
+    document.addEventListener("orvyn:handoff-task", onHandoff);
+    return () => document.removeEventListener("orvyn:handoff-task", onHandoff);
+  });
+
   /**
    * Persists a drag reorder: the list applies instantly (optimistic), then
    * each scope's run gets its new relative order. Positions are per-run in
@@ -1011,6 +1033,24 @@ function StageChip({ name, state }: { name: string; state: StageState }) {
   );
 }
 
+/** Handoffs already launched (one task per chat answer, even across re-renders). */
+const launchedHandoffs = new Set<string>();
+
+/** "Starting this as a task…": launches the task run once, with the user's own words. */
+function HandoffRow({ id, prompt }: { id: string; prompt: string }) {
+  React.useEffect(() => {
+    if (!prompt || launchedHandoffs.has(id)) return;
+    launchedHandoffs.add(id);
+    document.dispatchEvent(new CustomEvent("orvyn:handoff-task", { detail: { prompt } }));
+  }, [id, prompt]);
+  return (
+    <div className="stream-status" data-testid="chat-handoff" style={{ marginTop: 6 }}>
+      <span aria-hidden="true" className="stream-status__icon">→</span>
+      <span>Starting this as a task in your project…</span>
+    </div>
+  );
+}
+
 function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMessage; live: boolean; question?: string; onRegenerate?: () => void }) {
   if (message.role === "user") {
     return (
@@ -1043,6 +1083,10 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
             <MessageContent content={message.content} streaming={live} />
           )}
         </div>
+        {/* Work that needs the project's tools: the chat hands it to a real task run. */}
+        {(message.activity ?? []).filter((a) => a.kind === "handoff").map((a) => (
+          <HandoffRow key={a.id} id={a.id} prompt={question ?? ""} />
+        ))}
         {/* ORION needs a tool it does not have: the install card, never "the tool isn't available". */}
         {(message.activity ?? []).filter((a) => a.kind === "capability").map((a) => (
           <div key={a.id} data-testid="chat-capability" style={{ marginTop: 8 }}>

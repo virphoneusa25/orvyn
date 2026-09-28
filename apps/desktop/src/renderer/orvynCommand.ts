@@ -22,6 +22,8 @@ export type { CommandMode } from "./orvynIntent";
 export type CommandSource = "HOME" | "CHAT" | "NEW_TASK" | "QUICK_ACTION" | "MISSION";
 
 export interface OrvynCommand {
+  /** Start a task run regardless of how the words read (a chat handoff). */
+  forceTask?: boolean;
   prompt: string;
   mode: CommandMode;
   source: CommandSource;
@@ -236,7 +238,8 @@ export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutc
   }
   if (!prompt) return { kind: "error", error: "Empty command" };
 
-  switch (classifyIntent(cmd.prompt, cmd.mode, { followsRun: Boolean(binding?.previousRunId) })) {
+  // A chat handoff is already known to be work for the task tools.
+  switch (cmd.forceTask ? "code" : classifyIntent(cmd.prompt, cmd.mode, { followsRun: Boolean(binding?.previousRunId), hasAttachments: Boolean(cmd.attachments?.length) })) {
     case "chat":
       return runChat(cmd);
     case "research":

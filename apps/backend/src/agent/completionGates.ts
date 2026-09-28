@@ -1,3 +1,4 @@
+import { usesGivenFile } from "./taskIntent";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { decideCompletion } from "./agentRunState";
 import { asksToReadFileBack, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
@@ -107,7 +108,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact)) {
+  if (!failedGate && !usesGivenFile(input.instruction) && (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact)) {
     const ready = input.artifacts.filter((a) => a.artifactId && a.name);
     if (ready.length === 0) {
       failedGate = "artifact";

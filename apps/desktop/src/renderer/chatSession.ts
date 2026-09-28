@@ -9,7 +9,7 @@
 export interface ChatActivity {
   id: string;
   /** capability: ORION needs a tool it does not have (shown as an install card). */
-  kind: "search" | "read" | "capability";
+  kind: "search" | "read" | "capability" | "handoff";
   status: "running" | "done" | "failed";
   query?: string;
   url?: string;

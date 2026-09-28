@@ -16,7 +16,7 @@ export interface ResearchStep {
 
 export interface ActivityLike {
   id: string;
-  kind: "search" | "read" | "capability";
+  kind: "search" | "read" | "capability" | "handoff";
   status: "running" | "done" | "failed";
   query?: string;
   url?: string;
@@ -26,7 +26,7 @@ export interface ActivityLike {
 }
 
 export function stepsFromActivity(activity: ActivityLike[] | undefined): ResearchStep[] {
-  return (activity ?? []).filter((a) => a.kind !== "capability").map((a): ResearchStep => a.kind === "search"
+  return (activity ?? []).filter((a) => a.kind !== "capability" && a.kind !== "handoff").map((a): ResearchStep => a.kind === "search"
     ? { id: a.id, kind: "search", status: a.status, label: a.query ?? "", results: a.results }
     : { id: a.id, kind: "read", status: a.status, label: a.url ?? "", url: a.url, domain: a.url ? domainOf(a.url) : undefined });
 }

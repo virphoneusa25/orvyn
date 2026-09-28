@@ -117,3 +117,11 @@ test("a question about the project in a chat that already built it goes to ORION
   assert.equal(classifyIntent("What is the capital of France?", "auto", { followsRun: true }), "chat");
   assert.equal(classifyIntent("hi", "auto", { followsRun: true }), "chat");
 });
+
+test("an attached logo with 'use this' is work on that file, not image generation", () => {
+  assert.equal(classifyIntent("can you use this logo for virphone?", "auto", { hasAttachments: true }), "code");
+  assert.equal(classifyIntent("put this on the homepage", "auto", { hasAttachments: true }), "code");
+  assert.equal(classifyIntent("can you use this logo for virphone?", "auto", { hasAttachments: true, followsRun: true }), "code");
+  assert.equal(classifyIntent("What is in this picture?", "auto", { hasAttachments: true }), "code");
+  assert.equal(classifyIntent("What is the capital of France?", "auto", { hasAttachments: false }), "chat");
+});

@@ -1,3 +1,4 @@
+import { usesGivenFile } from "../agent/taskIntent";
 /** Prompt hints for Auto routing. Run mode stays separate. */
 
 export interface ExecutionHints {
@@ -36,7 +37,7 @@ export function classifyExecutionHints(prompt: string, mode?: string): Execution
     isBackground: BACKGROUND.test(t) || m === "automate",
     requiresRemote: (REMOTE.test(t) || FORCE_CLOUD.test(t) || m === "server" || m === "deploy") && !FORCE_LOCAL.test(t),
     isVisual: VISUAL.test(t),
-    isArtifact: ARTIFACT.test(t) && !LOCAL_CODE.test(t),
+    isArtifact: ARTIFACT.test(t) && !LOCAL_CODE.test(t) && !usesGivenFile(t),
     isLocalCoding: (LOCAL_CODE.test(t) || FORCE_LOCAL.test(t) || m === "code") && !SITE.test(t),
     isSite: SITE.test(t) && !FORCE_LOCAL.test(t),
   };

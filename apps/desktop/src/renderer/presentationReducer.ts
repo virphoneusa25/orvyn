@@ -105,6 +105,8 @@ export interface StatusItem {
   /** Thought rows: a safe high-level summary with a duration — NEVER private
    *  chain-of-thought. Consecutive thinking events merge into one row. */
   thought?: { ts: number; endTs?: number; summary?: string };
+  /** A preview line: the site's address, so the row reopens it any time. */
+  previewUrl?: string;
 }
 
 export interface ApprovalItem {
@@ -858,6 +860,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
           label: `Preview updated (v${previewRev})`,
           ephemeral: false,
           tone: "working",
+          ...(typeof e.data?.url === "string" && e.data.url ? { previewUrl: String(e.data.url) } : {}),
         });
         continue;
       case "run.execution":

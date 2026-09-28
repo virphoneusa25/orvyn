@@ -1,11 +1,13 @@
 // Serves a directory the agent already wrote. This module does not author pages.
 
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
 const roots = new Map<string, string>();
+/** The project folder behind a preview: a linked file the preview folder lacks is read from here. */
+const sources = new Map<string, string>();
 // Previews live in the data directory (a persistent volume in the cloud), so a
 // preview link still opens after the engine restarts or is redeployed.
 function previewBase(): string {
@@ -18,18 +20,24 @@ function loadRoots(): void {
   if (rootsLoaded) return;
   rootsLoaded = true;
   try {
-    const saved = JSON.parse(readFileSync(rootIndex(), "utf8")) as Record<string, string>;
-    for (const [id, dir] of Object.entries(saved)) {
+    const saved = JSON.parse(readFileSync(rootIndex(), "utf8")) as Record<string, string | { dir: string; source?: string }>;
+    for (const [id, entry] of Object.entries(saved)) {
+      const dir = typeof entry === "string" ? entry : entry?.dir;
       if (typeof dir === "string" && existsSync(dir)) roots.set(id, dir);
+      if (entry && typeof entry === "object" && typeof entry.source === "string") sources.set(id, entry.source);
     }
   } catch { /* first publish */ }
 }
 
-function saveRoot(id: string, dir: string): void {
+function saveRoot(id: string, dir: string, source?: string): void {
   roots.set(id, dir);
+  if (source) sources.set(id, source);
   loadRoots();
-  const all: Record<string, string> = {};
-  for (const [key, value] of roots) all[key] = value;
+  const all: Record<string, string | { dir: string; source: string }> = {};
+  for (const [key, value] of roots) {
+    const src = sources.get(key);
+    all[key] = src ? { dir: value, source: src } : value;
+  }
   mkdirSync(previewBase(), { recursive: true });
   writeFileSync(rootIndex(), JSON.stringify(all));
 }
@@ -105,11 +113,12 @@ export function composeSiteDocumentSource(runId: string, pageKey: string): strin
  * that run's published preview folder after a restart). Files this run
  * already has are kept. Returns the files inherited.
  */
-export function inheritSiteFiles(runId: string, fromRunIds: string[]): string[] {
+export function inheritSiteFiles(runId: string, fromRunIds: string[], siteKey?: string): string[] {
   const inherited: string[] = [];
   const bag = remembered.get(runId) ?? new Map<string, string>();
   const bin = rememberedBinary.get(runId) ?? new Map<string, Buffer>();
-  for (const from of [...fromRunIds].reverse()) {
+  const candidates = [...[...fromRunIds].reverse(), ...(siteKey ? [`site-${createHash("sha256").update(siteKey).digest("hex").slice(0, 16)}`] : [])];
+  for (const from of candidates) {
     if (!from || from === runId) continue;
     const prior = remembered.get(from);
     const priorBin = rememberedBinary.get(from);
@@ -247,14 +256,34 @@ export interface PublishedSite {
   unchanged: boolean;
 }
 
+/** One address per project: every run of a chat updates the same preview URL (it survives restarts). */
+export function stablePreviewId(siteKey: string): string {
+  const h = createHash("sha256").update(`orvyn-preview:${siteKey}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/** Stylesheets and scripts the page links that this run does not have (yet). */
+export function missingLinkedAssets(runId: string): string[] {
+  const bag = remembered.get(runId);
+  const pageKey = bag ? [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name)) : undefined;
+  if (!bag || !pageKey) return [];
+  const pageDir = pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/") + 1) : "";
+  const html = bag.get(pageKey) ?? "";
+  const refs = [...html.matchAll(/<(?:link\b[^>]*rel\s*=\s*["']?stylesheet[^>]*|script\b[^>]*)\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
+    .map((m) => m[1]!.split(/[?#]/)[0]!)
+    .filter((ref) => !/^(?:[a-z]+:)?\/\//i.test(ref) && !ref.startsWith("data:") && /\.(css|m?js)$/i.test(ref) && !ref.includes(".."))
+    .map((ref) => (ref.startsWith("/") ? ref.slice(1) : `${pageDir}${ref.replace(/^\.\//, "")}`));
+  return [...new Set(refs)].filter((ref) => !bag.has(ref));
+}
+
 /** Write the remembered pages to one stable folder. Later files update that same URL. */
-export function publishRememberedSite(runId: string, changedFiles: string[] = []): PublishedSite | null {
+export function publishRememberedSite(runId: string, changedFiles: string[] = [], opts: { siteKey?: string; sourceRoot?: string } = {}): PublishedSite | null {
   const bag = remembered.get(runId);
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
   const existingId = publishedIds.get(runId);
   const composed = composeSiteDocument(runId);
   const pageKey = [...bag.keys()].find((name) => /(^|\/)index\.html$/i.test(name));
-  const dir = join(previewBase(), runId);
+  const dir = join(previewBase(), opts.siteKey ? `site-${createHash("sha256").update(opts.siteKey).digest("hex").slice(0, 16)}` : runId);
   for (const [rel, content] of bag) {
     const abs = join(dir, rel);
     mkdirSync(join(abs, ".."), { recursive: true });
@@ -267,12 +296,15 @@ export function publishRememberedSite(runId: string, changedFiles: string[] = []
   }
   const pageDir = pageKey && pageKey.includes("/") ? pageKey.slice(0, pageKey.lastIndexOf("/")) : "";
   const root = pageDir ? join(dir, pageDir) : dir;
-  const id = existingId ?? randomUUID();
+  const id = existingId ?? (opts.siteKey ? stablePreviewId(opts.siteKey) : randomUUID());
   const bump = !existingId || changedFiles.length > 0;
   const revision = bump ? (revisions.get(runId) ?? 0) + 1 : (revisions.get(runId) ?? 1);
   publishedIds.set(runId, id);
   revisions.set(runId, revision);
-  saveRoot(id, root);
+  const sourceRoot = opts.sourceRoot && existsSync(opts.sourceRoot)
+    ? (pageDir ? join(opts.sourceRoot, pageDir) : opts.sourceRoot)
+    : undefined;
+  saveRoot(id, root, sourceRoot);
   return {
     id,
     url: previewUrl(id),
@@ -305,6 +337,16 @@ export function readPublishedFile(id: string, rel: string): { body: Buffer; cont
   if (!abs.startsWith(rootPrefix)) return undefined;
   const ext = extname(abs).toLowerCase();
   const index = join(root, "index.html");
+  // A linked stylesheet, script or image the preview folder lacks is served
+  // from the project itself, so the page never renders unstyled.
+  const source = sources.get(id);
+  if ((!existsSync(abs) || !statSync(abs).isFile()) && source && ext && ext !== ".html" && TYPES[ext]) {
+    const fromSource = join(source, safe);
+    const sourcePrefix = source.endsWith(sep) ? source : source + sep;
+    if (fromSource.startsWith(sourcePrefix) && existsSync(fromSource) && statSync(fromSource).isFile()) {
+      return { body: readFileSync(fromSource), contentType: TYPES[ext]! };
+    }
+  }
   if (!existsSync(abs) || !statSync(abs).isFile()) {
     if ((!ext || ext === ".html") && existsSync(index)) return { body: readFileSync(index), contentType: TYPES[".html"] };
     return undefined;

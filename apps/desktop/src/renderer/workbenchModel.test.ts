@@ -228,3 +228,15 @@ test("DOM contract: one workbench, one tab bar, no inspector", () => {
   assert.equal(c.tabbars, 1);
   assert.equal(c.inspectors, 0);
 });
+
+test("only one Preview tab: a newer preview address replaces the older ones", () => {
+  const out = reconcileWorkbenchTabs({
+    openTabIds: ["terminal", "preview:https://orvyn.example/api/v1/sites/a/", "preview:https://orvyn.example/api/v1/sites/b/", "files"],
+    activeTabId: "preview:https://orvyn.example/api/v1/sites/a/",
+    previewUrl: "https://orvyn.example/api/v1/sites/c/",
+  });
+  const previews = out.tabs.filter((t) => t.kind === "preview");
+  assert.equal(previews.length, 1);
+  assert.match(String(previews[0]!.url), /\/sites\/c\/?$/);
+  assert.equal(out.activeId, previews[0]!.id);
+});

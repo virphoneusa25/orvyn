@@ -39,6 +39,17 @@ function has(text: string, re: RegExp): boolean {
   return re.test(text);
 }
 
+/**
+ * "Can you use this logo for VirPhone?", "put the attached photo in the hero":
+ * the user gave the file. That is work with their file, not a request to
+ * generate a new logo/image deliverable.
+ */
+export function usesGivenFile(text: string): boolean {
+  const t = String(text ?? "");
+  return /\b(this|these|attached|my|our|the (?:attached|new|provided|uploaded))\s+(logo|image|picture|photo|icon|screenshot|graphic|banner|asset)s?\b/i.test(t)
+    || /\b(use|put|add|place|swap|replace|insert|set)\b.{0,40}\b(this|attached|uploaded)\b/i.test(t);
+}
+
 export function inferTaskIntent(instruction: string, composerMode?: string): TaskIntent {
   const goal = String(instruction ?? "").trim();
   const mode = String(composerMode ?? "").toLowerCase();
@@ -53,7 +64,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     // "Open example.com", "go to https://…": a site to look at, not a file.
     has(goal, /\b(open|visit|go to|navigate to|browse to|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
   const desktop = has(goal, /\b(desktop|on screen|settings dialog|computer-use)\b/i);
-  const artifact = has(goal, /\b(logo|png|jpe?g|gif|webp|svg|pdf|docx|xlsx|zip|generate an image)\b/i);
+  const artifact = has(goal, /\b(logo|png|jpe?g|gif|webp|svg|pdf|docx|xlsx|zip|generate an image)\b/i) && !usesGivenFile(goal);
   const integration = has(goal, /\b(mcp|external api|webhook|integration)\b/i);
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);

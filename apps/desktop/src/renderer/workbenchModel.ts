@@ -384,8 +384,23 @@ export function reconcileWorkbenchTabs(input: {
   const hasNativeBrowser = [...byKey.values()].some((row) => row.tab.kind === "browser" && row.tab.id.startsWith("browser:"));
   if (hasNativeBrowser) byKey.delete("browser");
 
+  // One Preview tab: the site being worked on. Older preview addresses (an
+  // earlier run, another chat) are replaced, never stacked as extra tabs.
+  let activeInput = input.activeTabId || "";
+  const previews = [...byKey.entries()].filter(([, row]) => row.tab.kind === "preview");
+  if (previews.length >= 1) {
+    const current = input.previewUrl ? previewTabId(input.previewUrl) : "";
+    let keep = previews.find(([key]) => key === current) ?? previews.reduce((a, b) => (b[1].index > a[1].index ? b : a));
+    const firstIndex = Math.min(...previews.map(([, row]) => row.index));
+    for (const [key] of previews) byKey.delete(key);
+    // The tab follows the current site: an old address becomes the new one.
+    if (current && keep[0] !== current) keep = [current, { tab: { ...previewTabFor(input.previewUrl!, keep[1].tab.nativeId), id: current }, index: firstIndex }];
+    byKey.set(keep[0], { ...keep[1], index: firstIndex });
+    if (activeInput.startsWith("preview") && activeInput !== keep[0]) activeInput = keep[0];
+  }
+
   const tabs = orderWorkbenchTabs([...byKey.values()].sort((a, b) => a.index - b.index).map((row) => row.tab));
-  const activeId = resolveActiveWorkbenchTabId(tabs, input.activeTabId || "");
+  const activeId = resolveActiveWorkbenchTabId(tabs, activeInput);
   return { tabs, activeId, openTabIds: tabs.map((tab) => tab.id) };
 }
 

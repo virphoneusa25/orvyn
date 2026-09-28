@@ -112,3 +112,22 @@ export function claimsToolUnavailable(text: string): boolean {
   const t = String(text ?? "");
   return CLAIMS.some((re) => re.test(t));
 }
+
+/**
+ * The run's own tools that already cover a capability ORION asked for
+ * ("edit the VirPhone website" → edit_file, write_file). Empty when the
+ * capability is something new (email, GitHub, a database, web search).
+ */
+export function builtInToolsFor(query: string, known: (name: string) => boolean): string[] {
+  const q = String(query ?? "").toLowerCase();
+  if (/\b(email|gmail|github|slack|calendar|database|postgres|mysql|jira|notion|stripe|twilio|search the web|web search|google)\b/.test(q)) return [];
+  const groups: [RegExp, string[]][] = [
+    [/\b(edit|write|create|update|change|modify|fix|add|remove|build|make)\b.*\b(file|site|website|web ?page|page|html|css|javascript|js|code|project|app|component|style|hero|section|logo|header|footer)\b|\b(website|web ?site|landing page|html|css)\b/, ["read_file", "edit_file", "write_file"]],
+    [/\b(run|execute|terminal|shell|command|npm|build|install packages?|tests?)\b/, ["terminal", "run_command", "run_tests"]],
+    [/\b(preview|screenshot|open the (?:page|site)|check the (?:page|site)|browser|render)\b/, ["browser_open", "browser_screenshot"]],
+    [/\b(read|look at|inspect|list|find)\b.*\b(files?|folders?|project|code)\b/, ["read_file", "list_directory", "search_code"]],
+  ];
+  const out = new Set<string>();
+  for (const [re, tools] of groups) if (re.test(q)) for (const t of tools) if (known(t)) out.add(t);
+  return [...out];
+}

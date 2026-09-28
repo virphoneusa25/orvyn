@@ -84,17 +84,22 @@ const ABOUT_THE_PROJECT = /\b(css|styles?(?:heet)?|script\.js|index\.html|[\w-]+
  * ORION with its tools (it can look at the files) instead of plain chat,
  * which cannot see them and would guess.
  */
-export function classifyIntent(prompt: string, mode: CommandMode, ctx: { followsRun?: boolean } = {}): CommandIntent {
+/** The message points at something the user attached ("use this logo", "the attached photo"). */
+export const REFERS_TO_ATTACHMENT = /\b(this|these|attached|my|our|the (?:attached|new|provided|uploaded))\s+(logo|image|picture|photo|icon|file|screenshot|design|mock-?up|pdf|document|asset|graphic|banner)s?\b|\b(use|put|add|place|swap|replace|insert|set)\b.{0,30}\b(this|attached|it)\b/i;
+
+export function classifyIntent(prompt: string, mode: CommandMode, ctx: { followsRun?: boolean; hasAttachments?: boolean } = {}): CommandIntent {
   const trimmed = prompt.trim();
 
   // Absolute guard first: pure greetings/tiny-talk are chat, always.
   if (GREETING_ONLY.test(trimmed)) return "chat";
 
   if (ctx.followsRun && mode !== "research" && ABOUT_THE_PROJECT.test(trimmed)) return "code";
+  // "Can you use this logo for VirPhone?" + an attached file: work with THAT file.
+  if (ctx.hasAttachments && mode !== "research" && (REFERS_TO_ATTACHMENT.test(trimmed) || ctx.followsRun)) return "code";
 
   // Polite action requests still need tools, even when phrased as a question.
   // "Can you log in to my server?" is work, not a capability question.
-  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add|log\s*in|login|ssh|connect|install|test|start|stop|restart|debug|verify|launch|browse|tail|diagnose|commit|screenshot)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
+  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add|use|put|replace|swap|insert|change|remove|log\s*in|login|ssh|connect|install|test|start|stop|restart|debug|verify|launch|browse|tail|diagnose|commit|screenshot)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
 
   if (mode === "research") return "research";
   if (mode === "automate") return "automate";

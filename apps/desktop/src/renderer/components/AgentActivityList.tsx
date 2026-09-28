@@ -297,11 +297,23 @@ export function AgentActivityList({
               );
             }
             if (item.label.startsWith("Preview updated")) {
+              // The chat keeps its site: this row reopens the preview any time,
+              // even after a restart (the address never changes for this chat).
+              const url = item.previewUrl;
               return (
-                <div key={item.key} className="preview-updated">
+                <button
+                  key={item.key}
+                  type="button"
+                  className="preview-updated preview-updated--link"
+                  data-testid="preview-row"
+                  disabled={!url}
+                  title={url ? "Open this site in Preview" : undefined}
+                  onClick={() => url && openArtifactInContext({ tab: "preview", url })}
+                >
                   <span aria-hidden="true">↻</span>
                   <span>{item.label}</span>
-                </div>
+                  {url && <span className="preview-updated__open">Open preview ↗</span>}
+                </button>
               );
             }
             return (

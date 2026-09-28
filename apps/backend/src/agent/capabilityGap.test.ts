@@ -40,3 +40,14 @@ test("replies that blame a tool are caught; normal replies are not", () => {
   assert.ok(!claimsToolUnavailable("I searched the web and read 4 pages. KEXP and NTS are good examples."));
   assert.ok(!claimsToolUnavailable("The Now Playing feed is not available when the stream is offline, so show a fallback message."));
 });
+
+test("work ORION's own tools cover is never sent to the marketplace", async () => {
+  const { builtInToolsFor } = await import("./StreamingAgentRuntime");
+  const known = (n: string) => ["read_file", "edit_file", "write_file", "terminal", "browser_open", "browser_screenshot", "list_directory", "search_code"].includes(n);
+  assert.deepEqual(builtInToolsFor("edit the VirPhone website", known), ["read_file", "edit_file", "write_file"]);
+  assert.ok(builtInToolsFor("run the tests", known).includes("terminal"));
+  assert.ok(builtInToolsFor("check the page in a browser", known).includes("browser_open"));
+  assert.deepEqual(builtInToolsFor("send and read email", known), []);
+  assert.deepEqual(builtInToolsFor("search the web", known), []);
+  assert.deepEqual(builtInToolsFor("work with GitHub", known), []);
+});

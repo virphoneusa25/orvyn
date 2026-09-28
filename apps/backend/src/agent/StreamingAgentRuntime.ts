@@ -4,6 +4,8 @@ import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS,
 import { condenseOutput, shouldCondense } from "./outputCondenser";
 import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
+import { builtInToolsFor } from "./capabilityGap";
+export { builtInToolsFor };
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
@@ -50,7 +52,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
-import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, missingLinkedAssets, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
@@ -59,7 +61,8 @@ import { normalizeKnownFile, workspaceModelNote } from "./workspacePreflight";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
 import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
-import { selectToolNames, shellServerRefusal, validateToolArguments, type ToolParameterSchema } from "./toolPolicy";
+import { internalPathRefusal, selectToolNames, shellServerRefusal, validateToolArguments, type ToolParameterSchema } from "./toolPolicy";
+import { defaultDataDir } from "../persistence/LocalStore";
 import {
   MALFORMED_CALL_LIMIT,
   classifyExecutedToolFailure,
@@ -490,10 +493,20 @@ export class StreamingAgentRuntime {
    * Later site files update that same URL and bump the revision.
    * A framework app uses its dev server instead of this static preview.
    */
-  private publishSitePreview(runId: string, changedFiles: string[]): void {
+  private publishSitePreview(runId: string, changedFiles: string[], opts: { force?: boolean } = {}): void {
     const state = this.runs.get(runId);
     if (state?.websiteLayout?.stack && state.websiteLayout.stack !== "static") return;
-    const published = publishRememberedSite(runId, changedFiles);
+    // Never show the site as bare HTML: while the page links a stylesheet or
+    // script this run cannot serve yet, fetch it (or wait for it to be written).
+    const alreadyShown = (this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available");
+    if (!opts.force && !alreadyShown) {
+      const missing = missingLinkedAssets(runId).filter((ref) => !this.sourceHasFile(runId, ref));
+      if (missing.length) {
+        void this.completeSiteAssets(runId);
+        return;
+      }
+    }
+    const published = this.publishSite(runId, changedFiles);
     if (!published || published.unchanged) return;
     const payload = {
       runId,
@@ -508,6 +521,25 @@ export class StreamingAgentRuntime {
       this.store.emit(runId, "preview.updated", payload);
     }
     this.speakWebsiteMilestone(runId);
+  }
+
+  /** This chat's one preview address, and the project folder it can read linked files from. */
+  private siteOptions(runId: string): { siteKey?: string; sourceRoot?: string } {
+    const state = this.runs.get(runId);
+    const siteKey = state?.workspaceId ? `ws:${state.workspaceId}` : undefined;
+    const remote = state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
+    return { siteKey, sourceRoot: !remote && state?.projectRoot ? state.projectRoot : undefined };
+  }
+
+  private publishSite(runId: string, changedFiles: string[] = []): ReturnType<typeof publishRememberedSite> {
+    return publishRememberedSite(runId, changedFiles, this.siteOptions(runId));
+  }
+
+  /** A linked file exists in the project folder this engine can read (so the preview can serve it). */
+  private sourceHasFile(runId: string, rel: string): boolean {
+    const root = this.siteOptions(runId).sourceRoot;
+    if (!root) return false;
+    try { return existsSync(path.join(root, rel)); } catch { return false; }
   }
 
   /** One chat line when the layout, the theme, or the visual check actually changes. */
@@ -611,6 +643,31 @@ export class StreamingAgentRuntime {
     return files.some((f) => /(^|\/)index\.html$/i.test(f)) && !files.some((f) => /(^|\/)package\.json$/i.test(f));
   }
 
+  /** Writes each attached image into the project's assets/ folder (on the user's computer for Local runs). */
+  private async saveAttachmentsToProject(runId: string, state: RunState, attachments: Attachment[]): Promise<{ name: string; path: string }[]> {
+    const saved: { name: string; path: string }[] = [];
+    for (const att of attachments.slice(0, 6)) {
+      if (att.kind !== "image" || !att.b64) continue;
+      const clean = String(att.name || "image.png").split(/[\\/]/).pop()!.replace(/[^\w.\-]+/g, "-").replace(/^-+|-+$/g, "") || "image.png";
+      const ext = /\.[a-z0-9]{2,5}$/i.test(clean) ? "" : `.${(att.mediaType ?? "image/png").split("/")[1]?.replace("jpeg", "jpg") ?? "png"}`;
+      const rel = `assets/${clean}${ext}`;
+      try {
+        const result = await this.tools.execute("write_file", { path: rel, content: "", content_base64: att.b64 }, "coder", {
+          signal: state.controller.signal,
+          runId,
+          workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
+          executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+        });
+        if (!result.ok) continue;
+        rememberSiteBinary(runId, rel, Buffer.from(att.b64, "base64"));
+        state.onProjectFile?.(rel);
+        this.store.emit(runId, "files.ready", { name: clean + ext, path: rel, additions: 0, deletions: 0, location: "workspace", message: `Saved your ${clean + ext} to ${rel}` });
+        saved.push({ name: att.name || clean + ext, path: rel });
+      } catch { /* the model still sees the image itself */ }
+    }
+    return saved;
+  }
+
   /** Reads one project file through the run's tools (on the user's computer for Local runs). */
   private async readSiteFile(runId: string, state: RunState, path: string): Promise<string | null> {
     try {
@@ -669,12 +726,12 @@ export class StreamingAgentRuntime {
     if (state.websiteLayout && (state.websiteLayout.directory || state.websiteLayout.stack !== "static")) return null;
     // The site this chat already built opens right away (its last preview),
     // wherever the files live; the project's current files refresh it below.
-    const inherited = inheritSiteFiles(runId, state.previousRunIds ?? []);
+    const inherited = inheritSiteFiles(runId, state.previousRunIds ?? [], this.siteOptions(runId).siteKey);
     const knownSite = inherited.some((f) => /(^|\/)index\.html$/i.test(f)) || (state.knownProjectFiles ?? []).some((f) => /^index\.html$/i.test(f));
     if (!state.intent.requiresFrontend && !knownSite) return null;
     let early: ReturnType<typeof publishRememberedSite> = null;
     if (inherited.some((f) => /(^|\/)index\.html$/i.test(f))) {
-      early = publishRememberedSite(runId);
+      early = this.publishSite(runId);
       if (early) this.store.emit(runId, "preview.available", { runId, previewId: early.id, url: early.url, revision: early.revision, changedFiles: inherited, label: "Live preview" });
     }
     const read = (path: string) => this.readSiteFile(runId, state, path);
@@ -688,7 +745,7 @@ export class StreamingAgentRuntime {
       const body = await read(ref);
       if (body) rememberSiteFile(runId, ref, body);
     }
-    const published = publishRememberedSite(runId, early ? ["index.html", ...refs] : []);
+    const published = this.publishSite(runId, early ? ["index.html", ...refs] : []);
     if (!published) return early?.url ?? null;
     if (early) this.store.emit(runId, "preview.updated", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs] });
     else this.store.emit(runId, "preview.available", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs], label: "Live preview" });
@@ -836,6 +893,12 @@ export class StreamingAgentRuntime {
       return `ORVYN already handled a tool to ${query} in this run. Do not say the tool is unavailable; finish with the tools you have.`;
     }
     state.capabilityQueries.add(query);
+    // Work ORION's own tools already do (edit the site, write files, run a
+    // command, check the page) is never a missing tool: no card, carry on.
+    const builtIn = builtInToolsFor(query, (n) => this.isKnownTool(n));
+    if (builtIn.length) {
+      return `You already have the tools for this: ${builtIn.join(", ")}. Do not look for or install another tool. Do the task with them now.`;
+    }
     type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean };
     let servers: Candidate[] = [];
     let reason = "";
@@ -1527,6 +1590,14 @@ export class StreamingAgentRuntime {
               const { bytes } = await this.artifacts.read(image.artifactId);
               rememberSiteBinary(runId, projectPath, bytes);
             } catch { /* a missing artifact cannot be used in the preview */ }
+          }
+        }
+        // Files the user attached (a logo, a photo) are saved into the project,
+        // so ORION uses THEM instead of generating new ones.
+        if (state && attachments?.length) {
+          const saved = await this.saveAttachmentsToProject(runId, state, attachments);
+          if (saved.length) {
+            messages[0].content += `\n\nThe user attached ${saved.map((f) => `${f.name} (saved in the project as ${f.path})`).join(", ")}. Use these exact files where the user asked (for example <img src="${saved[0]!.path}">). Do not generate or draw a replacement image. Look at the attached image before describing it.`;
           }
         }
         if (state) {
@@ -2524,6 +2595,12 @@ export class StreamingAgentRuntime {
         continue;
       }
 
+      const internalRefusal = internalPathRefusal(call.name, (call.arguments ?? {}) as Record<string, unknown>, { dataDir: defaultDataDir(), projectRoot: state.projectRoot });
+      if (internalRefusal) {
+        this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: internalRefusal, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, internalRefusal) });
+        replies.set(call.id, internalRefusal);
+        continue;
+      }
       const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend, this.isStaticSite(runId, state));
       if ((call.name === "terminal" || call.name === "run_command" || call.name === "start_process") && shellRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, shellRefusal) });
@@ -2994,6 +3071,9 @@ export class StreamingAgentRuntime {
    * work. Returns null when there is nothing to verify (no files changed).
    */
   private async runVerification(runId: string, state: RunState, provider: AIModelProvider) {
+    // The site is shown by now even if a linked file never got written (the
+    // verifier then reports the missing file instead of an empty preview).
+    if (!(this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available")) this.publishSitePreview(runId, [], { force: true });
     const events = this.store.get(runId)?.events ?? [];
     const evidence = collectVerificationEvidence(state.instruction, events, { website: Boolean(state.website) || undefined });
     if (!isImplementationTask(evidence)) return null;

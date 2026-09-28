@@ -87,10 +87,13 @@ export function makeWriteFileTool(projectRoot: string): AITool {
         let existed = false;
         try { await fs.access(target); existed = true; } catch { /* new file */ }
         await fs.mkdir(path.dirname(target), { recursive: true });
-        const expected = Buffer.from(String(args.content), "utf-8");
+        // content_base64 (not offered to the model): ORVYN saving a file the
+        // user attached (a logo, a photo) into the project, byte for byte.
+        const binary = typeof args.content_base64 === "string" && args.content_base64.length > 0;
+        const expected = binary ? Buffer.from(String(args.content_base64), "base64") : Buffer.from(String(args.content), "utf-8");
         await fs.writeFile(target, expected);
         const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), expected);
-        const lines = String(args.content).split("\n").length;
+        const lines = binary ? 1 : String(args.content).split("\n").length;
         return { ok: true, output: `${existed ? "OVERWROTE" : "CREATED"} ${args.path} (${lines} lines, ${projectFileEvidence.size} bytes, sha256 ${projectFileEvidence.sha256})`, projectFileEvidence };
       } catch (err: any) {
         return { ok: false, error: err.message };

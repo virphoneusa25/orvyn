@@ -1,6 +1,7 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
+import { builtInToolsFor } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
@@ -209,6 +210,15 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
   return messages;
 }
 
+/** Tools every task run has (the chat itself has only web tools). */
+const TASK_TOOLS = new Set(["read_file", "edit_file", "write_file", "list_directory", "search_code", "terminal", "run_command", "run_tests", "browser_open", "browser_screenshot"]);
+
+/** "Use this logo" with an image attached: the user's image, not a new one. */
+function usesGivenImage(req: ChatTurnRequest): boolean {
+  const images = [...(req.attachments ?? []), ...((req.context as { attachments?: { kind?: string }[] } | undefined)?.attachments ?? [])].some((a) => a?.kind === "image");
+  return images && /\b(this|these|attached|my|our|the (attached|new|provided|uploaded))\s+(logo|image|picture|photo|icon|design|graphic|banner)s?\b|\b(use|put|add|place|swap|replace|insert)\b/i.test(req.userMessage);
+}
+
 export class Orchestrator {
   constructor(
     private modelService: ModelService,
@@ -281,7 +291,7 @@ export class Orchestrator {
   }
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean }> {
-    if (looksLikeImageRequest(req.userMessage)) {
+    if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
     }
@@ -306,6 +316,15 @@ export class Orchestrator {
       const ready = installedTools.filter((t) => /search/i.test(query) ? /search/i.test(t.name) : true);
       if (ready.length && /search/i.test(query)) {
         const note = `Use ${ready.map((t) => t.name).join(", ")} (installed MCP tools) to ${query}.`;
+        requested.set(query, note);
+        return note;
+      }
+      // Work ORION's task tools do (edit the site, add the attached logo, run
+      // a command): no marketplace card — hand it to a real task run now.
+      if (builtInToolsFor(query, (n) => TASK_TOOLS.has(n)).length) {
+        const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query, startedAt: Date.now(), endedAt: Date.now() };
+        yield { delta: "", activity: handoff, done: false };
+        const note = `ORVYN is starting this as a task in the user's project right now, where ORION has file, terminal and browser tools. Do not ask for a tool or say one is missing. Tell the user in one short sentence that you are doing it now — then stop.`;
         requested.set(query, note);
         return note;
       }
@@ -460,7 +479,7 @@ export class Orchestrator {
   }
 
   async chat(req: ChatTurnRequest) {
-    if (looksLikeImageRequest(req.userMessage)) {
+    if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       let content = "";
       for await (const chunk of this.streamGeneratedImage(req)) {
         if (chunk.delta) content += chunk.delta;
