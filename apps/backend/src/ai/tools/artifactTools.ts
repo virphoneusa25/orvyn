@@ -127,6 +127,8 @@ export function makeArtifactReadTool(artifacts: ArtifactService): AITool {
       try {
         const { record, bytes } = await artifacts.read(String(args.id ?? ""));
         const textish = record.mimeType.startsWith("text/") || /\.(md|txt|json|csv|html|svg)$/i.test(record.name);
+        const base = (record.name ?? "").split(/[/\\]/).pop() ?? record.name;
+        const siteAsset = /\.(html?|css|mjs|png|jpe?g|webp|gif|svg|avif)$/i.test(base);
         return {
           ok: true,
           output: json({
@@ -137,12 +139,17 @@ export function makeArtifactReadTool(artifacts: ArtifactService): AITool {
             size: bytes.length,
             sha256: record.sha256,
             downloadUrl: `/artifacts/${record.artifactId}/download`,
+            projectPath: siteAsset ? `public/${base}` : undefined,
             content: textish ? bytes.toString("utf-8").slice(0, 20_000) : undefined,
-            note: textish ? undefined : "Binary artifact. Use artifact_download or the Files pane.",
+            note: textish
+              ? siteAsset
+                ? `For site work, the AUTHORITATIVE copy is the project file (public/${base}) — edit that file, not this artifact. This artifact is the generated/stored copy.`
+                : undefined
+              : "Binary artifact. Use artifact_download or the Files pane.",
           }),
         };
       } catch (e: any) {
-        return { ok: false, error: e.message };
+        return { ok: false, error: `ARTIFACT_NOT_FOUND: ${e.message}` };
       }
     },
   };

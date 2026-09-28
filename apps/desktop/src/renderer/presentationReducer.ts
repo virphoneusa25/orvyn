@@ -486,10 +486,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
 
       case "steer.queued":
-        items.push({ kind: "status", key: e.id, label: `Steer queued: ${String(e.data.text ?? "").slice(0, 80)}`, ephemeral: false, tone: "working" });
+        items.push({ kind: "status", key: e.id, label: `↳ Steering received — “${String(e.data.text ?? "").slice(0, 90)}” · applying at the next safe checkpoint`, ephemeral: false, tone: "working" });
         continue;
       case "steer.delivered":
-        items.push({ kind: "status", key: e.id, label: `Steer applied: ${String(e.data.text ?? "").slice(0, 80)}`, ephemeral: false, tone: "working" });
+        items.push({ kind: "status", key: e.id, label: `✓ Steering applied — “${String(e.data.text ?? "").slice(0, 90)}” now directs this run`, ephemeral: false, tone: "working" });
         continue;
 
       case "run.queued":

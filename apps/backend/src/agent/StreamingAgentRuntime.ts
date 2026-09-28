@@ -2469,6 +2469,13 @@ export class StreamingAgentRuntime {
             streamedText = false;
             streamedCalls.length = 0;
             failoverEligible = true;
+            // Continuity contract for the fallback model: it is CONTINUING this
+            // mission from the evidence in the conversation — a provider stall
+            // must never become an excuse to restart, reinvent the approach, or
+            // rebuild files that already exist.
+            state.pendingNotes.push(
+              "The previous model provider stalled and you are CONTINUING the same mission. The conversation above is authoritative: the files, reads and evidence already gathered stand. Do not restart the task, do not invent a new approach, and do not rebuild or replace existing files unless the user's request itself calls for it. Resume the current step."
+            );
           }
           if (failure && !state.cancelled && failoverEligible && (state.failovers ?? 0) < 4) {
             state.failovers = (state.failovers ?? 0) + 1;

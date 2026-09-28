@@ -292,28 +292,32 @@ export function WorkStream({
 
   /** Submits bypassing the active-run guard — used for queued delivery. */
   const deliver = useRef<(text: string) => void>(() => {});
-  async function send(text?: string, bypassQueue = false) {
+  async function send(text?: string, bypassQueue = false, forceQueue = false) {
     const chipNote = contextNoteFromChips(chips);
     const chipAtt = attachmentsFromChips(chips);
     const instruction = (text ?? prompt).trim();
     const outgoing = chipNote && !text ? `${instruction}\n\n${chipNote}` : instruction;
     if (!instruction || busy || !canStartAgentRun()) return;
-    // While a run is active the instruction joins the DURABLE queue — the
-    // backend RunStore holds it, so reconnects and restarts never lose it.
+    // While a run is active the instruction STEERS that run — it reaches the
+    // agent at its next safe model boundary (same mission, same run). The
+    // durable queue is the explicit secondary choice (Queue button) or the
+    // fallback when the run settles mid-click.
     if (runActive && !bypassQueue && run.runId) {
       setPrompt("");
       setAttachments([]);
       setChips([]);
       try {
-        const steered = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ text: outgoing }),
-        });
-        if (steered.ok) return;
-        if (steered.status === 409) {
-          await send(instruction, true);
-          return;
+        if (!forceQueue) {
+          const steered = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ text: outgoing }),
+          });
+          if (steered.ok) return;
+          if (steered.status === 409) {
+            await send(instruction, true);
+            return;
+          }
         }
         const r = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/queue`), {
           method: "POST",
@@ -854,7 +858,7 @@ export function WorkStream({
               }
             }}
             rows={2}
-            placeholder={runActive ? "Keep typing to queue follow-up changes…" : "Ask ORVYN to build, fix, deploy, research…"}
+            placeholder={runActive ? "Tell ORION what to change while it works — Enter steers the current run…" : "Ask ORVYN to build, fix, deploy, research…"}
             style={{
               width: "100%",
               background: "transparent",
@@ -952,27 +956,56 @@ export function WorkStream({
               }}
             />
             {runActive ? (
-              <button
-                onClick={() => void run.stop()}
-                title="Stop current run (Esc)"
-                style={{
-                  marginLeft: "auto",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 7,
-                  background: "transparent",
-                  border: "1px solid var(--orvyn-red)",
-                  borderRadius: "var(--orvyn-radius-sm)",
-                  color: "var(--orvyn-red)",
-                  padding: "6px 18px",
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                <span style={{ width: 9, height: 9, background: "var(--orvyn-red)", borderRadius: 2, display: "inline-block" }} />
-                Stop
-              </button>
+              <div style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 7 }}>
+                <button
+                  onClick={() => void send(undefined, false, true)}
+                  title="Queue this as the NEXT task after the current run finishes"
+                  disabled={!prompt.trim()}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    background: "transparent",
+                    border: "1px solid var(--orvyn-border)",
+                    borderRadius: "var(--orvyn-radius-sm)",
+                    color: "var(--orvyn-text-secondary)",
+                    padding: "6px 14px",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    cursor: prompt.trim() ? "pointer" : "default",
+                    opacity: prompt.trim() ? 1 : 0.5,
+                  }}
+                >
+                  Queue
+                </button>
+                <ComposerSubmitButton
+                  label="Steer Run"
+                  icon={<IconRocket size={13} />}
+                  onClick={() => void send()}
+                  disabled={!prompt.trim() || busy}
+                  title="Steer the CURRENT run — applied at the next safe checkpoint (Enter)"
+                />
+                <button
+                  onClick={() => void run.stop()}
+                  title="Stop current run (Esc)"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    background: "transparent",
+                    border: "1px solid var(--orvyn-red)",
+                    borderRadius: "var(--orvyn-radius-sm)",
+                    color: "var(--orvyn-red)",
+                    padding: "6px 14px",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ width: 9, height: 9, background: "var(--orvyn-red)", borderRadius: 2, display: "inline-block" }} />
+                  Stop
+                </button>
+              </div>
             ) : (
               <ComposerSubmitButton
                 label="Send"
