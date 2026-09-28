@@ -196,3 +196,44 @@ test("a check that does not apply to the project is not a failure (no tsconfig, 
   ]);
   assert.deepEqual(ev.testBuildEvidence.map((t) => [t.command, t.ok]), [["run_tests", false]]);
 });
+
+// ── Task-aware verification ──────────────────────────────────────────────────
+
+test("a file-only CSS task does NOT require browser verification (no page changed)", async () => {
+  // The exact production case: "Create demo-styles.css with a :root block"
+  // classified as frontend intent, but only a css file was written. The
+  // browser check must be skipped, not unverified — a correct file write
+  // passes on existence + syntax alone.
+  const ev = evidence({
+    goal: "Create demo-styles.css containing a :root block with CSS custom properties",
+    changedFiles: [{ path: "demo-styles.css", operation: "write" }],
+    website: false,
+  });
+  assert.equal(ev.website, false, "no page changed → not a website-verification task");
+  const runtime = new VerificationRuntime({ tools: filesTools({ "demo-styles.css": ":root { --bg: #050b14; }\n.hero { font-family: 'Segoe UI'; }" }) });
+  const result = await runtime.verify(ev);
+  const browser = result.checks.find((c) => c.name === "browser");
+  assert.equal(browser?.status, "skip");
+  assert.match(browser?.detail ?? "", /not required/i);
+  assert.equal(result.verdict, "PASS", "a correct standalone css file verifies without a browser");
+});
+
+test("collectVerificationEvidence derives website from page changes, not intent", () => {
+  const events = [
+    { type: "tool.completed", sequence: 1, data: { callId: "c1", tool: "write_file", envelope: { toolName: "write_file", status: "success", userSummary: "w", evidence: [{ type: "file", file: "demo-styles.css", operation: "write" }] } } },
+  ];
+  const cssOnly = collectVerificationEvidence("create a css file", events as never, { website: true });
+  assert.equal(cssOnly.website, false, "css-only change with frontend intent → browser not required");
+  const pageEvents = [
+    { type: "tool.completed", sequence: 1, data: { callId: "c1", tool: "write_file", envelope: { toolName: "write_file", status: "success", userSummary: "w", evidence: [{ type: "file", file: "index.html", operation: "write" }] } } },
+  ];
+  const withPage = collectVerificationEvidence("add a hero", pageEvents as never, { website: true });
+  assert.equal(withPage.website, true, "an html page change → browser verification required");
+});
+
+test("a page change without browser evidence is still PARTIAL (over-verification guard only relaxed for file-only tasks)", async () => {
+  const ev = evidence({ goal: "Update the site hero", changedFiles: [{ path: "index.html", operation: "edit" }], website: true });
+  const runtime = new VerificationRuntime({ tools: filesTools({ "index.html": "<html><body><h1>Hi</h1><main>x y z more text to render here ok</main></body></html>" }) });
+  const result = await runtime.verify(ev);
+  assert.equal(result.verdict, "PARTIAL", "site work without browser evidence stays PARTIAL");
+});

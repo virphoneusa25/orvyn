@@ -1008,12 +1008,13 @@ function StageChip({ name, state }: { name: string; state: StageState }) {
   const done = state === "done";
   // A check that failed, or a run that ended short of its goal, says so.
   const bad = state === "failed" || state === "partial";
+  const skipped = state === "skipped";
   const label = state === "partial" ? "Partial" : name;
   return (
     <span
       data-stage={name}
       data-state={state}
-      title={state === "failed" ? `${name} failed` : state === "partial" ? "Finished, but not every check passed" : undefined}
+      title={state === "failed" ? `${name} failed` : state === "partial" ? "Finished, but not every check passed" : skipped ? `${name} was not needed for this task` : undefined}
       style={{
         display: "inline-flex",
         alignItems: "center",

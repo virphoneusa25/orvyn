@@ -89,7 +89,7 @@ test("mission header stages follow real events and do not invent completion", ()
   )!;
   assert.equal(done.stages.find((s) => s.name === "Verify")?.state, "done");
   assert.equal(done.stages.find((s) => s.name === "Complete")?.state, "done");
-  assert.equal(done.stages.find((s) => s.name === "Research")?.state, "pending");
+  assert.equal(done.stages.find((s) => s.name === "Research")?.state, "skipped", "a finished run that never researched shows Skipped, not pending");
   const idle = deriveMissionStages([], "idle")!;
   assert.deepEqual(idle.stages.map((s) => s.state), ["pending", "pending", "pending", "pending", "pending", "pending"]);
 });
@@ -114,4 +114,23 @@ test("Preview passes only when its assets loaded; a broken stylesheet is never a
   assert.equal(state([...base, { type: "browser.verification.passed", data: {} }], "running").Verify, "pending");
   // A run that errored: Complete failed.
   assert.equal(state(base, "error").Complete, "failed");
+});
+
+test("a finished file-only run shows unreached stages as skipped, not pending", () => {
+  const events = [
+    { type: "tool.started", data: { callId: "c1", tool: "write_file" } },
+    { type: "tool.input", data: { callId: "c1", input: { path: "demo-styles.css", content: ":root{}" } } },
+    { type: "tool.completed", data: { callId: "c1", tool: "write_file" } },
+    { type: "verification.started", data: {} },
+    { type: "verification.completed", data: { verdict: "PASS" } },
+  ];
+  const view = deriveMissionStages(events as never, "completed");
+  assert.ok(view, "stages derived");
+  const by = Object.fromEntries(view.stages.map((s) => [s.name, s.state]));
+  assert.equal(by.Plan, "done");
+  assert.equal(by.Build, "done");
+  assert.equal(by.Verify, "done");
+  assert.equal(by.Complete, "done");
+  assert.equal(by.Research, "skipped", "no research ran — skipped, not pending");
+  assert.equal(by.Preview, "skipped", "no preview for a file-only task — skipped, not pending");
 });

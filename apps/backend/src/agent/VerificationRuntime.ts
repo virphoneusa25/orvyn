@@ -208,6 +208,14 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
     }
   }
   const changedFiles = [...changed.values()];
+  // Task-aware verification: the browser check is REQUIRED only when this
+  // run changed an actual page. A standalone file task ("create
+  // demo-styles.css with a :root block") or a css/js-only edit to an
+  // inherited site must verify by file existence, references and syntax —
+  // spinning up browser verification for it produces fake "Partial"
+  // results. Intent classification alone (a css task "looks frontend") is
+  // not enough evidence; the changed files are.
+  const pageChanged = changedFiles.some((f) => /\.html?$/i.test(f.path));
   return {
     goal,
     changedFiles,
@@ -217,7 +225,7 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
     editTransitions,
     previewUrls: [...previews],
     lastChangeSequence: lastChange,
-    website: opts.website ?? changedFiles.some((f) => /\.html?$/i.test(f.path)),
+    website: pageChanged,
   };
 }
 
@@ -340,7 +348,7 @@ async function deterministicChecks(evidence: VerificationEvidence, tools: Verifi
   checks.push({
     name: "browser",
     status: findings.some((x) => x.check === "browser" && x.severity === "blocker") ? "fail" : fresh.length ? "pass" : evidence.website ? "unverified" : "skip",
-    detail: fresh.length ? `${fresh.length} observation(s) after the last change${lastState ? ` · ${lastState.consoleErrors ?? 0} console / ${lastState.networkErrors ?? 0} network errors` : ""}` : "no browser evidence after the last change",
+    detail: fresh.length ? `${fresh.length} observation(s) after the last change${lastState ? ` · ${lastState.consoleErrors ?? 0} console / ${lastState.networkErrors ?? 0} network errors` : ""}` : evidence.website ? "no browser evidence after the last change" : "not required — no page changed in this run (file-only change)",
   });
 
   const git = await tools.execute("git_status", {});

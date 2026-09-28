@@ -38,7 +38,7 @@ export function phaseOfTool(tool: string, input: Record<string, any> | undefined
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 
 export type StageName = "Plan" | "Research" | "Build" | "Preview" | "Verify" | "Complete";
-export type StageState = "pending" | "active" | "done" | "failed" | "partial";
+export type StageState = "pending" | "active" | "done" | "failed" | "partial" | "skipped";
 export const MISSION_STAGES: StageName[] = ["Plan", "Research", "Build", "Preview", "Verify", "Complete"];
 
 export interface MissionStageView {
@@ -150,6 +150,9 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
   return {
     stages: MISSION_STAGES.map((name) => ({
       name,
+      // A finished run shows stages that never happened as SKIPPED, not
+      // pending — "Research skipped" for a file task is truthful; a pending
+      // chip after completion implies work that never ran.
       state: active === name
         ? "active"
         : name === "Complete" && partial
@@ -158,7 +161,9 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
             ? "failed"
             : done[name]
               ? "done"
-              : "pending",
+              : live
+                ? "pending"
+                : "skipped",
     })),
   };
 }
