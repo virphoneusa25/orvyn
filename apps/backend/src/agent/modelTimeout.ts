@@ -16,6 +16,29 @@ export function modelCallTimeoutMs(): number {
   return Math.max(0, Math.floor(raw));
 }
 
+/**
+ * A stream that has yielded NOTHING for this long is a dead connection even
+ * if technically open (provider accepted, then stalled). Aborting surfaces a
+ * provider failure → failover, instead of silent dead air.
+ * ORVYN_MODEL_STREAM_IDLE_MS (default 75000; 0 disables).
+ */
+export function streamIdleTimeoutMs(): number {
+  const raw = Number(process.env.ORVYN_MODEL_STREAM_IDLE_MS);
+  if (!Number.isFinite(raw)) return 75_000;
+  return Math.max(0, Math.floor(raw));
+}
+
+/**
+ * A run with no activity at all (no events, no model call in flight) for
+ * this long is orphaned between stages — the watchdog settles it truthfully.
+ * ORVYN_RUN_STALL_MS (default 150000; 0 disables).
+ */
+export function runStallTimeoutMs(): number {
+  const raw = Number(process.env.ORVYN_RUN_STALL_MS);
+  if (!Number.isFinite(raw)) return 150_000;
+  return Math.max(0, Math.floor(raw));
+}
+
 /** Composes the run's cancel signal with the per-call timeout. */
 export function modelCallSignal(parent: AbortSignal | undefined): AbortSignal {
   const ms = modelCallTimeoutMs();

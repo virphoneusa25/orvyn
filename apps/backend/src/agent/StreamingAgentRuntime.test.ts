@@ -576,3 +576,38 @@ test("a server task with no configured server is blocked and does not call the m
   assert.equal((diag?.data.taskIntent as { category?: string })?.category, "server");
   assert.equal(JSON.stringify(diag?.data).includes("password"), false);
 });
+
+test("a model stream that never yields is aborted by the idle watchdog, not left hanging", async () => {
+  const previousIdle = process.env.ORVYN_MODEL_STREAM_IDLE_MS;
+  process.env.ORVYN_MODEL_STREAM_IDLE_MS = "150";
+  try {
+    // A provider whose stream accepts the request and then never yields a
+    // chunk — the exact production freeze (failover retry on a dead
+    // connection): no content, no error, forever.
+    class HungProvider extends FakeProvider {
+      async *stream(request: AIRequest): AsyncIterable<AIChunk> {
+        this.requests.push(JSON.parse(JSON.stringify({ messages: request.messages })));
+        await new Promise<void>((resolve) => {
+          if (request.signal?.aborted) return resolve();
+          request.signal?.addEventListener("abort", () => resolve(), { once: true });
+        }); // resolves only when the idle watchdog aborts the call
+        const err = new Error("The operation was aborted due to timeout");
+        err.name = "TimeoutError";
+        throw err;
+      }
+    }
+    const hung = new HungProvider([], undefined);
+    const healthy = new FakeProvider([[{ delta: "Recovered.", done: true }]]);
+    hung.config.id = "hung:test/model";
+    healthy.config.id = "ok:test/model";
+    const h = harness([], { provider: hung, registryModels: [hung, healthy] });
+
+    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "say something");
+    const status = await waitForStatus(h.store, runId, 10_000);
+    assert.notEqual(status, "running", "the run must not sit in running forever");
+    assert.ok(["completed", "error", "failed", "cancelled"].includes(status), `settled state, got ${status}`);
+  } finally {
+    if (previousIdle === undefined) delete process.env.ORVYN_MODEL_STREAM_IDLE_MS;
+    else process.env.ORVYN_MODEL_STREAM_IDLE_MS = previousIdle;
+  }
+});

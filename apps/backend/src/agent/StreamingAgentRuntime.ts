@@ -42,7 +42,7 @@ import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
-import { modelCallSignal } from "./modelTimeout";
+import { modelCallSignal, modelCallTimeoutMs, runStallTimeoutMs, streamIdleTimeoutMs } from "./modelTimeout";
 import { AgentMode, applyMode } from "./modes";
 import {
   capabilityGapNotes,
@@ -276,6 +276,12 @@ interface RunState {
   loopWarned?: boolean;
   /** Set by runaway guards; beforeTurn stops the run truthfully. */
   forceStopReason?: string;
+  /** ms of the last visible progress (event, chunk, tool result). */
+  lastActivityAt: number;
+  /** ms when the in-flight model call started; cleared when it settles. */
+  modelCallStartedAt?: number;
+  /** Set when the stall watchdog force-aborts a hung call — the catch fails with it. */
+  stallAbort?: string;
   creditsExceeded?: boolean;
   /** Failed tool calls in a row (a repair loop that is not working). */
   failureStreak: number;
@@ -443,7 +449,38 @@ export class StreamingAgentRuntime {
     private mcpSummary: () => string[] = () => [],
     /** MCP marketplace: hide unused mcp.* schemas so the catalog never floods context. */
     private exposeTool: (name: string) => boolean = () => true
-  ) {}
+  ) {
+    // Stall watchdog: a run may never sit silently. If a model call outlives
+    // its ceiling (an adapter that swallowed the abort), or a run produces no
+    // activity at all between stages, it is settled truthfully here — the
+    // exact "narrated a task, then nothing" freeze this guards against.
+    const stallMs = runStallTimeoutMs();
+    if (stallMs > 0) {
+      this.stallWatchdog = setInterval(() => {
+        const now = Date.now();
+        for (const [runId, state] of this.runs) {
+          const status = this.store.get(runId)?.status;
+          if (status !== "queued" && status !== "running" && status !== "verifying") continue;
+          const callMs = state.modelCallStartedAt ? now - state.modelCallStartedAt : 0;
+          if (callMs > modelCallTimeoutMs() + 15_000) {
+            state.stallAbort = `The model stopped responding — the call was stopped after ${Math.round(callMs / 1000)}s with no data. This task can be retried.`;
+            this.store.emit(runId, "run.diagnostics", { stalled: "model-call", ms: callMs });
+            state.controller.abort();
+            continue;
+          }
+          if (!state.modelCallStartedAt && now - state.lastActivityAt > stallMs) {
+            this.store.emit(runId, "run.error", { message: "This task stopped making progress before it produced any result. Nothing is running — you can retry it.", code: "STALLED" });
+            this.store.setStatus(runId, "error");
+            state.controller.abort();
+            this.runs.delete(runId);
+          }
+        }
+      }, 15_000);
+      this.stallWatchdog.unref?.();
+    }
+  }
+
+  private stallWatchdog?: ReturnType<typeof setInterval>;
 
   private cloudMcpInvoke?: (input: {
     runId: string;
@@ -1467,6 +1504,7 @@ export class StreamingAgentRuntime {
       pendingNotes: [],
       recentToolSignatures: [],
       lastUsefulChangeAt: Date.now(),
+      lastActivityAt: Date.now(),
       failureStreak: 0,
       readOnlyStreak: 0,
       helperRejects: 0,
@@ -2182,9 +2220,10 @@ export class StreamingAgentRuntime {
   ): Promise<void> {
     const state = this.runs.get(runId);
     if (!state) return;
-    // Per-call timeout composed with the run's cancel signal — a hung
-    // provider connection must surface as a failure, not freeze the run.
-    const signal = modelCallSignal(state.controller.signal);
+    // The run's own cancel signal (Stop). The per-CALL timeout is composed in
+    // requestModelTurn — a run-level timed signal would expire mid-mission
+    // and instantly abort every later call.
+    const signal = state.controller.signal;
 
     const reasoningControl = provider.config.reasoningControl;
     const reasoningApplied =
@@ -2331,14 +2370,32 @@ export class StreamingAgentRuntime {
 
         let langChecked = false;
         let langBuffer = "";
+        // Per-CALL timeout + stream-idle watchdog. A connection that opens
+        // and then never yields a chunk must surface as a provider failure
+        // (→ failover), not as minutes of silent "thinking". The signal is
+        // rebuilt every turn: a run-level one would expire mid-mission and
+        // abort every later call.
+        const idleController = new AbortController();
+        const idleMs = streamIdleTimeoutMs();
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        const armIdle = () => {
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => idleController.abort(new Error(`Model stream idle: no data for ${Math.round(idleMs / 1000)}s (provider accepted the connection but stopped responding)`)), idleMs);
+        };
+        armIdle();
+        const callSignal = AbortSignal.any([modelCallSignal(state.controller.signal), idleController.signal]);
+        state.lastActivityAt = Date.now();
+        state.modelCallStartedAt = Date.now();
         try {
         for await (const chunk of provider.stream({
           messages,
           tools: tools(),
           reasoningEffort: state.reasoningEffort,
           stream: true,
-          signal,
+          signal: callSignal,
         })) {
+          armIdle();
+          state.lastActivityAt = Date.now();
           if (chunk.delta) {
             // Language guard: decide on the first bytes. A Chinese reply is
             // abandoned (nothing emitted yet) and regenerated in English —
@@ -2379,7 +2436,17 @@ export class StreamingAgentRuntime {
           if (chunk.usage) this.noteUsage(runId, state, provider, messages, chunk.usage);
           if (chunk.done) break;
         }
+        clearTimeout(idleTimer);
+        state.modelCallStartedAt = undefined;
         } catch (err: any) {
+          clearTimeout(idleTimer);
+          state.modelCallStartedAt = undefined;
+          // A stall the watchdog force-aborted settles truthfully — it is not
+          // a provider to fail over to again.
+          if (state.stallAbort) {
+            const f = fail(state.stallAbort, { code: "STALLED" });
+            return { kind: "stop" as const, outcome: f.outcome, reason: f.reason };
+          }
           // The model is missing, or its provider is down/rate-limited/refusing
           // the key: switch (same model elsewhere first), don't fail. Only when
           // nothing streamed, so no answer is duplicated and nothing is paid twice.
@@ -2808,6 +2875,7 @@ export class StreamingAgentRuntime {
       }
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
+      state.lastActivityAt = Date.now();
       const priorFailures = state.failedFingerprints.get(fingerprint) ?? 0;
       const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
       const websiteBuild = Boolean(state.website) && isBuildCommand(command);

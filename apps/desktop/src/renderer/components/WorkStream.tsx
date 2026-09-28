@@ -1052,7 +1052,7 @@ function HandoffRow({ id, prompt }: { id: string; prompt: string }) {
   return (
     <div className="stream-status" data-testid="chat-handoff" style={{ marginTop: 6 }}>
       <span aria-hidden="true" className="stream-status__icon">→</span>
-      <span>Starting this as a task in your project…</span>
+      <span>Preparing this task in your project…</span>
     </div>
   );
 }
