@@ -25,6 +25,7 @@ import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type
 import { ToolActivityRow, ToolActivityGroup, ToolRunGroup, WorkGroupRow } from "./ToolActivityRow";
 import { changeTotals, groupToolRuns } from "../streamRows";
 import { openArtifactInContext } from "../contextOpen";
+import { ArtifactVisualThumb } from "./ArtifactVisual";
 import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 
 export interface AgentEvent {
@@ -448,7 +449,7 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
         data-testid="generated-asset-thumb"
         style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 0, width: 72, height: 72, flexShrink: 0, overflow: "hidden", cursor: empty ? "not-allowed" : "pointer", background: "var(--bg-app)", display: "flex", alignItems: "center", justifyContent: "center" }}
       >
-        {empty ? <IconFile /> : isImage ? <ArtifactThumbnail artifactId={item.artifactId!} name={item.name} /> : <IconFile />}
+        <ArtifactVisualThumb name={item.name} artifactId={item.artifactId} mimeType={item.mediaType} size={item.size ?? 0} />
       </button>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{ display: "block", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
@@ -470,22 +471,7 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
 }
 
 /** The actual image, fetched with auth and shown at thumbnail size. */
-function ArtifactThumbnail({ artifactId, name }: { artifactId: string; name: string }) {
-  const [dataUrl, setDataUrl] = useState<string | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    setDataUrl(null);
-    fetch(apiUrl(`/files/read?id=${encodeURIComponent(artifactId)}`), { headers: authHeaders(), signal: controller.signal })
-      .then(async (r) => {
-        const d = await r.json();
-        if (!r.ok || typeof d?.dataUrl !== "string") throw new Error("no image");
-        if (!controller.signal.aborted) setDataUrl(d.dataUrl);
-      })
-      .catch(() => { if (!controller.signal.aborted) setDataUrl(null); });
-    return () => controller.abort();
-  }, [artifactId]);
-  return dataUrl ? <img src={dataUrl} alt={name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <IconFile />;
-}
+
 
 export function CapabilityCard({ item, install, onInstalled }: {
   item: CapabilityRequiredItem;

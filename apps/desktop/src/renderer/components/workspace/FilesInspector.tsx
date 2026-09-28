@@ -84,7 +84,7 @@ function AuthenticatedThumbnail({ url, name }: { url: string; name: string }) {
       .catch(() => { if (!controller.signal.aborted) setObjectUrl(null); });
     return () => { controller.abort(); if (owned) URL.revokeObjectURL(owned); };
   }, [url]);
-  return objectUrl ? <img src={objectUrl} alt={name} loading="lazy" /> : <span className="ofp-tile__ext">{typeLabel(name)}</span>;
+  return objectUrl ? <img src={objectUrl} alt={name} loading="lazy" /> : <FileTypeIcon path={name} size={28} />;
 }
 
 export function FilesInspector({
@@ -596,9 +596,13 @@ export function FilesInspector({
                   onClick={() => { setSelection({ kind: "item", item: g }); setSaved(null); centerFileView.open(); }}
                 >
                   <span className="ofp-tile__art">
-                    {previewKind(g.mimeType, g.name) === "image" && g.previewUrl && g.bytes !== 0
-                      ? <AuthenticatedThumbnail url={g.previewUrl} name={g.name} />
-                      : <span className="ofp-tile__ext">{typeLabel(g.name, g.mimeType)}</span>}
+                    {g.bytes === 0 ? (
+                      <FileTypeIcon path={g.name} size={28} />
+                    ) : previewKind(g.mimeType, g.name) === "image" && g.previewUrl ? (
+                      <AuthenticatedThumbnail url={g.previewUrl} name={g.name} />
+                    ) : (
+                      <FileTypeIcon path={g.name} size={28} />
+                    )}
                   </span>
                   <span className="ofp-tile__name" title={g.name}>{g.name}</span>
                   <span className="ofp-tile__meta">{g.bytes === 0 ? "Empty file" : formatBytes(g.bytes) || typeLabel(g.name, g.mimeType)}</span>

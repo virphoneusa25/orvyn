@@ -7,7 +7,9 @@
 // The registry stays the authority for language ids; this file owns glyphs.
 
 import React from "react";
-import { extensionOf } from "../fileTypeRegistry";
+import { fileIconKeyFor } from "../fileVisuals";
+export { fileIconKeyFor };
+export type { FileIconKey } from "../fileVisuals";
 
 const S = 16; // canvas; glyphs drawn in a 16×16 viewBox
 
@@ -118,6 +120,54 @@ const EnvIcon = () => <Square color="#ECD53F" label=".E" textColor="#3a3a00" fon
 const TomlIcon = ({ label }: { label: string }) => <Square color="#9C4121" label={label} fontSize={5.5} />;
 /** Svelte. */
 const SvelteIcon = () => <Square color="#FF3E00" label="S" />;
+/** React: the cyan atom orbits. */
+const ReactIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="React" style={{ display: "block", flexShrink: 0 }}>
+    <circle cx="8" cy="8" r="1.5" fill="#61DAFB" />
+    <ellipse cx="8" cy="8" rx="6.6" ry="2.6" fill="none" stroke="#61DAFB" strokeWidth="1" opacity="0.9" />
+    <ellipse cx="8" cy="8" rx="6.6" ry="2.6" fill="none" stroke="#61DAFB" strokeWidth="1" opacity="0.9" transform="rotate(60 8 8)" />
+    <ellipse cx="8" cy="8" rx="6.6" ry="2.6" fill="none" stroke="#61DAFB" strokeWidth="1" opacity="0.9" transform="rotate(120 8 8)" />
+  </svg>
+);
+/** Node: the green hex. */
+const NodeIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="Node" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M8 1l5.8 3.3v6.7L8 14.4 2.2 11V4.3L8 1z" fill="#5FA04E" />
+    <path d="M8 1l5.8 3.3-5.8 3.4-5.8-3.4L8 1z" fill="#8CC84B" />
+  </svg>
+);
+/** PDF: the red document. */
+const PdfIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="PDF" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M3 1.5h6.2L13 5.3V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5Z" fill="#D93025" />
+    <path d="M9 1.7V5h3.4" fill="none" stroke="#fff" opacity="0.7" strokeLinejoin="round" />
+    <text x="8" y="12" textAnchor="middle" fontSize="5.4" fontWeight="700" fontFamily="var(--font-mono, monospace)" fill="#fff">PDF</text>
+  </svg>
+);
+/** Archive: zip/tar/gz — the amber box. */
+const ArchiveIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="Archive" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M2.5 5h11v8.5a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V5z" fill="#B8860B" />
+    <path d="M2 2.5h12V5H2V2.5z" fill="#DAA520" />
+    <path d="M7 6.5h2v1.2H7V6.5zm0 2h2v1.2H7V8.5zm0 2h2v1.2H7v-1.2z" fill="#fff" opacity="0.85" />
+  </svg>
+);
+/** Text: the gray lined sheet. */
+const TxtIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="Text" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M3 1.5h6.2L13 5.3V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5Z" fill="rgba(143,163,184,0.15)" stroke="#8fa3b8" strokeLinejoin="round" />
+    <path d="M5 7h6M5 9h6M5 11h4" stroke="#8fa3b8" strokeWidth="1.1" strokeLinecap="round" />
+  </svg>
+);
+/** Git: the orange branch diamond. */
+const GitIcon = () => (
+  <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="Git" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M8 1l6.5 6.5L8 14 1.5 7.5 8 1z" fill="#F05032" opacity="0.92" />
+    <circle cx="6" cy="6" r="1.1" fill="#fff" />
+    <circle cx="10" cy="10" r="1.1" fill="#fff" />
+    <path d="M6.4 7l3.2 2" stroke="#fff" strokeWidth="0.9" />
+  </svg>
+);
 /** Dockerfile: blue container stack. */
 const DockerIcon = () => (
   <svg width={S} height={S} viewBox="0 0 16 16" role="img" aria-label="Docker" style={{ display: "block", flexShrink: 0 }}>
@@ -136,37 +186,42 @@ const GenericIcon = () => (
 
 /** The public entry: brand icon per extension, generic fallback otherwise. */
 export function FileTypeIcon({ path: p, size = 16 }: { path: string; size?: number }): React.ReactElement {
-  const ext = extensionOf(p);
   const glyph = (() => {
-    switch (ext) {
+    switch (fileIconKeyFor(p)) {
       case "ts": return <TsIcon label="TS" />;
       case "tsx": return <TsIcon label="TSX" />;
-      case "js": case "mjs": return <JsIcon label="JS" />;
-      case "jsx": case "cjs": return <JsIcon label="JSX" />;
+      case "react": return <ReactIcon />;
+      case "js": return <JsIcon label="JS" />;
+      case "jsx": return <JsIcon label="JSX" />;
       case "json": return <JsIcon label="{ }" />;
-      case "py": return <PythonIcon />;
-      case "html": case "htm": return <HtmlIcon />;
+      case "node": return <NodeIcon />;
+      case "python": return <PythonIcon />;
+      case "html": return <HtmlIcon />;
       case "css": return <CssIcon />;
-      case "scss": case "less": return <CssIcon color="#CC6699" label="S" />;
-      case "md": case "markdown": return <MdIcon />;
+      case "sass": return <CssIcon color="#CC6699" label="S" />;
+      case "markdown": return <MdIcon />;
       case "go": return <GoIcon />;
-      case "rs": return <RustIcon />;
+      case "rust": return <RustIcon />;
       case "java": return <JavaIcon />;
       case "cs": return <CsIcon />;
-      case "cpp": case "cc": case "c": case "h": case "hpp": return <CppIcon />;
+      case "cpp": return <CppIcon />;
+      case "c": return <CIcon />;
       case "php": return <PhpIcon />;
       case "vue": return <VueIcon />;
       case "svelte": return <SvelteIcon />;
-      case "yml": case "yaml": return <YamlIcon />;
+      case "yaml": return <YamlIcon />;
       case "xml": return <XmlIcon />;
       case "sql": return <SqlIcon />;
-      case "sh": case "bash": return <ShellIcon />;
-      case "ps1": return <PsIcon />;
-      case "bat": case "cmd": return <ShellIcon label="BAT" />;
+      case "shell": return <ShellIcon />;
+      case "powershell": return <PsIcon />;
       case "env": return <EnvIcon />;
       case "toml": return <TomlIcon label="TOML" />;
       case "ini": return <TomlIcon label="INI" />;
-      case "dockerfile": return <DockerIcon />;
+      case "docker": return <DockerIcon />;
+      case "git": return <GitIcon />;
+      case "pdf": return <PdfIcon />;
+      case "archive": return <ArchiveIcon />;
+      case "text": return <TxtIcon />;
       default: return <GenericIcon />;
     }
   })();
