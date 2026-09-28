@@ -30,6 +30,7 @@ const NAV: { label: string; items: NavEntry[] }[] = [
     items: [
       { id: "home", label: "Home", icon: "home" },
       { id: "chats", label: "Chats", icon: "chat" },
+      { id: "projects", label: "Projects", icon: "folder" },
       { id: "missions", label: "Missions", icon: "missions" },
       { id: "automations", label: "Automations", icon: "bolt" },
     ],

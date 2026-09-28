@@ -966,6 +966,18 @@ export class StreamingAgentRuntime {
       recommendedServers: servers,
       runId,
     });
+    // The capability is unavailable and the install card is showing. The run
+    // is now waiting on the USER to act (connect the tool), not on the model.
+    // Keep it recoverable: paused for capability, not stuck "running" with a
+    // spinner that never stops.
+    this.store.emit(runId, "run.blocked", {
+      message: primary
+        ? `This task needs ${primary} to ${query}. Connect it from the card above or Tools & MCP, then retry.`
+        : `This task needs a capability that is not installed yet. Add one from Tools & MCP → Marketplace, then retry.`,
+      code: "CAPABILITY_REQUIRED",
+      actions: ["retry", "open_tools", "cancel"],
+    });
+    this.store.setStatus(runId, "awaiting_approval");
     return primary
       ? `ORVYN is showing the user a card to connect ${primary} (it needs the user to sign in) so you can ${query}. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences that you need ${primary} to ${query}, and that connecting it from the card lets you finish — then stop.`
       : `ORVYN found no tool to install that can ${query}, and is showing the user a card to add one. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences what you need — then stop.`;

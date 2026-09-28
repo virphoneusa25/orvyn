@@ -112,6 +112,7 @@ export function useAgentRun(
     if (e.type === "approval.required") setStatus("awaiting_approval");
     else if (e.type === "run.queued") setStatus("queued");
     else if (e.type === "run.started") setStatus("running");
+    else if (e.type === "run.blocked") setStatus("awaiting_approval");
     else if (e.type === "run.completed") {
       setStatus("completed");
       noteActiveRunId(null);
