@@ -416,7 +416,15 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "model.unavailable": {
         flushAssistant(false);
-        items.push({ kind: "status", key: e.id, label: `${customerModelName(e.data.modelId) || "That model"} isn't available on this account — continuing with ${customerModelName(e.data.fallback) || "another model"}`, ephemeral: false, tone: "working" });
+        const from = customerModelName(e.data.modelId) || "That model";
+        const to = customerModelName(e.data.fallback) || "another model";
+        items.push({
+          kind: "status",
+          key: e.id,
+          label: from === to ? `${from}: switched to a backup provider — continuing` : `${from} isn't available right now — continuing with ${to}`,
+          ephemeral: false,
+          tone: "working",
+        });
         continue;
       }
       case "model.failover": {

@@ -1,7 +1,7 @@
 // Serves a directory the agent already wrote. This module does not author pages.
 
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
@@ -97,6 +97,52 @@ export function rememberSiteBinary(runId: string, relPath: string, bytes: Buffer
 /** The page as remembered (not composed), for finding the files it links. */
 export function composeSiteDocumentSource(runId: string, pageKey: string): string | null {
   return remembered.get(runId)?.get(pageKey) ?? null;
+}
+
+/**
+ * A follow-up in the same chat starts with the site the earlier run built:
+ * its remembered pages, styles, scripts and images (from memory, or from
+ * that run's published preview folder after a restart). Files this run
+ * already has are kept. Returns the files inherited.
+ */
+export function inheritSiteFiles(runId: string, fromRunIds: string[]): string[] {
+  const inherited: string[] = [];
+  const bag = remembered.get(runId) ?? new Map<string, string>();
+  const bin = rememberedBinary.get(runId) ?? new Map<string, Buffer>();
+  for (const from of [...fromRunIds].reverse()) {
+    if (!from || from === runId) continue;
+    const prior = remembered.get(from);
+    const priorBin = rememberedBinary.get(from);
+    if (prior?.size) {
+      for (const [rel, body] of prior) if (!bag.has(rel)) { bag.set(rel, body); inherited.push(rel); }
+      for (const [rel, bytes] of priorBin ?? []) if (!bin.has(rel)) { bin.set(rel, bytes); inherited.push(rel); }
+    } else {
+      const dir = join(previewBase(), from);
+      if (!existsSync(dir)) continue;
+      const walk = (d: string, rel: string, depth: number) => {
+        if (depth > 4) return;
+        let entries: import("fs").Dirent[] = [];
+        try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          const childRel = rel ? `${rel}/${e.name}` : e.name;
+          const abs = join(d, e.name);
+          if (e.isDirectory()) { walk(abs, childRel, depth + 1); continue; }
+          if (!e.isFile() || !SITE_ASSET.test(e.name) && !/\.(gif|ico|woff2?)$/i.test(e.name)) continue;
+          if (bag.has(childRel) || bin.has(childRel)) continue;
+          try {
+            if (/\.(png|jpe?g|webp|gif|ico|woff2?)$/i.test(e.name)) bin.set(childRel, readFileSync(abs));
+            else bag.set(childRel, readFileSync(abs, "utf8"));
+            inherited.push(childRel);
+          } catch { /* unreadable */ }
+        }
+      };
+      walk(dir, "", 0);
+    }
+    if (inherited.length) break; // the most recent run that had a site
+  }
+  if (bag.size) remembered.set(runId, bag);
+  if (bin.size) rememberedBinary.set(runId, bin);
+  return inherited;
 }
 
 /** A site file already remembered for this run (ORION wrote or read it). */

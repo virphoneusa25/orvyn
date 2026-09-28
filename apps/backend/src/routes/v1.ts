@@ -659,6 +659,25 @@ function projectChoice(body: { switchProject?: unknown; newProject?: unknown; fo
  * Worker. The control plane cannot see those files, so its empty copy of the
  * workspace is expected and must not stop a follow-up.
  */
+/**
+ * Where this conversation's last run worked, when that was the user's
+ * computer (the Local Worker): the folder it used there. A follow-up goes
+ * back to the same place; the files are not on this server.
+ */
+function priorLocalWorkerRoot(t: { runStore: { get(id: string): { events: { type: string; data: any }[] } | undefined } }, session: { runIds?: string[] } | undefined): string | null {
+  for (const id of [...(session?.runIds ?? [])].reverse()) {
+    const run = t.runStore.get(id);
+    if (!run) continue;
+    const exec = [...run.events].reverse().find((e) => e.type === "run.execution");
+    if (!exec) continue;
+    const data = exec.data ?? {};
+    if (!("remoteProjectRoot" in data) || !["local_host", "local_sandbox"].includes(String(data.executionTargetActual ?? ""))) return null;
+    const root = String(data.remoteProjectRoot ?? "").trim();
+    return root || null;
+  }
+  return null;
+}
+
 function filesOnClient(t: { runStore: { get(id: string): { events: { type: string; data: any }[] } | undefined } }, session: { runIds?: string[] } | undefined, body: { projectRoot?: unknown; remoteProjectRoot?: unknown }): boolean {
   const root = typeof body.projectRoot === "string" ? body.projectRoot.trim() : "";
   const cloudHost = process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR);
@@ -738,11 +757,17 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   // durable session workspace, while execution must still target that path on
   // the registered Local Worker.
   const explicitClientRoot = typeof req.body.projectRoot === "string" ? req.body.projectRoot.trim() : "";
-  const desktopProjectRoot = explicitClientRoot &&
+  const explicitDesktopRoot = explicitClientRoot &&
     (looksLikeForeignAbsolutePath(explicitClientRoot)
       || (cloudHost && /^[A-Za-z]:[\\/]/.test(explicitClientRoot)))
     ? explicitClientRoot
     : "";
+  // A follow-up in a chat whose project was built on the user's computer
+  // works there again (same folder), never in an empty Cloud copy.
+  const priorLocalRoot = !explicitDesktopRoot && cloudHost && !projectChoice(req.body).newProject && !projectChoice(req.body).forkProject
+    ? priorLocalWorkerRoot(t, session)
+    : null;
+  const desktopProjectRoot = explicitDesktopRoot || priorLocalRoot || "";
   const managedWorkspace = Boolean(resolvedRoot) && isProvisionedWorkspace(resolvedRoot, t.id, t.sessions.dataDirectory);
   const virtualWorkspace = managedWorkspace || (Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id));
   const hasLocalProject = Boolean(desktopProjectRoot) || (Boolean(resolvedRoot) && !virtualWorkspace);
@@ -849,6 +874,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
         ? {
             workspaceId: preflight.workspaceId,
             workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
+            previousRunIds: [...(session.runIds ?? [])],
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }
         : {}),
@@ -1259,6 +1285,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
         ? {
             workspaceId: preflight.workspaceId,
             workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
+            previousRunIds: [...(missionSession.runIds ?? [])],
             onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
           }
         : {}),

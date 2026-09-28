@@ -50,7 +50,7 @@ import {
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
 import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
-import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
+import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
 import { canonicalSiteSourcePath, detectSiteStack, listExistingSiteFiles, planWebsiteLayout, siteWriteRefusal, type WebsiteLayout } from "./websiteLayout";
 import { openSiteOnDesktop } from "../desktop/sandboxDesktop";
 import { inspectWorkspace } from "./workspaceContext";
@@ -206,6 +206,7 @@ interface RunState {
   /** Project files this conversation's workspace already has (from earlier runs). */
   knownProjectFiles?: string[];
   completingAssets?: boolean;
+  previousRunIds?: string[];
   /** Workspace path → artifact id for the download card of a file this run wrote. */
   writtenDownloads?: Map<string, string>;
   handoffModelId?: string;
@@ -273,6 +274,8 @@ export interface RunOptions {
   onProjectFile?: (relativePath: string) => void;
   /** Durable workspace id. File tools resolve inside projectRoot, not a host path the model picks. */
   workspaceId?: string;
+  /** Earlier runs of this conversation (oldest first): a follow-up starts with their site preview. */
+  previousRunIds?: string[];
 }
 
 /**
@@ -663,12 +666,20 @@ export class StreamingAgentRuntime {
   private async seedExistingSite(runId: string, state: RunState): Promise<string | null> {
     // A website task, or any follow-up in a workspace that already has a
     // homepage ("show it in preview", "yes"): the preview opens with the site.
-    const knownSite = (state.knownProjectFiles ?? []).some((f) => /^index\.html$/i.test(f));
-    if (!state.intent.requiresFrontend && !knownSite) return null;
     if (state.websiteLayout && (state.websiteLayout.directory || state.websiteLayout.stack !== "static")) return null;
+    // The site this chat already built opens right away (its last preview),
+    // wherever the files live; the project's current files refresh it below.
+    const inherited = inheritSiteFiles(runId, state.previousRunIds ?? []);
+    const knownSite = inherited.some((f) => /(^|\/)index\.html$/i.test(f)) || (state.knownProjectFiles ?? []).some((f) => /^index\.html$/i.test(f));
+    if (!state.intent.requiresFrontend && !knownSite) return null;
+    let early: ReturnType<typeof publishRememberedSite> = null;
+    if (inherited.some((f) => /(^|\/)index\.html$/i.test(f))) {
+      early = publishRememberedSite(runId);
+      if (early) this.store.emit(runId, "preview.available", { runId, previewId: early.id, url: early.url, revision: early.revision, changedFiles: inherited, label: "Live preview" });
+    }
     const read = (path: string) => this.readSiteFile(runId, state, path);
     const html = await read("index.html");
-    if (!html) return null;
+    if (!html) return early?.url ?? null;
     rememberSiteFile(runId, "index.html", html);
     const refs = [...html.matchAll(/<(?:link|script|img)\b[^>]*?\s(?:href|src)\s*=\s*["']([^"']+)["']/gi)]
       .map((match) => match[1]!.split(/[?#]/)[0]!.replace(/^\/?(?:\.\/)?/, ""))
@@ -677,9 +688,10 @@ export class StreamingAgentRuntime {
       const body = await read(ref);
       if (body) rememberSiteFile(runId, ref, body);
     }
-    const published = publishRememberedSite(runId);
-    if (!published) return null;
-    this.store.emit(runId, "preview.available", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs], label: "Live preview" });
+    const published = publishRememberedSite(runId, early ? ["index.html", ...refs] : []);
+    if (!published) return early?.url ?? null;
+    if (early) this.store.emit(runId, "preview.updated", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs] });
+    else this.store.emit(runId, "preview.available", { runId, previewId: published.id, url: published.url, revision: published.revision, changedFiles: ["index.html", ...refs], label: "Live preview" });
     void this.verifyPublishedPreview(runId, published.url);
     return published.url;
   }
@@ -1245,6 +1257,7 @@ export class StreamingAgentRuntime {
       ...(routeIntent.requiresFrontend ? { website: emptyWebsiteMission(), websiteLayout: planWebsiteLayout(instruction, listExistingSiteFiles(projectRoot), detectSiteStack(projectRoot)) } : {}),
       composerMode: options?.composerMode,
       knownProjectFiles: options?.workspaceIdentity?.knownFiles ?? [],
+      previousRunIds: options?.previousRunIds ?? [],
       actionNudges: 0,
       phase: "preflight",
       repositoryDetected: workspace.repositoryDetected,
