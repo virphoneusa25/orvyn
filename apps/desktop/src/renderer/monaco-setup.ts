@@ -88,6 +88,14 @@ monaco.editor.defineTheme("orvyn-dark", {
     { token: "attribute.name.html", foreground: "A9B4FF" },
     { token: "attribute.value", foreground: "7FD1B9" },
     { token: "attribute.value.html", foreground: "7FD1B9" },
+    // CSS: selectors (tag), property names, values, custom properties (--var),
+    // hex colors / units (number) — each visually distinct.
+    { token: "tag.css", foreground: "F07178" },
+    { token: "attribute.name.css", foreground: "7FDBFF" },
+    { token: "attribute.value.css", foreground: "9FE8C8" },
+    { token: "variable.css", foreground: "EECB8B" },
+    { token: "number.css", foreground: "E8B93F" },
+    { token: "keyword.css", foreground: "C792EA" },
   ],
   colors: {
     "editor.background": "#0B0E14",
