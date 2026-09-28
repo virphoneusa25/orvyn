@@ -5,6 +5,7 @@ import { condenseOutput, shouldCondense } from "./outputCondenser";
 import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "./capabilityGap";
+import { preferencesPrompt } from "../onboarding/preferences";
 export { builtInToolsFor };
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
@@ -1856,7 +1857,9 @@ export class StreamingAgentRuntime {
 
   private relevantMemory(projectRoot: string, instruction: string): string {
     // What ORION knows about the user (every run), plus notes relevant to this task.
-    return userMemoryPrompt(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
+    const prefs = preferencesPrompt(this.memoryStore);
+    const memory = userMemoryPrompt(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
+    return [prefs, memory].filter(Boolean).join("\n\n");
   }
 
   private async relevantCode(instruction: string): Promise<string> {

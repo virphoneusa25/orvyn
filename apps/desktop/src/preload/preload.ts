@@ -19,10 +19,16 @@ contextBridge.exposeInMainWorld("orvyn", {
       return () => ipcRenderer.removeListener("terminal:data", h);
     },
   },
+  onboarding: {
+    isFirstRun: (): Promise<boolean> => ipcRenderer.invoke("onboarding:isFirstRun"),
+    accountUrl: (): Promise<string | null> => ipcRenderer.invoke("onboarding:accountUrl"),
+  },
   project: {
     getWorkspace: () => ipcRenderer.invoke("project:getWorkspace"),
     open: () => ipcRenderer.invoke("project:open"),
     openPath: (folder: string) => ipcRenderer.invoke("project:openPath", folder),
+    create: (name: string) => ipcRenderer.invoke("project:create", name),
+    clone: (url: string) => ipcRenderer.invoke("project:clone", url),
     openFile: () => ipcRenderer.invoke("project:openFile"),
     close: () => ipcRenderer.invoke("project:close"),
     listDirectory: (relativePath: string) => ipcRenderer.invoke("project:listDirectory", relativePath),

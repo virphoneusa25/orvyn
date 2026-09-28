@@ -1,3 +1,4 @@
+import { memoryEnabled } from "../onboarding/preferences";
 // apps/backend/src/memory/userMemory.ts
 //
 // ORION remembers the user across conversations: who they are, their
@@ -41,6 +42,7 @@ const SECRET = /\b(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}|krl_
 
 /** The memory block for a prompt: everything about the user, plus memories relevant to this message. */
 export function userMemoryPrompt(store: MemoryStoreLike | undefined, text: string, projectRoot?: string | null): string {
+  if (!memoryEnabled(store)) return "";
   if (!store) return "";
   let all: MemoryRow[] = [];
   try { all = store.listMemories(projectRoot ?? null, 300); } catch { return ""; }
@@ -99,6 +101,8 @@ export interface LearnResult { added: string[]; updated: string[]; removed: stri
  * otherwise a model extracts durable facts. Never throws (memory is best-effort).
  */
 export async function learnFromUserMessage(store: MemoryStoreLike | undefined, model: GenerateLike | undefined, userText: string): Promise<LearnResult> {
+  // Project Memory off (onboarding / settings): nothing is learned.
+  if (!memoryEnabled(store)) return { added: [], updated: [], removed: [] };
   const result: LearnResult = { added: [], updated: [], removed: [] };
   if (!store || !mightTeachAboutUser(userText) || SECRET.test(userText)) return result;
   let existing: MemoryRow[] = [];

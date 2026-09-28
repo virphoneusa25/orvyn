@@ -69,6 +69,8 @@ export interface HomeScreenProps {
   projectRoot?: string | null;
   onOpenTerminal?: () => void;
   onNavigate?: (view: string) => void;
+  /** Quick actions under the composer: New Project, Open Project, Browse Files, Connect Server. */
+  onQuickAction?: (action: "new_project" | "open_project" | "browse_files" | "connect_server") => void;
   onPickAgent?: () => void;
   onOpenMission: (id: string) => void;
   onMissionAction?: (id: string) => void;
@@ -164,9 +166,9 @@ export function HomeScreen(props: HomeScreenProps) {
               <div className="ov-greeting ov-greeting--center">
                 <div className="ov-eyebrow">{dateLine}</div>
                 <h1>
-                  {greetingFor(now)}, {userName}.
+                  Welcome back, {userName}.
                 </h1>
-                <p>{props.statusLine ?? summaryLine(missions)}</p>
+                <p>{props.statusLine && /offline|disconnect|unreachable|error|sign in|signed out|needs|failed/i.test(props.statusLine) ? props.statusLine : missions.some((m) => m.tone === "approval" || m.tone === "blocked" || m.tone === "paused") ? summaryLine(missions) : "What shall we build today?"}</p>
               </div>
             </div>
 
@@ -274,6 +276,21 @@ export function HomeScreen(props: HomeScreenProps) {
               </div>
             </div>
 
+            {props.onQuickAction ? (
+              <div className="ov-quick" role="group" aria-label="Quick actions" data-testid="home-quick-actions">
+                {([
+                  ["new_project", "New Project", "M12 5v14M5 12h14"],
+                  ["open_project", "Open Project", "M3 7h6l2 2h10v10H3z"],
+                  ["browse_files", "Browse Files", "M6 3h9l4 4v14H6zM14 3v5h5"],
+                  ["connect_server", "Connect Server", "M4 5h16v5H4zM4 14h16v5H4zM8 7.5h.01M8 16.5h.01"],
+                ] as const).map(([id, label, d]) => (
+                  <button key={id} type="button" className="ov-quick__btn" onClick={() => props.onQuickAction?.(id)}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="ov-starters">
               <span>Start from</span>
               {starters.map((s) => (

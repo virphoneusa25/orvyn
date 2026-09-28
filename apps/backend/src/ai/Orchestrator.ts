@@ -2,6 +2,7 @@ import { CONVERSATION_STYLE } from "../agent/conversationStyle";
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "../agent/capabilityGap";
+import { preferencesPrompt } from "../onboarding/preferences";
 import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
@@ -136,6 +137,8 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
   if (req.context?.projectRules) {
     systemParts.push(`Project rules (.orvyn/rules.md):\n${req.context.projectRules}`);
   }
+  const prefs = preferencesPrompt(memory);
+  if (prefs) systemParts.push(prefs);
   const remembered = userMemoryPrompt(memory, req.userMessage, req.context?.projectRoot ?? null);
   if (remembered) systemParts.push(remembered);
   messages.push({ role: "system", content: systemParts.join("\n\n") });

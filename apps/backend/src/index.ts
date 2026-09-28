@@ -15,6 +15,7 @@ import { portForwardingService } from "./ports/PortForwardingService";
 import { workerStats } from "./routes/worker";
 import { probeQdrant } from "./indexing/qdrantHealth";
 import { authRouter } from "./routes/auth";
+import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
@@ -151,6 +152,9 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
 app.use("/api/v1/auth", ipRateLimit(), authRouter);
+// Onboarding is signed in and saves every screen (plus analytics): a person
+// clicking through quickly must never hit the sign-in brute-force limit.
+app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RATE_LIMIT_RPM) || 240), onboardingRouter);
 
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.

@@ -99,8 +99,9 @@ export function tenantRateLimit() {
 }
 
 /** Per-IP limiter for unauthenticated routes (register/login). */
-export function ipRateLimit() {
-  const limiter = new TokenBucketLimiter(envInt("ORVYN_AUTH_RATE_LIMIT_RPM", 30));
+/** Per-IP limit. Sign-in/sign-up use the strict default; signed-in setup screens pass a roomier one. */
+export function ipRateLimit(rpm = envInt("ORVYN_AUTH_RATE_LIMIT_RPM", 30)) {
+  const limiter = new TokenBucketLimiter(rpm);
   return (req: Request, res: Response, next: NextFunction): void => {
     const verdict = limiter.take(req.ip ?? "unknown");
     if (!verdict.ok) return deny(res, limiter, verdict.retryAfterSec);

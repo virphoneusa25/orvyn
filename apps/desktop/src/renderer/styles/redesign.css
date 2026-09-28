@@ -686,3 +686,11 @@
   .ov-trust { display: none; }
   .ov-search { margin-left: 12px; min-width: 140px; }
 }
+
+/* Quick actions under the home composer (post-onboarding home). */
+.ov-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 4px 0 10px; }
+.ov-quick__btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 76px; padding: 12px; border-radius: 12px; border: 1px solid rgba(120, 100, 255, .22); background: rgba(9, 18, 38, .6); color: var(--ov-text, #F8FAFF); font: inherit; font-size: 12.5px; cursor: pointer; transition: border-color .15s, transform .15s, background .15s; }
+.ov-quick__btn svg { color: #A5B4FC; }
+.ov-quick__btn:hover { border-color: rgba(139, 123, 255, .55); background: rgba(124, 77, 255, .1); transform: translateY(-1px); }
+.ov-quick__btn:focus-visible { outline: 2px solid #22D3EE; outline-offset: 2px; }
+@media (max-width: 760px) { .ov-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -52,10 +52,14 @@ rsync -az -e "$RSH" \
   "$ROOT/.env.example" \
   "$HOST:$REMOTE/"
 
-# Model provider keys from the deploy environment (GitHub secrets) go into the
-# server's .env, which deploys otherwise never touch. Values travel on stdin,
-# never on a command line.
-for name in NEBIUS_API_KEY; do
+# Secrets from the deploy environment (GitHub secrets) go into the server's
+# .env, which deploys otherwise never touch. Values travel on stdin, never on
+# a command line. Unset ones are skipped (the server keeps what it has).
+#   model provider: NEBIUS_API_KEY
+#   account email (verification links): SMTP_*
+#   sign-in and billing (added when the apps exist): GOOGLE_*, GITHUB_*, STRIPE_*
+for name in NEBIUS_API_KEY SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
+  GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
   value="${!name:-}"
   [[ -n "$value" ]] || continue
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -euo pipefail

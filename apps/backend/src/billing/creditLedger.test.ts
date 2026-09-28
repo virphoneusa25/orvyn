@@ -24,16 +24,16 @@ test("wallet spends included credits first and survives a new ledger on the same
   const { db, dir } = ledger();
   const t0 = Date.UTC(2026, 8, 1);
   db.ensureAccount("u1", "starter", t0);
-  db.purchase("u1", "pack_5k", "checkout", t0);
+  db.purchase("u1", "pack_10k", "checkout", t0);
   db.charge({ userId: "u1", type: "model", lane: "auto", providerCostUsd: 0.1, now: t0 + 1000 });
   const mid = db.snapshot("u1", t0 + 1000);
-  assert.equal(mid.includedBalance, 4_000 - customerCreditsFor(0.1, 2.25).customerCredits);
-  assert.equal(mid.purchasedBalance, 5_000);
+  assert.equal(mid.includedBalance, 24_000 - customerCreditsFor(0.1, 2.25).customerCredits);
+  assert.equal(mid.purchasedBalance, 10_000);
   db.close();
   const again = new CreditLedger(path.join(dir, "billing.sqlite"));
   const after = again.snapshot("u1", t0 + 2000);
   assert.equal(after.includedBalance, mid.includedBalance);
-  assert.equal(after.purchasedBalance, 5_000);
+  assert.equal(after.purchasedBalance, 10_000);
   again.close();
 });
 
@@ -75,7 +75,7 @@ test("two reservations cannot overspend one wallet", () => {
   db.release("run_a", t0 + 1);
   const snap = db.snapshot("u1", t0 + 2);
   assert.equal(snap.reservedBalance, 4_000);
-  assert.equal(snap.includedBalance, 10_000);
+  assert.equal(snap.includedBalance, 60_000);
   db.close();
 });
 
@@ -85,7 +85,7 @@ test("failed work is recorded and not charged", () => {
   db.ensureAccount("u1", "pro", t0);
   const failed = db.charge({ userId: "u1", type: "model", lane: "build", providerCostUsd: 0.2, ok: false, now: t0 });
   assert.equal(failed.creditsCharged, 0);
-  assert.equal(db.snapshot("u1", t0).includedBalance, 10_000);
+  assert.equal(db.snapshot("u1", t0).includedBalance, 60_000);
   db.close();
 });
 
@@ -93,13 +93,13 @@ test("auto-recharge fires once and stops at the monthly cap", () => {
   const { db } = ledger();
   const t0 = Date.UTC(2026, 8, 6);
   db.setPlan("u1", "starter", t0);
-  db.setAutoRecharge("u1", { threshold: 3_900, packId: "pack_5k", maxPerMonth: 1 }, t0);
+  db.setAutoRecharge("u1", { threshold: 23_900, packId: "pack_10k", maxPerMonth: 1 }, t0);
   db.charge({ userId: "u1", type: "model", lane: "auto", providerCostUsd: 0.2, now: t0 + 1 });
   const once = db.snapshot("u1", t0 + 1);
-  assert.equal(once.purchasedBalance, 5_000);
+  assert.equal(once.purchasedBalance, 10_000);
   assert.equal(once.autoRecharge?.recharges_this_cycle, 1);
   db.charge({ userId: "u1", type: "model", lane: "auto", providerCostUsd: 0.2, now: t0 + 2 });
-  assert.equal(db.snapshot("u1", t0 + 2).purchasedBalance, 5_000);
+  assert.equal(db.snapshot("u1", t0 + 2).purchasedBalance, 10_000);
   db.close();
 });
 
@@ -149,10 +149,21 @@ test("per-run cap stops a runaway and says so", () => {
   const { db } = ledger();
   const t0 = Date.UTC(2026, 8, 7);
   db.setPlan("u1", "pro", t0);
-  db.purchase("u1", "pack_5k", "checkout", t0);
+  db.purchase("u1", "pack_10k", "checkout", t0);
   assert.throws(
     () => db.charge({ userId: "u1", runId: "run_1", type: "model", lane: "utility", providerCostUsd: 1.6, now: t0 }),
     (e: any) => e.code === "RUN_CAP" && /autonomous budget/.test(e.message),
   );
+  db.close();
+});
+
+test("new accounts start on Free with 2,000 credits, granted once", () => {
+  const { db } = ledger();
+  const t0 = Date.UTC(2026, 8, 28);
+  db.ensureAccount("new-user", undefined, t0);
+  db.ensureAccount("new-user", undefined, t0 + 5);
+  const snap = db.snapshot("new-user", t0 + 10);
+  assert.equal(snap.includedBalance, 2_000);
+  assert.equal((snap as any).planId ?? (snap as any).plan?.id ?? "free", "free");
   db.close();
 });

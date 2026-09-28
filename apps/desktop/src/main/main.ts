@@ -268,6 +268,54 @@ ipcMain.handle("project:open", async () => {
   return { root: currentProjectRoot, kind: "folder" as const, recents };
 });
 
+async function openProjectRoot(root: string) {
+  currentProjectRoot = root;
+  (globalThis as { __orvynWorkspaceRoot?: string }).__orvynWorkspaceRoot = currentProjectRoot;
+  localWorkerManager.configure({ backendUrl: (await readConfig()).backendUrl, apiKey: (await readConfig()).apiKey, projectRoot: currentProjectRoot });
+  const recents = await pushRecent(root);
+  return { root: currentProjectRoot, kind: "folder" as const, recents };
+}
+
+/** A name that is safe as a folder name on every OS. */
+function safeFolderName(name: string): string {
+  return String(name ?? "").trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-").replace(/^[.\s-]+|[.\s]+$/g, "").slice(0, 80) || "orvyn-project";
+}
+
+/** Onboarding "Create a new project": the user picks where; ORVYN makes the folder and opens it. */
+ipcMain.handle("project:create", async (_evt, name: string) => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, { title: "Choose where to create the project", properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const target = path.join(result.filePaths[0]!, safeFolderName(name));
+  await fs.mkdir(target, { recursive: true });
+  return openProjectRoot(target);
+});
+
+/** Onboarding "Clone a Git repository": real git clone into a folder the user picks. */
+ipcMain.handle("project:clone", async (_evt, url: string) => {
+  const repo = String(url ?? "").trim();
+  if (!/^(https:\/\/[\w.-]+\/[\w./~-]+|git@[\w.-]+:[\w./~-]+)$/.test(repo)) return { error: "Enter an https:// or git@ repository address." };
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, { title: "Choose where to clone the repository", properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const base = repo.replace(/\.git$/, "").split(/[/:]/).pop() || "repository";
+  const target = path.join(result.filePaths[0]!, safeFolderName(base));
+  try {
+    await fs.access(target);
+    return { error: `A folder named ${path.basename(target)} already exists there.` };
+  } catch { /* free */ }
+  const outcome = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    const child = spawn("git", ["clone", "--", repo, target], { windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+    let err = "";
+    child.stderr?.on("data", (d) => { err = (err + String(d)).slice(-2000); });
+    const timer = setTimeout(() => { child.kill(); resolve({ ok: false, error: "The clone took too long." }); }, 10 * 60_000);
+    child.on("error", (e: any) => { clearTimeout(timer); resolve({ ok: false, error: e?.code === "ENOENT" ? "Git is not installed on this computer." : String(e?.message ?? e) }); });
+    child.on("close", (code) => { clearTimeout(timer); resolve(code === 0 ? { ok: true } : { ok: false, error: (err.split("\n").filter(Boolean).pop() || `git exited with ${code}`).replace(/https:\/\/[^@\s]+@/g, "https://") }); });
+  });
+  if (!outcome.ok) return { error: outcome.error };
+  return openProjectRoot(target);
+});
+
 ipcMain.handle("project:openPath", async (_evt, folder: string) => {
   const resolved = path.resolve(folder);
   try {
@@ -478,6 +526,9 @@ interface PersistedConfig {
 
 function encryptionAvailable(): boolean {
   try {
+    // Headless Linux test machines have no keyring; the suites opt into
+    // Chromium's plain-text store explicitly. Real installs never do.
+    if (process.env.ORVYN_TEST_PLAINTEXT_KEYSTORE === "1" && process.platform === "linux") (safeStorage as { setUsePlainTextEncryption?: (v: boolean) => void }).setUsePlainTextEncryption?.(true);
     return safeStorage.isEncryptionAvailable();
   } catch {
     return false;
@@ -594,6 +645,17 @@ ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
 });
 
 ipcMain.handle("config:get", () => readConfig());
+/** The account server (ORVYN Cloud unless ORVYN_CLOUD_URL points at staging or a test server). */
+ipcMain.handle("onboarding:accountUrl", () => process.env.ORVYN_CLOUD_URL?.trim() || null);
+/** A fresh install (no saved connection, no recent projects): onboarding greets it. Existing installs are never interrupted. */
+ipcMain.handle("onboarding:isFirstRun", async () => {
+  if (process.env.ORVYN_SKIP_ONBOARDING === "1") return false;
+  try {
+    await fs.access(CONFIG_PATH);
+    return false;
+  } catch { /* no saved connection */ }
+  return (await loadRecents()).length === 0;
+});
 ipcMain.handle("engine:ensureLocal", async () => {
   const ok = await ensureLocalEngine({ force: true });
   return { ok };

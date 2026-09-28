@@ -44,6 +44,8 @@ export function installPreviewBridge(): void {
       getWorkspace: async () => ({ root: "/workspace", kind: "default", recents: ["/workspace"] }),
       open: async () => null,
       openPath: async () => null,
+      create: async () => null,
+      clone: async () => null,
       openFile: async () => null,
       close: async () => ({ root: "", kind: "default", recents: [] }),
       listDirectory: async () => [],

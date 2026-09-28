@@ -33,10 +33,20 @@ export interface OrvynBridge {
     kill(sessionId: string): Promise<boolean>;
     onData(cb: (e: { sessionId: string; data: string }) => void): () => void;
   };
+  onboarding?: {
+    /** A fresh install: no saved connection and no recent projects. */
+    isFirstRun(): Promise<boolean>;
+    /** Account server override (staging/test); null means ORVYN Cloud. */
+    accountUrl?(): Promise<string | null>;
+  };
   project: {
     getWorkspace(): Promise<WorkspaceState>;
     open(): Promise<WorkspaceState | null>;
     openPath(folder: string): Promise<WorkspaceState | null>;
+    /** Onboarding: create a new project folder where the user chooses. */
+    create(name: string): Promise<WorkspaceState | null>;
+    /** Onboarding: git clone into a folder the user chooses. */
+    clone(url: string): Promise<WorkspaceState | { error: string } | null>;
     openFile(): Promise<WorkspaceState | null>;
     close(): Promise<WorkspaceState>;
     listDirectory(relativePath: string): Promise<DirEntry[]>;

@@ -92,6 +92,7 @@ export interface User {
   email: string;
   name: string | null;
   createdAt: number;
+  emailVerified?: boolean;
 }
 
 function hashPassword(password: string): string {
@@ -123,6 +124,95 @@ export class AuthService {
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
     this.migrateSessionOrg();
+    this.migrateVerification();
+  }
+
+  /** Email verification: a column on users plus single-use link tokens (only their hash is stored). */
+  private migrateVerification(): void {
+    try {
+      this.db.exec(`ALTER TABLE users ADD COLUMN email_verified_at INTEGER`);
+    } catch {
+      /* already present */
+    }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS email_verifications (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_verify_user ON email_verifications (user_id);`);
+  }
+
+  /** A single-use verification token for the user's current email (24 h). Older unused links stop working. */
+  createEmailVerification(userId: string, now = Date.now()): { token: string; email: string } {
+    const row = this.db.prepare(`SELECT email FROM users WHERE id = ?`).get(userId) as { email?: string } | undefined;
+    if (!row?.email) throw new Error("Unknown user");
+    this.db.prepare(`UPDATE email_verifications SET used_at = ? WHERE user_id = ? AND used_at IS NULL`).run(now, userId);
+    const token = `orvver_${randomBytes(32).toString("hex")}`;
+    this.db
+      .prepare(`INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(hashToken(token), userId, row.email, now, now + 24 * 60 * 60 * 1000);
+    return { token, email: row.email };
+  }
+
+  /** Consumes a verification link. Returns the verified user, or null for an unknown/expired/used link. */
+  verifyEmailToken(token: string, now = Date.now()): User | null {
+    if (!token.startsWith("orvver_")) return null;
+    const row = this.db
+      .prepare(`SELECT * FROM email_verifications WHERE token_hash = ?`)
+      .get(hashToken(token)) as { user_id: string; email: string; expires_at: number; used_at: number | null } | undefined;
+    if (!row || row.used_at || row.expires_at <= now) return null;
+    const user = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(row.user_id) as any;
+    if (!user || String(user.email) !== row.email) return null;
+    this.db.prepare(`UPDATE email_verifications SET used_at = ? WHERE token_hash = ?`).run(now, hashToken(token));
+    this.db.prepare(`UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?`).run(now, row.user_id);
+    return rowToUser(user);
+  }
+
+  isEmailVerified(userId: string): boolean {
+    const row = this.db.prepare(`SELECT email_verified_at FROM users WHERE id = ?`).get(userId) as { email_verified_at?: number | null } | undefined;
+    return Boolean(row?.email_verified_at);
+  }
+
+  /** Marks the email as verified by a trusted source (an OAuth provider that verified it). */
+  markEmailVerified(userId: string, now = Date.now()): void {
+    this.db.prepare(`UPDATE users SET email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?`).run(now, userId);
+  }
+
+  /** "Change email" before it is verified. */
+  changeUnverifiedEmail(userId: string, email: string): User {
+    const normalized = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new Error("Invalid email address");
+    if (this.isEmailVerified(userId)) throw new Error("This email is already verified");
+    const taken = this.db.prepare(`SELECT id FROM users WHERE email = ? AND id <> ?`).get(normalized, userId);
+    if (taken) throw new Error("An account with this email already exists");
+    this.db.prepare(`UPDATE users SET email = ? WHERE id = ?`).run(normalized, userId);
+    this.db.prepare(`UPDATE email_verifications SET used_at = ? WHERE user_id = ? AND used_at IS NULL`).run(Date.now(), userId);
+    return rowToUser(this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(userId));
+  }
+
+  setName(userId: string, name: string): void {
+    const clean = name.trim().slice(0, 80);
+    if (!clean) throw new Error("Name is required");
+    this.db.prepare(`UPDATE users SET name = ? WHERE id = ?`).run(clean, userId);
+  }
+
+  getUser(userId: string): User | null {
+    const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(userId);
+    return row ? rowToUser(row) : null;
+  }
+
+  /** The personal tenant's owner (the user whose preferences shape ORION there). */
+  userForTenant(tenantId: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT m.user_id FROM organizations o JOIN organization_members m ON m.organization_id = o.id
+         WHERE o.tenant_id = ? ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END, m.created_at ASC LIMIT 1`
+      )
+      .get(tenantId) as { user_id?: string } | undefined;
+    return row?.user_id ?? null;
   }
 
   close(): void {
@@ -398,6 +488,7 @@ function rowToUser(row: any): User {
     email: String(row.email),
     name: row.name != null ? String(row.name) : null,
     createdAt: Number(row.created_at),
+    emailVerified: row.email_verified_at != null,
   };
 }
 

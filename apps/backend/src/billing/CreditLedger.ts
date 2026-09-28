@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { customerCreditsFor, providerCostUsd } from "./creditMath";
-import { CREDIT_PACKS, LANE_FACTORS, type Lane, type PackId, type PlanId, packById, planById } from "./plans";
+import { CREDIT_PACKS, DEFAULT_PLAN, LANE_FACTORS, type Lane, type PackId, type PlanId, packById, planById } from "./plans";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -244,7 +244,7 @@ export class CreditLedger {
     };
   }
 
-  ensureAccount(userId: string, planId: PlanId = "starter", now = Date.now()): void {
+  ensureAccount(userId: string, planId: PlanId = DEFAULT_PLAN, now = Date.now()): void {
     const row = this.account(userId);
     if (!row) {
       const plan = planById(planId);
@@ -270,7 +270,7 @@ export class CreditLedger {
   purchase(userId: string, packId: PackId, source: "checkout" | "auto_recharge" = "checkout", now = Date.now()): { credits: number; priceUsd: number } {
     const pack = packById(packId);
     if (!pack) throw new BillingLimitError("PACK", "Unknown credit pack.");
-    this.ensureAccount(userId, "starter", now);
+    this.ensureAccount(userId, DEFAULT_PLAN, now);
     if (source === "auto_recharge") {
       const settings = this.autoRecharge(userId);
       if (!settings) throw new BillingLimitError("RECHARGE", "Auto-recharge is not turned on.");
@@ -290,7 +290,7 @@ export class CreditLedger {
   }
 
   setAutoRecharge(userId: string, input: { threshold: number; packId: PackId; maxPerMonth: number }, now = Date.now()): void {
-    this.ensureAccount(userId, "starter", now);
+    this.ensureAccount(userId, DEFAULT_PLAN, now);
     if (!packById(input.packId)) throw new BillingLimitError("PACK", "Unknown credit pack.");
     if (input.maxPerMonth < 1) throw new BillingLimitError("RECHARGE", "Set a monthly maximum of at least 1.");
     this.db.prepare(
@@ -301,7 +301,7 @@ export class CreditLedger {
   }
 
   reserve(userId: string, runId: string, credits: number, now = Date.now()): string {
-    this.ensureAccount(userId, "starter", now);
+    this.ensureAccount(userId, DEFAULT_PLAN, now);
     const row = this.account(userId)!;
     const plan = planById(row.plan_id);
     const held = this.heldCount(userId);
@@ -335,7 +335,7 @@ export class CreditLedger {
   /** Charge a metered event. Failed work (ok: false) is recorded and not billed. */
   charge(input: UsageChargeInput): { creditsCharged: number; providerCostUsd: number; eventId: string } {
     const now = input.now ?? Date.now();
-    this.ensureAccount(input.userId, "starter", now);
+    this.ensureAccount(input.userId, DEFAULT_PLAN, now);
     const lane: Lane = input.lane ?? "auto";
     const card = this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", now);
     const cost = input.providerCostUsd ?? (card
@@ -371,15 +371,26 @@ export class CreditLedger {
 
   authorizeRun(userId: string, runId: string): void {
     const row = this.account(userId);
-    const plan = planById(row?.plan_id ?? "starter");
+    const plan = planById(row?.plan_id ?? DEFAULT_PLAN);
     this.db.prepare(
       `INSERT INTO run_budget (run_id, user_id, extra_usd) VALUES (?, ?, ?)
        ON CONFLICT(run_id) DO UPDATE SET extra_usd = extra_usd + ?`,
     ).run(runId, userId, plan.perRunCostUsd, plan.perRunCostUsd);
   }
 
+  /** Read-only: the wallet's plan, or null when no wallet exists yet. */
+  planOf(userId: string): string | null {
+    return this.account(userId)?.plan_id ?? null;
+  }
+
+  /** Read-only: the included-credit grants the ledger has issued for this wallet (subscription_credit). */
+  grantsIssued(userId: string): { credits: number; plan: string; at: number }[] {
+    const rows = this.db.prepare(`SELECT credits, meta, created_at FROM credit_transactions WHERE user_id = ? AND kind = 'grant' ORDER BY created_at`).all(userId) as { credits: number; meta: string; created_at: number }[];
+    return rows.map((r) => ({ credits: Number(r.credits), plan: String((JSON.parse(r.meta || "{}") as { plan?: string }).plan ?? ""), at: Number(r.created_at) }));
+  }
+
   snapshot(userId: string, now = Date.now()) {
-    this.ensureAccount(userId, "starter", now);
+    this.ensureAccount(userId, DEFAULT_PLAN, now);
     const row = this.account(userId)!;
     const plan = planById(row.plan_id);
     const available = row.included_balance + row.purchased_balance - row.reserved_balance;
