@@ -669,7 +669,9 @@ export function AgentWorkspace({
             <div style={{ display: active?.kind === "desktop" ? "flex" : "none", flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
               <DesktopView
                 active={active?.kind === "desktop"}
-                projectRoot={boundRoot}
+                // The Desktop is a whole Linux computer, not a project view: it starts
+                // with the conversation's workspace, the open project, or on its own.
+                projectRoot={boundRoot || projectRoot || "desktop"}
                 runId={runId}
                 cursor={derived.browser.cursor}
                 status={derived.activity?.tab === "desktop" ? derived.activity.line : null}
@@ -844,7 +846,7 @@ function WorkbenchBody({
 }) {
   if (tab.kind === "changes") {
     return (
-      <>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0, width: "100%" }}>
       <RestoreStrip surface={surface} />
       <ChangesView
         files={surface.changeFiles}
@@ -853,7 +855,7 @@ function WorkbenchBody({
         selected={tab.path ?? derived.activity?.file}
         onSelect={() => { /* stay on Changes; the split shows the diff */ }}
       />
-      </>
+      </div>
     );
   }
   if (tab.kind === "files") {
@@ -864,7 +866,7 @@ function WorkbenchBody({
         .map((item) => ({ path: item.name || item.artifactId, kind: "artifact" as const, artifactId: item.artifactId, mimeType: item.mimeType })),
     ];
     return (
-      <>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, minWidth: 0, width: "100%" }}>
       <RestoreStrip surface={surface} />
       <FilesInspector
         files={surface.changeFiles}
@@ -880,7 +882,7 @@ function WorkbenchBody({
         onPreviewArtifact={onOpenArtifact}
         onOpenChanges={onOpenDiff}
       />
-      </>
+      </div>
     );
   }
   if (tab.kind === "diff") {

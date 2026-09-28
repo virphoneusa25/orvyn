@@ -221,6 +221,12 @@ test("a server run cannot complete without a remote result", () => {
 test("a website cannot be served with python", () => {
   assert.match(shellServerRefusal("python3 -m http.server 8080 &", true) ?? "", /write_file/);
   assert.equal(shellServerRefusal("python3 -m http.server 8080 &", false), null);
+  for (const cmd of ["npx http-server -p 8080", "npx -y serve .", "http-server . -p 8080", "live-server", "serve -l 3000", "php -S localhost:8000"]) {
+    assert.ok(shellServerRefusal(cmd, true), cmd);
+  }
+  for (const cmd of ["npm run dev", "npx vite", "npm install", "node server.js"]) {
+    assert.equal(shellServerRefusal(cmd, true), null, cmd);
+  }
 });
 
 test("a local dev server is not a remote server task, and gets the service tools", () => {

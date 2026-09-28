@@ -184,12 +184,21 @@ export function FilesInspector({
     () => composeWorkbenchFileTree({ environment: location === "sandbox" ? "sandbox" : location === "cloud" ? "cloud" : "local", projectRoot, locations, extras }),
     [locations, extras, location, projectRoot]
   );
-  const generatedItems = useMemo(
-    () => serverTree.sections
+  const generatedItems = useMemo(() => {
+    // Generated = files ORION made outside the project (images, documents,
+    // downloads). Project files already appear under Project; each name once.
+    const projectNames = new Set((writtenPaths ?? []).map((p) => p.replace(/\\/g, "/").split("/").pop()!.toLowerCase()));
+    const seen = new Map<string, ReturnType<typeof toWorkbenchFileItem>>();
+    for (const item of serverTree.sections
       .filter((s) => s.id === "generated" || s.id === "artifacts" || s.id === "uploads")
-      .flatMap((s) => s.files.map((f) => toWorkbenchFileItem(f))),
-    [serverTree]
-  );
+      .flatMap((s) => s.files.map((f) => toWorkbenchFileItem(f)))) {
+      const key = item.name.toLowerCase();
+      if (projectNames.has(key)) continue;
+      const prev = seen.get(key);
+      if (!prev || (!prev.artifactId && item.artifactId) || (!prev.bytes && item.bytes)) seen.set(key, item);
+    }
+    return [...seen.values()];
+  }, [serverTree, writtenPaths]);
   const cloudProjectEntries = useMemo(
     () => location === "local" ? [] : (serverTree.sections.find((s) => s.id === "project")?.files ?? []),
     [serverTree, location]

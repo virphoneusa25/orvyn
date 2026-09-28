@@ -189,13 +189,11 @@ async function main() {
     });
     ok(/Answer from gemini-3\.8-flash/.test(String(chat)), "answered by Gemini 3.8 Flash, not GPT-5.6 Sol", String(chat));
 
-    console.log("\n6. Credit budget");
+    console.log("\n6. Credits are metered; the internal run budget no longer stops a task (the credit wallet sets limits)");
     const big = await runTask("Create five files with long content");
     const bc = lastCredits(big.events);
-    ok(big.events.some((e) => e.type === "run.credits.warning"), "at 80% of the budget ORION is told to finish the essentials");
-    const err = [...big.events].reverse().find((e) => e.type === "run.error")?.data?.message ?? "";
-    ok(big.status === "error" && /credit budget/.test(err), "over the budget the run stops with a clear message", `${big.status} ${err}`);
-    ok(bc && bc.credits >= 20, `…after ${bc?.credits} credits (budget ${bc?.budget})`);
+    ok(bc && bc.credits > 20, `the run was metered past the old internal budget (${bc?.credits} credits)`, JSON.stringify(bc ?? null));
+    ok(!/credit budget/.test([...big.events].reverse().find((e) => e.type === "run.error")?.data?.message ?? ""), "…and was not stopped by it");
 
     console.log("\n7. The Code agent's model is missing on the account (HTTP 404)");
     missing.add(MODELS.kimi);

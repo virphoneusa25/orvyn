@@ -30,3 +30,8 @@ test("outcome reports, questions and empty replies are real stops", () => {
     assert.equal(announcesPendingWork(text), false, text);
   }
 });
+
+test("a conditional 'would let me' is an answer, not unfinished work", () => {
+  assert.equal(announcesPendingWork("Without live search, KEXP and NTS are good examples; installing Web Search would let me check them live."), false);
+  assert.equal(announcesPendingWork("Let me check the logs next."), true);
+});

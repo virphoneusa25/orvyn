@@ -53,6 +53,22 @@ const NAV: { label: string; items: NavEntry[] }[] = [
       { id: "environment", label: "Environments", icon: "server", workbench: "environment" },
     ],
   },
+  {
+    label: "Infrastructure",
+    items: [
+      { id: "servers", label: "Servers", icon: "server" },
+      { id: "containers", label: "Containers", icon: "box" },
+      { id: "databases", label: "Databases", icon: "database" },
+    ],
+  },
+  {
+    label: "Intelligence",
+    items: [
+      { id: "agents", label: "Agents", icon: "agent" },
+      { id: "memory", label: "Memory", icon: "database" },
+      { id: "learning", label: "Learning", icon: "cpu" },
+    ],
+  },
 ];
 
 const RAIL: { id: ViewId; label: string; icon: IconName }[] = [

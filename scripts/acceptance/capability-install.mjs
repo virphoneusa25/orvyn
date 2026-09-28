@@ -176,6 +176,7 @@ async function main() {
     const askA = a.events.find((e) => e.type === "approval.required" && e.data.install);
     ok(askA?.data?.install?.name === "Web Search" && askA.data.install.canonicalId === SERVER_ID, "ORION found Web Search and asked to install it", JSON.stringify(askA?.data ?? a.events.filter((e) => /capab|approval/.test(e.type)).map((e) => e.data)).slice(0, 400));
     ok(!a.events.some((e) => e.type === "capability.installed") && ((await api("/mcp/servers")).json.servers ?? []).length === 0, "nothing was installed without approval");
+    if (!finalText(a.events).endsWith(ASK_DENIED)) console.log("   run a:", JSON.stringify(a.events.filter((e) => /message|run\.(error|completed)|agent\.(continue|loop)/.test(e.type)).slice(-12).map((e) => [e.type, JSON.stringify(e.data).slice(0, 160)])));
     ok(finalText(a.events).endsWith(ASK_DENIED), "ORION finished with what it had, without saying a tool is unavailable", finalText(a.events));
 
     console.log("\n2. Agent: the user approves; ORVYN installs it and ORION uses it");

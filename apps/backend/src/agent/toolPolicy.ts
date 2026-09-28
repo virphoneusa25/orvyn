@@ -58,10 +58,13 @@ export function requiredArgumentNames(name: string, schema?: ToolParameterSchema
 }
 
 /** A website is published from the files the agent writes. A shell server is not available. */
+/** Static file servers a model reaches for to "preview" a plain site. Framework dev servers (vite, next, npm run dev) are not here. */
+const STATIC_SERVER = /\bpython3?\s+-m\s+(http\.server|SimpleHTTPServer)\b|\bhttp\.server\b|which python|\bnpx\s+(-y\s+)?(serve|http-server|live-server|lite-server)\b|(^|[\s;&|])(http-server|live-server|lite-server)\b|(^|[\s;&|])serve\s+(-[lp]|\.|--)|\bphp\s+-S\b|\bbusybox\s+httpd\b/i;
+
 export function shellServerRefusal(command: string, frontend: boolean): string | null {
   if (!frontend) return null;
-  if (!/\bpython3?\b|http\.server|which python|npx serve|live-server/i.test(command)) return null;
-  return "Do not start a shell server. python3 is not installed in this workspace. Call write_file for the new site's index.html and its stylesheet. Do not replace site files that were already written. The preview is published from the new files.";
+  if (!STATIC_SERVER.test(command)) return null;
+  return "Do not start a local web server for this site. ORVYN publishes a live preview from the files you write (it updates as they change) and opens it for the user; a localhost server dies with the process and cannot be shared. Call write_file for index.html, its stylesheet and script. Do not replace site files that were already written.";
 }
 
 export function validateToolArguments(

@@ -216,7 +216,13 @@ async function main() {
     ok(!!row, "3. Chats lists the conversation");
     await row.click();
     ok(!!(await waitFor(async () => /site-a/.test(await bodyText()) && !/other-b ▾/.test(await bodyText()), 15_000, 300)), "3. the workspace switched back to the session's project (site-a)");
-    ok(!!(await waitFor(async () => /Built the landing page: index\.html loads style\.css\./.test(await bodyText()), 15_000, 300)), "3. the run's stream is back");
+    const streamBack = !!(await waitFor(async () => /Built the landing page: index\.html loads style\.css\./.test(await bodyText()), 15_000, 300));
+    if (!streamBack) {
+      const runs0 = ((await api("/agent/stream/runs")).json.runs ?? []).sort((a, b) => a.createdAt - b.createdAt);
+      const ev0 = (await api(`/agent/stream/runs/${runs0[0]?.id}/events.json`)).json.events ?? [];
+      console.log("   run1 tail:", JSON.stringify(ev0.filter((e) => /message|verification|run\.(completed|error)/.test(e.type)).slice(-14).map((e) => [e.type, JSON.stringify(e.data).slice(0, 120)])));
+    }
+    ok(streamBack, "3. the run's stream is back");
     const card = win.locator('[data-testid="session-restore"]');
     ok(!!(await waitFor(async () => (await card.count()) === 1, 15_000, 300)), "3. the session card is shown");
     ok((await card.getAttribute("data-project-root").catch(() => "")) === projectA, "3. …for site-a");
@@ -240,6 +246,18 @@ async function main() {
     const box = win.locator("textarea").last();
     await box.click(); await box.fill(B2); await box.press("Enter");
     const r2 = await settle(win, 2);
+    if (!r2) {
+      console.log("   worker health:", JSON.stringify((await api("/local-worker/health")).json).slice(0, 600));
+      const all = ((await api("/agent/stream/runs")).json.runs ?? []).sort((a, b) => a.createdAt - b.createdAt);
+      for (const run of all) {
+        const ev = (await api(`/agent/stream/runs/${run.id}/events.json`)).json.events ?? [];
+        console.log("   follow-up", run.status, JSON.stringify(ev.map((e) => e.type === "agent.phase" ? `phase:${e.data?.note ?? e.data?.phase}` : e.type)));
+      }
+    }
+    if (r2?.[1]?.status !== "completed" && r2?.[1]?.id) {
+      const ev = (await api(`/agent/stream/runs/${r2[1].id}/events.json`)).json.events ?? [];
+      console.log("   follow-up events:", JSON.stringify(ev.filter((e) => /run\.(error|blocked|completed)|agent\.loop|tool\.failed|agent\.continue/.test(e.type)).map((e) => [e.type, JSON.stringify(e.data).slice(0, 220)])));
+    }
     ok(r2?.[1]?.status === "completed", "5. the follow-up ran", JSON.stringify(r2?.map((x) => x.status)));
     ok(/<footer>Made with ORVYN<\/footer>/.test(readFileSync(join(projectA, "index.html"), "utf8")), "5. …in site-a (index.html there has the footer)");
     ok(!existsSync(join(projectB, "index.html")), "5. …and nothing was written into other-b");

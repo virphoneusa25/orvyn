@@ -99,6 +99,18 @@ export function runningCommandCallId(events: Array<{ type: string; data?: Record
   return undefined;
 }
 
+/** A queued local job no worker has picked up (the worker that registered is gone). */
+export function localJobUnclaimed(runId: string): boolean {
+  const job = jobs.find((j) => j.runId === runId);
+  return Boolean(job && !job.assignedTo);
+}
+
+/** Drops a queued local job so a late worker does not run it twice. */
+export function dropLocalJob(runId: string): void {
+  const i = jobs.findIndex((j) => j.runId === runId && !j.assignedTo);
+  if (i >= 0) jobs.splice(i, 1);
+}
+
 export function queueLocalHostJob(runId: string, projectRoot: string, tenantId: string, role: "local_host" | "local_sandbox" = "local_host"): void {
   jobs.push({ runId, tenantId, projectRoot, role, createdAt: Date.now() });
 }

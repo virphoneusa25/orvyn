@@ -83,6 +83,10 @@ import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
 import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
+import { dropLocalJob, hasOnlineLocalWorker, localJobUnclaimed } from "../routes/localWorker";
+
+/** How long a queued local job may wait for a worker before a local engine runs it itself. */
+const LOCAL_CLAIM_GRACE_MS = Number(process.env.ORVYN_LOCAL_CLAIM_GRACE_MS) || 8_000;
 import { classifyProviderError, classifyProviderText, providerBlockUserMessage } from "../computerUse/providerErrors";
 import { decideComputerUseFallback } from "../computerUse/modelFallback";
 import { canInspectScreenshots, resolveRuntimeCapabilities } from "../computerUse/modelComputerCapabilities";
@@ -241,6 +245,8 @@ interface RunState {
   milestoneCheck?: boolean;
   /** The model already streamed a final answer. It stays hidden until verification finishes. */
   heldFinal?: boolean;
+  /** The last real answer ORION wrote before a nudge retracted it; used if the final turn comes back empty. */
+  lastAnswer?: string;
 }
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
@@ -1391,8 +1397,8 @@ export class StreamingAgentRuntime {
           });
         }
         if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
-          await this.awaitRemoteReady(runId);
-          this.mountRemoteTools(runId);
+          const remote = await this.awaitRemoteReady(runId);
+          if (remote) this.mountRemoteTools(runId);
         }
         // A follow-up publishes a new preview under a new run id. Rehydrate
         // verified project images from durable artifact storage so existing
@@ -1487,15 +1493,26 @@ export class StreamingAgentRuntime {
    * A sandbox.stopped before readiness fails immediately; on timeout the run
    * fails with a clear reason. No local fallback either way.
    */
-  private async awaitRemoteReady(runId: string): Promise<void> {
-    const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
+  private async awaitRemoteReady(runId: string): Promise<boolean> {
+    const started = Date.now();
+    const deadline = started + REMOTE_READY_TIMEOUT_MS;
     const state = this.runs.get(runId);
     const local = state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
     this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: local ? "Waiting for the Local Worker" : "Waiting for the ORVYN Cloud worker to prepare the mission workspace" });
     while (Date.now() < deadline) {
       const run = this.store.get(runId);
       const types = new Set(run?.events.map((e) => e.type));
-      if (types.has("sandbox.ready") || types.has("local.ready" as any)) return;
+      if (types.has("sandbox.ready") || types.has("local.ready" as any)) return true;
+      // On the user's own engine, a Local Worker that registered earlier may be
+      // gone (the app restarted). Nobody claimed the job: run here instead of hanging.
+      const onOwnEngine = process.env.ORVYN_CLOUD_MODE !== "true" && !process.env.ORVYN_PROJECTS_DIR;
+      const runState = this.runs.get(runId);
+      if (onOwnEngine && runState?.execution?.location === "LOCAL_HOST" && Date.now() - started > LOCAL_CLAIM_GRACE_MS && (localJobUnclaimed(runId) || !hasOnlineLocalWorker(runState.execution.tenantId || "default"))) {
+        dropLocalJob(runId);
+        runState.execution = { ...runState.execution, location: "LOCAL" as any, remoteProjectRoot: undefined };
+        this.store.emit(runId, "run.execution", { location: "LOCAL", executionTargetRequested: "auto", executionTargetActual: "local_host", executionLabel: "Local", fallbackReason: "The Local Worker did not pick up the task; running on this engine.", note: "Tools execute on this computer." });
+        return false;
+      }
       if (types.has("sandbox.stopped")) {
         const reason = run?.events.filter((e) => e.type === "sandbox.stopped").pop()?.data?.reason;
         throw new Error(local
@@ -2101,6 +2118,7 @@ export class StreamingAgentRuntime {
       },
 
       onFinalAnswer: (_turn, { content, streamedText }) => {
+        if (String(content ?? "").trim()) state.lastAnswer = String(content);
         if (state.website) this.noteWebsiteProgress(runId, state);
         const websiteWork = Boolean(state.website) && isWebsiteImplementation(state.instruction);
         const websiteEvidence = websiteWork ? websiteEvidenceFrom(this.store.get(runId)?.events ?? []) : null;
@@ -2109,11 +2127,15 @@ export class StreamingAgentRuntime {
         );
         // A website that is not on disk yet, served, and opened in the browser
         // is not finished — send the same agent back to the next phase.
+        // Once the page is written, the independent verifier checks it in the
+        // browser itself; a model that skipped the browser step does not fail the task.
+        const pageWritten = Boolean(websiteEvidence?.wrotePage);
         if (
           websiteMissing &&
           state.toolsEnabled &&
           (mode === "agent" || mode === "multitask") &&
-          !handsBackToUser(content)
+          !handsBackToUser(content) &&
+          !(pageWritten && state.continuationNudges >= MAX_CONTINUATION_NUDGES)
         ) {
           if (state.continuationNudges >= MAX_CONTINUATION_NUDGES) {
             if (streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
@@ -2180,14 +2202,10 @@ export class StreamingAgentRuntime {
           state.toolsEnabled &&
           (state.toolCalls > 0 || looksLikeActionRequest(state.instruction)) &&
           (mode === "agent" || mode === "multitask") &&
-          announcesPendingWork(content)
+          announcesPendingWork(content) &&
+          // After the nudges, the model's answer stands (it is verified below) instead of failing the task.
+          state.continuationNudges < MAX_CONTINUATION_NUDGES
         ) {
-          if (state.continuationNudges >= MAX_CONTINUATION_NUDGES) {
-            if (streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
-            const reason = `Stopped after ${MAX_CONTINUATION_NUDGES} attempts. The model described the next step without calling a tool.`;
-            fail(reason);
-            return { kind: "stop", outcome: "failed", reason };
-          }
           state.continuationNudges += 1;
           if (isWebsiteImplementation(state.instruction) && streamedText) this.store.emit(runId, "message.retracted", { reason: "unfinished narration" });
           else this.emitNarration(runId, content, streamedText);
@@ -2276,8 +2294,12 @@ export class StreamingAgentRuntime {
         return { kind: "retry", reason: `completion gate "${gates.failedGate}": ${gates.reasons.join("; ")}` };
       },
 
-      complete: (_turn, { content, streamedText }) => {
+      complete: (_turn, reply) => {
         if (state.cancelled) return;
+        // A nudge may have retracted the real answer and the model's last turn came back empty.
+        const recovered = !String(reply.content ?? "").trim() && Boolean(state.lastAnswer);
+        const content = recovered ? state.lastAnswer! : reply.content;
+        const streamedText = recovered ? false : reply.streamedText;
         const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
         const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts, this.store.get(runId)?.events ?? [], state.projectFileEvidence);
         if (claimCheck.blocked) grounded.blocked = true;
@@ -2386,7 +2408,7 @@ export class StreamingAgentRuntime {
       }
 
       const shellRefusal = shellServerRefusal(command, state.intent.requiresFrontend);
-      if ((call.name === "terminal" || call.name === "run_command") && shellRefusal) {
+      if ((call.name === "terminal" || call.name === "run_command" || call.name === "start_process") && shellRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: shellRefusal, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, shellRefusal) });
         replies.set(call.id, shellRefusal);
         continue;

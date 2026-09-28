@@ -9,7 +9,7 @@
 
 /** Sentences that promise work the model has not done yet. */
 const PENDING =
-  /(?:^|[\s,;:—-])(?:next|now|then|first|after that|afterwards)?[,\s]*(?:i['’]ll|i will|i am going to|i['’]m going to|let me|i need to|i should|i['’]ll now|i will now|going to)\s+(?:now\s+)?(?:read|open|run|check|verify|create|write|edit|update|fix|test|build|start|install|look|inspect|search|list|execute|call|use|try|confirm|continue|proceed|deploy|restart|fetch|navigate|take|capture|generate|add|apply|supply|re-?run|re-?check|compare|review|make|save|delete|move|copy|launch|connect)\b/i;
+  /(?:^|[\s,;:—-])(?:next|now|then|first|after that|afterwards)?[,\s]*(?:i['’]ll|i will|i am going to|i['’]m going to|(?<!\b(?:would|could|can|will|to|it|that|this)\s)let me|i need to|i should|i['’]ll now|i will now|going to)\s+(?:now\s+)?(?:read|open|run|check|verify|create|write|edit|update|fix|test|build|start|install|look|inspect|search|list|execute|call|use|try|confirm|continue|proceed|deploy|restart|fetch|navigate|take|capture|generate|add|apply|supply|re-?run|re-?check|compare|review|make|save|delete|move|copy|launch|connect)\b/i;
 
 /** Wording that hands control back to the user — a legitimate stop. */
 const ASKS_USER =

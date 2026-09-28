@@ -205,7 +205,7 @@ async function scenario(label, root, target, dir) {
   const fixes = ev.filter((e) => e.type === "tool.completed" && !e.data.verifier && e.data.tool === "write_file" && e.sequence > failSeq).map((e) => e.data.envelope?.structuredData?.path);
   ok(fixes.includes("style.css") && fixes.includes("app.js"), `${label}: the agent fixed the site after the FAIL (${fixes.join(", ")})`);
   const last = verdicts[verdicts.length - 1];
-  ok(last?.verdict === "PASS", `${label}: the verifier then returned PASS`, JSON.stringify(last ?? null).slice(0, 400));
+  ok(last?.verdict === "PASS", `${label}: the verifier then returned PASS`, JSON.stringify({ findings: last?.findings, browser: (last?.checks ?? []).filter((c) => /browser|console|network/i.test(c.name)) }).slice(0, 3000));
   ok((last?.checks ?? []).every((c) => c.status === "pass" || c.status === "skip"), `${label}: every automatic check passed on the fixed site`, JSON.stringify(last?.checks ?? []));
   const finished = ev.find((e) => e.type === "agent.loop.finished")?.data;
   ok(r.status === "completed" && finished?.outcome === "completed" && /evaluator approved/.test(finished?.reason ?? ""), `${label}: only then did the completion evaluator approve completion`, JSON.stringify({ status: r.status, finished }));

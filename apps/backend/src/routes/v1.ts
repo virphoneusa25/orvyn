@@ -627,7 +627,7 @@ v1Router.post("/chat/completions", async (req, res) => {
 
 
 // --- Streaming agent runs (typed event protocol) ---
-import { registerProjectToolsFor as _regTools } from "../ai/registerProjectTools";
+import { registerProjectToolsFor as _regTools, registerWorkspaceFreeToolsFor as _regFreeTools } from "../ai/registerProjectTools";
 import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
@@ -780,7 +780,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     String(req.headers["x-forwarded-proto"] || req.protocol || "https"),
     String(req.headers["x-forwarded-host"] || req.get("host") || "")
   );
-  if (exposeProjectTools(preflight)) _regTools(t, boundRoot);
+  if (exposeProjectTools(preflight)) _regTools(t, boundRoot); else _regFreeTools(t);
   t.usage.agentRuns++;
   // A follow-up continues the conversation: the session's runs are its history.
   const history: {role: "user" | "assistant";content:string}[] = threadHistory(t.runStore, session.runIds);
@@ -1202,7 +1202,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       projectRoot: preflight.projectRoot,
     });
   }
-  if (exposeProjectTools(preflight)) _regTools(t, preflight.projectRoot);
+  if (exposeProjectTools(preflight)) _regTools(t, preflight.projectRoot); else _regFreeTools(t);
   t.usage.agentRuns++;
   // One agent loop. Mission requests use the same runtime as chat runs.
   const reasoningEffort = ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)

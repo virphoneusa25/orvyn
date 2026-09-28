@@ -164,6 +164,8 @@ export function BrowserWorkbench({
 
   return (
     <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
+      {/* Which ORION browser session and viewport this tab shows (for checks; not displayed). */}
+      {tab?.sessionId && <span hidden data-testid="workbench-browser-session" data-session-id={tab.sessionId} data-viewport={tab.viewport ? `${tab.viewport.preset}:${tab.viewport.width}x${tab.viewport.height}` : "desktop"} />}
       {!fullscreen && (
       <div data-testid="preview-controls" className="wb-navrow">
         <button className="wb-icon" title="Back" aria-label="Back" disabled={!tab?.canGoBack} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>

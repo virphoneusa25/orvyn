@@ -1,3 +1,5 @@
+import { defaultDataDir } from "../persistence/LocalStore";
+import { join } from "path";
 import { makeReadDocumentTool, makeCreateDocumentTool, makeCreateZipTool } from "./tools/documentTools";
 // apps/backend/src/ai/registerProjectTools.ts
 import type { Tenant } from "../tenancy/TenantManager";
@@ -189,6 +191,27 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
 
 type ToolRegistrar = (tenant: Tenant, projectRoot: string) => void;
 const toolRegistrars: ToolRegistrar[] = [];
+
+/**
+ * Tools that need no project folder: web search and page reads, the
+ * Workbench Browser, the sandbox desktop, and finding/installing MCP tools.
+ * A run that does not write files (open a site, look something up, check a
+ * page) still gets these. Tools already registered for a project are kept.
+ */
+export function registerWorkspaceFreeToolsFor(tenant: Tenant): void {
+  const g = tenant.toolGateway;
+  const have = new Set(g.list().map((t) => t.name));
+  const add = (tool: { name: string }) => { if (!have.has(tool.name)) g.register(tool as any); };
+  const key = tenant.currentProjectRoot || join(defaultDataDir(), "scratch", tenant.id);
+  add(makeFetchUrlTool());
+  add(makeWebSearchTool());
+  setBrowserToolTenant(tenant.id);
+  for (const make of [makeBrowserOpenTool, makeBrowserNavigateTool, makeBrowserClickTool, makeBrowserTypeTool, makeBrowserScrollTool, makeBrowserViewportTool, makeBrowserScreenshotTool, makeBrowserConsoleErrorsTool, makeBrowserEvidenceTool]) add(make(key));
+  registerDesktopTools((tool) => add(tool), key, tenant.id);
+  registerHostDesktopTools((tool) => add(tool), tenant.id);
+  add(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
+  add(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
+}
 
 /** Lets later-phase modules (diagnostics, browser, MCP…) plug into the same registration pass. */
 export function addToolRegistrar(fn: ToolRegistrar): void {

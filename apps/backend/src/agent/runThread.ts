@@ -37,10 +37,12 @@ export function finalAnswerOf(events: AgentEvent[]): string {
   const grounded = [...events].reverse().find((e) => e.type === "message.grounded");
   if (grounded) return String(grounded.data.content ?? "");
   let lastTool = -1;
-  events.forEach((e, i) => { if (e.type === "tool.completed" || e.type === "tool.failed") lastTool = i; });
+  // A retracted reply (held for verification, or replaced by a researched one) is not the answer.
+  events.forEach((e, i) => { if (e.type === "tool.completed" || e.type === "tool.failed" || e.type === "message.retracted") lastTool = i; });
   const after = events.slice(lastTool + 1).filter((e) => e.type === "message.delta").map((e) => String(e.data.content ?? "")).join("");
   if (after.trim()) return after.trim();
-  return events.filter((e) => e.type === "message.delta").map((e) => String(e.data.content ?? "")).join("").slice(-4000).trim();
+  const lastRetract = events.map((e) => e.type).lastIndexOf("message.retracted");
+  return events.slice(lastRetract + 1).filter((e) => e.type === "message.delta").map((e) => String(e.data.content ?? "")).join("").slice(-4000).trim();
 }
 
 /** One line per tool result, from the envelopes: "Wrote hello.txt · 16 bytes". */

@@ -386,6 +386,10 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
     return adoptClient(input.sessions, session, client);
   }
 
+  // The user has a real project folder open: every run works there (commands,
+  // reads, previews), whether or not this instruction writes files.
+  if (!record && !leaving && isTrustedExistingProject(client, ctx)) return adoptClient(input.sessions, session, client);
+
   if (!record && !actionable && !leaving) return { status: "skipped" };
 
   if (record && (input.newProject || input.forkProject)) return provision(input.sessions, session);
