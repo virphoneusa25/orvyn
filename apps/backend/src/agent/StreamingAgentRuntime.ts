@@ -3504,6 +3504,9 @@ export class StreamingAgentRuntime {
       modelVerdict: result.modelVerdict,
       report: result.report.slice(0, 4000),
       verifierTools: result.toolCalls,
+      /** Task-awareness: true only when a page changed — browser evidence is
+       *  required exactly then. */
+      website: evidence.website,
     });
     return result;
   }

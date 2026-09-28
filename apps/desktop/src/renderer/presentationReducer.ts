@@ -511,7 +511,11 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         const all = Array.isArray(e.data.findings) ? (e.data.findings as { message?: string; check?: string; severity?: string }[]) : [];
         const checks = Array.isArray(e.data.checks) ? (e.data.checks as { name?: string; status?: string }[]) : [];
         const verifierTools = Array.isArray(e.data.verifierTools) ? (e.data.verifierTools as { tool?: string; ok?: boolean }[]) : [];
-        const failedRequired = checks.some((c) => c.status === "fail") || verifierTools.some((t) => t.ok === false && (t.tool === "git_status" || String(t.tool ?? "").startsWith("browser_")));
+        // Task-aware: a failed verifier BROWSER action only undermines the
+        // result when the task actually changed a page (website). For a
+        // file-only task the verifier should not have browsed at all.
+        const website = e.data.website === true;
+        const failedRequired = checks.some((c) => c.status === "fail") || verifierTools.some((t) => t.ok === false && (t.tool === "git_status" || (website && String(t.tool ?? "").startsWith("browser_"))));
         const shown = verdict === "PASS" && failedRequired ? "PARTIAL" : verdict;
         // A failed exploration step while the overall verification PASSED was
         // not required for the result: the finalize pass marks it superseded
