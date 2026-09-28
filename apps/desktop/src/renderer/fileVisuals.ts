@@ -5,7 +5,7 @@
 // composes it. One mapping — Chat cards, Files → Generated, and previews all
 // ask these functions instead of re-implementing extension logic.
 
-import { extensionOf } from "./fileTypeRegistry";
+import { extensionOf } from "./fileTypeRegistry.ts";
 
 export const IMAGE_EXTENSIONS = /^(png|jpe?g|webp|gif|svg|avif|bmp|ico)$/i;
 
