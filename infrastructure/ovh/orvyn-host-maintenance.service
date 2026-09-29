@@ -1,0 +1,6 @@
+[Unit]
+Description=ORVYN host disk retention
+
+[Service]
+Type=oneshot
+ExecStart=/opt/orvyn/infrastructure/ovh/host-maintenance.sh

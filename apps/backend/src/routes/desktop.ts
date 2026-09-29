@@ -19,6 +19,9 @@ import {
   restartSandboxDesktop,
   captureSandboxFrame,
   captureSandboxScreenshot,
+  desktopMetrics,
+  noteInputLatency,
+  noteStreamBytes,
   repeatFramesToViewers,
   sandboxInput,
   sandboxSendKeys,
@@ -172,6 +175,12 @@ export function desktopRouter(): Router {
     return res.status(404).json({ error: "No Desktop session. Desktop requires the Docker sandbox runtime." });
   });
 
+  // Measured pipeline metrics (admin diagnostics: start duration, fps counters,
+  // bytes, input latency, host snapshot). No guessed numbers.
+  router.get("/metrics", (_req, res) => {
+    res.json(desktopMetrics());
+  });
+
   // Live picture: Server-Sent Events, one "frame" event (base64 JPEG) per
   // changed picture. Viewers that fall behind skip to the newest picture
   // instead of queueing old ones. "unsupported" means this desktop image
@@ -196,6 +205,7 @@ export function desktopRouter(): Router {
     const write = (jpeg: Buffer) => {
       if (closed) return;
       if (res.writableNeedDrain) { waiting = jpeg; return; }
+      noteStreamBytes(sandbox.id, jpeg.length);
       res.write(`event: frame\ndata: ${jpeg.toString("base64")}\n\n`);
     };
     const onDrain = () => { const next = waiting; waiting = null; if (next) write(next); };
@@ -297,7 +307,9 @@ export function desktopRouter(): Router {
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox && sandbox.status !== "ended") {
       if (sandbox.controlOwner !== "user") return res.status(409).json({ error: "Take Control before interacting with this desktop." });
+      const inputStart = Date.now();
       const ok = await sandboxInput(sandbox, String(req.body?.type ?? ""), req.body ?? {});
+      noteInputLatency(sandbox.id, Date.now() - inputStart);
       return res.json({ ok, session: { id: sandbox.id, controlOwner: sandbox.controlOwner } });
     }
 

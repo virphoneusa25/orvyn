@@ -403,16 +403,15 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       case "route.escalated": {
         flushAssistant(false);
-        const model = customerModelName(e.data.modelId);
-        items.push({ kind: "status", key: e.id, label: `Switched to a stronger model${model ? ` (${model})` : ""}: ${String(e.data.reason ?? "the work stalled")}`.slice(0, 160), ephemeral: false, tone: "working" });
+        // Vendor/model internals stay out of customer text; the event keeps them.
+        items.push({ kind: "status", key: e.id, label: `Switched to a stronger model: ${String(e.data.reason ?? "the work stalled")}`.slice(0, 160), ephemeral: false, tone: "working" });
         continue;
       }
       case "route.step": {
         // A cheaper helper model took a look-around step (per-step routing).
         if (!e.data.accepted) continue;
         flushAssistant(false);
-        const model = customerModelName(e.data.modelId);
-        items.push({ kind: "status", key: e.id, label: `Light step on a cheaper model${model ? ` (${model})` : ""}: gathering only`, ephemeral: false, tone: "working" });
+        items.push({ kind: "status", key: e.id, label: `Light step on a cheaper model: gathering only`, ephemeral: false, tone: "working" });
         continue;
       }
       case "tool.output.condensed": {
@@ -422,12 +421,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "model.unavailable": {
         flushAssistant(false);
-        const from = customerModelName(e.data.modelId) || "That model";
-        const to = customerModelName(e.data.fallback) || "another model";
         items.push({
           kind: "status",
           key: e.id,
-          label: from === to ? `${from}: switched to a backup provider — continuing` : `${from} isn't available right now — continuing with ${to}`,
+          label: `The primary model was unavailable, so ORVYN continued with a compatible model.`,
           ephemeral: false,
           tone: "working",
         });
@@ -435,13 +432,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "model.failover": {
         flushAssistant(false);
-        const sameModel = e.data.level === "same-model";
         items.push({
           kind: "status",
           key: e.id,
-          label: sameModel
-            ? `The model provider is busy — continuing on a backup provider`
-            : `${customerModelName(e.data.modelId) || "The model"} is busy — continuing with ${customerModelName(e.data.fallback) || "another model"}`,
+          label: `The primary model was busy, so ORVYN continued with a compatible model.`,
           ephemeral: false,
           tone: "working",
         });
@@ -876,10 +870,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       }
       case "model.fallback": {
         flushAssistant(false);
+        // Vendor/model internals stay in the event data for diagnostics; the
+        // customer card names neither provider nor model.
         items.push({
           kind: "status",
           key: e.id,
-          label: `Model · Switched to ${customerModelName(e.data.actualModel) || "a compatible model"} for visual verification`,
+          label: `ORION switched to a compatible vision model and continued.`,
           ephemeral: false,
           tone: "working",
         });

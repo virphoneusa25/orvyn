@@ -99,15 +99,18 @@ value=\$(cat)
 mv .backup.env.tmp .backup.env && chmod 600 .backup.env"
 done
 
-# Hourly backups and a weekly restore drill (idempotent install).
+# Hourly backups, a weekly restore drill, host disk retention and capacity
+# alarms (idempotent install).
 "${SSH[@]}" "$HOST" "set -euo pipefail
 cd '$REMOTE'
-chmod +x infrastructure/ovh/backup.sh infrastructure/ovh/restore-drill.sh
+chmod +x infrastructure/ovh/backup.sh infrastructure/ovh/restore-drill.sh infrastructure/ovh/host-maintenance.sh infrastructure/ovh/host-alerts.sh
 sudo install -m 644 infrastructure/ovh/orvyn-backup.service infrastructure/ovh/orvyn-backup.timer \
-  infrastructure/ovh/orvyn-restore-drill.service infrastructure/ovh/orvyn-restore-drill.timer /etc/systemd/system/
+  infrastructure/ovh/orvyn-restore-drill.service infrastructure/ovh/orvyn-restore-drill.timer \
+  infrastructure/ovh/orvyn-host-maintenance.service infrastructure/ovh/orvyn-host-maintenance.timer \
+  infrastructure/ovh/orvyn-host-alerts.service infrastructure/ovh/orvyn-host-alerts.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now orvyn-backup.timer orvyn-restore-drill.timer
-" || echo "warning: could not install the backup timers (check sudo on the host)" >&2
+sudo systemctl enable --now orvyn-backup.timer orvyn-restore-drill.timer orvyn-host-maintenance.timer orvyn-host-alerts.timer
+" || echo "warning: could not install the backup/retention timers (check sudo on the host)" >&2
 
 # Never rebuild over customer data without a verified backup first.
 if [[ "${ORVYN_SKIP_PREDEPLOY_BACKUP:-}" != "1" ]]; then

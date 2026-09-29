@@ -604,7 +604,9 @@ export function DesktopView({
       {interrupted && (
         <div style={{ position: "absolute", inset: 0, zIndex: 6, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(7,11,20,0.78)" }}>
           <div style={emptyTitle()}>Reconnecting to Desktop…</div>
-          {streamNote && <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", maxWidth: 280, textAlign: "center" }}>{streamNote}</div>}
+          <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", maxWidth: 280, textAlign: "center" }}>
+            {streamNote ?? "Desktop session is still running. Reconnecting the visual stream…"}
+          </div>
           <button style={ghostBtn()} onClick={() => void reconnect()}>Reconnect now</button>
         </div>
       )}

@@ -486,7 +486,8 @@ test("provider computer-use block and Auto fallback stay truthful in the stream"
   const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
   assert.ok(labels.some((l) => /Computer use · Starting Desktop/.test(l)));
   assert.ok(labels.some((l) => /Claude cannot use computer control/.test(l)));
-  assert.ok(labels.some((l) => /Switched to GPT-4o/.test(l)));
+  assert.ok(labels.some((l) => /ORION switched to a compatible vision model/.test(l)));
+  assert.ok(!labels.some((l) => /GPT-4o|provider/i.test(l)), "customer card names neither model nor provider");
   assert.ok(labels.some((l) => /Desktop · Inspecting app/.test(l)));
   assert.ok(labels.some((l) => /Take Control/.test(l)));
   assert.ok(labels.some((l) => /Returned to ORION/.test(l)));

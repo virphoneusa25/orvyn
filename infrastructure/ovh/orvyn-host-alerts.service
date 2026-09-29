@@ -1,0 +1,6 @@
+[Unit]
+Description=ORVYN host capacity alarms
+
+[Service]
+Type=oneshot
+ExecStart=/opt/orvyn/infrastructure/ovh/host-alerts.sh

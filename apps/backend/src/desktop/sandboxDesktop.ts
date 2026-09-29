@@ -14,6 +14,8 @@
 
 import { spawn, exec } from "child_process";
 import { createHash, randomUUID } from "crypto";
+import * as fs from "fs";
+import { loadavg as osLoadavg, totalmem as osTotalmem, freemem as osFreemem } from "os";
 import { htmlTitle, isErrorPageTitle, matchBrowserTarget, type TargetMatch } from "../agent/previewTarget";
 import { readPublishedFile } from "../agent/sitePreview";
 
@@ -40,6 +42,8 @@ export interface SandboxDesktopSession {
   resources: SandboxResources;
   createdAt: number;
   startedAt?: string;
+  /** Measured container-start → usable-desktop duration (metrics, not guesses). */
+  startDurationMs?: number;
   lastFrameAt: number;
   error?: string;
 }
@@ -227,6 +231,7 @@ async function createSandboxDesktop(opts: {
   const containerName = `orvyn-desktop-${id.slice(5)}`;
   const width = opts.width ?? 1280;
   const height = opts.height ?? 720;
+  const startWallClock = Date.now();
 
   const session: SandboxDesktopSession = {
     id,
@@ -310,6 +315,8 @@ async function createSandboxDesktop(opts: {
 
   session.status = "ready";
   session.startedAt = new Date().toISOString();
+  // Measured, not guessed: how long container start → usable desktop took.
+  session.startDurationMs = Date.now() - startWallClock;
   sessions.set(id, session);
   openInputPipe(session);
   startDesktopIdleReaper();
@@ -892,6 +899,7 @@ interface FrameStream {
   subscribers: Set<FrameSubscriber>;
   lastHash: string;
   frames: number;
+  delivered: number;
   startedAt: number;
   ended: boolean;
   linger?: ReturnType<typeof setTimeout>;
@@ -936,6 +944,82 @@ export function repeatFramesToViewers(sessionId: string): void {
   }
 }
 
+// ── Metrics (measured values for the desktop pipeline, not guesses) ────────
+
+const streamBytes = new Map<string, number>();
+const inputLatencies = new Map<string, number[]>(); // rolling, per session
+
+export function noteStreamBytes(sessionId: string, bytes: number): void {
+  streamBytes.set(sessionId, (streamBytes.get(sessionId) ?? 0) + bytes);
+}
+
+export function noteInputLatency(sessionId: string, ms: number): void {
+  const arr = inputLatencies.get(sessionId) ?? [];
+  arr.push(ms);
+  if (arr.length > 20) arr.shift();
+  inputLatencies.set(sessionId, arr);
+}
+
+export interface DesktopMetrics {
+  host: { loadavg: number[]; memTotalMb: number; memAvailableMb: number; diskUsedPct: number | null };
+  sessions: Array<{
+    id: string;
+    status: string;
+    controlOwner: string;
+    tenantId: string;
+    startDurationMs: number | null;
+    ageMs: number;
+    lastFrameAgeMs: number | null;
+    viewers: number;
+    framesCaptured: number;
+    framesDelivered: number;
+    bytesDelivered: number;
+    inputLatencyMsAvg: number | null;
+  }>;
+}
+
+/** Live desktop-pipeline metrics for /desktop/metrics (admin diagnostics). */
+export function desktopMetrics(now = Date.now()): DesktopMetrics {
+  const out: DesktopMetrics["sessions"] = [];
+  for (const session of sessions.values()) {
+    const stream = frameStreams.get(session.id);
+    const lat = inputLatencies.get(session.id);
+    out.push({
+      id: session.id,
+      status: session.status,
+      controlOwner: session.controlOwner,
+      tenantId: session.tenantId,
+      startDurationMs: session.startDurationMs ?? null,
+      ageMs: now - session.createdAt,
+      lastFrameAgeMs: session.lastFrameAt ? now - session.lastFrameAt : null,
+      viewers: stream?.subscribers.size ?? 0,
+      framesCaptured: stream?.frames ?? 0,
+      framesDelivered: stream?.delivered ?? 0,
+      bytesDelivered: streamBytes.get(session.id) ?? 0,
+      inputLatencyMsAvg: lat && lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
+    });
+  }
+  return {
+    host: {
+      loadavg: osLoadavg(),
+      memTotalMb: Math.round(osTotalmem() / 1048576),
+      memAvailableMb: Math.round(osFreemem() / 1048576),
+      diskUsedPct: lastDiskUsedPct,
+    },
+    sessions: out,
+  };
+}
+
+let lastDiskUsedPct: number | null = null;
+function refreshDiskUsedPct(): void {
+  fs.statfs("/", (err, s) => {
+    if (err || !s.blocks) return;
+    lastDiskUsedPct = Math.round(((s.blocks - s.bavail) / s.blocks) * 100);
+  });
+}
+setInterval(() => void refreshDiskUsedPct(), 60_000).unref?.();
+void refreshDiskUsedPct();
+
 /**
  * When the run that held a desktop ends, the desktop belongs to the user
  * again. An "orion"-held session otherwise stays input-blocked forever —
@@ -974,6 +1058,7 @@ function spawnFrameGrabber(session: SandboxDesktopSession, stream: FrameStream):
       const hash = createHash("sha1").update(jpeg).digest("hex");
       if (hash === stream.lastHash) continue;
       stream.lastHash = hash;
+      stream.delivered += stream.subscribers.size;
       for (const sub of stream.subscribers) {
         try { sub.frame(jpeg); } catch { /* a closed viewer is removed on close */ }
       }
@@ -1013,7 +1098,7 @@ export function subscribeFrames(session: SandboxDesktopSession, sub: FrameSubscr
   if (session.status !== "ready" && session.status !== "user_control") return null;
   let stream = frameStreams.get(session.id);
   if (!stream || stream.ended) {
-    stream = { proc: null, subscribers: new Set(), lastHash: "", frames: 0, startedAt: Date.now(), ended: false, restarts: 0 };
+    stream = { proc: null, subscribers: new Set(), lastHash: "", frames: 0, delivered: 0, startedAt: Date.now(), ended: false, restarts: 0 };
     frameStreams.set(session.id, stream);
     spawnFrameGrabber(session, stream);
   }

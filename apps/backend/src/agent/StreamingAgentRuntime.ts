@@ -1465,13 +1465,13 @@ export class StreamingAgentRuntime {
     if (def.toolsEnabled && !provider.supportsTools()) {
       const pinned = choice.pinned;
       if (pinned) {
-        toolModelError = `Pinned model "${provider.config.id}" cannot call tools. This run was not completed as chat. Choose Auto or a model with tool calling.`;
+        toolModelError = `The pinned model cannot call tools. This run was not completed as chat. Choose Auto or a model with tool calling.`;
       } else {
         const next = this.modelService.registry
           .list()
           .find((p) => p.config.id !== provider.config.id && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && p.config.capabilities.agent && p.supportsTools());
         if (!next) {
-          toolModelError = `No configured model can call tools. "${provider.config.id}" is chat-only, so this run was not completed as a chat reply.`;
+          toolModelError = `No configured model can call tools. The selected model is chat-only, so this run was not completed as a chat reply.`;
         } else {
           toolFallbackReason = `${provider.config.id} cannot call tools; switched to ${next.config.id}`;
           provider = next;
@@ -2125,7 +2125,10 @@ export class StreamingAgentRuntime {
       tenantId: state.execution?.tenantId,
     });
     this.store.emit(runId, "message.delta", {
-      content: `Model · Switched to ${result.next.config.name} for visual verification\n`,
+      // Message content is never redacted on the wire (it is conversation) —
+      // vendor and model names must not be put here in the first place. The
+      // model.fallback event above carries the internals for diagnostics.
+      content: `ORION switched to a compatible vision model.\n`,
     });
     return result.next;
   }
@@ -2506,7 +2509,7 @@ export class StreamingAgentRuntime {
               provider = next;
               return { kind: "retry", reason: `${failure} failure: switched to ${next.config.id}` };
             }
-            if (failure === "model") return fail(`${provider.config.name || provider.config.id} is not available on this account, and no other model for this task is set up. Pick another model in Settings → Models.`, { desktopHealthy: true, code: "MODEL_UNAVAILABLE" });
+            if (failure === "model") return fail(`The selected model is not available on this account, and no other model is set up for this task. Pick another model in Settings → Models.`, { desktopHealthy: true, code: "MODEL_UNAVAILABLE" });
           }
           const block = classifyProviderError(err, provider.config.provider);
           if (!block) throw err;

@@ -5,10 +5,21 @@ shift || true
 case "$app" in
   browser|chromium)
     url="${1:-file:///usr/share/orvyn/home.html}"
-    if command -v firefox-esr >/dev/null 2>&1; then
-      exec firefox-esr --new-window "$url"
+    if command -v chromium >/dev/null 2>&1; then
+      exec chromium --no-sandbox --disable-dev-shm-usage --no-first-run --start-maximized "$url"
     fi
-    exec chromium --no-sandbox --disable-dev-shm-usage --start-maximized "$url"
+    # One fixed profile per session with ORVYN's resource prefs pre-seeded:
+    # a capped frame rate and a single content process keep an animated page
+    # from burning the container's CPU budget (measured ~180% before).
+    profdir=/profile
+    if [ ! -d "$profdir" ]; then
+      firefox-esr --CreateProfile "orvyn $profdir" >/dev/null 2>&1 || true
+    fi
+    if [ -d "$profdir" ]; then
+      cp -f /usr/share/orvyn/firefox-user.js "$profdir/user.js" 2>/dev/null || true
+      exec firefox-esr -P orvyn --new-window "$url"
+    fi
+    exec firefox-esr --new-window "$url"
     ;;
   code|editor)
     if command -v code >/dev/null 2>&1; then

@@ -1,8 +1,8 @@
 # orvyn-desktop: sandbox desktop runtime
 #
 # A true visual sandbox desktop — not just a browser viewport:
-#   Xvfb + openbox + tint2 (left rail, bottom dock, clock) + Thunar
-#   + Firefox + lxterminal + VS Code (geany fallback)
+#   Xvfb + openbox + picom + a live GTK launch card and dock + Thunar
+#   + Chromium + lxterminal + VS Code (geany fallback)
 #   + feh (ORVYN wallpaper) + xdotool (input) + ffmpeg (live picture)
 #   + ImageMagick (single screenshots)
 #
@@ -22,8 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb \
       xauth \
       openbox \
-      tint2 \
+      picom \
       feh \
+      chromium \
       firefox-esr \
       thunar \
       lxterminal \
@@ -39,6 +40,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wmctrl \
       procps \
       dbus-x11 \
+      python3-gi \
+      python3-cairo \
+      gir1.2-gtk-3.0 \
       ca-certificates \
       wget \
       fonts-liberation \
@@ -46,7 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       papirus-icon-theme \
     && rm -rf /var/lib/apt/lists/*
 
-# ORVYN brand assets: wallpaper, mark, dock glyphs, landing page.
+# ORVYN brand assets: reference-matched wallpaper, mark, dock glyphs, landing page.
 COPY assets/ /usr/share/backgrounds/orvyn/
 RUN mkdir -p /usr/share/orvyn/icons /usr/share/orvyn/indicators && \
     cp /usr/share/backgrounds/orvyn/orvyn-brand.png /usr/share/orvyn/orvyn-brand.png && \
@@ -56,16 +60,18 @@ RUN mkdir -p /usr/share/orvyn/icons /usr/share/orvyn/indicators && \
     cp /usr/share/backgrounds/orvyn/indicators/* /usr/share/orvyn/indicators/
 COPY home.html /usr/share/orvyn/home.html
 COPY openbox/themerc /usr/share/orvyn/openbox-themerc
-COPY orvyn-input orvyn-launch /usr/local/bin/
-RUN chmod 755 /usr/local/bin/orvyn-input /usr/local/bin/orvyn-launch
+COPY orvyn-input orvyn-launch orvyn-shell.py /usr/local/bin/
+RUN chmod 755 /usr/local/bin/orvyn-input /usr/local/bin/orvyn-launch /usr/local/bin/orvyn-shell.py
 
-# Dock/panel launchers.
+# Application menu launchers.
 COPY apps/*.desktop /usr/share/applications/
 
 # Firefox opens the ORVYN landing page for a new window.
-RUN mkdir -p /etc/firefox/policies /etc/firefox-esr/policies
+RUN mkdir -p /etc/firefox/policies /etc/firefox-esr/policies /usr/share/orvyn
 COPY firefox/policies.json /etc/firefox/policies/policies.json
 COPY firefox/policies.json /etc/firefox-esr/policies/policies.json
+# Resource profile seeded into the session profile by orvyn-launch (see user.js).
+COPY firefox/user.js /usr/share/orvyn/firefox-user.js
 
 # VS Code is the dock editor. Geany remains the fallback if this download fails.
 RUN wget -qO /tmp/code.deb "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" \
