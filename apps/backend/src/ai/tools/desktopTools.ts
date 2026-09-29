@@ -105,6 +105,15 @@ async function sbStart(tenantId: string, projectRoot: string, runId?: string, ur
     let s = sandboxFor(tenantId);
     if (!s) s = await startSandboxDesktop({ tenantId, projectRoot, runId, url });
     if (s.status === "error") return { ok: false, error: s.error ?? "Desktop failed to start." };
+    // A previous run's finish returns the desktop to the user. A NEW agent
+    // run starting work takes control back (the pane shows "ORION in
+    // control" within its next 2s session poll; the user can take it at
+    // any time) — the agent must not be refused with "Desktop is
+    // user_control" forever after one finished mission.
+    if (s.controlOwner === "user" && s.status === "user_control") {
+      s.controlOwner = "orion";
+      s.status = "ready";
+    }
     if (url) {
       const nav = await sandboxNavigate(s, url);
       if (!nav.ok) return { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle } };

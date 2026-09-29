@@ -206,7 +206,12 @@ export async function startSandboxDesktop(opts: {
   height?: number;
 }): Promise<SandboxDesktopSession> {
   const existing = findSandboxSession(opts.tenantId);
-  if (existing && existing.status !== "error" && reusesSandboxRun(existing.runId, opts.runId)) return existing;
+  if (existing && existing.status !== "error" && reusesSandboxRun(existing.runId, opts.runId)) {
+    // Reuse only a LIVE container: a crashed or out-of-band-removed desktop
+    // must not strand every later mission on a dead session record.
+    if (existing.containerId && (await containerAlive(existing.containerId))) return existing;
+    sessions.delete(existing.id);
+  }
   const pending = startsInFlight.get(opts.tenantId);
   if (pending) return pending;
   const job = (async () => {
@@ -215,6 +220,15 @@ export async function startSandboxDesktop(opts: {
   })().finally(() => startsInFlight.delete(opts.tenantId));
   startsInFlight.set(opts.tenantId, job);
   return job;
+}
+
+/** Is the session's container actually running (docker inspect, ~100ms)? */
+function containerAlive(containerId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec(`docker inspect -f {{.State.Running}} ${containerId}`, { windowsHide: true }, (err, stdout) => {
+      resolve(!err && String(stdout).trim() === "true");
+    });
+  });
 }
 
 async function createSandboxDesktop(opts: {
