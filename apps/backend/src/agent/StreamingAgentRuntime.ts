@@ -436,6 +436,24 @@ function parseToolArtifacts(raw: string, tool: string, args: Record<string, unkn
   }
 }
 
+/**
+ * A run that ends on an exception says so in plain words with what to do
+ * next; the raw error stays in `detail` for diagnostics.
+ */
+export function userFacingRunError(err: unknown): { message: string; code: string; detail: string; actions: string[] } {
+  const raw = String((err as { message?: unknown })?.message ?? err ?? "");
+  if (/stream idle|no data for|stopped responding|timed? ?out|ETIMEDOUT|aborted/i.test(raw)) {
+    return { message: "The AI model stopped responding and no backup model could take over. Your changes so far are saved — Retry to continue.", code: "PROVIDER_STREAM_IDLE", detail: raw, actions: ["retry", "cancel"] };
+  }
+  if (/\b(429|rate.?limit|busy|overloaded|capacity)\b/i.test(raw)) {
+    return { message: "The AI providers are busy right now. Your changes so far are saved — Retry in a moment.", code: "PROVIDER_BUSY", detail: raw, actions: ["retry", "cancel"] };
+  }
+  if (/\b5\d\d\b|bad gateway|service unavailable|internal server error/i.test(raw)) {
+    return { message: "The AI provider had an error. Your changes so far are saved — Retry to continue.", code: "PROVIDER_5XX", detail: raw, actions: ["retry", "cancel"] };
+  }
+  return { message: raw || "The run stopped because of an error. Retry to continue.", code: "RUN_ERROR", detail: raw, actions: ["retry", "cancel"] };
+}
+
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
   /** What the user typed into an approval (an MCP server's API key), by callId. Used once, then dropped. */
@@ -474,7 +492,13 @@ export class StreamingAgentRuntime {
             continue;
           }
           if (!state.modelCallStartedAt && now - state.lastActivityAt > stallMs) {
-            this.store.emit(runId, "run.error", { message: "This task stopped making progress before it produced any result. Nothing is running — you can retry it.", code: "STALLED" });
+            const events = this.store.get(runId)?.events ?? [];
+            const waitingOnWorker = Boolean(state.execution && ["OVH_WORKER", "LOCAL_HOST", "LOCAL_SANDBOX"].includes(String(state.execution.location))) && !events.some((e) => e.type === "sandbox.ready" || String(e.type) === "local.ready" || e.type === "tool.started");
+            state.stalled = true;
+            this.store.emit(runId, "run.stalled", { stallMs, waitingOnWorker });
+            this.store.emit(runId, "run.error", waitingOnWorker
+              ? { message: "The worker failed to start — ORION never got a ready signal. Your project was not changed. Retry, or check the worker.", code: "WORKER_START_FAILED", actions: ["retry", "cancel"] }
+              : { message: "This task stopped making progress before it produced any result. Nothing is running — you can retry it.", code: "STALLED", actions: ["retry", "cancel"] });
             this.store.setStatus(runId, "error");
             state.controller.abort();
             this.runs.delete(runId);
@@ -538,6 +562,10 @@ export class StreamingAgentRuntime {
     return this.tools
       .list()
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
+      // Only tools this run's role can actually execute: offering one the
+      // gateway will always refuse (host_desktop_* needs SYSTEM) sends the
+      // model down a dead end ("Role 'coder' lacks SYSTEM capability").
+      .filter((t) => this.tools.permissions.checkRole(t.name, "coder").allowed)
       .filter((t) => !allow || allow.has(t.name))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
@@ -1286,8 +1314,9 @@ export class StreamingAgentRuntime {
       // ORION cursor overlay, and control audit all derive from these —
       // without them a desktop_* tool call is invisible to the UI.
       case "desktop_start":
+        // "Starting" now; "live" only once the start actually succeeded
+        // (see desktopResult) — never before the session exists.
         this.store.emit(runId, "desktop.started", { tool: call.name, url: args.url });
-        this.store.emit(runId, "desktop.ready", { tool: call.name, url: args.url });
         break;
       case "desktop_open_url":
         this.store.emit(runId, "desktop.action", { tool: call.name, kind: "navigate", url: args.url });
@@ -1687,12 +1716,6 @@ export class StreamingAgentRuntime {
     // Deliberately not awaited: the caller gets a runId synchronously and
     // subscribes to events. Errors are surfaced as run.error events.
     void (async () => {
-      // Progress watchdog: a run that shows no activity at all (no event) for
-      // ORVYN_RUN_STALL_MS while it claims to be working ends as a recoverable
-      // error with a plain message — never an endless "thinking".
-      const stallMs = Number(process.env.ORVYN_RUN_STALL_MS) || 300_000;
-      const watchdog = setInterval(() => this.checkStalled(runId, stallMs), Math.min(30_000, Math.max(1_000, Math.floor(stallMs / 4))));
-      watchdog.unref?.();
       const state = this.runs.get(runId);
       try {
         const toolNames = this.toolDefinitions(state?.exposedTools ?? null).map((t) => t.name);
@@ -1848,11 +1871,10 @@ export class StreamingAgentRuntime {
         if (st?.cancelled || err?.name === "AbortError") {
           this.finishCancelled(runId, 0);
         } else {
-          this.store.emit(runId, "run.error", { message: err?.message ?? String(err) });
+          this.store.emit(runId, "run.error", userFacingRunError(err));
           this.store.setStatus(runId, "error");
         }
       } finally {
-        clearInterval(watchdog);
         this.teardownRemote(runId);
         try {
           this.onRunSettled?.(runId);
@@ -2084,28 +2106,6 @@ export class StreamingAgentRuntime {
       content: `Model · Switched to ${result.next.config.name} for visual verification\n`,
     });
     return result.next;
-  }
-
-  /** No event for stallMs while working: stop the run, say why, keep the work. */
-  private checkStalled(runId: string, stallMs: number): void {
-    const run = this.store.get(runId);
-    const state = this.runs.get(runId);
-    if (!run || !state || state.cancelled || state.stalled) return;
-    if (!["running", "verifying", "queued"].includes(String(run.status))) return;
-    const last = run.events[run.events.length - 1];
-    const lastAt = Number((last as { timestamp?: number } | undefined)?.timestamp ?? 0) || Date.now();
-    if (Date.now() - lastAt < stallMs) return;
-    state.stalled = true;
-    const waitingOnWorker = Boolean(state.execution && ["OVH_WORKER", "LOCAL_HOST", "LOCAL_SANDBOX"].includes(String(state.execution.location))) && !run.events.some((e) => e.type === "sandbox.ready" || String(e.type) === "local.ready" || e.type === "tool.started");
-    const message = waitingOnWorker
-      ? "The worker failed to start — ORION never got a ready signal. Your project was not changed. Retry, or check the worker in Settings."
-      : `ORION stopped making progress (no activity for ${Math.round(stallMs / 60_000)} minutes), so the run was stopped. Your changes so far are saved — Retry to continue.`;
-    this.store.emit(runId, "run.stalled", { stallMs, phase: state.phase, waitingOnWorker });
-    this.store.emit(runId, "run.error", { message, code: waitingOnWorker ? "WORKER_START_FAILED" : "RUN_STALLED", actions: ["retry", "cancel"] });
-    this.store.setStatus(runId, "error");
-    if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
-    for (const [callId, p] of this.pending) if (p.runId === runId) { this.pending.delete(callId); p.resolve(false); }
-    state.controller.abort();
   }
 
   private finishCancelled(runId: string, steps: number): void {
@@ -2858,7 +2858,7 @@ export class StreamingAgentRuntime {
       if (state.cancelled || err?.name === "AbortError") {
         return this.finishCancelled(runId, steps);
       }
-      this.store.emit(runId, "run.error", { message: err.message });
+      this.store.emit(runId, "run.error", userFacingRunError(err));
       this.store.setStatus(runId, "error");
     }
     // NOTE: run state is NOT deleted here — the start() kickoff's finally
@@ -3219,6 +3219,10 @@ export class StreamingAgentRuntime {
       result = requirePersistedArtifacts(call.name, result);
       // The desktop browser's machine target check (expected page vs what the
       // window actually shows) is recorded as evidence the answer is held to.
+      if (call.name === "desktop_start") {
+        if (result.ok) this.store.emit(runId, "desktop.ready", { tool: call.name, url: (call.arguments as { url?: unknown })?.url });
+        else this.store.emit(runId, "desktop.failed", { tool: call.name, error: String(result.error ?? "The desktop did not start.") });
+      }
       const desktopTarget = (result.meta as { desktopTarget?: Record<string, unknown> } | undefined)?.desktopTarget;
       if (desktopTarget) this.store.emit(runId, "desktop.target", { callId: call.id, tool: call.name, ...desktopTarget });
       if (result.ok && (call.name === "write_file" || call.name === "edit_file") && result.projectFileEvidence &&

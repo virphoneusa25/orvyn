@@ -478,7 +478,10 @@ test("desktop tools emit the desktop.* lifecycle the Workbench derives its tab a
   await waitForStatus(h.store, runId);
   const types = h.store.get(runId)!.events.map((e) => e.type);
   assert.ok(types.includes("desktop.started"), "desktop.started");
-  assert.ok(types.includes("desktop.ready"), "desktop.ready");
+  // "live" only when the start really succeeded; a failed start says why.
+  const started = h.store.get(runId)!.events.find((e) => (e.type === "tool.completed" || e.type === "tool.failed") && e.data?.callId === "call_d1");
+  if (started?.type === "tool.completed") assert.ok(types.includes("desktop.ready"), "desktop.ready");
+  else assert.ok(types.includes("desktop.failed") && !types.includes("desktop.ready"), "a failed desktop_start is desktop.failed, never desktop.ready");
   const action = h.store.get(runId)!.events.find((e) => e.type === "desktop.action");
   assert.ok(action, "desktop.action for clicks");
   assert.equal((action!.data as any).kind, "click");

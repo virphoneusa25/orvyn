@@ -896,6 +896,10 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         // settled state, so it gets its own label.
         items.push({ kind: "status", key: e.id, label: "Computer use · Desktop session live", ephemeral: false });
         continue;
+      case "desktop.failed":
+        flushAssistant(false);
+        items.push({ kind: "status", key: e.id, label: `Computer use · Desktop did not start: ${String(e.data.error ?? "unknown reason").slice(0, 140)}`, ephemeral: false, tone: "stopped" });
+        continue;
       case "desktop.screenshot":
         flushAssistant(false);
         items.push({ kind: "status", key: e.id, label: "Desktop · Inspecting app", ephemeral: false, tone: "working" });
