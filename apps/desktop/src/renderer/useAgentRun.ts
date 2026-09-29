@@ -118,14 +118,20 @@ export function useAgentRun(
       setStatus("completed");
       noteActiveRunId(null);
       streamRef.current?.close();
+      // Settle-side events (e.g. desktop control returning to the user) land
+      // right after the terminal event — the SSE above closes on it, so one
+      // last tail fetch renders them in this chat.
+      void poll(e.runId);
     } else if (e.type === "run.error") {
       setStatus("error");
       noteActiveRunId(null);
       streamRef.current?.close();
+      void poll(e.runId);
     } else if (e.type === "run.cancelled") {
       setStatus("cancelled");
       noteActiveRunId(null);
       streamRef.current?.close();
+      void poll(e.runId);
     } else if (e.type === "approval.resolved") setStatus("running");
     else if (e.type === "usage.updated") {
       setUsage({
