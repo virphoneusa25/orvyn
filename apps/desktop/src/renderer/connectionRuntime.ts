@@ -1,6 +1,7 @@
 // Live account + cloud controller. Panels subscribe; they do not poll their own truth.
 import {
   INITIAL_FACTS,
+  connectionTickAction,
   deriveCloudConnectionState,
   readPersistedProfileName,
   reduceConnection,
@@ -291,7 +292,9 @@ export function startConnectionRuntime(): () => void {
     ensureOrchestratorHeartbeat();
   })();
   const timer = setInterval(() => {
-    if (facts.accountState === "signed-in" && facts.backendState === "online") void refreshWorkers();
+    const tick = connectionTickAction(facts.accountState, facts.backendState);
+    if (tick === "revalidate-session") void validateSession();
+    else if (tick === "refresh-workers") void refreshWorkers();
   }, 10000);
   return () => {
     clearInterval(timer);

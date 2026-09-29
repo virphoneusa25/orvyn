@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiUrl, authHeaders, getConnectionConfig } from "./connection";
 import { noteActiveRunId } from "./connectionRuntime";
+import { pollRetryDelayMs } from "./runPollRetry";
 import { AgentEvent } from "./components/AgentActivityList";
 import { Attachment } from "./components/AttachmentBar";
 
@@ -171,7 +172,13 @@ export function useAgentRun(
       const res = await fetch(apiUrl(`/agent/stream/runs/${id}/events.json?after=${lastSeq.current}`), {
         headers: authHeaders(),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        // A deploy window or auth blip returns 401/502 for a moment. Giving up
+        // here left finished runs showing "ORION is working…" forever — the
+        // run had completed server-side and nobody ever asked again.
+        if (runIdRef.current === id) setTimeout(() => void poll(id), pollRetryDelayMs(res.status));
+        return;
+      }
       const data = await res.json();
       if (data.events?.length) {
         for (const e of data.events) applyEvent(e);

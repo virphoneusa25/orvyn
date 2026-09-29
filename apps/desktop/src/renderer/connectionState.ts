@@ -7,6 +7,22 @@ export type BackendState = "offline" | "connecting" | "online";
 export type SyncState = "idle" | "syncing" | "synced" | "error";
 export type LocalEngineState = "ready" | "degraded" | "offline";
 
+/**
+ * What the periodic connection tick should do. An "expired" session is often
+ * a transient 401 from a backend that was mid-deploy — without revalidation
+ * the app latches "Session expired" (and treats the backend as offline) even
+ * after every request succeeds again. So expired sessions get re-checked on
+ * every tick until they recover or the user signs out.
+ */
+export function connectionTickAction(
+  accountState: AccountState,
+  backendState: BackendState,
+): "revalidate-session" | "refresh-workers" | "idle" {
+  if (accountState === "expired") return "revalidate-session";
+  if (accountState === "signed-in" && backendState === "online") return "refresh-workers";
+  return "idle";
+}
+
 export type CloudConnectionState =
   | "signed-out"
   | "local"

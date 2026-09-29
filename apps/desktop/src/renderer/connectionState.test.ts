@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   INITIAL_FACTS,
+  connectionTickAction,
   describeConnection,
   deriveCloudConnectionState,
   heroStatusLine,
@@ -225,4 +226,12 @@ test("greeting prefers account/profile name over the OS login", () => {
 test("OS username is only the last greeting fallback", () => {
   const view = describeConnection({ ...INITIAL_FACTS, localDisplayName: "Rmckn" });
   assert.equal(view.userName, "Rmckn");
+});
+
+test("an expired session is revalidated on every connection tick", () => {
+  assert.equal(connectionTickAction("expired", "offline"), "revalidate-session");
+  assert.equal(connectionTickAction("expired", "online"), "revalidate-session");
+  assert.equal(connectionTickAction("signed-in", "online"), "refresh-workers");
+  assert.equal(connectionTickAction("signed-in", "connecting"), "idle");
+  assert.equal(connectionTickAction("signed-out", "offline"), "idle");
 });
