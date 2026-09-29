@@ -2517,7 +2517,7 @@ export class StreamingAgentRuntime {
           // nothing streamed, so no answer is duplicated and nothing is paid twice.
           const failure = classifyModelFailure(err);
           let failoverEligible = !content && streamedCalls.length === 0;
-          if (!failoverEligible && failure && !state.cancelled && state.toolCalls > 0 && /stream idle|aborted due to timeout|ETIMEDOUT/i.test(String(err?.message ?? err))) {
+          if (!failoverEligible && failure && !state.cancelled && /stream idle|aborted due to timeout|ETIMEDOUT/i.test(String(err?.message ?? err))) {
             // A MID-MISSION stall (the idle watchdog / call timeout) with partial
             // narration is not an answer — the work is still in flight. Retract
             // the partial text and continue on a backup provider instead of

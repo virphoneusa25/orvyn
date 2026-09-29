@@ -212,8 +212,13 @@ export function AgentWorkspace({
     const latest = latestUrl ? { url: latestUrl } : undefined;
     if (!latest?.url) return;
     const previewTab = parseWorkbenchTab(previewTabId(latest.url));
+    // A NEW preview render is a milestone the user asked to see: show it once
+    // even when Follow is paused (paused follow stops tab churn mid-run, not
+    // the completed render). Re-activation of an already-shown preview stays
+    // follow-gated.
+    const freshAnnounce = !previewSeeded.current.has(latest.url);
     const revealPreview = () => {
-      if (!followApplies(followRef.current)) return;
+      if (!followApplies(followRef.current) && !freshAnnounce) return;
       activate(previewTab, false);
     };
     const existing = browserState.tabs.find((t) => urlsMatch(t.url, latest.url)) ?? browserState.tabs.find((t) => t.kind === "preview");
