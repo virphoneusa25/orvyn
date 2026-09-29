@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { defaultDataDir } from "../persistence/LocalStore";
+import { sharedCloudHost, tenantMayUseRoot } from "../tenancy/workspaceAccess";
 
 /** Tenant-scoped virtual workspace. Cloud Mode writes here when the client
  *  sends a machine-local folder the control plane cannot see. */
@@ -51,26 +52,21 @@ async function ensureDir(dir: string): Promise<string> {
  */
 export async function resolveWorkspace(tenant: { id: string; currentProjectRoot?: string | null }, requested: unknown): Promise<string> {
   const root = typeof requested === "string" ? requested.trim() : "";
-  const cloud = process.env.ORVYN_PROJECTS_DIR;
-  if (cloud) {
-    const base = path.resolve(cloud, tenant.id);
-    await fs.mkdir(base, { recursive: true });
-    if (!root || looksLikeForeignAbsolutePath(root)) {
-      return ensureDir(virtualWorkspaceRoot(tenant.id));
-    }
-    const target = path.resolve(root);
-    const relative = path.relative(base, target);
-    if (!path.isAbsolute(root) || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  // A shared cloud host: only this tenant's own roots (its projects dir and its
+  // managed/virtual workspaces). Anything else — another tenant's workspace,
+  // the data directory, a system path — becomes this tenant's virtual
+  // workspace, never the path it named.
+  if (sharedCloudHost()) {
+    const projects = process.env.ORVYN_PROJECTS_DIR;
+    if (projects) await fs.mkdir(path.resolve(projects, tenant.id), { recursive: true });
+    if (!root || looksLikeForeignAbsolutePath(root) || !path.isAbsolute(root) || !tenantMayUseRoot(tenant.id, root)) {
+      if (root && path.isAbsolute(root) && !looksLikeForeignAbsolutePath(root) && !tenantMayUseRoot(tenant.id, root)) {
+        console.warn(JSON.stringify({ event: "tenant.path.refused", tenantId: tenant.id }));
+      }
       return ensureDir(virtualWorkspaceRoot(tenant.id));
     }
     try {
-      const realBase = await fs.realpath(base);
-      const realTarget = await fs.realpath(target);
-      const rel = path.relative(realBase, realTarget);
-      if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
-        return ensureDir(virtualWorkspaceRoot(tenant.id));
-      }
-      return realTarget;
+      return await fs.realpath(root);
     } catch {
       return ensureDir(virtualWorkspaceRoot(tenant.id));
     }

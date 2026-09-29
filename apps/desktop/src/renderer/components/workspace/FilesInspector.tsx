@@ -148,8 +148,10 @@ export function FilesInspector({
     return () => { alive = false; window.clearInterval(t); };
   }, [location, cloudBackend]);
   const copy = locationCopy(location, { projectRoot, workerState: cloudBackend ? workerState : "ready" });
-  const whereTitle = unbound ? NO_WORKSPACE_LABEL : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.title;
-  const whereDetail = unbound ? NO_WORKSPACE_LABEL : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.detail;
+  // No workspace is a real state (research and browsing run without files),
+  // said plainly — not a missing thing that should be there.
+  const whereTitle = unbound ? "No project workspace" : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.title;
+  const whereDetail = unbound ? "This conversation has no project files" : workspaceStatus === "created" ? NEW_WORKSPACE_LABEL : copy.detail;
 
   // --- ORION's changes this run
   const changed = useMemo(() => changedByOrion(files, projectRoot), [files, projectRoot]);
@@ -574,7 +576,11 @@ export function FilesInspector({
 
         <section aria-label={location === "cloud" ? "Cloud workspace files" : "Project files"}>
           <div className="ofp-sec"><span>{location === "cloud" ? "Cloud workspace" : "Project"}</span><span>{fileCount ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}</span></div>
-          {unbound && <p className="ofp-empty" data-testid="files-workspace-empty">{NO_WORKSPACE_LABEL}</p>}
+          {unbound && (
+            <p className="ofp-empty" data-testid="files-workspace-empty" data-label={NO_WORKSPACE_LABEL}>
+              No project is open in this conversation. Research, questions and browsing run without files; open a project, or ask ORION to build something, and its workspace appears here.
+            </p>
+          )}
           {!unbound && location === "local" && projectRoot && localError && <p className="ofp-empty">{localError}</p>}
           {!unbound && location !== "local" && loadError && <p className="ofp-empty">{loadError}</p>}
           {!unbound && visibleNodes.length === 0 && (location !== "local" || !localError) && !loadError && (

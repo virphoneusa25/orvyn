@@ -5,6 +5,7 @@
 
 import { existsSync, mkdirSync, readdirSync, realpathSync, statSync } from "fs";
 import path from "path";
+import { sharedCloudHost, tenantMayUseRoot } from "../tenancy/workspaceAccess";
 import { looksLikeForeignAbsolutePath, virtualWorkspaceRoot } from "../documents/workspace";
 import { inferTaskIntent } from "./taskIntent";
 import { normalizeKnownFile, rootKey, type WorkSession, type WorkSessionStore } from "../sessions/WorkSessionStore";
@@ -106,9 +107,11 @@ export function isUntrustedProjectRoot(raw: string | null | undefined, ctx: { cw
   return false;
 }
 
-export function isTrustedExistingProject(raw: string | null | undefined, ctx: { cwd: string; virtualRoot: string }): boolean {
+export function isTrustedExistingProject(raw: string | null | undefined, ctx: { cwd: string; virtualRoot: string; tenantId?: string; dataDir?: string }): boolean {
   const text = String(raw ?? "").trim();
   if (!text || looksLikeForeignAbsolutePath(text) || isUntrustedProjectRoot(text, ctx)) return false;
+  // On a shared cloud host a run may only adopt one of its own tenant's roots.
+  if (sharedCloudHost() && !tenantMayUseRoot(ctx.tenantId ?? "", text, process.env, ctx.dataDir)) return false;
   try {
     return statSync(path.resolve(text)).isDirectory();
   } catch {
@@ -385,7 +388,7 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
   const session = input.sessions.get(input.session.sessionId) ?? input.session;
   const cwd = input.cwd ?? process.cwd();
   const virtualRoot = virtualWorkspaceRoot(input.tenantId, input.sessions.dataDirectory);
-  const ctx = { cwd, virtualRoot };
+  const ctx = { cwd, virtualRoot, tenantId: input.tenantId, dataDir: input.sessions.dataDirectory };
   const client = String(input.clientRoot ?? "").trim();
   const actionable = needsActionWorkspace(input.instruction, input.composerMode);
   const record = session.workspaceId ? input.sessions.getWorkspace(session.workspaceId) : undefined;

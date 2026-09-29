@@ -789,10 +789,14 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const inProcessLocal = !cloudHost;
   // Virtual workspace + generated-file work lives on the Cloud control plane.
   // Auto must not demand the desktop Local Worker or an OVH sandbox for a logo.
+  // A question or research task with no workspace (the preflight skipped it)
+  // needs no worker: it runs here with the free tools, never waiting on a
+  // Local Worker that may be offline.
+  const noWorkspaceTask = cloudHost && preflight.status === "skipped" && !desktopProjectRoot && !hasLocalProject;
   const controlPlaneVirtual =
     requestedTarget === "auto" &&
     !desktopProjectRoot &&
-    (virtualWorkspace || (cloudHost && hints.isArtifact && !hasLocalProject));
+    (virtualWorkspace || noWorkspaceTask || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     if (!hasOnlineWorker()) {
@@ -885,7 +889,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   }
   const attached = t.sessions.attachRun(session.sessionId, runId, boundRoot || null) ?? session;
   if (t.runStore.get(runId)) {
-    t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId });
+    t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId, ...(attached.workspaceId && attached.projectRoot ? { projectRoot: attached.projectRoot } : {}) });
     if (preflight.status === "resolved") {
       t.runStore.emit(runId, "workspace.resolved", {
         sessionId: preflight.sessionId,
@@ -1293,7 +1297,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   );
   const joined = t.sessions.attachRun(missionSession.sessionId, runId, missionRoot || null) ?? missionSession;
   if (t.runStore.get(runId)) {
-    t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId });
+    t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId, ...(joined.workspaceId && joined.projectRoot ? { projectRoot: joined.projectRoot } : {}) });
     if (preflight.status === "resolved") {
       t.runStore.emit(runId, "workspace.resolved", {
         sessionId: preflight.sessionId,

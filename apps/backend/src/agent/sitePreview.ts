@@ -1,11 +1,14 @@
 // Serves a directory the agent already wrote. This module does not author pages.
 
-import { createHash, randomUUID } from "crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { join, normalize, extname, sep, isAbsolute } from "path";
 
 const roots = new Map<string, string>();
+/** Who owns each preview: tenant, project, workspace, the run that published it. */
+export interface PreviewOwner { tenantId: string; projectId?: string; workspaceId?: string; runId?: string }
+const owners = new Map<string, PreviewOwner>();
 /** The project folder behind a preview: a linked file the preview folder lacks is read from here. */
 const sources = new Map<string, string>();
 // Previews live in the data directory (a persistent volume in the cloud), so a
@@ -20,23 +23,26 @@ function loadRoots(): void {
   if (rootsLoaded) return;
   rootsLoaded = true;
   try {
-    const saved = JSON.parse(readFileSync(rootIndex(), "utf8")) as Record<string, string | { dir: string; source?: string }>;
+    const saved = JSON.parse(readFileSync(rootIndex(), "utf8")) as Record<string, string | { dir: string; source?: string; owner?: PreviewOwner }>;
     for (const [id, entry] of Object.entries(saved)) {
       const dir = typeof entry === "string" ? entry : entry?.dir;
       if (typeof dir === "string" && existsSync(dir)) roots.set(id, dir);
       if (entry && typeof entry === "object" && typeof entry.source === "string") sources.set(id, entry.source);
+      if (entry && typeof entry === "object" && entry.owner?.tenantId) owners.set(id, entry.owner);
     }
   } catch { /* first publish */ }
 }
 
-function saveRoot(id: string, dir: string, source?: string): void {
+function saveRoot(id: string, dir: string, source?: string, owner?: PreviewOwner): void {
   roots.set(id, dir);
   if (source) sources.set(id, source);
+  if (owner) owners.set(id, owner);
   loadRoots();
-  const all: Record<string, string | { dir: string; source: string }> = {};
+  const all: Record<string, string | { dir: string; source?: string; owner?: PreviewOwner }> = {};
   for (const [key, value] of roots) {
     const src = sources.get(key);
-    all[key] = src ? { dir: value, source: src } : value;
+    const own = owners.get(key);
+    all[key] = src || own ? { dir: value, ...(src ? { source: src } : {}), ...(own ? { owner: own } : {}) } : value;
   }
   mkdirSync(previewBase(), { recursive: true });
   writeFileSync(rootIndex(), JSON.stringify(all));
@@ -340,8 +346,29 @@ export interface PublishedSite {
 }
 
 /** One address per project: every run of a chat updates the same preview URL (it survives restarts). */
+/**
+ * The server's preview secret (created once, kept in the data volume). A
+ * preview id is an HMAC of the tenant + workspace under it: 128 unguessable
+ * bits that no client-visible id can be turned into.
+ */
+let previewSecret: Buffer | null = null;
+function secret(): Buffer {
+  if (previewSecret) return previewSecret;
+  const env = process.env.ORVYN_PREVIEW_SECRET?.trim();
+  if (env) return (previewSecret = Buffer.from(env));
+  const file = join(previewBase(), ".secret");
+  try {
+    previewSecret = readFileSync(file);
+  } catch {
+    mkdirSync(previewBase(), { recursive: true });
+    previewSecret = randomBytes(32);
+    writeFileSync(file, previewSecret, { mode: 0o600 });
+  }
+  return previewSecret;
+}
+
 export function stablePreviewId(siteKey: string): string {
-  const h = createHash("sha256").update(`orvyn-preview:${siteKey}`).digest("hex");
+  const h = createHmac("sha256", secret()).update(`orvyn-preview:${siteKey}`).digest("hex");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
@@ -361,7 +388,7 @@ export function missingLinkedAssets(runId: string): string[] {
 }
 
 /** Write the remembered pages to one stable folder. Later files update that same URL. */
-export function publishRememberedSite(runId: string, changedFiles: string[] = [], opts: { siteKey?: string; sourceRoot?: string } = {}): PublishedSite | null {
+export function publishRememberedSite(runId: string, changedFiles: string[] = [], opts: { siteKey?: string; sourceRoot?: string; owner?: PreviewOwner } = {}): PublishedSite | null {
   const bag = remembered.get(runId);
   if (!bag || ![...bag.keys()].some((name) => /(^|\/)index\.(html|php)$/i.test(name))) return null;
   const existingId = publishedIds.get(runId);
@@ -388,7 +415,7 @@ export function publishRememberedSite(runId: string, changedFiles: string[] = []
   const sourceRoot = opts.sourceRoot && existsSync(opts.sourceRoot)
     ? (pageDir ? join(opts.sourceRoot, pageDir) : opts.sourceRoot)
     : undefined;
-  saveRoot(id, root, sourceRoot);
+  saveRoot(id, root, sourceRoot, opts.owner);
   return {
     id,
     url: previewUrl(id),
@@ -410,6 +437,14 @@ export function publishAgentSite(dir: string): { id: string; url: string } | nul
   return { id, url: previewUrl(id) };
 }
 
+const PAGE_ASSET_EXT = /^\.(css|m?js|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|mp4|webm)$/;
+
+/** The owner recorded for a preview (tenant, project, workspace), if any. */
+export function previewOwner(id: string): PreviewOwner | undefined {
+  loadRoots();
+  return owners.get(id);
+}
+
 export function readPublishedFile(id: string, rel: string): { body: Buffer; contentType: string } | undefined {
   loadRoots();
   const root = roots.get(id);
@@ -424,7 +459,10 @@ export function readPublishedFile(id: string, rel: string): { body: Buffer; cont
   // A linked stylesheet, script or image the preview folder lacks is served
   // from the project itself, so the page never renders unstyled.
   const source = sources.get(id);
-  if ((!existsSync(abs) || !statSync(abs).isFile()) && source && ext && ext !== ".html" && TYPES[ext]) {
+  // Only page ASSETS come from the project folder (styles, scripts, images,
+  // fonts, media) — never data or text files (.json, .md, .txt, .php, .map…):
+  // a preview link must not expose the rest of the project.
+  if ((!existsSync(abs) || !statSync(abs).isFile()) && source && ext && PAGE_ASSET_EXT.test(ext) && TYPES[ext]) {
     const fromSource = join(source, safe);
     const sourcePrefix = source.endsWith(sep) ? source : source + sep;
     if (fromSource.startsWith(sourcePrefix) && existsSync(fromSource) && statSync(fromSource).isFile()) {

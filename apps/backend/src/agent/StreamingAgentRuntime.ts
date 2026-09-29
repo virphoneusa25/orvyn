@@ -645,11 +645,18 @@ export class StreamingAgentRuntime {
   }
 
   /** This chat's one preview address, and the project folder it can read linked files from. */
-  private siteOptions(runId: string): { siteKey?: string; sourceRoot?: string } {
+  private siteOptions(runId: string): { siteKey?: string; sourceRoot?: string; owner?: { tenantId: string; projectId?: string; workspaceId?: string; runId: string } } {
     const state = this.runs.get(runId);
-    const siteKey = state?.workspaceId ? `ws:${state.workspaceId}` : undefined;
+    const tenantId = state?.execution?.tenantId || "local";
+    // Tenant + workspace: one preview address per workspace, never shared
+    // across customers, never derivable from ids a client has seen.
+    const siteKey = state?.workspaceId ? `ws:${tenantId}:${state.workspaceId}` : undefined;
     const remote = state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
-    return { siteKey, sourceRoot: !remote && state?.projectRoot ? state.projectRoot : undefined };
+    return {
+      siteKey,
+      sourceRoot: !remote && state?.projectRoot ? state.projectRoot : undefined,
+      owner: { tenantId, projectId: state?.execution?.projectId ?? undefined, workspaceId: state?.workspaceId ?? undefined, runId },
+    };
   }
 
   private publishSite(runId: string, changedFiles: string[] = []): ReturnType<typeof publishRememberedSite> {

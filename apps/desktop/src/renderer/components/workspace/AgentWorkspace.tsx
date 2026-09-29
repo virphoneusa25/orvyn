@@ -890,7 +890,10 @@ function WorkbenchBody({
       <FilesInspector
         files={surface.changeFiles}
         artifacts={artifacts}
-        projectRoot={projectRoot}
+        // The workspace this conversation is bound to (a Cloud workspace has a
+        // server path the Electron folder never equals); the local folder only
+        // when it IS that workspace.
+        projectRoot={listDisk ? projectRoot : (surface.listRoot ?? projectRoot)}
         workspaceStatus={surface.status}
         writtenPaths={surface.files.map((f) => f.path)}
         listDisk={listDisk}
