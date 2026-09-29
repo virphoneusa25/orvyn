@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { PREVIEW_CACHE_CONTROL, readPublishedFile, rebaseRootUrls } from "../agent/sitePreview";
+import { publishedSiteHealth } from "../agent/previewCheck";
 
 export const siteRouter = Router();
 
@@ -20,6 +21,14 @@ function send(id: string, rel: string, prefix: string, res: import("express").Re
   }
   res.send(file.body);
 }
+
+// The preview's real health (page + every stylesheet/script/image it links),
+// so the Preview pane is green only when the site actually renders styled.
+siteRouter.get("/:id/__health", async (req, res) => {
+  const health = await publishedSiteHealth(req.params.id, readPublishedFile, rebaseRootUrls);
+  res.setHeader("Cache-Control", "no-store");
+  res.json(health);
+});
 
 siteRouter.use("/:id", (req, res) => {
   const rel = req.path.replace(/^\/+/, "") || "index.html";

@@ -173,8 +173,8 @@ export function makeDesktopOpenUrlTool(projectRoot: string, tenantId: string, ru
         if (unhealthy) return unhealthy;
         const nav = await sandboxNavigate(s, url);
         return nav.ok
-          ? { ok: true, output: `Desktop opened ${url}${nav.pageTitle ? ` — "${nav.pageTitle}"` : ""}.` }
-          : { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle } };
+          ? { ok: true, output: `Desktop opened ${url} — the window shows "${nav.pageTitle}" (matches the page's title).`, meta: { desktopTarget: nav.target } }
+          : { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: nav.target?.reason === "WRONG_TARGET" || nav.target?.reason === "UNCHANGED" ? "WRONG_TARGET" : "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle, desktopTarget: nav.target } };
       }
       return playwrightGuard(projectRoot, tenantId, runId, async (session, a) =>
         withAgentLock(session, async () => {

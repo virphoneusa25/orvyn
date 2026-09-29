@@ -126,14 +126,37 @@ function changeEvidence(events: ClaimEvent[]): boolean {
  * Drop success sentences that this run's events do not support.
  * Artifact filenames are handled by groundAssistantClaims.
  */
+/** The last desktop target check, if the run made one. */
+function lastDesktopTarget(events: ClaimEvent[]): { actualTitle?: string; expectedUrl?: string; matched?: boolean } | null {
+  const e = [...events].reverse().find((x) => x.type === "desktop.target");
+  return e ? (e.data as { actualTitle?: string; expectedUrl?: string; matched?: boolean }) : null;
+}
+
+/** The desktop browser really showed the expected page (machine-checked, latest check wins). */
+function desktopTargetMatched(events: ClaimEvent[]): boolean {
+  return lastDesktopTarget(events)?.matched === true;
+}
+
 export function groundSuccessClaims(text: string, events: ClaimEvent[]): { text: string; blocked: boolean } {
   const sentences = String(text || "").split(/(?<=[.!?])\s+/).filter(Boolean);
   const kept: string[] = [];
   let blocked = false;
+  let wrongTarget: { actualTitle?: string; expectedUrl?: string } | null = null;
   for (const sentence of sentences) {
     const claimsTests = /\b(tests?\s+(passed|pass|are green|succeeded)|all tests pass)\b/i.test(sentence);
     const claimsVisual = /\b(verified (the )?(ui|page|screen|visually)|visual verification|checked (it )?in the browser|desktop verification passed)\b/i.test(sentence);
     const claimsFix = /\b(i fixed|the bug is fixed|i deployed|deployed the app)\b/i.test(sentence);
+    // "The desktop Firefox loaded it cleanly" needs the machine target check:
+    // the desktop window showed the expected page's title.
+    const claimsDesktop = /\b(firefox|chromium|desktop browser|orvyn desktop|the desktop|on the desktop)\b/i.test(sentence)
+      && !/\b(desktop (and|\/|&) mobile|mobile (and|\/|&) desktop|desktop (view|layout|width|breakpoint|viewport|screens?))\b/i.test(sentence)
+      && !/\?\s*$/.test(sentence)
+      && /\b(loaded|loads|showing|shows|shown|rendered|renders|rendering|displays?|displayed|is live|now live|opened|visible)\b/i.test(sentence);
+    if (claimsDesktop && !desktopTargetMatched(events)) {
+      blocked = true;
+      wrongTarget = lastDesktopTarget(events);
+      continue;
+    }
     if ((claimsTests && !testsPassed(events)) || (claimsVisual && !visualEvidence(events)) || (claimsFix && !changeEvidence(events))) {
       blocked = true;
       continue;
@@ -141,6 +164,9 @@ export function groundSuccessClaims(text: string, events: ClaimEvent[]): { text:
     kept.push(sentence);
   }
   if (!blocked) return { text, blocked: false };
+  if (wrongTarget) {
+    kept.push(`The desktop browser did not show the site${wrongTarget.actualTitle ? ` (it showed “${wrongTarget.actualTitle}”)` : ""}, so it was not verified on the desktop.`);
+  }
   const remainder = kept.join(" ").trim();
   return {
     text: remainder || "This run has no tool evidence for that success claim, so it is not reported as done.",

@@ -14,7 +14,8 @@
 
 import { spawn, exec } from "child_process";
 import { createHash, randomUUID } from "crypto";
-import { isErrorPageTitle } from "../agent/previewTarget";
+import { htmlTitle, isErrorPageTitle, matchBrowserTarget, type TargetMatch } from "../agent/previewTarget";
+import { readPublishedFile } from "../agent/sitePreview";
 
 export type SandboxControlOwner = "orion" | "user" | "none";
 
@@ -674,41 +675,88 @@ export interface SandboxNavigationResult {
   ok: boolean;
   error?: string;
   pageTitle?: string;
+  /** The machine check that the window shows the expected page. */
+  target?: TargetMatch;
+}
+
+/** The <title> the target page declares: from the published preview itself when it is ours, else over HTTP. */
+async function expectedTitleFor(url: string): Promise<string | undefined> {
+  const site = /\/api\/v1\/sites\/([\w-]+)\/?(.*)$/.exec(new URL(url).pathname);
+  if (site) {
+    const file = readPublishedFile(site[1]!, site[2] || "index.html");
+    if (file && /html/.test(file.contentType)) return htmlTitle(file.body.toString("utf8"));
+  }
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+    return r.ok ? htmlTitle(await r.text()) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function sandboxNavigate(session: SandboxDesktopSession, url: string): Promise<SandboxNavigationResult> {
   if (session.status !== "ready") return { ok: false, error: `Desktop is ${session.status}.` };
-  const titled = async (name: string) => (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${name}' | head -1`])).stdout.toString().trim();
-  let title = (await titled("Chromium")) ? "Chromium" : (await titled("Firefox")) ? "Firefox" : "";
-  if (!title) {
-    await dockerExec(session.containerId, ["sh", "-c", "nohup /usr/local/bin/orvyn-launch browser >/dev/null 2>&1 &"]);
-    await new Promise((res) => setTimeout(res, 2500));
-    title = (await titled("Chromium")) ? "Chromium" : "Firefox";
+  const sh = async (cmd: string) => (await dockerExec(session.containerId, ["sh", "-c", cmd])).stdout.toString().trim();
+  const browserWindows = async () => (await sh(`xdotool search --name 'Firefox|Chromium' 2>/dev/null`)).split(/\s+/).filter(Boolean);
+  const titleOf = (win: string) => sh(`xdotool getwindowname ${win} 2>/dev/null`);
+  const expectedTitle = await expectedTitleFor(url).catch(() => undefined);
+  const before = await browserWindows();
+  const titleBefore = before.length ? await titleOf(before[before.length - 1]!) : "";
+  // Open the URL through the browser itself (reuses the running instance) —
+  // not by typing into an address bar that may not have focus (a security
+  // banner or dialog swallowed the keystrokes and the page never changed).
+  const q = url.replace(/'/g, "'\\''");
+  // A tab in the running Firefox (not a new window per check — windows pile up
+  // and eat the sandbox's memory); a fresh browser only when none is running.
+  await sh(before.length && /Firefox/i.test(titleBefore)
+    ? `nohup firefox-esr --new-tab '${q}' >/dev/null 2>&1 &`
+    : `nohup /usr/local/bin/orvyn-launch browser '${q}' >/dev/null 2>&1 &`);
+  let win = "";
+  let pageTitle = "";
+  let target: TargetMatch | undefined;
+  for (let i = 0; i < 16; i++) {
+    await new Promise((res) => setTimeout(res, 750));
+    const wins = await browserWindows();
+    // The newest window, or the one whose title changed.
+    for (const w of [...wins].reverse()) {
+      const t = await titleOf(w);
+      const m = matchBrowserTarget({ expectedUrl: url, expectedTitle, actualTitle: t, titleBefore });
+      if (m.matched) { win = w; pageTitle = t; target = m; break; }
+      if (!win) { win = w; pageTitle = t; target = m; }
+    }
+    if (target?.matched || target?.reason === "ERROR_PAGE") break;
   }
-  const win = (await dockerExec(session.containerId, ["sh", "-c", `xdotool search --name '${title}' | head -1`])).stdout.toString().trim();
-  if (!win) return { ok: false, error: `No browser window is open on the desktop (looked for ${title}).` };
-  const r = await dockerExec(session.containerId, [
-    "xdotool", "search", "--name", title, "windowactivate", "--sync",
-    "key", "--clearmodifiers", "ctrl+l",
-  ]);
-  await new Promise((res) => setTimeout(res, 200));
-  await dockerExec(session.containerId, ["xdotool", "type", "--delay", "20", "--clearmodifiers", url]);
-  await new Promise((res) => setTimeout(res, 200));
-  await dockerExec(session.containerId, ["xdotool", "key", "Return"]);
-  // Wait for the page to settle, then read the window title: Firefox and
-  // Chromium both put the page (or error-page) title in it.
-  await new Promise((res) => setTimeout(res, 2500));
-  const pageTitle = (await dockerExec(session.containerId, ["sh", "-c", `xdotool getwindowname ${win} 2>/dev/null`])).stdout.toString().trim();
-  session.url = url;
-  if (r.code !== 0) return { ok: false, error: "Could not focus the desktop browser address bar.", pageTitle };
-  if (isErrorPageTitle(pageTitle)) {
+  // Fallback for a browser that ignored the launch: the address bar.
+  if (!target?.matched && win && target?.reason !== "ERROR_PAGE") {
+    await dockerExec(session.containerId, ["xdotool", "windowactivate", "--sync", win, "key", "--clearmodifiers", "Escape", "ctrl+l"]);
+    await new Promise((res) => setTimeout(res, 250));
+    await dockerExec(session.containerId, ["xdotool", "type", "--delay", "15", "--clearmodifiers", url]);
+    await dockerExec(session.containerId, ["xdotool", "key", "Return"]);
+    await new Promise((res) => setTimeout(res, 3000));
+    pageTitle = await titleOf(win);
+    target = matchBrowserTarget({ expectedUrl: url, expectedTitle, actualTitle: pageTitle, titleBefore });
+  }
+  if (!win) return { ok: false, error: "No browser window is open on the desktop.", target: matchBrowserTarget({ expectedUrl: url, expectedTitle, actualTitle: "" }) };
+  if (target && target.matched) {
+    session.url = url;
+    return { ok: true, pageTitle, target };
+  }
+  if (target?.reason === "ERROR_PAGE") {
     return {
       ok: false,
       pageTitle,
+      target,
       error: `The desktop browser could not load ${url} — it is showing an error page ("${pageTitle}"). The page did not render; do not inspect or screenshot this error page. Check that the URL is the run's live preview URL and that it responds 200.`,
     };
   }
-  return { ok: true, pageTitle };
+  return {
+    ok: false,
+    pageTitle,
+    target,
+    error: `WRONG_TARGET: the desktop browser is showing "${pageTitle || "no page"}", not ${url}${expectedTitle ? ` (expected "${expectedTitle}")` : ""}. The site was NOT verified on the desktop — do not describe what the desktop shows as the site.`,
+  };
 }
 
 function runningDesktopContainer(): Promise<string | null> {

@@ -3217,6 +3217,10 @@ export class StreamingAgentRuntime {
 
       const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       result = requirePersistedArtifacts(call.name, result);
+      // The desktop browser's machine target check (expected page vs what the
+      // window actually shows) is recorded as evidence the answer is held to.
+      const desktopTarget = (result.meta as { desktopTarget?: Record<string, unknown> } | undefined)?.desktopTarget;
+      if (desktopTarget) this.store.emit(runId, "desktop.target", { callId: call.id, tool: call.name, ...desktopTarget });
       if (result.ok && (call.name === "write_file" || call.name === "edit_file") && result.projectFileEvidence &&
           /\.(svg|png|jpe?g|webp)$/i.test(result.projectFileEvidence.name) && this.artifacts) {
         let bytes: Buffer | null = null;

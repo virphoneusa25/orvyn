@@ -58,6 +58,8 @@ export function TitleBar({
   const [maximized, setMaximized] = useState(false);
   const [accountPlan, setAccountPlan] = useState<string | null>(null);
   const [accountCredits, setAccountCredits] = useState<string | null>(null);
+  const [accountDetail, setAccountDetail] = useState<string | null>(null);
+  const walletRefresh = useRef<(() => void) | null>(null);
   const [engineLive, setEngineLive] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -71,28 +73,38 @@ export function TitleBar({
       .catch(() => {
         if (alive) setEngineLive(false);
       });
-    void fetch(apiUrl("/billing"), { headers: authHeaders() })
+    // The header shows the ACCOUNT's wallet (ledger), refreshed while the app
+    // is open and after each run — never a single run's spend or budget.
+    const loadWallet = () => void fetch(apiUrl("/billing"), { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
-        if (!alive || !body?.wallet) return;
+        if (!alive) return;
+        if (!body?.wallet) { setAccountCredits(null); return; }
         const plan = typeof body.wallet.plan?.label === "string" ? body.wallet.plan.label : null;
         const cycle = body.wallet.windows?.cycle;
         const used = Number(cycle?.used);
         const limit = Number(cycle?.limit);
         const available = Number(body.wallet.availableBalance);
-        const credits = Number.isFinite(used) && Number.isFinite(limit) && limit > 0
-          ? `${Math.round(used).toLocaleString()} / ${Math.round(limit).toLocaleString()}`
-          : Number.isFinite(available)
-            ? `${Math.round(available).toLocaleString()} credits`
+        const credits = Number.isFinite(available)
+          ? `${Math.max(0, Math.round(available)).toLocaleString()} credits left`
+          : Number.isFinite(used) && Number.isFinite(limit) && limit > 0
+            ? `${Math.max(0, Math.round(limit - used)).toLocaleString()} credits left`
             : null;
         setAccountPlan(plan);
         setAccountCredits(credits);
+        setAccountDetail(Number.isFinite(used) && Number.isFinite(limit) && limit > 0 ? `${Math.round(used).toLocaleString()} of ${Math.round(limit).toLocaleString()} used this cycle${plan ? ` · ${plan} plan` : ""}` : null);
       })
       .catch(() => undefined);
+    loadWallet();
+    const walletTimer = setInterval(loadWallet, 60_000);
+    walletRefresh.current = loadWallet;
     return () => {
       alive = false;
+      clearInterval(walletTimer);
     };
   }, []);
+  // A run's spend changed (it ran or finished): the wallet moved too.
+  useEffect(() => { walletRefresh.current?.(); }, [usageLabel]);
 
   useEffect(() => {
     window.orvyn.window.isMaximized().then(setMaximized);
@@ -301,10 +313,10 @@ export function TitleBar({
             {accountPlan || planLabel}
           </span>
         )}
-        {(accountCredits || usageLabel) && (
+        {accountCredits && (
           <span
             data-testid="title-credits"
-            title={usageTitle ?? accountCredits ?? usageLabel ?? ""}
+            title={[accountDetail, usageLabel ? `This run: ${usageLabel}` : null, usageTitle].filter(Boolean).join("\n")}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -321,7 +333,7 @@ export function TitleBar({
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="1.7">
               <path d="M13 2 4 14h7l-1 8 9-12h-7z" strokeLinejoin="round" />
             </svg>
-            {accountCredits || usageLabel}
+            {accountCredits}
           </span>
         )}
         {engineLive && (

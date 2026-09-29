@@ -4,6 +4,18 @@ import { IconCheck, IconChevronDown, IconExternal, IconGlobe, IconMore, IconPhon
 import { emptyBody, emptyTitle, ghostBtn, openExternalSafe } from "./workspaceChrome";
 import "./workbenchChrome.css";
 
+/** /api/v1/sites/<id>/ → /api/v1/sites/<id>/__health (ORVYN previews only). */
+export function previewHealthUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const m = /^(\/api\/v1\/sites\/[\w-]+)\//.exec(u.pathname);
+    return m ? `${u.origin}${m[1]}/__health` : null;
+  } catch {
+    return null;
+  }
+}
+
 export function BrowserWorkbench({
   kind,
   projectName,
@@ -43,6 +55,7 @@ export function BrowserWorkbench({
   const [copied, setCopied] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [stopped, setStopped] = useState(false);
+
   const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const seenVersion = useRef(0);
@@ -140,6 +153,28 @@ export function BrowserWorkbench({
   }
 
   const tab = activeTab(state);
+  // The preview's real health from the server (page + stylesheets + scripts +
+  // images). Green only when READY; a missing stylesheet is DEGRADED, never
+  // a green "Live Preview".
+  const [health, setHealth] = useState<{ status: "READY" | "DEGRADED" | "FAILED" | "CHECKING"; issues: string[] } | null>(null);
+  const healthUrl = previewHealthUrl(kind === "preview" ? tab?.url : undefined);
+  useEffect(() => {
+    if (!healthUrl || stopped) { setHealth(null); return; }
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await fetch(healthUrl, { cache: "no-store" });
+        const j = r.ok ? await r.json() : { status: r.status === 404 ? "FAILED" : "DEGRADED", issues: [`Health check returned ${r.status}.`] };
+        if (alive) setHealth({ status: j.status, issues: Array.isArray(j.issues) ? j.issues : [] });
+      } catch {
+        if (alive) setHealth({ status: "FAILED", issues: ["The preview server did not answer."] });
+      }
+    };
+    setHealth({ status: "CHECKING", issues: [] });
+    void check();
+    const t = setInterval(check, 15_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [healthUrl, stopped, liveVersion]);
   const start = !tab?.url;
   const addressValue = draft || requestedUrl || "";
 
@@ -288,11 +323,27 @@ export function BrowserWorkbench({
           data-testid="preview-footer"
           style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderTop: "1px solid var(--orvyn-border-soft)", fontSize: 11, color: "var(--orvyn-text-secondary)", flexShrink: 0 }}
         >
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: tab?.url && !stopped ? "#34d399" : "#64748b", boxShadow: tab?.url && !stopped ? "0 0 8px #34d399" : "none", flexShrink: 0 }} />
-          <span style={{ fontWeight: 650 }}>{tab?.url && !stopped ? `Live Preview (v${Math.max(liveVersion, 1)})` : stopped ? "Preview stopped" : "Preview"}</span>
-          {tab?.url && !stopped && autoRefresh && (
-            <span style={{ color: "var(--orvyn-text-muted)" }}>Updating after file changes</span>
-          )}
+          {(() => {
+            const live = Boolean(tab?.url) && !stopped;
+            const st = !live ? null : health?.status ?? "READY";
+            const color = !live ? "#64748b" : st === "READY" ? "#34d399" : st === "CHECKING" ? "#94a3b8" : st === "DEGRADED" ? "#fbbf24" : "#f87171";
+            const label = !live ? (stopped ? "Preview stopped" : "Preview")
+              : st === "DEGRADED" ? `Preview degraded (v${Math.max(liveVersion, 1)})`
+              : st === "FAILED" ? `Preview failed (v${Math.max(liveVersion, 1)})`
+              : st === "CHECKING" ? `Checking preview (v${Math.max(liveVersion, 1)})…`
+              : `Live Preview (v${Math.max(liveVersion, 1)})`;
+            return (
+              <>
+                <span data-testid="preview-health" data-status={st ?? "NONE"} style={{ width: 7, height: 7, borderRadius: "50%", background: color, boxShadow: live && st === "READY" ? `0 0 8px ${color}` : "none", flexShrink: 0 }} />
+                <span style={{ fontWeight: 650 }}>{label}</span>
+                {live && (st === "DEGRADED" || st === "FAILED") && health?.issues.length ? (
+                  <span style={{ color: "#fbbf24", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} title={health.issues.join("\n")}>{health.issues[0]}</span>
+                ) : live && autoRefresh ? (
+                  <span style={{ color: "var(--orvyn-text-muted)" }}>Updating after file changes</span>
+                ) : null}
+              </>
+            );
+          })()}
           <label style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
             <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
             Auto Refresh

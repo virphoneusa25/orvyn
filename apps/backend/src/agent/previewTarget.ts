@@ -194,3 +194,52 @@ export function invalidPreviewUrlResult(resolution: Extract<ResolvedNavigationTa
     meta: { code: "INVALID_PREVIEW_URL", target: resolution.issue.target, reason: resolution.issue.reason },
   };
 }
+
+
+// ── Did the browser really show the expected page? ───────────────────────────
+
+/** ORVYN's own desktop start page, a blank/new tab, or a bare browser name — never a customer page. */
+const NOT_A_PAGE = /^(ORVYN Desktop|New Tab|Mozilla Firefox|Firefox|Chromium|about:blank|Untitled)(\s*[—–-]\s*(Mozilla Firefox|Firefox|Chromium))?$/i;
+
+function normalizeTitle(t: string): string {
+  return String(t ?? "")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&mdash;/g, "—").replace(/&ndash;/g, "–")
+    .replace(/\s*[—–-]\s*(Mozilla Firefox|Firefox|Chromium|Google Chrome)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** The <title> a page declares. */
+export function htmlTitle(html: string): string | undefined {
+  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(String(html ?? ""));
+  const t = m?.[1]?.replace(/\s+/g, " ").trim();
+  return t || undefined;
+}
+
+export interface TargetMatch {
+  matched: boolean;
+  reason: "TITLE_MATCH" | "WRONG_TARGET" | "UNCHANGED" | "ERROR_PAGE" | "NO_TITLE";
+  expectedUrl: string;
+  expectedTitle?: string;
+  actualTitle: string;
+}
+
+/**
+ * Machine check that the browser window shows the page that was asked for —
+ * never inferred from narration. The window title must carry the expected
+ * page's <title>; ORVYN's own start page, a new tab, an error page, or the
+ * same title as before navigation is a WRONG_TARGET.
+ */
+export function matchBrowserTarget(input: { expectedUrl: string; expectedTitle?: string; actualTitle: string; titleBefore?: string }): TargetMatch {
+  const actual = normalizeTitle(input.actualTitle);
+  const base = { expectedUrl: input.expectedUrl, expectedTitle: input.expectedTitle, actualTitle: input.actualTitle };
+  if (!actual) return { ...base, matched: false, reason: "NO_TITLE" };
+  if (isErrorPageTitle(input.actualTitle)) return { ...base, matched: false, reason: "ERROR_PAGE" };
+  if (NOT_A_PAGE.test(String(input.actualTitle).trim()) || NOT_A_PAGE.test(actual)) return { ...base, matched: false, reason: "WRONG_TARGET" };
+  const expected = input.expectedTitle ? normalizeTitle(input.expectedTitle) : "";
+  if (expected) return { ...base, matched: actual.includes(expected) || expected.includes(actual), reason: actual.includes(expected) || expected.includes(actual) ? "TITLE_MATCH" : "WRONG_TARGET" };
+  // No declared title to compare: at least the window must have moved off what it showed before.
+  if (input.titleBefore && normalizeTitle(input.titleBefore) === actual) return { ...base, matched: false, reason: "UNCHANGED" };
+  return { ...base, matched: true, reason: "TITLE_MATCH" };
+}

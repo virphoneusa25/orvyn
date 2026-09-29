@@ -644,9 +644,13 @@ export function DesktopView({
       minWidth: 0, borderTop: "1px solid var(--orvyn-border-soft)",
     }}>
       <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 8 }}>
-        <span style={{ marginTop: 5 }}><Dot color="#34d399" /></span>
+        {/* Session, picture stream and input are separate: a live session with a
+            dead picture stream is said as such, never as a healthy desktop. */}
+        <span style={{ marginTop: 5 }}><Dot color={interrupted ? "#fbbf24" : "#34d399"} /></span>
         <span>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--orvyn-text)" }}>Desktop is running</div>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--orvyn-text)" }} data-testid="desktop-health">
+            {interrupted ? "Desktop session running · visual stream disconnected" : "Desktop is running"}
+          </div>
           <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)" }}>{resourceLine}</div>
         </span>
       </span>

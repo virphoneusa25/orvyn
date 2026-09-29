@@ -73,10 +73,12 @@ function hasRules(css: string): boolean {
   return /[^{}]+\{[^{}]*:[^{}]*\}/.test(text);
 }
 
-export async function checkPreview(pageUrl: string, opts: { browser?: boolean; timeoutMs?: number } = {}): Promise<PreviewCheckResult> {
+type Fetched = { status: number; contentType: string; body: Buffer };
+
+export async function checkPreview(pageUrl: string, opts: { browser?: boolean; timeoutMs?: number; fetcher?: (url: string) => Promise<Fetched> } = {}): Promise<PreviewCheckResult> {
   const issues: string[] = [];
   const timeout = opts.timeoutMs ?? 15_000;
-  const get = async (url: string) => {
+  const get = opts.fetcher ?? (async (url: string) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
     try {
@@ -86,7 +88,7 @@ export async function checkPreview(pageUrl: string, opts: { browser?: boolean; t
     } catch {
       return { status: 0, contentType: "", body: Buffer.alloc(0) };
     } finally { clearTimeout(t); }
-  };
+  });
 
   const page = await get(pageUrl);
   if (page.status !== 200) issues.push(`index.html → ${page.status || "no response"}`);
@@ -162,4 +164,34 @@ async function browserCheck(url: string, timeout: number): Promise<NonNullable<P
   } finally {
     await b?.close().catch(() => undefined);
   }
+}
+
+
+export type PreviewHealth = "READY" | "DEGRADED" | "FAILED";
+
+/**
+ * A published site's health read straight from what the preview serves (no
+ * network hop): the page and every asset it links, with statuses and types.
+ * READY only when nothing required is missing and the page is styled.
+ */
+export async function publishedSiteHealth(
+  siteId: string,
+  read: (id: string, rel: string) => { body: Buffer; contentType: string } | undefined,
+  rebase: (text: string, prefix: string, kind: "html" | "css") => string
+): Promise<{ status: PreviewHealth; issues: string[]; assets: Array<Pick<AssetCheck, "path" | "kind" | "status" | "contentType" | "ok" | "required">>; styled: boolean }> {
+  const prefix = `/api/v1/sites/${siteId}`;
+  const base = `http://preview.local${prefix}/`;
+  const fetcher = async (url: string): Promise<Fetched> => {
+    const u = new URL(url);
+    if (!u.pathname.startsWith(prefix + "/")) return { status: 404, contentType: "", body: Buffer.alloc(0) };
+    const rel = decodeURIComponent(u.pathname.slice(prefix.length + 1)) || "index.html";
+    const f = read(siteId, rel);
+    if (!f) return { status: 404, contentType: "text/plain", body: Buffer.alloc(0) };
+    const body = /^text\/(html|css)/.test(f.contentType) ? Buffer.from(rebase(f.body.toString("utf8"), prefix, f.contentType.startsWith("text/css") ? "css" : "html")) : f.body;
+    return { status: 200, contentType: f.contentType, body };
+  };
+  const r = await checkPreview(base, { browser: false, fetcher });
+  const requiredMissing = r.assets.some((a) => a.required && !a.ok);
+  const status: PreviewHealth = r.pageStatus !== 200 ? "FAILED" : requiredMissing || !r.styled ? "DEGRADED" : "READY";
+  return { status, issues: r.issues, styled: r.styled, assets: r.assets.map(({ path, kind, status, contentType, ok, required }) => ({ path: path.replace(prefix + "/", ""), kind, status, contentType, ok, required })) };
 }

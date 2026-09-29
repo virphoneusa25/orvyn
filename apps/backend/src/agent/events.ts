@@ -150,6 +150,7 @@ export type AgentEventType =
   | "tool.validated"
   | "tool.repaired"
   | "run.stalled"
+  | "desktop.target"
   | "capability.installed"
   | "model.unavailable"
   | "model.failover"
