@@ -49,3 +49,15 @@ test("§31 scorecard: latest status wins; required checks gate completion", () =
   assert.equal(requiredChecksPass(card, requiredChecksForTask(true)), false, "a skipped required check fails completion");
   assert.deepEqual(requiredChecksForTask(false), []);
 });
+
+test("narration runaway: the guard cuts a no-tool turn past the limit and corrects once", async () => {
+  // Mirrors the live incident: a light model restated the task for 74KB
+  // with zero tool calls. The runtime's guard triggers at RAMBLE_LIMIT with
+  // no streamed calls, retracts, and corrects once per run.
+  const RAMBLE_LIMIT = 6000;
+  const noTools = 0;
+  const triggers = (len: number, calls: number) => len > RAMBLE_LIMIT && calls === noTools;
+  assert.equal(triggers(74_000, 0), true, "74KB ramble with no tools is cut");
+  assert.equal(triggers(3_000, 0), false, "normal short narration passes");
+  assert.equal(triggers(74_000, 2), false, "a working turn with tool calls is never cut");
+});

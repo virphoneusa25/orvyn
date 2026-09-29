@@ -278,6 +278,8 @@ interface RunState {
   missionPlan?: MissionPlan;
   /** §22-23 canonical verification commands discovered from the project. */
   verificationCommands?: DiscoveredCommands;
+  /** One narration-runaway correction per run. */
+  rambleWarned?: boolean;
   /** Whether the canonical preview URL has been announced to the model. */
   previewUrlAnnounced?: boolean;
   /** Recent successful tool signatures — identical repeats with no useful
@@ -2503,6 +2505,12 @@ export class StreamingAgentRuntime {
         const callSignal = AbortSignal.any([modelCallSignal(state.controller.signal), idleController.signal]);
         state.lastActivityAt = Date.now();
         state.modelCallStartedAt = Date.now();
+        // Narration runaway guard: a turn that has already streamed far more
+        // prose than any competent agent turn needs, with NO tool call in it,
+        // is a rambling/looping model (seen live: a light model restated the
+        // task for 74KB). Cut it, retract the ramble, correct the model once.
+        const RAMBLE_LIMIT = 6000;
+        let rambled = false;
         try {
         for await (const chunk of provider.stream({
           messages,
@@ -2542,6 +2550,11 @@ export class StreamingAgentRuntime {
                 content += langBuffer;
                 streamedText = true;
               }
+              if (!rambled && content.length > RAMBLE_LIMIT && streamedCalls.length === 0 && !(provider.stream as { rambleGuardOff?: boolean }).rambleGuardOff) {
+                rambled = true;
+                idleController.abort(new Error(`Narration runaway: ${content.length} chars with no tool call — aborted and corrected.`));
+                break;
+              }
             } else {
               content += chunk.delta;
               streamedText = true;
@@ -2558,6 +2571,20 @@ export class StreamingAgentRuntime {
         } catch (err: any) {
           clearTimeout(idleTimer);
           state.modelCallStartedAt = undefined;
+          // A rambling turn is not a provider failure: retract the prose and
+          // correct the model, once per run — the same conversation continues.
+          if (rambled) {
+            this.store.emit(runId, "message.retracted", { reason: "narration runaway — answer with tools or a short final answer" });
+            state.pendingNotes.push(`[Runtime note] Your previous reply was cut off: it narrated far too long without doing anything. Answer with ACTION now: call the tool that does the work (read_file, edit_file, browser tools as needed) or, if the work is already done, reply with a final answer under 200 words. Never restate the task or the plan again.`);
+            content = "";
+            streamedText = false;
+            streamedCalls.length = 0;
+            if (!state.rambleWarned) {
+              state.rambleWarned = true;
+              return { kind: "retry" as const, reason: "narration runaway — corrected" };
+            }
+            return { kind: "reply" as const, reply: { content: "Stopped a runaway reply. Retry the task.", calls: [], reasoning: "", streamedText: false } };
+          }
           // A stall the watchdog force-aborted settles truthfully — it is not
           // a provider to fail over to again.
           if (state.stallAbort) {
