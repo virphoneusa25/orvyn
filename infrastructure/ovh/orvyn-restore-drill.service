@@ -1,0 +1,10 @@
+[Unit]
+Description=ORVYN restore drill (restores the newest backup into a scratch dir and boots it)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/orvyn
+EnvironmentFile=-/home/ubuntu/orvyn/.backup.env
+ExecStart=/home/ubuntu/orvyn/infrastructure/ovh/restore-drill.sh

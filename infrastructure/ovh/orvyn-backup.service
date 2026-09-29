@@ -1,0 +1,12 @@
+[Unit]
+Description=ORVYN backup (SQLite snapshots, files, postgres, off-host copy)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/orvyn
+EnvironmentFile=-/home/ubuntu/orvyn/.backup.env
+ExecStart=/home/ubuntu/orvyn/infrastructure/ovh/backup.sh --tag hourly
+Nice=10
+IOSchedulingClass=idle

@@ -58,8 +58,22 @@ rsync -az -e "$RSH" \
 #   model provider: NEBIUS_API_KEY
 #   account email (verification links): SMTP_*
 #   sign-in and billing (added when the apps exist): GOOGLE_*, GITHUB_*, STRIPE_*
+# Repository variables (not secrets) arrive as one JSON object; only these names are taken.
+if [[ -n "${DEPLOY_VARS:-}" ]]; then
+  while IFS='=' read -r k v; do [[ -n "$k" ]] && export "$k=$v"; done < <(python3 -c '
+import json, os, re
+d = json.loads(os.environ.get("DEPLOY_VARS") or "{}")
+for k, v in d.items():
+    if re.match(r"^(STRIPE_PRICE_[A-Z0-9_]+|ORVYN_PUBLIC_ORIGIN|BACKUP_S3_URI|BACKUP_S3_ENDPOINT|AWS_DEFAULT_REGION)$", k) and "\n" not in str(v):
+        print(f"{k}={v}")
+')
+fi
+PRICE_NAMES=""
+for plan in STARTER PRO POWER BUSINESS TEAM; do PRICE_NAMES="$PRICE_NAMES STRIPE_PRICE_${plan}_MONTHLY STRIPE_PRICE_${plan}_YEARLY"; done
+for pack in 10K 25K 50K 100K 250K 500K; do PRICE_NAMES="$PRICE_NAMES STRIPE_PRICE_PACK_${pack}"; done
 for name in NEBIUS_API_KEY SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
-  GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
+  GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
+  ORVYN_PUBLIC_ORIGIN $PRICE_NAMES; do
   value="${!name:-}"
   [[ -n "$value" ]] || continue
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -euo pipefail
@@ -70,6 +84,44 @@ value=\$(cat)
 mv .env.tmp .env && chmod 600 .env"
   echo "Set $name in the server .env"
 done
+
+# Backup settings live in their own root-only file, read by the backup timer.
+for name in BACKUP_PASSPHRASE BACKUP_S3_URI BACKUP_S3_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION; do
+  value="${!name:-}"
+  [[ -n "$value" ]] || continue
+  printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -euo pipefail
+cd '$REMOTE'
+touch .backup.env && chmod 600 .backup.env
+value=\$(cat)
+{ grep -v '^$name=' .backup.env || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .backup.env.tmp
+mv .backup.env.tmp .backup.env && chmod 600 .backup.env"
+done
+
+# Hourly backups and a weekly restore drill (idempotent install).
+"${SSH[@]}" "$HOST" "set -euo pipefail
+cd '$REMOTE'
+chmod +x infrastructure/ovh/backup.sh infrastructure/ovh/restore-drill.sh
+sudo install -m 644 infrastructure/ovh/orvyn-backup.service infrastructure/ovh/orvyn-backup.timer \
+  infrastructure/ovh/orvyn-restore-drill.service infrastructure/ovh/orvyn-restore-drill.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now orvyn-backup.timer orvyn-restore-drill.timer
+" || echo "warning: could not install the backup timers (check sudo on the host)" >&2
+
+# Never rebuild over customer data without a verified backup first.
+if [[ "${ORVYN_SKIP_PREDEPLOY_BACKUP:-}" != "1" ]]; then
+  echo "Pre-deploy backup on $HOST"
+  if ! "${SSH[@]}" "$HOST" "set -euo pipefail
+cd '$REMOTE'
+if docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml ps --services --status running | grep -qx backend; then
+  set -a; [ -f .backup.env ] && . ./.backup.env; set +a
+  sudo -E infrastructure/ovh/backup.sh --tag predeploy
+else
+  echo 'backend not running: nothing to back up'
+fi"; then
+    echo "Pre-deploy backup FAILED — not deploying. Fix the backup, or set ORVYN_SKIP_PREDEPLOY_BACKUP=1 to deploy anyway." >&2
+    exit 1
+  fi
+fi
 
 echo "Rebuilding backend + worker on $HOST"
 "${SSH[@]}" "$HOST" "set -euo pipefail
