@@ -202,7 +202,7 @@ test("invalid argument calls do not escalate; an identical repeat is blocked, re
   assert.equal(loop.primary.requests.length, 3);
 });
 
-test("permission denial is not an argument error and still escalates", async () => {
+test("permission denial is not an argument error and repairs via note, not a model switch", async () => {
   const args = { path: "index.html", content: "Hello World" };
   const h = harness([
     [call("a", args), call("b", args), call("c", args), { delta: "", done: true }],
@@ -219,9 +219,11 @@ test("permission denial is not an argument error and still escalates", async () 
   assert.equal(parsed.retryable, false);
   assert.equal(parsed.missing, undefined);
   assert.match(JSON.stringify(parsed), /denied/i);
-  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "route.escalated"), true);
-  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "model.escalated"), true);
-  assert.ok(h.heavy.requests.length >= 1);
+  // §17: tool failures NEVER climb the model ladder — a stronger model does
+  // not fix a denied permission. The runtime hands back a repair note instead.
+  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "route.escalated"), false);
+  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "model.escalated"), false);
+  assert.ok(h.store.get(runId)!.events.some((e) => e.type === "agent.continue" && /tool calls failed in a row/i.test(String(e.data?.reason))));
 });
 
 test("a missing workspace file is RESOURCE_MISSING and names the real entries", async () => {
@@ -243,7 +245,7 @@ test("a missing workspace file is RESOURCE_MISSING and names the real entries", 
   assert.equal(parsed.errorType === "EXECUTION_FAILED", false);
 });
 
-test("an executed failure still escalates after three in a row", async () => {
+test("an executed failure three in a row gets a tool-repair note, not a model switch", async () => {
   const h = harness([
     [
       call("a", { path: "index.html" }, "probe_disk"),
@@ -266,6 +268,7 @@ test("an executed failure still escalates after three in a row", async () => {
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(failed.length, 3);
   assert.ok(failed.every((e) => e.data.errorType === "EXECUTION_FAILED"));
-  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "route.escalated"), true);
-  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "model.escalated"), true);
+  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "route.escalated"), false);
+  assert.equal(h.store.get(runId)!.events.some((e) => e.type === "model.escalated"), false);
+  assert.ok(h.store.get(runId)!.events.some((e) => e.type === "agent.continue" && /tool calls failed in a row/i.test(String(e.data?.reason))));
 });

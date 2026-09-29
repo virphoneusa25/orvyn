@@ -997,7 +997,7 @@ export class StreamingAgentRuntime {
     const usable = (p: AIModelProvider | undefined): p is AIModelProvider =>
       Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isRouteBlocked(p.config.id));
     let next: AIModelProvider | undefined;
-    let how: "same-model" | "same-tier" | "next-tier" | "emergency" = "same-model";
+    let how: "same-model" | "same-tier" | "next-tier" | "emergency" | "last-resort" = "same-model";
     // Level 1: the same model on another provider.
     if (kind !== "model") {
       for (const id of sameModelElsewhere(current.config.id, (x) => Boolean(registry.get(x)))) {
@@ -1024,6 +1024,19 @@ export class StreamingAgentRuntime {
       }
     }
     if (!next) next = registry.list().find((p) => usable(p) && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id));
+    // Last resort: "no backup model could take over" is only true after EVERY
+    // registered model was considered. Route blocks are heuristic cooldowns
+    // (a 404 six hours ago, a provider blip minutes ago) — a dying run may
+    // retry past them rather than give up. Never a customer's own model.
+    if (!next) {
+      next = registry.list().find((p) =>
+        p.config.id !== current.config.id &&
+        p.config.capabilities.agent &&
+        p.supportsTools() &&
+        !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id)
+      );
+      if (next) how = "last-resort";
+    }
     if (!next) return null;
     if (state.billAtWeight === undefined) state.billAtWeight = state.route?.weight ?? weightFor(current.config.id);
     state.failoverReason = `${kind}: ${current.config.id} → ${next.config.id}`;
@@ -2616,19 +2629,36 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "agent.continue", { reason: "replanning a step whose tool call was malformed" });
           state.argumentReplanNote = undefined;
         }
-        // Three real tool failures in a row: the current model is stuck — climb one step.
-        // INVALID_ARGUMENTS is a correctable schema mistake and does not climb by itself.
+        // Three real tool failures in a row are a TOOL problem, not a model
+        // problem: a bigger model does not fix a broken tool (bad path,
+        // missing target, environment). Switching models for tool bugs wasted
+        // budget and produced the "Switched to a stronger model: 3 tool calls
+        // failed in a row" regression. Instead: classify the failures and hand
+        // the model a targeted repair note; the circuit breaker still stops a
+        // runaway run honestly. Model escalation stays for model-quality
+        // signals only (e.g. the independent check failing repeatedly).
         const batch = (this.store.get(runId)?.events ?? []).filter((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && calls.some((c) => c.id === e.data?.callId));
+        const failedTools: string[] = [];
+        const failureClasses = new Set<string>();
         for (const e of batch) {
           if (e.type !== "tool.failed") {
             state.failureStreak = 0;
             continue;
           }
-          if (!countsTowardModelEscalation(normalizeErrorType(e.data?.errorType))) continue;
+          const errorType = normalizeErrorType(e.data?.errorType);
+          if (!countsTowardModelEscalation(errorType)) continue;
           state.failureStreak += 1;
+          failedTools.push(String(e.data?.tool ?? e.data?.name ?? "tool"));
+          failureClasses.add(errorType);
         }
         state.readOnlyStreak = calls.length > 0 && calls.every((c) => isReadOnlyCall(c.name, c.arguments)) ? state.readOnlyStreak + 1 : 0;
-        if (state.failureStreak >= 3 && this.escalateRoute(runId, state, `${state.failureStreak} tool calls failed in a row.`)) state.failureStreak = 0;
+        if (state.failureStreak >= 3) {
+          state.failureStreak = 0;
+          this.store.emit(runId, "agent.continue", { reason: `${failedTools.length} tool calls failed in a row — repairing approach, not switching models` });
+          state.pendingNotes.push(
+            `[Runtime note] ${failedTools.length} tool calls just failed in a row (${[...failureClasses].join(", ")}): ${[...new Set(failedTools)].join(", ")}. This is a tool-level problem — switching approach or model will not fix it. Read the exact error of the LAST failure above, fix THAT cause (wrong path? missing prerequisite? tool unavailable in this environment?), and use the native tool designed for the need instead of a shell workaround. Do not repeat the same call unchanged.`
+          );
+        }
         if (state.handoffModelId && !state.modelPinned) {
           const next = this.modelService.registry.get(state.handoffModelId);
           if (next?.config.capabilities.agent && next.supportsTools() && next.config.id !== provider.config.id) {

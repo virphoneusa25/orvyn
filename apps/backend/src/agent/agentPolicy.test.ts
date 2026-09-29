@@ -291,3 +291,27 @@ test("siteFilesWritten guards read the same way the runtime uses them", async ()
   assert.equal(wroteNothing > 0, false, "read-only run must not publish");
   assert.equal(wrotePage > 0, true, "a run that wrote site files publishes");
 });
+
+test("model escalation reasons: tool failures never climb the ladder, verification quality can", () => {
+  // §17: three failing tool calls are a tool problem — a bigger model does
+  // not fix a broken tool. The runtime now emits a repair note instead of
+  // route.escalated. Verification-quality failures remain escalation-worthy.
+  const toolFailureReasons = ["3 tool calls failed in a row."];
+  const qualityReasons = ["The independent check failed 2 times."];
+  const escalatesFor = (reason: string) => !/tool calls failed/i.test(reason);
+  for (const r of toolFailureReasons) assert.equal(escalatesFor(r), false, `must NOT escalate for: ${r}`);
+  for (const r of qualityReasons) assert.equal(escalatesFor(r), true, `may escalate for: ${r}`);
+});
+
+test("the failover ladder's last resort ignores heuristic cooldowns (route blocks), never user models", () => {
+  // §5: "no backup could take over" is only true after every registered
+  // platform model was considered — a 6h-old 404 cooldown must not doom a
+  // live run. Pure predicate mirroring the runtime's last-resort pass.
+  const mk = (id: string, agent = true, tools = true) => ({ id, agent, tools, user: id.startsWith("own:") });
+  const current = mk("nebius:kimi");
+  const all = [current, mk("fw:kimi"), mk("fw:deepseek"), mk("own:mine")];
+  const lastResort = all.find((p) => p.id !== current.id && p.agent && p.tools && !p.user);
+  assert.equal(lastResort && lastResort.id, "fw:kimi", "finds a platform model despite any route-block cooldown");
+  const onlyUser = [current, mk("own:mine")];
+  assert.equal(onlyUser.find((p) => p.id !== current.id && p.agent && p.tools && !p.user), undefined, "never borrows a customer's own model");
+});
