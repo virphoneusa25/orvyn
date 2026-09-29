@@ -184,7 +184,9 @@ test("stored activeTab and agentPanelWidth win over legacy keys", () => {
 
 test("Tools & MCP and other full-page views do not keep the Workbench docked", () => {
   assert.equal(workbenchAllowedForView("newtask"), true);
-  assert.equal(workbenchAllowedForView("home"), true);
+  // Home is the landing surface: a stale project preview must never follow
+  // the user there ("no active project ⇒ no project preview").
+  assert.equal(workbenchAllowedForView("home"), false);
   assert.equal(workbenchAllowedForView("editor"), true);
   assert.equal(workbenchAllowedForView("tools"), false);
   assert.equal(workbenchAllowedForView("models"), false);

@@ -88,8 +88,12 @@ export function fitsDockedWorkbench(viewportWidth: number): boolean {
  *  phantom third track. Open Workbench adds the panel column. */
 /** Full-page tools (Marketplace, Models, Settings, …) own the main column.
  *  Leaving the Workbench docked there is what crushed MCP Marketplace into
- *  a sliver beside Desktop/Review. Work surfaces keep the panel. */
-export const WORKBENCH_VIEWS = new Set(["home", "newtask", "editor", "terminal"]);
+ *  a sliver beside Desktop/Review. Work surfaces keep the panel.
+ *  Home is deliberately NOT a work surface: it is the landing view, and a
+ *  preview/files/code from a previously opened project must never follow
+ *  the user there (the "stale preview on Home" state leak). Active runs
+ *  are followed in the chat/newtask view. */
+export const WORKBENCH_VIEWS = new Set(["newtask", "editor", "terminal"]);
 
 export function workbenchAllowedForView(view: string): boolean {
   return WORKBENCH_VIEWS.has(view);

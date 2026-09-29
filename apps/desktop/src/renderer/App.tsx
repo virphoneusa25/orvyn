@@ -738,9 +738,16 @@ export function App() {
     },
   ];
 
-  /** Home quick actions: real project creation/opening, files, servers. */
+  /** Home quick actions: real project creation/opening, files, servers.
+   *  A new project gets a dated name — "New project" as a literal name
+   *  collides with the no-project state and reads as a placeholder. */
   const homeQuickAction = (action: "new_project" | "open_project" | "browse_files" | "connect_server") => {
-    if (action === "new_project") { void window.orvyn.project.create("New project").then((ws) => { if (ws) setWorkspace(ws); }); return; }
+    if (action === "new_project") {
+      const d = new Date();
+      const name = `Project ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+      void window.orvyn.project.create(name).then((ws) => { if (ws) setWorkspace(ws); });
+      return;
+    }
     if (action === "open_project") { void window.orvyn.project.open().then((ws) => { if (ws) setWorkspace(ws); }); return; }
     if (action === "browse_files") { navigateView("files"); return; }
     setView("servers");
@@ -836,7 +843,7 @@ export function App() {
             }
             if (v === "home") setCenterMode("home");
           }}
-          workspace={{ name: projectName ?? "No project", subtitle: presentation.workspaceLabel }}
+          workspace={{ name: projectName ?? "No project selected", subtitle: projectName ? presentation.workspaceLabel : "Open or create a project" }}
           user={{ name: presentation.userName, subtitle: presentation.userSubtitle }}
           usage={{ valueLabel: agentRun.usage ? `${((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / 1000).toFixed(1)}k` : "—", limitLabel: "current run", percent: agentRun.usage ? Math.min(100, ((agentRun.usage.promptTokens + agentRun.usage.completionTokens) / Math.max(agentRun.usage.contextBudget || 2_000_000, 1)) * 100) : 0 }}
           missionsNeedingYou={homeMissions.filter(m => ["approval","blocked","paused"].includes(m.tone)).length}
