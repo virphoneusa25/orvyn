@@ -117,6 +117,7 @@ export type AgentEventType =
   // --- MCP host lifecycle (server connect/disconnect; tool activity rides
   //     the standard tool.* events through the shared gateway) ---
   | "agent.phase"
+  | "agent.plan"
   | "worker.started"
   | "worker.completed"
   | "worker.failed"

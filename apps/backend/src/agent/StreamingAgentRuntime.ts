@@ -1,5 +1,8 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
+import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
+import { planSkeleton, planPromptNote, type MissionPlan } from "./missionPlan";
+import { scorecardFromChecks, requiredChecksForTask } from "./verificationScorecard";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
 import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
@@ -271,6 +274,10 @@ interface RunState {
   budgetWarned?: boolean;
   /** Site files THIS run wrote (a read-only run must not mint a new preview). */
   siteFilesWritten?: number;
+  /** §7 structured plan, machine-owned, emitted before the first edit. */
+  missionPlan?: MissionPlan;
+  /** §22-23 canonical verification commands discovered from the project. */
+  verificationCommands?: DiscoveredCommands;
   /** Whether the canonical preview URL has been announced to the model. */
   previewUrlAnnounced?: boolean;
   /** Recent successful tool signatures — identical repeats with no useful
@@ -1884,6 +1891,38 @@ export class StreamingAgentRuntime {
         if (state) {
           const existingPreview = await this.seedExistingSite(runId, state);
           if (existingPreview) messages[0].content += `\n\nThe existing homepage is already live at ${existingPreview}. Keep its preview updated while editing, and use browser and sandbox desktop tools to inspect it.`;
+        }
+        // §22-23: this project's own manifests name its canonical verification
+        // commands — the model verifies with those, never invented scripts.
+        if (state) {
+          const manifestNames = ["package.json", "Makefile", "makefile", "go.mod", "Cargo.toml", "pyproject.toml", "pytest.ini", "requirements.txt"];
+          const workspaceFiles: Array<{ name: string; content?: string }> = [];
+          for (const name of manifestNames) {
+            const body = await this.readSiteFile(runId, state, name);
+            if (body != null) workspaceFiles.push({ name, content: body });
+            else if ((state?.knownProjectFiles ?? []).includes(name)) workspaceFiles.push({ name });
+          }
+          if ((state?.knownProjectFiles ?? []).some((f: string) => f.startsWith("tests/"))) workspaceFiles.push({ name: "tests/" });
+          const commands = discoverTestCommands(workspaceFiles);
+          if (commands.testCommand || commands.buildCommand) {
+            state.verificationCommands = commands;
+            this.store.emit(runId, "run.diagnostics", { verificationCommands: commands });
+          }
+          // §7: a structured plan exists before the first edit on any
+          // write-capable task — machine-owned, emitted, then confirmed or
+          // refined by the model in its first reply.
+          if (state && def.toolsEnabled && !routeIntent.informational && workspace.available) {
+            const plan = planSkeleton({
+              instruction,
+              category: intent.category,
+              knownFiles: state.knownProjectFiles ?? [],
+              commands: state.verificationCommands,
+              website: Boolean(intent.requiresFrontend),
+            });
+            state.missionPlan = plan;
+            this.store.emit(runId, "agent.plan", { ...plan });
+            state.pendingNotes.push(planPromptNote(plan, state.verificationCommands));
+          }
         }
         const codeContext = await this.relevantCode(instruction);
         if (codeContext) {
@@ -3655,6 +3694,8 @@ export class StreamingAgentRuntime {
       verdict: result.verdict,
       findings: result.findings,
       checks: result.checks,
+      scorecard: scorecardFromChecks(result.checks),
+      requiredChecks: requiredChecksForTask(evidence.website),
       modelVerdict: result.modelVerdict,
       report: result.report.slice(0, 4000),
       verifierTools: result.toolCalls,
