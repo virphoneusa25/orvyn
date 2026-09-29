@@ -46,9 +46,9 @@
 }
 .opo__gif {
   position: absolute;
-  inset: -35%;
-  width: 170%;
-  height: 170%;
+  inset: -22%;
+  width: 144%;
+  height: 144%;
   object-fit: contain;
   border-radius: 50%;
   /* Black field disappears against dark backgrounds; only the plasma glows. */
