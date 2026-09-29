@@ -281,3 +281,17 @@ test("mapContextTab resolves Docs/Plan/Diff onto the single tab set", () => {
   assert.equal(mapContextTab("browser"), "browser");
   assert.equal(mapContextTab("diff"), "diff");
 });
+
+test("ORION's desktop clicks move the cursor overlay at call start", () => {
+  const items = deriveAgentWorkspace([
+    { id: "e1", type: "tool.started", data: { callId: "c1", tool: "desktop_click" } },
+    { id: "e2", type: "tool.input", data: { callId: "c1", input: { x: 640, y: 300 } } },
+    { id: "e3", type: "tool.started", data: { callId: "c2", tool: "desktop_type" } },
+    { id: "e4", type: "tool.input", data: { callId: "c2", input: { x: 640, y: 305 } } },
+    { id: "e5", type: "tool.started", data: { callId: "c3", tool: "read_file" } },
+    { id: "e6", type: "tool.input", data: { callId: "c3", input: { path: "x" } } },
+  ]);
+  assert.ok(items.browser.cursor, "cursor exists after a desktop click input");
+  assert.equal(items.browser.cursor!.x, 640);
+  assert.equal(items.browser.cursor!.kind, "type", "the latest desktop input wins");
+});

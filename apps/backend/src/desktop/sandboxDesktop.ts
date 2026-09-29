@@ -491,6 +491,8 @@ export function formatDesktopCommand(
   switch (type) {
     case "move":
       return `MOVE ${xi} ${yi}`;
+    case "glide":
+      return `GLIDE ${xi} ${yi}`;
     case "click":
       return `CLICK ${xi} ${yi} 1`;
     case "rightclick":
@@ -627,6 +629,19 @@ async function sandboxAct(
   // Pointer-move spam was queued ahead of clicks, so Take Control felt frozen.
   // Clicks already carry the coordinates. Do not send a move for every pixel.
   if (type === "move") return true;
+
+  // The cursor visibly travels to the target before click-family actions —
+  // a teleport between 8fps frames read as "the mouse just sits there".
+  if (type === "click" || type === "rightclick" || type === "dblclick" || type === "scroll") {
+    if ((await desktopInputMode(session)) === "pipe") {
+      writeInputLine(session, `GLIDE ${Math.max(0, Math.round(x))} ${Math.max(0, Math.round(y))}`);
+      if (writeInputLine(session, line)) return true;
+    } else {
+      const gx = Math.max(0, Math.round(x));
+      const gy = Math.max(0, Math.round(y));
+      await dockerExec(session.containerId, ["sh", "-c", `eval "$(xdotool getmouselocation --shell)"; for i in 1 2 3 4 5 6 7 8 9 10; do xdotool mousemove $(( X + (${gx} - X) * i / 10 )) $(( Y + (${gy} - Y) * i / 10 )); done`], 1500).catch(() => undefined);
+    }
+  }
 
   if ((await desktopInputMode(session)) === "pipe" && writeInputLine(session, line)) return true;
 

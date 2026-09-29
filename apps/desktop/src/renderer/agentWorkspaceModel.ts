@@ -307,6 +307,8 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
   const consoleLines: string[] = [];
   const network: { method: string; url: string; status?: string }[] = [];
   let cursor: AgentWorkspaceDerived["browser"]["cursor"] = null;
+  // tool.input events carry no tool name; remember it from tool.started.
+  const callTools = new Map<string, string>();
   let browserUrl: string | undefined;
   let waitingApproval = false;
   let latest: WorkspaceActivity | null = null;
@@ -394,6 +396,19 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
           artifactId: typeof data.artifactId === "string" ? data.artifactId : typeof data.id === "string" ? data.id : prev?.artifactId,
           mimeType: typeof data.mimeType === "string" ? data.mimeType : prev?.mimeType,
         });
+      }
+    }
+
+    if (type === "tool.started" && data.callId && tool) callTools.set(String(data.callId), tool);
+
+    // ORION's desktop clicks/typing move the cursor overlay the moment the
+    // call starts (tool.input) — the user sees WHERE it will act, not a dot
+    // frozen at its last browser-tool position.
+    if (type === "tool.input" && data.callId) {
+      const namedTool = callTools.get(String(data.callId)) ?? "";
+      if (/^(desktop_(click|type|scroll|dblclick|rightclick)|computer[._](click|type|scroll))/.test(namedTool)) {
+        const xy = cursorFrom(data);
+        if (xy) cursor = { ...xy, kind: actionKind(namedTool, "input") };
       }
     }
 
