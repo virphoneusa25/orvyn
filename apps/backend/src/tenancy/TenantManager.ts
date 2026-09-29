@@ -15,7 +15,8 @@ import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { releaseSandboxControlForRun } from "../desktop/sandboxDesktop";
 import { creditLedger } from "../billing/creditLedgerInstance";
-import { laneForUsage } from "../billing/plans";
+import { LANE_FACTORS, laneForUsage, planById } from "../billing/plans";
+import { customerCreditsFor } from "../billing/creditMath";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
 import { embedModelChoice, ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -131,22 +132,21 @@ export class TenantManager {
     }
     // Every provider is metered; from here they're also durably recorded.
     modelService.usage.attachStore(localStore);
+    // Before every model call: the wallet (balance, rolling windows, the run's
+    // budget) must be able to pay for it. Enforced on ORVYN Cloud; a local
+    // engine running on the user's own keys only records.
+    modelService.usage.onPreflight((ctx) => {
+      if (!creditsEnforced()) return;
+      creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
+    });
+    // After it: settle exactly once per call (the usage event id is the key).
     modelService.usage.onRecord((event) => {
-      if (!event.ok) {
-        creditLedger.charge({
-          userId: id, runId: event.missionId, sessionId: event.missionId,
-          type: event.method === "image" ? "image" : "model",
-          provider: event.provider, model: event.modelId, lane: laneForUsage(event),
-          inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: false,
-        });
-        return;
-      }
-      if (!event.promptTokens && !event.completionTokens) return;
       creditLedger.charge({
+        eventId: event.id,
         userId: id, runId: event.missionId, sessionId: event.missionId,
         type: event.method === "image" ? "image" : "model",
         provider: event.provider, model: event.modelId, lane: laneForUsage(event),
-        inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: true,
+        inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: event.ok,
       });
     });
     // Restore the user's routing choices, the same way the autonomy profile is
@@ -244,6 +244,24 @@ export class TenantManager {
     // A finished run must not keep the desktop input-blocked: when the run
     // that held sandbox control ends, control returns to the user (the pane
     // reconciles within one 2s session poll; the event helps live viewers).
+    // Credits: reserve → execute → settle → release. A run holds up to its
+    // plan's per-run budget (never more than the wallet has); every model call
+    // settles against the hold; what is left returns when the run ends.
+    tenant.runStore.onCreated((runId) => {
+      if (!creditsEnforced()) return;
+      try {
+        const available = creditLedger.snapshot(id).availableBalance;
+        const plan = planById(creditLedger.planOf(id) ?? "free");
+        const budget = customerCreditsFor(plan.perRunCostUsd, LANE_FACTORS.auto).customerCredits;
+        const hold = Math.min(budget, available);
+        if (hold > 0) creditLedger.reserve(id, runId, hold);
+      } catch (err) {
+        console.warn(JSON.stringify({ event: "credits.reserve_failed", tenantId: id, runId, code: (err as { code?: string }).code ?? "ERROR" }));
+      }
+    });
+    tenant.runStore.onTerminalStatus((runId) => {
+      try { creditLedger.release(runId); } catch { /* nothing held */ }
+    });
     tenant.runStore.onTerminalStatus((runId) => {
       const released = releaseSandboxControlForRun(runId);
       if (released) {
@@ -404,4 +422,10 @@ export function bootstrapDefaultTenant(): Tenant | null {
   const key = process.env.ORVYN_API_KEY?.trim();
   if (key) return tenantManager.create("default", key, "default");
   return tenantManager.ensureLocalDefault();
+}
+
+/** Credits gate model calls on ORVYN Cloud (or when forced on for testing). */
+export function creditsEnforced(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.ORVYN_ENFORCE_CREDITS === "false") return false;
+  return env.ORVYN_ENFORCE_CREDITS === "true" || env.ORVYN_CLOUD_MODE === "true";
 }

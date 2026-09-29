@@ -442,6 +442,11 @@ function parseToolArtifacts(raw: string, tool: string, args: Record<string, unkn
  */
 export function userFacingRunError(err: unknown): { message: string; code: string; detail: string; actions: string[] } {
   const raw = String((err as { message?: unknown })?.message ?? err ?? "");
+  const billing = err as { billing?: boolean; code?: string } | null;
+  if (billing?.billing === true) {
+    const windowStop = billing.code === "WINDOW_5H" || billing.code === "WINDOW_7D";
+    return { message: raw, code: `CREDITS_${billing.code ?? "LIMIT"}`, detail: raw, actions: windowStop ? ["upgrade", "cancel"] : ["add_credits", "upgrade", "cancel"] };
+  }
   if (/stream idle|no data for|stopped responding|timed? ?out|ETIMEDOUT|aborted/i.test(raw)) {
     return { message: "The AI model stopped responding and no backup model could take over. Your changes so far are saved — Retry to continue.", code: "PROVIDER_STREAM_IDLE", detail: raw, actions: ["retry", "cancel"] };
   }

@@ -30,6 +30,8 @@ export function accountReadiness(userId: string): AccountReadiness {
 
 const OPEN_ANY = [/^\/local-worker(\/|$)/, /^\/worker(\/|$)/];
 const OPEN_GET = [/^\/session$/, /^\/billing\/?$/, /^\/health$/];
+/** Open to a verified account that is still in setup (the plan step can start Checkout). */
+const OPEN_DURING_SETUP = [/^\/billing\/checkout$/];
 
 export function gateExempt(method: string, path: string): boolean {
   if (OPEN_ANY.some((r) => r.test(path))) return true;
@@ -46,6 +48,7 @@ export function requireAccountReady(req: Request, res: Response, next: NextFunct
   if (!userId || !accountGateEnabled() || gateExempt(req.method, req.path)) return next();
   const state = accountReadiness(userId);
   if (state === "ready") return next();
+  if (state === "ONBOARDING_REQUIRED" && req.method === "POST" && OPEN_DURING_SETUP.some((r) => r.test(req.path))) return next();
   res.status(403).json({ error: MESSAGE[state], code: state });
 }
 

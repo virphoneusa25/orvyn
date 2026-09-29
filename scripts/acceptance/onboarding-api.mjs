@@ -88,7 +88,7 @@ async function main() {
     await call("/onboarding/provision", "POST", {}, token);
     await call("/onboarding/provision", "POST", {}, token);
     const bill = new DatabaseSync(join(dataDir, "billing.sqlite"));
-    const grants = bill.prepare(`SELECT credits FROM credit_transactions WHERE kind = 'grant'`).all();
+    const grants = bill.prepare(`SELECT amount AS credits FROM ledger_entries WHERE type = 'monthly_grant'`).all();
     ok(grants.length === 1 && grants[0].credits === 2000, "2,000 credits were issued exactly once", JSON.stringify(grants));
     bill.close();
     const wallet = await call("/billing", "GET", null, token);

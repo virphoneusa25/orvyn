@@ -40,6 +40,8 @@ export interface UsageEvent {
   completionTokens?: number;
   /** Stream/generate output size — always measurable, never estimated tokens. */
   outputChars?: number;
+  /** True when the provider reported no token counts and they were estimated from the text (billing never treats "unknown" as free). */
+  estimated?: boolean;
   toolCalls?: number;
   missionId?: string;
   taskId?: string;
@@ -94,6 +96,7 @@ export class UsageService {
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
   private sinks: Array<(event: UsageEvent) => void> = [];
+  private preflights: Array<(ctx: UsageContext) => void> = [];
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -117,6 +120,16 @@ export class UsageService {
    * persists every subsequent event. Structural type avoids a circular import
    * with LocalStore.
    */
+  /** A check run before every provider call (the credit wallet): throwing stops the call. */
+  onPreflight(fn: (ctx: UsageContext) => void): void {
+    this.preflights.push(fn);
+  }
+
+  private runPreflight(): void {
+    const ctx = this.als.getStore() ?? {};
+    for (const fn of this.preflights) fn(ctx);
+  }
+
   onRecord(fn: (event: UsageEvent) => void): void {
     this.sinks.push(fn);
   }
@@ -279,6 +292,7 @@ export class UsageService {
       async generate(request: AIRequest): Promise<AIResponse> {
         usage.checkQuota();
         usage.checkMissionBudget();
+        usage.runPreflight();
         const start = Date.now();
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
@@ -287,14 +301,16 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
+          const reported = Boolean(res.usage?.promptTokens || res.usage?.completionTokens);
           usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: true,
-            promptTokens: res.usage?.promptTokens,
-            completionTokens: res.usage?.completionTokens,
+            promptTokens: reported ? res.usage?.promptTokens : estimateTokens(requestChars(request)),
+            completionTokens: reported ? res.usage?.completionTokens : estimateTokens((res.content?.length ?? 0) + JSON.stringify(res.toolCalls ?? []).length),
+            estimated: reported ? undefined : true,
             outputChars: res.content?.length ?? 0,
             toolCalls: res.toolCalls?.length || undefined,
           });
@@ -315,9 +331,29 @@ export class UsageService {
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
         usage.checkQuota();
         usage.checkMissionBudget();
+        usage.runPreflight();
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
+        let reportedUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+        let settled = false;
+        let yieldedAny = false;
+        const recordOk = () => {
+          if (settled) return;
+          settled = true;
+          usage.record({
+            modelId: inner.config.id,
+            provider: inner.config.provider,
+            method: "stream",
+            durationMs: Date.now() - start,
+            ok: true,
+            promptTokens: reportedUsage?.promptTokens || estimateTokens(requestChars(request)),
+            completionTokens: reportedUsage?.completionTokens || estimateTokens(chars),
+            estimated: reportedUsage?.promptTokens || reportedUsage?.completionTokens ? undefined : true,
+            outputChars: chars,
+            toolCalls: toolCalls || undefined,
+          });
+        };
         try {
           // A stream may only be retried before the first chunk reaches the
           // consumer — after that, replaying would duplicate output. One quick
@@ -330,8 +366,10 @@ export class UsageService {
             try {
               for await (const chunk of inner.stream(request)) {
                 yielded = true;
+                yieldedAny = true;
                 chars += chunk.delta?.length ?? 0;
-                if (chunk.toolCall) toolCalls++;
+                if (chunk.toolCall) { toolCalls++; chars += JSON.stringify(chunk.toolCall).length; }
+                if (chunk.usage) reportedUsage = chunk.usage;
                 yield chunk;
               }
               break;
@@ -344,16 +382,9 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "stream",
-            durationMs: Date.now() - start,
-            ok: true,
-            outputChars: chars,
-            toolCalls: toolCalls || undefined,
-          });
+          recordOk();
         } catch (err: any) {
+          settled = true;
           usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -364,6 +395,10 @@ export class UsageService {
             error: String(err?.message ?? err).slice(0, 300),
           });
           throw err;
+        } finally {
+          // The consumer stopped reading (it had the final chunk, or the run
+          // was cancelled mid-answer): what was delivered is still one call.
+          if (!settled && yieldedAny) recordOk();
         }
       },
 
@@ -379,6 +414,7 @@ export class UsageService {
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
         usage.checkQuota();
+        usage.runPreflight();
         const start = Date.now();
         try {
           const res = await inner.generateImage!(request);
@@ -405,5 +441,19 @@ export class UsageService {
     }
 
     return wrapper;
+  }
+}
+
+/** ~4 characters per token: a conservative estimate used only when the provider reports nothing. */
+export function estimateTokens(chars: number): number {
+  return chars > 0 ? Math.ceil(chars / 4) : 0;
+}
+
+function requestChars(request: unknown): number {
+  try {
+    const r = request as { messages?: unknown; tools?: unknown; system?: unknown };
+    return JSON.stringify([r.system ?? "", r.messages ?? [], r.tools ?? []]).length;
+  } catch {
+    return 0;
   }
 }

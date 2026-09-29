@@ -708,6 +708,15 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // aborts the run itself.
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
+  // A run the wallet cannot pay for is refused up front, in plain words.
+  if (creditsEnforced()) {
+    try {
+      creditLedger.assertCanSpend(t.id);
+    } catch (err) {
+      if (err instanceof BillingLimitError) return res.status(402).json({ error: err.message, code: `CREDITS_${err.code}` });
+      throw err;
+    }
+  }
   const instruction = String(req.body.instruction ?? req.body.goal ?? "");
   const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
   const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
@@ -1728,6 +1737,8 @@ import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
 import { EntitlementService } from "../billing/EntitlementService";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { billingService, purchasablePacks, StripeApiError } from "../billing/stripe";
+import { creditsEnforced } from "../tenancy/TenantManager";
 import { BillingLimitError } from "../billing/CreditLedger";
 import { packById, planById, type PackId, type PlanId } from "../billing/plans";
 import { DEFAULT_PRIVACY, bindTenantResource } from "../orgs/organization";
@@ -1901,9 +1912,11 @@ v1Router.get("/billing", (req, res) => {
   const t = requireTenant(req);
   const totals = t.modelService.usage.totals();
   const wallet = creditLedger.snapshot(t.id);
+  const payments = billingService();
   res.json({
-    provider: billing.name,
+    provider: payments.enabled ? "stripe" : billing.name,
     note: wallet.note,
+    payments: { enabled: payments.enabled, packs: purchasablePacks(), canManage: billingManager(req) },
     wallet,
     entitlements: entitlements.limits(),
     used: {
@@ -1925,31 +1938,55 @@ v1Router.get("/billing/stats", (req, res) => {
   res.json(creditLedger.usageStats(t.id));
 });
 
-v1Router.post("/billing/topup", (req, res) => {
+// Plans and credits are bought through Stripe Checkout. Nothing here grants
+// them: the verified webhook does (routes/billingPublic.ts → billing/stripe.ts).
+function billingManager(req: import("express").Request): boolean {
+  const role = req.principal?.role;
+  return !req.principal || role === "owner" || role === "admin";
+}
+
+function billingError(res: import("express").Response, err: unknown) {
+  if (err instanceof StripeApiError) return res.status(err.status >= 400 && err.status < 600 ? err.status : 502).json({ error: err.message });
+  console.error(JSON.stringify({ event: "billing.error", reason: String((err as Error)?.message ?? err).slice(0, 200) }));
+  return res.status(502).json({ error: "Billing is unavailable right now. Try again in a minute." });
+}
+
+v1Router.post("/billing/checkout", async (req, res) => {
   const t = requireTenant(req);
-  const pack = packById(String(req.body?.packId ?? ""));
-  if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
+  if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
+  if (!req.principal) return res.status(401).json({ error: "Sign in to buy a plan or credits." });
+  const period = req.body?.period === "yearly" ? "yearly" : "monthly";
+  const planId = typeof req.body?.planId === "string" ? req.body.planId : undefined;
+  const packId = typeof req.body?.packId === "string" ? req.body.packId : undefined;
+  if (!planId === !packId) return res.status(400).json({ error: "Choose a plan or a credit pack." });
   try {
-    const order = creditLedger.purchase(t.id, pack.id as PackId);
-    res.json({ order, wallet: creditLedger.snapshot(t.id) });
+    const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
+    const out = await billingService().checkout({ accountId: t.id, email: req.principal.email, name: req.principal.name, planId, period, packId, origin });
+    res.json(out);
   } catch (err) {
-    const message = err instanceof BillingLimitError ? err.message : "Could not add credits.";
-    res.status(409).json({ error: message });
+    billingError(res, err);
   }
 });
 
-v1Router.post("/billing/plan", (req, res) => {
+v1Router.post("/billing/portal", async (req, res) => {
   const t = requireTenant(req);
-  const plan = planById(String(req.body?.planId ?? ""));
-  if (!["starter", "pro", "team", "enterprise"].includes(plan.id) || String(req.body?.planId) !== plan.id) {
-    return res.status(400).json({ error: "Unknown plan." });
+  if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
+  try {
+    const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
+    res.json(await billingService().portal(t.id, origin));
+  } catch (err) {
+    billingError(res, err);
   }
-  creditLedger.setPlan(t.id, plan.id as PlanId);
-  res.json({ wallet: creditLedger.snapshot(t.id) });
 });
+
+// The old free-grant endpoints are gone for good.
+v1Router.post("/billing/topup", (_req, res) => res.status(410).json({ error: "Buy credits through checkout.", code: "USE_CHECKOUT" }));
+v1Router.post("/billing/plan", (_req, res) => res.status(410).json({ error: "Change plans through checkout.", code: "USE_CHECKOUT" }));
 
 v1Router.post("/billing/auto-recharge", (req, res) => {
   const t = requireTenant(req);
+  if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
+  if (req.body?.enabled === false) { creditLedger.disableAutoRecharge(t.id); return res.json({ wallet: creditLedger.snapshot(t.id) }); }
   const pack = packById(String(req.body?.packId ?? "pack_5k"));
   if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
   const threshold = Number(req.body?.threshold ?? 500);

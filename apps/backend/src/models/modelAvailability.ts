@@ -70,6 +70,8 @@ const AUTH = /\bHTTP (401|402|403)\b|\b(invalid api key|incorrect api key|unauth
 export function classifyModelFailure(err: unknown): FailureClass | null {
   const message = String((err as Error)?.message ?? err ?? "");
   if (!message) return null;
+  // The customer's wallet or plan stopped the call: no other provider may take it.
+  if ((err as { billing?: boolean })?.billing === true) return null;
   if ((err as Error)?.name === "AbortError" && /abort/i.test(message) && !/time/i.test(message)) return null; // user cancelled
   if (isModelNotFound(err)) return "model";
   if (AUTH.test(message)) return "auth";

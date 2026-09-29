@@ -18,6 +18,7 @@ import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
+import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
@@ -40,6 +41,8 @@ const BUILD_INFO: { commit?: string; builtAt?: string } = (() => {
 
 const app = express();
 app.use(cloudCors());
+// Stripe signs the raw body: the webhook reads it before the JSON parser.
+app.post("/api/v1/billing/stripe/webhook", ...stripeWebhookHandler);
 app.use(express.json({ limit: "10mb" }));
 
 // Unauthenticated: needed for container/load-balancer health probes.
@@ -152,6 +155,7 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
 // me/logout validate their own bearer token against the session store.
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
+app.use("/api/v1/billing/return", billingReturnRouter);
 app.use("/api/v1/auth", ipRateLimit(), authRouter);
 // Onboarding is signed in and saves every screen (plus analytics): a person
 // clicking through quickly must never hit the sign-in brute-force limit.

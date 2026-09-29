@@ -350,8 +350,19 @@ export class RunStore {
     this.runs.set(id, run);
     this.log(id, { t: "run", projectRoot, createdAt: run.createdAt, status });
     this.evictOldRuns();
+    for (const cb of this.createdListeners) {
+      try { cb(id); } catch (err) { console.warn(`run.created listener: ${(err as Error).message}`); }
+    }
     return run;
   }
+
+  /** A run was created (e.g. the credit wallet reserves for it). */
+  onCreated(cb: (runId: string) => void): () => void {
+    this.createdListeners.add(cb);
+    return () => this.createdListeners.delete(cb);
+  }
+
+  private readonly createdListeners = new Set<(runId: string) => void>();
 
   /** Attach the durable workspace id. projectRoot is already set by create(). */
   bindWorkspace(runId: string, workspaceId: string): void {
