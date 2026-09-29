@@ -42,6 +42,10 @@ export interface ComposerModel {
   reasoningControl?: { param: string; levels: Partial<Record<"fast" | "standard" | "deep" | "max", string>> };
   /** False for a provider's long tail: shown only when the filter matches it. */
   featured?: boolean;
+  /** ORVYN Cloud: "orvyn" (ORVYN's named models) or "user" (the customer's own). */
+  kind?: "orvyn" | "user";
+  description?: string;
+  available?: boolean;
 }
 
 export const ACCESS_MODES: { id: AccessMode; label: string; description: string }[] = [
@@ -303,6 +307,9 @@ export function useComposerModels(): ComposerModel[] {
             contextWindow: m.contextWindow,
             reasoningControl: m.reasoningControl,
             featured: m.featured !== false,
+            kind: m.kind,
+            description: m.description,
+            available: m.available,
           }))
         );
       })
@@ -342,13 +349,19 @@ export function ModelMenu({
 }) {
   const [filter, setFilter] = useState("");
   const [advanced, setAdvanced] = useState(false);
-  const agentModels = models.filter((m) => m.capabilities?.agent && m.capabilities?.tools);
-  const lanes: { id: string; name: string; hint: string }[] = [
-    { id: "auto", name: "Auto", hint: "ORVYN routing chooses the model" },
-    { id: "fast", name: "Fast", hint: "Short questions and internal work" },
-    { id: "code", name: "Code", hint: "Coding, server, and deploy work" },
-    { id: "premium", name: "Premium", hint: "Hard problems only" },
-  ];
+  // ORVYN Cloud lists ORVYN's models by name and the customer's own models; never vendors.
+  const cloudCatalog = models.some((m) => m.kind === "orvyn");
+  const agentModels = cloudCatalog
+    ? models.filter((m) => m.kind === "user")
+    : models.filter((m) => m.capabilities?.agent && m.capabilities?.tools);
+  const lanes: { id: string; name: string; hint: string }[] = cloudCatalog
+    ? models.filter((m) => m.kind === "orvyn" && m.available !== false).map((m) => ({ id: m.id, name: m.name, hint: m.description ?? "" }))
+    : [
+        { id: "auto", name: "Auto", hint: "ORVYN routing chooses the model" },
+        { id: "fast", name: "Fast", hint: "Short questions and internal work" },
+        { id: "code", name: "Code", hint: "Coding, server, and deploy work" },
+        { id: "premium", name: "Premium", hint: "Hard problems only" },
+      ];
   const q = filter.trim().toLowerCase();
   // The curated set is listed; a provider's long tail appears when the filter matches it.
   const visible = q
@@ -357,7 +370,7 @@ export function ModelMenu({
   const moreCount = q ? 0 : agentModels.length - visible.length;
   const groups = new Map<string, ComposerModel[]>();
   for (const m of visible) {
-    const key = providerLabel(m.provider, m.id);
+    const key = cloudCatalog ? "Your models" : providerLabel(m.provider, m.id);
     groups.set(key, [...(groups.get(key) ?? []), m]);
   }
   const selected = models.find((m) => m.id === value);
@@ -420,7 +433,7 @@ export function ModelMenu({
             style={{ ...menuItem(false), color: "var(--orvyn-text-muted)" }}
             onClick={() => setAdvanced((on) => !on)}
           >
-            {advanced ? "Hide models" : "Show models"}
+            {cloudCatalog ? (advanced ? "Hide your models" : `Your models (${agentModels.length})`) : advanced ? "Hide models" : "Show models"}
           </button>
           {advanced && [...groups.entries()].map(([provider, list]) => (
             <div key={provider}>
@@ -462,9 +475,9 @@ export function ModelMenu({
               {moreCount} more model{moreCount === 1 ? "" : "s"} — type in the filter to find them.
             </div>
           )}
-          {visible.length === 0 && (
+          {visible.length === 0 && (advanced || !cloudCatalog) && (
             <div style={{ padding: "8px 10px", fontSize: 11, color: "var(--orvyn-text-muted)" }}>
-              No models match{q ? ` “${filter.trim()}”` : ""}. Configure providers in the Model Manager.
+              {cloudCatalog && !q ? "Connect your own model in AI Models." : <>No models match{q ? ` “${filter.trim()}”` : ""}. Configure providers in the Model Manager.</>}
             </div>
           )}
         </div>

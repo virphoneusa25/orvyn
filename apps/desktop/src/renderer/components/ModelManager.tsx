@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api, ModelConfig, ModelHealthResult, ModelTestResult, ModelCapabilities } from "../api";
+import { apiUrl, authHeaders } from "../connection";
+import { CloudModels } from "./CloudModels";
 
 const PROVIDERS: ModelConfig["provider"][] = [
   "ollama",
@@ -294,7 +296,7 @@ function ModelForm({
   );
 }
 
-export function ModelManager() {
+function LocalModelManager() {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [health, setHealth] = useState<Record<string, ModelHealthResult>>({});
   const [routing, setRoutingState] = useState<Record<string, string>>({});
@@ -484,4 +486,22 @@ function btnGhost(): React.CSSProperties {
     fontSize: 12,
     cursor: "pointer",
   };
+}
+
+/**
+ * ORVYN Cloud shows ORVYN's models by name (read-only) plus the customer's
+ * own models; a local engine keeps the full model manager.
+ */
+export function ModelManager() {
+  const [mode, setMode] = useState<"loading" | "cloud" | "local">("loading");
+  useEffect(() => {
+    let alive = true;
+    fetch(apiUrl("/models"), { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((d) => { if (alive) setMode(d?.catalog ? "cloud" : "local"); })
+      .catch(() => { if (alive) setMode("local"); });
+    return () => { alive = false; };
+  }, []);
+  if (mode === "loading") return <div style={{ padding: 20, fontSize: 12, color: "var(--orvyn-text-muted)" }}>Loading models…</div>;
+  return mode === "cloud" ? <CloudModels /> : <LocalModelManager />;
 }

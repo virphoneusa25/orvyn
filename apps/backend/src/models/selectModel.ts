@@ -5,7 +5,8 @@ import type { TaskIntent } from "../agent/taskIntent";
 import { CERTIFIED_MODELS, laneModel, type LaneModel } from "./certifiedModels";
 import { escalate, LADDERS, profileFor, startRoute, stepFrom, TIERS, type RouteProfile, type RouteStep, type Tier } from "./routingPolicy";
 
-export type ModelLaneRequest = "auto" | "fast" | "code" | "premium";
+export type ModelLaneRequest = "auto" | "fast" | "code" | "premium" | "reasoning" | "research" | "vision";
+const LANE_REQUESTS = new Set(["auto", "fast", "code", "premium", "reasoning", "research", "vision"]);
 
 export interface ModelHealth {
   registryId: string;
@@ -38,11 +39,12 @@ export function selectAgentModel(input: {
   escalate?: number;
   /** A thinking-heavy task (strategy, planning, naming, architecture, deep reasoning). */
   deep?: boolean;
+  /** Registered models that understand images (for the Vision lane). */
+  visionIds?: string[];
 }): AgentModelChoice {
-  const requested = (input.requestedModelId ?? "auto").trim();
-  const laneRequest: ModelLaneRequest =
-    requested === "fast" || requested === "code" || requested === "premium" ? requested : "auto";
-  const pinned = Boolean(requested && requested !== "auto" && laneRequest === "auto");
+  const requested = (input.requestedModelId ?? "auto").trim() || "auto";
+  const laneRequest: ModelLaneRequest = LANE_REQUESTS.has(requested) ? (requested as ModelLaneRequest) : "auto";
+  const pinned = Boolean(requested && requested !== "auto" && !LANE_REQUESTS.has(requested));
   if (pinned) {
     return { registryId: requested, lane: "pinned", reason: "User pinned this model.", pinned: true };
   }
@@ -52,7 +54,14 @@ export function selectAgentModel(input: {
     ? "code"
     : profileFor({ composerMode: laneRequest === "code" ? "code" : mode, category: input.intent.category, instruction: input.intent.goal ?? "", deep: input.deep });
   let route = startRoute({ profile, instruction: input.intent.goal ?? "", availableIds: input.availableIds, health });
-  if (laneRequest === "premium") {
+  if (laneRequest === "reasoning" || laneRequest === "research" || laneRequest === "vision") {
+    // ORVYN's named models (customer catalog): a fixed ladder per model.
+    const tiers: Tier[] = laneRequest === "reasoning" ? ["advanced", "heavy", "deep"] : laneRequest === "research" ? ["advanced", "deep"] : ["advanced", "auto", "agent"];
+    const pool = laneRequest === "vision" ? (input.visionIds ?? []) : input.availableIds;
+    const hit = stepFrom(tiers, 0, pool, health);
+    const fallbackVision = laneRequest === "vision" && !hit ? (input.visionIds ?? [])[0] ?? null : null;
+    route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? tiers[0]!, registryId: hit?.registryId ?? fallbackVision, weight: TIERS[hit?.tier ?? tiers[0]!].weight, reason: `${laneRequest[0]!.toUpperCase()}${laneRequest.slice(1)} (requested).` };
+  } else if (laneRequest === "premium") {
     // The user asked for the strongest model: Ultra first, Deep behind it.
     const tiers: Tier[] = ["ultra", "deep", "heavy"];
     const hit = stepFrom(tiers, 0, input.availableIds, health);

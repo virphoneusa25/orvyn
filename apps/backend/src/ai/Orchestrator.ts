@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { isCustomerModelId, resolveCustomerModel } from "../models/customerCatalog";
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "../agent/capabilityGap";
@@ -252,8 +253,17 @@ export class Orchestrator {
   ) {}
 
   private resolveProvider(req: ChatTurnRequest) {
-    const requested = req.requestedModelId?.trim();
-    if (requested && requested !== "auto") {
+    const requested = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(req.requestedModelId)?.trim();
+    // ORVYN's named models (Fast, Reasoning, Code, Research, Vision): resolved server-side.
+    if (requested && isCustomerModelId(requested) && requested !== "auto") {
+      const view = this.modelService.registry.list().map((p) => ({ id: p.config.id, vision: p.supportsVision(), chat: (p.config.capabilities as any).chat !== false, mock: p.config.provider === "mock" }))
+        .filter((r) => !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(r.id));
+      const id = resolveCustomerModel(requested, view);
+      const provider = id ? this.modelService.registry.get(id) : undefined;
+      if (provider && !isRouteBlocked(provider.config.id)) return provider;
+      if (provider) return this.chatAlternative(provider) ?? provider;
+    }
+    if (requested && requested !== "auto" && !isCustomerModelId(requested)) {
       const provider = this.modelService.registry.get(requested);
       if (!provider) throw new Error(`Requested model "${requested}" is not configured.`);
       const capability = req.task === "chat" ? "chat" : req.task;
@@ -290,7 +300,7 @@ export class Orchestrator {
   private chatAlternative(current: AIModelProvider): AIModelProvider | undefined {
     const registry = this.modelService.registry;
     const ok = (p: AIModelProvider | undefined): p is AIModelProvider =>
-      Boolean(p && p.config.id !== current.config.id && p.config.id !== "orvyn-mock" && (p.config.capabilities as any).chat !== false && p.supportsTools() && !isRouteBlocked(p.config.id));
+      Boolean(p && p.config.id !== current.config.id && p.config.id !== "orvyn-mock" && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && (p.config.capabilities as any).chat !== false && p.supportsTools() && !isRouteBlocked(p.config.id));
     for (const id of sameModelElsewhere(current.config.id, (x) => Boolean(registry.get(x)))) {
       const p = registry.get(id);
       if (ok(p)) return p;

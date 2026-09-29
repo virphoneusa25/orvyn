@@ -223,6 +223,21 @@ function openaiConfig(id: string, apiKey: string, temperature: number): ModelCon
 // Phase 7 (production) should move this to Postgres via Prisma (see docs/architecture.md).
 export class ModelService {
   public registry = new ModelRegistry();
+  /** Models the customer added themselves (their key, their endpoint). Everything else is ORVYN's. */
+  public readonly userModelIds = new Set<string>();
+  /** A customer's own model that replaces ORVYN's routing when "Auto" is chosen (null: ORVYN routes). */
+  public preferredModel: string | null = null;
+
+  isUserModel(id: string): boolean {
+    return this.userModelIds.has(id);
+  }
+
+  /** The model a run/chat should use when the customer chose Auto (their default, if set and registered). */
+  effectiveRequest(requested: string | undefined): string | undefined {
+    const r = requested?.trim();
+    if ((!r || r === "auto") && this.preferredModel && this.registry.get(this.preferredModel)) return this.preferredModel;
+    return requested;
+  }
   public router = new ModelRouter(this.registry);
   /** Server-side usage metering — every provider registered here is wrapped. */
   public usage = new UsageService();
@@ -488,7 +503,7 @@ export class ModelService {
     }
   }
 
-  addModel(config: ModelConfig): AIModelProvider {
+  addModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
     let provider: AIModelProvider;
     switch (config.provider) {
       case "ollama":
@@ -518,11 +533,15 @@ export class ModelService {
     // model produces a usage event, regardless of which code path calls it.
     const metered = this.usage.wrap(provider);
     this.registry.register(metered);
+    if (source === "user") this.userModelIds.add(config.id);
+    else this.userModelIds.delete(config.id);
     return metered;
   }
 
   removeModel(id: string): void {
     this.registry.unregister(id);
+    this.userModelIds.delete(id);
+    if (this.preferredModel === id) this.preferredModel = null;
   }
 
   list() {

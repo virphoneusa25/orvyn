@@ -15,6 +15,7 @@ import { classifyExecutionHints } from "../execution/classifyExecution";
 import { portForwardingService } from "../ports/PortForwardingService";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
+import { customerRedaction } from "../middleware/customerRedaction";
 import { requirePrincipal, requireTenant } from "../middleware/tenant";
 import { authService } from "../auth/AuthService";
 import { tenantManager } from "../tenancy/TenantManager";
@@ -29,6 +30,8 @@ import path from "path";
 import { promises as fsp } from "fs";
 
 export const v1Router = Router();
+// ORVYN Cloud: responses never name ORVYN's model vendors (models/customerCatalog.ts).
+v1Router.use(customerRedaction);
 v1Router.use("/documents", documentRouter);
 v1Router.use("/desktop", desktopRouter());
 v1Router.use("/mcp", mcpRouter(requireTenant));
@@ -117,17 +120,33 @@ v1Router.use(async (req, res, next) => {
 // Express app in index.ts (before apiKeyAuth), not here.
 
 // --- Models ---
+// On ORVYN Cloud a customer sees ORVYN's six models by name (never vendors,
+// ids or endpoints) and can't change them; their own models ("my:…") are
+// theirs to add, edit, test and set as the default.
+function registryView(t: ReturnType<typeof requireTenant>) {
+  return t.modelService.registry.list().map((p) => ({ id: p.config.id, vision: p.supportsVision(), chat: p.config.capabilities.chat !== false, mock: p.config.provider === "mock" }));
+}
+
+function userModelsOf(t: ReturnType<typeof requireTenant>) {
+  return t.modelService.registry.list().filter((p) => t.modelService.isUserModel(p.config.id)).map((p) => publicUserModel(p.config));
+}
+
 v1Router.get("/models", (req, res) => {
-  res.json({ models: requireTenant(req).modelService.list() });
+  const t = requireTenant(req);
+  if (!customerCatalogEnabled()) return res.json({ models: t.modelService.list() });
+  res.json({
+    catalog: true,
+    models: [...customerCatalog(registryView(t)), ...userModelsOf(t)],
+    preferredModelId: t.modelService.preferredModel,
+  });
 });
 
 v1Router.get("/models/roles", (req, res) => {
   const t = requireTenant(req);
   const roles = t.modelService.roles();
-  res.json({
-    roles,
-    production: roles.filter((r) => r.task !== "image").every((r) => r.production),
-  });
+  const production = roles.filter((r) => r.task !== "image").every((r) => r.production);
+  if (customerCatalogEnabled()) return res.json({ roles: [], production });
+  res.json({ roles, production });
 });
 
 v1Router.get("/session", (req, res) => {
@@ -213,26 +232,55 @@ v1Router.get("/chats/:id", (req, res) => {
   }
 });
 
-v1Router.post("/models", (req, res) => {
+v1Router.post("/models", async (req, res) => {
+  const t = requireTenant(req);
   try {
-    const t = requireTenant(req);
-    const provider = t.modelService.addModel(req.body);
-    t.localStore.saveModel(req.body);
-    res.status(201).json({ model: provider.config });
+    if (!customerCatalogEnabled()) {
+      const provider = t.modelService.addModel(req.body, "user");
+      t.localStore.saveModel(req.body);
+      return res.status(201).json({ model: provider.config });
+    }
+    let config = await buildUserModel(req.body ?? {});
+    // Two models with the same name get distinct ids.
+    for (let n = 2; t.modelService.registry.get(config.id); n++) config = { ...config, id: `${config.id.replace(/-\d+$/, "")}-${n}` };
+    const provider = t.modelService.addModel(config, "user");
+    t.localStore.saveModel(sealModelConfig(config, t.id));
+    res.status(201).json({ model: publicUserModel(provider.config) });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-v1Router.put("/models/:id", (req, res) => {
+/** Use one of your own models instead of ORVYN's routing whenever "Auto" is chosen (null: ORVYN routes). */
+v1Router.put("/models/preferred", (req, res) => {
+  const t = requireTenant(req);
+  const id = req.body?.modelId ? String(req.body.modelId) : null;
+  if (id && !t.modelService.isUserModel(id)) return res.status(400).json({ error: "Choose one of your own models, or clear the default." });
+  t.modelService.preferredModel = id;
+  t.localStore.setSetting("preferredModel", id ?? "");
+  res.json({ preferredModelId: id });
+});
+
+v1Router.put("/models/:id", async (req, res) => {
+  const t = requireTenant(req);
+  const ms = t.modelService;
   try {
-    const t = requireTenant(req);
-    const ms = t.modelService;
-    ms.removeModel(req.params.id);
-    const config = { ...req.body, id: req.params.id };
-    const provider = ms.addModel(config);
-    t.localStore.saveModel(config);
-    res.json({ model: provider.config });
+    if (!customerCatalogEnabled()) {
+      ms.removeModel(req.params.id);
+      const config = { ...req.body, id: req.params.id };
+      const provider = ms.addModel(config, "user");
+      t.localStore.saveModel(config);
+      return res.json({ model: provider.config });
+    }
+    if (!ms.isUserModel(req.params.id)) return res.status(403).json({ error: "ORVYN's models can't be changed. Add your own model instead.", code: "PLATFORM_MODEL" });
+    const existing = ms.registry.get(req.params.id)!.config;
+    const config = await buildUserModel(req.body ?? {}, { existing, id: existing.id });
+    const wasPreferred = ms.preferredModel === existing.id;
+    ms.removeModel(existing.id);
+    const provider = ms.addModel(config, "user");
+    if (wasPreferred) ms.preferredModel = existing.id;
+    t.localStore.saveModel(sealModelConfig(config, t.id));
+    res.json({ model: publicUserModel(provider.config) });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -240,13 +288,22 @@ v1Router.put("/models/:id", (req, res) => {
 
 v1Router.delete("/models/:id", (req, res) => {
   const t = requireTenant(req);
+  if (customerCatalogEnabled() && !t.modelService.isUserModel(req.params.id)) {
+    return res.status(403).json({ error: "ORVYN's models can't be removed.", code: "PLATFORM_MODEL" });
+  }
+  const wasPreferred = t.modelService.preferredModel === req.params.id;
   t.modelService.removeModel(req.params.id);
   t.localStore.deleteModel(req.params.id);
+  if (wasPreferred) t.localStore.setSetting("preferredModel", "");
   res.status(204).end();
 });
 
+
 v1Router.get("/models/health", async (req, res) => {
-  res.json({ results: await requireTenant(req).modelService.healthCheckAll() });
+  const t = requireTenant(req);
+  const results = await t.modelService.healthCheckAll();
+  if (!customerCatalogEnabled()) return res.json({ results });
+  res.json({ results: (results as any[]).filter((r) => t.modelService.isUserModel(String(r.id ?? r.modelId ?? ""))) });
 });
 
 // Live provider health from real traffic (success share, cool-downs after
@@ -254,6 +311,7 @@ v1Router.get("/models/health", async (req, res) => {
 // same model on another provider first.
 v1Router.get("/models/providers/health", (req, res) => {
   requireTenant(req);
+  if (customerCatalogEnabled()) return res.json({ providers: [] });
   res.json({ providers: providerHealthSnapshot() });
 });
 
@@ -261,7 +319,9 @@ v1Router.get("/models/providers/health", (req, res) => {
 // (not just a health ping) and reports latency + a response snippet, so
 // the user can confirm the model is actually reachable and answering.
 v1Router.post("/models/:id/test", async (req, res) => {
-  const provider = requireTenant(req).modelService.registry.get(req.params.id);
+  const tt = requireTenant(req);
+  if (customerCatalogEnabled() && !tt.modelService.isUserModel(req.params.id)) return res.status(403).json({ error: "Only your own models can be tested here.", code: "PLATFORM_MODEL" });
+  const provider = tt.modelService.registry.get(req.params.id);
   if (!provider) return res.status(404).json({ error: `Unknown model "${req.params.id}"` });
   if (!provider.config.capabilities.chat && !provider.config.capabilities.code) {
     const start = Date.now();
@@ -301,12 +361,18 @@ v1Router.post("/models/:id/test", async (req, res) => {
 import { requiredCapability } from "@orvyn/ai-core";
 
 v1Router.get("/routing", (req, res) => {
-  res.json({ overrides: requireTenant(req).modelService.router.getOverrides() });
+  const t = requireTenant(req);
+  const overrides = t.modelService.router.getOverrides() as Record<string, string>;
+  if (!customerCatalogEnabled()) return res.json({ overrides });
+  res.json({ overrides: Object.fromEntries(Object.entries(overrides).filter(([, id]) => t.modelService.isUserModel(id))) });
 });
 
 v1Router.post("/routing", (req, res) => {
   const { task, modelId } = req.body;
   const ms2 = requireTenant(req);
+  if (customerCatalogEnabled() && !ms2.modelService.isUserModel(String(modelId))) {
+    return res.status(403).json({ error: "ORVYN routes its own models. You can route a task to one of your own models.", code: "PLATFORM_MODEL" });
+  }
   const provider = ms2.modelService.registry.get(modelId);
   if (!provider) {
     return res.status(400).json({ error: `Unknown model "${modelId}"` });
@@ -709,7 +775,8 @@ import { notePublicOrigin } from "../agent/sitePreview";
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
   // A run the wallet cannot pay for is refused up front, in plain words.
-  if (creditsEnforced()) {
+  const ownModel = t.modelService.isUserModel(String(t.modelService.effectiveRequest(req.body?.requestedModelId) ?? ""));
+  if (creditsEnforced() && !ownModel) {
     try {
       creditLedger.assertCanSpend(t.id);
     } catch (err) {
@@ -1737,6 +1804,8 @@ import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
 import { EntitlementService } from "../billing/EntitlementService";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { customerCatalog, customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
+import { buildUserModel, publicUserModel, sealModelConfig } from "../models/userModels";
 import { billingService, purchasablePacks, StripeApiError } from "../billing/stripe";
 import { creditsEnforced } from "../tenancy/TenantManager";
 import { BillingLimitError } from "../billing/CreditLedger";

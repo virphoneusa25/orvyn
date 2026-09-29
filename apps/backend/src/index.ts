@@ -18,6 +18,7 @@ import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
+import { redactChunk } from "./middleware/customerRedaction";
 import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
@@ -284,7 +285,7 @@ wss.on("connection", (socket, req) => {
       };
       try {
       for await (const chunk of guarded) {
-        socket.send(JSON.stringify(chunk));
+        socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
         if (chunk.retract) recorder?.retract();
@@ -302,7 +303,7 @@ wss.on("connection", (socket, req) => {
       recorder?.finish();
     } catch (err: any) {
       recorder?.finish(err.message);
-      socket.send(JSON.stringify({ delta: "", done: true, error: err.message }));
+      socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message })));
     }
   });
   // The app closed mid-reply: keep what arrived.

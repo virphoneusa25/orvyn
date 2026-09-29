@@ -96,7 +96,7 @@ export class UsageService {
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
   private sinks: Array<(event: UsageEvent) => void> = [];
-  private preflights: Array<(ctx: UsageContext) => void> = [];
+  private preflights: Array<(ctx: UsageContext, model?: { id: string }) => void> = [];
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -121,13 +121,13 @@ export class UsageService {
    * with LocalStore.
    */
   /** A check run before every provider call (the credit wallet): throwing stops the call. */
-  onPreflight(fn: (ctx: UsageContext) => void): void {
+  onPreflight(fn: (ctx: UsageContext, model?: { id: string }) => void): void {
     this.preflights.push(fn);
   }
 
-  private runPreflight(): void {
+  private runPreflight(model?: { id: string }): void {
     const ctx = this.als.getStore() ?? {};
-    for (const fn of this.preflights) fn(ctx);
+    for (const fn of this.preflights) fn(ctx, model);
   }
 
   onRecord(fn: (event: UsageEvent) => void): void {
@@ -292,7 +292,7 @@ export class UsageService {
       async generate(request: AIRequest): Promise<AIResponse> {
         usage.checkQuota();
         usage.checkMissionBudget();
-        usage.runPreflight();
+        usage.runPreflight(inner.config);
         const start = Date.now();
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
@@ -331,7 +331,7 @@ export class UsageService {
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
         usage.checkQuota();
         usage.checkMissionBudget();
-        usage.runPreflight();
+        usage.runPreflight(inner.config);
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
@@ -414,7 +414,7 @@ export class UsageService {
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
         usage.checkQuota();
-        usage.runPreflight();
+        usage.runPreflight(inner.config);
         const start = Date.now();
         try {
           const res = await inner.generateImage!(request);

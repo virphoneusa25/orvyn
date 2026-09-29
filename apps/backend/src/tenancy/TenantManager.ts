@@ -15,6 +15,8 @@ import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { releaseSandboxControlForRun } from "../desktop/sandboxDesktop";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
+import { openModelConfig } from "../models/userModels";
 import { LANE_FACTORS, laneForUsage, planById } from "../billing/plans";
 import { customerCreditsFor } from "../billing/creditMath";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
@@ -120,29 +122,41 @@ export class TenantManager {
   create(name: string, apiKey: string, id: string = randomUUID()): Tenant {
     const localStore = new LocalStore(id);
     const modelService = new ModelService();
-    // Restore user-added/edited models. removeModel first so a persisted edit
-    // of an env-seeded model id replaces the seed instead of colliding.
-    for (const cfg of localStore.loadModels()) {
+    // Restore the customer's own models (keys are sealed at rest). On ORVYN
+    // Cloud only "my:" models are the customer's: an old saved edit of one of
+    // ORVYN's models is ignored, so ORVYN's model always stands.
+    for (const saved of localStore.loadModels()) {
       try {
+        const cfg = openModelConfig(saved, id);
+        if (customerCatalogEnabled() && !isUserModelId(cfg.id)) {
+          console.warn(JSON.stringify({ event: "models.platform_edit_ignored", tenantId: id, modelId: cfg.id }));
+          continue;
+        }
         modelService.removeModel(cfg.id);
-        modelService.addModel(cfg);
+        modelService.addModel(cfg, "user");
       } catch (err: any) {
-        console.warn(`Skipping persisted model "${cfg.id}": ${err.message}`);
+        console.warn(`Skipping persisted model "${saved.id}": ${err.message}`);
       }
     }
+    const preferred = localStore.getSetting("preferredModel");
+    if (preferred && modelService.isUserModel(preferred)) modelService.preferredModel = preferred;
     // Every provider is metered; from here they're also durably recorded.
     modelService.usage.attachStore(localStore);
     // Before every model call: the wallet (balance, rolling windows, the run's
     // budget) must be able to pay for it. Enforced on ORVYN Cloud; a local
     // engine running on the user's own keys only records.
-    modelService.usage.onPreflight((ctx) => {
+    modelService.usage.onPreflight((ctx, model) => {
       if (!creditsEnforced()) return;
+      // The customer's own model runs on their provider account, not ORVYN credits.
+      if (model && modelService.isUserModel(model.id)) return;
       creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
     });
     // After it: settle exactly once per call (the usage event id is the key).
     modelService.usage.onRecord((event) => {
+      const own = modelService.isUserModel(event.modelId);
       creditLedger.charge({
         eventId: event.id,
+        ...(own ? { providerCostUsd: 0 } : {}),
         userId: id, runId: event.missionId, sessionId: event.missionId,
         type: event.method === "image" ? "image" : "model",
         provider: event.provider, model: event.modelId, lane: laneForUsage(event),

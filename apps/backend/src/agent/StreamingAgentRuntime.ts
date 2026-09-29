@@ -1017,7 +1017,7 @@ export class StreamingAgentRuntime {
         if (id) { next = registry.get(id); break; }
       }
     }
-    if (!next) next = registry.list().find((p) => usable(p));
+    if (!next) next = registry.list().find((p) => usable(p) && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id));
     if (!next) return null;
     if (state.billAtWeight === undefined) state.billAtWeight = state.route?.weight ?? weightFor(current.config.id);
     state.failoverReason = `${kind}: ${current.config.id} → ${next.config.id}`;
@@ -1411,11 +1411,16 @@ export class StreamingAgentRuntime {
     const runId = randomUUID();
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
+    // "Auto" with the customer's own model set as default: their model runs the task.
+    requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId);
+    const registered = this.modelService.registry.list();
     const choice = selectAgentModel({
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
-      availableIds: this.modelService.registry.list().map((p) => p.config.id),
+      // ORVYN's routing only ever picks ORVYN's models; a customer's own model runs only when chosen.
+      availableIds: registered.filter((p) => !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id)).map((p) => p.config.id),
+      visionIds: registered.filter((p) => !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && p.supportsVision()).map((p) => p.config.id),
       deep,
     });
     let provider = choice.pinned
@@ -1458,13 +1463,13 @@ export class StreamingAgentRuntime {
     let toolModelError: string | undefined;
     let toolFallbackReason: string | undefined;
     if (def.toolsEnabled && !provider.supportsTools()) {
-      const pinned = Boolean(requestedModelId && requestedModelId !== "auto");
+      const pinned = choice.pinned;
       if (pinned) {
         toolModelError = `Pinned model "${provider.config.id}" cannot call tools. This run was not completed as chat. Choose Auto or a model with tool calling.`;
       } else {
         const next = this.modelService.registry
           .list()
-          .find((p) => p.config.id !== provider.config.id && p.config.capabilities.agent && p.supportsTools());
+          .find((p) => p.config.id !== provider.config.id && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && p.config.capabilities.agent && p.supportsTools());
         if (!next) {
           toolModelError = `No configured model can call tools. "${provider.config.id}" is chat-only, so this run was not completed as a chat reply.`;
         } else {
@@ -1511,7 +1516,7 @@ export class StreamingAgentRuntime {
       cancelled: false,
       toolCalls: 0,
       modelCalls: 0,
-      requestedModelId: requestedModelId && requestedModelId !== "auto" ? requestedModelId : undefined,
+      requestedModelId: choice.pinned ? requestedModelId : undefined,
       actualModelId: provider.config.id,
       fallbackCount: 0,
       extraProviderCalls: 0,
