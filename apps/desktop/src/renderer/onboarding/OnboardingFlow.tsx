@@ -8,6 +8,7 @@
 // local draft and synced when it is back; the server stays authoritative.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import orvynMark from "../assets/icon.png";
 import { OnboardingOrb, type OrbState } from "./OnboardingOrb";
 import {
   FIRST_MISSIONS,
@@ -398,7 +399,7 @@ export function OnboardingFlow({ onDone, signedIn }: { onDone: (r: OnboardingRes
   return (
     <div className="ob-root" data-testid="onboarding" data-step={step}>
       <header className="ob-top">
-        <div className="ob-wordmark" aria-label="ORVYN">ORVYN</div>
+        <div className="ob-brand" aria-label="ORVYN"><img className="ob-brand__mark" src={orvynMark} alt="" aria-hidden="true" /><span className="ob-wordmark">ORVYN</span></div>
         <div className="ob-top__right">
           {firstName && STEPS.indexOf(step) > STEPS.indexOf("name") ? <span>{firstName}</span> : null}
         </div>

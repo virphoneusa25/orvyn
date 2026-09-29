@@ -17,6 +17,8 @@
 .ob-root * { box-sizing: border-box; }
 .ob-top { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 22px 32px; z-index: 2; -webkit-app-region: drag; }
 .ob-top > * { -webkit-app-region: no-drag; }
+.ob-brand { display: inline-flex; align-items: center; gap: 10px; }
+.ob-brand__mark { width: 28px; height: 28px; border-radius: 7px; display: block; }
 .ob-wordmark { font-weight: 700; letter-spacing: .16em; font-size: 18px; color: var(--ob-text); }
 .ob-top__right { display: flex; align-items: center; gap: 16px; font-size: 12.5px; color: var(--ob-text-2); }
 .ob-skip { background: none; border: 0; color: var(--ob-text-2); font: inherit; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
