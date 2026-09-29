@@ -244,7 +244,7 @@ async function createSandboxDesktop(opts: {
   const id = `desk_${randomUUID().slice(0, 12)}`;
   const containerName = `orvyn-desktop-${id.slice(5)}`;
   const width = opts.width ?? 1280;
-  const height = opts.height ?? 720;
+  const height = opts.height ?? 800; // a little taller: more of the desktop visible in the pane
   const startWallClock = Date.now();
 
   const session: SandboxDesktopSession = {

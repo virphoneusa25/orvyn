@@ -140,7 +140,7 @@ async function sbAct(tenantId: string, type: string, args: Record<string, unknow
 export function makeDesktopStartTool(projectRoot: string, tenantId: string, runId?: string): AITool {
   return {
     name: "desktop_start",
-    description: "Start an isolated ORVYN Desktop session (a real Linux desktop the user can watch). Optional url opens that page in the desktop Chromium.",
+    description: "Start an isolated ORVYN Desktop session (a real Linux desktop the user can watch). Only for GUI work: native apps, installers, OS dialogs. For checking a WEBSITE use browser_* tools instead — do not start the Desktop for pages.",
     parameters: {
       type: "object",
       properties: { url: { type: "string" } },
@@ -169,7 +169,7 @@ export function makeDesktopStartTool(projectRoot: string, tenantId: string, runI
 export function makeDesktopOpenUrlTool(projectRoot: string, tenantId: string, runId?: string): AITool {
   return {
     name: "desktop_open_url",
-    description: "Open a URL inside the Desktop session browser (Chromium on the Linux desktop).",
+    description: "Open a URL inside the Desktop session browser. Only when the user asked for the desktop view of a page; for page checks use browser_open.",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     defaultPermission: "ask",
     execute: async (args) => {
@@ -303,7 +303,7 @@ export function makeDesktopKeyTool(projectRoot: string, tenantId: string, runId?
 export function makeDesktopScreenshotTool(projectRoot: string, tenantId: string, runId?: string): AITool {
   return {
     name: "desktop_screenshot",
-    description: "Capture the current Desktop frame for visual reasoning. Do not call this every action — only when you need to see the screen.",
+    description: "Capture the current Desktop frame for visual reasoning (GUI apps only — for a WEBSITE use browser_screenshot instead). Do not call this every action — only when you need to see the screen.",
     parameters: { type: "object", properties: {} },
     defaultPermission: "ask",
     execute: async (args) => {

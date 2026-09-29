@@ -86,7 +86,7 @@ export function registerComputerUseTools(
   const shot = makeComputerTool(
     "screenshot",
     "computer_screenshot",
-    "Capture the current Desktop or Browser frame. ORVYN owns this action — do not use a provider-native computer-use API. Prefer this over streaming video.",
+    "Capture the current Desktop or Browser frame. ORVYN owns this action — do not use a provider-native computer-use API. Websites are checked with browser_screenshot; this is for desktop GUI apps the browser cannot reach.",
     { sessionId: { type: "string" }, surface: { type: "string", enum: ["auto", "desktop", "browser", "host"] }, persist: { type: "boolean" } },
     [],
     tenantId,
