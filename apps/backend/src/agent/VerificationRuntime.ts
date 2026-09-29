@@ -382,7 +382,7 @@ function verifierPrompt(evidence: VerificationEvidence, deterministic: { finding
     "3. Base every finding on a tool result you got here or on the evidence below.",
     "For follow-up changes, the successful edit transitions below show this run's before and after. Git HEAD may predate earlier missions; do not use its diff as the before state for this run.",
     evidence.website
-      ? "4. This changed a web page: open it in the browser and check console and network errors."
+      ? "4. This changed a web page: open it in the browser and check console and network errors. If browser_open FAILS (the app is disconnected or the browser is unavailable), do NOT retry navigate/viewport against a dead session — say so in your verdict (browser unverified: app disconnected) and continue with the file and search evidence you have."
       : "4. This was a FILE-ONLY change (no page changed): verify the file contents, references and syntax. Do NOT open a browser — it is not required for this task.",
     "5. Start your final answer with exactly one line: VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL.",
     "6. Then list findings as short bullets (what is wrong, which file, what you saw).",

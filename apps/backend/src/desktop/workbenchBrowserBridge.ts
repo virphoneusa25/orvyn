@@ -47,7 +47,7 @@ export function sendWorkbenchBrowserCommand(tenantId: string, command: BrowserBr
     const id = `bc_${Date.now().toString(36)}_${++seq}`;
     const timer = setTimeout(() => {
       pending.delete(id);
-      resolve({ ok: false, error: `The Workbench Browser did not answer within ${Math.round(timeoutMs / 1000)}s.`, timedOut: true });
+      resolve({ ok: false, error: `The Workbench Browser did not answer within ${Math.round(timeoutMs / 1000)}s. The ORVYN app may be disconnected — do not retry browser tools against a session that does not exist; verify from files instead.`, timedOut: true, appDisconnected: true });
     }, timeoutMs);
     pending.set(id, { id, tenantId, command, createdAt: Date.now(), taken: false, resolve, timer });
   });

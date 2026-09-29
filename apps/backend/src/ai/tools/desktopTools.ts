@@ -250,7 +250,14 @@ export function makeDesktopTypeTool(projectRoot: string, tenantId: string, runId
     defaultPermission: "ask",
     execute: async (args) => {
       if (sandboxFor(tenantId) && !args.selector) {
-        return sbAct(tenantId, "type", args);
+        const result = await sbAct(tenantId, "type", args);
+        if (result.ok) {
+          const typed = String(args.text ?? "");
+          // Show the typed text in the tool output — the chat feed and the
+          // verifier both read it; without it, "type" was an invisible action.
+          return { ...result, output: `Typed ${typed.length} chars: "${typed.slice(0, 80)}${typed.length > 80 ? "…" : ""}"` };
+        }
+        return result;
       }
       return playwrightGuard(projectRoot, tenantId, runId, async (session, a) =>
         withAgentLock(session, async () => {
