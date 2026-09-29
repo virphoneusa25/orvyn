@@ -172,7 +172,7 @@ async function main() {
     await page.waitForSelector("[data-testid=finish-setup]", { timeout: 10000 });
     ok(true, "a new account must finish setup before entering (no skipping into the app)");
     await page.click("[data-testid=finish-setup]");
-    await page.waitForSelector("text=Welcome to", { timeout: 10000 });
+    await page.waitForSelector("text=Welcome back", { timeout: 10000 });
     await page.waitForSelector("[data-testid=stat-plan]", { timeout: 10000 });
     await sleep(600);
     await shot(page, "home");

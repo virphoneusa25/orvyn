@@ -5,6 +5,7 @@
 // the other at the same step. Mounted before the tenant resolver (it
 // authenticates the session itself, like /auth/me).
 
+import { onAdminHost } from "../http/hosts";
 import { Router, type Request, type Response } from "express";
 import { authService } from "../auth/AuthService";
 import { creditLedger } from "../billing/creditLedgerInstance";
@@ -139,12 +140,14 @@ onboardingRouter.get("/plans", (_req, res) => {
 });
 
 /** Which sign-in and billing integrations this server has keys for (buttons show only when real). */
-onboardingRouter.get("/providers", (_req, res) => {
+onboardingRouter.get("/providers", (req, res) => {
   const has = (...names: string[]) => names.every((n) => Boolean(process.env[n]?.trim()));
+  // Staff sign in to the Admin Portal with email and password (provider callbacks return to the customer host).
+  const admin = onAdminHost(req);
   res.json({
     email: verificationRequired(),
-    google: has("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"),
-    github: has("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"),
+    google: !admin && has("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"),
+    github: !admin && has("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"),
     checkout: has("STRIPE_SECRET_KEY"),
   });
 });

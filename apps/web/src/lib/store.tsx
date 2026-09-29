@@ -1,5 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { api, ApiError, getToken, onUnauthorized, setToken } from "./api";
+import { api, ApiError, getToken, getViewAsToken, onUnauthorized, setToken, setViewAsToken } from "./api";
+
+/** Leave a read-only support view: this tab forgets the view token and closes (or returns to the Admin Portal). */
+function endViewAs(): void {
+  setViewAsToken(null);
+  window.close();
+  window.setTimeout(() => location.replace("/admin"), 150);
+}
 
 // The signed-in account, its wallet and its ORVYN models: shared by every page.
 
@@ -9,6 +16,9 @@ export interface Me {
   organizations: { id: string; name: string; kind: string }[];
   onboarding: { step: string; completedAt: number | null } | null;
   verificationRequired?: boolean;
+  staff?: { role: string } | null;
+  paused?: { since: number } | null;
+  viewAs?: { staffEmail: string; expiresAt: number; paused: boolean } | null;
 }
 
 export interface Window { used: number; limit: number; resetAt: number }
@@ -31,7 +41,7 @@ interface Store {
   models: Model[];
   model: string;
   setModel: (id: string) => void;
-  status: "loading" | "signed-out" | "gated" | "ready";
+  status: "loading" | "signed-out" | "gated" | "paused" | "ready";
   gate: string | null;
   refresh: () => Promise<void>;
   refreshBilling: () => Promise<void>;
@@ -69,15 +79,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const m = await api<Me>("/auth/me");
       setMe(m);
+      if (m.paused && !m.viewAs) { setGate("ACCOUNT_PAUSED"); setStatus("paused"); return; }
       const verified = m.user.emailVerified !== false || m.verificationRequired === false;
-      if (!verified) { setGate("EMAIL_NOT_VERIFIED"); setStatus("gated"); return; }
-      if (!m.onboarding?.completedAt) { setGate("ONBOARDING_REQUIRED"); setStatus("gated"); return; }
+      if (!verified && !m.viewAs) { setGate("EMAIL_NOT_VERIFIED"); setStatus("gated"); return; }
+      if (!m.onboarding?.completedAt && !m.viewAs) { setGate("ONBOARDING_REQUIRED"); setStatus("gated"); return; }
       setGate(null);
       const [, mdl] = await Promise.all([refreshBilling(), api<{ models: Model[] }>("/models").catch(() => ({ models: [] }))]);
       setModels((mdl.models ?? []).filter((x) => x.kind === "orvyn" || x.kind === "user"));
       setStatus("ready");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { setToken(null); setMe(null); setStatus("signed-out"); return; }
+      if (err instanceof ApiError && err.code === "ACCOUNT_PAUSED") { setStatus("paused"); return; }
       if (err instanceof ApiError && (err.code === "EMAIL_NOT_VERIFIED" || err.code === "ONBOARDING_REQUIRED")) { setGate(err.code); setStatus("gated"); return; }
       setStatus("ready");
     }
@@ -86,11 +98,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const signIn = useCallback(async (token: string) => { setToken(token); setStatus("loading"); await refresh(); }, [refresh]);
   const signOut = useCallback(async () => {
     try { await api("/auth/logout", { method: "POST", body: {} }); } catch { /* already gone */ }
+    if (getViewAsToken()) { endViewAs(); return; }
     setToken(null); setMe(null); setBilling(null); setStatus("signed-out");
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => onUnauthorized(() => { setToken(null); setMe(null); setStatus("signed-out"); }), []);
+  useEffect(() => onUnauthorized(() => { if (getViewAsToken()) { endViewAs(); return; } setToken(null); setMe(null); setStatus("signed-out"); }), []);
   // The balance moves as the account is used (here, on Desktop, or by a payment).
   useEffect(() => {
     if (status !== "ready") return;

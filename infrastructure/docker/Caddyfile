@@ -15,6 +15,22 @@
 	}
 }
 
+# ORVYN Cloud (customers) and the Admin Portal (staff): the same backend; it
+# serves the portal or the admin app by host. Certificates are issued once
+# the DNS records point here.
+{$ORVYN_APP_HOST:app.kernelailabs.com} {
+	reverse_proxy backend:4570
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
+{$ORVYN_ADMIN_HOST:admin.kernelailabs.com} {
+	reverse_proxy backend:4570
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	header X-Robots-Tag "noindex, nofollow"
+}
+
 # Fallback hostname used before the registrar A record existed.
 staging.orvyn.40.160.11.123.sslip.io {
 	reverse_proxy backend-staging:4570

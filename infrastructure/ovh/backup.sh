@@ -36,6 +36,14 @@ mkdir -p "$OUT"
 chmod 700 "$OUT_BASE" "$OUT"
 COMPOSE=(docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml)
 log() { echo "[backup $STAMP] $*"; }
+
+# Status for the Admin Portal (Operations → Backups), written into the data
+# volume through the running backend. No host, path or bucket names.
+record_status() {
+  "${COMPOSE[@]}" exec -T -e B_STATUS="$1" -e B_STAMP="$STAMP" -e B_TAG="$TAG" -e B_SIZE="${2:-}" -e B_ENC="${BACKUP_PASSPHRASE:+1}" -e B_OFF="${BACKUP_S3_URI:+1}" backend \
+    node -e 'const fs=require("fs"),p=require("path");const d=p.join(process.env.ORVYN_DATA_DIR||"/data",".ops");fs.mkdirSync(d,{recursive:true});const s={status:process.env.B_STATUS,stamp:process.env.B_STAMP,tag:process.env.B_TAG,size:process.env.B_SIZE||null,encrypted:!!process.env.B_ENC,offHost:!!process.env.B_OFF,at:Date.now()};fs.writeFileSync(p.join(d,"backup-status.json"),JSON.stringify(s));let h=[];try{h=JSON.parse(fs.readFileSync(p.join(d,"backup-history.json"),"utf8"))}catch{};h.push(s);fs.writeFileSync(p.join(d,"backup-history.json"),JSON.stringify(h.slice(-96)))' >/dev/null 2>&1 || true
+}
+trap 'record_status failed' ERR
 volume() { docker volume ls --format '{{.Name}}' | grep -m1 -E "(^|_)$1\$" || true; }
 
 # 1. Consistent SQLite snapshots, taken by the backend itself.
@@ -106,4 +114,5 @@ fi
 # 6. Retention (local).
 KEEP="${BACKUP_KEEP:-48}"
 ls -1d "$OUT_BASE"/*/ 2>/dev/null | sort | head -n -"$KEEP" | xargs -r rm -rf
+record_status ok "$(du -sh "$OUT" | cut -f1)"
 log "done"

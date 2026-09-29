@@ -4,7 +4,19 @@
 
 const KEY = "orvyn.session";
 
+const VIEW_KEY = "orvyn.viewas";
+
+/** A staff "view as customer" tab keeps its read-only token in this tab only (never the staff member's own session). */
+export function getViewAsToken(): string | null {
+  try { return sessionStorage.getItem(VIEW_KEY); } catch { return null; }
+}
+export function setViewAsToken(token: string | null): void {
+  try { token ? sessionStorage.setItem(VIEW_KEY, token) : sessionStorage.removeItem(VIEW_KEY); } catch { /* storage off */ }
+}
+
 export function getToken(): string | null {
+  const view = getViewAsToken();
+  if (view) return view;
   try { return localStorage.getItem(KEY); } catch { return null; }
 }
 export function setToken(token: string | null): void {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
+import { adminUrl } from "../lib/surface";
 import { navigate, useLocation } from "../lib/router";
 import { num } from "../lib/format";
 import { Icon } from "./Icons";
@@ -129,6 +130,7 @@ function TopBar() {
           <div className="mp__menu" role="menu" style={{ width: 220 }}>
             <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); navigate("/settings"); }}><Icon.user size={18} /> <b>Account settings</b></button>
             <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); navigate("/billing"); }}><Icon.billing size={18} /> <b>Billing</b></button>
+            {me?.staff ? <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); const u = adminUrl(); if (u.startsWith("/")) navigate(u); else location.href = u; }} data-testid="open-admin"><Icon.shield size={18} /> <b>Admin Portal</b></button> : null}
             <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); void signOut(); }} data-testid="sign-out"><Icon.logout size={18} /> <b>Sign out</b></button>
           </div>
         ) : null}

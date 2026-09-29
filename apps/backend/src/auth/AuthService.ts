@@ -348,6 +348,18 @@ export class AuthService {
     };
   }
 
+  /** A member's principal in one organization (staff "view as customer"; never from a client claim). */
+  principalFor(userId: string, organizationId: string): { user: User; principal: Principal } | null {
+    const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(userId) as any;
+    if (!row) return null;
+    const user = rowToUser(row);
+    const org = this.db.prepare(`SELECT o.* FROM organizations o JOIN organization_members m ON m.organization_id = o.id WHERE o.id = ? AND m.user_id = ?`).get(organizationId, userId) as any;
+    if (!org) return null;
+    const member = this.db.prepare(`SELECT role FROM organization_members WHERE organization_id = ? AND user_id = ?`).get(organizationId, userId) as { role?: string } | undefined;
+    const o = rowToOrg(org);
+    return { user, principal: { userId: user.id, email: user.email, name: user.name, organizationId: o.id, organizationName: o.name, organizationKind: o.kind, tenantId: o.tenantId, role: (member?.role as OrgRole) || "owner" } };
+  }
+
   ensurePersonalOrganization(user: User): OrganizationRecord {
     const existing = this.db
       .prepare(

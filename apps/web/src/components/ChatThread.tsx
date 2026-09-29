@@ -249,7 +249,8 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
           ))}
         </div>
       ) : null}
-      <form className="composer" onSubmit={(e) => { e.preventDefault(); void send(); }}
+      {me?.viewAs ? <div className="notice notice--warn" data-testid="viewas-composer">Support view is read-only — messages can't be sent.</div> : null}
+      <form className="composer" style={me?.viewAs ? { display: "none" } : undefined} onSubmit={(e) => { e.preventDefault(); void send(); }}
         onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); }}>
         <button type="button" className="composer__attach" aria-label="Attach files" onClick={() => fileInput.current?.click()}><Icon.paperclip size={20} /></button>
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} data-testid="file-input" />

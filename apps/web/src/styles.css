@@ -493,3 +493,7 @@ input, textarea, select { font: inherit; color: var(--text); }
   .page-title { font-size: 22px; }
   .table { font-size: 12.5px; }
 }
+
+.viewas-banner { position: fixed; z-index: 90; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 16px; background: linear-gradient(90deg, #b45309, #a21caf); color: #fff; font-size: 13.5px; box-shadow: 0 6px 24px rgba(0,0,0,.4); }
+.viewas-banner .btn { margin-left: auto; background: rgba(0,0,0,.25); border-color: rgba(255,255,255,.4); }
+body:has(.viewas-banner) .app { padding-top: 40px; }

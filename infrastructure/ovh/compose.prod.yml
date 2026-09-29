@@ -14,6 +14,9 @@ services:
       # local default tenant. Local `npm run backend:dev` leaves this unset.
       - ORVYN_CLOUD_MODE=true
       - ORVYN_PUBLIC_URL=${ORVYN_PUBLIC_URL:-https://orvyn.virphoneusa.com}
+      # Customer portal and staff Admin Portal hosts (the backend routes by host).
+      - ORVYN_APP_HOST=${ORVYN_APP_HOST:-app.kernelailabs.com}
+      - ORVYN_ADMIN_HOST=${ORVYN_ADMIN_HOST:-admin.kernelailabs.com}
     restart: always
     healthcheck:
       # node:20-slim has no curl; use node's built-in fetch.

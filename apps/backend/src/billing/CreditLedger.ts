@@ -409,15 +409,20 @@ export class CreditLedger {
     return { refunded };
   }
 
+  /** The wallet's current subscription id (Stripe id or "manual:…" for a staff-assigned plan). */
+  subscriptionIdOf(accountId: string): string | null {
+    return this.wallet(accountId)?.subscription_id ?? null;
+  }
+
   /** Staff credit or debit. Always attributed, always with a reason; never an edit of history. */
-  adminAdjust(accountId: string, credits: number, opts: { actor: string; reason: string; bucket?: "included" | "purchased"; key?: string }, now = Date.now()): LedgerEntry {
+  adminAdjust(accountId: string, credits: number, opts: { actor: string; reason: string; bucket?: "included" | "purchased"; key?: string; category?: string }, now = Date.now()): LedgerEntry {
     if (!opts.actor?.trim()) throw new BillingLimitError("ADJUST", "An adjustment needs the staff member who made it.");
     if (!opts.reason?.trim()) throw new BillingLimitError("ADJUST", "An adjustment needs a reason.");
     if (!Number.isInteger(credits) || credits === 0) throw new BillingLimitError("ADJUST", "Adjust by a whole, non-zero number of credits.");
     this.ensureAccount(accountId, DEFAULT_PLAN, now);
     const key = opts.key ?? `adjust:${randomUUID()}`;
     this.tx(() => {
-      this.append({ accountId, type: "admin_adjustment", bucket: opts.bucket ?? "purchased", amount: credits, key, actor: opts.actor, meta: { reason: opts.reason }, now });
+      this.append({ accountId, type: "admin_adjustment", bucket: opts.bucket ?? "purchased", amount: credits, key, actor: opts.actor, meta: { reason: opts.reason, ...(opts.category ? { category: opts.category } : {}) }, now });
     });
     return this.entryByKey(key)!;
   }

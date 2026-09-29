@@ -1,6 +1,7 @@
 // apps/backend/src/middleware/tenant.ts
 import { Request, Response, NextFunction } from "express";
 import { Tenant, tenantManager } from "../tenancy/TenantManager";
+import { staffStore } from "../admin/staffStore";
 import { authService } from "../auth/AuthService";
 import type { Principal } from "../identity/principal";
 import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
@@ -51,6 +52,26 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
       return;
     }
     req.tenant = tenantManager.ensureLocalDefault();
+    next();
+    return;
+  }
+
+  // Staff "View as customer": read-only, time-limited, and never a customer session.
+  if (key.startsWith("orvview_")) {
+    const view = staffStore().resolveViewAs(key);
+    const as = view ? authService.principalFor(view.userId, view.organizationId) : null;
+    if (!view || !as) {
+      res.status(401).json({ error: "This support view has ended.", code: "VIEW_AS_ENDED" });
+      return;
+    }
+    const readOnly = ["GET", "HEAD", "OPTIONS"].includes(req.method) || (req.method === "POST" && /^\/artifacts\/[^/]+\/preview-link$/.test(req.path));
+    if (!readOnly) {
+      res.status(403).json({ error: "Support view is read-only.", code: "READ_ONLY_VIEW" });
+      return;
+    }
+    req.tenant = tenantManager.ensureOrgTenant(as.principal);
+    req.principal = as.principal;
+    (req as Request & { viewAs?: unknown }).viewAs = view;
     next();
     return;
   }

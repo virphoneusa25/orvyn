@@ -39,5 +39,10 @@ for _ in $(seq 1 40); do
 done
 USERS="$(docker exec "$CID" node --no-warnings -e "const {DatabaseSync}=require('node:sqlite');console.log(new DatabaseSync('/data/auth.db',{readOnly:true}).prepare('select count(*) n from users').get().n)" 2>/dev/null || echo "?")"
 docker stop "$CID" >/dev/null
-[[ "$ok" -eq 1 ]] || { echo "[drill] FAILED: the restored backend did not become healthy" >&2; exit 1; }
+record_drill() {
+  docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml exec -T -e D_STATUS="$1" -e D_USERS="$USERS" -e D_BACKUP="$(basename "$SRC")" backend \
+    node -e 'const fs=require("fs"),p=require("path");const d=p.join(process.env.ORVYN_DATA_DIR||"/data",".ops");fs.mkdirSync(d,{recursive:true});fs.writeFileSync(p.join(d,"restore-drill.json"),JSON.stringify({status:process.env.D_STATUS,backup:process.env.D_BACKUP,accounts:process.env.D_USERS,at:Date.now()}))' >/dev/null 2>&1 || true
+}
+[[ "$ok" -eq 1 ]] || { record_drill failed; echo "[drill] FAILED: the restored backend did not become healthy" >&2; exit 1; }
+record_drill pass
 echo "[drill] PASS: restored backend healthy; $USERS account(s) present"

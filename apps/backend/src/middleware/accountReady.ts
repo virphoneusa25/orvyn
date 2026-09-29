@@ -13,6 +13,7 @@
 
 import type { NextFunction, Request, Response } from "express";
 import { authService } from "../auth/AuthService";
+import { staffStore } from "../admin/staffStore";
 import { onboardingStore } from "../onboarding/OnboardingStore";
 import { verificationRequired } from "../onboarding/provisioning";
 
@@ -43,7 +44,17 @@ const MESSAGE: Record<Exclude<AccountReadiness, "ready">, string> = {
   ONBOARDING_REQUIRED: "Finish setting up your ORVYN account to continue.",
 };
 
+/** A paused account (staff action) can sign in but not use ORVYN; its data stays exactly as it was. */
+export function pausedMessage(tenantId: string | undefined): string | null {
+  if (!tenantId) return null;
+  return staffStore().suspension(tenantId) ? "This account is paused. Contact ORVYN support to restore access." : null;
+}
+
 export function requireAccountReady(req: Request, res: Response, next: NextFunction): void {
+  if (req.principal && !(req as Request & { viewAs?: unknown }).viewAs && !OPEN_ANY.some((r) => r.test(req.path))) {
+    const paused = pausedMessage(req.principal.tenantId);
+    if (paused) { res.status(403).json({ error: paused, code: "ACCOUNT_PAUSED" }); return; }
+  }
   const userId = req.principal?.userId;
   if (!userId || !accountGateEnabled() || gateExempt(req.method, req.path)) return next();
   const state = accountReadiness(userId);
@@ -57,6 +68,8 @@ export function socketAccountReady(token: string | null): { ok: true } | { ok: f
   if (!token || !accountGateEnabled()) return { ok: true };
   const session = authService.verifyPrincipal(token);
   if (!session) return { ok: true }; // API keys and invalid tokens are handled by authorizeSocket
+  const paused = pausedMessage(session.principal.tenantId);
+  if (paused) return { ok: false, error: paused, code: "ACCOUNT_PAUSED" as AccountReadiness };
   const state = accountReadiness(session.user.id);
   return state === "ready" ? { ok: true } : { ok: false, error: MESSAGE[state], code: state };
 }

@@ -12,6 +12,8 @@ import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { v1Router, isolateUntrustedContent } from "./routes/v1";
+import { adminRouter } from "./routes/admin";
+import { adminHost, appHost, onAdminHost, originFor } from "./http/hosts";
 import { resolvePreviewLink } from "./artifacts/previewLinks";
 import { siteRouter } from "./routes/sites";
 import { portForwardingService } from "./ports/PortForwardingService";
@@ -180,6 +182,8 @@ app.get("/api/v1/preview/:token", async (req, res) => {
   }
 });
 app.use("/api/v1/billing/return", billingReturnRouter);
+// ORVYN Admin Portal API: platform staff only (checked inside), never the customer chain.
+app.use("/api/v1/admin", ipRateLimit(Number(process.env.ORVYN_ADMIN_RATE_LIMIT_RPM) || 600), adminRouter);
 // Credential endpoints (sign-up, sign-in, reset, provider starts) get the
 // strict per-IP limit; session reads and the desktop's sign-in polling a
 // looser one, so an app waiting for the browser never trips the limiter.
@@ -237,11 +241,19 @@ if (WEB_DIR) {
       res.setHeader("Cache-Control", /[\\/]assets[\\/]/.test(file) ? "public, max-age=31536000, immutable" : "no-cache");
     },
   }));
-  const shell = fsModule.readFileSync(pathModule.join(WEB_DIR, "index.html"));
-  app.get(/^\/(?!api\/|ws\/).*/, (_req, res) => {
+  const shell = fsModule.readFileSync(pathModule.join(WEB_DIR, "index.html"), "utf8");
+  // The same app serves the customer portal and the Admin Portal; the host decides (http/hosts.ts).
+  const shellFor = (surface: "app" | "admin") => shell.replace("<head>", `<head>
+    <meta name="orvyn-surface" content="${surface}" />
+    <meta name="orvyn-app-host" content="${appHost() ?? ""}" />
+    <meta name="orvyn-admin-host" content="${adminHost() ?? ""}" />${surface === "admin" ? '\n    <meta name="robots" content="noindex, nofollow" />' : ""}`);
+  app.get(/^\/(?!api\/|ws\/).*/, (req, res) => {
+    const admin = onAdminHost(req);
+    // /admin on the customer host moves to the admin host.
+    if (!admin && adminHost() && /^\/admin(\/|$)/.test(req.path)) return res.redirect(302, `${originFor(req, adminHost()!)}${req.originalUrl}`);
     secure(res);
     res.setHeader("Cache-Control", "no-cache");
-    res.type("html").send(shell);
+    res.type("html").send(shellFor(admin ? "admin" : "app"));
   });
 }
 

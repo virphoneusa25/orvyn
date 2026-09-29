@@ -15,11 +15,6 @@ import { UsageChart } from "../components/UsageChart";
 export interface Invoice { id: string; date: number; description: string; amountUsd: number; status: string; hostedUrl: string | null; pdfUrl: string | null }
 export interface Account { invoices: Invoice[]; paymentMethod: { brand: string; last4: string; expMonth: number; expYear: number } | null; subscription: { cancelAtPeriodEnd: boolean; currentPeriodEnd: number | null; status: string } | null }
 
-function greeting(): string {
-  const h = new Date().getHours();
-  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-}
-
 export function Home() {
   const { me, billing, toast } = useStore();
   const [chatId, setChatId] = useState<string | null>(null);
@@ -27,6 +22,7 @@ export function Home() {
   const projects = useApi<{ projects: Project[] }>("/projects");
   const files = useApi<{ artifacts: Artifact[] }>("/artifacts");
   const stats = useApi<Stats>("/billing/stats");
+  const [range, setRange] = useState<7 | 30>(7);
   const account = useApi<Account>("/billing/account");
   const upload = useRef<HTMLInputElement | null>(null);
 
@@ -38,8 +34,8 @@ export function Home() {
   const actions: { label: string; sub: string; icon: React.ReactNode; go: () => void; plus?: boolean }[] = [
     { label: "New Chat", sub: "Start a new conversation", icon: <Icon.chat />, go: () => navigate("/chats") },
     { label: "New Project", sub: "Organize chats and files", icon: <Icon.folder />, go: () => navigate("/projects?new=1") },
-    { label: "Upload Files", sub: "Add files to your account", icon: <Icon.upload />, go: () => upload.current?.click() },
-    { label: "Buy Credits", sub: "Top up your balance", icon: <Icon.plus />, go: () => navigate("/billing#credits"), plus: true },
+    { label: "Upload File", sub: "Add files to your account", icon: <Icon.upload />, go: () => upload.current?.click() },
+    { label: "Manage Subscription", sub: "Plan, credits and invoices", icon: <Icon.billing />, go: () => navigate("/billing"), plus: true },
   ];
 
   return (
@@ -56,9 +52,9 @@ export function Home() {
         <section className="hero" aria-label="Welcome">
           <div className="hero__stars" />
           <div className="hero__orb"><Orb /></div>
-          <p className="hero__hello">{greeting()}, {firstName(me?.user.name, me?.user.email)}</p>
-          <h1><span className="g1">Welcome to</span><br /><span className="g2">ORVYN Cloud</span></h1>
-          <p>Chat with ORVYN, keep your projects and files in one place, and pick up anywhere — here or in ORVYN Desktop.</p>
+          <p className="hero__hello" data-testid="hero-hello">Welcome back, {firstName(me?.user.name, me?.user.email)}</p>
+          <h1><span className="g1">Your AI workspace</span><br /><span className="g2">in the cloud.</span></h1>
+          <p>Chat with ORVYN, keep your projects and files in one place, and pick up where you left off — here or in ORVYN Desktop.</p>
           <div className="hero__script">Ideas to what's next</div>
         </section>
         <section className="card qa" aria-label="Quick actions">
@@ -124,8 +120,10 @@ export function Home() {
           </div>
           <div className="home-lists2">
             <section className="card card--pad" aria-label="Usage overview">
-              <div className="card__head"><h3>Usage Overview</h3><span className="muted">Last 7 days · credits</span><a className="link" href="/usage" onClick={(e) => { e.preventDefault(); navigate("/usage"); }}>Details</a></div>
-              <UsageChart points={dailyPoints(stats.data, 7)} />
+              <div className="card__head"><h3>Usage Overview</h3>
+                <div className="seg" role="tablist" aria-label="Period" style={{ marginLeft: "auto" }}><button className={range === 7 ? "is-on" : ""} onClick={() => setRange(7)}>7 days</button><button className={range === 30 ? "is-on" : ""} onClick={() => setRange(30)}>30 days</button></div>
+              </div>
+              <UsageChart points={dailyPoints(stats.data, range)} />
             </section>
             <section className="card card--pad" aria-label="Invoices">
               <div className="card__head"><h3>Invoices</h3><a className="link" href="/billing" onClick={(e) => { e.preventDefault(); navigate("/billing#invoices"); }}>View all</a></div>

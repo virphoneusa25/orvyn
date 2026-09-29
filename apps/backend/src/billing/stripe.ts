@@ -206,6 +206,23 @@ export class StripeStore {
   subscription(id: string) {
     return this.db.prepare(`SELECT * FROM stripe_subscriptions WHERE subscription_id = ?`).get(id) as { subscription_id: string; account_id: string; plan_id: string; status: string } | undefined;
   }
+  /** The account's newest Stripe subscription (any status). */
+  latestSubscription(accountId: string) {
+    return this.db.prepare(`SELECT * FROM stripe_subscriptions WHERE account_id = ? ORDER BY updated_at DESC LIMIT 1`).get(accountId) as { subscription_id: string; account_id: string; plan_id: string; status: string; period_start: number | null; period_end: number | null; cancel_at_period_end: number } | undefined;
+  }
+  periodOf(subscriptionId: string): "monthly" | "yearly" | null {
+    const r = this.db.prepare(`SELECT period FROM stripe_checkouts WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1`).get(subscriptionId) as { period: string | null } | undefined;
+    return r?.period === "yearly" ? "yearly" : r?.period === "monthly" ? "monthly" : null;
+  }
+  failedEvents(sinceMs: number) {
+    return this.db.prepare(`SELECT id, type, received_at, error FROM stripe_events WHERE status = 'failed' AND received_at >= ? ORDER BY received_at DESC LIMIT 50`).all(sinceMs) as { id: string; type: string; received_at: number; error: string | null }[];
+  }
+  eventStats(sinceMs: number) {
+    return this.db.prepare(`SELECT status, COUNT(*) AS n, MAX(received_at) AS last FROM stripe_events WHERE received_at >= ? GROUP BY status`).all(sinceMs) as { status: string; n: number; last: number }[];
+  }
+  lastEventAt(): number | null {
+    return ((this.db.prepare(`SELECT MAX(received_at) AS t FROM stripe_events`).get() as { t: number | null }).t) ?? null;
+  }
   recentEvents(limit = 50) {
     return this.db.prepare(`SELECT * FROM stripe_events ORDER BY received_at DESC LIMIT ?`).all(limit);
   }
@@ -329,6 +346,96 @@ export class BillingService {
       paymentMethod: card ? { brand: String(card.brand ?? ""), last4: String(card.last4 ?? ""), expMonth: Number(card.exp_month ?? 0), expYear: Number(card.exp_year ?? 0) } : null,
       subscription: sub ? { cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end), currentPeriodEnd: sub.current_period_end ? Number(sub.current_period_end) * 1000 : (sub.items?.data?.[0]?.current_period_end ? Number(sub.items.data[0].current_period_end) * 1000 : null), status: String(sub.status ?? "") } : null,
     };
+  }
+
+  // ---------- staff (Admin Portal) — every change goes through Stripe; the webhook applies it ----------
+
+  /** The subscription as Stripe has it now (null: no Stripe subscription). */
+  async adminSubscription(accountId: string): Promise<null | { id: string; status: string; cancelAtPeriodEnd: boolean; currentPeriodStart: number | null; currentPeriodEnd: number | null; priceId: string; planId: string | null; period: "monthly" | "yearly"; itemId: string; scheduleId: string | null }> {
+    const cfg = this.require();
+    const known = this.store.latestSubscription(accountId);
+    if (!known) return null;
+    const sub = await stripeRequest<any>(cfg, "GET", `/v1/subscriptions/${encodeURIComponent(known.subscription_id)}`);
+    const item = sub.items?.data?.[0] ?? {};
+    const priceId = String(item.price?.id ?? "");
+    const yearly = Object.keys(PLANS).some((p) => [`STRIPE_PRICE_${p.toUpperCase()}_ANNUAL`, `STRIPE_PRICE_${p.toUpperCase()}_YEARLY`].some((k) => this.env[k]?.trim() === priceId));
+    const start = sub.current_period_start ?? item.current_period_start;
+    const end = sub.current_period_end ?? item.current_period_end;
+    return {
+      id: String(sub.id), status: String(sub.status ?? known.status), cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
+      currentPeriodStart: start ? Number(start) * 1000 : null, currentPeriodEnd: end ? Number(end) * 1000 : null,
+      priceId, planId: planForPrice(priceId, this.env) ?? known.plan_id ?? null, period: yearly || item.price?.recurring?.interval === "year" ? "yearly" : "monthly",
+      itemId: String(item.id ?? ""), scheduleId: typeof sub.schedule === "string" ? sub.schedule : sub.schedule?.id ?? null,
+    };
+  }
+
+  /** Change plan/billing cycle now (prorated by Stripe). The paid invoice's webhook moves the wallet. */
+  async adminChangePlan(accountId: string, planId: PlanId, period: Period, actor: string): Promise<{ subscriptionId: string }> {
+    const cfg = this.require();
+    const sub = await this.adminSubscription(accountId);
+    if (!sub || ["canceled", "incomplete_expired"].includes(sub.status)) throw new StripeApiError(409, "This customer has no active Stripe subscription. Send them a checkout link instead.");
+    const price = priceIdFor({ planId, period }, this.env);
+    if (!price) throw new StripeApiError(503, "That plan and billing cycle has no Stripe price configured.");
+    if (sub.scheduleId) await stripeRequest(cfg, "POST", `/v1/subscription_schedules/${encodeURIComponent(sub.scheduleId)}/release`, {});
+    await stripeRequest(cfg, "POST", `/v1/subscriptions/${encodeURIComponent(sub.id)}`, {
+      items: [{ id: sub.itemId, price }], proration_behavior: "create_prorations", cancel_at_period_end: "false",
+      metadata: { accountId, planId, period, changedBy: actor },
+    }, `admin-plan:${sub.id}:${planId}:${period}:${Math.floor(Date.now() / 60_000)}`);
+    this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId, status: sub.status, cancelAtPeriodEnd: false });
+    return { subscriptionId: sub.id };
+  }
+
+  /** Switch plan/cycle at the next renewal (a Stripe subscription schedule; nothing changes today). */
+  async adminScheduleChange(accountId: string, planId: PlanId, period: Period): Promise<{ scheduleId: string; effectiveAt: number | null }> {
+    const cfg = this.require();
+    const sub = await this.adminSubscription(accountId);
+    if (!sub || sub.status === "canceled") throw new StripeApiError(409, "This customer has no active Stripe subscription.");
+    const price = priceIdFor({ planId, period }, this.env);
+    if (!price) throw new StripeApiError(503, "That plan and billing cycle has no Stripe price configured.");
+    const scheduleId = sub.scheduleId ?? String((await stripeRequest<any>(cfg, "POST", "/v1/subscription_schedules", { from_subscription: sub.id })).id);
+    await stripeRequest(cfg, "POST", `/v1/subscription_schedules/${encodeURIComponent(scheduleId)}`, {
+      end_behavior: "release",
+      phases: [
+        { items: [{ price: sub.priceId, quantity: 1 }], start_date: sub.currentPeriodStart ? Math.floor(sub.currentPeriodStart / 1000) : "now", end_date: sub.currentPeriodEnd ? Math.floor(sub.currentPeriodEnd / 1000) : undefined },
+        { items: [{ price, quantity: 1 }], metadata: { accountId, planId, period } },
+      ],
+    });
+    return { scheduleId, effectiveAt: sub.currentPeriodEnd };
+  }
+
+  /** Cancel at renewal (true) or keep renewing (false). */
+  async adminCancelAtPeriodEnd(accountId: string, cancel: boolean): Promise<{ subscriptionId: string; currentPeriodEnd: number | null }> {
+    const cfg = this.require();
+    const sub = await this.adminSubscription(accountId);
+    if (!sub || sub.status === "canceled") throw new StripeApiError(409, "This customer has no active Stripe subscription.");
+    if (sub.scheduleId && cancel) await stripeRequest(cfg, "POST", `/v1/subscription_schedules/${encodeURIComponent(sub.scheduleId)}/release`, {});
+    await stripeRequest(cfg, "POST", `/v1/subscriptions/${encodeURIComponent(sub.id)}`, { cancel_at_period_end: cancel ? "true" : "false" });
+    const known = this.store.latestSubscription(accountId);
+    this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId: known?.plan_id ?? sub.planId ?? "free", status: sub.status, cancelAtPeriodEnd: cancel });
+    return { subscriptionId: sub.id, currentPeriodEnd: sub.currentPeriodEnd };
+  }
+
+  /** Invoices for staff, newest first, one page at a time (null account: every customer). */
+  async adminInvoices(opts: { accountId?: string; limit?: number; startingAfter?: string } = {}): Promise<{ invoices: { id: string; number: string | null; accountId: string | null; customerId: string | null; date: number; description: string; amountUsd: number; status: string; hostedUrl: string | null; pdfUrl: string | null }[]; hasMore: boolean }> {
+    const cfg = this.require();
+    const customer = opts.accountId ? this.store.customerOf(opts.accountId) : undefined;
+    if (opts.accountId && !customer) return { invoices: [], hasMore: false };
+    const r = await stripeRequest<{ data: any[]; has_more?: boolean }>(cfg, "GET", "/v1/invoices", { ...(customer ? { customer } : {}), limit: Math.min(100, opts.limit ?? 25), ...(opts.startingAfter ? { starting_after: opts.startingAfter } : {}) });
+    return {
+      invoices: (r.data ?? []).map((i: any) => {
+        const cust = typeof i.customer === "string" ? i.customer : i.customer?.id ?? null;
+        return {
+          id: String(i.id), number: i.number ?? null, customerId: cust, accountId: opts.accountId ?? (cust ? this.store.accountOfCustomer(cust) : null),
+          date: Number(i.created ?? 0) * 1000, description: String(i.lines?.data?.[0]?.description ?? i.description ?? "ORVYN"),
+          amountUsd: Number(i.amount_paid || i.amount_due || 0) / 100, status: String(i.status ?? ""), hostedUrl: i.hosted_invoice_url ?? null, pdfUrl: i.invoice_pdf ?? null,
+        };
+      }),
+      hasMore: Boolean(r.has_more),
+    };
+  }
+
+  customerIdOf(accountId: string): string | null {
+    return this.store.customerOf(accountId);
   }
 
   /** Auto-recharge: charge the saved card off-session. Credits arrive with the payment_intent.succeeded webhook. */

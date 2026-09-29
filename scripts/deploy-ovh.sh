@@ -68,7 +68,7 @@ if [[ -n "${DEPLOY_VARS:-}" ]]; then
 import json, os, re
 d = json.loads(os.environ.get("DEPLOY_VARS") or "{}")
 for k, v in d.items():
-    if re.match(r"^(STRIPE_PRICE_[A-Z0-9_]+|ORVYN_PUBLIC_ORIGIN|BACKUP_S3_URI|BACKUP_S3_ENDPOINT|AWS_DEFAULT_REGION)$", k) and "\n" not in str(v):
+    if re.match(r"^(STRIPE_PRICE_[A-Z0-9_]+|ORVYN_PUBLIC_ORIGIN|ORVYN_APP_HOST|ORVYN_ADMIN_HOST|ORVYN_SUPER_ADMIN_EMAILS|BACKUP_S3_URI|BACKUP_S3_ENDPOINT|AWS_DEFAULT_REGION)$", k) and "\n" not in str(v):
         print(f"{k}={v}")
 ')
 fi
@@ -79,7 +79,7 @@ for plan in STARTER PRO POWER BUSINESS TEAM; do PRICE_NAMES="$PRICE_NAMES STRIPE
 for pack in 10K 25K 50K 100K 250K 500K; do PRICE_NAMES="$PRICE_NAMES STRIPE_PRICE_PACK_${pack}"; done
 for name in NEBIUS_API_KEY SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
-  ORVYN_PUBLIC_ORIGIN $PRICE_NAMES; do
+  ORVYN_PUBLIC_ORIGIN ORVYN_APP_HOST ORVYN_ADMIN_HOST ORVYN_SUPER_ADMIN_EMAILS $PRICE_NAMES; do
   value="${!name:-}"
   [[ -n "$value" ]] || continue
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -euo pipefail
@@ -141,6 +141,19 @@ docker compose \
   -f infrastructure/ovh/compose.control-plane.yml \
   -f infrastructure/ovh/compose.worker.yml \
   up -d --build --no-deps backend worker
+# Caddy: pick up new site blocks (app/admin hosts) without dropping connections.
+docker compose \
+  -f docker-compose.yml \
+  -f infrastructure/ovh/compose.prod.yml \
+  -f infrastructure/ovh/compose.control-plane.yml \
+  -f infrastructure/ovh/compose.worker.yml \
+  up -d --no-deps caddy
+docker compose \
+  -f docker-compose.yml \
+  -f infrastructure/ovh/compose.prod.yml \
+  -f infrastructure/ovh/compose.control-plane.yml \
+  -f infrastructure/ovh/compose.worker.yml \
+  exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || echo 'caddy reload skipped'
 docker compose \
   -f docker-compose.yml \
   -f infrastructure/ovh/compose.prod.yml \

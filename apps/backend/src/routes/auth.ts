@@ -5,6 +5,7 @@
 // authenticate directly against the session store (they don't need a tenant).
 
 import { Router, Request } from "express";
+import { staffStore } from "../admin/staffStore";
 import { authService } from "../auth/AuthService";
 import { onboardingStore } from "../onboarding/OnboardingStore";
 import { verificationRequired } from "../onboarding/provisioning";
@@ -14,7 +15,7 @@ import { authorizeUrl, exchangeCode, exchangeCodeWithToken, oauthConfigured, oau
 import { saveGithubConnection } from "../integrations/githubConnection";
 
 /** Public origin for links in email (the address the user reached us at). */
-function publicOrigin(req: Request): string {
+export function publicOrigin(req: Request): string {
   const fixed = process.env.ORVYN_PUBLIC_ORIGIN?.trim();
   if (fixed) return fixed.replace(/\/$/, "");
   const proto = String(req.header("x-forwarded-proto") || req.protocol || "https").split(",")[0]!.trim();
@@ -25,7 +26,7 @@ function publicOrigin(req: Request): string {
 const lastSent = new Map<string, number>();
 
 /** Sends (or re-sends) the verification link. At most one email a minute per account. */
-async function sendVerification(req: Request, userId: string, name: string | null): Promise<{ sent: boolean; error?: string }> {
+export async function sendVerification(req: Request, userId: string, name: string | null): Promise<{ sent: boolean; error?: string }> {
   if (!mailConfigured()) return { sent: false, error: "Email is not configured on this server." };
   const prev = lastSent.get(userId) ?? 0;
   if (Date.now() - prev < 60_000) return { sent: false, error: "A verification email was just sent. Check your inbox (and spam), or try again in a minute." };
@@ -154,6 +155,12 @@ authRouter.post("/login", (req, res) => {
 
 authRouter.post("/logout", (req, res) => {
   const token = bearerToken(req);
+  if (token?.startsWith("orvview_")) {
+    const view = staffStore().resolveViewAs(token);
+    staffStore().endViewAs(token);
+    if (view) staffStore().audit({ actorId: view.staffId, actorEmail: view.staffEmail, action: "support.view_as_end", tenantId: view.tenantId, ip: req.ip ?? null });
+    return res.json({ ok: true });
+  }
   if (token) authService.logout(token);
   res.json({ ok: true });
 });
@@ -171,15 +178,22 @@ authRouter.post("/switch-organization", (req, res) => {
 
 authRouter.get("/me", (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  // Staff "View as customer" (read-only): the customer's view, labelled as a support session.
+  const view = token?.startsWith("orvview_") ? staffStore().resolveViewAs(token) : null;
+  const session = view ? authService.principalFor(view.userId, view.organizationId) : token ? authService.verifyPrincipal(token) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
   const profile = onboardingStore().get(session.user.id);
+  if (!view && process.env.ORVYN_SUPER_ADMIN_EMAILS) staffStore().seedFromEnv();
+  const paused = staffStore().suspension(session.principal.tenantId);
   res.json({
     user: { ...session.user, emailVerified: authService.isEmailVerified(session.user.id) },
     principal: session.principal,
     organizations: authService.listOrganizations(session.user.id),
     onboarding: profile ? { step: profile.currentStep, completedAt: profile.completedAt } : null,
     verificationRequired: verificationRequired(),
+    staff: view ? null : (() => { const role = staffStore().roleOf(session.user.id); return role ? { role } : null; })(),
+    paused: paused && !view ? { since: paused.at } : null,
+    viewAs: view ? { staffEmail: view.staffEmail, expiresAt: view.expiresAt, paused: Boolean(paused) } : null,
   });
 });
 
@@ -239,6 +253,25 @@ authRouter.post("/refresh", (req, res) => {
 // ---------- password reset ----------
 
 const resetSent = new Map<string, number>();
+
+/** Sends a password-reset link (staff "Send password reset"). At most one a minute per email. */
+export async function sendPasswordReset(req: Request, emailInput: string): Promise<{ sent: boolean; error?: string }> {
+  const email = emailInput.trim().toLowerCase();
+  if (!mailConfigured()) return { sent: false, error: "Email is not configured on this server." };
+  if (Date.now() - (resetSent.get(email) ?? 0) < 60_000) return { sent: false, error: "A reset email was sent less than a minute ago." };
+  const reset = authService.createPasswordReset(email);
+  if (!reset) return { sent: false, error: "No account uses that email." };
+  resetSent.set(email, Date.now());
+  const link = `${publicOrigin(req)}/api/v1/auth/reset?token=${encodeURIComponent(reset.token)}`;
+  try {
+    await sendMail(passwordResetMail({ to: reset.user.email, name: reset.user.name, link }));
+    return { sent: true };
+  } catch (err: any) {
+    resetSent.delete(email);
+    console.warn(JSON.stringify({ event: "auth.reset.send_failed", error: String(err?.code ?? err?.message ?? err).slice(0, 80) }));
+    return { sent: false, error: "The reset email could not be sent. Try again in a moment." };
+  }
+}
 
 /** Always answers the same, whether or not the account exists. */
 authRouter.post("/password/forgot", async (req, res) => {

@@ -3,6 +3,7 @@ import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { navigate, useLocation } from "../lib/router";
 import { Orb } from "../components/Orb";
+import { surface } from "../lib/surface";
 import { Icon } from "../components/Icons";
 
 // Sign in / create account / reset password. Google and GitHub finish through a
@@ -79,13 +80,13 @@ export function SignIn() {
     }
   };
 
-  const title = mode === "login" ? "Sign in to ORVYN" : mode === "register" ? "Create your ORVYN account" : "Reset your password";
+  const title = mode === "login" ? (surface === "admin" ? "ORVYN Admin Portal" : "Sign in to ORVYN") : mode === "register" ? "Create your ORVYN account" : "Reset your password";
   return (
     <div className="auth">
       <div className="card auth__card">
         <div className="auth__orb"><Orb /></div>
         <h1>{title}</h1>
-        <p className="sub">{mode === "forgot" ? "We'll email you a link to choose a new password." : "One account for ORVYN Cloud and ORVYN Desktop."}</p>
+        <p className="sub">{mode === "forgot" ? "We'll email you a link to choose a new password." : surface === "admin" ? "Staff sign-in. Access is limited to ORVYN staff." : "One account for ORVYN Cloud and ORVYN Desktop."}</p>
         {mode !== "forgot" && (providers.google || providers.github) ? (
           <>
             <div className="auth__social">
@@ -111,7 +112,7 @@ export function SignIn() {
         </form>
         <div className="auth__links">
           {mode === "login" ? <button className="linkbtn" onClick={() => { setMode("forgot"); setError(null); }}>Forgot password?</button> : <button className="linkbtn" onClick={() => { setMode("login"); setError(null); setNotice(null); }}>Back to sign in</button>}
-          {mode !== "register" ? <button className="linkbtn" onClick={() => { setMode("register"); setError(null); setNotice(null); }}>Create an account</button> : null}
+          {mode !== "register" && surface !== "admin" ? <button className="linkbtn" onClick={() => { setMode("register"); setError(null); setNotice(null); }}>Create an account</button> : null}
         </div>
       </div>
     </div>
