@@ -11,6 +11,8 @@ import appIcon from "../assets/icon.png";
 import { AccountCluster } from "./AccountCluster";
 import type { TranscriptInput } from "../shareTranscript";
 import { apiUrl, authHeaders, healthUrl } from "../connection";
+import { PlansPanel } from "../onboarding/OnboardingFlow";
+import "../onboarding/onboarding.css";
 
 export interface MenuItem {
   label?: string;
@@ -61,6 +63,39 @@ export function TitleBar({
   const [accountDetail, setAccountDetail] = useState<string | null>(null);
   const walletRefresh = useRef<(() => void) | null>(null);
   const [engineLive, setEngineLive] = useState(false);
+  const [packs, setPacks] = useState<Array<{ id: string; credits: number; priceUsd: number }> | null>(null);
+  const [checkoutEnabled, setCheckoutEnabled] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState<string | null>(null);
+  const [checkoutNote, setCheckoutNote] = useState<string | null>(null);
+  const [plansOpen, setPlansOpen] = useState(false);
+
+  // The credits popover reads the public catalog once it is first opened.
+  useEffect(() => {
+    if (openMenu !== "credits" || packs) return;
+    void fetch(apiUrl("/onboarding/plans")).then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (d?.packs) setPacks(d.packs);
+    }).catch(() => undefined);
+    void fetch(apiUrl("/onboarding/providers")).then((r) => (r.ok ? r.json() : null)).then((d) => {
+      setCheckoutEnabled(Boolean(d?.checkout));
+    }).catch(() => undefined);
+  }, [openMenu, packs]);
+
+  // One pack or plan purchase opens Stripe checkout in the browser.
+  const buy = (body: Record<string, string>) => {
+    const key = body.packId ?? body.planId ?? "";
+    setCheckoutBusy(key);
+    setCheckoutNote(null);
+    void fetch(apiUrl("/billing/checkout"), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(body) })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.url) {
+          setCheckoutNote("Opening secure checkout…");
+          void window.orvyn.window.openExternal?.(d.url);
+        } else setCheckoutNote(String(d?.error ?? "Checkout isn't available yet."));
+      })
+      .catch(() => setCheckoutNote("Checkout isn't available right now."))
+      .finally(() => setCheckoutBusy(null));
+  };
   const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -314,26 +349,83 @@ export function TitleBar({
           </span>
         )}
         {accountCredits && (
-          <span
-            data-testid="title-credits"
-            title={[accountDetail, usageLabel ? `This run: ${usageLabel}` : null, usageTitle].filter(Boolean).join("\n")}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 11,
-              color: "var(--orvyn-text-secondary)",
-              background: "var(--orvyn-surface-2)",
-              border: "1px solid var(--orvyn-border-soft)",
-              borderRadius: 999,
-              padding: "3px 10px",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="1.7">
-              <path d="M13 2 4 14h7l-1 8 9-12h-7z" strokeLinejoin="round" />
-            </svg>
-            {accountCredits}
+          <span data-testid="title-credits-wrap" style={{ position: "relative", display: "inline-flex" }}>
+            <button
+              data-testid="title-credits"
+              onClick={() => setOpenMenu(openMenu === "credits" ? null : "credits")}
+              title={[accountDetail, usageLabel ? `This run: ${usageLabel}` : null, usageTitle, "Click to top up or change plan"].filter(Boolean).join("\n")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: "var(--orvyn-text-secondary)",
+                background: openMenu === "credits" ? "var(--orvyn-surface-3, #131c2e)" : "var(--orvyn-surface-2)",
+                border: "1px solid var(--orvyn-border-soft)",
+                borderRadius: 999,
+                padding: "3px 10px",
+                whiteSpace: "nowrap",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7dd3fc" strokeWidth="1.7">
+                <path d="M13 2 4 14h7l-1 8 9-12h-7z" strokeLinejoin="round" />
+              </svg>
+              {accountCredits}
+              <span style={{ fontSize: 12, lineHeight: 1, color: "#7dd3fc", fontWeight: 700 }} aria-hidden>+</span>
+            </button>
+            {openMenu === "credits" && (
+              <div
+                data-testid="credits-popover"
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 8px)",
+                  right: 0,
+                  zIndex: 60,
+                  width: 250,
+                  background: "var(--orvyn-surface-2)",
+                  border: "1px solid var(--orvyn-border)",
+                  borderRadius: 10,
+                  boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                  padding: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                }}
+              >
+                <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: "2px 4px 6px" }}>
+                  {accountDetail ?? "Credit balance"}
+                </div>
+                {(packs ?? []).map((p) => (
+                  <button
+                    key={p.id}
+                    disabled={!checkoutEnabled || checkoutBusy !== null}
+                    onClick={() => buy({ packId: p.id })}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      fontSize: 11.5, padding: "6px 8px", borderRadius: 7, cursor: "pointer",
+                      background: "var(--orvyn-surface-3, #131c2e)", color: "var(--orvyn-text)",
+                      border: "1px solid var(--orvyn-border-soft)",
+                      opacity: checkoutEnabled ? 1 : 0.55,
+                    }}
+                  >
+                    <span>{p.credits.toLocaleString("en-US")} credits</span>
+                    <span style={{ fontWeight: 650 }}>${p.priceUsd}{checkoutBusy === p.id ? " …" : ""}</span>
+                  </button>
+                ))}
+                {!packs && <div style={{ fontSize: 11, color: "var(--orvyn-text-muted)", padding: 4 }}>Loading packs…</div>}
+                <button
+                  onClick={() => { setOpenMenu(null); setPlansOpen(true); }}
+                  style={{
+                    marginTop: 4, fontSize: 11.5, fontWeight: 650, padding: "7px 8px", borderRadius: 7, cursor: "pointer",
+                    background: "#2563eb", border: "1px solid #2563eb", color: "#f8fafc",
+                  }}
+                >
+                  View plans & upgrade
+                </button>
+                {checkoutNote && <div style={{ fontSize: 10.5, color: "var(--orvyn-text-muted)", padding: "2px 4px" }}>{checkoutNote}</div>}
+              </div>
+            )}
           </span>
         )}
         {engineLive && (
@@ -421,6 +513,22 @@ export function TitleBar({
           </svg>
         </WinButton>
       </div>
+      {plansOpen && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setPlansOpen(false); }}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(4,7,15,0.82)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+        >
+          <div style={{ maxWidth: 860, width: "100%", maxHeight: "86vh", overflowY: "auto", background: "var(--orvyn-surface-1)", border: "1px solid var(--orvyn-border)", borderRadius: 14, padding: 20, position: "relative" }} className="no-drag">
+            <button
+              onClick={() => setPlansOpen(false)}
+              style={{ position: "absolute", top: 10, right: 10, fontSize: 12, cursor: "pointer", background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 7, padding: "4px 10px", color: "var(--orvyn-text)" }}
+            >
+              Close
+            </button>
+            <PlansPanel currentId="free" checkout={checkoutEnabled} onBack={() => setPlansOpen(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
