@@ -117,7 +117,9 @@ export function DesktopView({
       const data = await res.json();
       setSandboxAvailable(data.sandbox === true);
       if (userStopped.current) return;
-      setSession(data.session ?? null);
+      // Polled every 2 s: only a real change re-renders the pane.
+      const next = data.session ?? null;
+      setSession((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
     } catch { /* transient */ }
   }, [projectRoot, runId]);
 
@@ -300,8 +302,10 @@ export function DesktopView({
     if (!el || !session) return;
     const update = () => {
       const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return; // hidden tab: nothing to measure
       const rect = letterboxRect(r.width, r.height, session.width, session.height);
-      setImageRect(rect);
+      // Measured every 400 ms: re-render only when the size really changed.
+      setImageRect((prev) => (prev && prev.x === rect.x && prev.y === rect.y && prev.w === rect.w && prev.h === rect.h ? prev : rect));
       const canvas = canvasRef.current;
       if (canvas) {
         canvas.style.width = `${rect.w}px`;

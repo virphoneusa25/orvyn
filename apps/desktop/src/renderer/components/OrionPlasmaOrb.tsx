@@ -2,9 +2,12 @@ import React from "react";
 import "./orion-plasma-orb.css";
 
 /**
- * 22px plasma orb. CSS transforms and SVG stroke-dashoffset only —
- * no canvas, no requestAnimationFrame. Ribbons are irregular paths on
- * different axes so the loop does not read as one spinning circle.
+ * 22px plasma orb. Every moving part is an HTML layer animated with
+ * transform/opacity only, so the GPU compositor runs it: no per-frame style,
+ * layout or repaint on the main thread (the SVG itself is static art, and
+ * its glow is a static filter, never re-rasterized). Before, SVG-internal
+ * animations (stroke-dashoffset, <g> transforms under a blur filter) forced
+ * ~60 restyles + layouts per second for as long as a run was going.
  */
 export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | "tool" | "waiting" | "done" | "error" }) {
   const uid = React.useId().replace(/:/g, "");
@@ -20,7 +23,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
       <span className="opo__atmo" />
       <span className="opo__conic opo__conic-a" />
       <span className="opo__conic opo__conic-b" />
-      <svg className="opo__svg" viewBox="0 0 64 64" focusable="false">
+      <span className="opo__rot"><svg className="opo__svg" viewBox="0 0 64 64" focusable="false">
         <defs>
           <radialGradient id={core} cx="32%" cy="28%" r="74%">
             <stop offset="0%" stopColor="#ffffff" />
@@ -59,7 +62,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
           </clipPath>
         </defs>
 
-        <g className="opo__spin opo__spin-b" filter={`url(#${glow})`}>
+        <g className="opo__spin opo__spin-b">
           <path
             className="opo__path opo__path-b"
             pathLength={100}
@@ -82,7 +85,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
           <ellipse className="opo__spec opo__spec-b" cx="26" cy="22" rx="2.4" ry="1.2" fill="#d9fbff" />
         </g>
 
-        <g className="opo__spin opo__spin-a" filter={`url(#${glow})`}>
+        <g className="opo__spin opo__spin-a">
           <path
             className="opo__path opo__path-a"
             pathLength={100}
@@ -103,7 +106,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
             opacity="0.85"
           />
         </g>
-      </svg>
+      </svg></span>
     </span>
   );
 }

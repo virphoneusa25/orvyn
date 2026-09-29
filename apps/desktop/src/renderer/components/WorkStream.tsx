@@ -370,26 +370,37 @@ export function WorkStream({
   deliver.current = (text: string) => void send(text);
 
   // The chat handed work to a task run (it needs file/terminal/browser tools).
+  // The listener is registered ONCE and calls the latest handler: re-adding it
+  // on every render left a gap in each commit (old listener removed before the
+  // new one was added) and the handoff row's event, fired in that same commit,
+  // was dropped — the chat said "Preparing this task…" and nothing started.
+  const handoffHandler = React.useRef<(e: Event) => void>(() => undefined);
+  handoffHandler.current = (e: Event) => {
+    const detail = (e as CustomEvent<{ prompt?: string; id?: string }>).detail ?? {};
+    const text = String(detail.prompt ?? "").trim();
+    if (!text) return;
+    const report = (state: HandoffState) => document.dispatchEvent(new CustomEvent("orvyn:handoff-result", { detail: { id: detail.id, ...state } }));
+    report({ status: "received" });
+    void (async () => {
+      try {
+        const outcome = await submitOrvynCommand({
+          prompt: text, mode: "code", forceTask: true, source: "CHAT", projectRoot, previousRunId: run.runId, attachments: chatAttachmentsForHandoff(),
+          requestedModelId, reasoningEffort, permissionMode: accessMode, executionTarget,
+        });
+        if (outcome.kind === "error") throw new Error(outcome.error);
+        if (outcome.kind !== "chat") { ensureChatForRun(text, outcome.runId); onRunStarted(outcome.runId); }
+        report({ status: "started" });
+      } catch (err: any) {
+        setError(err.message);
+        report({ status: "failed", error: err.message });
+      }
+    })();
+  };
   React.useEffect(() => {
-    const onHandoff = (e: Event) => {
-      const text = String((e as CustomEvent<{ prompt?: string }>).detail?.prompt ?? "").trim();
-      if (!text) return;
-      void (async () => {
-        try {
-          const outcome = await submitOrvynCommand({
-            prompt: text, mode: "code", forceTask: true, source: "CHAT", projectRoot, previousRunId: run.runId, attachments: chatAttachmentsForHandoff(),
-            requestedModelId, reasoningEffort, permissionMode: accessMode, executionTarget,
-          });
-          if (outcome.kind === "error") throw new Error(outcome.error);
-          if (outcome.kind !== "chat") { ensureChatForRun(text, outcome.runId); onRunStarted(outcome.runId); }
-        } catch (err: any) {
-          setError(err.message);
-        }
-      })();
-    };
+    const onHandoff = (e: Event) => handoffHandler.current(e);
     document.addEventListener("orvyn:handoff-task", onHandoff);
     return () => document.removeEventListener("orvyn:handoff-task", onHandoff);
-  });
+  }, []);
 
   /**
    * Persists a drag reorder: the list applies instantly (optimistic), then
@@ -1075,18 +1086,44 @@ function StageChip({ name, state }: { name: string; state: StageState }) {
 
 /** Handoffs already launched (one task per chat answer, even across re-renders). */
 const launchedHandoffs = new Set<string>();
+/** What happened to each handoff (kept across re-renders of the chat). */
+const handoffStates = new Map<string, HandoffState>();
 
-/** "Starting this as a task…": launches the task run once, with the user's own words. */
+type HandoffState = { status: "sending" | "received" | "started" | "failed"; error?: string };
+
+/**
+ * "Starting this as a task…": launches the task run once, with the user's own
+ * words, and shows what happened (started, or why it couldn't start). If no
+ * one picked the request up, it is sent once more.
+ */
 function HandoffRow({ id, prompt }: { id: string; prompt: string }) {
+  const [state, setState] = React.useState<HandoffState>(() => handoffStates.get(id) ?? { status: "sending" });
   React.useEffect(() => {
-    if (!prompt || launchedHandoffs.has(id)) return;
-    launchedHandoffs.add(id);
-    document.dispatchEvent(new CustomEvent("orvyn:handoff-task", { detail: { prompt } }));
+    const onResult = (e: Event) => {
+      const d = (e as CustomEvent<HandoffState & { id?: string }>).detail;
+      if (d?.id !== id) return;
+      const next = { status: d.status, error: d.error } as HandoffState;
+      handoffStates.set(id, next);
+      setState(next);
+    };
+    document.addEventListener("orvyn:handoff-result", onResult);
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    if (prompt && !launchedHandoffs.has(id)) {
+      launchedHandoffs.add(id);
+      handoffStates.set(id, { status: "sending" });
+      const send = () => document.dispatchEvent(new CustomEvent("orvyn:handoff-task", { detail: { prompt, id } }));
+      send();
+      retry = setTimeout(() => { if (handoffStates.get(id)?.status === "sending") send(); }, 1500);
+    }
+    return () => { document.removeEventListener("orvyn:handoff-result", onResult); if (retry) clearTimeout(retry); };
   }, [id, prompt]);
+  const label = state.status === "started" ? "Started in your project — progress below."
+    : state.status === "failed" ? `Couldn't start the task: ${state.error ?? "unknown error"}`
+    : "Starting this as a task in your project…";
   return (
-    <div className="stream-status" data-testid="chat-handoff" style={{ marginTop: 6 }}>
-      <span aria-hidden="true" className="stream-status__icon">→</span>
-      <span>Preparing this task in your project…</span>
+    <div className="stream-status" data-testid="chat-handoff" data-state={state.status} style={{ marginTop: 6, color: state.status === "failed" ? "#fbbf24" : undefined }}>
+      <span aria-hidden="true" className="stream-status__icon">{state.status === "started" ? "✓" : state.status === "failed" ? "⚠" : "→"}</span>
+      <span>{label}</span>
     </div>
   );
 }
