@@ -5,7 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { createServer } from "node:http";
 import { CreditLedger } from "./CreditLedger";
-import { BillingService, StripeStore, signStripePayload, verifyStripeSignature, planForPrice } from "./stripe";
+import { BillingService, StripeStore, signStripePayload, verifyStripeSignature, planForPrice, priceIdFor } from "./stripe";
 
 const SECRET = "whsec_test_secret";
 const env = {
@@ -138,4 +138,14 @@ test("checkout uses configured prices only and never creates products", async ()
 test("price ids map back to plans", () => {
   assert.equal(planForPrice("price_pro_y", env), "pro");
   assert.equal(planForPrice("price_unknown", env), null);
+});
+
+test("ANNUAL is the canonical price-variable suffix; YEARLY still resolves", () => {
+  const both = { STRIPE_PRICE_PRO_ANNUAL: "price_pro_a", STRIPE_PRICE_PRO_YEARLY: "price_pro_y" } as NodeJS.ProcessEnv;
+  assert.equal(priceIdFor({ planId: "pro", period: "yearly" }, both), "price_pro_a");
+  const yearlyOnly = { STRIPE_PRICE_PRO_YEARLY: "price_pro_y" } as NodeJS.ProcessEnv;
+  assert.equal(priceIdFor({ planId: "pro", period: "yearly" }, yearlyOnly), "price_pro_y");
+  assert.equal(priceIdFor({ planId: "pro", period: "monthly" }, { STRIPE_PRICE_PRO_MONTHLY: "price_pro_m" } as NodeJS.ProcessEnv), "price_pro_m");
+  assert.equal(priceIdFor({ packId: "pack_10k" }, { STRIPE_PRICE_PACK_10K: "price_pack10k" } as NodeJS.ProcessEnv), "price_pack10k");
+  assert.equal(planForPrice("price_pro_a", both), "pro");
 });

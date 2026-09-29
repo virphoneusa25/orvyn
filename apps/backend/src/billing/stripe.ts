@@ -48,14 +48,21 @@ export function stripeConfig(env: NodeJS.ProcessEnv = process.env): StripeConfig
 /** Configured price id for a plan/period or a credit pack (env), or null. */
 export function priceIdFor(item: { planId?: string; period?: Period; packId?: string }, env: NodeJS.ProcessEnv = process.env): string | null {
   if (item.packId) return env[`STRIPE_PRICE_${item.packId.toUpperCase()}`]?.trim() || null;
-  if (item.planId) return env[`STRIPE_PRICE_${item.planId.toUpperCase()}_${(item.period ?? "monthly").toUpperCase()}`]?.trim() || null;
+  if (item.planId) {
+    const suffix = (item.period ?? "monthly") === "yearly" ? "ANNUAL" : "MONTHLY";
+    // ANNUAL is the canonical repository-variable suffix; YEARLY kept so an
+    // older deployment keeps working.
+    return env[`STRIPE_PRICE_${item.planId.toUpperCase()}_${suffix}`]?.trim()
+      ?? env[`STRIPE_PRICE_${item.planId.toUpperCase()}_YEARLY`]?.trim()
+      ?? null;
+  }
   return null;
 }
 
 /** Reverse lookup: which plan a Stripe price id stands for. */
 export function planForPrice(priceId: string, env: NodeJS.ProcessEnv = process.env): PlanId | null {
   for (const plan of Object.keys(PLANS)) {
-    for (const period of ["MONTHLY", "YEARLY"]) {
+    for (const period of ["MONTHLY", "ANNUAL", "YEARLY"]) {
       if (env[`STRIPE_PRICE_${plan.toUpperCase()}_${period}`]?.trim() === priceId) return plan as PlanId;
     }
   }
