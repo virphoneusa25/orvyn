@@ -26,8 +26,8 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
       <span className="opo__rot"><svg className="opo__svg" viewBox="0 0 64 64" focusable="false">
         <defs>
           <radialGradient id={core} cx="32%" cy="28%" r="74%">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="12%" stopColor="#e7fdff" />
+            <stop offset="0%" stopColor="#d9fbff" />
+            <stop offset="12%" stopColor="#a5f3fc" />
             <stop offset="28%" stopColor="#7af0ff" />
             <stop offset="46%" stopColor="#3b82f6" />
             <stop offset="64%" stopColor="#7c3aed" />
@@ -40,13 +40,13 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
             <stop offset="100%" stopColor="#67e8f9" stopOpacity="0" />
           </radialGradient>
           <linearGradient id={ribbon} x1="0%" y1="10%" x2="100%" y2="90%">
-            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="0%" stopColor="#d9fbff" />
             <stop offset="36%" stopColor="#a5f3fc" />
             <stop offset="70%" stopColor="#c4b5fd" />
-            <stop offset="100%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#c4b5fd" />
           </linearGradient>
           <linearGradient id={ribbon2} x1="100%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#f0fdff" />
+            <stop offset="0%" stopColor="#a5f3fc" />
             <stop offset="40%" stopColor="#22d3ee" />
             <stop offset="100%" stopColor="#e879f9" />
           </linearGradient>
@@ -81,7 +81,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
             <ellipse className="opo__blob opo__blob-b" cx="22" cy="24" rx="12" ry="7" fill="#f4fdff" opacity="0.7" />
             <ellipse cx="36" cy="46" rx="9" ry="5" fill="#ff4ad8" opacity="0.5" />
           </g>
-          <ellipse className="opo__spec" cx="22.5" cy="19.5" rx="6.2" ry="3.2" fill="#ffffff" />
+          <ellipse className="opo__spec" cx="22.5" cy="19.5" rx="6.2" ry="3.2" fill="#cffafe" />
           <ellipse className="opo__spec opo__spec-b" cx="26" cy="22" rx="2.4" ry="1.2" fill="#d9fbff" />
         </g>
 
@@ -100,7 +100,7 @@ export function OrionPlasmaOrb({ motion = "thinking" }: { motion?: "thinking" | 
             pathLength={100}
             d="M14 18 C28 4 52 10 56 28 C60 46 36 54 22 42 C12 34 8 26 14 18"
             fill="none"
-            stroke="#ffffff"
+            stroke="#a5f3fc"
             strokeWidth="2.6"
             strokeLinecap="round"
             opacity="0.85"

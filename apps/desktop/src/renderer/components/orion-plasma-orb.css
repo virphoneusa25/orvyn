@@ -34,9 +34,9 @@
 
 .opo {
   position: relative;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 22px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
   overflow: visible;
   /* Nothing inside affects the page's layout or paint. */
   contain: layout paint style;
@@ -53,8 +53,8 @@
 .opo::before {
   inset: -5px -7px;
   border: 2.5px solid transparent;
-  border-top-color: #ffffff;
-  border-right-color: #7af0ff;
+  border-top-color: #7af0ff;
+  border-right-color: #22d3ee;
   border-bottom-color: rgba(167, 139, 250, 0.15);
   opacity: 0.9;
   animation: opo-spin 4.6s linear infinite;
@@ -64,7 +64,7 @@
   border: 2px solid transparent;
   border-left-color: #f5d0fe;
   border-bottom-color: #e879f9;
-  border-top-color: rgba(255, 255, 255, 0.2);
+  border-top-color: rgba(122, 240, 255, 0.2);
   opacity: 0.85;
   animation: opo-spin 6.2s linear infinite reverse;
 }
@@ -88,27 +88,27 @@
   mask: radial-gradient(circle, transparent 22%, #000 40%, #000 78%, transparent 90%);
 }
 .opo__conic-a {
-  background: conic-gradient(from 12deg, transparent 0 8%, #ffffff 18%, #7af0ff 30%, transparent 44%, #e879f9 60%, #ffffff 72%, transparent 84%, #67e8f9 94%, transparent 100%);
+  background: conic-gradient(from 12deg, transparent 0 8%, #a5f3fc 18%, #7af0ff 30%, transparent 44%, #e879f9 60%, #c4b5fd 72%, transparent 84%, #67e8f9 94%, transparent 100%);
   animation: opo-spin 4.6s linear infinite;
 }
 .opo__conic-b {
-  background: conic-gradient(from 200deg, transparent 0 14%, #f0fdff 28%, #c084fc 42%, transparent 56%, #22d3ee 74%, #ffffff 84%, transparent 100%);
+  background: conic-gradient(from 200deg, transparent 0 14%, #a5f3fc 28%, #c084fc 42%, transparent 56%, #22d3ee 74%, #67e8f9 84%, transparent 100%);
   animation: opo-spin 6.2s linear infinite reverse;
 }
 /* The whole SVG turns as one composited layer; its art is static. */
 .opo__rot {
   position: relative;
   display: block;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   will-change: transform;
   animation: opo-spin 9.4s linear infinite;
   filter: drop-shadow(0 0 1.5px rgba(122, 240, 255, 0.55));
 }
 .opo__svg {
   position: relative;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   overflow: visible;
   display: block;
 }

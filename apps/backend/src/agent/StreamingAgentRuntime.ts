@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
+import { budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
 import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
@@ -266,6 +267,8 @@ interface RunState {
   /** Runtime notes for the model (preview URL announcements, loop warnings).
    * Drained onto the next model turn as [Runtime note] messages. */
   pendingNotes: string[];
+  /** One-shot soft budget warning fired at 75% of the run's token cap. */
+  budgetWarned?: boolean;
   /** Whether the canonical preview URL has been announced to the model. */
   previewUrlAnnounced?: boolean;
   /** Recent successful tool signatures — identical repeats with no useful
@@ -1436,6 +1439,26 @@ export class StreamingAgentRuntime {
           return this.modelService.router.resolve("agent");
         })();
     this.store.create(runId, projectRoot);
+    // The user attached an image (a logo, a screenshot): a model without
+    // vision literally cannot see it, and "use the logo attached" degrades
+    // to a note about a file the model can never look at. Route the run to
+    // a vision-capable model. Field data keeps the internals; the customer
+    // card stays vendor-free ("ORION switched to a compatible vision model").
+    const hasImageAttachment = (attachments ?? []).some((a) => a.kind === "image" && a.b64);
+    if (hasImageAttachment && !provider.supportsVision()) {
+      const visionProvider = pickVisionFallback(registered, provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
+      if (visionProvider) {
+        const previousModel = provider.config.id;
+        provider = visionProvider;
+        this.store.emit(runId, "model.fallback", {
+          requestedModel: requestedModelId ?? "auto",
+          actualModel: visionProvider.config.id,
+          previousModel,
+          fallbackReason: "image attachment: routing to a vision-capable model",
+          reason: "vision attachment",
+        });
+      }
+    }
     if (options?.workspaceId) {
       this.store.bindWorkspace(runId, options.workspaceId);
       console.log(JSON.stringify({
@@ -2357,6 +2380,13 @@ export class StreamingAgentRuntime {
         if (capTokens > 0 && spent >= capTokens) {
           const f = fail("This run reached its execution limit before verification completed. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `tokens: ${spent}/${capTokens} (ORVYN_RUN_MAX_TOKENS)` });
           return { outcome: f.outcome, reason: f.reason };
+        }
+        // Soft budget: at 75% the run is TOLD to wrap up, so it finishes
+        // with a verified summary instead of dying at the hard cap
+        // mid-verification (the failure mode users saw as "stuck then failed").
+        if (budgetWarnLevel(spent, capTokens, Boolean(state.budgetWarned)) === "warn") {
+          state.budgetWarned = true;
+          state.pendingNotes.push(budgetWrapNote(Math.round((spent / capTokens) * 100)));
         }
         state.modelCalls++;
         return null;
