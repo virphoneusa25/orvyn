@@ -201,7 +201,10 @@ export function BrowserWorkbench({
     <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
       {/* Which ORION browser session and viewport this tab shows (for checks; not displayed). */}
       {tab?.sessionId && <span hidden data-testid="workbench-browser-session" data-session-id={tab.sessionId} data-viewport={tab.viewport ? `${tab.viewport.preset}:${tab.viewport.width}x${tab.viewport.height}` : "desktop"} />}
-      {!fullscreen && (
+      {/* The nav/tab row is chrome for the docked pane. Expanded mode is a
+          focused view of one surface — it gets the whole window and only an
+          exit affordance (Esc), not the tab box. */}
+      {!fullscreen && !expanded && (
       <div data-testid="preview-controls" className="wb-navrow">
         <button className="wb-icon" title="Back" aria-label="Back" disabled={!tab?.canGoBack} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
         <button className="wb-icon" title="Forward" aria-label="Forward" disabled={!tab?.canGoForward} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
@@ -309,13 +312,13 @@ export function BrowserWorkbench({
         </div>
         </div>
       )}
-      {fullscreen && (
+      {(fullscreen || expanded) && (
         <button
-          data-testid="preview-exit-fullscreen"
-          onClick={() => setFullscreen(false)}
+          data-testid={fullscreen ? "preview-exit-fullscreen" : "preview-exit-expanded"}
+          onClick={() => { if (fullscreen) setFullscreen(false); else setExpanded(false); }}
           style={{ position: "absolute", top: 10, right: 10, zIndex: 7, ...ghostBtn(), background: "rgba(11,18,32,0.85)" }}
         >
-          Exit Full Screen (Esc)
+          {fullscreen ? "Exit Full Screen (Esc)" : "Exit Expanded (Esc)"}
         </button>
       )}
       {kind === "preview" && !fullscreen && (
