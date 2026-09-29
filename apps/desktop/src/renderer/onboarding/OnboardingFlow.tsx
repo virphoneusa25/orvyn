@@ -33,7 +33,7 @@ import {
   type Step,
 } from "./onboardingModel";
 import { LOCAL_BACKEND_URL, ORVYN_CLOUD_URL, getConnectionConfig, isSessionToken, secureBackendUrl } from "../connection";
-import { signInWithCredentials } from "../connectionRuntime";
+import { adoptBrowserSession, signInWithCredentials } from "../connectionRuntime";
 import "./onboarding.css";
 
 interface ProvisionLine { id: string; label: string; done: boolean; detail?: string }
@@ -120,6 +120,12 @@ const ICON: Record<string, React.ReactNode> = {
 
 const WORKSPACE_ICON: Record<string, string> = { new_project: "plus", local_folder: "folder", clone_repo: "git", github: "github", none: "none" };
 const RECAP_ICON: Record<string, string> = { name: "user", primary_use: "briefcase", goals: "spark", work_style: "plan", response_style: "concise", memory: "memory", workspace: "folder", github: "github" };
+
+function b64url(bytes: Uint8Array): string {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
 function Check({ on }: { on: boolean }) {
   return <span className="ob-check" aria-hidden="true">{on ? ICON.check : null}</span>;
@@ -444,15 +450,63 @@ function SignupScreen({ providers, onSignedIn, initialMode }: { providers: Provi
     if (!r.ok) { setError(r.error); return; }
     await onSignedIn();
   }
+  const [browserWait, setBrowserWait] = useState<null | { provider: string; cancel: () => void }>(null);
+  const [resetNote, setResetNote] = useState("");
+  // Google/GitHub: sign in in the browser; this app then claims its session
+  // with a secret only it holds. No session token ever travels in a URL.
   const social = (provider: "google" | "github") => {
     const enabled = providers[provider];
     return (
-      <button type="button" className="ob-btn ob-btn--secondary ob-btn--block" disabled={!enabled} title={enabled ? undefined : "Not switched on yet"}
-        onClick={() => { void window.orvyn.window.openExternal?.(`${accountBase()}/api/v1/auth/oauth/${provider}/start?client=desktop`); }}>
+      <button type="button" className="ob-btn ob-btn--secondary ob-btn--block" disabled={!enabled || Boolean(browserWait)} title={enabled ? undefined : "Not switched on yet"}
+        data-testid={`ob-oauth-${provider}`}
+        onClick={() => { void browserSignIn(provider); }}>
         {provider === "google" ? ICON.google : ICON.github} Continue with {provider === "google" ? "Google" : "GitHub"}
       </button>
     );
   };
+  async function browserSignIn(provider: "google" | "github") {
+    setError("");
+    const rand = (n: number) => { const b = new Uint8Array(n); crypto.getRandomValues(b); return b64url(b); };
+    const hid = rand(24);
+    const verifier = rand(32);
+    const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+    const base = accountBase();
+    let cancelled = false;
+    setBrowserWait({ provider, cancel: () => { cancelled = true; setBrowserWait(null); } });
+    void window.orvyn.window.openExternal?.(`${base}/api/v1/auth/oauth/${provider}/start?client=desktop&hid=${hid}&challenge=${challenge}`);
+    const until = Date.now() + 10 * 60_000;
+    while (!cancelled && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 2000));
+      if (cancelled) return;
+      try {
+        const r = await fetch(`${base}/api/v1/auth/handoff/claim`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hid, verifier, device: navigator.userAgent }) });
+        if (r.status === 202) continue;
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.token) {
+          await adoptBrowserSession(base, d);
+          setBrowserWait(null);
+          await onSignedIn();
+          return;
+        }
+        setError(d.error || "Sign-in didn't finish. Try again.");
+        break;
+      } catch { /* offline for a moment: keep waiting */ }
+    }
+    if (!cancelled && Date.now() >= until) setError("Sign-in timed out. Try again.");
+    setBrowserWait(null);
+  }
+  async function forgotPassword() {
+    setTouched(true);
+    if (!validEmail(email)) { setError("Enter your email above, then choose Forgot password."); return; }
+    setError("");
+    try {
+      const r = await fetch(`${accountBase()}/api/v1/auth/password/forgot`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+      const d = await r.json().catch(() => ({}));
+      setResetNote(d.message || "If an account uses that email, a reset link is on its way.");
+    } catch {
+      setError("Couldn't reach ORVYN. Try again in a moment.");
+    }
+  }
   return (
     <>
       <OnboardingOrb state="idle" size={150} />
@@ -487,9 +541,17 @@ function SignupScreen({ providers, onSignedIn, initialMode }: { providers: Provi
           </div>
         ) : null}
         {error ? <p className="ob-error" role="alert">{error}</p> : null}
-        <button type="submit" className="ob-btn ob-btn--primary ob-btn--block" disabled={busy}>
+        {resetNote ? <p className="ob-note" role="status" data-testid="ob-reset-note">{resetNote}</p> : null}
+        {browserWait ? (
+          <p className="ob-note" role="status" data-testid="ob-browser-wait">
+            Finish signing in with {browserWait.provider === "google" ? "Google" : "GitHub"} in your browser — ORVYN continues on its own.{" "}
+            <button type="button" className="ob-link" onClick={browserWait.cancel}>Cancel</button>
+          </p>
+        ) : null}
+        <button type="submit" className="ob-btn ob-btn--primary ob-btn--block" disabled={busy || Boolean(browserWait)}>
           {busy ? "One moment…" : mode === "register" ? "Create Free Account" : "Sign In"}
         </button>
+        {mode === "login" ? <button type="button" className="ob-link" data-testid="ob-forgot" onClick={() => void forgotPassword()}>Forgot password?</button> : null}
       </form>
       <p className="ob-note">
         {mode === "register" ? "Already have an account? " : "New to ORVYN? "}
@@ -792,9 +854,12 @@ function GithubScreen({ available, connected, onLater, onConnected }: { availabl
         {connected ? (
           <button className="ob-btn ob-btn--primary" onClick={onLater}>Connected — Continue {ICON.arrow}</button>
         ) : (
-          <button className="ob-btn ob-btn--primary" disabled={!available || waiting} onClick={() => {
+          <button className="ob-btn ob-btn--primary" data-testid="ob-github-connect" disabled={!available || waiting} onClick={async () => {
+            // A one-time link from this signed-in app; the browser never carries the session.
+            const r = await call<{ url?: string; error?: string }>("/auth/github/connect-link", { method: "POST", body: {} }).catch(() => null);
+            if (!r?.ok || !r.data.url) return;
             setWaiting(true);
-            void window.orvyn.window.openExternal?.(`${accountBase()}/api/v1/onboarding/github/start`);
+            void window.orvyn.window.openExternal?.(r.data.url);
           }}>{waiting ? "Waiting for GitHub…" : "Connect GitHub"}</button>
         )}
         {!available ? <p className="ob-note">GitHub connection isn't switched on for this server yet. You can connect it later from Settings.</p> : null}

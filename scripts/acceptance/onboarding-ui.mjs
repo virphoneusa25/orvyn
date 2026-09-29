@@ -61,6 +61,34 @@ const model = createServer((req, res) => {
   });
 });
 
+// A mock Google for the browser sign-in (checks the PKCE challenge).
+const IDP_PORT = 4803;
+const idpCodes = new Map();
+const idp = createServer((req, res) => {
+  let raw = ""; req.on("data", (d) => (raw += d));
+  req.on("end", async () => {
+    const { createHash, randomBytes } = await import("node:crypto");
+    const u = new URL(req.url, `http://127.0.0.1:${IDP_PORT}`);
+    res.setHeader("Content-Type", "application/json");
+    if (u.pathname === "/authorize") {
+      const code = randomBytes(9).toString("base64url");
+      idpCodes.set(code, u.searchParams.get("code_challenge"));
+      const back = new URL(u.searchParams.get("redirect_uri"));
+      back.searchParams.set("code", code); back.searchParams.set("state", u.searchParams.get("state"));
+      res.writeHead(302, { Location: back.toString() }); return res.end();
+    }
+    if (u.pathname === "/token") {
+      const p = new URLSearchParams(raw);
+      const challenge = idpCodes.get(p.get("code"));
+      const ok = challenge && createHash("sha256").update(p.get("code_verifier") ?? "").digest("base64url") === challenge;
+      if (!ok) { res.statusCode = 400; return res.end(JSON.stringify({ error: "invalid_grant" })); }
+      return res.end(JSON.stringify({ access_token: "idp-token" }));
+    }
+    if (u.pathname === "/v1/userinfo") return res.end(JSON.stringify({ sub: "google-777", email: "googler@example.com", email_verified: true, name: "Googler" }));
+    res.statusCode = 404; res.end("{}");
+  });
+});
+
 const api = async (path, method = "GET", body, token) => {
   const r = await fetch(`${BASE}/api/v1${path}`, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch {}
@@ -96,7 +124,11 @@ const cont = (win) => win.getByRole("button", { name: /^Continue/ }).first().cli
 
 async function main() {
   await new Promise((r) => model.listen(MODEL_PORT, "127.0.0.1", r));
+  await new Promise((r) => idp.listen(IDP_PORT, "127.0.0.1", r));
+  const IDPU = `http://127.0.0.1:${IDP_PORT}`;
   const env = {
+    GOOGLE_CLIENT_ID: "g-client", GOOGLE_CLIENT_SECRET: "g-secret",
+    ORVYN_OAUTH_GOOGLE_AUTHORIZE: `${IDPU}/authorize`, ORVYN_OAUTH_GOOGLE_TOKEN: `${IDPU}/token`, ORVYN_OAUTH_GOOGLE_API: IDPU,
     ...process.env, ORVYN_DATA_DIR: dataDir, PORT: String(PORT), ORVYN_VAULT_KEY: Buffer.alloc(32, 7).toString("base64"),
     ORVYN_MAIL_CAPTURE: mailDir, ORVYN_PUBLIC_ORIGIN: BASE,
     MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", OPENAI_CODE_MODEL: "scripted-agent",
@@ -277,13 +309,44 @@ async function main() {
     ({ app, win } = await launch(staleData));
     ok(await waitStep(win, "welcome", 15000), "an expired session never opens ORVYN", String(await step(win)));
     await closeApp(app);
+
+    console.log("\n11. Forgot password, and Continue with Google (in the browser)");
+    const gData = join(work, "google-install");
+    mkdirSync(gData, { recursive: true });
+    ({ app, win } = await launch(gData));
+    await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u); }; });
+    ok(await waitStep(win, "welcome", 15000), "welcome");
+    await win.locator("[data-testid=ob-welcome-signin]").click();
+    await win.locator("#ob-email").fill("royce@example.com");
+    await win.locator("[data-testid=ob-forgot]").click();
+    await sleep(800);
+    ok(/reset link is on its way/.test(await win.locator("[data-testid=ob-reset-note]").innerText().catch(() => "")), "Forgot password? sends a reset link (same answer for any email)");
+    ok(mails().some((m) => m.to === "royce@example.com" && /Reset your ORVYN password/.test(m.subject)), "…and the email arrives");
+    await win.locator("[data-testid=ob-oauth-google]").click();
+    let opened = null;
+    for (let i = 0; i < 20 && !opened; i++) { await sleep(250); opened = (await app.evaluate(() => globalThis.__opened))[0] ?? null; }
+    ok(Boolean(opened) && /oauth\/google\/start\?client=desktop&hid=[\w-]{22,}&challenge=[\w-]{43}$/.test(opened), "the system browser opens Google sign-in (with a challenge, no token)", opened);
+    ok(await win.locator("[data-testid=ob-browser-wait]").isVisible().catch(() => false), "ORVYN waits: finish signing in in your browser");
+    let url = opened, page = "";
+    for (let i = 0; i < 6; i++) {
+      const r = await fetch(url, { redirect: "manual" });
+      if (r.status >= 300 && r.status < 400) { url = new URL(r.headers.get("location"), url).toString(); continue; }
+      page = await r.text(); break;
+    }
+    ok(/signed in/.test(page) && !/orvsess_/.test(page) && !/orvsess_/.test(url), "the browser shows 'You're signed in' — no token in the page or URL");
+    let moved = false;
+    for (let i = 0; i < 40 && !moved; i++) { await sleep(250); const st = await step(win); moved = Boolean(st) && st !== "signup" && st !== "welcome"; }
+    ok(moved, "ORVYN picks the sign-in up on its own and continues setup", String(await step(win)));
+    const googler = await api("/auth/login", "POST", { email: "googler@example.com", password: "x" });
+    ok(googler.status === 401, "the Google account has no password (signs in with Google)");
+    await closeApp(app);
     app = null;
   } catch (e) {
     failures++; console.error("HARNESS ERROR:", e.stack ?? e.message);
     if (win) await shot(win, "zz-error");
   } finally {
     if (app) await closeApp(app);
-    server.kill("SIGKILL"); model.close();
+    server.kill("SIGKILL"); model.close(); idp.close();
   }
   console.log(`\nScreens: ${shots}`);
   if (failures) console.log("--- control plane log (tail) ---\n" + log.join("").slice(-2500));

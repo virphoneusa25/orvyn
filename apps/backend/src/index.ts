@@ -157,7 +157,13 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
 app.use("/api/v1/billing/return", billingReturnRouter);
-app.use("/api/v1/auth", ipRateLimit(), authRouter);
+// Credential endpoints (sign-up, sign-in, reset, provider starts) get the
+// strict per-IP limit; session reads and the desktop's sign-in polling a
+// looser one, so an app waiting for the browser never trips the limiter.
+const strictAuthLimit = ipRateLimit();
+const sessionAuthLimit = ipRateLimit(Number(process.env.ORVYN_AUTH_SESSION_RATE_LIMIT_RPM) || 300);
+const CREDENTIAL_PATHS = /^\/(register|login|password\/|verification\/(resend|change-email)|oauth\/[^/]+\/start)/;
+app.use("/api/v1/auth", (req, res, next) => (CREDENTIAL_PATHS.test(req.path) ? strictAuthLimit : sessionAuthLimit)(req, res, next), authRouter);
 // Onboarding is signed in and saves every screen (plus analytics): a person
 // clicking through quickly must never hit the sign-in brute-force limit.
 app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RATE_LIMIT_RPM) || 240), onboardingRouter);

@@ -19,6 +19,7 @@ import {
 } from "../onboarding/OnboardingStore";
 import { provisionAccount, provisioningStatus, verificationRequired } from "../onboarding/provisioning";
 import { applyPreferences } from "../onboarding/applyPreferences";
+import { githubConnection } from "../integrations/githubConnection";
 
 export const onboardingRouter = Router();
 
@@ -119,6 +120,13 @@ onboardingRouter.post("/event", (req, res) => {
   if (!ANALYTICS_EVENTS.has(name)) return res.status(400).json({ error: "Unknown event" });
   onboardingStore().track(s?.user.id ?? null, name, (req.body?.props ?? {}) as Record<string, string | number | boolean>);
   res.json({ ok: true });
+});
+
+/** Whether this account has connected GitHub (repository access). */
+onboardingRouter.get("/github", (req, res) => {
+  const s = session(req);
+  if (!s) return res.status(401).json({ error: "Not signed in" });
+  res.json(githubConnection(s.user.id));
 });
 
 /** Public plan list for the pricing screens (from the billing configuration). */

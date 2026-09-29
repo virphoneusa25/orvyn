@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
 import { SkillsPage } from "./SkillsPage";
 import { UsageStatsPage } from "./UsageStatsPage";
+import { ModelManager } from "./ModelManager";
+import { BillingPanel } from "./BillingPanel";
+import { AccountSecurity } from "./AccountSecurity";
 import logo from "../assets/logo-lockup.png";
-import mark from "../assets/icon.png";
 import "../styles/settings-screen.css";
 
 type SectionId =
@@ -47,37 +49,6 @@ const NAV: { label: string; items: { id: SectionId; label: string; icon: React.R
   },
 ];
 
-interface Provider {
-  id: string;
-  name: string;
-  desc: string;
-  warn?: boolean;
-  connected?: boolean;
-  blurb: string;
-  baseUrl: string;
-  format: string;
-}
-
-const PROVIDERS: Provider[] = [
-  { id: "auto", name: "ORVYN Auto", desc: "Best model for your task", blurb: "ORVYN picks the lowest-cost model that can finish the task, then escalates only when the work needs it.", baseUrl: "https://orvyn.virphoneusa.com/v1", format: "ORVYN lane" },
-  { id: "openai", name: "OpenAI", desc: "Official OpenAI models", connected: true, blurb: "Access to OpenAI's latest models including GPT-5, GPT-4 and reasoning models.", baseUrl: "https://api.openai.com/v1", format: "Responses (v1)" },
-  { id: "anthropic", name: "Anthropic", desc: "Claude models", blurb: "Claude models for long context, coding recovery, and careful reasoning.", baseUrl: "https://api.anthropic.com", format: "Messages (v1)" },
-  { id: "fireworks", name: "Fireworks", desc: "Fast inference", blurb: "Low-latency open models for fast answers and image generation.", baseUrl: "https://api.fireworks.ai/inference/v1", format: "Chat completions" },
-  { id: "gemini", name: "Gemini", desc: "Google models", blurb: "Gemini models for long context and multimodal reading.", baseUrl: "https://generativelanguage.googleapis.com/v1beta", format: "Generate content" },
-  { id: "openrouter", name: "OpenRouter", desc: "Access 300+ models", warn: true, blurb: "One key for hundreds of models. ORVYN still bills the lane, not the raw provider price.", baseUrl: "https://openrouter.ai/api/v1", format: "Chat completions" },
-  { id: "custom", name: "Custom Provider", desc: "Any OpenAI-compatible API", blurb: "Point ORVYN at an OpenAI-compatible base URL and key.", baseUrl: "https://", format: "Chat completions" },
-];
-
-const MODELS = [
-  { name: "GPT-5.6 Sol", window: "1M", caps: ["Vision", "Reasoning", "Tools"], mark: "sol" },
-  { name: "GPT-5.6 Luna", window: "1M", caps: ["Vision", "Tools"], mark: "luna" },
-  { name: "GPT-5.6 Terra", window: "1M", caps: ["Vision", "Tools"], mark: "terra" },
-  { name: "GPT-5.4", window: "1M", caps: ["Vision", "Tools"], mark: "gpt" },
-  { name: "GLM-5.3", window: "1M", caps: ["Vision", "Code"], mark: "glm" },
-  { name: "Kimi K2.7 Code", window: "1M", caps: ["Code", "Tools"], mark: "kimi" },
-  { name: "Claude 4 Sonnet", window: "200K", caps: ["Vision", "Tools"], mark: "claude" },
-];
-
 export function SettingsScreen({
   userName,
   planLabel,
@@ -100,12 +71,6 @@ export function SettingsScreen({
       .catch(() => undefined);
     return () => { cancel = true; };
   }, []);
-  const [providerId, setProviderId] = useState("openai");
-  const [enabled, setEnabled] = useState<Record<string, boolean>>({ openai: true, auto: true, anthropic: true, fireworks: true, gemini: true, openrouter: true, custom: true });
-  const [modelsOn, setModelsOn] = useState<Record<string, boolean>>(() => Object.fromEntries(MODELS.map((m) => [m.name, true])));
-  const [showKey, setShowKey] = useState(false);
-  const provider = PROVIDERS.find((p) => p.id === providerId) ?? PROVIDERS[1];
-
   return (
     <div className="settings-screen">
       <aside className="settings-side">
@@ -145,17 +110,11 @@ export function SettingsScreen({
       </aside>
       <main className="settings-main">
         {section === "models" ? (
-          <ModelSettings
-            provider={provider}
-            enabled={enabled[provider.id] !== false}
-            onToggleEnabled={() => setEnabled((s) => ({ ...s, [provider.id]: s[provider.id] === false }))}
-            onPick={setProviderId}
-            showKey={showKey}
-            onToggleKey={() => setShowKey((v) => !v)}
-            modelsOn={modelsOn}
-            onToggleModel={(name) => setModelsOn((s) => ({ ...s, [name]: !s[name] }))}
-          />
-        ) : section === "usage" ? (
+          <ModelManager />
+        ) : section === "billing" ? (
+          <BillingPanel />
+        ) : section === "security" ? (
+          <AccountSecurity />        ) : section === "usage" ? (
           <UsageStatsPage />
         ) : section === "skills" ? (
           <SkillsPage />
@@ -168,165 +127,6 @@ export function SettingsScreen({
       </main>
     </div>
   );
-}
-
-function ModelSettings({
-  provider, enabled, onToggleEnabled, onPick, showKey, onToggleKey, modelsOn, onToggleModel,
-}: {
-  provider: Provider;
-  enabled: boolean;
-  onToggleEnabled: () => void;
-  onPick: (id: string) => void;
-  showKey: boolean;
-  onToggleKey: () => void;
-  modelsOn: Record<string, boolean>;
-  onToggleModel: (name: string) => void;
-}) {
-  return (
-    <>
-      <h1>Model settings</h1>
-      <p className="settings-lead">Manage model providers and configure access to AI models. Once configured, they can be selected during chat.</p>
-      <div className="settings-grid">
-        <section className="settings-card">
-          <div className="settings-card__head">
-            Providers
-            <button type="button" className="settings-icon-btn" aria-label="Add provider">+</button>
-          </div>
-          {PROVIDERS.map((p) => (
-            <button key={p.id} type="button" className={`settings-provider${p.id === provider.id ? " is-on" : ""}`} onClick={() => onPick(p.id)}>
-              <span className="settings-provider__mark">{p.id === "auto" ? <img src={mark} alt="" /> : <ProviderMark id={p.id} />}</span>
-              <span style={{ minWidth: 0, flex: 1 }}>
-                <span className="settings-provider__name">{p.name}</span>
-                <span className="settings-provider__desc">{p.desc}</span>
-              </span>
-              {p.id === "custom" ? <span style={{ color: "#8b97b0" }}>+</span> : <span className={`settings-dot${p.warn ? " is-warn" : ""}`} />}
-            </button>
-          ))}
-        </section>
-        <div>
-          <section className="settings-card">
-            <div className="settings-provider-head">
-              <span className="settings-provider__mark" style={{ width: 40, height: 40 }}><ProviderMark id={provider.id} /></span>
-              <div style={{ minWidth: 0 }}>
-                <h2>
-                  {provider.name}
-                  {provider.connected && <span className="settings-connected">Connected</span>}
-                </h2>
-                <p>{provider.blurb}</p>
-              </div>
-              <div className="settings-head-actions">
-                <span>Enabled</span>
-                <Toggle on={enabled} onClick={onToggleEnabled} label={`${provider.name} enabled`} />
-                <button type="button" className="settings-gear" aria-label="Provider menu">···</button>
-              </div>
-            </div>
-            <div className="settings-fields">
-              <div className="settings-field">
-                <label>Base URL</label>
-                <input readOnly value={provider.baseUrl} />
-              </div>
-              <div className="settings-field">
-                <label>API format</label>
-                <select defaultValue={provider.format}><option>{provider.format}</option></select>
-              </div>
-            </div>
-            <div className="settings-key">
-              <label>API key</label>
-              <div className="settings-key__row">
-                <input readOnly type={showKey ? "text" : "password"} value="sk-orvyn-demo-key-000000" />
-                <button type="button" onClick={onToggleKey} aria-label={showKey ? "Hide API key" : "Show API key"}><Eye /></button>
-                <button type="button">Get API key ↗</button>
-              </div>
-            </div>
-          </section>
-
-          <section className="settings-card settings-quota">
-            <div className="settings-quota__top">
-              <b>Usage & quota</b>
-              <span>
-                <span className="settings-renew">Renews Sep 30, 2025</span>
-                <button type="button" className="settings-manage">Manage plan</button>
-              </span>
-            </div>
-            <div className="settings-meters">
-              <Meter icon={<Clock />} label="5-hour remaining" pct="100%" sub="21:31 left" width="100%" />
-              <Meter icon={<Cal />} label="Weekly remaining" pct="15%" sub="12K / 80K requests" width="15%" />
-              <Meter icon={<Card />} label="Monthly credits" pct="62%" sub="248K / 400K" width="62%" />
-              <Meter icon={<Spark />} label="ZCode MCP" pct="100%" sub="Included" width="100%" />
-            </div>
-          </section>
-
-          <section className="settings-card settings-models">
-            <div className="settings-models__top">
-              <b>Model list</b>
-              <button type="button" className="settings-add">+ Add model</button>
-            </div>
-            <table className="settings-table">
-              <thead>
-                <tr>
-                  <th>Model name</th>
-                  <th>Context window</th>
-                  <th>Capabilities</th>
-                  <th>Actions</th>
-                  <th>Enabled</th>
-                </tr>
-              </thead>
-              <tbody>
-                {MODELS.map((m) => (
-                  <tr key={m.name}>
-                    <td>
-                      <span className="settings-model"><ModelGlyph kind={m.mark} /> {m.name}</span>
-                    </td>
-                    <td>{m.window}</td>
-                    <td>
-                      <span className="settings-caps">{m.caps.map((c) => <span key={c} className="settings-cap">{c}</span>)}</span>
-                    </td>
-                    <td>
-                      <span className="settings-row-actions">
-                        <button type="button" aria-label={`Configure ${m.name}`}><Sliders /></button>
-                        <button type="button" aria-label={`Edit ${m.name}`}><Pencil /></button>
-                      </span>
-                    </td>
-                    <td><Toggle on={modelsOn[m.name] !== false} onClick={() => onToggleModel(m.name)} label={`${m.name} enabled`} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function Meter({ icon, label, pct, sub, width }: { icon: React.ReactNode; label: string; pct: string; sub: string; width: string }) {
-  return (
-    <div className="settings-meter">
-      <div className="settings-meter__label">{icon}{label}</div>
-      <div className="settings-meter__pct">{pct}</div>
-      <div className="settings-meter__sub">{sub}</div>
-      <div className="settings-bar"><div style={{ width }} /></div>
-    </div>
-  );
-}
-
-function Toggle({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
-  return <button type="button" className={`settings-toggle${on ? " is-on" : ""}`} aria-pressed={on} aria-label={label} onClick={onClick}><i /></button>;
-}
-
-function ProviderMark({ id }: { id: string }) {
-  if (id === "auto") return <img src={mark} alt="" style={{ width: 22, height: 22 }} />;
-  if (id === "openai") return <OpenAIMark />;
-  if (id === "anthropic") return <span style={{ fontWeight: 700, fontSize: 14 }}>A</span>;
-  if (id === "fireworks") return <Spark />;
-  if (id === "gemini") return <span style={{ color: "#7aa2ff" }}>✦</span>;
-  if (id === "openrouter") return <span style={{ fontSize: 12 }}>⇆</span>;
-  return <Box />;
-}
-
-function ModelGlyph({ kind }: { kind: string }) {
-  const color = kind === "sol" ? "#7aa2ff" : kind === "luna" ? "#c4bfff" : kind === "terra" ? "#86efac" : kind === "glm" ? "#c4b5fd" : kind === "kimi" ? "#93c5fd" : kind === "claude" ? "#fdba74" : "#9aa6bd";
-  return <span style={{ color, width: 16, display: "inline-grid", placeItems: "center" }}>{kind === "claude" ? "✶" : kind === "kimi" ? "K" : kind === "glm" ? "✧" : "◎"}</span>;
 }
 
 function Svg({ children }: { children: React.ReactNode }) {
@@ -357,10 +157,3 @@ function Clock() { return <Svg><circle cx="12" cy="12" r="9" /><path d="M12 7v6l
 function Cal() { return <Svg><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></Svg>; }
 function Box() { return <Svg><path d="M21 8 12 3 3 8l9 5 9-5zM3 8v8l9 5 9-5V8" /></Svg>; }
 function Eye() { return <Svg><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></Svg>; }
-function OpenAIMark() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="currentColor" d="M12 2.2c.7 0 1.3.4 1.6 1l2.2 3.8 4.4.6c.7.1 1.2.6 1.3 1.3.1.7-.2 1.3-.7 1.8l-3.2 3.1.8 4.3c.1.7-.2 1.4-.8 1.8-.6.4-1.3.4-1.9.1L12 18.1 8.3 20c-.6.3-1.3.3-1.9-.1-.6-.4-.9-1.1-.8-1.8l.8-4.3-3.2-3.1c-.5-.5-.8-1.1-.7-1.8.1-.7.6-1.2 1.3-1.3l4.4-.6 2.2-3.8c.3-.6.9-1 1.6-1z" />
-    </svg>
-  );
-}

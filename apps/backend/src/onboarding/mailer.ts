@@ -74,6 +74,49 @@ export function verificationMail(input: { to: string; name?: string | null; link
   return { to: input.to, subject: "Confirm your ORVYN account", text, html };
 }
 
+function frame(title: string, paragraphs: string[], button?: { label: string; href: string }, footer?: string): string {
+  return `<!doctype html><html><body style="margin:0;background:#050816;font-family:Inter,Segoe UI,Arial,sans-serif;color:#F8FAFF">
+<div style="max-width:520px;margin:0 auto;padding:40px 28px">
+  <div style="font-weight:700;letter-spacing:.14em;font-size:14px;color:#F8FAFF">ORVYN</div>
+  <h1 style="font-size:22px;margin:28px 0 12px;color:#F8FAFF">${escapeHtml(title)}</h1>
+  ${paragraphs.map((p) => `<p style="color:#9DAAC7;line-height:1.6;font-size:14px">${escapeHtml(p)}</p>`).join("\n  ")}
+  ${button ? `<p style="margin:28px 0"><a href="${escapeAttr(button.href)}" style="display:inline-block;padding:12px 22px;border-radius:10px;color:#fff;text-decoration:none;font-weight:600;background:linear-gradient(90deg,#7C4DFF,#31C8FF)">${escapeHtml(button.label)}</a></p>` : ""}
+  ${footer ? `<p style="color:#9DAAC7;font-size:12px;line-height:1.6">${escapeHtml(footer)}</p>` : ""}
+</div></body></html>`;
+}
+
+/** Password reset link (1 hour). */
+export function passwordResetMail(input: { to: string; name?: string | null; link: string }): OutgoingMail {
+  const hello = input.name ? `Hi ${input.name},` : "Hi,";
+  const footer = "The link works for one hour and only once. If you didn't ask to reset your password, ignore this email — your password stays the same.";
+  return {
+    to: input.to,
+    subject: "Reset your ORVYN password",
+    text: [hello, "", "Choose a new ORVYN password:", input.link, "", footer].join("\n"),
+    html: frame("Reset your password", [`${hello} use the button below to choose a new password. Every device signed in to your account will be signed out.`], { label: "Choose a new password", href: input.link }, footer),
+  };
+}
+
+/** A security notice (password changed, signed out everywhere, new sign-in method). */
+export function securityNoticeMail(input: { to: string; name?: string | null; subject: string; message: string }): OutgoingMail {
+  const hello = input.name ? `Hi ${input.name},` : "Hi,";
+  const footer = "If this wasn't you, reset your password right away and contact support.";
+  return { to: input.to, subject: input.subject, text: [hello, "", input.message, "", footer].join("\n"), html: frame(input.subject, [hello, input.message], undefined, footer) };
+}
+
+/** A payment problem (dunning). */
+export function paymentFailedMail(input: { to: string; name?: string | null; amountUsd?: number; link?: string | null }): OutgoingMail {
+  const hello = input.name ? `Hi ${input.name},` : "Hi,";
+  const amount = input.amountUsd ? ` of $${input.amountUsd.toFixed(2)}` : "";
+  const msg = `We couldn't collect your ORVYN payment${amount}. Update your payment method to keep your plan; paid features pause if the payment keeps failing.`;
+  return {
+    to: input.to,
+    subject: "Action needed: your ORVYN payment didn't go through",
+    text: [hello, "", msg, input.link ?? "", ""].join("\n"),
+    html: frame("Your payment didn't go through", [hello, msg], input.link ? { label: "Update payment method", href: input.link } : undefined),
+  };
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }

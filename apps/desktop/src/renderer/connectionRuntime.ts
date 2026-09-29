@@ -195,6 +195,21 @@ export async function signInWithCredentials(
   return { ok: true };
 }
 
+/**
+ * Completes a sign-in that happened in the browser (Google/GitHub): the
+ * server handed this app its session once, in exchange for the secret only
+ * this app holds. Saved exactly like a password sign-in.
+ */
+export async function adoptBrowserSession(backendUrl: string, data: { token: string; principal?: any; organizations?: any[] }): Promise<void> {
+  const base = secureBackendUrl(backendUrl);
+  resetAuthFailureLatch();
+  clearSession();
+  applyAuthPayload(data);
+  await saveConnectionConfig({ backendUrl: base, apiKey: String(data.token) });
+  ensureOrchestratorHeartbeat();
+  await validateSession();
+}
+
 export async function switchOrganization(organizationId: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(apiUrl("/auth/switch-organization"), {
