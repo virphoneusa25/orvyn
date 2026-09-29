@@ -32,120 +32,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The ORVYN orb: the user's ORB_Orvyn.gif, screen-blended so its black
+   field vanishes on the app's dark background. States ride on the same
+   status classes as before. */
 .opo {
   position: relative;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
   overflow: visible;
-  /* Nothing inside affects the page's layout or paint. */
   contain: layout paint style;
   isolation: isolate;
 }
-.opo::before,
-.opo::after {
-  content: "";
+.opo__gif {
   position: absolute;
+  inset: -35%;
+  width: 170%;
+  height: 170%;
+  object-fit: contain;
   border-radius: 50%;
+  /* Black field disappears against dark backgrounds; only the plasma glows. */
+  mix-blend-mode: screen;
   pointer-events: none;
-  will-change: transform;
-}
-.opo::before {
-  inset: -5px -7px;
-  border: 2.5px solid transparent;
-  border-top-color: #7af0ff;
-  border-right-color: #22d3ee;
-  border-bottom-color: rgba(167, 139, 250, 0.15);
-  opacity: 0.9;
-  animation: opo-spin 4.6s linear infinite;
-}
-.opo::after {
-  inset: -6px -2px -3px -6px;
-  border: 2px solid transparent;
-  border-left-color: #f5d0fe;
-  border-bottom-color: #e879f9;
-  border-top-color: rgba(122, 240, 255, 0.2);
-  opacity: 0.85;
-  animation: opo-spin 6.2s linear infinite reverse;
-}
-.opo__atmo {
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(196, 181, 253, 0.42) 0%, rgba(34, 211, 238, 0.28) 34%, rgba(168, 85, 247, 0.08) 58%, transparent 72%);
-  animation: opo-atmo 3.2s ease-in-out infinite;
-  pointer-events: none;
-  will-change: transform, opacity;
-}
-.opo__conic {
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  pointer-events: none;
-  will-change: transform;
-  opacity: 0.8;
-  -webkit-mask: radial-gradient(circle, transparent 22%, #000 40%, #000 78%, transparent 90%);
-  mask: radial-gradient(circle, transparent 22%, #000 40%, #000 78%, transparent 90%);
-}
-.opo__conic-a {
-  background: conic-gradient(from 12deg, transparent 0 8%, #a5f3fc 18%, #7af0ff 30%, transparent 44%, #e879f9 60%, #c4b5fd 72%, transparent 84%, #67e8f9 94%, transparent 100%);
-  animation: opo-spin 4.6s linear infinite;
-}
-.opo__conic-b {
-  background: conic-gradient(from 200deg, transparent 0 14%, #a5f3fc 28%, #c084fc 42%, transparent 56%, #22d3ee 74%, #67e8f9 84%, transparent 100%);
-  animation: opo-spin 6.2s linear infinite reverse;
-}
-/* The whole SVG turns as one composited layer; its art is static. */
-.opo__rot {
-  position: relative;
-  display: block;
-  width: 18px;
-  height: 18px;
-  will-change: transform;
-  animation: opo-spin 9.4s linear infinite;
-  filter: drop-shadow(0 0 1.5px rgba(122, 240, 255, 0.55));
-}
-.opo__svg {
-  position: relative;
-  width: 18px;
-  height: 18px;
-  overflow: visible;
-  display: block;
-}
-.opo__spec { opacity: 0.95; }
-.opo__spec-b { opacity: 0.7; }
-.opo__path { fill: none; }
-.opo__path-a { stroke-dasharray: 46 54; }
-.opo__path-b { stroke-dasharray: 38 62; stroke-dashoffset: 30; opacity: 0.9; }
-.opo__path-c { stroke-dasharray: 22 78; stroke-dashoffset: 60; }
-
-.opo--tool .opo__rot { animation-duration: 3.4s; }
-.opo--tool .opo__conic-a { animation-duration: 2.4s; }
-.opo--tool .opo__conic-b { animation-duration: 3.1s; }
-.opo--tool .opo__atmo { animation-duration: 1.8s; }
-.opo--tool::before { animation-duration: 2.6s; }
-.opo--tool::after { animation-duration: 3.4s; }
-.opo--tool { filter: brightness(1.22) saturate(1.12); }
-
-.opo--waiting .opo__rot { animation-duration: 22s; }
-.opo--waiting .opo__conic-a { animation-duration: 14s; }
-.opo--waiting .opo__conic-b { animation-duration: 18s; }
-.opo--waiting .opo__atmo { opacity: 0.6; animation: none; }
-
-.orion-status--error .opo {
-  animation: opo-error 720ms ease forwards;
-}
-.orion-status--done .opo__atmo,
-.orion-status--done .opo__conic-a {
-  animation: opo-flash 260ms ease forwards;
+  will-change: opacity;
 }
 
-@keyframes opo-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes opo-atmo {
-  0%, 100% { opacity: 0.55; transform: scale(0.92); }
-  50% { opacity: 0.95; transform: scale(1.05); }
+/* Tool motion: a touch brighter and faster-feeling via a subtle pulse. */
+.opo--tool .opo__gif { animation: opo-pulse 0.9s ease-in-out infinite; }
+/* Waiting: dim and still. */
+.opo--waiting .opo__gif { animation: none; opacity: 0.55; }
+
+.orion-status--error .opo { animation: opo-error 720ms ease forwards; }
+.orion-status--done .opo__gif { animation: opo-flash 260ms ease forwards; }
+
+@keyframes opo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.82; }
 }
 @keyframes opo-error {
   0% { filter: none; opacity: 1; }
@@ -157,24 +79,4 @@
   30% { opacity: 1; filter: brightness(2); }
   100% { opacity: 0; filter: brightness(1.3); }
 }
-@keyframes orion-status-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes orion-status-out {
-  to { opacity: 0; }
-}
 
-@media (prefers-reduced-motion: reduce) {
-  .opo::before,
-  .opo::after,
-  .opo__atmo,
-  .opo__conic-a,
-  .opo__conic-b,
-  .opo__rot,
-  .orion-status,
-  .orion-status--done,
-  .orion-status--error .opo {
-    animation: none;
-  }
-}
