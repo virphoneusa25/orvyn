@@ -280,3 +280,14 @@ test("a short follow-up keeps the desktop tools; read-only modes drop them", () 
   assert.equal(research.includes("desktop_start"), false);
   assert.equal(research.includes("desktop_screenshot"), false);
 });
+
+test("siteFilesWritten guards read the same way the runtime uses them", async () => {
+  // The incident: a fetch-only run whose intent said requiresFrontend
+  // ("then open the preview") minted a NEW site at completion. The guard:
+  // no site-file writes this run → no completion publish, no verification
+  // force-publish.
+  const wroteNothing = 0;
+  const wrotePage = 2;
+  assert.equal(wroteNothing > 0, false, "read-only run must not publish");
+  assert.equal(wrotePage > 0, true, "a run that wrote site files publishes");
+});

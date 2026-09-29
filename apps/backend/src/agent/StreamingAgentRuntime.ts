@@ -269,6 +269,8 @@ interface RunState {
   pendingNotes: string[];
   /** One-shot soft budget warning fired at 75% of the run's token cap. */
   budgetWarned?: boolean;
+  /** Site files THIS run wrote (a read-only run must not mint a new preview). */
+  siteFilesWritten?: number;
   /** Whether the canonical preview URL has been announced to the model. */
   previewUrlAnnounced?: boolean;
   /** Recent successful tool signatures — identical repeats with no useful
@@ -606,6 +608,7 @@ export class StreamingAgentRuntime {
    */
   private publishSitePreview(runId: string, changedFiles: string[], opts: { force?: boolean } = {}): void {
     const state = this.runs.get(runId);
+    if (state) state.siteFilesWritten = (state.siteFilesWritten ?? 0) + changedFiles.length;
     if (state?.websiteLayout?.stack && state.websiteLayout.stack !== "static") return;
     // Never show the site as bare HTML: while the page links a stylesheet or
     // script this run cannot serve yet, fetch it (or wait for it to be written).
@@ -2883,7 +2886,10 @@ export class StreamingAgentRuntime {
         } else {
           this.emitNarration(runId, content, streamedText && !state.heldFinal);
         }
-        if (state.intent.requiresFrontend) this.publishSitePreview(runId, []);
+        // A read-only run ("fetch and summarize, then open the preview") must
+        // not mint a NEW site/preview from workspace files it never touched —
+        // that opened a second, stale-looking preview beside the real one.
+        if (state.intent.requiresFrontend && (state.siteFilesWritten ?? 0) > 0) this.publishSitePreview(runId, []);
         const outcome = runOutcome(this.store.get(runId)?.events ?? []);
         this.store.emit(runId, "run.outcome", { ...outcome });
         // The answer never outruns the evidence: say plainly what is not done.
@@ -3560,7 +3566,7 @@ export class StreamingAgentRuntime {
   private async runVerification(runId: string, state: RunState, provider: AIModelProvider) {
     // The site is shown by now even if a linked file never got written (the
     // verifier then reports the missing file instead of an empty preview).
-    if (!(this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available")) {
+    if (!(this.store.get(runId)?.events ?? []).some((e) => e.type === "preview.available") && (state.siteFilesWritten ?? 0) > 0) {
       await this.completeSiteAssets(runId);
       this.publishSitePreview(runId, [], { force: true });
     }
