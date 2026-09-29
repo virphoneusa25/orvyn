@@ -201,11 +201,10 @@ export function BrowserWorkbench({
     <div style={frameStyle} data-testid="workbench-browser" data-expanded={expanded ? "true" : "false"} data-fullscreen={fullscreen ? "true" : "false"}>
       {/* Which ORION browser session and viewport this tab shows (for checks; not displayed). */}
       {tab?.sessionId && <span hidden data-testid="workbench-browser-session" data-session-id={tab.sessionId} data-viewport={tab.viewport ? `${tab.viewport.preset}:${tab.viewport.width}x${tab.viewport.height}` : "desktop"} />}
-      {/* The nav/tab row is chrome for the docked pane. Expanded mode is a
-          focused view of one surface — it gets the whole window and only an
-          exit affordance (Esc), not the tab box. */}
-      {!fullscreen && !expanded && (
-      <div data-testid="preview-controls" className="wb-navrow">
+      {/* Expanded keeps the menu bar (address + refresh + open-external +
+          exit); the tabby menus hide — expanded is a focused single view. */}
+      {!fullscreen && (
+      <div data-testid="preview-controls" className={`wb-navrow${expanded ? " wb-navrow--expanded" : ""}`}>
         <button className="wb-icon" title="Back" aria-label="Back" disabled={!tab?.canGoBack} onClick={() => tab && void api?.back(tab.id).then(apply)}>←</button>
         <button className="wb-icon" title="Forward" aria-label="Forward" disabled={!tab?.canGoForward} onClick={() => tab && void api?.forward(tab.id).then(apply)}>→</button>
         <button className="wb-icon" title={tab?.loading ? "Stop" : "Refresh"} aria-label="Refresh" onClick={() => tab && void api?.reload(tab.id).then(apply)}>

@@ -341,6 +341,13 @@ export class WorkbenchBrowserManager {
 
   setSurfaceVisible(visible: boolean): BrowserPublic {
     this.visible = visible;
+    if (!visible) {
+      // Hiding the surface must take the guest views with it: a still-
+      // visible WebContentsView over a DOM pane (Desktop, Files) is the
+      // black box users saw stuck in the corner after switching tabs.
+      for (const guest of this.guests.values()) this.detach(guest);
+      return this.snapshot();
+    }
     this.attachActive();
     return this.snapshot();
   }

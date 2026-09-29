@@ -219,6 +219,11 @@ export function AgentWorkspace({
     const existing = browserState.tabs.find((t) => urlsMatch(t.url, latest.url)) ?? browserState.tabs.find((t) => t.kind === "preview");
     if (existing) {
       if (!urlsMatch(existing.url, latest.url)) {
+        // Hijack guard: navigating the preview the user is WATCHING to a
+        // different site mid-view (a follow-up run announcing its own
+        // preview) reads as the pane "flashing through things" and showing
+        // the wrong site. Only Follow ORION drives the visible tab.
+        if (!followApplies(followRef.current)) return;
         const key = `nav:${latest.url}`;
         if (previewSeeded.current.has(key)) return;
         previewSeeded.current.add(key);

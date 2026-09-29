@@ -213,3 +213,7 @@
   padding: 4px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
+
+/* Expanded mode: the menu bar stays (address, reload, open externally) but
+   the device/viewport and More menus — tabby chrome — hide. */
+.wb-navrow--expanded .wb-device { display: none; }
