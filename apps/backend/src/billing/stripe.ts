@@ -258,7 +258,7 @@ export class BillingService {
   }
 
   /** A Checkout Session for a plan (subscription) or a credit pack (one-time). Returns the hosted URL. */
-  async checkout(input: { accountId: string; email: string; name?: string | null; planId?: string; period?: Period; packId?: string; origin?: string }): Promise<{ url: string; sessionId: string }> {
+  async checkout(input: { accountId: string; email: string; name?: string | null; planId?: string; period?: Period; packId?: string; origin?: string; returnTo?: "portal" }): Promise<{ url: string; sessionId: string }> {
     const cfg = this.require();
     const isPack = Boolean(input.packId);
     if (isPack && !packById(input.packId!)) throw new StripeApiError(400, "Unknown credit pack.");
@@ -277,8 +277,10 @@ export class BillingService {
       customer,
       client_reference_id: input.accountId,
       line_items: [{ price, quantity: 1 }],
-      success_url: this.returnUrl("/api/v1/billing/return?status=success&session_id={CHECKOUT_SESSION_ID}", input.origin),
-      cancel_url: this.returnUrl("/api/v1/billing/return?status=cancel", input.origin),
+      // The Cloud portal returns to its Billing page (which says "confirming"
+      // until the webhook lands); the desktop gets the standalone page.
+      success_url: this.returnUrl(input.returnTo === "portal" ? "/billing?checkout=success" : "/api/v1/billing/return?status=success&session_id={CHECKOUT_SESSION_ID}", input.origin),
+      cancel_url: this.returnUrl(input.returnTo === "portal" ? "/billing?checkout=cancel" : "/api/v1/billing/return?status=cancel", input.origin),
       metadata,
       ...(isPack
         ? { payment_intent_data: { metadata, setup_future_usage: "off_session" } }
@@ -290,12 +292,43 @@ export class BillingService {
   }
 
   /** Stripe's hosted customer portal (payment methods, invoices, cancel). */
-  async portal(accountId: string, origin?: string): Promise<{ url: string }> {
+  async portal(accountId: string, origin?: string, returnTo?: "portal"): Promise<{ url: string }> {
     const cfg = this.require();
     const customer = this.store.customerOf(accountId);
     if (!customer) throw new StripeApiError(404, "There's no billing account yet — buy a plan or credits first.");
-    const s = await stripeRequest<{ url: string }>(cfg, "POST", "/v1/billing_portal/sessions", { customer, return_url: this.returnUrl("/api/v1/billing/return?status=portal", origin) });
+    const s = await stripeRequest<{ url: string }>(cfg, "POST", "/v1/billing_portal/sessions", { customer, return_url: this.returnUrl(returnTo === "portal" ? "/billing" : "/api/v1/billing/return?status=portal", origin) });
     return { url: s.url };
+  }
+
+  /**
+   * What the Billing page shows from Stripe: recent invoices and the card on
+   * file (brand, last 4, expiry — never more). Read-only; nothing here
+   * changes paid state.
+   */
+  async account(accountId: string): Promise<{ invoices: { id: string; date: number; description: string; amountUsd: number; status: string; hostedUrl: string | null; pdfUrl: string | null }[]; paymentMethod: { brand: string; last4: string; expMonth: number; expYear: number } | null; subscription: { cancelAtPeriodEnd: boolean; currentPeriodEnd: number | null; status: string } | null }> {
+    const cfg = this.cfg;
+    const customer = this.store.customerOf(accountId);
+    if (!cfg || !customer) return { invoices: [], paymentMethod: null, subscription: null };
+    const [inv, pms, subs] = await Promise.all([
+      stripeRequest<{ data: any[] }>(cfg, "GET", "/v1/invoices", { customer, limit: 12 }).catch(() => ({ data: [] })),
+      stripeRequest<{ data: any[] }>(cfg, "GET", "/v1/payment_methods", { customer, type: "card", limit: 1 }).catch(() => ({ data: [] })),
+      stripeRequest<{ data: any[] }>(cfg, "GET", "/v1/subscriptions", { customer, status: "all", limit: 1 }).catch(() => ({ data: [] })),
+    ]);
+    const card = pms.data?.[0]?.card;
+    const sub = subs.data?.[0];
+    return {
+      invoices: (inv.data ?? []).map((i: any) => ({
+        id: String(i.id),
+        date: Number(i.created ?? 0) * 1000,
+        description: String(i.lines?.data?.[0]?.description ?? i.description ?? "ORVYN"),
+        amountUsd: Number(i.amount_paid ?? i.amount_due ?? 0) / 100,
+        status: String(i.status ?? ""),
+        hostedUrl: i.hosted_invoice_url ?? null,
+        pdfUrl: i.invoice_pdf ?? null,
+      })),
+      paymentMethod: card ? { brand: String(card.brand ?? ""), last4: String(card.last4 ?? ""), expMonth: Number(card.exp_month ?? 0), expYear: Number(card.exp_year ?? 0) } : null,
+      subscription: sub ? { cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end), currentPeriodEnd: sub.current_period_end ? Number(sub.current_period_end) * 1000 : (sub.items?.data?.[0]?.current_period_end ? Number(sub.items.data[0].current_period_end) * 1000 : null), status: String(sub.status ?? "") } : null,
+    };
   }
 
   /** Auto-recharge: charge the saved card off-session. Credits arrive with the payment_intent.succeeded webhook. */

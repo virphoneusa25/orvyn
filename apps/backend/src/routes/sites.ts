@@ -12,6 +12,13 @@ function send(id: string, rel: string, prefix: string, res: import("express").Re
   }
   res.setHeader("Content-Type", file.contentType);
   res.setHeader("Cache-Control", PREVIEW_CACHE_CONTROL);
+  // Sites are served on the portal's origin: they run sandboxed (an opaque
+  // origin), so a page a run built can never read the signed-in session.
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // The sandboxed page's own module scripts, fonts and fetches come from an
+  // opaque origin: site files are public by their capability URL already.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  if (/html|svg/i.test(file.contentType)) res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-popups allow-modals");
   // The site is served under /api/v1/sites/<id>/: a root-absolute "/styles.css"
   // in the project means this site's styles.css, not the server's root.
   // Rewritten on the way out — the project's own files are never changed.

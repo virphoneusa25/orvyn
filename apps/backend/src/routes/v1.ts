@@ -1146,17 +1146,47 @@ v1Router.post("/agent/stream/runs/:id/queue/:itemId/delivered", (req, res) => {
 });
 
 // ── WorkSessions: the durable record of a conversation and its work ─────────
+// Conversations belong to the person who started them: in an organization,
+// another member's conversation is not listed and answers 404 (never 403, so
+// its existence is not revealed). Tenant isolation is below this: a session
+// id from another tenant is never found at all.
+function ownsSession(req: import("express").Request, s: { userId?: string | null }): boolean {
+  const me = req.principal?.userId;
+  return !me || !s.userId || s.userId === me;
+}
+
+v1Router.use("/sessions/:id", (req, res, next) => {
+  const t = requireTenant(req);
+  const s = t.sessions.get(String(req.params.id));
+  if (s && !ownsSession(req, s)) return res.status(404).json({ error: "Unknown session" });
+  next();
+});
+
 v1Router.get("/sessions", (req, res) => {
   const t = requireTenant(req);
-  res.json({ sessions: t.sessions.list().map((x) => ({ ...x, ...t.sessions.messageSummary(x.sessionId) })) });
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
+  const list = t.sessions.list()
+    .filter((x) => ownsSession(req, x))
+    .filter((x) => !projectId || x.projectId === projectId);
+  res.json({ sessions: list.map((x) => ({ ...x, ...t.sessions.messageSummary(x.sessionId) })) });
 });
 
 v1Router.post("/sessions", (req, res) => {
   const t = requireTenant(req);
+  // A Cloud project chat: the project must be this tenant's.
+  let projectId: string | null = null;
+  if (typeof req.body?.projectId === "string" && req.body.projectId) {
+    try {
+      projectId = authService.getProject(req.body.projectId, t.id).id;
+    } catch {
+      return res.status(404).json({ error: "Unknown project" });
+    }
+  }
   const s = t.sessions.create({
     title: String(req.body?.title ?? "New conversation"),
     userId: req.principal?.userId ?? "",
     projectRoot: typeof req.body?.projectRoot === "string" ? req.body.projectRoot : null,
+    projectId,
   });
   res.status(201).json({ session: s });
 });
@@ -1478,7 +1508,13 @@ v1Router.get("/artifacts", (req, res) => {
   const t = requireTenant(req);
   const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
   const q = typeof req.query.q === "string" ? req.query.q : "";
-  const rows = q ? t.artifactService.search(q) : t.artifactService.listArtifacts({ kind });
+  const chatId = typeof req.query.chatId === "string" ? req.query.chatId : null;
+  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
+  const rows = (q ? t.artifactService.search(q) : t.artifactService.listArtifacts({ kind }))
+    .filter((a) => !chatId || a.chatId === chatId)
+    .filter((a) => !projectId || a.projectId === projectId)
+    // A file from another member's conversation stays theirs.
+    .filter((a) => { if (!a.chatId) return true; const s = t.sessions.get(a.chatId); return !s || ownsSession(req, s); });
   res.json({ artifacts: rows.map((a) => publicArtifact(t.artifactService, a)) });
 });
 
@@ -1544,6 +1580,16 @@ v1Router.get("/files/read", async (req, res) => {
 v1Router.post("/artifacts", async (req, res) => {
   try {
     const t = requireTenant(req);
+    // Cloud uploads name their conversation/project; neither may be another tenant's or another member's.
+    const chatId = typeof req.body.chatId === "string" && req.body.chatId ? req.body.chatId : undefined;
+    if (chatId) {
+      const s = t.sessions.get(chatId);
+      if (!s || !ownsSession(req, s)) return res.status(404).json({ error: "Unknown conversation" });
+    }
+    let projectId: string | undefined;
+    if (typeof req.body.projectId === "string" && req.body.projectId) {
+      try { projectId = authService.getProject(req.body.projectId, t.id).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
+    }
     const rec = await t.artifactService.create({
       name: String(req.body.name ?? "file.txt"),
       kind: req.body.kind,
@@ -1551,13 +1597,37 @@ v1Router.post("/artifacts", async (req, res) => {
       bytes: typeof req.body.base64 === "string" ? Buffer.from(req.body.base64, "base64") : undefined,
       mediaType: req.body.mediaType,
       runId: req.body.runId,
-      projectRoot: req.body.projectRoot ?? t.currentProjectRoot,
+      chatId,
+      projectId,
+      // Cloud uploads never inherit whatever project the tenant last opened.
+      projectRoot: chatId || projectId ? (req.body.projectRoot ?? null) : (req.body.projectRoot ?? t.currentProjectRoot),
     });
     res.status(201).json({ artifact: publicArtifact(t.artifactService, rec) });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
+
+// A file from another member's conversation answers 404 (tenant isolation already holds below this).
+v1Router.use("/artifacts/:id", (req, res, next) => {
+  const t = requireTenant(req);
+  const a = t.artifactService.getArtifact(String(req.params.id));
+  if (a?.chatId) {
+    const s = t.sessions.get(a.chatId);
+    if (s && !ownsSession(req, s)) return res.status(404).json({ error: "Unknown artifact" });
+  }
+  next();
+});
+
+/**
+ * Served on the portal's own origin: HTML/SVG must never run as that origin
+ * (it could read the signed-in session). A CSP sandbox gives the document an
+ * opaque origin; nosniff stops type guessing.
+ */
+export function isolateUntrustedContent(res: import("express").Response, mimeType: string): void {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (/html|svg|xml|javascript/i.test(mimeType)) res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms; default-src 'self' data: blob: 'unsafe-inline'");
+}
 
 v1Router.get("/artifacts/:id", async (req, res) => {
   try {
@@ -1577,6 +1647,7 @@ v1Router.get("/artifacts/:id/preview", async (req, res) => {
   try {
     const t = requireTenant(req);
     const { record, bytes, filename } = await t.artifactService.previewArtifact(req.params.id);
+    isolateUntrustedContent(res, record.mimeType || "");
     res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
     res.setHeader("Content-Length", String(bytes.length));
     res.setHeader("Content-Disposition", `inline; filename="${filename.replace(/"/g, "")}"`);
@@ -1584,6 +1655,14 @@ v1Router.get("/artifacts/:id/preview", async (req, res) => {
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
+});
+
+/** A five-minute link the portal's preview frame loads (HTML/PDF need a real, sandboxed URL). No model, no credits. */
+v1Router.post("/artifacts/:id/preview-link", (req, res) => {
+  const t = requireTenant(req);
+  const a = t.artifactService.getArtifact(String(req.params.id));
+  if (!a || a.status === "deleted") return res.status(404).json({ error: "Unknown artifact" });
+  res.json({ url: `/api/v1/preview/${createPreviewLink(t.id, a.artifactId)}` });
 });
 
 v1Router.get("/artifacts/:id/download", async (req, res) => {
@@ -1595,6 +1674,7 @@ v1Router.get("/artifacts/:id/download", async (req, res) => {
       if (resolved !== req.params.id) return res.status(403).json({ error: "Token does not match this artifact." });
     }
     const { record, bytes, filename } = await t.artifactService.getDownload(req.params.id);
+    isolateUntrustedContent(res, record.mimeType || "");
     res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
     res.setHeader("Content-Length", String(bytes.length));
     res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "")}"`);
@@ -1807,6 +1887,7 @@ import { creditLedger } from "../billing/creditLedgerInstance";
 import { customerCatalog, customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
 import { buildUserModel, publicUserModel, sealModelConfig } from "../models/userModels";
 import { billingService, purchasablePacks, StripeApiError } from "../billing/stripe";
+import { createPreviewLink } from "../artifacts/previewLinks";
 import { creditsEnforced } from "../tenancy/TenantManager";
 import { BillingLimitError } from "../billing/CreditLedger";
 import { packById, planById, type PackId, type PlanId } from "../billing/plans";
@@ -2030,7 +2111,7 @@ v1Router.post("/billing/checkout", async (req, res) => {
   if (!planId === !packId) return res.status(400).json({ error: "Choose a plan or a credit pack." });
   try {
     const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
-    const out = await billingService().checkout({ accountId: t.id, email: req.principal.email, name: req.principal.name, planId, period, packId, origin });
+    const out = await billingService().checkout({ accountId: t.id, email: req.principal.email, name: req.principal.name, planId, period, packId, origin, returnTo: req.body?.returnTo === "portal" ? "portal" : undefined });
     res.json(out);
   } catch (err) {
     billingError(res, err);
@@ -2042,7 +2123,28 @@ v1Router.post("/billing/portal", async (req, res) => {
   if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
   try {
     const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
-    res.json(await billingService().portal(t.id, origin));
+    res.json(await billingService().portal(t.id, origin, req.body?.returnTo === "portal" ? "portal" : undefined));
+  } catch (err) {
+    billingError(res, err);
+  }
+});
+
+/** Where to get ORVYN Desktop (links configured on the server; none are invented). */
+v1Router.get("/downloads/desktop", (_req, res) => {
+  const link = (k: string) => process.env[k]?.trim() || null;
+  res.json({
+    windows: link("ORVYN_DESKTOP_DOWNLOAD_WINDOWS"),
+    mac: link("ORVYN_DESKTOP_DOWNLOAD_MAC"),
+    linux: link("ORVYN_DESKTOP_DOWNLOAD_LINUX"),
+    version: link("ORVYN_DESKTOP_VERSION"),
+  });
+});
+
+/** Invoices, the card on file and the subscription's renewal (read from Stripe; the ledger stays the balance). */
+v1Router.get("/billing/account", async (req, res) => {
+  const t = requireTenant(req);
+  try {
+    res.json(await billingService().account(t.id));
   } catch (err) {
     billingError(res, err);
   }
@@ -2056,7 +2158,7 @@ v1Router.post("/billing/auto-recharge", (req, res) => {
   const t = requireTenant(req);
   if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
   if (req.body?.enabled === false) { creditLedger.disableAutoRecharge(t.id); return res.json({ wallet: creditLedger.snapshot(t.id) }); }
-  const pack = packById(String(req.body?.packId ?? "pack_5k"));
+  const pack = packById(String(req.body?.packId ?? "pack_10k"));
   if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
   const threshold = Number(req.body?.threshold ?? 500);
   const maxPerMonth = Number(req.body?.maxPerMonth ?? 3);

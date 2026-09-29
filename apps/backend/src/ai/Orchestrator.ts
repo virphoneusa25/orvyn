@@ -6,7 +6,7 @@ import { builtInToolsFor } from "../agent/capabilityGap";
 import { preferencesPrompt } from "../onboarding/preferences";
 import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
-import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -55,6 +55,10 @@ export interface ChatTurnRequest {
   reasoningEffort?: "auto" | "fast" | "standard" | "deep" | "max";
   /** Server-built summary of registered tools. Never taken from the client as truth. */
   capabilityPrompt?: string;
+  /** "cloud": the ORVYN Cloud web chat — a conversation, never a project task (no handoff). */
+  surface?: "cloud" | "desktop";
+  /** The stored conversation this turn belongs to (files it produces are linked to it). */
+  sessionId?: string;
 }
 
 function modeInstructions(mode: ChatMode | undefined): string {
@@ -321,7 +325,7 @@ export class Orchestrator {
     return next;
   }
 
-  async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean }> {
+  async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean; artifacts?: { artifactId: string; name: string; mimeType: string }[] }> {
     if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
@@ -331,9 +335,10 @@ export class Orchestrator {
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
     const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
-    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, CHAT_TASK_TOOL, CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
+    const cloud = req.surface === "cloud";
+    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(cloud ? [] : [CHAT_TASK_TOOL]), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
     const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
-    if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${CHAT_MANIFEST}` });
+    if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${cloud ? CLOUD_CHAT_MANIFEST : CHAT_MANIFEST}` });
     let toolCallsUsed = 0;
     let nudged = false;
     let capabilityNudged = false;
@@ -516,6 +521,9 @@ export class Orchestrator {
         yield* this.streamChat({ ...req, requestedModelId: undefined, __modelFallback: true } as ChatTurnRequest);
         return;
       }
+      // A wallet/plan stop is not a model failure: it goes to the caller, which
+      // sends it with its code (the client offers Buy credits / Upgrade).
+      if (err?.billing) throw err;
       yield { delta: `\n\n[Error: ${err.message}]`, done: true };
     }
   }
@@ -540,8 +548,9 @@ export class Orchestrator {
       const prompt = stripImagePrefix(req.userMessage) || req.userMessage;
       const result = await new ImageService(this.modelService, this.artifacts).generate({
         prompt,
-        projectRoot: req.context?.projectRoot,
+        projectRoot: req.surface === "cloud" ? undefined : req.context?.projectRoot,
         size: "1024x1024",
+        ...(req.sessionId ? { chatId: req.sessionId } : {}),
       });
       const blocks = result.images
         .map((img) => {
@@ -552,7 +561,8 @@ export class Orchestrator {
             : `Persisted \`${cap}\` as artifact ${img.artifactId}.`;
         })
         .join("\n\n");
-      yield { delta: `Generated with ${result.model}:\n\n${blocks}`, done: true };
+      const files = result.images.map((img) => ({ artifactId: img.artifactId, name: img.filename, mimeType: (img as { mimeType?: string }).mimeType ?? "image/png" }));
+      yield { delta: req.surface === "cloud" ? `Here's your image.` : `Generated with ${result.model}:\n\n${blocks}`, done: true, artifacts: files } as AIChunk & { artifacts: typeof files };
     } catch (err: any) {
       yield {
         delta:

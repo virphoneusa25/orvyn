@@ -635,6 +635,26 @@ export class AuthService {
     return { token: this.createSession(user.id, org.id, device), organization: org };
   }
 
+  // ---------- WebSocket connect tickets (browser: no session token in a URL) ----------
+
+  private wsTickets = new Map<string, { token: string; expiresAt: number }>();
+
+  /** A single-use, 60-second ticket that stands for this session when the browser opens the chat socket. */
+  createWsTicket(token: string, now = Date.now()): string | null {
+    if (!this.verifyPrincipal(token)) return null;
+    for (const [k, v] of this.wsTickets) if (v.expiresAt <= now) this.wsTickets.delete(k);
+    const ticket = `wst_${randomBytes(24).toString("hex")}`;
+    this.wsTickets.set(hashToken(ticket), { token, expiresAt: now + 60_000 });
+    return ticket;
+  }
+
+  redeemWsTicket(ticket: string, now = Date.now()): string | null {
+    const key = hashToken(ticket);
+    const hit = this.wsTickets.get(key);
+    this.wsTickets.delete(key);
+    return hit && hit.expiresAt > now ? hit.token : null;
+  }
+
   // ---------- "Connect GitHub" links (10 minutes, single use) ----------
 
   createGithubLink(userId: string, now = Date.now()): string {

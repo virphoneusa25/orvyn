@@ -23,11 +23,15 @@ printf '{"commit":"%s","builtAt":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%
 
 echo "Syncing $ROOT → $HOST:$REMOTE (preserving remote .env)"
 
-"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts' '$REMOTE/resources'"
+"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/web' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts' '$REMOTE/resources'"
 
 rsync -az --delete -e "$RSH" \
   --exclude node_modules/ --exclude dist/ --exclude '*.log' \
   "$ROOT/apps/backend/" "$HOST:$REMOTE/apps/backend/"
+
+rsync -az --delete -e "$RSH" \
+  --exclude node_modules/ --exclude dist/ --exclude '*.log' \
+  "$ROOT/apps/web/" "$HOST:$REMOTE/apps/web/"
 
 rsync -az --delete -e "$RSH" \
   --exclude node_modules/ --exclude dist/ --exclude '*.log' \

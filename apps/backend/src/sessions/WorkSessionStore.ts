@@ -360,7 +360,7 @@ export class WorkSessionStore {
     return this.get(sessionId);
   }
 
-  create(input: { title: string; userId?: string; projectRoot?: string | null }): WorkSession {
+  create(input: { title: string; userId?: string; projectRoot?: string | null; projectId?: string | null }): WorkSession {
     const now = Date.now();
     const root = input.projectRoot?.trim() || null;
     const ws = root ? this.workspaceFor(root) : null;
@@ -369,7 +369,8 @@ export class WorkSessionStore {
       tenantId: this.tenantId,
       userId: input.userId ?? "",
       title: (input.title || "New conversation").slice(0, 120),
-      projectId: ws?.projectId ?? null,
+      // A Cloud project (the account's project list) or the workspace's own id.
+      projectId: input.projectId ?? ws?.projectId ?? null,
       workspaceId: ws?.workspaceId ?? null,
       projectRoot: root,
       runIds: [],
@@ -447,7 +448,7 @@ export class WorkSessionStore {
    * the same id again updates that message instead of adding a second one,
    * so a client can retry safely. The sequence is assigned here, once.
    */
-  appendMessage(sessionId: string, input: { messageId?: string; role: SessionMessageRole; content: string; runId?: string | null; mode?: string | null; status?: "complete" | "streaming"; createdAt?: number }): SessionMessage | undefined {
+  appendMessage(sessionId: string, input: { messageId?: string; role: SessionMessageRole; content: string; runId?: string | null; mode?: string | null; status?: "complete" | "streaming"; createdAt?: number; meta?: Record<string, unknown> }): SessionMessage | undefined {
     if (!this.get(sessionId)) return undefined;
     const content = String(input.content ?? "").slice(0, MAX_MESSAGE);
     const messageId = input.messageId?.trim() || id("msg");
@@ -464,6 +465,7 @@ export class WorkSessionStore {
        VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM session_messages WHERE session_id = ?), ?, ?, ?, ?)`
     ).run(messageId, sessionId, input.role, content, input.runId ?? null, sessionId, input.mode ?? null, input.status ?? "complete", createdAt, now);
     this.db.prepare(`UPDATE work_sessions SET updated_at = ? WHERE session_id = ?`).run(now, sessionId);
+    if (input.meta) return this.updateMessage(messageId, { meta: input.meta });
     return this.getMessage(messageId);
   }
 

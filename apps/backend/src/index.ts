@@ -1,3 +1,5 @@
+import * as pathModule from "path";
+import * as fsModule from "fs";
 import "./loadEnv";
 import { makeFetchUrlTool, makeWebSearchTool } from "./ai/tools/netTools";
 import { makeInstallMcpServerTool, makeSearchCapabilitiesTool } from "./ai/tools/searchCapabilities";
@@ -9,7 +11,8 @@ import express from "express";
 import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import { v1Router } from "./routes/v1";
+import { v1Router, isolateUntrustedContent } from "./routes/v1";
+import { resolvePreviewLink } from "./artifacts/previewLinks";
 import { siteRouter } from "./routes/sites";
 import { portForwardingService } from "./ports/PortForwardingService";
 import { workerStats } from "./routes/worker";
@@ -18,6 +21,7 @@ import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
+import { authService } from "./auth/AuthService";
 import { redactChunk } from "./middleware/customerRedaction";
 import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
@@ -156,6 +160,25 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
 // me/logout validate their own bearer token against the session store.
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
+// The portal's preview frame: one stored file by a five-minute link (no session), sandboxed.
+app.get("/api/v1/preview/:token", async (req, res) => {
+  const link = resolvePreviewLink(String(req.params.token));
+  const tenant = link ? tenantManager.get(link.tenantId) : undefined;
+  if (!link || !tenant) return res.status(404).type("text/plain").send("This preview link expired. Open the preview again.");
+  try {
+    const { record, bytes, filename } = await tenant.artifactService.previewArtifact(link.artifactId);
+    isolateUntrustedContent(res, record.mimeType || "");
+    if (/html|svg|xml/i.test(record.mimeType || "")) res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms allow-modals; default-src 'self' data: blob: 'unsafe-inline'; frame-ancestors 'self'");
+    else res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", record.mimeType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${filename.replace(/"/g, "")}"`);
+    res.send(bytes);
+  } catch {
+    res.status(404).type("text/plain").send("That file is no longer available.");
+  }
+});
 app.use("/api/v1/billing/return", billingReturnRouter);
 // Credential endpoints (sign-up, sign-in, reset, provider starts) get the
 // strict per-IP limit; session reads and the desktop's sign-in polling a
@@ -181,6 +204,47 @@ app.use("/api/v1", resolveTenant, requireAccountReady, (req, res, next) => {
     return tenantRateLimit()(req, res, next);
   }, v1Router);
 
+// ORVYN Cloud — the customer portal (apps/web), on the same origin as the API.
+// Static files, then the app shell for any page path (client-side routing).
+// Strict CSP: scripts only from this origin; nothing may frame the portal.
+const WEB_DIR = [process.env.ORVYN_WEB_DIR, pathModule.resolve(__dirname, "../web"), pathModule.resolve(__dirname, "../../web/dist")]
+  .find((d) => d && fsModule.existsSync(pathModule.join(d, "index.html")));
+if (WEB_DIR) {
+  const PORTAL_CSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' ws: wss:",
+    "frame-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self' https://checkout.stripe.com https://billing.stripe.com",
+    "frame-ancestors 'none'",
+  ].join("; ");
+  const secure = (res: express.Response) => {
+    res.setHeader("Content-Security-Policy", PORTAL_CSP);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("X-Frame-Options", "DENY");
+  };
+  app.use(express.static(WEB_DIR, {
+    index: false,
+    setHeaders: (res, file) => {
+      secure(res);
+      res.setHeader("Cache-Control", /[\\/]assets[\\/]/.test(file) ? "public, max-age=31536000, immutable" : "no-cache");
+    },
+  }));
+  const shell = fsModule.readFileSync(pathModule.join(WEB_DIR, "index.html"));
+  app.get(/^\/(?!api\/|ws\/).*/, (_req, res) => {
+    secure(res);
+    res.setHeader("Cache-Control", "no-cache");
+    res.type("html").send(shell);
+  });
+}
+
 const server = createServer(app);
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url ?? "", "http://internal");
@@ -198,7 +262,13 @@ const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 102
 
 wss.on("connection", (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
-  const token = url.searchParams.get("token");
+  const ticket = url.searchParams.get("ticket");
+  const token = ticket ? authService.redeemWsTicket(ticket) : url.searchParams.get("token");
+  if (ticket && !token) {
+    socket.send(JSON.stringify({ delta: "", done: true, error: "This connection expired. Reconnecting…", code: "TICKET_EXPIRED" }));
+    socket.close();
+    return;
+  }
   const ready = socketAccountReady(token);
   if (!ready.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: ready.error, code: ready.code }));
@@ -213,6 +283,8 @@ wss.on("connection", (socket, req) => {
   }
   const tenant = admitted.tenant;
   (socket as any).__orvynTenantId = tenant.id;
+  // The person on this socket (session tokens): conversations are theirs alone.
+  const socketUserId = token ? authService.verifyPrincipal(token)?.user.id ?? null : null;
 
   socket.send(JSON.stringify({
     type: "connection.ready",
@@ -261,7 +333,29 @@ wss.on("connection", (socket, req) => {
       const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
       // The turn is stored now, and the reply as it streams: the session is
       // the durable conversation, not the desktop's cache file.
-      const session = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      const found = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      if (found && socketUserId && found.userId && found.userId !== socketUserId) {
+        socket.send(JSON.stringify({ delta: "", done: true, error: "Unknown conversation" }));
+        return;
+      }
+      const session = found;
+      // ORVYN Cloud (the web portal) is a conversation, never a mission: no
+      // project task handoff, and the history comes from the stored
+      // conversation rather than from the client.
+      const cloudSurface = body?.surface === "cloud";
+      if (cloudSurface) {
+        body.surface = "cloud";
+        body.sessionId = session?.sessionId;
+        if (session && !Array.isArray(body.history)) {
+          body.history = tenant.sessions.messages(session.sessionId)
+            .filter((m) => (m.role === "user" || m.role === "assistant") && m.status === "complete" && m.content.trim())
+            .slice(-24)
+            .map((m) => ({ role: m.role, content: m.content.slice(0, 12_000) }));
+        }
+        if (!Array.isArray(body.history)) body.history = [];
+        body.task = "chat";
+        if (body.context && typeof body.context === "object") delete body.context.projectRoot;
+      }
       // Regenerate: the old reply is replaced by the one about to stream.
       if (session && typeof body?.replacesMessageId === "string") tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId);
       recorder = session && typeof body?.userMessage === "string"
@@ -270,6 +364,7 @@ wss.on("connection", (socket, req) => {
             userMessageId: typeof body.userMessageId === "string" ? body.userMessageId : undefined,
             assistantMessageId: typeof body.assistantMessageId === "string" ? body.assistantMessageId : undefined,
             userCreatedAt: Number(body.userCreatedAt) || undefined,
+            attachments: Array.isArray(body.attachmentRefs) ? body.attachmentRefs.slice(0, 20).map((a: any) => ({ artifactId: String(a?.artifactId ?? ""), name: String(a?.name ?? ""), mimeType: String(a?.mimeType ?? "") })).filter((a: any) => a.artifactId) : undefined,
           })
         : null;
       // A turn never hangs: a heartbeat every 10s tells the desktop the turn is
@@ -294,6 +389,7 @@ wss.on("connection", (socket, req) => {
         socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
+        if (Array.isArray((chunk as { artifacts?: unknown[] }).artifacts)) recorder?.artifacts((chunk as { artifacts: unknown[] }).artifacts);
         if (chunk.retract) recorder?.retract();
         if (chunkError) recorder?.finish(String(chunkError));
         else recorder?.delta(String(chunk.delta ?? ""));
@@ -309,7 +405,9 @@ wss.on("connection", (socket, req) => {
       recorder?.finish();
     } catch (err: any) {
       recorder?.finish(err.message);
-      socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message })));
+      // A wallet/plan stop carries its code so the client can offer an upgrade or top-up.
+      const code = (err as { billing?: boolean; code?: string })?.billing ? `CREDITS_${(err as { code?: string }).code ?? "LIMIT"}` : undefined;
+      socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message, ...(code ? { code } : {}) })));
     }
   });
   // The app closed mid-reply: keep what arrived.

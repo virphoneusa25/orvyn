@@ -179,6 +179,7 @@ authRouter.get("/me", (req, res) => {
     principal: session.principal,
     organizations: authService.listOrganizations(session.user.id),
     onboarding: profile ? { step: profile.currentStep, completedAt: profile.completedAt } : null,
+    verificationRequired: verificationRequired(),
   });
 });
 
@@ -193,6 +194,14 @@ function verifiedPage(ok: boolean): string {
 <div style="width:96px;height:96px;margin:0 auto 24px;border-radius:50%;background:radial-gradient(circle at 40% 35%,#f0c8ff 0%,#C044FF 35%,#7C4DFF 60%,#22D3EE 100%);box-shadow:0 0 60px rgba(124,77,255,.6)"></div>
 <h1 style="font-size:24px;margin:0 0 10px">${title}</h1><p style="color:#9DAAC7;line-height:1.6">${body}</p></main></body></html>`;
 }
+
+/** The browser's chat socket: a one-minute, single-use ticket instead of the session token in the URL. */
+authRouter.post("/ws-ticket", (req, res) => {
+  const token = bearerToken(req);
+  const ticket = token ? authService.createWsTicket(token) : null;
+  if (!ticket) return res.status(401).json({ error: "Not signed in" });
+  res.json({ ticket });
+});
 
 // ---------- sessions: see them, end one, end all, rotate ----------
 
@@ -298,7 +307,8 @@ authRouter.get("/oauth/:provider/start", (req, res) => {
   const client = req.query.client === "desktop" ? "desktop" : "web";
   let handoffId: string | undefined;
   try {
-    if (client === "desktop") {
+    // Desktop and the Cloud portal both hand the session over by claim (id + secret verifier).
+    if (client === "desktop" || req.query.hid) {
       handoffId = String(req.query.hid ?? "");
       authService.startHandoff(handoffId, String(req.query.challenge ?? ""));
     }
@@ -338,7 +348,12 @@ authRouter.get("/oauth/:provider/callback", async (req, res) => {
       if (!authService.completeHandoff(saved.handoffId, user.id)) return fail("This sign-in request expired.");
       return res.type("html").send(page("You're signed in", "<p>Go back to ORVYN — it continues on its own. You can close this tab.</p>"));
     }
-    // Web: the web app completes sign-in from its own handoff (same mechanism).
+    // The Cloud portal: back to the portal, which claims its session with the
+    // verifier it kept (the URL carries only the public handoff id).
+    if (saved.handoffId) {
+      if (!authService.completeHandoff(saved.handoffId, user.id)) return fail("This sign-in request expired.");
+      return res.redirect(302, `${publicOrigin(req)}/signin?complete=${encodeURIComponent(saved.handoffId)}`);
+    }
     return res.type("html").send(page("You're signed in", "<p>You can close this tab and return to ORVYN.</p>"));
   } catch (err: any) {
     console.warn(JSON.stringify({ event: "auth.oauth.failed", provider, reason: String(err?.message ?? err).slice(0, 120) }));

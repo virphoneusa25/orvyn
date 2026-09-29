@@ -62,6 +62,13 @@ export const CHAT_MANIFEST = [
   "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a database server, a calendar…). Never call it for project files, the website, the preview or the terminal.",
 ].join("\n");
 
+/** ORVYN Cloud's web chat: a conversation with web research, files and images — not project tasks. */
+export const CLOUD_CHAT_MANIFEST = [
+  "CAPABILITIES (facts from ORVYN): this is ORVYN Cloud chat. You answer, research the web, read the files and images the user attaches, write and explain code, and draft documents. You do not run tasks on the user's computer or edit their project files from here.",
+  "If the user wants you to change files in a project, run commands or check a site in a browser, say that ORVYN Desktop does that work and offer to plan it or write the code here.",
+  "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a calendar…).",
+].join("\n");
+
 export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   {
     name: "web_search",

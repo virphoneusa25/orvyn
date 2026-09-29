@@ -69,10 +69,14 @@ export class ChatTurnRecorder {
   constructor(
     private readonly sessions: WorkSessionStore,
     private readonly sessionId: string,
-    input: { userMessage: string; userMessageId?: string; assistantMessageId?: string; userCreatedAt?: number; mode?: string },
+    input: { userMessage: string; userMessageId?: string; assistantMessageId?: string; userCreatedAt?: number; mode?: string; attachments?: unknown[] },
   ) {
     const mode = input.mode ?? "chat";
-    sessions.appendMessage(sessionId, { messageId: input.userMessageId, role: "user", content: input.userMessage, mode, createdAt: input.userCreatedAt });
+    sessions.appendMessage(sessionId, {
+      messageId: input.userMessageId, role: "user", content: input.userMessage, mode, createdAt: input.userCreatedAt,
+      // The files the user attached (their stored artifact ids), so reopening the chat shows them.
+      ...(input.attachments?.length ? { meta: { attachments: input.attachments } } : {}),
+    });
     const reply = sessions.appendMessage(sessionId, { messageId: input.assistantMessageId, role: "assistant", content: "", mode, status: "streaming" });
     this.replyId = reply?.messageId ?? null;
   }
@@ -85,6 +89,12 @@ export class ChatTurnRecorder {
     const i = this.activities.findIndex((x) => (x as { id: string }).id === a.id);
     if (i >= 0) this.activities[i] = a; else this.activities.push(a);
     this.sessions.updateMessage(this.replyId, { meta: { activity: this.activities } });
+  }
+
+  /** Files the reply produced (e.g. a generated image), kept with the reply. */
+  artifacts(list: unknown[]): void {
+    if (!this.replyId || !list.length) return;
+    this.sessions.updateMessage(this.replyId, { meta: { artifacts: list } });
   }
 
   /** The reply so far was withdrawn (ORION researches first). */

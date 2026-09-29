@@ -11,6 +11,7 @@ WORKDIR /repo
 COPY package.json ./
 COPY packages/ai-core/package.json packages/ai-core/
 COPY apps/backend/package.json apps/backend/
+COPY apps/web/package.json apps/web/
 
 # --ignore-scripts: the root postinstall builds ai-core, but sources aren't
 # copied yet at this layer — the explicit build steps below handle it.
@@ -21,6 +22,9 @@ COPY apps/backend apps/backend
 
 RUN npm run build -w packages/ai-core
 RUN npm run build -w apps/backend
+# ORVYN Cloud — the customer portal, served by the backend at "/".
+COPY apps/web apps/web
+RUN npm run build -w apps/web
 # deploy-ovh.sh writes build-info.json (commit + time); local builds get "{}".
 RUN test -f apps/backend/build-info.json || echo '{}' > apps/backend/build-info.json
 
@@ -50,6 +54,8 @@ COPY --from=build /repo/packages/ai-core ./packages/ai-core
 COPY --from=build /repo/apps/backend/dist ./dist
 COPY --from=build /repo/apps/backend/package.json ./package.json
 COPY --from=build /repo/apps/backend/build-info.json ./build-info.json
+# The portal's static build (dist/index.js serves ../web).
+COPY --from=build /repo/apps/web/dist ./web
 # Packaged skills. The process cwd is /app, and the loader looks for resources/skills there.
 COPY resources/skills ./resources/skills
 # Imported skills (claude-skills and other packs). Without them the server has only the built-in packs.
