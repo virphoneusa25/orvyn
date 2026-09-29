@@ -17,7 +17,7 @@ const GIT = /^git_/;
 export function selectToolNames(
   names: string[],
   intent: TaskIntent,
-  options?: { repositoryDetected?: boolean }
+  options?: { repositoryDetected?: boolean; desktopTools?: boolean }
 ): string[] {
   const gitAllowed = options?.repositoryDetected !== false;
   return names.filter((name) => {
@@ -29,7 +29,12 @@ export function selectToolNames(
       return false;
     }
     if (BROWSER.test(name) && !intent.requiresBrowser && !intent.requiresFrontend && intent.category !== "browser") return false;
-    if (DESKTOP.test(name) && !intent.requiresDesktop && intent.category !== "desktop") return false;
+    // Desktop/computer-use is the product's core surface, not a guessable
+    // intent: a follow-up like "try now" classified as `general` must not
+    // strip the tools the conversation was just using. Every capable run
+    // exposes them; read-only modes pass desktopTools:false and the mode's
+    // permission profile stays authoritative either way.
+    if (DESKTOP.test(name) && options?.desktopTools === false) return false;
     if (ARTIFACT.test(name) && !intent.requiresArtifact && intent.category !== "artifact") return false;
     if (MCP.test(name) && !intent.requiresExternalIntegration && intent.category !== "integration") return false;
     return true;

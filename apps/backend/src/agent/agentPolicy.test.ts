@@ -269,3 +269,14 @@ test("ORVYN's own storage is off limits; the project is not", () => {
     assert.equal(internalPathRefusal(tool, args as Record<string, unknown>, ctx), null, `${tool} ${JSON.stringify(args)}`);
   }
 });
+
+test("a short follow-up keeps the desktop tools; read-only modes drop them", () => {
+  // "try now" classifies as general — the desktop must not vanish mid-thread.
+  const followUp = selectToolNames(["read_file", "desktop_start", "desktop_screenshot", "computer.click"], inferTaskIntent("try now"));
+  assert.ok(followUp.includes("desktop_start"));
+  assert.ok(followUp.includes("desktop_screenshot"));
+  assert.ok(followUp.includes("computer.click"));
+  const research = selectToolNames(["read_file", "desktop_start", "desktop_screenshot"], inferTaskIntent("try now"), { desktopTools: false });
+  assert.equal(research.includes("desktop_start"), false);
+  assert.equal(research.includes("desktop_screenshot"), false);
+});

@@ -510,7 +510,8 @@ test("the run prompt is built from live permissions", async () => {
   const system = String(h.provider.requests[0].messages[0].content);
   assert.match(system, /Read files: available/);
   assert.match(system, /Edit and create files: available/);
-  assert.match(system, /Desktop and computer-use in this session: not available/);
+  // Desktop is a core surface exposed on every capable run, not intent-gated.
+  assert.match(system, /Desktop and computer-use in this session: available/);
   assert.match(system, /Terminal, tests, builds, dev servers, and SSH: not available/);
   assert.match(system, /not a read-only/);
   assert.doesNotMatch(system, /let the user/i);

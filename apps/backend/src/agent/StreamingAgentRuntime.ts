@@ -1498,7 +1498,12 @@ export class StreamingAgentRuntime {
       resources: catalog,
     });
     const exposed = def.toolsEnabled
-      ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent, { repositoryDetected: workspace.repositoryDetected }))
+      ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent, {
+          repositoryDetected: workspace.repositoryDetected,
+          // Read-only modes drop the desktop; every capable run keeps it —
+          // "try now"-style follow-ups must not lose the desktop mid-thread.
+          desktopTools: mode !== "research" && mode !== "plan",
+        }))
       : null;
     const runCaps = summarizeCapabilities(
       this.tools.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
