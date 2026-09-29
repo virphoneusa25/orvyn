@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld("orvyn", {
     },
   },
   onboarding: {
-    isFirstRun: (): Promise<boolean> => ipcRenderer.invoke("onboarding:isFirstRun"),
+    bypassed: (): Promise<boolean> => ipcRenderer.invoke("onboarding:bypassed"),
     accountUrl: (): Promise<string | null> => ipcRenderer.invoke("onboarding:accountUrl"),
   },
   project: {

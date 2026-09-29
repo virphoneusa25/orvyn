@@ -34,8 +34,8 @@ export interface OrvynBridge {
     onData(cb: (e: { sessionId: string; data: string }) => void): () => void;
   };
   onboarding?: {
-    /** A fresh install: no saved connection and no recent projects. */
-    isFirstRun(): Promise<boolean>;
+    /** Dev/test builds only: the account gate is bypassed (never true in a packaged build). */
+    bypassed(): Promise<boolean>;
     /** Account server override (staging/test); null means ORVYN Cloud. */
     accountUrl?(): Promise<string | null>;
   };

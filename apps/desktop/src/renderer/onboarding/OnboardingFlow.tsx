@@ -124,7 +124,7 @@ function Check({ on }: { on: boolean }) {
   return <span className="ob-check" aria-hidden="true">{on ? ICON.check : null}</span>;
 }
 
-export function OnboardingFlow({ onDone, onSkip, signedIn }: { onDone: (r: OnboardingResult) => void; onSkip?: () => void; signedIn: boolean }) {
+export function OnboardingFlow({ onDone, signedIn }: { onDone: (r: OnboardingResult) => void; signedIn: boolean }) {
   const [step, setStep] = useState<Step>(signedIn ? "provisioning" : "welcome");
   const [answers, setAnswers] = useState<Answers>({ workStyle: "adaptive", responseStyle: "adaptive", memory: true });
   const [completed, setCompleted] = useState<Step[]>([]);
@@ -134,6 +134,7 @@ export function OnboardingFlow({ onDone, onSkip, signedIn }: { onDone: (r: Onboa
   const [busy, setBusy] = useState(false);
   const [offline, setOffline] = useState(false);
   const [returnToRecap, setReturnToRecap] = useState(false);
+  const [signinFirst, setSigninFirst] = useState(false);
   const [orb, setOrb] = useState<OrbState>(signedIn ? "idle" : "awakening");
   const loadedRef = useRef(false);
 
@@ -263,11 +264,17 @@ export function OnboardingFlow({ onDone, onSkip, signedIn }: { onDone: (r: Onboa
               Let's get started {ICON.arrow}
             </button>
           </div>
+          {!signedIn ? (
+            <p className="ob-note">
+              Already have an account?{" "}
+              <button className="ob-link" data-testid="ob-welcome-signin" onClick={() => { setSigninFirst(true); setStep("signup"); }}>Sign in</button>
+            </p>
+          ) : null}
         </>
       );
       break;
     case "signup":
-      body = <SignupScreen providers={providers} onSignedIn={async () => {
+      body = <SignupScreen providers={providers} initialMode={signinFirst ? "login" : "register"} onSignedIn={async () => {
         const v = await refresh();
         const next = v?.profile.currentStep ?? "verification";
         setAnswers((a) => ({ ...a, ...(v?.profile.answers ?? {}) }));
@@ -394,7 +401,6 @@ export function OnboardingFlow({ onDone, onSkip, signedIn }: { onDone: (r: Onboa
         <div className="ob-wordmark" aria-label="ORVYN">ORVYN</div>
         <div className="ob-top__right">
           {firstName && STEPS.indexOf(step) > STEPS.indexOf("name") ? <span>{firstName}</span> : null}
-          {signedIn && onSkip && step !== "complete" ? <button className="ob-skip" onClick={onSkip}>Skip</button> : null}
         </div>
       </header>
       <main className="ob-stage">
@@ -414,8 +420,8 @@ export function OnboardingFlow({ onDone, onSkip, signedIn }: { onDone: (r: Onboa
 
 // ---------- screens ----------
 
-function SignupScreen({ providers, onSignedIn }: { providers: Providers; onSignedIn: () => Promise<void> }) {
-  const [mode, setMode] = useState<"register" | "login">("register");
+function SignupScreen({ providers, onSignedIn, initialMode }: { providers: Providers; onSignedIn: () => Promise<void>; initialMode?: "register" | "login" }) {
+  const [mode, setMode] = useState<"register" | "login">(initialMode ?? "register");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

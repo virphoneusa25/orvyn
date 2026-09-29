@@ -647,15 +647,13 @@ ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
 ipcMain.handle("config:get", () => readConfig());
 /** The account server (ORVYN Cloud unless ORVYN_CLOUD_URL points at staging or a test server). */
 ipcMain.handle("onboarding:accountUrl", () => process.env.ORVYN_CLOUD_URL?.trim() || null);
-/** A fresh install (no saved connection, no recent projects): onboarding greets it. Existing installs are never interrupted. */
-ipcMain.handle("onboarding:isFirstRun", async () => {
-  if (process.env.ORVYN_SKIP_ONBOARDING === "1") return false;
-  try {
-    await fs.access(CONFIG_PATH);
-    return false;
-  } catch { /* no saved connection */ }
-  return (await loadRecents()).length === 0;
-});
+/**
+ * ORVYN requires a signed-in account with finished onboarding on every
+ * launch. Only an unpackaged dev/test build may bypass that gate
+ * (ORVYN_SKIP_ONBOARDING=1, used by the acceptance harnesses); a packaged
+ * build ignores the variable.
+ */
+ipcMain.handle("onboarding:bypassed", () => !app.isPackaged && process.env.ORVYN_SKIP_ONBOARDING === "1");
 ipcMain.handle("engine:ensureLocal", async () => {
   const ok = await ensureLocalEngine({ force: true });
   return { ok };

@@ -126,7 +126,7 @@ async function main() {
     mkdirSync(project, { recursive: true });
     writeFileSync(join(userData, "orvyn-connection.json"), JSON.stringify({ backendUrl: `http://localhost:${PORT}`, apiKey: "" }) /* the renderer CSP allows localhost:*, as the installed app uses */);
     writeFileSync(join(userData, "orvyn-recents.json"), JSON.stringify([project]));
-    app = await _electron.launch({ executablePath: electronBin, args: [desktopDir, `--user-data-dir=${userData}`, "--no-sandbox", "--no-proxy-server"], env: { ...process.env } });
+    app = await _electron.launch({ executablePath: electronBin, args: [desktopDir, `--user-data-dir=${userData}`, "--no-sandbox", "--no-proxy-server"], env: { ...process.env, ORVYN_SKIP_ONBOARDING: "1" } });
     const win = await app.firstWindow();
     win.on("console", (m) => { if (process.env.DEBUG) console.log("[renderer]", m.type(), m.text().slice(0, 300)); });
     win.on("request", (r) => { if (process.env.DEBUG && r.url().includes("/api/v1/agent")) console.log("[req]", r.method(), r.url()); });

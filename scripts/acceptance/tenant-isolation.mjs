@@ -117,6 +117,11 @@ async function main() {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await sleep(250); }
     const A = (await call("/auth/register", "POST", { name: "Alice", email: "alice@a.example", password: "customer-a-password" })).json.token;
     const B = (await call("/auth/register", "POST", { name: "Bob", email: "bob@b.example", password: "customer-b-password" })).json.token;
+    // Both customers finish setup (the account gate refuses ORVYN until then).
+    for (const t of [A, B]) {
+      await call("/onboarding/provision", "POST", {}, t);
+      await call("/onboarding", "PUT", { step: "complete", completed: ["first_mission"] }, t);
+    }
     ok(Boolean(A && B), "two customers signed up (each with a Personal Organization)");
     await call("/onboarding/provision", "POST", {}, A);
     await call("/onboarding/provision", "POST", {}, B);

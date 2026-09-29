@@ -228,8 +228,20 @@ async function main() {
     ok(/Welcome back, Royce\./.test(await win.locator("body").innerText()), "the home screen: “Welcome back, Royce.”");
     ok(await win.locator("[data-testid=home-quick-actions]").isVisible().catch(() => false), "quick actions: New Project, Open Project, Browse Files, Connect Server");
     await shot(win, "17-desktop-home");
+    console.log("\n7b. Signing out returns to the gate");
+    await win.locator("button[aria-haspopup=menu]").first().click({ timeout: 8000 });
+    await sleep(400);
+    await win.getByRole("button", { name: /^Sign out$/i }).first().click({ timeout: 8000 });
+    ok(await waitStep(win, "welcome", 15000), "after sign-out the app closes behind the welcome screen", String(await step(win)));
+    await shot(win, "17b-signed-out");
+    await win.locator("[data-testid=ob-welcome-signin]").click({ timeout: 8000 });
+    ok(await waitStep(win, "signup", 8000) && /Sign in to ORVYN/.test(await win.locator("[data-testid=onboarding]").innerText()), "“Already have an account? Sign in” goes straight to sign-in");
+    await win.locator("#ob-email").fill("royce@example.com");
+    await win.locator("#ob-password").fill("Carrier-Grade-2026!");
+    await win.getByRole("button", { name: /^Sign In$/ }).click();
+    for (let i = 0; i < 60 && (await win.locator("[data-testid=onboarding]").count()); i++) await sleep(250);
+    ok(!(await win.locator("[data-testid=onboarding]").count()), "a returning account that finished setup signs in and ORVYN opens", String(await step(win)));
     await closeApp(app);
-
     console.log("\n8. Web → desktop handoff");
     const web = await api("/auth/register", "POST", { name: "Web User", email: "web@example.com", password: "Started-On-The-Web-1" });
     const webLink = (mails().find((m) => m.to === "web@example.com")?.text.match(/https?:\/\/\S+\/auth\/verify\?token=\S+/) ?? [])[0];
@@ -244,17 +256,26 @@ async function main() {
     writeFileSync(join(webData, "orvyn-connection.json"), JSON.stringify({ backendUrl: BASE, apiKey: web.json.token }));
     ({ app, win } = await launch(webData));
     ok(await waitStep(win, "memory", 20000), "the desktop app opens the same account at the same step (memory)", String(await step(win)));
+    ok(!(await win.getByText(/^Skip$/).count()), "no Skip: unfinished setup cannot be bypassed");
     await closeApp(app);
 
-    console.log("\n9. Existing installs are not interrupted");
+    console.log("\n9. No account, no ORVYN (existing installs included)");
     const oldData = join(work, "existing-install");
     mkdirSync(join(oldData), { recursive: true });
     const proj = join(work, "old-project"); mkdirSync(proj, { recursive: true });
     writeFileSync(join(oldData, "orvyn-connection.json"), JSON.stringify({ backendUrl: BASE, apiKey: "" }));
     writeFileSync(join(oldData, "orvyn-recents.json"), JSON.stringify([proj]));
     ({ app, win } = await launch(oldData));
-    await sleep(3500);
-    ok(!(await win.locator("[data-testid=onboarding]").count()), "an existing install opens ORVYN directly");
+    ok(await waitStep(win, "welcome", 15000), "an install with projects but no account signs in / signs up first", String(await step(win)));
+    ok(!(await win.getByText(/Local Mode/i).count()), "no anonymous local-mode way in");
+    await closeApp(app);
+
+    console.log("\n10. A stale session signs in again");
+    const staleData = join(work, "stale-session");
+    mkdirSync(staleData, { recursive: true });
+    writeFileSync(join(staleData, "orvyn-connection.json"), JSON.stringify({ backendUrl: BASE, apiKey: "orvsess_revoked_or_expired_token_0000000000" }));
+    ({ app, win } = await launch(staleData));
+    ok(await waitStep(win, "welcome", 15000), "an expired session never opens ORVYN", String(await step(win)));
     await closeApp(app);
     app = null;
   } catch (e) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import appIcon from "./assets/icon.png";
 import { FileExplorer } from "./components/FileExplorer";
@@ -38,7 +38,8 @@ import { EditorTabs } from "./components/EditorTabs";
 import { loadConnectionConfig, apiUrl, authHeaders, noteProtectedStatus, getConnectionConfig, isCloudBackend, isSessionToken } from "./connection";
 import { OnboardingFlow, setAccountServer, type OnboardingResult } from "./onboarding/OnboardingFlow";
 import { describeConnection, heroStatusLine } from "./connectionState";
-import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, startConnectionRuntime } from "./connectionRuntime";
+import { getConnectionFacts, noteLocalEngine, noteWorkspaceName, onConnectionFacts, signOutOfCloud, startConnectionRuntime } from "./connectionRuntime";
+import { decideGate, forgetComplete, gateAfterAccountChange, isRememberedComplete, rememberComplete, type GateServer, type GateState } from "./onboarding/onboardingModel";
 import { WorkspaceState } from "./orvyn-bridge";
 import { subscribeChat, newChat, openChatSession, openChatForRun, initChatHistory, getActiveChat, getChatMessages, getChat, flushChats, bindChatWorkspace, sessionRestoreState, restoredWorkSession } from "./chatSession";
 import { sameRoot, syncSessions } from "./sessionsApi";
@@ -140,36 +141,55 @@ function guessLanguage(path: string): string {
   return map[ext] ?? "plaintext";
 }
 
+/** A per-account key (hash of server + session) for remembering finished setup offline. Never the token itself. */
+async function accountKey(backendUrl: string, token: string): Promise<string> {
+  if (!token) return "";
+  try {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${backendUrl}|${token}`));
+    return Array.from(new Uint8Array(bytes)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch { return ""; }
+}
+
 export function App() {
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
-  // Onboarding: a fresh install, or an account that has not finished setup.
-  // Existing installs and finished accounts open ORVYN normally.
-  const [onboarding, setOnboarding] = useState<"checking" | "new" | "resume" | "off">("checking");
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const cfg = await loadConnectionConfig().catch(() => getConnectionConfig());
-      setAccountServer((await window.orvyn.onboarding?.accountUrl?.().catch(() => null)) ?? null);
-      if (isSessionToken(cfg.apiKey)) {
-        try {
-          if (sessionStorage.getItem("orvyn:onboarding-skipped") === "1") { if (alive) setOnboarding("off"); return; }
-        } catch { /* storage off */ }
-        try {
-          const r = await fetch(apiUrl("/onboarding"), { headers: authHeaders() });
-          if (r.ok) {
-            const d = await r.json();
-            if (alive) setOnboarding(d?.profile?.completedAt ? "off" : "resume");
-            return;
-          }
-        } catch { /* offline: open ORVYN; onboarding resumes next time */ }
-        if (alive) setOnboarding("off");
-        return;
-      }
-      const first = await window.orvyn.onboarding?.isFirstRun?.().catch(() => false);
-      if (alive) setOnboarding(first ? "new" : "off");
-    })();
-    return () => { alive = false; };
+  // The account gate: ORVYN opens only for a signed-in account that finished
+  // onboarding. No Skip, no anonymous local mode. The server decides; a
+  // finished account may open offline on a machine where it finished before.
+  const [onboarding, setOnboarding] = useState<GateState>("checking");
+  const gateBypassed = useRef(false);
+  const checkGate = useCallback(async () => {
+    const bypassed = Boolean(await window.orvyn.onboarding?.bypassed?.().catch(() => false));
+    gateBypassed.current = bypassed;
+    const cfg = await loadConnectionConfig().catch(() => getConnectionConfig());
+    setAccountServer((await window.orvyn.onboarding?.accountUrl?.().catch(() => null)) ?? null);
+    const hasSession = isSessionToken(cfg.apiKey);
+    const key = hasSession ? await accountKey(cfg.backendUrl, cfg.apiKey) : "";
+    let server: GateServer | undefined;
+    if (!bypassed && hasSession) {
+      try {
+        const r = await fetch(apiUrl("/onboarding"), { headers: authHeaders() });
+        if (r.status === 401) server = "unauthorized";
+        else if (r.ok) server = (await r.json())?.profile?.completedAt ? "complete" : "incomplete";
+        else server = "unreachable";
+      } catch { server = "unreachable"; }
+    }
+    if (server === "complete") rememberComplete(key);
+    if (server === "incomplete") forgetComplete();
+    if (server === "unauthorized") { forgetComplete(); await signOutOfCloud().catch(() => undefined); }
+    setOnboarding(decideGate({ bypassed, hasSession, server, cachedComplete: isRememberedComplete(key) }));
   }, []);
+  useEffect(() => { void checkGate(); }, [checkGate]);
+  // Signing out (or a session that expired) while ORVYN is open returns to the gate.
+  const lastAccountState = useRef<string | null>(null);
+  useEffect(() => onConnectionFacts((f) => {
+    const previous = lastAccountState.current;
+    lastAccountState.current = f.accountState;
+    setOnboarding((cur) => {
+      const next = gateAfterAccountChange(cur, previous, f.accountState, gateBypassed.current);
+      if (next !== cur) forgetComplete();
+      return next;
+    });
+  }), []);
   const [tabs, setTabs] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>(() => (typeof window !== "undefined" && window.location.hash === "#skills" ? "skills" : "home"));
@@ -753,9 +773,23 @@ export function App() {
     setView("servers");
   };
 
+  if (onboarding === "checking") return <div className="orvyn-gate-checking" style={{ height: "100%", background: "var(--bg-app)" }} />;
+  if (onboarding === "offline") {
+    return (
+      <div data-gate="offline" style={{ height: "100%", display: "grid", placeItems: "center", background: "var(--bg-app)", color: "var(--text)" }}>
+        <div style={{ textAlign: "center", maxWidth: 380 }}>
+          <div style={{ fontSize: 18, fontWeight: 650, marginBottom: 8 }}>Can't reach ORVYN right now</div>
+          <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 16 }}>ORVYN needs to confirm your account before it opens. Check your connection and try again.</div>
+          <button type="button" onClick={() => { setOnboarding("checking"); void checkGate(); }} style={{ padding: "8px 18px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--accent, #4f7cff)", color: "#fff", cursor: "pointer" }}>Try again</button>
+        </div>
+      </div>
+    );
+  }
   if (onboarding === "new" || onboarding === "resume") {
     const finish = (result: OnboardingResult) => {
       setOnboarding("off");
+      const cfg = getConnectionConfig();
+      void accountKey(cfg.backendUrl, cfg.apiKey).then(rememberComplete);
       void window.orvyn.project.getWorkspace().then(setWorkspace).catch(() => undefined);
       const mission = result.mission;
       if (!mission) { setCenterMode("home"); setView("home"); return; }
@@ -772,7 +806,6 @@ export function App() {
       <OnboardingFlow
         signedIn={onboarding === "resume"}
         onDone={finish}
-        onSkip={onboarding === "resume" ? () => { try { sessionStorage.setItem("orvyn:onboarding-skipped", "1"); } catch { /* ignore */ } setOnboarding("off"); } : undefined}
       />
     );
   }

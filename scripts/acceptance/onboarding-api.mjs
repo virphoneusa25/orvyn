@@ -60,6 +60,8 @@ async function main() {
     const token = reg.json.token;
     const first = await call("/onboarding", "GET", null, token);
     ok(first.json.profile?.currentStep === "verification" && first.json.user?.emailVerified === false, "onboarding starts at 'Check your inbox'", JSON.stringify(first.json.profile));
+    const unverified = await call("/projects", "GET", null, token);
+    ok(unverified.status === 403 && unverified.json.code === "EMAIL_NOT_VERIFIED", "a new, unverified account cannot go straight into ORVYN", `${unverified.status} ${JSON.stringify(unverified.json)}`);
     const sent = mails();
     ok(sent.length === 1 && sent[0].to === "royce@example.com" && /Confirm your ORVYN account/.test(sent[0].subject), "one verification email to the right address", JSON.stringify(sent.map((m) => [m.to, m.subject])));
 
@@ -118,6 +120,28 @@ async function main() {
     const parsed = prefs ? JSON.parse(prefs.value) : {};
     ok(parsed.memory === false && parsed.workStyle === "plan_first" && parsed.responseStyle === "concise" && parsed.name === "Royce", "the workspace ORION runs in holds the choices (memory off, plan first, concise)", JSON.stringify(parsed));
 
+    console.log("\n6b. The account gate: no ORVYN before setup is finished");
+    const early1 = await call("/projects", "GET", null, token);
+    ok(early1.status === 403 && early1.json.code === "ONBOARDING_REQUIRED", "a verified account mid-setup cannot use ORVYN (projects)", `${early1.status} ${JSON.stringify(early1.json)}`);
+    const earlyRun = await call("/agent/stream/runs", "POST", { prompt: "hello" }, token);
+    ok(earlyRun.status === 403 && earlyRun.json.code === "ONBOARDING_REQUIRED", "…nor start a run", `${earlyRun.status} ${JSON.stringify(earlyRun.json)}`);
+    const wsDenied = await new Promise((resolveWs) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws/chat?token=${encodeURIComponent(token)}`);
+      const t = setTimeout(() => { try { sock.close(); } catch {} resolveWs(null); }, 4000);
+      sock.onmessage = (e) => { clearTimeout(t); try { resolveWs(JSON.parse(String(e.data))); } catch { resolveWs(null); } try { sock.close(); } catch {} };
+      sock.onerror = () => { clearTimeout(t); resolveWs(null); };
+    });
+    ok(wsDenied?.code === "ONBOARDING_REQUIRED", "…nor chat over the socket", JSON.stringify(wsDenied));
+    const walletMid = await call("/billing", "GET", null, token);
+    ok(walletMid.status === 200, "the setup screens can still read the plan and wallet");
+    for (const [stepName, doneName] of [["github", "workspace"], ["plan", "github"], ["recap", "plan"], ["first_mission", "recap"], ["complete", "first_mission"]]) {
+      await call("/onboarding", "PUT", { step: stepName, completed: [doneName] }, token);
+    }
+    const finished = await call("/onboarding", "GET", null, token);
+    ok(Boolean(finished.json.profile?.completedAt), "onboarding completes", JSON.stringify(finished.json.profile));
+    const after = await call("/projects", "GET", null, token);
+    ok(after.status === 200, "after setup, ORVYN opens (projects 200)", `${after.status} ${JSON.stringify(after.json).slice(0, 200)}`);
+
     console.log("\n7. Existing accounts are not asked to sign up again");
     const legacy = await call("/auth/register", "POST", { email: "old@example.com", password: "another good pass" });
     // Simulate an account from before onboarding existed: no profile yet.
@@ -126,6 +150,8 @@ async function main() {
     auth.close();
     const legacyView = await call("/onboarding", "GET", null, legacy.json.token);
     ok(legacyView.json.profile?.currentStep === "provisioning" && legacyView.json.user?.emailVerified === true && !legacyView.json.profile?.completedSteps.includes("name"), "an existing account resumes at 'finish setup' (no signup, no verification)", JSON.stringify(legacyView.json.profile));
+    const legacyGate = await call("/projects", "GET", null, legacy.json.token);
+    ok(legacyGate.status === 403 && legacyGate.json.code === "ONBOARDING_REQUIRED", "…and finishes setup before using ORVYN", `${legacyGate.status} ${legacyGate.json.code}`);
 
     console.log("\n8. Plans come from the billing configuration");
     const plans = await call("/onboarding/plans");

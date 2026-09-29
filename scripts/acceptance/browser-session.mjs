@@ -158,7 +158,7 @@ async function main() {
     app = await _electron.launch({
       executablePath: electronBin,
       args: [desktopDir, `--user-data-dir=${userData}`, "--no-sandbox", `--host-resolver-rules=MAP example.com:443 127.0.0.1:${SITE_PORT}`, "--ignore-certificate-errors", "--no-proxy-server"],
-      env: { ...process.env },
+      env: { ...process.env, ORVYN_SKIP_ONBOARDING: "1" },
     });
     const win = await app.firstWindow();
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setSize(1600, 1000); w.setPosition(0, 0); });

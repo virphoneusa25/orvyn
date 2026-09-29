@@ -44,3 +44,20 @@ test("an offline draft keeps the user's answers but never skips verification", (
   assert.equal(stale.step, "goals");
   assert.equal(stale.needsSync, false);
 });
+
+test("the account gate: no session, no ORVYN", async () => {
+  const { decideGate, gateAfterAccountChange } = await import("./onboardingModel.ts");
+  assert.equal(decideGate({ bypassed: false, hasSession: false, cachedComplete: false }), "new", "a fresh install signs up first");
+  assert.equal(decideGate({ bypassed: false, hasSession: false, cachedComplete: true }), "new", "an existing install without an account signs in first");
+  assert.equal(decideGate({ bypassed: false, hasSession: true, server: "incomplete", cachedComplete: true }), "resume", "unfinished setup resumes — no skip");
+  assert.equal(decideGate({ bypassed: false, hasSession: true, server: "unauthorized", cachedComplete: true }), "new", "an expired session signs in again");
+  assert.equal(decideGate({ bypassed: false, hasSession: true, server: "complete", cachedComplete: false }), "off");
+  assert.equal(decideGate({ bypassed: false, hasSession: true, server: "unreachable", cachedComplete: false }), "offline", "unknown account offline never opens");
+  assert.equal(decideGate({ bypassed: false, hasSession: true, server: "unreachable", cachedComplete: true }), "off", "a finished account opens offline");
+  assert.equal(decideGate({ bypassed: true, hasSession: false, cachedComplete: false }), "off", "dev/test bypass only");
+  assert.equal(gateAfterAccountChange("off", "signed-in", "signed-out", false), "new", "signing out returns to the gate");
+  assert.equal(gateAfterAccountChange("off", "signed-in", "expired", false), "new");
+  assert.equal(gateAfterAccountChange("off", "signed-out", "signed-out", false), "off", "startup state before validation does not bounce");
+  assert.equal(gateAfterAccountChange("off", "signed-in", "signed-in", false), "off");
+  assert.equal(gateAfterAccountChange("resume", "signed-in", "signed-out", false), "resume");
+});

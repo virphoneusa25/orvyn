@@ -186,3 +186,49 @@ export function mergeDraft(profile: Profile, draft: ReturnType<typeof loadDraft>
   const step = serverAt <= STEPS.indexOf("provisioning") ? profile.currentStep : draftAt > serverAt ? draft.step : profile.currentStep;
   return { step, answers: { ...profile.answers, ...draft.answers }, completed: [...new Set([...profile.completedSteps, ...draft.completed])], needsSync: true };
 }
+
+// ---------- the account gate ----------
+//
+// ORVYN opens only for a signed-in account whose onboarding is finished. There
+// is no Skip and no anonymous local mode: a new person creates an account (or
+// signs in), verifies their email, and completes setup first.
+
+export type GateState = "checking" | "new" | "resume" | "offline" | "off";
+export type GateServer = "complete" | "incomplete" | "unauthorized" | "unreachable";
+
+export function decideGate(i: { bypassed: boolean; hasSession: boolean; server?: GateServer; cachedComplete: boolean }): GateState {
+  if (i.bypassed) return "off";
+  if (!i.hasSession) return "new";
+  switch (i.server) {
+    case "complete": return "off";
+    case "incomplete": return "resume";
+    case "unauthorized": return "new";
+    // Offline: an account already known to have finished setup on this
+    // machine may open (its work is local too); anyone else waits for the server.
+    case "unreachable": return i.cachedComplete ? "off" : "offline";
+    default: return "checking";
+  }
+}
+
+/**
+ * A connection-state change while ORVYN is open: leaving "signed-in" (sign
+ * out, or the session expired) returns to the gate. Only the transition
+ * counts: the startup "signed-out" before the session is validated does not.
+ */
+export function gateAfterAccountChange(current: GateState, previous: string | null, accountState: string, bypassed: boolean): GateState {
+  if (bypassed || current !== "off" || previous !== "signed-in") return current;
+  return accountState === "signed-out" || accountState === "expired" ? "new" : current;
+}
+
+const COMPLETE_KEY = "orvyn:onboarding-complete";
+
+/** Remember (per account) that setup finished, so an offline launch can still open. */
+export function rememberComplete(userKey: string, storage: Pick<Storage, "setItem"> | undefined = globalThis.localStorage): void {
+  try { storage?.setItem(COMPLETE_KEY, userKey); } catch { /* storage off */ }
+}
+export function isRememberedComplete(userKey: string, storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage): boolean {
+  try { return Boolean(userKey) && storage?.getItem(COMPLETE_KEY) === userKey; } catch { return false; }
+}
+export function forgetComplete(storage: Pick<Storage, "removeItem"> | undefined = globalThis.localStorage): void {
+  try { storage?.removeItem(COMPLETE_KEY); } catch { /* storage off */ }
+}

@@ -17,6 +17,7 @@ import { probeQdrant } from "./indexing/qdrantHealth";
 import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
+import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
@@ -159,7 +160,9 @@ app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RA
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.
 // The rate limit is per tenant, so one customer can't starve the others.
-app.use("/api/v1", resolveTenant, (req, res, next) => {
+// …then the account gate: a signed-in person uses ORVYN only after verifying
+// their email and finishing onboarding (no skipping into the app).
+app.use("/api/v1", resolveTenant, requireAccountReady, (req, res, next) => {
     // Desktop frame polling is a real-time visual stream (~11 FPS), not a
     // typical API call — exempting it prevents the 300 RPM tenant limiter
     // from starving the stream with 429s while the user watches.
@@ -185,6 +188,12 @@ const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 102
 wss.on("connection", (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
+  const ready = socketAccountReady(token);
+  if (!ready.ok) {
+    socket.send(JSON.stringify({ delta: "", done: true, error: ready.error, code: ready.code }));
+    socket.close();
+    return;
+  }
   const admitted = authorizeSocket(token);
   if (!admitted.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: admitted.error }));
