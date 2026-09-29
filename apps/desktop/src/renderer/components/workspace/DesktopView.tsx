@@ -515,7 +515,7 @@ export function DesktopView({
   const resourceLine = res
     ? `${res.os ?? "Linux"} · ${res.vcpus ?? "?"} vCPU · ${ramGb ?? "?"} GB RAM`
     : `Linux · ${session.width}×${session.height}`;
-  const statusLabel = user ? "User Control" : session.controlOwner === "orion" ? "Running" : session.status;
+  const statusLabel = user ? "User Control" : session.controlOwner === "orion" ? "ORION in control" : session.status;
   const statusColor = user ? "#22d3ee" : "#34d399";
 
   const header = (

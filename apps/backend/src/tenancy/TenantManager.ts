@@ -13,6 +13,7 @@ import { WorkSessionStore } from "../sessions/WorkSessionStore";
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
+import { releaseSandboxControlForRun } from "../desktop/sandboxDesktop";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { laneForUsage } from "../billing/plans";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
@@ -240,6 +241,23 @@ export class TenantManager {
     // never visible across customers. The store gets a per-tenant directory:
     // events append to disk as they stream and replay after a restart.
     tenant.runStore = new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
+    // A finished run must not keep the desktop input-blocked: when the run
+    // that held sandbox control ends, control returns to the user (the pane
+    // reconciles within one 2s session poll; the event helps live viewers).
+    tenant.runStore.onTerminalStatus((runId) => {
+      const released = releaseSandboxControlForRun(runId);
+      if (released) {
+        try {
+          tenant.runStore.emit(runId, "desktop.control.changed", {
+            sessionId: released.id,
+            to: "user",
+            controlOwner: "user",
+            status: "user_control",
+            reason: "run-finished",
+          });
+        } catch { /* the run's subscribers may already be gone */ }
+      }
+    });
     tenant.eventBus = new EventBus(tenant.runStore);
     tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);

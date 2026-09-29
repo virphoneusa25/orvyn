@@ -667,9 +667,30 @@ export class RunStore {
     // Stop is terminal. A tool or model call that finishes after the user
     // hits Stop must not put the run back into running or completed.
     if (run.status === "cancelled" && status !== "cancelled") return;
+    // Setting the status it already has is a no-op: no re-log, and terminal
+    // listeners (desktop control release) fire once per transition.
+    if (run.status === status) return;
     run.status = status;
     this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}) });
+    if (status === "completed" || status === "error" || status === "cancelled") {
+      for (const cb of this.terminalListeners) {
+        try { cb(runId, status); } catch { /* a listener must not break the settle */ }
+      }
+    }
   }
+
+  /**
+   * Notified when a run reaches a terminal status. Registered by the app
+   * wiring (the store stays domain-free) — e.g. desktop control returns to
+   * the user when the run that held it ends, so the pane never stays
+   * input-blocked with "ORION is working" after nothing is running.
+   */
+  onTerminalStatus(cb: (runId: string, status: RunStatus) => void): () => void {
+    this.terminalListeners.add(cb);
+    return () => this.terminalListeners.delete(cb);
+  }
+
+  private readonly terminalListeners = new Set<(runId: string, status: RunStatus) => void>();
 
   setCheckpoint(runId: string, checkpointId: string): void {
     const run = this.runs.get(runId);

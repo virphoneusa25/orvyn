@@ -907,10 +907,15 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
       case "desktop.control.changed": {
         flushAssistant(false);
         const to = String(e.data.to ?? e.data.controlOwner ?? "");
+        // An automatic release (the run finished) is not the user seizing
+        // control — the desktop simply belongs to them again.
+        const autoReleased = e.data.reason === "run-finished";
         items.push({
           kind: "status",
           key: e.id,
-          label: to === "user" ? "Desktop · Take Control — ORION input paused" : "Desktop · Returned to ORION",
+          label: to === "user"
+            ? autoReleased ? "Desktop · Returned to you — run finished" : "Desktop · Take Control — ORION input paused"
+            : "Desktop · Returned to ORION",
           ephemeral: false,
           tone: "working",
         });

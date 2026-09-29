@@ -936,6 +936,23 @@ export function repeatFramesToViewers(sessionId: string): void {
   }
 }
 
+/**
+ * When the run that held a desktop ends, the desktop belongs to the user
+ * again. An "orion"-held session otherwise stays input-blocked forever —
+ * the pane shows "Running" behind a Take Control wall while nothing is
+ * actually running anymore.
+ */
+export function releaseSandboxControlForRun(runId: string): SandboxDesktopSession | null {
+  for (const session of sessions.values()) {
+    if (session.runId !== runId || session.status === "ended") continue;
+    if (session.controlOwner !== "orion") return null;
+    session.controlOwner = "user";
+    session.status = "user_control";
+    return session;
+  }
+  return null;
+}
+
 function spawnFrameGrabber(session: SandboxDesktopSession, stream: FrameStream): void {
   const proc = spawn("docker", ["exec", session.containerId, ...frameStreamCommand(session.width, session.height)], {
     windowsHide: true,

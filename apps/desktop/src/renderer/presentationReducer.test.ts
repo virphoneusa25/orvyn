@@ -642,3 +642,16 @@ test("a failed exploration stays failed when verification does not pass", () => 
   assert.ok(insp);
   assert.equal(insp.status, "failed", "without a passing verification the failure stays a failure");
 });
+
+test("an automatic control release at run end is labeled as returning, not Take Control", () => {
+  const items = reducePresentation(
+    [
+      ev("desktop.ready", { sessionId: "desk_9" }),
+      ev("desktop.control.changed", { to: "user", reason: "run-finished" }),
+    ],
+    "completed"
+  );
+  const labels = items.filter((i) => i.kind === "status").map((i) => (i as { label: string }).label);
+  assert.ok(labels.some((l) => /Returned to you — run finished/.test(l)));
+  assert.ok(!labels.some((l) => /Take Control/.test(l)));
+});

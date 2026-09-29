@@ -223,3 +223,24 @@ test("queue: reconnect fetch (queueList) never resurrects consumed items", () =>
     ["one"]
   );
 });
+
+test("terminal statuses notify exactly once — desktop control returns when the owning run ends", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-runs-"));
+  try {
+    const store = new RunStore(dir);
+    store.create("run-ccc", "C:/proj");
+    const seen: Array<[string, string]> = [];
+    store.onTerminalStatus((runId, status) => seen.push([runId, status]));
+    store.setStatus("run-ccc", "running");
+    store.setStatus("run-ccc", "awaiting_approval");
+    assert.equal(seen.length, 0, "non-terminal statuses do not notify");
+    store.setStatus("run-ccc", "completed");
+    store.setStatus("run-ccc", "completed");
+    assert.deepEqual(seen, [["run-ccc", "completed"]], "terminal status notifies once");
+    store.create("run-ddd", "C:/proj");
+    store.setStatus("run-ddd", "error");
+    assert.equal(seen.length, 2, "a second run's terminal status notifies too");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
