@@ -41,6 +41,16 @@ export const VIEWPORT_PRESETS: Record<Exclude<ViewportPreset, "custom">, Browser
   mobile: { preset: "mobile", width: 390, height: 844, mobile: true },
 };
 
+/**
+ * Re-opening a tab that already exists in the Workbench. A preview must be
+ * shown as the site is NOW: the guest otherwise keeps its last render, and a
+ * mid-publish frame (index.html written before its CSS) outlives every later
+ * run. Browser tabs keep their state — ORION may be mid-flow in one.
+ */
+export function previewReopenStrategy(kind: BrowserKind, url?: string): "reload" | "activate" {
+  return kind === "preview" && url ? "reload" : "activate";
+}
+
 /** A preset name or explicit size → a viewport. Unknown input → null. */
 export function resolveViewport(input: { preset?: unknown; width?: unknown; height?: unknown; mobile?: unknown }): BrowserViewport | null {
   const preset = String(input.preset ?? "").toLowerCase();

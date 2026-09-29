@@ -19,6 +19,7 @@ import {
   restartSandboxDesktop,
   captureSandboxFrame,
   captureSandboxScreenshot,
+  repeatFramesToViewers,
   sandboxInput,
   sandboxSendKeys,
   sandboxLaunchApp,
@@ -203,6 +204,9 @@ export function desktopRouter(): Router {
     const heartbeat = setInterval(() => {
       if (closed) return;
       noteDesktopUse(sandbox.id);
+      // A still screen produces no changed frames; repeat the current
+      // picture so a viewer's picture-age watchdog sees a live stream.
+      repeatFramesToViewers(sandbox.id);
       res.write(`event: state\ndata: ${JSON.stringify({ controlOwner: sandbox.controlOwner, status: sandbox.status })}\n\n`);
     }, 5000);
     const finish = () => {

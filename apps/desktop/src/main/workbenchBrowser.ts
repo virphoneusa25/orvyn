@@ -12,6 +12,7 @@ import {
   isLocalBrowserUrl,
   isSafeBrowserUrl,
   normalizeBrowserInput,
+  previewReopenStrategy,
   publicBrowserTab,
   rememberBrowserRecent,
   requestBrowserControl,
@@ -138,6 +139,13 @@ export class WorkbenchBrowserManager {
       const existing = [...this.guests.values()].find((g) => g.tab.url.replace(/\/$/, "") === href.replace(/\/$/, ""));
       if (existing) {
         existing.tab.kind = kind;
+        // A preview re-open shows the site as it is NOW: the guest otherwise
+        // keeps its last render (a mid-publish frame outlives every later
+        // run). loadURL also restarts a load that hung mid-flight.
+        if (previewReopenStrategy(kind, existing.tab.url) === "reload") {
+          existing.tab.loading = true;
+          existing.view.webContents.loadURL(existing.tab.url);
+        }
         return this.activate(existing.tab.id);
       }
     }

@@ -84,44 +84,77 @@ export function imageKind(bytes: Uint8Array): "jpeg" | "png" | null {
  *  - "unsupported": this backend or desktop cannot stream — poll instead;
  *  - "ended": the desktop stopped or the stream was closed;
  *  - "failed": network trouble — try again shortly.
+ *
+ * The stream sends a state heartbeat every ~5s and repeats the current
+ * picture while the screen is still. `onActivity` fires for every received
+ * event, so the caller can treat "bytes flowing" as liveness without a new
+ * picture. A connection that goes silent longer than the stall window is
+ * aborted as "failed" — a black-holed fetch would otherwise hang forever
+ * with the poller suppressed underneath it.
  */
+export const STREAM_STALL_MS = 12_000;
+
 export async function readDesktopStream(
   url: string,
   headers: Record<string, string>,
   signal: AbortSignal,
   onFrame: (jpeg: Uint8Array) => void,
+  opts?: {
+    /** Abort when no bytes arrive for this long (default STREAM_STALL_MS). */
+    stallMs?: number;
+    /** Called for every received event — liveness without a new picture. */
+    onActivity?: () => void;
+  },
 ): Promise<"unsupported" | "ended" | "failed"> {
-  let res: Response;
+  if (signal.aborted) return "ended";
+  const stall = new AbortController();
+  const follow = () => stall.abort();
+  signal.addEventListener("abort", follow, { once: true });
+  const stallMs = opts?.stallMs ?? STREAM_STALL_MS;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const bump = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => stall.abort(), stallMs);
+  };
   try {
-    res = await fetch(url, { headers, cache: "no-store", signal });
-  } catch {
-    return "failed";
-  }
-  const type = res.headers.get("content-type") ?? "";
-  if (res.status === 404 && !type.includes("json")) return "unsupported"; // backend without /stream
-  if (!res.ok) return res.status === 404 ? "ended" : "failed";
-  if (!type.includes("text/event-stream") || !res.body) return "unsupported";
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return "ended";
-      buf += decoder.decode(value, { stream: true });
-      let cut: number;
-      while ((cut = buf.indexOf("\n\n")) >= 0) {
-        const block = buf.slice(0, cut);
-        buf = buf.slice(cut + 2);
-        const ev = parseSseBlock(block);
-        if (ev.event === "frame" && ev.data) onFrame(base64ToBytes(ev.data));
-        else if (ev.event === "end") return /unsupported/.test(ev.data) ? "unsupported" : "ended";
-      }
+    bump();
+    let res: Response;
+    try {
+      res = await fetch(url, { headers, cache: "no-store", signal: stall.signal });
+    } catch {
+      return signal.aborted ? "ended" : "failed";
     }
-  } catch {
-    return signal.aborted ? "ended" : "failed";
+    const type = res.headers.get("content-type") ?? "";
+    if (res.status === 404 && !type.includes("json")) return "unsupported"; // backend without /stream
+    if (!res.ok) return res.status === 404 ? "ended" : "failed";
+    if (!type.includes("text/event-stream") || !res.body) return "unsupported";
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return "ended";
+        bump();
+        opts?.onActivity?.();
+        buf += decoder.decode(value, { stream: true });
+        let cut: number;
+        while ((cut = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, cut);
+          buf = buf.slice(cut + 2);
+          const ev = parseSseBlock(block);
+          if (ev.event === "frame" && ev.data) onFrame(base64ToBytes(ev.data));
+          else if (ev.event === "end") return /unsupported/.test(ev.data) ? "unsupported" : "ended";
+        }
+      }
+    } catch {
+      return signal.aborted ? "ended" : "failed";
+    } finally {
+      try { reader.releaseLock(); } catch { /* ignore */ }
+    }
   } finally {
-    try { reader.releaseLock(); } catch { /* ignore */ }
+    if (timer) clearTimeout(timer);
+    signal.removeEventListener("abort", follow);
   }
 }
 

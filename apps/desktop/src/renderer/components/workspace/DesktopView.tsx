@@ -255,6 +255,11 @@ export function DesktopView({
       void readDesktopStream(apiUrl(`/desktop/stream?${q}`), authHeaders() as Record<string, string>, ctrl.signal, (jpeg) => {
         streamLive.current = true;
         void drawFrame(jpeg);
+      }, {
+        // Heartbeats and repeated still frames are liveness: without this,
+        // a healthy stream showing a still screen (ORION thinking between
+        // tool calls) reads as "timed out" once any hiccup trips the overlay.
+        onActivity: () => { lastFrameAt.current = Date.now(); },
       }).then((why) => {
         running = false;
         streamLive.current = false;

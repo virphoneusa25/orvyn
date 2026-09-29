@@ -230,6 +230,10 @@ export function AgentWorkspace({
       }
       if (previewSeeded.current.has(latest.url)) return;
       previewSeeded.current.add(latest.url);
+      // The tab may still hold the render from an earlier publish (or from a
+      // different chat viewing the same site): a preview must open showing
+      // the site as it is NOW, not the frame it happened to paint last.
+      void api.reload(existing.id, { ignoreCache: true }).then((state) => setBrowserState(state));
       revealPreview();
       return;
     }

@@ -863,6 +863,31 @@ export function frameStreamViewers(sessionId: string): number {
   return frameStreams.get(sessionId)?.subscribers.size ?? 0;
 }
 
+/** A still screen sends no changed frames: viewers read that silence as a
+ *  dead stream and cover a healthy desktop with a reconnect overlay. The
+ *  stream heartbeat re-pushes the current picture when nothing changed
+ *  recently, which also clears a tripped overlay without waiting for the
+ *  screen to move. Fresh captures (frames flowing) and long-dead ones (the
+ *  poll path owns recovery there) are left alone. */
+export function frameRepeatCandidate(slot: { jpeg: Buffer; at: number } | undefined, now = Date.now()): Buffer | null {
+  if (!slot || slot.jpeg.length < 1000) return null;
+  const age = now - slot.at;
+  if (age < 4500) return null;
+  if (age > 120_000) return null;
+  return slot.jpeg;
+}
+
+/** Push the current picture to every live viewer, changed or not. */
+export function repeatFramesToViewers(sessionId: string): void {
+  const stream = frameStreams.get(sessionId);
+  if (!stream || stream.ended || stream.subscribers.size === 0) return;
+  const jpeg = frameRepeatCandidate(memoryFrames.get(sessionId));
+  if (!jpeg) return;
+  for (const sub of stream.subscribers) {
+    try { sub.frame(jpeg); } catch { /* a closed viewer is removed on close */ }
+  }
+}
+
 function spawnFrameGrabber(session: SandboxDesktopSession, stream: FrameStream): void {
   const proc = spawn("docker", ["exec", session.containerId, ...frameStreamCommand(session.width, session.height)], {
     windowsHide: true,

@@ -10,6 +10,7 @@ import {
   looksLikeUrlOrDomain,
   normalizeBrowserInput,
   parseBrowserWorkbenchId,
+  previewReopenStrategy,
   previewWorkbenchTitle,
   rememberBrowserRecent,
   requestBrowserControl,
@@ -93,4 +94,10 @@ test("a mobile viewport is centered at its own width inside the Workbench surfac
   assert.deepEqual(fitViewport(surface, undefined), surface);
   assert.deepEqual(fitViewport(surface, VIEWPORT_PRESETS.mobile), { x: 965, y: 120, width: 390, height: 700 });
   assert.deepEqual(fitViewport({ x: 0, y: 0, width: 300, height: 400 }, VIEWPORT_PRESETS.mobile), { x: 0, y: 0, width: 300, height: 400 });
+});
+
+test("re-opening a preview tab reloads it; browser tabs keep their state", () => {
+  assert.equal(previewReopenStrategy("preview", "https://orvyn.example/api/v1/sites/s1/"), "reload");
+  assert.equal(previewReopenStrategy("browser", "https://example.com/page"), "activate");
+  assert.equal(previewReopenStrategy("preview", ""), "activate");
 });

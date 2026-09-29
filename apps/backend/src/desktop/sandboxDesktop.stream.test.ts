@@ -4,6 +4,7 @@ import {
   JpegSplitter,
   desktopIsIdle,
   DESKTOP_IDLE_MS,
+  frameRepeatCandidate,
   frameStreamCommand,
   orphanDesktopIds,
   reusesSandboxRun,
@@ -67,6 +68,16 @@ test("a desktop is idle only with no viewers, no user control and nothing recent
   assert.equal(desktopIsIdle(s, now, 1, 0), false);
   assert.equal(desktopIsIdle({ ...s, controlOwner: "user" }, now, 0, 0), false);
   assert.equal(desktopIsIdle(s, now, 0, now - 1000), false);
+});
+
+test("a still screen repeats the current picture; fresh or long-dead captures do not", () => {
+  const now = 1_000_000;
+  const jpeg = fakeJpeg(9);
+  assert.equal(frameRepeatCandidate(undefined, now), null);
+  assert.equal(frameRepeatCandidate({ jpeg: Buffer.alloc(10), at: now }, now), null); // too small to be a picture
+  assert.equal(frameRepeatCandidate({ jpeg, at: now - 2_000 }, now), null); // changed frames still flowing
+  assert.equal(frameRepeatCandidate({ jpeg, at: now - 6_000 }, now), jpeg); // still screen → repeat to viewers
+  assert.equal(frameRepeatCandidate({ jpeg, at: now - 180_000 }, now), null); // capture long dead — poll path owns recovery
 });
 
 test("open_app understands the names people use", () => {
