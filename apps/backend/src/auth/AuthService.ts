@@ -348,6 +348,18 @@ export class AuthService {
     };
   }
 
+  /** Records that the user accepted the Terms and Privacy Policy (sign-up). */
+  acceptTerms(userId: string, now = Date.now()): void {
+    try { this.db.exec(`ALTER TABLE users ADD COLUMN terms_accepted_at INTEGER`); } catch { /* present */ }
+    this.db.prepare(`UPDATE users SET terms_accepted_at = ? WHERE id = ?`).run(now, userId);
+  }
+
+  /** Names the organization a new account starts with (the company given at sign-up). */
+  nameOrganization(organizationId: string, name: string): void {
+    const n = name.trim().slice(0, 120);
+    if (n) this.db.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).run(n, organizationId);
+  }
+
   /** A member's principal in one organization (staff "view as customer"; never from a client claim). */
   principalFor(userId: string, organizationId: string): { user: User; principal: Principal } | null {
     const row = this.db.prepare(`SELECT * FROM users WHERE id = ?`).get(userId) as any;

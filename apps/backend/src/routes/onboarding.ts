@@ -148,6 +148,8 @@ onboardingRouter.get("/providers", (req, res) => {
     email: verificationRequired(),
     google: !admin && has("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"),
     github: !admin && has("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"),
+    termsUrl: process.env.ORVYN_TERMS_URL?.trim() || null,
+    privacyUrl: process.env.ORVYN_PRIVACY_URL?.trim() || null,
     checkout: has("STRIPE_SECRET_KEY"),
   });
 });

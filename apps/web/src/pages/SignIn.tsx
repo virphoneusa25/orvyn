@@ -11,7 +11,18 @@ import { Icon } from "../components/Icons";
 // session with it — no session token ever appears in a URL.
 
 type Mode = "login" | "register" | "forgot";
-interface Providers { google: boolean; github: boolean; email: boolean }
+interface Providers { google: boolean; github: boolean; email: boolean; termsUrl?: string | null; privacyUrl?: string | null }
+
+/** Same rule as ORVYN Desktop's sign-up meter; the web asks for at least "Fair". */
+export function passwordStrength(pw: string): { score: number; label: string; ok: boolean } {
+  let score = 0;
+  if (pw.length >= 8) score++;
+  if (pw.length >= 12) score++;
+  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
+  if (/\d/.test(pw) && /[^A-Za-z0-9]/.test(pw)) score++;
+  const labels = ["Too short", "Weak", "Fair", "Good", "Strong"];
+  return { score, label: pw.length < 8 ? "At least 8 characters" : labels[score]!, ok: pw.length >= 8 && score >= 2 };
+}
 
 const HANDOFF_KEY = "orvyn.handoff";
 
@@ -36,7 +47,12 @@ export function SignIn() {
   const [mode, setMode] = useState<Mode>(query.get("mode") === "register" ? "register" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
+  const [company, setCompany] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [terms, setTerms] = useState(false);
+  const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -62,15 +78,26 @@ export function SignIn() {
       .finally(() => setBusy(false));
   }, [complete, signIn]);
 
+  const strength = passwordStrength(password);
+  const registerProblem = (): string | null => {
+    if (!first.trim() || !last.trim()) return "Enter your first and last name.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return "Enter a valid email address.";
+    if (!strength.ok) return "Choose a stronger password: at least 12 characters, or mix upper and lower case, numbers and symbols.";
+    if (password !== confirm) return "The passwords don't match.";
+    if (!terms) return "Agree to the Terms of Service and Privacy Policy to continue.";
+    return null;
+  };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null); setNotice(null); setBusy(true);
+    setError(null); setNotice(null);
+    if (mode === "register") { const p = registerProblem(); if (p) { setError(p); return; } }
+    setBusy(true);
     try {
       if (mode === "forgot") {
         const r = await api<{ message: string }>("/auth/password/forgot", { method: "POST", body: { email } });
         setNotice(r.message);
       } else {
-        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email, password, name: name || undefined } });
+        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email: email.trim(), password, name: `${first.trim()} ${last.trim()}`, organization: company.trim() || undefined, acceptTerms: true, client: "web" } });
         await signIn(r.token);
       }
     } catch (err: any) {
@@ -87,22 +114,41 @@ export function SignIn() {
         <div className="auth__orb"><Orb /></div>
         <h1>{title}</h1>
         <p className="sub">{mode === "forgot" ? "We'll email you a link to choose a new password." : surface === "admin" ? "Staff sign-in. Access is limited to ORVYN staff." : "One account for ORVYN Cloud and ORVYN Desktop."}</p>
-        {mode !== "forgot" && (providers.google || providers.github) ? (
+        {mode !== "forgot" && surface !== "admin" ? (
           <>
             <div className="auth__social">
-              {providers.google ? <button className="btn" onClick={() => void startProvider("google")} disabled={busy}><Icon.google /> Continue with Google</button> : null}
-              {providers.github ? <button className="btn" onClick={() => void startProvider("github")} disabled={busy}><Icon.github /> Continue with GitHub</button> : null}
+              <button className="btn" onClick={() => void startProvider("google")} disabled={busy || !providers.google} title={providers.google ? undefined : "Google sign-in isn't switched on for this server yet"} data-testid="oauth-google"><Icon.google /> Continue with Google</button>
+              <button className="btn" onClick={() => void startProvider("github")} disabled={busy || !providers.github} title={providers.github ? undefined : "GitHub sign-in isn't switched on for this server yet"} data-testid="oauth-github"><Icon.github /> Continue with GitHub</button>
+              {!providers.google || !providers.github ? <div className="faint" style={{ fontSize: 12, textAlign: "center" }}>{!providers.google && !providers.github ? "Google and GitHub sign-in aren't switched on for this server yet." : `${!providers.google ? "Google" : "GitHub"} sign-in isn't switched on for this server yet.`}</div> : null}
             </div>
             <div className="auth__or">or with email</div>
           </>
         ) : null}
         <form onSubmit={submit}>
           {mode === "register" ? (
-            <div className="field"><label htmlFor="name">Name</label><input id="name" className="input" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></div>
+            <>
+              <div className="two" style={{ gap: 10 }}>
+                <div className="field"><label htmlFor="first">First name *</label><input id="first" className="input" required value={first} onChange={(e) => setFirst(e.target.value)} autoComplete="given-name" /></div>
+                <div className="field"><label htmlFor="last">Last name *</label><input id="last" className="input" required value={last} onChange={(e) => setLast(e.target.value)} autoComplete="family-name" /></div>
+              </div>
+              <div className="field"><label htmlFor="company">Company <span className="faint">(optional)</span></label><input id="company" className="input" value={company} onChange={(e) => setCompany(e.target.value)} autoComplete="organization" /></div>
+            </>
           ) : null}
-          <div className="field"><label htmlFor="email">Email</label><input id="email" className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></div>
+          <div className="field"><label htmlFor="email">Email{mode === "register" ? " *" : ""}</label><input id="email" className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></div>
           {mode !== "forgot" ? (
-            <div className="field"><label htmlFor="password">Password</label><input id="password" className="input" type="password" required minLength={mode === "register" ? 8 : 1} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} /></div>
+            <div className="field"><label htmlFor="password">Password{mode === "register" ? " *" : ""}</label>
+              <div style={{ position: "relative" }}>
+                <input id="password" className="input" style={{ width: "100%", paddingRight: 64 }} type={show ? "text" : "password"} required value={password} onChange={(e) => setPassword(e.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+                <button type="button" className="linkbtn" style={{ position: "absolute", right: 12, top: 13 }} onClick={() => setShow((v) => !v)}>{show ? "Hide" : "Show"}</button>
+              </div>
+              {mode === "register" && password ? <div className="pw-meter" aria-live="polite"><span>{[0, 1, 2, 3].map((i) => <i key={i} className={i < strength.score ? "on" : ""} />)}</span>{strength.label}</div> : null}
+            </div>
+          ) : null}
+          {mode === "register" ? (
+            <>
+              <div className="field"><label htmlFor="confirm">Confirm password *</label><input id="confirm" className="input" type={show ? "text" : "password"} required value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" aria-invalid={Boolean(confirm) && confirm !== password} /></div>
+              <label className="terms"><input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} data-testid="accept-terms" /> <span>I agree to the {providers.termsUrl ? <a href={providers.termsUrl} target="_blank" rel="noopener noreferrer">Terms of Service</a> : "Terms of Service"} and {providers.privacyUrl ? <a href={providers.privacyUrl} target="_blank" rel="noopener noreferrer">Privacy Policy</a> : "Privacy Policy"}.</span></label>
+            </>
           ) : null}
           {error ? <div className="error" role="alert">{error}</div> : null}
           {notice ? <div className="notice">{notice}</div> : null}

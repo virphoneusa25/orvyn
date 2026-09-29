@@ -165,9 +165,16 @@ async function main() {
     page.on("framenavigated", (f) => urls.push(f.url()));
     await page.goto(`${BASE}/`);
     await page.getByRole("button", { name: "Create an account" }).click();
-    await page.fill("#name", "Ada Lovelace");
+    ok(await page.isVisible("[data-testid=oauth-google]") && await page.isVisible("[data-testid=oauth-github]"), "sign-up shows Continue with Google / GitHub (disabled until the server has their keys)");
+    await page.fill("#first", "Ada");
+    await page.fill("#last", "Lovelace");
+    await page.fill("#company", "Analytical Engines");
     await page.fill("#email", "ada@example.com");
     await page.fill("#password", "a-long-password-1");
+    await page.fill("#confirm", "a-long-password-1");
+    await page.click("[data-testid=auth-submit]");
+    ok(/Terms of Service/.test(await page.innerText(".error")), "sign-up requires agreeing to the Terms and Privacy Policy");
+    await page.check("[data-testid=accept-terms]");
     await page.click("[data-testid=auth-submit]");
     await page.waitForSelector("[data-testid=finish-setup]", { timeout: 10000 });
     ok(true, "a new account must finish setup before entering (no skipping into the app)");

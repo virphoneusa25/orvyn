@@ -68,6 +68,10 @@ function bearerToken(req: Request): string | null {
 }
 
 authRouter.post("/register", async (req, res) => {
+  // The web sign-up asks for a full name and agreement to the Terms (the desktop app collects its own).
+  const web = req.body?.client === "web";
+  if (web && String(req.body?.name ?? "").trim().split(/\s+/).filter(Boolean).length < 2) return res.status(400).json({ error: "Enter your first and last name." });
+  if (web && req.body?.acceptTerms !== true) return res.status(400).json({ error: "Agree to the Terms of Service and Privacy Policy to create an account." });
   try {
     const { user, token, organization } = authService.register(
       String(req.body.email ?? ""),
@@ -75,6 +79,8 @@ authRouter.post("/register", async (req, res) => {
       req.body.name ? String(req.body.name) : undefined,
       deviceOf(req),
     );
+    if (req.body?.acceptTerms === true) authService.acceptTerms(user.id);
+    if (typeof req.body?.organization === "string" && req.body.organization.trim() && organization?.id) authService.nameOrganization(organization.id, req.body.organization);
     const session = authService.verifyPrincipal(token);
     // A new account starts onboarding at email verification (or straight at
     // provisioning when this server cannot send email).
