@@ -74,6 +74,8 @@ export function useAgentRun(
     stoppedRef.current = false;
     setStatus("running");
     attachStream(id);
+    // A restored chat's run may already be terminal — the SSE will error and
+    // the poll's 404/status check reconciles within one cycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts?.attachRunId]);
 
@@ -179,6 +181,17 @@ export function useAgentRun(
         headers: authHeaders(),
       });
       if (!res.ok) {
+        // 404: the run is GONE (deleted, different account, stale chat
+        // reference). Retrying forever kept the composer stuck in "running"
+        // mode with Queue/Steer buttons and no Send — the user's text
+        // disappeared into a dead steer call. Clear the run instead.
+        if (res.status === 404 && runIdRef.current === id) {
+          setStatus("idle");
+          setRunId(null);
+          runIdRef.current = null;
+          noteActiveRunId(null);
+          return;
+        }
         // A deploy window or auth blip returns 401/502 for a moment. Giving up
         // here left finished runs showing "ORION is working…" forever — the
         // run had completed server-side and nobody ever asked again.
