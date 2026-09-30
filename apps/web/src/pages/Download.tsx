@@ -14,13 +14,12 @@ export function Download() {
   const os = guess();
   const items: { id: "windows" | "mac" | "linux"; label: string }[] = [{ id: "windows", label: "Windows" }, { id: "mac", label: "macOS" }, { id: "linux", label: "Linux" }];
   return (
-    <>
-      <section className="hero" style={{ minHeight: 220 }}>
-        <div className="hero__stars" />
-        <div className="hero__orb" style={{ width: 240, height: 240 }}><Orb /></div>
-        <p className="hero__hello">ORVYN Desktop{data?.version ? ` · ${data.version}` : ""}</p>
-        <h1><span className="g1">Build on your</span><br /><span className="g2">own computer</span></h1>
-        <p>Missions that write code, run apps and work in your folders — with the same account, projects and credits as ORVYN Cloud.</p>
+    <div className="page">
+      <section className="home-hero" style={{ paddingBottom: 24 }}>
+        <div className="home-hero__orb"><Orb /></div>
+        <p className="home-hero__hello">ORVYN Desktop{data?.version ? ` · ${data.version}` : ""}</p>
+        <h1>Build on <span className="g">your own computer</span></h1>
+        <p className="muted" style={{ maxWidth: 560, margin: "10px auto 0" }}>Missions that write code, run apps and work in your folders — with the same account, projects and credits as ORVYN Cloud.</p>
       </section>
       <div className="three" style={{ marginTop: 16 }}>
         {items.map((it) => {
@@ -42,6 +41,6 @@ export function Download() {
           <li>Open a project and start a mission.</li>
         </ol>
       </section>
-    </>
+    </div>
   );
 }

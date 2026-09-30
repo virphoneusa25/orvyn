@@ -125,6 +125,33 @@ export class AuthService {
     this.migrateSessionOrg();
     this.migrateVerification();
     this.migrateAccountSecurity();
+    this.migratePortal();
+  }
+
+  /** Team invitations, personal API keys, chat share links and project details (customer portal). */
+  private migratePortal(): void {
+    for (const col of ["description TEXT", "updated_at INTEGER"]) {
+      try { this.db.exec(`ALTER TABLE tenant_projects ADD COLUMN ${col}`); } catch { /* present */ }
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS org_invites (
+        id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE, invited_by TEXT NOT NULL, created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_invites_org ON org_invites (organization_id);
+      CREATE TABLE IF NOT EXISTS api_keys (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, organization_id TEXT NOT NULL, name TEXT NOT NULL,
+        prefix TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL,
+        last_used_at INTEGER, revoked_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id);
+      CREATE TABLE IF NOT EXISTS chat_shares (
+        id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, organization_id TEXT NOT NULL,
+        session_id TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_shares_session ON chat_shares (session_id);
+    `);
   }
 
   /**
@@ -515,6 +542,233 @@ export class AuthService {
     return scopedGet(rowToChat(row), tenantId);
   }
 
+  // ---------- customer portal: profile & password ----------
+
+  /** Changes the password when the current one is right; every other session ends. */
+  changePassword(userId: string, current: string, next: string, keepToken?: string, now = Date.now()): number {
+    const row = this.db.prepare(`SELECT password_hash FROM users WHERE id = ?`).get(userId) as { password_hash?: string } | undefined;
+    if (!row || !verifyPassword(current, String(row.password_hash))) throw Object.assign(new Error("Your current password isn't right."), { status: 400 });
+    if (next.length < 8) throw Object.assign(new Error("Password must be at least 8 characters"), { status: 400 });
+    if (current === next) throw Object.assign(new Error("Choose a password you haven't used here."), { status: 400 });
+    this.db.prepare(`UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?`).run(hashPassword(next), now, userId);
+    return this.logoutAll(userId, keepToken);
+  }
+
+  // ---------- customer portal: team ----------
+
+  memberRole(organizationId: string, userId: string): OrgRole | null {
+    const m = this.db.prepare(`SELECT role FROM organization_members WHERE organization_id = ? AND user_id = ?`).get(organizationId, userId) as { role?: string } | undefined;
+    return m?.role ? (m.role as OrgRole) : null;
+  }
+
+  getOrganization(organizationId: string): OrganizationRecord | null {
+    const row = this.db.prepare(`SELECT * FROM organizations WHERE id = ?`).get(organizationId) as any;
+    return row ? rowToOrg(row) : null;
+  }
+
+  renameOrganization(actor: Principal, name: string): OrganizationRecord {
+    this.requireManager(actor);
+    const clean = name.trim().slice(0, 80);
+    if (clean.length < 2) throw Object.assign(new Error("Enter a workspace name."), { status: 400 });
+    this.db.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).run(clean, actor.organizationId);
+    return this.getOrganization(actor.organizationId)!;
+  }
+
+  listMembers(organizationId: string): { userId: string; email: string; name: string | null; role: OrgRole; joinedAt: number }[] {
+    return (this.db.prepare(
+      `SELECT u.id, u.email, u.name, m.role, m.created_at FROM organization_members m JOIN users u ON u.id = m.user_id
+       WHERE m.organization_id = ? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, m.created_at ASC`
+    ).all(organizationId) as any[]).map((r) => ({ userId: String(r.id), email: String(r.email), name: r.name != null ? String(r.name) : null, role: String(r.role) as OrgRole, joinedAt: Number(r.created_at) }));
+  }
+
+  listInvites(organizationId: string, now = Date.now()): { id: string; email: string; role: OrgRole; createdAt: number; expiresAt: number }[] {
+    return (this.db.prepare(
+      `SELECT id, email, role, created_at, expires_at FROM org_invites WHERE organization_id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+    ).all(organizationId, now) as any[]).map((r) => ({ id: String(r.id), email: String(r.email), role: String(r.role) as OrgRole, createdAt: Number(r.created_at), expiresAt: Number(r.expires_at) }));
+  }
+
+  private requireManager(actor: Principal): OrgRole {
+    const role = this.memberRole(actor.organizationId, actor.userId);
+    if (role !== "owner" && role !== "admin") throw Object.assign(new Error("Only the workspace owner or an admin can do that."), { status: 403 });
+    return role;
+  }
+
+  /** Invites someone by email (7 days, single use). `seats`: how many people besides the owner the plan allows. */
+  createInvite(actor: Principal, email: string, role: OrgRole, seats: number, now = Date.now()): { token: string; invite: { id: string; email: string; role: OrgRole; expiresAt: number } } {
+    const actorRole = this.requireManager(actor);
+    const normalized = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw Object.assign(new Error("Enter a valid email address."), { status: 400 });
+    if (role === "owner") throw Object.assign(new Error("A workspace has one owner."), { status: 400 });
+    if (role === "admin" && actorRole !== "owner") throw Object.assign(new Error("Only the owner can invite admins."), { status: 403 });
+    const members = this.listMembers(actor.organizationId);
+    if (members.some((m) => m.email === normalized)) throw Object.assign(new Error("That person is already in this workspace."), { status: 409 });
+    const pending = this.listInvites(actor.organizationId, now).filter((i) => i.email !== normalized);
+    const used = members.filter((m) => m.role !== "owner").length + pending.length;
+    if (used >= seats) {
+      throw Object.assign(new Error(seats === 0 ? "Your plan doesn't include team seats. Upgrade to Business or Team to invite people." : `All ${seats} team seats are in use. Remove someone or upgrade for more seats.`), { status: 402, code: "SEATS_FULL" });
+    }
+    // A new invite for the same address replaces the old one.
+    this.db.prepare(`UPDATE org_invites SET revoked_at = ? WHERE organization_id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL`).run(now, actor.organizationId, normalized);
+    const token = `orvinv_${randomBytes(24).toString("hex")}`;
+    const id = `inv_${randomBytes(8).toString("hex")}`;
+    const expiresAt = now + 7 * 24 * 60 * 60_000;
+    this.db.prepare(`INSERT INTO org_invites (id, organization_id, email, role, token_hash, invited_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, actor.organizationId, normalized, role, hashToken(token), actor.userId, now, expiresAt);
+    return { token, invite: { id, email: normalized, role, expiresAt } };
+  }
+
+  revokeInvite(actor: Principal, inviteId: string, now = Date.now()): boolean {
+    this.requireManager(actor);
+    return Number(this.db.prepare(`UPDATE org_invites SET revoked_at = ? WHERE id = ? AND organization_id = ? AND accepted_at IS NULL AND revoked_at IS NULL`).run(now, inviteId, actor.organizationId).changes) > 0;
+  }
+
+  /** What an invite link is for (the invitee sees this before joining). */
+  inviteInfo(token: string, now = Date.now()): { organizationId: string; organizationName: string; email: string; role: OrgRole; invitedBy: string | null } | null {
+    const row = this.db.prepare(
+      `SELECT i.*, o.name AS org_name, u.name AS by_name, u.email AS by_email FROM org_invites i JOIN organizations o ON o.id = i.organization_id LEFT JOIN users u ON u.id = i.invited_by
+       WHERE i.token_hash = ? AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?`
+    ).get(hashToken(token), now) as any;
+    if (!row) return null;
+    return { organizationId: String(row.organization_id), organizationName: String(row.org_name), email: String(row.email), role: String(row.role) as OrgRole, invitedBy: row.by_name ? String(row.by_name) : row.by_email ? String(row.by_email) : null };
+  }
+
+  /** Joins the invited workspace. The invite is for one email address: the signed-in account must match it. */
+  acceptInvite(token: string, user: User, now = Date.now()): OrganizationRecord {
+    const info = this.inviteInfo(token, now);
+    if (!info) throw Object.assign(new Error("This invitation has expired or was already used. Ask for a new one."), { status: 410 });
+    if (info.email !== user.email) throw Object.assign(new Error(`This invitation is for ${info.email}. Sign in with that email to accept it.`), { status: 403, code: "INVITE_EMAIL_MISMATCH" });
+    this.db.prepare(`UPDATE org_invites SET accepted_at = ? WHERE token_hash = ?`).run(now, hashToken(token));
+    if (!this.memberRole(info.organizationId, user.id)) {
+      this.db.prepare(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`).run(info.organizationId, user.id, info.role, now);
+    }
+    return this.getOrganization(info.organizationId)!;
+  }
+
+  /** Open invitations addressed to this email (shown in the invitee's notifications). */
+  invitesForEmail(email: string, now = Date.now()): { id: string; organizationId: string; organizationName: string; role: OrgRole; invitedBy: string | null; createdAt: number }[] {
+    return (this.db.prepare(
+      `SELECT i.id, i.organization_id, i.role, i.created_at, o.name AS org_name, u.name AS by_name, u.email AS by_email
+       FROM org_invites i JOIN organizations o ON o.id = i.organization_id LEFT JOIN users u ON u.id = i.invited_by
+       WHERE i.email = ? AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ? ORDER BY i.created_at DESC`
+    ).all(email.trim().toLowerCase(), now) as any[]).map((r) => ({ id: String(r.id), organizationId: String(r.organization_id), organizationName: String(r.org_name), role: String(r.role) as OrgRole, invitedBy: r.by_name ? String(r.by_name) : r.by_email ? String(r.by_email) : null, createdAt: Number(r.created_at) }));
+  }
+
+  /** Accepts an invitation from the notification feed: the signed-in (verified) account must own the invited email. */
+  acceptInviteById(inviteId: string, user: User, now = Date.now()): OrganizationRecord {
+    const row = this.db.prepare(`SELECT * FROM org_invites WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).get(inviteId, now) as any;
+    if (!row || String(row.email) !== user.email) throw Object.assign(new Error("This invitation has expired or was already used. Ask for a new one."), { status: 410 });
+    this.db.prepare(`UPDATE org_invites SET accepted_at = ? WHERE id = ?`).run(now, inviteId);
+    if (!this.memberRole(String(row.organization_id), user.id)) {
+      this.db.prepare(`INSERT INTO organization_members (organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?)`).run(String(row.organization_id), user.id, String(row.role), now);
+    }
+    return this.getOrganization(String(row.organization_id))!;
+  }
+
+  declineInvite(inviteId: string, user: User, now = Date.now()): boolean {
+    return Number(this.db.prepare(`UPDATE org_invites SET revoked_at = ? WHERE id = ? AND email = ? AND accepted_at IS NULL AND revoked_at IS NULL`).run(now, inviteId, user.email).changes) > 0;
+  }
+
+  setMemberRole(actor: Principal, userId: string, role: OrgRole): void {
+    const actorRole = this.requireManager(actor);
+    const target = this.memberRole(actor.organizationId, userId);
+    if (!target) throw Object.assign(new Error("That person isn't in this workspace."), { status: 404 });
+    if (target === "owner" || role === "owner") throw Object.assign(new Error("The owner's role can't be changed here."), { status: 400 });
+    if (actorRole !== "owner" && (target === "admin" || role === "admin")) throw Object.assign(new Error("Only the owner can change admins."), { status: 403 });
+    this.db.prepare(`UPDATE organization_members SET role = ? WHERE organization_id = ? AND user_id = ?`).run(role, actor.organizationId, userId);
+  }
+
+  /** Removes someone (or yourself: leaving). The owner never leaves their own workspace; their sessions there end. */
+  removeMember(actor: Principal, userId: string): void {
+    const self = userId === actor.userId;
+    const target = this.memberRole(actor.organizationId, userId);
+    if (!target) throw Object.assign(new Error("That person isn't in this workspace."), { status: 404 });
+    if (target === "owner") throw Object.assign(new Error(self ? "The owner can't leave their own workspace." : "The owner can't be removed."), { status: 400 });
+    if (!self) {
+      const actorRole = this.requireManager(actor);
+      if (target === "admin" && actorRole !== "owner") throw Object.assign(new Error("Only the owner can remove an admin."), { status: 403 });
+    }
+    this.db.prepare(`DELETE FROM organization_members WHERE organization_id = ? AND user_id = ?`).run(actor.organizationId, userId);
+    // Their sessions in this workspace stop working at once (they fall back to their own workspace on next sign-in).
+    this.db.prepare(`DELETE FROM sessions WHERE user_id = ? AND organization_id = ?`).run(userId, actor.organizationId);
+    this.db.prepare(`UPDATE api_keys SET revoked_at = ? WHERE user_id = ? AND organization_id = ? AND revoked_at IS NULL`).run(Date.now(), userId, actor.organizationId);
+  }
+
+  // ---------- customer portal: personal API keys ----------
+
+  createApiKey(principal: Principal, name: string, now = Date.now()): { key: string; record: { id: string; name: string; prefix: string; createdAt: number } } {
+    const clean = name.trim().slice(0, 60) || "API key";
+    const active = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND revoked_at IS NULL`).get(principal.userId) as { n: number }).n);
+    if (active >= 20) throw Object.assign(new Error("You have 20 active keys. Revoke one first."), { status: 400 });
+    const key = `orvkey_${randomBytes(28).toString("hex")}`;
+    const id = `key_${randomBytes(8).toString("hex")}`;
+    const prefix = key.slice(0, 14);
+    this.db.prepare(`INSERT INTO api_keys (id, user_id, organization_id, name, prefix, key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, principal.userId, principal.organizationId, clean, prefix, hashToken(key), now);
+    return { key, record: { id, name: clean, prefix, createdAt: now } };
+  }
+
+  listApiKeys(userId: string, organizationId: string): { id: string; name: string; prefix: string; createdAt: number; lastUsedAt: number | null }[] {
+    return (this.db.prepare(`SELECT * FROM api_keys WHERE user_id = ? AND organization_id = ? AND revoked_at IS NULL ORDER BY created_at DESC`).all(userId, organizationId) as any[])
+      .map((r) => ({ id: String(r.id), name: String(r.name), prefix: String(r.prefix), createdAt: Number(r.created_at), lastUsedAt: r.last_used_at != null ? Number(r.last_used_at) : null }));
+  }
+
+  revokeApiKey(userId: string, id: string, now = Date.now()): boolean {
+    return Number(this.db.prepare(`UPDATE api_keys SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL`).run(now, id, userId).changes) > 0;
+  }
+
+  /** A personal API key → the same principal its owner has in that workspace (membership re-checked every time). */
+  verifyApiKey(key: string, now = Date.now()): { user: User; principal: Principal; keyId: string } | null {
+    if (!key.startsWith("orvkey_")) return null;
+    const row = this.db.prepare(`SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL`).get(hashToken(key)) as any;
+    if (!row) return null;
+    const as = this.principalFor(String(row.user_id), String(row.organization_id));
+    if (!as) return null;
+    if (!row.last_used_at || now - Number(row.last_used_at) > 5 * 60_000) this.db.prepare(`UPDATE api_keys SET last_used_at = ? WHERE id = ?`).run(now, row.id);
+    return { ...as, keyId: String(row.id) };
+  }
+
+  // ---------- customer portal: projects ----------
+
+  updateProject(id: string, tenantId: string, patch: { name?: string; description?: string | null }): TenantProject {
+    const p = this.getProject(id, tenantId);
+    const name = patch.name !== undefined ? (String(patch.name).trim().slice(0, 80) || p.name) : p.name;
+    const description = patch.description !== undefined ? (patch.description ? String(patch.description).trim().slice(0, 500) : null) : (p.description ?? null);
+    this.db.prepare(`UPDATE tenant_projects SET name = ?, description = ?, updated_at = ? WHERE id = ? AND tenant_id = ?`).run(name, description, Date.now(), id, tenantId);
+    return this.getProject(id, tenantId);
+  }
+
+  deleteProject(id: string, tenantId: string): boolean {
+    this.getProject(id, tenantId);
+    return Number(this.db.prepare(`DELETE FROM tenant_projects WHERE id = ? AND tenant_id = ?`).run(id, tenantId).changes) > 0;
+  }
+
+  // ---------- customer portal: chat share links ----------
+
+  shareFor(sessionId: string, userId: string): { id: string; createdAt: number } | null {
+    const r = this.db.prepare(`SELECT id, created_at FROM chat_shares WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL`).get(sessionId, userId) as any;
+    return r ? { id: String(r.id), createdAt: Number(r.created_at) } : null;
+  }
+
+  /** A read-only public link to one conversation. A new link replaces the old one (the old URL stops working). */
+  createShare(principal: Principal, sessionId: string, now = Date.now()): { token: string; id: string } {
+    this.revokeShare(principal.userId, sessionId, now);
+    const token = `orvshr_${randomBytes(20).toString("hex")}`;
+    const id = `shr_${randomBytes(8).toString("hex")}`;
+    this.db.prepare(`INSERT INTO chat_shares (id, token_hash, user_id, organization_id, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(id, hashToken(token), principal.userId, principal.organizationId, sessionId, now);
+    return { token, id };
+  }
+
+  revokeShare(userId: string, sessionId: string, now = Date.now()): boolean {
+    return Number(this.db.prepare(`UPDATE chat_shares SET revoked_at = ? WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL`).run(now, sessionId, userId).changes) > 0;
+  }
+
+  resolveShare(token: string): { userId: string; organizationId: string; sessionId: string; createdAt: number } | null {
+    if (!token.startsWith("orvshr_")) return null;
+    const r = this.db.prepare(`SELECT * FROM chat_shares WHERE token_hash = ? AND revoked_at IS NULL`).get(hashToken(token)) as any;
+    return r ? { userId: String(r.user_id), organizationId: String(r.organization_id), sessionId: String(r.session_id), createdAt: Number(r.created_at) } : null;
+  }
+
   logout(token: string): void {
     this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
   }
@@ -771,6 +1025,8 @@ function rowToProject(row: any): TenantProject {
     name: String(row.name),
     projectRoot: row.project_root != null ? String(row.project_root) : null,
     createdAt: Number(row.created_at),
+    description: row.description != null ? String(row.description) : null,
+    updatedAt: Number(row.updated_at ?? row.created_at),
   };
 }
 

@@ -97,6 +97,19 @@ export function passwordResetMail(input: { to: string; name?: string | null; lin
   };
 }
 
+/** An invitation to join someone's ORVYN workspace. */
+export function teamInviteMail(input: { to: string; workspace: string; invitedBy?: string | null; role: string; link: string }): OutgoingMail {
+  const who = input.invitedBy ? `${input.invitedBy} invited you` : "You've been invited";
+  const msg = `${who} to join the ${input.workspace} workspace on ORVYN as ${input.role === "admin" ? "an admin" : "a member"}. You'll share its projects, files and credits.`;
+  const footer = "The invitation works for 7 days, only for this email address. If you weren't expecting it, you can ignore this email.";
+  return {
+    to: input.to,
+    subject: `Join ${input.workspace} on ORVYN`,
+    text: ["Hi,", "", msg, "", input.link, "", footer].join("\n"),
+    html: frame(`Join ${input.workspace} on ORVYN`, ["Hi,", msg], { label: "Accept invitation", href: input.link }, footer),
+  };
+}
+
 /** A security notice (password changed, signed out everywhere, new sign-in method). */
 export function securityNoticeMail(input: { to: string; name?: string | null; subject: string; message: string }): OutgoingMail {
   const hello = input.name ? `Hi ${input.name},` : "Hi,";

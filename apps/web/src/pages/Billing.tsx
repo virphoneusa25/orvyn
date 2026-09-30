@@ -71,9 +71,9 @@ export function Billing() {
   const order = (plans.data?.plans ?? []).map((p) => p.id);
 
   return (
-    <>
-      <h1 className="page-title">Billing</h1>
-      <p className="page-sub">Your plan, credits and invoices. Payments are handled securely by Stripe.</p>
+    <div className="page">
+      <div className="page-head"><div><h1 className="page-title">Billing</h1>
+      <p className="page-sub">Your plan, credits and invoices. Payments are handled securely by Stripe.</p></div></div>
       {query.get("checkout") === "cancel" ? <div className="notice notice--warn">Checkout was cancelled — nothing was charged.</div> : null}
       {confirming ? <div className="notice" data-testid="checkout-confirming">Confirming your payment… your plan or credits appear here as soon as it clears.</div> : null}
       {!canManage ? <div className="notice notice--warn">Only an owner or admin of this workspace can change billing.</div> : null}
@@ -170,7 +170,7 @@ export function Billing() {
           </table>
         ) : <div className="list__empty">{account.error ? "Invoices aren't available right now." : "No invoices yet."}</div>}
       </section>
-    </>
+    </div>
   );
 }
 

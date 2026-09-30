@@ -12,7 +12,7 @@ function endViewAs(): void {
 
 export interface Me {
   user: { id: string; email: string; name: string | null; emailVerified?: boolean };
-  principal: { organizationName: string; organizationKind: string; role: string; tenantId: string };
+  principal: { organizationId: string; organizationName: string; organizationKind: string; role: string; tenantId: string };
   organizations: { id: string; name: string; kind: string }[];
   onboarding: { step: string; completedAt: number | null } | null;
   verificationRequired?: boolean;

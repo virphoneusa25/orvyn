@@ -15,6 +15,7 @@ import { Billing } from "./pages/Billing";
 import { Settings } from "./pages/Settings";
 import { Help } from "./pages/Help";
 import { Download } from "./pages/Download";
+import { InvitePage, SharedChat, pendingInvite, rememberInvite } from "./pages/Public";
 
 export function App() {
   return (
@@ -41,7 +42,16 @@ function Root() {
     if (status !== "loading" && status !== "signed-out" && path === "/signin") navigate(surface === "admin" ? "/admin" : "/", { replace: true });
   }, [status, path]);
 
+  // Signed in with an invitation still waiting (it was opened before signing in): show it.
+  useEffect(() => {
+    if (status === "ready" && path !== "/invite" && !path.startsWith("/share/") && pendingInvite()) navigate("/invite", { replace: true });
+  }, [status, path]);
+
   if (path === "/view-as") return <ViewAsLanding />;
+  // A shared conversation is public (read-only, text only): no account needed.
+  if (path.startsWith("/share/")) return <SharedChat token={decodeURIComponent(path.slice(7))} />;
+  // An invitation opened while signed out: remember it through sign-in / sign-up.
+  if (path === "/invite" && status === "signed-out") { const t = new URLSearchParams(location.search).get("token"); if (t) rememberInvite(t); }
   if (status === "loading") return <div className="auth"><div className="muted">Loading ORVYN…</div></div>;
   if (status === "signed-out") return <SignIn />;
   // The Admin Portal: its own shell and its own server-side check (staff only).
@@ -111,12 +121,15 @@ function page(path: string): React.ReactNode {
   if (path === "/usage") return <Usage />;
   if (path === "/billing") return <Billing />;
   if (path === "/settings") return <Settings />;
+  if ((m = match("/settings/:tab", path))) return <Settings tab={m.tab} />;
+  if (path === "/invite") return <InvitePage />;
   if (path === "/help") return <Help />;
   if (path === "/download") return <Download />;
   return (
-    <div className="empty">
+    <div className="page"><div className="card empty">
       <h3>Page not found</h3>
-      <button className="btn" onClick={() => navigate("/")}>Go home</button>
-    </div>
+      That page doesn't exist or has moved.
+      <div><button className="btn" onClick={() => navigate("/")}>Go home</button></div>
+    </div></div>
   );
 }

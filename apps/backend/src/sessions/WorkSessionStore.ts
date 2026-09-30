@@ -434,6 +434,13 @@ export class WorkSessionStore {
     return this.get(sessionId);
   }
 
+  /** Moves a conversation into a project (or out of one: null). */
+  setProject(sessionId: string, projectId: string | null): WorkSession | undefined {
+    if (!this.get(sessionId)) return undefined;
+    this.db.prepare(`UPDATE work_sessions SET project_id = ?, updated_at = ? WHERE session_id = ?`).run(projectId, Date.now(), sessionId);
+    return this.get(sessionId);
+  }
+
   delete(sessionId: string): boolean {
     const r = this.db.prepare(`DELETE FROM work_sessions WHERE session_id = ? AND tenant_id = ?`).run(sessionId, this.tenantId);
     this.db.prepare(`DELETE FROM session_runs WHERE session_id = ?`).run(sessionId);

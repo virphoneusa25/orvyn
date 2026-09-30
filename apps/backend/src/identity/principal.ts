@@ -28,6 +28,8 @@ export interface TenantProject {
   name: string;
   projectRoot?: string | null;
   createdAt: number;
+  description?: string | null;
+  updatedAt?: number;
 }
 
 export interface TenantChat {

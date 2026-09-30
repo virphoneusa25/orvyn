@@ -22,5 +22,5 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): { data: T 
 }
 
 export interface SessionRow { sessionId: string; title: string; projectId: string | null; projectRoot: string | null; runIds: string[]; pinned: boolean; createdAt: number; updatedAt: number; messageCount: number; lastMessage: string }
-export interface Project { id: string; name: string; projectRoot: string | null; createdAt: number; userId: string }
+export interface Project { id: string; name: string; projectRoot: string | null; createdAt: number; userId: string; description?: string | null; updatedAt?: number }
 export interface Artifact { artifactId: string; name: string; mimeType: string; size: number; kind: string; chatId?: string | null; projectId?: string | null; createdAt: number; previewable: boolean }

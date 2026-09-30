@@ -5,6 +5,8 @@ import { staffStore } from "../admin/staffStore";
 import { authService } from "../auth/AuthService";
 import type { Principal } from "../identity/principal";
 import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
+import { creditLedger } from "../billing/creditLedgerInstance";
+import { planById } from "../billing/plans";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -72,6 +74,27 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
     req.tenant = tenantManager.ensureOrgTenant(as.principal);
     req.principal = as.principal;
     (req as Request & { viewAs?: unknown }).viewAs = view;
+    next();
+    return;
+  }
+
+  // A personal API key (Settings → API keys) acts as its owner in that
+  // workspace — on plans that include API access, and never for account
+  // management (req.apiKeyId marks it; the account routes refuse it).
+  if (key.startsWith("orvkey_")) {
+    const k = authService.verifyApiKey(key);
+    if (!k) {
+      res.status(401).json({ error: "Unauthorized — this API key is invalid or was revoked", code: "API_KEY_INVALID" });
+      return;
+    }
+    if (!planById(creditLedger.planOf(k.principal.tenantId) ?? "free").features.apiAccess) {
+      res.status(403).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
+      return;
+    }
+    req.tenant = tenantManager.ensureOrgTenant(k.principal);
+    req.tenant.usage.requests++;
+    req.principal = k.principal;
+    (req as Request & { apiKeyId?: string }).apiKeyId = k.keyId;
     next();
     return;
   }

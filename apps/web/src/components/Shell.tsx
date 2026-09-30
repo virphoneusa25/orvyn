@@ -1,18 +1,26 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { api, setToken } from "../lib/api";
 import { useStore } from "../lib/store";
 import { adminUrl } from "../lib/surface";
 import { navigate, useLocation } from "../lib/router";
 import { num } from "../lib/format";
+import { signal, useSignal } from "../lib/events";
+import type { SessionRow } from "../lib/useApi";
 import { Icon } from "./Icons";
 import { Orb } from "./Orb";
 import { ModelPicker } from "./ModelPicker";
-import icon from "../assets/icon.png";
+import { CommandPalette } from "./CommandPalette";
+import { Notifications } from "./Notifications";
+import { useDismiss } from "./Menu";
+import { hueFor, initials, workspaceLabel } from "./Bits";
 
-const NAV: { to: string; label: string; icon: keyof typeof Icon; chev?: boolean }[] = [
+const NAV: { to: string; label: string; icon: keyof typeof Icon }[] = [
   { to: "/", label: "Home", icon: "home" },
-  { to: "/chats", label: "Chats", icon: "chat", chev: true },
+  { to: "/chats", label: "Chats", icon: "chat" },
   { to: "/projects", label: "Projects", icon: "folder" },
   { to: "/files", label: "Files", icon: "file" },
+];
+const ACCOUNT_NAV: { to: string; label: string; icon: keyof typeof Icon }[] = [
   { to: "/usage", label: "Usage", icon: "usage" },
   { to: "/billing", label: "Billing", icon: "billing" },
   { to: "/settings", label: "Settings", icon: "settings" },
@@ -26,112 +34,181 @@ function active(path: string, to: string): boolean {
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const { path } = useLocation();
-  const full = path.startsWith("/chats");
+  const [palette, setPalette] = useState(false);
+  const full = path.startsWith("/chats") || /^\/projects\/[^/]+/.test(path);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <div className="app">
       <Sidebar path={path} />
       <div className="main">
-        <TopBar />
+        <TopBar onSearch={() => setPalette(true)} />
         <main className={`content${full ? " content--full" : ""}`}>{children}</main>
       </div>
+      {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
     </div>
   );
 }
 
 function Sidebar({ path }: { path: string }) {
   const { billing } = useStore();
+  const [recents, setRecents] = useState<SessionRow[]>([]);
+  const load = useCallback(() => {
+    api<{ sessions: SessionRow[] }>("/sessions").then((r) => setRecents([...r.sessions].filter((s) => !s.projectRoot).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt).slice(0, 14))).catch(() => undefined);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useSignal("sessions", load);
   const planId = billing?.wallet.plan.id ?? "free";
   const showUpsell = planId === "free" || planId === "starter";
+  const openChat = path.startsWith("/chats/") ? path.split("/")[2] : null;
   return (
-    <aside className="side">
-      <button className="brand" onClick={() => navigate("/")} style={{ background: "none", border: 0, cursor: "pointer", color: "inherit", textAlign: "left" }} aria-label="ORVYN Cloud home">
+    <aside className="side" aria-label="Sidebar">
+      <button className="brand" onClick={() => navigate("/")} aria-label="ORVYN Cloud home">
         <span className="brand__mark"><Orb /></span>
         <span>
           <div className="brand__word">ORVYN</div>
           <div className="brand__sub">CLOUD</div>
         </span>
       </button>
+      <button className="btn btn--primary side__new" onClick={() => { navigate("/chats"); signal("sessions"); }} data-testid="side-new-chat" aria-label="New chat">
+        <Icon.plus size={17} /> <span>New chat</span>
+      </button>
       <nav className="nav" aria-label="Main">
-        {NAV.map((n) => {
-          const I = Icon[n.icon];
-          return (
-            <button key={n.to} className={`nav__item${active(path, n.to) ? " is-active" : ""}`} onClick={() => navigate(n.to)} aria-current={active(path, n.to) ? "page" : undefined}>
-              <I /> <span>{n.label}</span>
-              {n.chev ? <span className="nav__chev"><Icon.chev size={16} /></span> : null}
-            </button>
-          );
-        })}
-        <div className="nav__sep" />
-        <button className={`nav__item${active(path, "/download") ? " is-active" : ""}`} onClick={() => navigate("/download")}>
-          <Icon.download /> <span>Download Desktop</span>
-        </button>
+        {NAV.map((n) => <NavItem key={n.to} path={path} {...n} />)}
       </nav>
-      {showUpsell ? (
-        <div className="upsell">
-          <h4>Unlock more with<br /><b>ORVYN Pro</b></h4>
-          <ul>
-            <li><Icon.check /> More monthly credits</li>
-            <li><Icon.check /> Priority processing</li>
-            <li><Icon.check /> Advanced models</li>
-            <li><Icon.check /> Team features</li>
-          </ul>
-          <button className="btn btn--primary" style={{ width: "100%" }} onClick={() => navigate("/billing#plans")}>Upgrade Now</button>
-        </div>
-      ) : null}
+      {recents.length && !path.startsWith("/chats") ? (
+        <>
+          <div className="nav__label">Recent</div>
+          <div className="side__recents" data-testid="side-recents">
+            {recents.map((s) => (
+              <button key={s.sessionId} className={`side__recent${s.sessionId === openChat ? " is-on" : ""}`} onClick={() => navigate(`/chats/${s.sessionId}`)} title={s.title}>
+                {s.title || "Conversation"}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : <div style={{ flex: 1 }} />}
+      <nav className="nav" aria-label="Account">
+        <div className="nav__label">Account</div>
+        {ACCOUNT_NAV.map((n) => <NavItem key={n.to} path={path} {...n} />)}
+        <NavItem path={path} to="/download" label="Download Desktop" icon="download" />
+      </nav>
+      <div className="side__foot">
+        {showUpsell ? (
+          <div className="upsell" data-testid="upsell">
+            <b>Unlock more with ORVYN Pro</b>
+            <span>More credits, advanced models and priority.</span>
+            <button className="btn btn--primary btn--sm" onClick={() => navigate("/billing#plans")}>Upgrade</button>
+          </div>
+        ) : null}
+        <WorkspaceSwitcher />
+      </div>
     </aside>
   );
 }
 
-function TopBar() {
+function NavItem({ path, to, label, icon }: { path: string; to: string; label: string; icon: keyof typeof Icon }) {
+  const I = Icon[icon] as (p: { size?: number }) => JSX.Element;
+  const on = active(path, to);
+  return (
+    <button className={`nav__item${on ? " is-active" : ""}`} onClick={() => navigate(to)} aria-current={on ? "page" : undefined} title={label}>
+      <I /> <span>{label}</span>
+    </button>
+  );
+}
+
+/** The workspace this session is in; people in more than one team can switch here. */
+function WorkspaceSwitcher() {
+  const { me, billing, refresh, toast } = useStore();
+  const [open, setOpen] = useState(false);
+  const ref = useDismiss<HTMLDivElement>(open, () => setOpen(false));
+  if (!me) return null;
+  const current = me.principal;
+  const name = workspaceLabel({ name: current.organizationName, kind: current.organizationKind }, me.user.name);
+  const switchTo = async (id: string) => {
+    setOpen(false);
+    try {
+      const r = await api<{ token: string }>("/auth/switch-organization", { method: "POST", body: { organizationId: id } });
+      setToken(r.token);
+      await refresh();
+      signal("sessions"); signal("projects"); signal("files");
+      navigate("/");
+      toast("Switched workspace.");
+    } catch (err: any) { toast(err.message); }
+  };
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button className="ws" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} data-testid="workspace-switcher" title={name}>
+        <span className="ws__avatar" style={{ background: hueFor(current.organizationName) }}>{initials(name)}</span>
+        <span>
+          <div className="ws__name">{name}</div>
+          <div className="ws__sub">{billing?.wallet.plan.label ?? "Free"} plan · {current.role}</div>
+        </span>
+        <Icon.down size={14} />
+      </button>
+      {open ? (
+        <div className="menu menu--left menu--up" role="menu" style={{ width: 250 }}>
+          <div className="menu__head">Workspaces</div>
+          {me.organizations.map((o) => (
+            <button key={o.id} role="menuitem" className={`menu__item${o.id === current.organizationId ? " is-on" : ""}`} onClick={() => void switchTo(o.id)}>
+              <span className="avatar-sm" style={{ width: 24, height: 24, borderRadius: 7, fontSize: 11, background: hueFor(o.name) }}>{initials(workspaceLabel(o, me.user.name))}</span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{workspaceLabel(o, me.user.name)}</span>
+              {o.id === current.organizationId ? <Icon.check size={15} /> : null}
+            </button>
+          ))}
+          <div className="menu__sep" />
+          <button role="menuitem" className="menu__item" onClick={() => { setOpen(false); navigate("/settings/team"); }}><Icon.users size={16} /> Team & invitations</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TopBar({ onSearch }: { onSearch: () => void }) {
   const { me, billing, signOut } = useStore();
-  const [q, setQ] = useState("");
   const [menu, setMenu] = useState(false);
-  const input = useRef<HTMLInputElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); input.current?.focus(); } };
-    const onDown = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false); };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onDown);
-    return () => { window.removeEventListener("keydown", onKey); window.removeEventListener("mousedown", onDown); };
-  }, []);
+  const ref = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
   const available = billing?.wallet.availableBalance ?? 0;
   const name = me?.user.name || me?.user.email || "";
   return (
     <header className="top">
-      <form className="search" role="search" onSubmit={(e) => { e.preventDefault(); if (q.trim()) navigate(`/files?q=${encodeURIComponent(q.trim())}`); }}>
-        <Icon.search size={20} />
-        <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search files, chats, and projects…" aria-label="Search" />
+      <button className="search" onClick={onSearch} aria-label="Search" data-testid="open-search">
+        <Icon.search size={17} />
+        <span>Search chats, projects and files…</span>
         <kbd>Ctrl K</kbd>
-      </form>
-      <div className="top__spacer" />
-      <div className="modelsel">
-        <span className="modelsel__label">Model</span>
-        <div>
-          <ModelPicker />
-          <div className="modelsel__hint">Best model for your request</div>
-        </div>
-      </div>
-      <button className="credits-pill" onClick={() => navigate("/billing#credits")} data-testid="credits-pill" title="Credits available">
-        <Icon.coins size={22} /> {num(available)} Credits
-        <span className="credits-pill__plus"><Icon.plus size={18} /></span>
       </button>
-      <button className="bell" aria-label="Notifications" onClick={() => navigate("/billing")}><Icon.bell /></button>
-      <div ref={menuRef} style={{ position: "relative" }}>
+      <div className="top__spacer" />
+      <ModelPicker />
+      <button className="credits-pill" onClick={() => navigate("/billing#credits")} data-testid="credits-pill" title="Credits available — add more">
+        <Icon.coins size={17} /> {num(available)} Credits
+        <span className="credits-pill__plus"><Icon.plus size={15} /></span>
+      </button>
+      <Notifications />
+      <div ref={ref} style={{ position: "relative" }}>
         <button className="me" onClick={() => setMenu((v) => !v)} aria-haspopup="menu" aria-expanded={menu}>
-          <span className="me__avatar"><img src={icon} alt="" /></span>
+          <span className="me__avatar">{initials(me?.user.name, me?.user.email)}</span>
           <span>
             <div className="me__name" data-testid="me-name">{name}</div>
-            <div className="me__plan">{billing?.wallet.plan.label ?? "Free"} Plan</div>
+            <div className="me__plan">{billing?.wallet.plan.label ?? "Free"} plan</div>
           </span>
-          <Icon.down size={16} />
+          <Icon.down size={14} />
         </button>
         {menu ? (
-          <div className="mp__menu" role="menu" style={{ width: 220 }}>
-            <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); navigate("/settings"); }}><Icon.user size={18} /> <b>Account settings</b></button>
-            <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); navigate("/billing"); }}><Icon.billing size={18} /> <b>Billing</b></button>
-            {me?.staff ? <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); const u = adminUrl(); if (u.startsWith("/")) navigate(u); else location.href = u; }} data-testid="open-admin"><Icon.shield size={18} /> <b>Admin Portal</b></button> : null}
-            <button className="mp__item" role="menuitem" onClick={() => { setMenu(false); void signOut(); }} data-testid="sign-out"><Icon.logout size={18} /> <b>Sign out</b></button>
+          <div className="menu menu--right menu--down" role="menu" style={{ width: 240 }}>
+            <div className="menu__head"><b>{me?.user.name || "Your account"}</b>{me?.user.email}</div>
+            <div className="menu__sep" />
+            <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/settings"); }}><Icon.user size={16} /> Account settings</button>
+            <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/settings/team"); }}><Icon.users size={16} /> Team</button>
+            <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/billing"); }}><Icon.billing size={16} /> Billing</button>
+            <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/help"); }}><Icon.help size={16} /> Help</button>
+            {me?.staff ? <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); const u = adminUrl(); if (u.startsWith("/")) navigate(u); else location.href = u; }} data-testid="open-admin"><Icon.shield size={16} /> Admin Portal</button> : null}
+            <div className="menu__sep" />
+            <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); void signOut(); }} data-testid="sign-out"><Icon.logout size={16} /> Sign out</button>
           </div>
         ) : null}
       </div>

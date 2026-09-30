@@ -235,7 +235,7 @@ async function main() {
     ok(/10,|Team/.test(await cp.innerText("body")) && /Team/.test(await cp.innerText("[data-testid=stat-plan]")), "…the customer portal is back (Team plan)");
     ok((await cp.innerText("[data-testid=stat-topup]")).includes("5,000"), "…and shows the 5,000 granted credits as top-up balance");
     const home = await cp.innerText("body");
-    ok(/Welcome back, John/.test(home) && /Your AI workspace/.test(home) && /Manage Subscription/.test(home) && !VENDOR.test(home), "customer Home: new hero, quick actions, no vendor names");
+    ok(/Welcome back, John/.test(home) && /What can I help with/.test(home) && /Manage plan/.test(home) && !VENDOR.test(home), "customer Home: orb greeting, quick actions, no vendor names");
     await shot(cp, "cloud-home-1440");
     ok(!(await cp.$("[data-testid=open-admin]")), "a customer's menu has no Admin Portal link");
     await cc.close();
@@ -243,7 +243,8 @@ async function main() {
     await page.click("[data-testid=customer-actions]"); await page.click("[data-testid=act-plan]");
     await page.waitForSelector("[data-testid=plan-change-now]", { timeout: 10000 });
     ok(/active/.test(await page.innerText(".modal")), "Manage Plan reads the live subscription from Stripe");
-    await page.keyboard.press("Escape"); await page.click(".modal__actions >> text=Close");
+    // Escape closes the modal (as every portal modal does); Close is only needed if it is still open.
+    await page.keyboard.press("Escape"); if (await page.isVisible(".modal__actions >> text=Close")) await page.click(".modal__actions >> text=Close");
     // Audit log tab
     await page.click("[data-testid=tab-audit]");
     await page.waitForSelector("[data-testid=acct-audit]");

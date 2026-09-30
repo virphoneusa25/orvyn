@@ -15,9 +15,9 @@ const FAQ: [string, string][] = [
 export function Help() {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <>
-      <h1 className="page-title">Help</h1>
-      <p className="page-sub">Answers to common questions.</p>
+    <div className="page">
+      <div className="page-head"><div><h1 className="page-title">Help</h1>
+      <p className="page-sub">Answers to common questions.</p></div></div>
       <div className="two" style={{ gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr)" }}>
         <div>
           {FAQ.map(([q, a], i) => (
@@ -39,6 +39,6 @@ export function Help() {
           </section>
         </div>
       </div>
-    </>
+    </div>
   );
 }

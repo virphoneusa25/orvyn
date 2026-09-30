@@ -30,9 +30,9 @@ export function Usage() {
   const total = byModel.reduce((s, [, v]) => s + v, 0);
 
   return (
-    <>
-      <h1 className="page-title">Usage</h1>
-      <p className="page-sub">Credits used across ORVYN Cloud and ORVYN Desktop — one account, one balance.</p>
+    <div className="page">
+      <div className="page-head"><div><h1 className="page-title">Usage</h1>
+      <p className="page-sub">Credits used across ORVYN Cloud and ORVYN Desktop — one account, one balance.</p></div></div>
       {w ? (
         <div className="three">
           {([["Monthly credits", w.windows.cycle, `Resets in ${resetIn(w.windows.cycle.resetAt)}`], ["5-hour window", w.windows.fiveHour, `Frees up in ${resetIn(w.windows.fiveHour.resetAt)}`], ["7-day window", w.windows.sevenDay, `Frees up in ${resetIn(w.windows.sevenDay.resetAt)}`]] as const).map(([label, win, foot]) => (
@@ -74,6 +74,6 @@ export function Usage() {
           </div>
         </section>
       ) : null}
-    </>
+    </div>
   );
 }

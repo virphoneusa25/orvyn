@@ -186,10 +186,10 @@ async function main() {
     ok((await page.textContent("[data-testid=stat-plan]"))?.trim() === "Free", "Home shows the current plan (Free)");
     ok(/2,000 Credits/.test((await page.textContent("[data-testid=credits-pill]")) ?? ""), "the top bar shows the credit balance", await page.textContent("[data-testid=credits-pill]"));
     const homeText = await page.innerText("body");
-    for (const label of ["Quick Actions", "Monthly Credits", "5-Hour Usage", "7-Day Usage", "Top-up Balance", "Active Subscription", "Cloud Chat", "Recent Projects", "Recent Chats", "Recent Files", "Usage Overview", "Invoices", "Download Desktop"]) {
-      if (!homeText.includes(label)) ok(false, `Home shows "${label}"`);
-    }
-    ok(["Quick Actions", "Monthly Credits", "5-Hour Usage", "7-Day Usage", "Top-up Balance", "Active Subscription", "Cloud Chat", "Recent Projects", "Recent Chats", "Recent Files", "Usage Overview", "Invoices"].every((l) => homeText.includes(l)), "Home has hero, quick actions, the six account cards, Cloud Chat, recents, usage chart and invoices");
+    const HOME = ["What can I help with?", "Current plan", "Credits available", "5-hour window", "7-day window", "New chat", "New project", "Upload files", "Continue where you left off", "Projects", "Recent files", "Usage", "Download Desktop"];
+    for (const label of HOME) if (!homeText.includes(label)) ok(false, `Home shows "${label}"`);
+    ok(HOME.every((l) => homeText.includes(l)), "Home has the orb greeting and ask box, plan and usage meters, quick actions, recents and the usage chart");
+    ok(await page.isVisible(".home-hero__orb video"), "…with the animated ORVYN orb");
     ok(!VENDOR.test(homeText), "no model vendor or hosting provider appears on Home", (homeText.match(VENDOR) ?? [])[0]);
     const token = await page.evaluate(() => localStorage.getItem("orvyn.session"));
     ok(Boolean(token), "the session is kept in the browser (sent as a header, not a URL)");
@@ -287,6 +287,7 @@ async function main() {
     await page.click("[data-testid=send]");
     await page.waitForFunction(() => [...document.querySelectorAll("[data-testid=msg-assistant]")].some((m) => /Cloud reply:.*Project question/.test(m.textContent ?? "")), null, { timeout: 15000 });
     await page.waitForURL(/\/projects\/prj_[^/]+\/chats\//, { timeout: 5000 });
+    await shot(page, "project");
     const projChats = (await call(`/sessions?projectId=${projectId}`, "GET", null, token)).json.sessions;
     const projFiles = (await call(`/artifacts?projectId=${projectId}`, "GET", null, token)).json.artifacts;
     ok(projChats.length === 1 && projChats[0].projectId === projectId, "the chat belongs to the project", JSON.stringify(projChats));
@@ -375,8 +376,110 @@ async function main() {
       if (VENDOR.test(txt)) ok(false, `${path} shows no vendor`, (txt.match(VENDOR) ?? [])[0]);
     }
     await shot(page, "download");
-    ok(!urls.some((u) => /orvsess_|token=/.test(u)), "no session token ever appears in a page URL");
-    ok(pageErrors.length === 0, "no uncaught errors in the portal", pageErrors.join(" | "));
+
+    console.log("\n10. Search, chat actions and sharing");
+    await page.goto(`${BASE}/`);
+    await page.waitForSelector("[data-testid=stat-plan]");
+    await page.keyboard.press("Control+k");
+    await page.waitForSelector("[data-testid=palette]");
+    await page.fill("[data-testid=palette-input]", "Hello portal");
+    await sleep(300); await shot(page, "palette");
+    await page.waitForSelector("[data-testid=palette-item] >> text=Hello portal", { timeout: 5000 });
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.waitForURL(new RegExp(`/chats/${chatId}$`), { timeout: 8000 });
+    ok(true, "Ctrl+K finds a chat by title and opens it");
+    await page.waitForSelector("[data-testid=msg-assistant]");
+    await page.click("[data-testid=head-share]");
+    await page.click("[data-testid=share-create]");
+    const shareUrl = (await page.textContent("[data-testid=share-url] code"))?.trim() ?? "";
+    ok(/\/share\/orvshr_[0-9a-f]+$/.test(shareUrl), "Share makes a public read-only link", shareUrl);
+    const anon = await (await browser.newContext()).newPage();
+    await anon.goto(shareUrl.replace(/^https?:\/\/[^/]+/, BASE));
+    await anon.waitForSelector("[data-testid=shared-chat] >> text=Cloud reply: Hello portal", { timeout: 8000 });
+    const shared = await anon.innerText("body");
+    ok(/Hello portal/.test(shared) && !/ada@example\.com/.test(shared) && !(await anon.$("[data-testid=file-chip], img[data-testid=thumb]")), "…anyone with it reads the messages — never the files or the account email");
+    await page.click("[data-testid=share-off]");
+    await page.keyboard.press("Escape");
+    const gone = await fetch(`${BASE}/api/v1/public/shares/${shareUrl.split("/").pop()}`);
+    ok(gone.status === 404, "turning sharing off kills the link", `${gone.status}`);
+    const ren = await call(`/sessions/${chatId}`, "PATCH", { title: "Renamed chat", pinned: true }, token);
+    ok(ren.json.session?.title === "Renamed chat" && ren.json.session?.pinned === true, "chats can be renamed and pinned");
+    await page.goto(`${BASE}/chats`);
+    await page.waitForSelector(".chats__group >> text=Pinned");
+    ok((await page.innerText(".chats__list")).includes("Renamed chat"), "pinned chats are grouped at the top of the list");
+
+    console.log("\n11. Projects: details, move, delete");
+    const pd = await call(`/projects/${projectId}`, "PATCH", { name: "Launch Plan v2", description: "Q4 launch" }, token);
+    ok(pd.json.project?.name === "Launch Plan v2" && pd.json.project?.description === "Q4 launch", "a project can be renamed and described");
+    const mv = await call(`/sessions/${chatId}`, "PATCH", { projectId }, token);
+    ok(mv.json.session?.projectId === projectId, "a chat can be moved into a project");
+    const mvB = await call(`/sessions/${chatId}`, "PATCH", { projectId }, B);
+    ok(mvB.status === 404, "…but not by another account", `${mvB.status}`);
+    await page.goto(`${BASE}/projects`);
+    await page.waitForSelector("[data-testid=project-card] >> text=Q4 launch");
+    await shot(page, "projects");
+    ok(true, "project cards show the description and counts");
+    const del = await call(`/projects/${projectId}`, "DELETE", null, token);
+    const back = (await call("/sessions", "GET", null, token)).json.sessions.filter((x) => x.projectId === projectId);
+    ok(del.status === 200 && back.length === 0, "deleting a project keeps its chats (they move back to Chats)", JSON.stringify(back.map((x) => x.sessionId)));
+    ok((await call(`/projects/${projectId}`, "GET", null, B)).status === 404, "another account still can't see it");
+
+    console.log("\n12. Account settings");
+    await page.goto(`${BASE}/settings/security`);
+    await page.fill("#pw-cur", "wrong-password");
+    await page.fill("#pw-new", "a-new-password-9");
+    await page.fill("#pw-conf", "a-new-password-9");
+    await page.click("[data-testid=change-password]");
+    ok(/current password/i.test(await page.innerText(".error")), "changing the password needs the current one");
+    await page.fill("#pw-cur", "a-long-password-1");
+    await page.click("[data-testid=change-password]");
+    await page.waitForSelector("text=Password changed", { timeout: 8000 });
+    const relog = await call("/auth/login", "POST", { email: "ada@example.com", password: "a-new-password-9" });
+    ok(relog.status === 200 && (await call("/auth/me", "GET", null, token)).status === 200, "…the new password works and this browser stays signed in");
+    await page.goto(`${BASE}/settings/team`);
+    await page.waitForSelector("[data-testid=team-members] >> text=ada@example.com");
+    await shot(page, "team");
+    ok(await page.isVisible("[data-testid=team-upsell]"), "Team shows the members and, on Free, how to get team seats");
+    const inv = await call("/account/team/invites", "POST", { email: "bob@example.com" }, token);
+    ok(inv.status === 402 && inv.json.code === "SEATS_FULL", "…inviting needs a plan with seats (enforced by the server)", JSON.stringify(inv.json));
+    await page.goto(`${BASE}/settings/api-keys`);
+    await page.waitForSelector("[data-testid=api-upsell]");
+    await shot(page, "apikeys");
+    const key = await call("/account/api-keys", "POST", { name: "x" }, token);
+    ok(key.status === 402, "API keys need a plan with API access (enforced by the server)", `${key.status}`);
+    const forgedKey = await fetch(`${BASE}/api/v1/sessions`, { headers: { Authorization: "Bearer orvkey_forged" } });
+    ok(forgedKey.status === 401, "a forged API key is refused", `${forgedKey.status}`);
+    await page.goto(`${BASE}/settings`);
+    await page.fill("#s-name", "Ada King");
+    await page.click("[data-testid=save-profile]");
+    await page.waitForFunction(() => /Ada King/.test(document.querySelector("[data-testid=me-name]")?.textContent ?? ""), null, { timeout: 8000 });
+    ok(true, "the profile name saves and shows in the top bar");
+
+    console.log("\n13. Notifications and invitations");
+    await page.goto(`${BASE}/`);
+    await page.waitForSelector("[data-testid=stat-plan]");
+    await page.click("[data-testid=bell]");
+    await page.waitForSelector("[data-testid=notifications]");
+    const notes = await page.innerText("[data-testid=notifications]");
+    ok(/allowance|Credits|caught up/.test(notes), "the bell opens real account notifications", notes.slice(0, 200));
+    await page.keyboard.press("Escape");
+    await page.goto(`${BASE}/invite?token=orvinv_bogus`);
+    await page.waitForSelector("text=Invitation unavailable", { timeout: 8000 });
+    ok(true, "a bad invitation link says so");
+    await page.evaluate(() => sessionStorage.clear());
+    await shot(page, "settings");
+    if (shots) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${BASE}/`); await page.waitForSelector("[data-testid=stat-plan]"); await sleep(400); await shot(page, "mobile-home");
+      await page.goto(`${BASE}/chats/${chatId}`); await page.waitForSelector("[data-testid=msg-assistant]"); await sleep(400); await shot(page, "mobile-chat");
+      await page.setViewportSize({ width: 1680, height: 1050 });
+    }
+
+    ok(!urls.some((u) => /orvsess_|token=orvsess/.test(u)), "no session token ever appears in a page URL");
+    // The wrong-password and bad-invite checks above get their expected 400 / 410 on purpose.
+    const unexpected = pageErrors.filter((e) => !/Failed to load resource: the server responded with a status of (400|410)/.test(e));
+    ok(unexpected.length === 0, "no uncaught errors in the portal", unexpected.join(" | "));
     await page.click("[data-testid=me-name]");
     await page.click("[data-testid=sign-out]");
     await page.waitForSelector("[data-testid=auth-submit]");

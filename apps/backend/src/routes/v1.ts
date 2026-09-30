@@ -1,3 +1,5 @@
+import { accountRouter } from "./account";
+import { publicOrigin } from "./auth";
 import { documentRouter } from "./documents";
 import { learnFromUserMessage, type MemoryStoreLike } from "../memory/userMemory";
 import { memoryModel } from "../memory/learnModel";
@@ -30,6 +32,9 @@ import path from "path";
 import { promises as fsp } from "fs";
 
 export const v1Router = Router();
+
+// Customer portal account area: profile, password, team, API keys, notifications.
+v1Router.use("/account", accountRouter);
 // ORVYN Cloud: responses never name ORVYN's model vendors (models/customerCatalog.ts).
 v1Router.use(customerRedaction);
 v1Router.use("/documents", documentRouter);
@@ -203,6 +208,33 @@ v1Router.get("/projects/:id", (req, res) => {
   try {
     const principal = requirePrincipal(req);
     res.json({ project: authService.getProject(req.params.id, principal.tenantId) });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: "Not found" });
+  }
+});
+
+v1Router.patch("/projects/:id", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    if ((req as any).viewAs) return res.status(403).json({ error: "Support view is read-only." });
+    const project = authService.updateProject(req.params.id, principal.tenantId, {
+      name: typeof req.body?.name === "string" ? req.body.name : undefined,
+      description: req.body?.description === null || typeof req.body?.description === "string" ? req.body.description : undefined,
+    });
+    res.json({ project });
+  } catch (err: any) {
+    res.status(err.status ?? 404).json({ error: "Not found" });
+  }
+});
+
+/** Deletes the project. Its chats and files are kept (they move back to Chats and Files). */
+v1Router.delete("/projects/:id", (req, res) => {
+  try {
+    const principal = requirePrincipal(req);
+    const t = requireTenant(req);
+    authService.deleteProject(req.params.id, principal.tenantId);
+    for (const s of t.sessions.list()) if (s.projectId === req.params.id) t.sessions.setProject(s.sessionId, null);
+    res.json({ ok: true });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
@@ -1268,9 +1300,39 @@ v1Router.patch("/sessions/:id/messages/:messageId", (req, res) => {
 
 v1Router.patch("/sessions/:id", (req, res) => {
   const t = requireTenant(req);
+  // Move to a project (or out of one: null). The project must be this tenant's.
+  if (req.body && "projectId" in req.body) {
+    let projectId: string | null = null;
+    if (typeof req.body.projectId === "string" && req.body.projectId) {
+      try { projectId = authService.getProject(req.body.projectId, t.id).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
+    }
+    if (!t.sessions.setProject(String(req.params.id), projectId)) return res.status(404).json({ error: "Unknown session" });
+  }
   const s = t.sessions.update(String(req.params.id), { title: req.body?.title, status: req.body?.status, pinned: typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined });
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s });
+});
+
+// ---- Share a conversation (read-only public link) -----------------------------
+v1Router.get("/sessions/:id/share", (req, res) => {
+  const principal = requirePrincipal(req);
+  const t = requireTenant(req);
+  if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
+  res.json({ share: authService.shareFor(String(req.params.id), principal.userId) });
+});
+
+v1Router.post("/sessions/:id/share", (req, res) => {
+  const principal = requirePrincipal(req);
+  const t = requireTenant(req);
+  if ((req as any).viewAs || (req as any).apiKeyId) return res.status(403).json({ error: "Only the account owner can share a conversation." });
+  if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
+  const { token } = authService.createShare(principal, String(req.params.id));
+  res.status(201).json({ url: `${publicOrigin(req)}/share/${token}` });
+});
+
+v1Router.delete("/sessions/:id/share", (req, res) => {
+  const principal = requirePrincipal(req);
+  res.json({ ok: authService.revokeShare(principal.userId, String(req.params.id)) });
 });
 
 v1Router.delete("/sessions/:id", (req, res) => {

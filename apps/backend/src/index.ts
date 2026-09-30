@@ -195,6 +195,22 @@ app.use("/api/v1/auth", (req, res, next) => (CREDENTIAL_PATHS.test(req.path) ? s
 // clicking through quickly must never hit the sign-in brute-force limit.
 app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RATE_LIMIT_RPM) || 240), onboardingRouter);
 
+// A shared conversation (read-only public link from Chats → Share). Text only:
+// attachments, files and account details never leave through a share link.
+app.get("/api/v1/public/shares/:token", ipRateLimit(120), (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  const share = authService.resolveShare(String(req.params.token));
+  const as = share ? authService.principalFor(share.userId, share.organizationId) : null;
+  const tenant = as ? tenantManager.ensureOrgTenant(as.principal) : null;
+  const session = share && tenant ? tenant.sessions.get(share.sessionId) : undefined;
+  if (!share || !session || (session.userId && session.userId !== share.userId)) return res.status(404).json({ error: "This shared conversation isn't available. The link may have been turned off." });
+  const messages = tenant!.sessions.messages(session.sessionId, 0)
+    .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
+    .map((m: { role: string; content: string; createdAt: number }) => ({ role: m.role, content: String(m.content ?? ""), createdAt: m.createdAt }));
+  res.json({ title: session.title, sharedAt: share.createdAt, author: as!.user.name?.split(" ")[0] ?? null, messages });
+});
+
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.
 // The rate limit is per tenant, so one customer can't starve the others.
