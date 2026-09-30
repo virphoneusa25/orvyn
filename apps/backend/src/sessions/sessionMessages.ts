@@ -38,7 +38,12 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
   const save = () => {
     const run = store.get(runId);
     if (!run) return;
-    const answer = finalAnswerOf(run.events) || (run.status === "cancelled" ? "Stopped." : run.status === "error" ? "The run ended with an error." : "");
+    const answer = finalAnswerOf(run.events)
+      || (run.status === "cancelled" ? "Stopped."
+        : run.status === "error" ? "The run ended with an error."
+        : run.status === "blocked" ? "The run was interrupted — resume it to continue."
+        : run.status === "partial" ? "The run finished with remaining gaps."
+        : "");
     if (!answer) return;
     sessions.appendMessage(sessionId, { messageId: runAnswerMessageId(runId), role: "assistant", content: answer, runId, mode: "agent" });
   };

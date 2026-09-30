@@ -128,8 +128,15 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
     // All default to ask through the gateway
     assert.equal(gateway.getPermission("mcp.echosrv.echo_message"), "ask");
 
-    // Execute through the SAME gateway ORION uses
-    const result = await gateway.execute("mcp.echosrv.echo_message", { message: "hello mcp" }, "coder");
+    // Ask fails closed at the boundary: no grant in the context, no execution.
+    const unapproved = await gateway.execute("mcp.echosrv.echo_message", { message: "no grant" }, "coder");
+    assert.equal(unapproved.ok, false);
+    assert.equal(unapproved.errorType, "APPROVAL_REQUIRED");
+
+    // Execute through the SAME gateway ORION uses — the caller carries the
+    // approval evidence it obtained (the test stands in for the approve card).
+    const approvedCtx = { approval: { granted: true, scope: "once" as const, grantedBy: "user" as const } };
+    const result = await gateway.execute("mcp.echosrv.echo_message", { message: "hello mcp" }, "coder", approvedCtx);
     assert.ok(result.ok, `echo should succeed: ${result.error}`);
     assert.match(String(result.output), /echo: hello mcp/);
 
@@ -152,7 +159,7 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
     assert.equal(gateway.list().some((t) => t.name === "mcp.echosrv.echo_message"), false);
     mgr.reregisterConnectedTools();
     assert.ok(gateway.list().some((t) => t.name === "mcp.echosrv.echo_message"));
-    const afterClear = await gateway.execute("mcp.echosrv.echo_message", { message: "still here" }, "coder");
+    const afterClear = await gateway.execute("mcp.echosrv.echo_message", { message: "still here" }, "coder", approvedCtx);
     assert.ok(afterClear.ok, `reregistered echo should succeed: ${afterClear.error}`);
 
     // Disable → tools become denied (removed from availability)

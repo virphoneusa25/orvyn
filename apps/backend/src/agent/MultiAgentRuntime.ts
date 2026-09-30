@@ -20,9 +20,9 @@ import { randomUUID } from "crypto";
 import { AIMessage, AIModelProvider, Attachment, ToolDefinition } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
-import { AITool, ToolPermission } from "../ai/ToolTypes";
+import { ToolRegistry } from "../ai/ToolTypes";
 import { DockerSandbox } from "../sandbox/DockerSandbox";
-import { makeSandboxTerminalTool, SANDBOX_DENIED_TOOLS, sandboxDenialMessage } from "../ai/tools/sandboxTools";
+import { makeSandboxTerminalTool, makeSandboxVerificationTools, makeSandboxProcessTools, SANDBOX_DENIED_TOOLS, sandboxDenialMessage, SandboxExec } from "../ai/tools/sandboxTools";
 import { ModelGateway } from "../gateway/ModelGateway";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
@@ -40,7 +40,12 @@ import { MissionQueue } from "../queue/MissionQueue";
 import { raceApprovalTimeout } from "./approvals";
 import { LANGUAGE_RULE, generateEnglish, isMostlyChinese } from "./languageRule";
 import { modelCallSignal } from "./modelTimeout";
+import { creditsFor } from "../models/routingPolicy";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
+import { inferTaskIntent } from "./taskIntent";
+import { classifyToolError, recoveryGuidance } from "./toolErrors";
+import { settleResult, settlementCriteria, SettlementCriterion } from "./resultContract";
+import { isModelUnavailable, markModelUnavailable } from "../models/modelAvailability";
 
 interface PendingApproval {
   resolve: (approved: boolean) => void;
@@ -52,6 +57,25 @@ interface PendingApproval {
 export type ApprovalScope = "once" | "mission";
 
 const MAX_TASKS = 12;
+
+/**
+ * The sandbox surface a mission consumes — provider-neutral, so the runtime
+ * is decoupled from the Docker implementation. Docker satisfies this today;
+ * the OpenShell provider slots in behind the same seam (see
+ * execution/SandboxRegistry for provider selection).
+ */
+interface MissionSandbox extends SandboxExec {
+  readonly containerId: string;
+  mergeBack(projectRoot: string): Promise<{ mergedFiles: number }>;
+  /** Re-sync the host tree into the sandbox so verification sees fresh writes. */
+  refresh?(projectRoot: string): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/** Single seam for sandbox creation — provider selection lives here. */
+async function startMissionSandbox(missionId: string, projectRoot: string): Promise<MissionSandbox> {
+  return DockerSandbox.start(missionId, projectRoot);
+}
 
 /**
  * Structured result contract for delegated workers. ORION receives the
@@ -72,6 +96,10 @@ export interface WorkerResult {
   /** Errors encountered (empty when successful). */
   errors: string[];
   tokensUsed: number;
+  /** Billing-weighted token cost of this task (routingPolicy credits). */
+  creditsUsed: number;
+  /** Model calls this task consumed against its allowance. */
+  modelCalls: number;
   durationMs: number;
 }
 
@@ -94,6 +122,10 @@ const DELEGATION_POLICY = {
   workerTimeoutMs: Number(process.env.ORVYN_WORKER_TIMEOUT_MS) || 300_000,
   /** Worker token budget per task. */
   workerTokenBudget: Number(process.env.ORVYN_WORKER_TOKEN_BUDGET) || 50_000,
+  /** Worker credit budget per task (billing-weighted tokens — a heavy model spends the same task's allowance faster). */
+  workerCreditBudget: Number(process.env.ORVYN_WORKER_CREDIT_BUDGET) || 400,
+  /** Worker model-call allowance per task — the step ceiling, named for what it meters. */
+  workerMaxModelCalls: Number(process.env.ORVYN_WORKER_MAX_MODEL_CALLS) || 10,
 };
 
 /** Decides whether a task type should be delegated to a worker. */
@@ -105,7 +137,7 @@ function shouldDelegate(agent: string, scope: { files?: number; estDurationMs?: 
   return false;
 }
 const MAX_REVISIONS = 2;        // per task, before giving up and moving on
-const MAX_EXECUTOR_STEPS = 10;  // tool calls per task attempt
+
 
 /** Which specialists ORION may delegate to today (browser needs Playwright). */
 function delegatable(): AgentRole[] {
@@ -188,6 +220,10 @@ export class MultiAgentRuntime {
   private checkpoints = new CheckpointEngine();
   private contextEngine: ContextEngine;
   private queue: MissionQueue;
+  /** Per-mission tool surface: mode/profile/sandbox changes never mutate the shared registry. */
+  private runTools = new Map<string, ToolGateway>();
+  /** Planner-reported scope estimates (files to touch), keyed by task id. */
+  private taskScope = new Map<string, number>();
 
   constructor(
     private modelService: ModelService,
@@ -263,18 +299,38 @@ export class MultiAgentRuntime {
     this.controllers.delete(runId);
   }
 
-  private toolDefinitionsFor(role: AgentRole): ToolDefinition[] {
-    return this.tools
+  private toolDefinitionsFor(role: AgentRole, runId?: string): ToolDefinition[] {
+    return this.gatewayFor(runId)
       .list()
       .filter((t) => ROLE_TOOLS[role](t.name))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
+  /**
+   * The ToolGateway this run sees. Missions get a scoped registry so sandbox
+   * tool swaps and permission changes cannot leak into a concurrent mission —
+   * ORVYN_MAX_CONCURRENT_MISSIONS > 1 makes a shared-mutable gateway a
+   * cross-run race, not just untidy.
+   */
+  private gatewayFor(runId?: string): ToolGateway {
+    return (runId && this.runTools.get(runId)) || this.tools;
+  }
+
+  /** A per-run copy of the shared gateway (tools by reference, permissions copied). */
+  private scopedGateway(): ToolGateway {
+    const registry = new ToolRegistry();
+    for (const t of this.tools.list()) {
+      registry.register(t);
+      registry.setPermission(t.name, this.tools.getPermission(t.name));
+    }
+    const gateway = new ToolGateway(registry, this.tools.permissions);
+    gateway.profile = this.tools.profile;
+    return gateway;
+  }
+
   start(projectRoot: string, goal: string, rules?: string, attachments?: Attachment[]): string {
     const runId = randomUUID();
     this.store.create(runId, projectRoot);
-    applyMode(this.tools.registry, "multitask");
-    this.tools.applyProfile();
     // Bounded concurrency: beyond ORVYN_MAX_CONCURRENT_MISSIONS the mission
     // waits its turn instead of piling more agent loops onto the box.
     const position = this.queue.enqueue(() => this.orchestrate(runId, projectRoot, goal, rules, attachments));
@@ -309,28 +365,46 @@ export class MultiAgentRuntime {
     this.store.emit(runId, "run.started", { instruction: goal, mode: "multitask" });
     const mission = this.taskEngine.createMission(runId, projectRoot, goal);
 
+    // Mission-scoped tool surface: mode/profile application, sandbox swaps and
+    // per-run denials happen on a private copy — a concurrent mission can never
+    // observe (or inherit) this run's tool mutations.
+    const runGateway = this.scopedGateway();
+    applyMode(runGateway.registry, "multitask");
+    runGateway.applyProfile();
+    this.runTools.set(runId, runGateway);
+
     // Sandbox mode: command-class tools execute inside a per-mission Docker
     // container, never on the API host (master spec §31). Enabled per
     // environment — cloud deployments set ORVYN_MISSION_EXECUTION=sandbox.
-    let sandbox: DockerSandbox | undefined;
+    let sandbox: MissionSandbox | undefined;
     const sandboxMode = process.env.ORVYN_MISSION_EXECUTION?.trim() === "sandbox";
-    let originalTerminal: AITool | undefined;
-    let originalRunCommand: AITool | undefined;
-    const savedPermissions = new Map<string, ToolPermission>();
 
     if (sandboxMode) {
-      sandbox = await DockerSandbox.start(mission.id, projectRoot);
-      this.store.emit(runId, "sandbox.started", { container: sandbox.containerId, image: "isolated", network: "none" });
-      // Swap the command tools for sandbox-backed equivalents; the swap is
-      // undone in the finally below so later host runs are unaffected.
-      originalTerminal = this.tools.list().find((t) => t.name === "terminal");
-      originalRunCommand = this.tools.list().find((t) => t.name === "run_command");
-      for (const t of this.tools.list()) savedPermissions.set(t.name, this.tools.getPermission(t.name));
-      const sandboxTerminal = makeSandboxTerminalTool(sandbox);
-      this.tools.register(sandboxTerminal);
-      this.tools.registerAlias("run_command", "terminal");
+      const sb = await startMissionSandbox(mission.id, projectRoot);
+      sandbox = sb;
+      this.store.emit(runId, "sandbox.started", { container: sb.containerId, image: "isolated", network: "none" });
+      // Swap the command tools for sandbox-backed equivalents on the mission's
+      // OWN registry — the scope is discarded at settle, so nothing restores.
+      runGateway.register(makeSandboxTerminalTool(sb));
+      runGateway.registerAlias("run_command", "terminal");
+      // Semantic verification runs inside the sandbox too — run_tests,
+      // run_typecheck and run_linter would otherwise execute project code on
+      // the API host. The host tree drives detection; a refresh before each
+      // verification run makes the sandbox copy see the files just written.
+      for (const tool of makeSandboxVerificationTools(sb, projectRoot, {
+        beforeRun: () => sb.refresh?.(projectRoot),
+      })) {
+        runGateway.register(tool);
+      }
+      // Provider-native process lifecycle — a dev server started inside the
+      // sandbox is managed there too, never on the host ServiceManager.
+      for (const tool of makeSandboxProcessTools(sb)) {
+        runGateway.register(tool);
+      }
+      // Anything left without a sandbox equivalent stays denied — the list
+      // is the migration surface, not a permanent feature.
       for (const denied of SANDBOX_DENIED_TOOLS) {
-        this.tools.setPermission(denied, "denied");
+        runGateway.setPermission(denied, "denied");
       }
     }
 
@@ -343,7 +417,7 @@ export class MultiAgentRuntime {
       const planResponse = await this.modelService.usage.with(
         { missionId: mission.id, agent: "orchestrator" },
         () =>
-          generateEnglish(astra, {
+          this.callWithFailover(runId, astra, {
         messages: [
           {
             role: "system",
@@ -362,7 +436,11 @@ export class MultiAgentRuntime {
                 ? ['- "browser": browser QA — open pages, click, type, screenshot (Playwright)']
                 : []),
               "Respond with ONLY JSON, no prose, no fences:",
-              '{"tasks":[{"description":"...","agent":"coder"}]}',
+              '{"tasks":[{"id":"t1","description":"...","agent":"coder","files":1,"dependsOn":[]}]}',
+              '"files" is your estimate of how many files the task will touch — it sizes the work.',
+              '"dependsOn" lists the ids of tasks that must COMPLETE before this one runs.',
+              "Independent read-only investigations (research/security) SHOULD have no dependencies so they run in parallel.",
+              "A task that reads or verifies another task's changes MUST depend on it.",
               `Use at most ${MAX_TASKS} tasks. Prefer fewer, larger tasks over many tiny ones.`,
               "Most missions end with one tester task verifying the whole change.",
               rules ? `\nProject rules:\n${rules}` : "",
@@ -373,17 +451,36 @@ export class MultiAgentRuntime {
           { role: "user", content: goal, attachments },
         ],
         signal: modelCallSignal(this.signalFor(runId)),
-          })
+          }, "planner")
       );
 
       try {
         const parsed = extractJson(planResponse.content);
         const raw: any[] = (parsed.tasks ?? []).slice(0, MAX_TASKS);
         const allowed = delegatable();
-        for (const t of raw) {
-          const agent = allowed.includes(t.agent) ? (t.agent as AgentRole) : "coder";
-          this.taskEngine.addTask(mission.id, String(t.description ?? t), agent);
-        }
+        // Two passes: the planner names dependencies with its own ids
+        // ("t1"), so create all tasks first, then resolve the dep names to
+        // the TaskEngine ids. Unknown dep names are dropped — a dependency on
+        // nothing must not silently become a dependency on everything.
+        const created: Task[] = [];
+        const plannerIds = new Map<string, Task>();
+        raw.forEach((t, i) => {
+          const agent = allowed.includes(t?.agent) ? (t.agent as AgentRole) : "coder";
+          const task = this.taskEngine.addTask(mission.id, String(t?.description ?? t), agent);
+          if (!task) return;
+          created.push(task);
+          plannerIds.set(String(t?.id ?? `t${i + 1}`), task);
+          const files = Number(t?.files);
+          if (Number.isFinite(files) && files > 0) this.taskScope.set(task.id, files);
+        });
+        raw.forEach((t, i) => {
+          const task = created[i];
+          if (!task || !Array.isArray(t?.dependsOn)) return;
+          const deps = t.dependsOn
+            .map((d: unknown) => plannerIds.get(String(d))?.id)
+            .filter((d: string | undefined): d is string => Boolean(d) && d !== task.id);
+          if (deps.length) task.dependsOn = deps;
+        });
       } catch (err: any) {
         this.store.emit(runId, "run.error", {
           message: `ORION did not return valid JSON: ${err.message}. Raw: ${planResponse.content.slice(0, 200)}`,
@@ -394,11 +491,23 @@ export class MultiAgentRuntime {
       }
 
       if (mission.tasks.length === 0) {
-        // NO_TASK_NEEDED vs PLANNING_FAILED: an empty task list usually means
-        // the request was conversational and slipped past the client-side
-        // intent router. That is not an engineering failure — complete the
-        // mission with an honest explanation instead of an error, so no
-        // surface ever shows "ERROR" for "hi".
+        // NO_TASK_NEEDED vs PLANNING_FAILED: an empty task list is only benign
+        // when the request was genuinely conversational. An engineering goal
+        // that produced zero tasks is a planner failure — "Completed" there is
+        // the false-completion bug all over again.
+        const intent = inferTaskIntent(goal);
+        const engineering =
+          !intent.informational &&
+          (intent.requiresWorkspace || intent.requiresFrontend || intent.requiresTerminal ||
+            intent.requiresBrowser || intent.requiresArtifact || intent.requiresRemoteResource ||
+            ["code", "deploy", "database", "server", "artifact", "automation"].includes(intent.category));
+        if (engineering) {
+          const message = "ORION could not break this request into executable tasks (planning failed). Please retry.";
+          this.store.emit(runId, "run.error", { message, code: "PLANNING_FAILED" });
+          this.taskEngine.setMissionStatus(mission.id, "FAILED");
+          this.store.setStatus(runId, "error");
+          return;
+        }
         const note =
           "This request didn't need engineering steps — it looks conversational. " +
           "Ask it in the Chat tab for a direct answer, or describe the change you want made and run it as Code.";
@@ -436,9 +545,48 @@ export class MultiAgentRuntime {
       // ---------- WORKERS: EXECUTE, ORION: REVIEW EACH ----------
       const reviewer = this.models.resolveTask("reviewer");
 
-      for (const task of mission.tasks.slice()) {
+      // Dependency-aware scheduling: a task runs when every dependsOn entry
+      // reached COMPLETED. Read-only roles (research, security) cannot
+      // conflict, so all ready read-only tasks run concurrently up to the
+      // worker cap; mutating roles run one at a time — a test or browser task
+      // must observe the writes it verifies, never run mid-write.
+      const READ_ONLY_ROLES = new Set<AgentRole>(["research", "security"]);
+      const pending = new Set<Task>(mission.tasks);
+      while (pending.size > 0) {
         if (this.isCancelled(runId)) return this.finishCancelled(runId, mission.id);
-        await this.processTask(runId, mission, task, goal, reviewer, rules);
+
+        // A task whose dependency can never complete (FAILED/SKIPPED) is
+        // unreachable — mark it SKIPPED instead of waiting forever.
+        for (const task of pending) {
+          if ((task.dependsOn ?? []).some((d) => {
+            const dep = mission.tasks.find((t) => t.id === d);
+            return dep && (dep.status === "FAILED" || dep.status === "SKIPPED");
+          })) {
+            this.taskEngine.transition(mission.id, task.id, "SKIPPED");
+            this.store.emit(runId, "task.skipped", { taskId: task.id, reason: "a dependency did not complete" });
+            pending.delete(task);
+          }
+        }
+        if (pending.size === 0) break;
+
+        const ready = [...pending].filter((t) =>
+          (t.dependsOn ?? []).every((d) => mission.tasks.find((x) => x.id === d)?.status === "COMPLETED")
+        );
+        if (ready.length === 0) {
+          // Cycle or a dep that can never satisfy — better a truthful skip
+          // than a silent hang.
+          for (const task of pending) {
+            this.taskEngine.transition(mission.id, task.id, "SKIPPED");
+            this.store.emit(runId, "task.skipped", { taskId: task.id, reason: "dependency cycle in the plan" });
+            pending.delete(task);
+          }
+          break;
+        }
+
+        const readOnly = ready.filter((t) => READ_ONLY_ROLES.has(t.agent)).slice(0, DELEGATION_POLICY.maxWorkers);
+        const batch = readOnly.length > 0 ? readOnly : ready.filter((t) => !READ_ONLY_ROLES.has(t.agent)).slice(0, 1);
+        for (const task of batch) pending.delete(task);
+        await Promise.all(batch.map((task) => this.processTask(runId, mission, task, goal, reviewer, rules)));
       }
       if (this.isCancelled(runId)) return this.finishCancelled(runId, mission.id);
 
@@ -452,10 +600,27 @@ export class MultiAgentRuntime {
           reviewerModel: reviewer.config.id,
         });
 
-        const verdict = await this.modelService.usage.with(
-          { missionId: mission.id, agent: "reviewer" },
-          () => this.reviewEngine.reviewMission(mission, rules)
-        );
+        // The review model resolves through the ModelGateway each call — a
+        // provider failure retries once and lands on a live route instead of
+        // killing the mission at the gate.
+        let verdict;
+        try {
+          verdict = await this.modelService.usage.with(
+            { missionId: mission.id, agent: "reviewer" },
+            () => this.reviewEngine.reviewMission(mission, rules)
+          );
+        } catch (err) {
+          if (this.isCancelled(runId)) return this.finishCancelled(runId, mission.id);
+          this.store.emit(runId, "model.fallback", {
+            role: "mission_reviewer",
+            reason: String((err as Error)?.message ?? err).slice(0, 200),
+            failure: "provider",
+          });
+          verdict = await this.modelService.usage.with(
+            { missionId: mission.id, agent: "reviewer" },
+            () => this.reviewEngine.reviewMission(mission, rules)
+          );
+        }
 
         if (verdict.status === "approved") {
           this.bus.reviewApproved(runId, mission.id, verdict.score);
@@ -499,10 +664,12 @@ export class MultiAgentRuntime {
       // A blown runaway-guard budget is BLOCKED (needs a human decision, e.g.
       // raising the cap), not FAILED — the work may be nearly done.
       if (err instanceof MissionBudgetExceededError) {
-        this.store.emit(runId, "run.error", { message: err.message });
+        // One truth: the mission is BLOCKED (a human can resume it or raise
+        // the allowance) — the run status must agree, not say "error".
+        this.store.emit(runId, "run.blocked", { terminal: true, message: err.message, code: "BUDGET_EXCEEDED" });
         this.store.emit(runId, "mission.blocked", { missionId: mission.id, reason: err.message });
         this.taskEngine.setMissionStatus(mission.id, "BLOCKED");
-        this.store.setStatus(runId, "error");
+        this.store.setStatus(runId, "blocked");
         return;
       }
       this.store.emit(runId, "run.error", { message: err.message });
@@ -527,12 +694,9 @@ export class MultiAgentRuntime {
         }
         await sandbox.stop().catch(() => {});
 
-        // Restore the host tool set exactly as it was.
-        if (originalTerminal) this.tools.register(originalTerminal);
-        if (originalRunCommand) this.tools.register(originalRunCommand);
-        for (const [name, permission] of savedPermissions) this.tools.setPermission(name, permission);
       }
     }
+    this.runTools.delete(runId);
   }
 
   // One task through the worker + Astra's per-task review, with rework retries.
@@ -544,6 +708,49 @@ export class MultiAgentRuntime {
     reviewer: AIModelProvider,
     rules?: string
   ): Promise<void> {
+    // Delegation policy BEFORE any execution: a task the planner sized below
+    // its role's threshold does not spawn a specialist worker at all. The
+    // orchestrator model executes it directly in the same bounded tool loop
+    // and skips the dedicated review round — the mission-level Review Engine
+    // still gates the end. No `files` estimate means "unknown", and unknown
+    // always delegates.
+    const scopedFiles = this.taskScope.get(task.id);
+    const delegated = scopedFiles === undefined ? true : shouldDelegate(task.agent, { files: scopedFiles });
+
+    if (!delegated) {
+      task.attempts++;
+      this.taskEngine.transition(mission.id, task.id, "RUNNING");
+      const executor = this.models.resolveRole("orchestrator");
+      this.bus.agentStarted(runId, task.agent, task.id, executor.config.id);
+      this.store.emit(runId, "task.started", {
+        taskId: task.id,
+        description: task.description,
+        agent: task.agent,
+        attempt: task.attempts,
+        executorModel: executor.config.id,
+        direct: true,
+      });
+      const result = await this.modelService.usage.with(
+        { missionId: mission.id, taskId: task.id, agent: task.agent },
+        () => this.runWorker(runId, executor, task, goal, mission.projectRoot, rules, { direct: true })
+      );
+      task.result = result.summary;
+      if (result.status === "completed") {
+        this.taskEngine.transition(mission.id, task.id, "COMPLETED");
+        this.store.emit(runId, "review.skipped", {
+          taskId: task.id,
+          reason: `below delegation threshold (${scopedFiles} file(s)) — direct execution, covered by the mission review`,
+        });
+        this.bus.agentCompleted(runId, task.agent, task.id, true);
+      } else {
+        this.taskEngine.transition(mission.id, task.id, result.status === "cancelled" ? "BLOCKED" : "FAILED");
+        this.store.emit(runId, "task.failed", { taskId: task.id, reason: result.errors[0] ?? "direct execution did not finish" });
+        this.bus.agentCompleted(runId, task.agent, task.id, false);
+      }
+      this.store.emit(runId, "task.completed", { taskId: task.id, status: task.status });
+      return;
+    }
+
     let accepted = false;
 
     while (task.attempts <= MAX_REVISIONS && !accepted) {
@@ -564,7 +771,20 @@ export class MultiAgentRuntime {
         { missionId: mission.id, taskId: task.id, agent: task.agent },
         () => this.runWorker(runId, worker, task, goal, mission.projectRoot, rules)
       );
-      task.result = result;
+      task.result = result.summary;
+
+      // A worker that died (deadline, budget, exhausted failover) did not
+      // finish — failing the task is more truthful than reviewing a corpse.
+      if (result.status !== "completed") {
+        if (result.status === "cancelled") {
+          this.taskEngine.transition(mission.id, task.id, "BLOCKED");
+        } else {
+          this.taskEngine.transition(mission.id, task.id, "FAILED");
+          this.store.emit(runId, "task.failed", { taskId: task.id, reason: result.errors[0] ?? "worker did not finish" });
+        }
+        this.bus.agentCompleted(runId, task.agent, task.id, false);
+        break;
+      }
 
       this.taskEngine.transition(mission.id, task.id, "REVIEW");
       this.store.emit(runId, "review.started", { taskId: task.id, reviewerModel: reviewer.config.id });
@@ -618,7 +838,7 @@ export class MultiAgentRuntime {
     const summary = await this.modelService.usage.with(
       { missionId: mission.id, agent: "orchestrator" },
       () =>
-        generateEnglish(astra, {
+        this.callWithFailover(runId, astra, {
       messages: [
         {
           role: "system",
@@ -637,7 +857,7 @@ export class MultiAgentRuntime {
         },
       ],
         signal: modelCallSignal(this.signalFor(runId)),
-        })
+        }, "summarizer")
     );
 
     if (this.isCancelled(runId) || this.store.get(runId)?.status === "cancelled") return;
@@ -646,10 +866,90 @@ export class MultiAgentRuntime {
       this.store.emit(runId, "message.delta", { content: chunk });
     }
     this.store.emit(runId, "message.completed", {});
-    // The terminal event names the outcome — a blocked mission must never
-    // arrive as "run.completed", or a listener that trusts the event name
-    // renders ✓ Completed for work that failed review.
-    if (blocked) {
+
+    // ── Settlement: review approval is evidence, not the verdict ─────────
+    // The Review Engine is an LLM judgment; the terminal status is decided by
+    // machine criteria — every task completed, the mission review passed,
+    // AND the intent-derived evidence exists (files written, tests run,
+    // browser verification for UI work). A requested "completed" that fails
+    // the criteria settles as partial — never upgraded.
+    const intent = inferTaskIntent(goal);
+    const events = this.store.get(runId)?.events ?? [];
+    const wroteFiles = mission.tasks.some((t) => t.agent === "coder" || t.agent === "git");
+    const criteria: SettlementCriterion[] = [
+      {
+        id: "tasks",
+        required: true,
+        status: mission.tasks.every((t) => t.status === "COMPLETED")
+          ? "pass"
+          : mission.tasks.some((t) => t.status === "FAILED")
+            ? "fail"
+            : "unverified",
+        detail: `${done}/${mission.tasks.length} tasks completed`,
+      },
+      {
+        id: "review",
+        required: true,
+        status: blocked ? "fail" : "pass",
+        detail: blocked ? "the mission review was not approved" : undefined,
+      },
+      // Evidence criteria derived from the classified intent — the same
+      // machine checks the single-agent settlement runs.
+      ...settlementCriteria({
+        instruction: goal,
+        events,
+        needsArtifact: intent.requiresArtifact,
+        // A workspace write is required only when the plan actually contained
+        // file-mutating work — a remote deploy produces no local file events.
+        needsWorkspaceWrite: intent.requiresWorkspace && wroteFiles,
+        needsTests: /\b(test|typecheck|lint|build)\b/i.test(goal),
+        website: false,
+        needsVisual: intent.requiresDesktop,
+        verifierVerdict: null,
+        implementationWork: false,
+      }),
+    ];
+    if (intent.requiresBrowserVerification) {
+      // UI work must be verified in a browser — a code diff alone is not
+      // evidence the page behaves. The browser worker's tools supply it.
+      const verified = events.some(
+        (e) =>
+          e.type === "verification.completed" ||
+          (e.type === "tool.completed" && /^browser_/.test(String(e.data?.tool ?? "")))
+      );
+      criteria.push({
+        id: "browser_verification",
+        required: true,
+        status: verified ? "pass" : "not_run",
+        detail: verified ? undefined : "the UI change was never checked in a browser",
+      });
+    }
+    const summaryText = (summary.content ?? "").trim();
+    const verdict = settleResult({
+      request: { status: blocked ? "blocked" : "completed", summary: summaryText || "The mission ended." },
+      criteria,
+    });
+    const settled = verdict.accepted ? verdict.status : "partial";
+    this.store.emit(runId, "mission.settled", {
+      missionId: mission.id,
+      requested: blocked ? "blocked" : "completed",
+      status: settled,
+      summary: (verdict.accepted ? verdict.summary : summaryText).slice(0, 500),
+      criteria,
+      viaContract: false,
+    });
+
+    // The terminal event names the outcome — a listener that trusts the event
+    // name can never render ✓ Completed for a blocked or partial mission.
+    if (settled === "completed") {
+      this.store.emit(runId, "run.completed", {
+        tasksTotal: mission.tasks.length,
+        tasksCompleted: done,
+        tasksFailed: mission.tasks.length - done,
+        missionStatus,
+      });
+      this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
+    } else if (settled === "blocked") {
       this.store.emit(runId, "run.blocked", {
         terminal: true,
         message: "Mission failed final review — your decision is needed.",
@@ -658,36 +958,97 @@ export class MultiAgentRuntime {
         tasksFailed: mission.tasks.length - done,
         missionStatus,
       });
-    } else {
-      this.store.emit(runId, "run.completed", {
+      this.taskEngine.setMissionStatus(mission.id, "BLOCKED");
+    } else if (settled === "partial") {
+      this.store.emit(runId, "run.partial", {
+        outcome: "partial",
         tasksTotal: mission.tasks.length,
         tasksCompleted: done,
         tasksFailed: mission.tasks.length - done,
         missionStatus,
       });
-      this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
+      // Work ended but incompletely — the mission ledger needs a decision.
+      this.taskEngine.setMissionStatus(mission.id, "BLOCKED");
+    } else {
+      this.store.emit(runId, "run.error", { message: summaryText.slice(0, 300) || "The mission failed.", code: "MISSION_FAILED" });
+      this.taskEngine.setMissionStatus(mission.id, "FAILED");
     }
     this.missionApproved.delete(runId);
-    this.store.setStatus(runId, blocked ? "blocked" : "completed");
+    for (const t of mission.tasks) this.taskScope.delete(t.id);
+    this.store.setStatus(
+      runId,
+      settled === "completed" ? "completed" : settled === "blocked" ? "blocked" : settled === "failed" ? "error" : "partial"
+    );
   }
 
   private workerModelFor(role: AgentRole): AIModelProvider {
     return this.models.resolveRole(role);
   }
 
+  /**
+   * Every mission model call goes through the same provider failover the
+   * worker loop uses: planner, task reviewers and the summarizer are not
+   * exempt — a provider dying mid-mission must fail over to a compatible
+   * provider, not fail the mission.
+   */
+  private async callWithFailover(
+    runId: string,
+    provider: AIModelProvider,
+    request: Parameters<typeof generateEnglish>[1],
+    role: string
+  ): Promise<Awaited<ReturnType<typeof generateEnglish>>> {
+    try {
+      return await generateEnglish(provider, request);
+    } catch (err) {
+      if (this.isCancelled(runId)) throw err;
+      const fallback = this.fallbackWorker(provider);
+      if (!fallback) throw err;
+      markModelUnavailable(provider.config.id, String((err as Error)?.message ?? err).slice(0, 200));
+      this.store.emit(runId, "model.fallback", {
+        role,
+        previousModel: provider.config.id,
+        actualModel: fallback.config.id,
+        reason: String((err as Error)?.message ?? err).slice(0, 200),
+        failure: "provider",
+      });
+      return generateEnglish(fallback, request);
+    }
+  }
+
+  /**
+   * A compatible replacement when the worker's model fails mid-task: prefer
+   * the SAME model on another provider, then any agent-capable tool model —
+   * the same ordering the main runtime's failover uses.
+   */
+  private fallbackWorker(current: AIModelProvider): AIModelProvider | undefined {
+    const registered = this.modelService.registry.list();
+    const usable = (p: AIModelProvider) =>
+      p.config.id !== current.config.id &&
+      p.config.capabilities?.agent !== false &&
+      p.supportsTools() &&
+      !isModelUnavailable(p.config.id);
+    const sameModel = registered.find((p) => usable(p) && p.config.apiModelId && p.config.apiModelId === current.config.apiModelId);
+    return sameModel ?? registered.find(usable);
+  }
+
   // Runs one task on the worker's model with the worker's tool subset and the
-  // standard approval gates. Returns a transcript for the reviewer.
+  // standard approval gates. Returns the structured WorkerResult — the
+  // reviewer consumes its summary/evidence, never a raw transcript it must
+  // parse for claims. `direct` mode: the orchestrator executes a small task
+  // itself — same bounded loop, no specialist framing.
   private async runWorker(
     runId: string,
     worker: AIModelProvider,
     task: Task,
     goal: string,
     projectRoot: string,
-    rules?: string
-  ): Promise<string> {
+    rules?: string,
+    opts?: { direct?: boolean }
+  ): Promise<WorkerResult> {
     const workerStart = Date.now();
-    const workerId = `w_${task.agent}_${task.id.slice(-6)}`;
-    this.store.emit(runId, "worker.started", { workerId, role: task.agent, task: task.description.slice(0, 120) });
+    const direct = opts?.direct === true;
+    const workerId = `${direct ? "direct" : "w"}_${task.agent}_${task.id.slice(-6)}`;
+    this.store.emit(runId, "worker.started", { workerId, role: task.agent, task: task.description.slice(0, 120), ...(direct ? { direct: true } : {}) });
     // Targeted context, not the whole repo (Context Engine v1: ripgrep + diff).
     const context = await this.contextEngine.buildTaskContext(
       task.description,
@@ -706,11 +1067,19 @@ export class MultiAgentRuntime {
       ? `Browser verification task. Target the URL described in YOUR TASK. Do NOT receive or use the parent conversation.`
       : `Code task. Scope: ${task.description.slice(0, 120)}`;
 
+    const rolePrompt = direct
+      ? [
+          "You are ORION executing a small task directly — no delegation ceremony.",
+          "Complete ONLY the assigned task with the tools, then state plainly what you did.",
+          "Keep it tight: this task was sized small enough to skip specialist delegation.",
+        ].join("\n")
+      : WORKER_PROMPTS[task.agent] ?? WORKER_PROMPTS.coder;
+
     const messages: AIMessage[] = [
       {
         role: "system",
         content: [
-          WORKER_PROMPTS[task.agent] ?? WORKER_PROMPTS.coder,
+          rolePrompt,
           CONVERSATION_STYLE,
           LANGUAGE_RULE,
           scopedContext,
@@ -735,20 +1104,72 @@ export class MultiAgentRuntime {
     ];
 
     const transcript: string[] = [];
-    const toolDefs = this.toolDefinitionsFor(task.agent);
+    const evidence: string[] = [];
+    const artifacts: string[] = [];
+    const errors: string[] = [];
+    let failedReason: string | undefined;
+    const tools = this.gatewayFor(runId);
+    const toolDefs = this.toolDefinitionsFor(task.agent, runId);
 
-    for (let step = 0; step < MAX_EXECUTOR_STEPS; step++) {
+    // Per-worker wall-clock deadline and token budget — a hung or runaway
+    // worker unwinds the task instead of holding the mission slot forever.
+    const deadline = Date.now() + DELEGATION_POLICY.workerTimeoutMs;
+    const workerSignal = () =>
+      AbortSignal.any([this.signalFor(runId), AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
+    let workerTokens = 0;
+    let workerCredits = 0;
+    let modelCalls = 0;
+    let modelRetries = 0;
+    const MAX_MODEL_RETRIES = 2;
+
+    let step = 0;
+    for (; step < DELEGATION_POLICY.workerMaxModelCalls; step++) {
       // Unwind promptly rather than burning the worker's remaining steps.
       if (this.isCancelled(runId)) break;
+      if (Date.now() >= deadline) {
+        failedReason = `worker deadline exceeded (${Math.round(DELEGATION_POLICY.workerTimeoutMs / 1000)}s)`;
+        this.store.emit(runId, "worker.timeout", { workerId, taskId: task.id, kind: "wall_clock", budgetMs: DELEGATION_POLICY.workerTimeoutMs });
+        transcript.push(`Worker timed out after ${Math.round(DELEGATION_POLICY.workerTimeoutMs / 1000)}s`);
+        errors.push(failedReason);
+        break;
+      }
       // Safe boundary: deliver any steered user instructions to the model.
       for (const t of this.store.takeSteer(runId)) {
         messages.push({ role: "user", content: `[User steering instruction — applies from now on] ${t}` });
       }
       let response;
       try {
-        response = await generateEnglish(worker, { messages, tools: toolDefs, signal: modelCallSignal(this.signalFor(runId)) });
+        // Mission-scoped metering: worker calls count against the mission's
+        // runaway-guard budget (and the tenant ledger) like every other call.
+        response = await this.modelService.usage.with(
+          { missionId: task.missionId, taskId: task.id, agent: task.agent },
+          () => generateEnglish(worker, { messages, tools: toolDefs, signal: modelCallSignal(workerSignal()) })
+        );
+        modelCalls++;
+        modelRetries = 0;
       } catch (err: any) {
         if (this.isCancelled(runId)) break;
+        // Provider/model failure: failover to a compatible model before
+        // giving up — same model on another provider first, like the main
+        // runtime. A worker that dies on a transient provider error is a
+        // false failure, not a task failure.
+        if (modelRetries < MAX_MODEL_RETRIES && Date.now() < deadline) {
+          const fallback = this.fallbackWorker(worker);
+          if (fallback) {
+            markModelUnavailable(worker.config.id, String(err?.message ?? err).slice(0, 200));
+            this.store.emit(runId, "model.fallback", {
+              taskId: task.id,
+              workerId,
+              previousModel: worker.config.id,
+              actualModel: fallback.config.id,
+              reason: String(err?.message ?? err).slice(0, 200),
+              failure: "provider",
+            });
+            worker = fallback;
+            modelRetries++;
+            continue;
+          }
+        }
         // Surface it — a silent break here looks like the agent "gave up
         // after one tool call" in the UI, which is undebuggable.
         this.store.emit(runId, "tool.failed", {
@@ -756,7 +1177,29 @@ export class MultiAgentRuntime {
           tool: "model",
           error: `Worker model error: ${String(err.message).slice(0, 300)}`,
         });
+        failedReason = `worker model error: ${String(err.message).slice(0, 300)}`;
+        errors.push(failedReason);
         transcript.push(`Worker model error: ${err.message}`);
+        break;
+      }
+
+      const usage = (response as { usage?: { promptTokens?: number; completionTokens?: number } }).usage;
+      if (usage) {
+        workerTokens += (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0);
+        workerCredits += creditsFor(worker.config.id, usage);
+      }
+      if (workerTokens > DELEGATION_POLICY.workerTokenBudget) {
+        failedReason = `worker token budget exhausted (${workerTokens}/${DELEGATION_POLICY.workerTokenBudget})`;
+        this.store.emit(runId, "worker.budget", { workerId, taskId: task.id, kind: "tokens", used: workerTokens, limit: DELEGATION_POLICY.workerTokenBudget });
+        transcript.push(`Worker token budget exhausted (${workerTokens}/${DELEGATION_POLICY.workerTokenBudget})`);
+        errors.push(failedReason);
+        break;
+      }
+      if (workerCredits > DELEGATION_POLICY.workerCreditBudget) {
+        failedReason = `worker credit budget exhausted (${Math.round(workerCredits)}/${DELEGATION_POLICY.workerCreditBudget})`;
+        this.store.emit(runId, "worker.budget", { workerId, taskId: task.id, kind: "credits", used: Math.round(workerCredits), limit: DELEGATION_POLICY.workerCreditBudget });
+        transcript.push(`Worker credit budget exhausted (${Math.round(workerCredits)}/${DELEGATION_POLICY.workerCreditBudget})`);
+        errors.push(failedReason);
         break;
       }
 
@@ -793,7 +1236,7 @@ export class MultiAgentRuntime {
 
         this.bus.agentToolCall(runId, task.agent, call.name, task.id);
 
-        const permission = this.tools.getPermission(call.name);
+        const permission = tools.getPermission(call.name);
         if (permission === "denied") {
           // In sandbox mode the denial is a redirection, not a flat no — tell
           // the agent the sandbox path instead of leaving it to guess.
@@ -851,9 +1294,15 @@ export class MultiAgentRuntime {
 
         const terminalLike = ["terminal", "run_command"].includes(call.name);
         if (terminalLike) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command, taskId: task.id });
-        let result = await this.tools.execute(call.name, call.arguments, task.agent, {
-          signal: this.signalFor(runId),
+        let result = await tools.execute(call.name, call.arguments, task.agent, {
+          signal: Date.now() < deadline ? workerSignal() : this.signalFor(runId),
           onOutput: terminalLike ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, content: chunk, taskId: task.id }) : undefined,
+          // Reaching execute() with permission "ask" means the call was
+          // sanctioned above — interactively approved or covered by an earlier
+          // "Allow for Mission". The registry boundary requires that evidence.
+          approval: permission === "ask"
+            ? { granted: true, scope: missionApproved ? "mission" : "once", approvalId: call.id, grantedBy: "user" }
+            : undefined,
         });
         result = requirePersistedArtifacts(call.name, result);
         if (terminalLike) this.store.emit(runId, "terminal.completed", { callId: call.id, exitCode: result.ok ? 0 : 1, taskId: task.id });
@@ -862,6 +1311,7 @@ export class MultiAgentRuntime {
           const isTerminal = ["terminal", "run_command", "ssh_exec"].includes(call.name);
           const persisted = FILE_PRODUCING_TOOLS.has(call.name) ? parsePersistedArtifacts(output, result.artifacts) : [];
           for (const art of persisted) {
+            artifacts.push(art.artifactId);
             this.store.emit(runId, "artifact.created", {
               artifactId: art.artifactId,
               id: art.artifactId,
@@ -889,23 +1339,81 @@ export class MultiAgentRuntime {
           });
           // The transcript is the reviewer's evidence: include real output, not
           // just "-> ok", or the reviewer will reject verified work as unproven.
-          const evidence = (result.output ?? "").replace(/\s+/g, " ").slice(0, 400);
-          transcript.push(`${call.name}(${JSON.stringify(call.arguments).slice(0, 160)}) -> ok${evidence ? `: ${evidence}` : ""}`);
+          const evidenceLine = (result.output ?? "").replace(/\s+/g, " ").slice(0, 400);
+          if (evidenceLine) evidence.push(`${call.name}: ${evidenceLine}`);
+          transcript.push(`${call.name}(${JSON.stringify(call.arguments).slice(0, 160)}) -> ok${evidenceLine ? `: ${evidenceLine}` : ""}`);
           messages.push({ role: "tool", name: call.name, toolCallId: call.id, content: clampToolOutput(result.output ?? "", MAX_TOOL_OUTPUT_CHARS).text });
         } else {
-          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: result.error, ...(result.envelope ? { envelope: envelopeForEvent({ ...result.envelope, toolUseId: call.id }) } : {}) });
-          transcript.push(`${call.name} -> FAILED: ${result.error}`);
+          // Typed error taxonomy — the same recovery model the main runtime
+          // uses: repairable args, retryable transients, permission/policy
+          // denials and capability gaps each carry distinct guidance, so the
+          // worker isn't told to "try a different approach" for a transient
+          // timeout (or to retry a flat denial).
+          const classified = classifyToolError({ tool: call.name, error: result.error, errorType: result.errorType });
+          this.store.emit(runId, "tool.error.classified", {
+            callId: call.id,
+            tool: call.name,
+            taskId: task.id,
+            errorClass: classified.toolErrorClass,
+            code: classified.code,
+          });
+          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: result.error, errorClass: classified.toolErrorClass, ...(result.envelope ? { envelope: envelopeForEvent({ ...result.envelope, toolUseId: call.id }) } : {}) });
+          errors.push(`${call.name} [${classified.toolErrorClass}]: ${result.error}`);
+          transcript.push(`${call.name} -> FAILED [${classified.toolErrorClass}]: ${result.error}`);
           messages.push({
             role: "tool",
             name: call.name,
             toolCallId: call.id,
-            content: `FAILED: ${result.error}. Diagnose and try a different approach.`,
+            content: `FAILED: ${result.error}. ${recoveryGuidance(classified)}`,
           });
         }
       }
     }
 
-    return transcript.join("\n").slice(0, 8000);
+    // A worker that burned its whole model-call allowance without finishing
+    // did not complete — "the loop simply ended" must never read as success.
+    if (!failedReason && !this.isCancelled(runId) && step >= DELEGATION_POLICY.workerMaxModelCalls) {
+      failedReason = `worker model-call budget exhausted (${modelCalls}/${DELEGATION_POLICY.workerMaxModelCalls})`;
+      this.store.emit(runId, "worker.budget", { workerId, taskId: task.id, kind: "model_calls", used: modelCalls, limit: DELEGATION_POLICY.workerMaxModelCalls });
+      transcript.push(`Worker model-call budget exhausted (${modelCalls}/${DELEGATION_POLICY.workerMaxModelCalls})`);
+      errors.push(failedReason);
+    }
+
+    const status: WorkerResult["status"] = this.isCancelled(runId)
+      ? "cancelled"
+      : failedReason
+        ? "failed"
+        : "completed";
+    // The structured result is what the orchestrator, reviewer and ledger
+    // consume — a string transcript alone loses what the machine knows.
+    const outcome: WorkerResult = {
+      workerId,
+      role: task.agent,
+      task: task.description,
+      status,
+      summary: transcript.join("\n").slice(0, 8000) || "(no output)",
+      evidence: evidence.slice(0, 20),
+      artifacts,
+      errors: errors.slice(0, 20),
+      tokensUsed: workerTokens,
+      creditsUsed: Math.round(workerCredits * 100) / 100,
+      modelCalls,
+      durationMs: Date.now() - workerStart,
+    };
+    this.store.emit(runId, status === "completed" ? "worker.completed" : status === "cancelled" ? "worker.cancelled" : "worker.failed", {
+      workerId,
+      role: task.agent,
+      taskId: task.id,
+      status,
+      tokensUsed: outcome.tokensUsed,
+      creditsUsed: outcome.creditsUsed,
+      modelCalls: outcome.modelCalls,
+      durationMs: outcome.durationMs,
+      artifactCount: artifacts.length,
+      errorCount: errors.length,
+      ...(failedReason ? { reason: failedReason } : {}),
+    });
+    return outcome;
   }
 
   // ORION (reviewer model) judges each task result strictly. A malformed
@@ -917,7 +1425,7 @@ export class MultiAgentRuntime {
     task: Task
   ): Promise<{ approved: boolean; notes: string }> {
     try {
-      const response = await generateEnglish(reviewer, {
+      const response = await this.callWithFailover(runId, reviewer, {
         messages: [
           {
             role: "system",
@@ -938,7 +1446,7 @@ export class MultiAgentRuntime {
           },
         ],
         signal: modelCallSignal(this.signalFor(runId)),
-      });
+      }, "task_reviewer");
       const parsed = extractJson(response.content);
       return {
         approved: parsed.approved === true,

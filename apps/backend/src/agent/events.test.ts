@@ -68,24 +68,31 @@ test("in-memory store still works with no directory (durability opt-out)", () =>
   assert.equal(store.get("run-ccc")?.events.length, 1);
 });
 
-test("a run that was in-flight at shutdown replays as an honest error, not a ghost", () => {
+test("a run that was in-flight at shutdown replays as an honest blocked run, not a ghost", () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-runs-"));
   try {
     const live = new RunStore(dir);
     live.create("run-ddd", "C:/proj");
+    live.bindWorkspace("run-ddd", "ws_ddd");
     live.emit("run-ddd", "run.started", { instruction: "long work" });
     live.setStatus("run-ddd", "awaiting_approval"); // process dies here
 
     const revived = new RunStore(dir);
     const run = revived.get("run-ddd");
-    assert.equal(run?.status, "error", "non-terminal run replayed as error");
-    const ghost = run?.events.find((e) => e.type === "run.error");
+    // Blocked, not error: a resumable interruption is not a failure, and
+    // blocked is the settled-but-holds-retained state resume unblocks.
+    assert.equal(run?.status, "blocked", "non-terminal run replayed as blocked/resumable");
+    const ghost = run?.events.find((e) => e.type === "run.blocked");
     assert.match(String(ghost?.data.message), /restarted/i);
+    assert.equal(ghost?.data.reason, "backend_restart");
+    assert.equal(ghost?.data.resumable, true);
     // The durable-checkpoint marker follows it: this is a resumable
     // interruption, not a dead run.
     const last = run?.events[run.events.length - 1];
     assert.equal(last?.type, "mission.interrupted");
     assert.equal(last?.data.resumable, true);
+    // The workspace binding survived the restart too.
+    assert.equal(run?.workspaceId, "ws_ddd");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

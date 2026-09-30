@@ -671,7 +671,10 @@ v1Router.post("/tools/:name/execute", async (req, res) => {
   if (permission === "ask" && req.body.approved !== true) {
     return res.status(428).json({ error: "Approval required", requiresApproval: true });
   }
-  const result = await tr.execute(req.params.name, req.body.args ?? {});
+  const result = await tr.execute(req.params.name, req.body.args ?? {}, {
+    // The registry fails closed on "ask" — carry the grant this route checked.
+    ...(permission === "ask" ? { approval: { granted: true, scope: "once" as const, grantedBy: "user" as const } } : {}),
+  });
   res.json(result);
 });
 

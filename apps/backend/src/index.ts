@@ -345,7 +345,10 @@ wss.on("connection", (socket, req) => {
         // The chat researches on its own: web_search / fetch_url through the tool gateway.
         // Before a project is opened the gateway has no tools yet; the chat's own tools still work.
         execute: (name, args) => {
-          if (tenant.toolGateway.list().some((t) => t.name === name)) return tenant.toolGateway.execute(name, args);
+          // The chat has no per-tool approval UI: its own tool set is
+          // internally sanctioned. Flat "denied" still blocks at the registry.
+          const approval = { granted: true, scope: "internal", grantedBy: "runtime" } as const;
+          if (tenant.toolGateway.list().some((t) => t.name === name)) return tenant.toolGateway.execute(name, args, undefined, { approval });
           const own = chatOwnTool(tenant, name);
           return own ? own.execute(args, {} as any) : Promise.resolve({ ok: false, error: `Unknown tool "${name}"` });
         },

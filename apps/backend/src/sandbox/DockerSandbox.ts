@@ -23,6 +23,7 @@ import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
+import type { SandboxExecRequest, SandboxExecResult, SandboxProcess } from "../ai/tools/sandboxTools";
 
 const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:22-slim";
 /** Whole-mission wall clock, minutes. A wedged mission must not hold a box. */
@@ -48,7 +49,12 @@ function docker(args: string[], opts: { timeoutMs?: number; maxBuffer?: number }
   });
 }
 
-export interface ExecOptions { timeoutS?: number; signal?: AbortSignal; onOutput?: (chunk: string) => void; }
+export interface ExecOptions {
+  timeoutS?: number;
+  signal?: AbortSignal;
+  onOutput?: (chunk: string) => void;
+  onOutputChunk?: (chunk: { stream: "stdout" | "stderr"; data: string }) => void;
+}
 
 export interface ExecResult {
   ok: boolean;
@@ -57,10 +63,20 @@ export interface ExecResult {
   timedOut: boolean;
 }
 
+/** Host-side bookkeeping for a background process running in the container. */
+interface ProcMeta {
+  proc: SandboxProcess;
+  logFile: string;
+  statusFile: string;
+  /** Inner command pid — the process group members die with this. */
+  innerPidFile: string;
+}
+
 export class DockerSandbox {
   readonly containerId: string;
   private stopped = false;
   private wallClock?: NodeJS.Timeout;
+  private processes = new Map<string, ProcMeta>();
 
   private constructor(containerId: string) {
     this.containerId = containerId;
@@ -143,32 +159,148 @@ export class DockerSandbox {
     });
   }
 
-  /** Runs a command inside the sandbox with a per-command timeout. */
-  async exec(command: string, timeoutOrOptions: number | ExecOptions = COMMAND_TIMEOUT_S): Promise<ExecResult> {
-    if (this.stopped) return { ok:false, output:"Sandbox has already been stopped.", exitCode:-1, timedOut:false };
-    const opts: ExecOptions = typeof timeoutOrOptions === "number" ? { timeoutS: timeoutOrOptions } : timeoutOrOptions;
+  /**
+   * Runs a command inside the sandbox with a per-command timeout.
+   * `workdir` is passed to `docker exec -w` (native cwd — no `cd` shell
+   * wrapping); omitted for the legacy exec() path, whose callers compose
+   * `cd` into the command themselves.
+   */
+  private spawnExec(command: string, opts: ExecOptions & { workdir?: string }): Promise<SandboxExecResult> {
     const timeoutS = opts.timeoutS ?? COMMAND_TIMEOUT_S;
-    return await new Promise((resolve) => {
+    return new Promise((resolve) => {
       const commandId = `orvyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const pidFile = `/tmp/${commandId}.pid`;
-      // Record the in-container shell PID. On cancellation we kill that PID as
-      // well as the local docker client, so Stop does not leave a build/test
-      // process running invisibly inside the mission container.
-      const wrapped = `echo $ > ${pidFile}; exec timeout --signal=KILL ${Math.max(1, Math.floor(timeoutS))} sh -c "$1"`;
-      const child = spawn("docker", ["exec", this.containerId, "sh", "-c", wrapped, "orvyn-command", command], { windowsHide:true });
-      let output = ""; let outputBytes = 0; let truncated = false; let settled = false;
+      // Record the in-container process-group leader (setsid), so Stop kills
+      // the WHOLE tree — a bare kill of `timeout` would orphan its child.
+      const wrapped = `echo $$ > ${pidFile}; exec setsid timeout --signal=KILL ${Math.max(1, Math.floor(timeoutS))} sh -c "$1"`;
+      const child = spawn("docker", ["exec", ...(opts.workdir ? ["-w", opts.workdir] : []), this.containerId, "sh", "-c", wrapped, "orvyn-command", command], { windowsHide:true });
+      let stdout = "", stderr = "", output = ""; let outputBytes = 0; let truncated = false; let settled = false;
       const timer = setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, (timeoutS + 10) * 1000);
-      const push = (d: any) => { const s=String(d); opts.onOutput?.(s); const bytes=Buffer.byteLength(s); if(outputBytes < MAX_RETAINED_OUTPUT){ const room=MAX_RETAINED_OUTPUT-outputBytes; const kept=Buffer.from(s).subarray(0,room).toString(); output+=kept; outputBytes+=Buffer.byteLength(kept); if(bytes>room) truncated=true; } else truncated=true; };
-      child.stdout.on("data", push); child.stderr.on("data", push);
-      const abort = () => { void docker(["exec", this.containerId, "sh", "-c", `test -f ${pidFile} && kill -KILL $(cat ${pidFile}) 2>/dev/null || true`], { timeoutMs: 5000 }); child.kill("SIGKILL"); };
+      const push = (stream: "stdout" | "stderr") => (d: any) => {
+        const s = String(d);
+        if (stream === "stdout") stdout += s; else stderr += s;
+        opts.onOutputChunk?.({ stream, data: s });
+        opts.onOutput?.(s);
+        const bytes = Buffer.byteLength(s);
+        if (outputBytes < MAX_RETAINED_OUTPUT) {
+          const room = MAX_RETAINED_OUTPUT - outputBytes;
+          const kept = Buffer.from(s).subarray(0, room).toString();
+          output += kept; outputBytes += Buffer.byteLength(kept);
+          if (bytes > room) truncated = true;
+        } else truncated = true;
+      };
+      child.stdout.on("data", push("stdout")); child.stderr.on("data", push("stderr"));
+      const abort = () => { void docker(["exec", this.containerId, "sh", "-c", `test -f ${pidFile} && { kill -KILL -- -$(cat ${pidFile}) 2>/dev/null; kill -KILL $(cat ${pidFile}) 2>/dev/null; } || true`], { timeoutMs: 5000 }); child.kill("SIGKILL"); };
       opts.signal?.addEventListener("abort", abort, { once:true });
       child.on("close", (code, sig) => {
         settled=true; clearTimeout(timer); opts.signal?.removeEventListener("abort", abort);
         const exitCode=code ?? (sig ? 137 : 1); const timedOut=exitCode===137 && !opts.signal?.aborted;
-        const suffix=truncated ? `\n[output truncated after ${MAX_RETAINED_OUTPUT} bytes]` : ""; resolve({ ok:exitCode===0, output:(output.trim()||"(no output)")+suffix, exitCode, timedOut });
+        const suffix=truncated ? `\n[output truncated after ${MAX_RETAINED_OUTPUT} bytes]` : "";
+        resolve({ ok:exitCode===0, stdout, stderr, output:(output.trim()||"(no output)")+suffix, exitCode, timedOut });
       });
-      child.on("error", (err) => { if(settled)return; settled=true; clearTimeout(timer); resolve({ok:false,output:String(err.message),exitCode:1,timedOut:false}); });
+      child.on("error", (err) => { if(settled)return; settled=true; clearTimeout(timer); resolve({ok:false,stdout:"",stderr:String(err.message),output:String(err.message),exitCode:1,timedOut:false}); });
     });
+  }
+
+  /** Runs a command inside the sandbox with a per-command timeout (legacy combined-output surface). */
+  async exec(command: string, timeoutOrOptions: number | ExecOptions = COMMAND_TIMEOUT_S): Promise<ExecResult> {
+    if (this.stopped) return { ok:false, output:"Sandbox has already been stopped.", exitCode:-1, timedOut:false };
+    const opts: ExecOptions = typeof timeoutOrOptions === "number" ? { timeoutS: timeoutOrOptions } : timeoutOrOptions;
+    return this.spawnExec(command, opts);
+  }
+
+  /**
+   * Structured execution: the provider resolves the workspace-relative cwd
+   * natively (docker -w) and stdout/stderr come back as separate fields.
+   */
+  async execStructured(req: SandboxExecRequest): Promise<SandboxExecResult> {
+    if (this.stopped) return { ok:false, stdout:"", stderr:"", output:"Sandbox has already been stopped.", exitCode:-1, timedOut:false };
+    return this.spawnExec(req.command, { ...req, workdir: req.cwd ? `/workspace/${req.cwd}` : "/workspace" });
+  }
+
+  /** Re-syncs the host project tree into /workspace (incremental enough for a per-verification refresh). */
+  async refresh(projectRoot: string): Promise<void> {
+    if (this.stopped) return;
+    await this.copyIn(projectRoot);
+  }
+
+  // ── Sandbox-native process lifecycle ────────────────────────────────────
+
+  /**
+   * Starts a background process inside the container. A supervising shell
+   * writes the process pid, tees output to a log file and records the exit
+   * code on completion — listProcesses/stopProcess/readLogs key off those.
+   */
+  async startProcess(req: { command: string; cwd?: string }): Promise<SandboxProcess> {
+    const id = `proc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    const workdir = req.cwd ? `/workspace/${req.cwd}` : "/workspace";
+    const logFile = `/tmp/${id}.log`;
+    const pidFile = `/tmp/${id}.pid`;
+    const innerPidFile = `/tmp/${id}.innerpid`;
+    const statusFile = `/tmp/${id}.status`;
+    // The supervisor waits on the command it spawned, so it lives exactly as
+    // long as the work, knows the inner pid (for stopProcess) and records the
+    // exit status on completion. $1 carries the model's command through the
+    // quoting layers untouched.
+    const launcher = `nohup sh -c 'sh -c "$1" > ${logFile} 2>&1 & echo $! > ${innerPidFile}; wait $!; echo $? > ${statusFile}' orvyn-proc "$1" > /dev/null 2>&1 & echo $! > ${pidFile}; cat ${pidFile}`;
+    const res = await docker(["exec", "-w", workdir, this.containerId, "sh", "-c", launcher, "orvyn-launcher", req.command], { timeoutMs: 15_000 });
+    const pid = Number(res.stdout.trim());
+    const proc: SandboxProcess = {
+      id,
+      command: req.command,
+      cwd: req.cwd ?? "",
+      pid: Number.isFinite(pid) ? pid : undefined,
+      startedAt: Date.now(),
+      status: res.code === 0 && Number.isFinite(pid) ? "running" : "failed",
+      ...(res.code === 0 ? {} : { exitCode: res.code }),
+    };
+    this.processes.set(id, { proc, logFile, statusFile, innerPidFile });
+    return proc;
+  }
+
+  async stopProcess(id: string): Promise<{ ok: boolean; error?: string }> {
+    const meta = this.processes.get(id);
+    if (!meta) return { ok: false, error: `Unknown sandbox process "${id}"` };
+    if (meta.proc.status !== "running") return { ok: true };
+    // Kill the inner command, then the supervisor waiting on it. Grandchild
+    // processes of the command are not individually tracked — the mission
+    // container teardown is their hard boundary.
+    await docker(
+      ["exec", this.containerId, "sh", "-c",
+        `test -f ${meta.innerPidFile} && kill -KILL $(cat ${meta.innerPidFile}) 2>/dev/null; ` +
+        `test -f ${meta.statusFile} || kill -KILL ${meta.proc.pid ?? -1} 2>/dev/null; ` +
+        `echo stopped > ${meta.statusFile}; true`],
+      { timeoutMs: 10_000 }
+    );
+    meta.proc.status = "stopped";
+    return { ok: true };
+  }
+
+  async processLogs(id: string, tail = 80): Promise<{ stdout: string; stderr: string }> {
+    const meta = this.processes.get(id);
+    if (!meta) throw new Error(`Unknown sandbox process "${id}"`);
+    const res = await docker(["exec", this.containerId, "sh", "-c", `test -f ${meta.logFile} && tail -n ${Math.max(1, tail)} ${meta.logFile} || true`], { timeoutMs: 10_000 });
+    return { stdout: res.stdout, stderr: "" };
+  }
+
+  async listProcesses(): Promise<SandboxProcess[]> {
+    const out: SandboxProcess[] = [];
+    for (const meta of this.processes.values()) {
+      if (meta.proc.status === "running") {
+        // A status file means the supervisor saw the process exit — read the
+        // recorded code; otherwise probe liveness with kill -0.
+        const probe = await docker(
+          ["exec", this.containerId, "sh", "-c", `if test -f ${meta.statusFile}; then cat ${meta.statusFile}; elif kill -0 ${meta.proc.pid ?? -1} 2>/dev/null; then echo RUNNING; else echo DEAD; fi`],
+          { timeoutMs: 10_000 }
+        );
+        const seen = probe.stdout.trim();
+        if (seen === "RUNNING") meta.proc.status = "running";
+        else if (seen === "DEAD") { meta.proc.status = "failed"; }
+        else { meta.proc.status = "exited"; meta.proc.exitCode = Number(seen); }
+      }
+      out.push({ ...meta.proc });
+    }
+    return out;
   }
 
   /** Copies /workspace out of the container into a host temp dir. */
@@ -212,10 +344,11 @@ export class DockerSandbox {
     return { mergedFiles: merged };
   }
 
-  /** Removes the container. Safe to call more than once. */
+  /** Removes the container — and with it every sandbox process. Safe to call more than once. */
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.processes.clear();
     if (this.wallClock) clearTimeout(this.wallClock);
     await docker(["rm", "-f", this.containerId], { timeoutMs: 30_000 });
   }

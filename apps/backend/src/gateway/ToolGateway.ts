@@ -60,8 +60,10 @@ export class ToolGateway {
   /**
    * Execute with the full permission stack:
    * 1. role capability check (if a role is supplied),
-   * 2. registry allowed/ask/denied ("ask" approval is obtained by the caller
-   *    BEFORE calling execute — the gateway refuses only flat denials).
+   * 2. workspace + execution-boundary checks,
+   * 3. registry allowed/ask/denied — "denied" refuses outright and "ask"
+   *    fails closed unless the context carries a ToolApproval grant the
+   *    caller already obtained (once / mission / internal).
    *
    * Every result comes back wrapped: `result.envelope` carries status, model
    * payload, user summary, structured data, evidence and retryable. A tool
@@ -90,19 +92,19 @@ export class ToolGateway {
 
     const verdict = this.permissions.checkRole(toolName, role);
     if (!verdict.allowed) {
-      return wrap({ ok: false, error: verdict.reason ?? "Denied by capability policy" }, true);
+      return wrap({ ok: false, error: verdict.reason ?? "Denied by capability policy", errorType: "PERMISSION_DENIED" }, true);
     }
     if (isProjectWorkspaceTool(toolName)) {
       let root = "";
       try {
         root = workspaceRootFor(undefined, context);
       } catch (err) {
-        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err) }, true);
+        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err), errorType: "PERMISSION_DENIED" }, true);
       }
       try {
         assertInsideWorkspace(root, toolName, args ?? {});
       } catch (err) {
-        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err) }, true);
+        return wrap({ ok: false, error: err instanceof Error ? err.message : String(err), errorType: "PERMISSION_DENIED" }, true);
       }
     }
     if (/^(write_file|read_file|edit_file|delete_file|create_file|apply_patch)$/.test(toolName)) {
@@ -111,15 +113,19 @@ export class ToolGateway {
         String(args.path ?? args.file ?? ""),
         context?.workspaceRoot ?? ""
       );
-      if (!decision.ok) return wrap({ ok: false, error: `${decision.code}: ${decision.error}` }, true);
+      if (!decision.ok) return wrap({ ok: false, error: `${decision.code}: ${decision.error}`, errorType: "PERMISSION_DENIED" }, true);
     }
     let result: ToolResult;
     try {
       result = await this.registry.execute(toolName, args, context);
     } catch (err) {
-      result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      result = { ok: false, error: err instanceof Error ? err.message : String(err), errorType: "EXECUTION_FAILED" };
     }
-    const denied = !result.ok && /^Tool "[^"]+" is denied/.test(String(result.error ?? ""));
+    const denied =
+      !result.ok &&
+      (result.errorType === "PERMISSION_DENIED" ||
+        result.errorType === "APPROVAL_REQUIRED" ||
+        /^Tool "[^"]+" is denied/.test(String(result.error ?? "")));
     return wrap(result, denied);
   }
 }

@@ -41,26 +41,10 @@ export function selectToolNames(
   });
 }
 
-export interface ToolParameterSchema {
-  required?: string[];
-  properties?: Record<string, { type?: string }>;
-}
-
-const REQUIRED_BY_TOOL: Record<string, string[]> = {
-  ssh_exec: ["host", "command"],
-  remote_exec: ["resourceId", "command"],
-  read_file: ["path"],
-  write_file: ["path", "content"],
-  edit_file: ["path"],
-  delete_file: ["path"],
-  terminal: ["command"],
-  run_command: ["command"],
-};
-
-/** Schema required fields plus the arguments this tool cannot run without. */
-export function requiredArgumentNames(name: string, schema?: ToolParameterSchema): string[] {
-  return [...new Set([...(schema?.required ?? []), ...(REQUIRED_BY_TOOL[name] ?? [])])];
-}
+// Argument validation lives at the contract layer (ai/toolArgs.ts) so the
+// registry boundary can enforce it; re-exported here for existing callers.
+export type { ToolParameterSchema } from "../ai/toolArgs";
+export { requiredArgumentNames, validateToolArguments } from "../ai/toolArgs";
 
 /** A website is published from the files the agent writes. A shell server is not available. */
 /** Static file servers a model reaches for to "preview" a plain site. Framework dev servers (vite, next, npm run dev) are not here. */
@@ -78,46 +62,6 @@ export function shellServerRefusal(command: string, frontend: boolean, staticSit
   if (!frontend && !staticSite) return null;
   if (!STATIC_SERVER.test(command) && !(staticSite && NODE_STATIC_SERVER.test(command))) return null;
   return "Do not start a web server for this site. ORVYN already publishes the live preview from the project files (it updates as they change) and shows it in the Preview tab; a localhost server cannot be opened by the user and dies with the process. To change the site, call write_file or edit_file on its files. To show it, tell the user it is in the Preview tab. Do not probe ports or processes.";
-}
-
-export function validateToolArguments(
-  name: string,
-  raw: unknown,
-  schema?: ToolParameterSchema
-): { ok: true; args: Record<string, unknown> } | {
-  ok: false;
-  error: string;
-  errorType: "INVALID_ARGUMENTS";
-  missing: string[];
-  invalid: string[];
-  retryable: true;
-} {
-  const args = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const required = requiredArgumentNames(name, schema);
-  const missing: string[] = [];
-  const invalid: string[] = [];
-  for (const field of required) {
-    const value = args[field];
-    if (value == null || (typeof value === "string" && value.trim() === "")) {
-      missing.push(field);
-      continue;
-    }
-    const expected = schema?.properties?.[field]?.type;
-    if (expected === "string" && typeof value !== "string") invalid.push(field);
-    else if ((expected === "number" || expected === "integer") && (typeof value !== "number" || !Number.isFinite(value))) invalid.push(field);
-    else if (expected === "boolean" && typeof value !== "boolean") invalid.push(field);
-    else if (expected === "array" && !Array.isArray(value)) invalid.push(field);
-    else if (expected === "object" && (value == null || typeof value !== "object" || Array.isArray(value))) invalid.push(field);
-  }
-  if (missing.length === 0 && invalid.length === 0) return { ok: true, args };
-  const quote = (names: string[]) => names.map((field) => `"${field}"`).join(", ");
-  const parts: string[] = [];
-  if (missing.length) parts.push(`${name} is missing required argument${missing.length === 1 ? "" : "s"} ${quote(missing)}.`);
-  if (invalid.length) parts.push(`${name} has invalid argument${invalid.length === 1 ? "" : "s"} ${quote(invalid)}.`);
-  if (name === "ssh_exec" || name === "remote_exec") {
-    parts.push("Do not call it with an empty host or command. If no server is connected, stop and ask for one.");
-  }
-  return { ok: false, error: parts.join(" "), errorType: "INVALID_ARGUMENTS", missing, invalid, retryable: true };
 }
 
 const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

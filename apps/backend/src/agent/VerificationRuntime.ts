@@ -17,8 +17,10 @@
 //      the last test/build run passed, the browser saw no errors;
 //   2. an adversarial verifier model with read-only tools, which must start
 //      its answer with "VERDICT: PASS|FAIL|PARTIAL".
-// The worst verdict wins. A verifier that cannot answer properly is a FAIL:
-// nothing is certified by default.
+// The worst verdict wins. A verifier that cannot answer certifies nothing:
+// its absence caps the verdict at PARTIAL — an infrastructure outage must
+// never certify the work as PASS, and the work is not "broken" just because
+// the verifier provider failed.
 //
 // Pattern after CoWork-OS VerificationRuntime (MIT): read-only verifier,
 // adversarial prompt, parsed verdict. Their runtime is not copied.
@@ -83,18 +85,34 @@ export interface VerificationResult {
   toolCalls: { tool: string; ok: boolean; blocked?: boolean }[];
 }
 
-/** What the verifier may call. Nothing here writes to the project. */
-/** Capabilities the verifier must be able to call. Names are the registry names. */
-export const REQUIRED_VERIFIER_CAPABILITIES = [
+/** Capabilities every verification run needs — the deterministic checks. */
+export const BASE_VERIFIER_CAPABILITIES = ["read_file", "git_status"] as const;
+
+/** Added only when the task can require a browser: visual/frontend work. */
+export const WEBSITE_VERIFIER_CAPABILITIES = [
   "browser_screenshot",
   "browser_console_errors",
   "browser_evidence",
-  "git_status",
 ] as const;
 
-export function missingVerifierCapabilities(registered: Iterable<string>): string[] {
+/** What the verifier may call. Nothing here writes to the project. */
+export const REQUIRED_VERIFIER_CAPABILITIES = [
+  ...WEBSITE_VERIFIER_CAPABILITIES,
+  ...BASE_VERIFIER_CAPABILITIES,
+] as const;
+
+/**
+ * The capabilities THIS task's verifier needs. A file-only/document task does
+ * not need a browser; a visual/frontend task does — a missing browser tool
+ * must not block verification for work that never required one.
+ */
+export function requiredVerifierCapabilities(opts: { website?: boolean } = {}): readonly string[] {
+  return opts.website === false ? BASE_VERIFIER_CAPABILITIES : REQUIRED_VERIFIER_CAPABILITIES;
+}
+
+export function missingVerifierCapabilities(registered: Iterable<string>, opts: { website?: boolean } = {}): string[] {
   const have = new Set(registered);
-  return REQUIRED_VERIFIER_CAPABILITIES.filter((name) => !have.has(name));
+  return requiredVerifierCapabilities(opts).filter((name) => !have.has(name));
 }
 
 export const VERIFIER_TOOLS = new Set([
@@ -208,14 +226,16 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
     }
   }
   const changedFiles = [...changed.values()];
-  // Task-aware verification: the browser check is REQUIRED only when this
-  // run changed an actual page. A standalone file task ("create
-  // demo-styles.css with a :root block") or a css/js-only edit to an
-  // inherited site must verify by file existence, references and syntax —
-  // spinning up browser verification for it produces fake "Partial"
-  // results. Intent classification alone (a css task "looks frontend") is
-  // not enough evidence; the changed files are.
+  // Task-aware verification. The browser check is REQUIRED when this run's
+  // work is visual: an HTML page changed, OR the task was classified frontend
+  // (opts.website) AND the change touched frontend file types — "make the
+  // navbar responsive" editing only styles.css is a visual change. A task
+  // with no frontend intent ("create demo-styles.css containing a :root
+  // block") is file-deliverable: it verifies by existence, references and
+  // syntax, never by a browser.
   const pageChanged = changedFiles.some((f) => /\.html?$/i.test(f.path));
+  const visualFrontendChange =
+    pageChanged || (opts.website === true && changedFiles.some((f) => WEBSITE_FILE.test(f.path)));
   return {
     goal,
     changedFiles,
@@ -225,7 +245,7 @@ export function collectVerificationEvidence(goal: string, events: EventLike[], o
     editTransitions,
     previewUrls: [...previews],
     lastChangeSequence: lastChange,
-    website: pageChanged,
+    website: visualFrontendChange,
   };
 }
 
@@ -411,6 +431,16 @@ function verifierPrompt(evidence: VerificationEvidence, deterministic: { finding
 export interface VerificationRuntimeDeps {
   tools: VerifierToolRunner;
   provider?: AIModelProvider;
+  /**
+   * Optional model-call executor with provider failover — runtimes pass their
+   * routing seam so a provider outage inside verification fails over like any
+   * other role instead of aborting the whole check. Without it, the raw
+   * provider.generate is used and failures degrade to "verifier unavailable".
+   */
+  generateModel?: (
+    provider: AIModelProvider,
+    request: { messages: AIMessage[]; tools?: ToolDefinition[]; signal?: AbortSignal }
+  ) => Promise<{ content?: string; toolCalls?: ToolCall[]; reasoningContent?: string }>;
   toolDefinitions?: ToolDefinition[];
   maxTurns?: number;
   signal?: AbortSignal;
@@ -474,6 +504,16 @@ export class VerificationRuntime {
     return { verdict, findings, checks: det.checks, report, modelVerdict, toolCalls };
   }
 
+  /** The verifier's model call, routed through the caller's failover seam when one was supplied. */
+  private async callModel(
+    provider: AIModelProvider,
+    request: { messages: AIMessage[]; tools?: ToolDefinition[]; signal?: AbortSignal }
+  ): Promise<{ content?: string; toolCalls?: ToolCall[]; reasoningContent?: string }> {
+    return this.deps.generateModel
+      ? this.deps.generateModel(provider, request)
+      : provider.generate(request as never);
+  }
+
   private async runVerifierModel(
     provider: AIModelProvider,
     evidence: VerificationEvidence,
@@ -490,7 +530,15 @@ export class VerificationRuntime {
     const maxTurns = this.deps.maxTurns ?? 8;
     for (let turn = 0; turn < maxTurns; turn++) {
       if (this.deps.signal?.aborted) break;
-      const res = await provider.generate({ messages, tools: defs, signal: this.deps.signal } as never);
+      let res;
+      try {
+        res = await this.callModel(provider, { messages, tools: defs, signal: this.deps.signal });
+      } catch {
+        // The model layer failed even after the failover seam (or none was
+        // supplied): degrade to "verifier unavailable" — PARTIAL via the
+        // caller's cap — never a thrown verification.
+        break;
+      }
       const calls: ToolCall[] = res.toolCalls ?? [];
       if (!calls.length) {
         const report = String(res.content ?? "").trim();
@@ -516,7 +564,7 @@ export class VerificationRuntime {
     // Out of turns (or the model kept calling tools): ask once for the verdict, no tools.
     try {
       messages.push({ role: "user", content: "Stop using tools. Give your verdict now. First line exactly: VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL. Then the findings as bullets." });
-      const res = await provider.generate({ messages, signal: this.deps.signal } as never);
+      const res = await this.callModel(provider, { messages, signal: this.deps.signal });
       const report = String(res.content ?? "").trim();
       return { report, verdict: parseVerdict(report) ?? undefined, browserObserved, browserErrors };
     } catch {

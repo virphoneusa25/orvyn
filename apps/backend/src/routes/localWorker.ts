@@ -10,6 +10,7 @@ import type { ServiceRecord } from "../services/ServiceManager";
 import { noteWorkbenchBrowser, resolveWorkbenchBrowserCommand, takeWorkbenchBrowserCommands } from "../desktop/workbenchBrowserBridge";
 import type { AgentEventType } from "../agent/events";
 import type { RunStore } from "../agent/events";
+import { isRunSettled } from "../agent/events";
 import type { Tenant } from "../tenancy/TenantManager";
 
 export type LocalWorkerHealth = "ready" | "degraded" | "offline";
@@ -186,7 +187,7 @@ export function localWorkerRouter(
     let finished = false;
     try {
       const run = getRunStore(t.id).get(req.params.runId);
-      finished = !!run && (run.status === "completed" || run.status === "error" || run.status === "cancelled");
+      finished = !!run && isRunSettled(run.status);
     } catch { /* keep serving */ }
     if (finished) toolRpc.cleanup(req.params.runId);
     res.json({ request, finished, projectRoot: job?.projectRoot });

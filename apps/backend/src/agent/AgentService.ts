@@ -188,7 +188,11 @@ export class AgentService {
 
     const call = session.pendingToolCall;
     if (approved) {
-      const result = await this.toolRegistry.execute(call.name, call.arguments);
+      // The registry fails closed on "ask"-permission tools — carry the grant
+      // the user just gave through the pending approval card.
+      const result = await this.toolRegistry.execute(call.name, call.arguments, {
+        approval: { granted: true, scope: "once", approvalId: call.id, grantedBy: "user" },
+      });
       this.recordResult(session, call, result.ok, result.ok ? result.output ?? "" : result.error ?? "unknown error", true);
     } else {
       session.toolLog.push({ tool: call.name, args: call.arguments, result: "denied by user", approved: false });

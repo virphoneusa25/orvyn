@@ -85,6 +85,16 @@ export class PermissionToolError extends ToolExecutionError {
   readonly code = "PERMISSION_DENIED";
 }
 
+/**
+ * The call never reached the tool: the caller hit an "ask"-permission tool
+ * without carrying an approval grant. A caller-side defect — the model was
+ * not refused, it was never asked.
+ */
+export class ApprovalRequiredError extends ToolExecutionError {
+  readonly toolErrorClass = "permission";
+  readonly code = "APPROVAL_REQUIRED";
+}
+
 /** A sandbox/policy boundary refused the action (network policy, credential policy). Ask for a grant; never retry blindly. */
 export class PolicyToolError extends ToolExecutionError {
   readonly toolErrorClass = "policy";
@@ -112,6 +122,12 @@ export class CapabilityUnavailableError extends ToolExecutionError {
 export class FatalToolError extends ToolExecutionError {
   readonly toolErrorClass = "fatal";
   readonly code = "TOOL_INTERNAL_ERROR";
+}
+
+/** The call was cancelled (user stop, worker deadline, abort). Never retried, never failed over — the path ends. */
+export class CancelledToolError extends ToolExecutionError {
+  readonly toolErrorClass = "fatal";
+  readonly code = "CANCELLED";
 }
 
 // ── Classification ───────────────────────────────────────────────────────────
@@ -147,6 +163,16 @@ export function classifyToolError(input: {
       return new RetryableToolError(message, { ...opts, code: "TEMPORARY_FAILURE" });
     case "PERMISSION_DENIED":
       return POLICY_CODES.test(message) ? new PolicyToolError(message, opts) : new PermissionToolError(message, opts);
+    case "APPROVAL_REQUIRED":
+      return new ApprovalRequiredError(message, opts);
+    case "POLICY_DENIED":
+      return new PolicyToolError(message, opts);
+    case "WORKSPACE_UNAVAILABLE":
+      return new WorkspaceToolError(message, opts);
+    case "CANCELLED":
+      return new CancelledToolError(message, opts);
+    case "TOOL_INTERNAL":
+      return new FatalToolError(message, opts);
     case "WRITE_GUARD":
       return new PolicyToolError(message, { ...opts, code: "WRITE_GUARD" });
     case "RESOURCE_MISSING":
@@ -218,6 +244,12 @@ export function recoveryFor(error: ToolExecutionError): RecoveryAction {
         guidance: "The workspace path was wrong or unavailable. Re-check what actually exists (list the workspace root) before touching a file again; never invent a path.",
       };
     case "fatal":
+      if (error.code === "CANCELLED") {
+        return {
+          action: "stop_path",
+          guidance: "This call was cancelled (user stop, deadline, or abort). Do not retry it — check whether the run itself should continue.",
+        };
+      }
       return {
         action: "stop_path",
         guidance: "This tool crashed internally. Do not retry the identical call — take a different approach for this step.",

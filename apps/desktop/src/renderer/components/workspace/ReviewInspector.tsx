@@ -28,7 +28,19 @@ export function ReviewInspector({
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--orvyn-border-soft)", display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 16, fontWeight: 650 }}>{summary.completed ? "Review ready" : "Review in progress"}</div>
+              <div style={{ fontSize: 16, fontWeight: 650 }}>
+                {summary.completed ? "Review ready"
+                  : summary.settled === "partial" ? "Partially completed — review what was done"
+                  : summary.settled === "blocked" ? "Blocked — needs a decision"
+                  : summary.settled === "failed" ? "Failed — review what was attempted"
+                  : summary.settled === "cancelled" ? "Stopped"
+                  : "Review in progress"}
+              </div>
+              {summary.settled && summary.settled !== "completed" && summary.settled !== "cancelled" && (
+                <div style={{ fontSize: 12, color: "var(--orvyn-yellow)", marginTop: 4 }}>
+                  The mission settled as {summary.settled} — not all checks passed.
+                </div>
+              )}
               <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", marginTop: 4 }}>
                 {summary.filesChanged} files · <span style={{ color: "var(--orvyn-green)" }}>+{summary.additions}</span>{" "}
                 <span style={{ color: "var(--orvyn-red)" }}>−{summary.deletions}</span>

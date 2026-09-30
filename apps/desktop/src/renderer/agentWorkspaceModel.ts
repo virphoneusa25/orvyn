@@ -558,6 +558,37 @@ export function followedPreviewUrl(derived: AgentWorkspaceDerived): string | und
   return derived.activity?.previewUrl ?? derived.previews[0]?.url;
 }
 
+export type SettledStatus = "completed" | "partial" | "blocked" | "failed" | "cancelled";
+
+const SETTLED_STATUSES = new Set<SettledStatus>(["completed", "partial", "blocked", "failed", "cancelled"]);
+
+/**
+ * The run's terminal verdict. `mission.settled` is the authoritative record —
+ * the backend emits it after the settlement engine judges the evidence. The
+ * `run.*` events are status-specific mirrors kept for compatibility; they are
+ * consulted only when no settlement event exists (older runs, replayed logs).
+ */
+export function settledStatus(events: WorkspaceEvent[]): SettledStatus | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.type === "mission.settled") {
+      const s = String(e.data?.status ?? "");
+      if (SETTLED_STATUSES.has(s as SettledStatus)) return s as SettledStatus;
+    }
+    if (e.type === "run.completed" || e.type === "mission.completed") return "completed";
+    if (e.type === "run.partial") return "partial";
+    if (e.type === "run.blocked") return "blocked";
+    if (e.type === "run.error") return "failed";
+    if (e.type === "run.cancelled") return "cancelled";
+  }
+  return null;
+}
+
+/** No further events can arrive — distinct from `successful`. */
+export function isTerminalRun(events: WorkspaceEvent[]): boolean {
+  return settledStatus(events) !== null;
+}
+
 export interface ReviewSummary {
   filesChanged: number;
   additions: number;
@@ -567,7 +598,12 @@ export interface ReviewSummary {
   buildPassed: boolean | null;
   warnings: number;
   artifacts: number;
+  /** A review gate approved work — evidence, NOT the mission verdict. */
+  reviewPassed: boolean;
+  /** The settlement verdict is "completed". Only mission.settled sets this. */
   completed: boolean;
+  /** The settlement verdict, or null while the run is live. */
+  settled: SettledStatus | null;
 }
 
 export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWorkspaceDerived): ReviewSummary {
@@ -575,8 +611,7 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
   let testsFailed = 0;
   let warnings = 0;
   let buildPassed: boolean | null = null;
-  let completed = false;
-  let blockedRun = false;
+  let reviewPassed = false;
   for (const e of events) {
     const data = e.data ?? {};
     if (e.type === "test.completed") {
@@ -593,11 +628,12 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
       buildPassed = false;
     }
     if (e.type === "review.rejected" || e.type === "tool.failed") warnings += 1;
-    if (e.type === "run.blocked" || e.type === "resource.required" || e.type === "run.error") blockedRun = true;
-    if (e.type === "run.completed" || e.type === "mission.completed" || e.type === "review.approved" || e.type === "review.passed") {
-      completed = true;
-    }
+    // review.passed is evidence for the reviewer pane, never the verdict —
+    // a mission can pass review and still settle partial on verification.
+    if (e.type === "review.approved" || e.type === "review.passed") reviewPassed = true;
   }
+  const settled = settledStatus(events);
+  const produced = derived.changeSummary.files > 0 || derived.artifacts.length > 0 || testsPassed > 0 || testsFailed > 0;
   return {
     filesChanged: derived.changeSummary.files,
     additions: derived.changeSummary.additions,
@@ -607,7 +643,9 @@ export function deriveReviewSummary(events: WorkspaceEvent[], derived: AgentWork
     buildPassed,
     warnings,
     artifacts: derived.artifacts.length,
-    completed: completed && !blockedRun && (derived.changeSummary.files > 0 || derived.artifacts.length > 0 || testsPassed > 0 || testsFailed > 0),
+    reviewPassed,
+    completed: settled === "completed" && produced,
+    settled,
   };
 }
 

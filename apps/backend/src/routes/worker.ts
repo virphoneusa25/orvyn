@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import type { RunStore } from "../agent/events";
+import { isRunSettled } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
 import { readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
@@ -384,7 +385,7 @@ export function workerRouter(
       let active = false;
       try {
         const run = getRunStore(job.tenantId).get(job.runId);
-        active = Boolean(run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled");
+        active = Boolean(run && !isRunSettled(run.status));
       } catch { active = false; }
       if (!active) { finishJob(job.runId); continue; }
       const lost = job.assignedTo;
@@ -540,9 +541,7 @@ export function workerRouter(
     try {
       const bound = tenantForRun(req.params.runId);
       const run = getRunStore(bound).get(req.params.runId);
-      finished = run
-        ? run.status === "completed" || run.status === "error" || run.status === "cancelled"
-        : false;
+      finished = run ? isRunSettled(run.status) : false;
     } catch { /* store unavailable — keep serving */ }
     if (finished) {
       toolRpc.cleanup(req.params.runId);

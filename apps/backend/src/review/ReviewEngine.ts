@@ -48,8 +48,11 @@ export class ReviewEngine {
     const reviewer: AIModelProvider = this.models.resolveTask("reviewer");
 
     // Real evidence, not agent claims: what actually changed in the repo.
-    const gitStatus = await this.tools.execute("git_status", {}, "orchestrator");
-    const gitDiff = await this.tools.execute("git_diff", {}, "orchestrator");
+    // The reviewer is an internal caller — its read-only checks are
+    // sanctioned by the runtime, not prompted for.
+    const internal = { approval: { granted: true, scope: "internal", grantedBy: "runtime" } } as const;
+    const gitStatus = await this.tools.execute("git_status", {}, "orchestrator", internal);
+    const gitDiff = await this.tools.execute("git_diff", {}, "orchestrator", internal);
     const diffText = (gitDiff.output ?? gitDiff.error ?? "").slice(0, MAX_DIFF_CHARS);
 
     const taskReport = mission.tasks

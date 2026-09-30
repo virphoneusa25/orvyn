@@ -437,8 +437,11 @@ test("failed writes never emit a successful file change", async () => {
     name: "edit_file", description: "test edit", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
     async execute() { return { ok: false, error: "Read-only file" }; },
   });
+  // BALANCED pre-approves edits on the run-scoped gateway. A post-start
+  // setPermission on the shared gateway cannot reach it — runs snapshot
+  // their own permission baseline, which is the isolation this suite wants.
+  h.gateway.profile = "BALANCED";
   const id = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "edit a file");
-  h.gateway.setPermission("edit_file", "allowed");
   await waitForStatus(h.store, id);
   const events = h.store.get(id)!.events;
   assert.ok(events.some(e => e.type === "tool.failed"));

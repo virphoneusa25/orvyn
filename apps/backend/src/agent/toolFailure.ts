@@ -6,20 +6,10 @@ import { existsSync, readdirSync } from "fs";
 import { resolveSafePath } from "../execution/pathSafety";
 import type { ToolParameterSchema } from "./toolPolicy";
 import { requiredArgumentNames } from "./toolPolicy";
+import { TOOL_ERROR_TYPES, type ToolErrorType } from "../ai/ToolTypes";
 
-export const TOOL_ERROR_TYPES = [
-  "INVALID_ARGUMENTS",
-  "PERMISSION_DENIED",
-  "CAPABILITY_UNAVAILABLE",
-  "RESOURCE_MISSING",
-  "WRITE_GUARD",
-  "EXECUTION_FAILED",
-  "TIMEOUT",
-  "TRANSIENT_PROVIDER_ERROR",
-  "UNKNOWN",
-] as const;
-
-export type ToolErrorType = (typeof TOOL_ERROR_TYPES)[number];
+export { TOOL_ERROR_TYPES };
+export type { ToolErrorType };
 
 /**
  * Same tool and the same invalid arguments, this many times, then that call is
@@ -82,9 +72,16 @@ export function normalizeErrorType(value: unknown): ToolErrorType {
   return TOOL_ERROR_TYPES.includes(value as ToolErrorType) ? (value as ToolErrorType) : "UNKNOWN";
 }
 
-/** INVALID_ARGUMENTS is correctable on the current model. Every other class can climb. */
+/**
+ * Which failure classes count toward the repeated-failure repair streak.
+ * INVALID_ARGUMENTS is correctable via its own repair path; APPROVAL_REQUIRED
+ * is a caller-side gate skip; CANCELLED means the run is stopping — none of
+ * them represent a failure the repair streak should react to. (The name is
+ * historical: the streak now produces a targeted repair note, never a model
+ * switch.)
+ */
 export function countsTowardModelEscalation(errorType: ToolErrorType): boolean {
-  return errorType !== "INVALID_ARGUMENTS";
+  return errorType !== "INVALID_ARGUMENTS" && errorType !== "APPROVAL_REQUIRED" && errorType !== "CANCELLED";
 }
 
 function quoted(names: string[]): string {

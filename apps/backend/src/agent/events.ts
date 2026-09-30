@@ -63,6 +63,7 @@ export type AgentEventType =
   | "task.started"
   | "task.completed"
   | "task.failed"
+  | "task.skipped"
   | "review.started"
   | "review.passed"
   | "review.rejected"
@@ -190,7 +191,13 @@ export type AgentEventType =
   /** A failed tool call was classified into the typed error model. */
   | "tool.error.classified"
   /** A canonical preview environment record was written/updated. */
-  | "preview.environment";
+  | "preview.environment"
+  /** A worker hit its wall-clock deadline (ORVYN_WORKER_TIMEOUT_MS). */
+  | "worker.timeout"
+  /** A worker exhausted its per-task token budget (ORVYN_WORKER_TOKEN_BUDGET). */
+  | "worker.budget"
+  /** A task's dedicated review round was skipped under the delegation policy. */
+  | "review.skipped";
 
 export interface AgentEvent {
   id: string;
@@ -223,9 +230,26 @@ export interface QueueItem {
   updatedAt: number;
 }
 
-/** A run is finished when no further events can arrive for it. */
-export function isTerminal(status: RunStatus): boolean {
+/**
+ * A run is SETTLED when no further events can arrive for it — the
+ * interaction is over from the user's point of view.
+ */
+export function isRunSettled(status: RunStatus): boolean {
   return status === "completed" || status === "partial" || status === "error" || status === "cancelled" || status === "blocked";
+}
+
+/**
+ * Settled and resource-terminal are DIFFERENT states: a blocked run is
+ * finished for the user but keeps its holds (leases, credits, desktop
+ * control) because a follow-up on the same mission can resume it.
+ */
+export function releasesResources(status: RunStatus): boolean {
+  return status === "completed" || status === "partial" || status === "error" || status === "cancelled";
+}
+
+/** A run is finished when no further events can arrive for it. Alias for isRunSettled — kept for existing callers. */
+export function isTerminal(status: RunStatus): boolean {
+  return isRunSettled(status);
 }
 
 export interface Run {
@@ -250,6 +274,12 @@ export interface Run {
     reason?: string;
     containerId?: string;
     workerId?: string;
+    /** Execution-sandbox record id (provider-neutral; Docker/OpenShell). */
+    sandboxId?: string;
+    /** Mission identity the run is bound to, when one exists. */
+    missionId?: string;
+    /** Worker-side project root for remote executions. */
+    remoteProjectRoot?: string;
     startedAt?: number;
   };
 }
@@ -327,6 +357,7 @@ export class RunStore {
           // Later meta line = later status/checkpoint snapshot.
           run.status = (rec.status as RunStatus) ?? run.status;
           if (rec.checkpointId) run.checkpointId = String(rec.checkpointId);
+          if (rec.workspaceId) run.workspaceId = String(rec.workspaceId);
         } else if (rec.t === "usage" && run) {
           run.usage = {
             promptTokens: Number(rec.promptTokens ?? 0),
@@ -343,6 +374,10 @@ export class RunStore {
               executionLocation: location,
               reason: event.data?.fallbackReason ? String(event.data.fallbackReason) : undefined,
               workerId: event.data?.workerId ? String(event.data.workerId) : undefined,
+              containerId: event.data?.containerId ? String(event.data.containerId) : undefined,
+              sandboxId: event.data?.sandboxId ? String(event.data.sandboxId) : undefined,
+              missionId: event.data?.missionId ? String(event.data.missionId) : undefined,
+              remoteProjectRoot: event.data?.remoteProjectRoot ? String(event.data.remoteProjectRoot) : undefined,
               startedAt: Number(event.timestamp || Date.now()),
             };
           }
@@ -351,21 +386,27 @@ export class RunStore {
       }
       if (run) {
         // A run that was mid-flight when the process died can never progress
-        // again — its runtime state is gone. Mark it honestly instead of
-        // leaving a permanent "running"/"awaiting_approval" ghost.
+        // again on its own — its runtime state is gone. It is marked BLOCKED,
+        // not error: a resumable interruption (checkpoint + resume endpoint)
+        // is not a failure, and "blocked" is the settled-but-holds-retained
+        // state that resume unblocks. OVH_WORKER runs are deliberately left
+        // alone here — routes/worker.ts recoverOrphanedRunsOnBoot() re-queues
+        // them with recover=true so a worker reattaches to the mission
+        // sandbox, and recoverOrphanedJobs() handles worker loss while the
+        // control plane stays up.
         if (!isTerminal(run.status) && run.execution?.executionLocation !== "OVH_WORKER") {
           const seq = run.nextSequence++;
           const ghost: AgentEvent = {
             id: `evt_${run.id.slice(0, 6)}_${seq}`,
             runId: run.id,
             sequence: seq,
-            type: "run.error",
+            type: "run.blocked",
             timestamp: Date.now(),
-            data: { message: "The backend restarted while this run was in flight. Retry to continue the work." },
+            data: { reason: "backend_restart", resumable: true, message: "The backend restarted while this run was in flight. Resume to continue the work." },
           };
           run.events.push(ghost);
-          run.status = "error";
-          this.log(run.id, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: "error" });
+          run.status = "blocked";
+          this.log(run.id, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: "blocked" });
           this.log(run.id, { t: "ev", e: ghost });
           // A durable mission checkpoint makes this a resumable interruption,
           // not a dead run — POST /agent/stream/runs/:id/resume continues it.
@@ -422,6 +463,10 @@ export class RunStore {
     const run = this.runs.get(runId);
     if (!run || !workspaceId) return;
     run.workspaceId = workspaceId;
+    // Persisted in the run meta so the binding survives a backend restart —
+    // replaying the log must restore which workspace this run's file tools
+    // were bound to, not just the projectRoot path string.
+    this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: run.status, workspaceId });
   }
 
   /**
@@ -736,11 +781,12 @@ export class RunStore {
     // listeners (desktop control release) fire once per transition.
     if (run.status === status) return;
     run.status = status;
-    this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}) });
-    // Every terminal status releases what the run held (desktop control,
-    // credits, worker leases). "blocked" is excluded: a blocked run keeps its
-    // hold because it can be resumed by a follow-up on the same mission.
-    if (status === "completed" || status === "partial" || status === "error" || status === "cancelled") {
+    this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}), ...(run.workspaceId ? { workspaceId: run.workspaceId } : {}) });
+    // Every resource-terminal status releases what the run held (desktop
+    // control, credits, worker leases). "blocked" is settled but NOT
+    // resource-terminal: a blocked run keeps its hold because it can be
+    // resumed by a follow-up on the same mission.
+    if (releasesResources(status)) {
       for (const cb of this.terminalListeners) {
         try { cb(runId, status); } catch { /* a listener must not break the settle */ }
       }

@@ -263,6 +263,10 @@ test("an executed failure three in a row gets a tool-repair note, not a model sw
       return { ok: false, error: "disk full" };
     },
   });
+  // The probe must actually EXECUTE — unknown tools are SYSTEM-class and the
+  // coder role cannot run them. Declare it read-only so the failure comes
+  // from the tool itself, not the capability boundary.
+  h.gateway.permissions.declareCapabilities("probe_disk", ["READ"]);
   const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
   assert.equal(await settle(h.store, runId), "completed");
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");

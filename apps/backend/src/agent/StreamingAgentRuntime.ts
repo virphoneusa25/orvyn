@@ -42,7 +42,7 @@ import path from "path";
 import { AIMessage, AIModelProvider, Attachment, ToolCall, ToolDefinition, type TokenUsage } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
-import { AITool, ToolResult } from "../ai/ToolTypes";
+import { ScopedToolRegistry, ToolResult, type ToolApproval } from "../ai/ToolTypes";
 import { isDestructiveCommand } from "../ai/tools/terminalTool";
 import { RunStore, isTerminal } from "./events";
 import { raceApprovalTimeout } from "./approvals";
@@ -208,13 +208,7 @@ interface RunState {
   argumentReplanNote?: string;
   /** Remote execution spec; when OVH_WORKER the coding tools route over Tool RPC. */
   execution?: ExecutionSpec;
-  /** Local tools replaced by remote variants for this run (restored on settle). */
-  replacedTools?: AITool[];
-  /** Permission snapshot taken when remote variants mounted — restored on
-   *  settle so per-run denials never leak into later local runs. */
-  savedPermissions?: Map<string, "allowed" | "ask" | "denied">;
-  /** The run's mode — needed to restore the permission profile after a
-   *  remote run puts its tool variants back. */
+  /** The run's mode — applied to the run's scoped gateway at start. */
   mode: AgentMode;
   /** Composer reasoning effort; "auto" defers to the provider. */
   reasoningEffort: ReasoningEffort;
@@ -228,8 +222,6 @@ interface RunState {
    *  Undefined for callers that did not send one — the tenant autonomy
    *  profile applies unchanged for those, preserving legacy behavior. */
   accessMode?: AccessMode;
-  /** Gateway autonomy profile before this run mounted its access mode. */
-  previousProfile?: "SAFE" | "BALANCED" | "AUTONOMOUS";
   /** Persisted artifacts created this run — the only names ORION may claim. */
   createdArtifacts: GroundedArtifact[];
   projectFileEvidence: ProjectFileEvidence[];
@@ -561,6 +553,7 @@ export class StreamingAgentRuntime {
               : { message: "This task stopped making progress before it produced any result. Nothing is running — you can retry it.", code: "STALLED", actions: ["retry", "cancel"] });
             this.store.setStatus(runId, "error");
             state.controller.abort();
+            this.runTools.delete(runId);
             this.runs.delete(runId);
           }
         }
@@ -570,6 +563,28 @@ export class StreamingAgentRuntime {
   }
 
   private stallWatchdog?: ReturnType<typeof setInterval>;
+
+  /**
+   * Per-run tool surface. The shared tenant gateway is the SOURCE of truth for
+   * what is registered — but a run must never mutate it: mode/profile
+   * application, remote-tool mounts and per-run denials would otherwise leak
+   * into concurrent runs (or the next run if teardown raced). Each run works
+   * on a ScopedToolRegistry snapshot; base registrations added mid-run (a
+   * capability install) still become visible.
+   */
+  private runTools = new Map<string, ToolGateway>();
+
+  /** The gateway a run sees — its scoped surface when one exists. */
+  private gatewayFor(runId: string): ToolGateway {
+    return this.runTools.get(runId) ?? this.tools;
+  }
+
+  /** A per-run view over the shared tenant gateway (tools by reference, permissions copied). */
+  private scopedGateway(): ToolGateway {
+    const gateway = new ToolGateway(new ScopedToolRegistry(this.tools.registry), this.tools.permissions);
+    gateway.profile = this.tools.profile;
+    return gateway;
+  }
 
   private cloudMcpInvoke?: (input: {
     runId: string;
@@ -618,8 +633,8 @@ export class StreamingAgentRuntime {
     return ready;
   }
 
-  private toolDefinitions(allow: Set<string> | null = null): ToolDefinition[] {
-    return this.tools
+  private toolDefinitions(runId: string, allow: Set<string> | null = null): ToolDefinition[] {
+    return this.gatewayFor(runId)
       .list()
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
       // Only runs whose sandbox can open network access ever see this tool.
@@ -848,11 +863,13 @@ export class StreamingAgentRuntime {
       const ext = /\.[a-z0-9]{2,5}$/i.test(clean) ? "" : `.${(att.mediaType ?? "image/png").split("/")[1]?.replace("jpeg", "jpg") ?? "png"}`;
       const rel = `assets/${clean}${ext}`;
       try {
-        const result = await this.tools.execute("write_file", { path: rel, content: "", content_base64: att.b64 }, "coder", {
+        const result = await this.gatewayFor(runId).execute("write_file", { path: rel, content: "", content_base64: att.b64 }, "coder", {
           signal: state.controller.signal,
           runId,
           workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
           executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+          // Attachment staging is sanctioned by the runtime itself.
+          approval: { granted: true, scope: "internal", grantedBy: "runtime" },
         });
         if (!result.ok) continue;
         rememberSiteBinary(runId, rel, Buffer.from(att.b64, "base64"));
@@ -867,11 +884,12 @@ export class StreamingAgentRuntime {
   /** Reads one project file through the run's tools (on the user's computer for Local runs). */
   private async readSiteFile(runId: string, state: RunState, path: string, encoding?: "base64"): Promise<string | null> {
     try {
-      const result = await this.tools.execute("read_file", { path, ...(encoding ? { encoding } : {}) }, "coder", {
+      const result = await this.gatewayFor(runId).execute("read_file", { path, ...(encoding ? { encoding } : {}) }, "coder", {
         signal: state.controller.signal,
         runId,
         workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
         executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+        approval: { granted: true, scope: "internal", grantedBy: "runtime" },
       });
       return result.ok && typeof result.output === "string" && result.output.trim() && !/…\(truncated\)\s*$/.test(result.output) ? result.output : null;
     } catch {
@@ -964,9 +982,10 @@ export class StreamingAgentRuntime {
   }
 
   /** web_search is registered and not denied (Plan/Research modes keep it; nothing turns it off silently). */
-  private webResearchAvailable(): boolean {
+  private webResearchAvailable(runId: string): boolean {
     try {
-      return this.tools.list().some((t) => t.name === "web_search") && this.tools.getPermission("web_search") !== "denied";
+      const gw = this.gatewayFor(runId);
+      return gw.list().some((t) => t.name === "web_search") && gw.getPermission("web_search") !== "denied";
     } catch {
       return false;
     }
@@ -1104,7 +1123,7 @@ export class StreamingAgentRuntime {
 
   /** The capability manifest from the tools this run really has (remote tools included). */
   private capabilityManifest(runId: string, state: RunState): CapabilityManifest {
-    return buildCapabilityManifest(this.tools.list(), (n) => this.tools.getPermission(n), {
+    return buildCapabilityManifest(this.gatewayFor(runId).list(), (n) => this.gatewayFor(runId).getPermission(n), {
       projectRoot: state.execution?.remoteProjectRoot || state.projectRoot,
       location: state.execution?.targetActual ?? state.execution?.location ?? "local",
     });
@@ -1117,8 +1136,8 @@ export class StreamingAgentRuntime {
     return paths.size;
   }
 
-  private isKnownTool(name: string): boolean {
-    return this.tools.list().some((t) => t.name === name);
+  private isKnownTool(runId: string, name: string): boolean {
+    return this.gatewayFor(runId).list().some((t) => t.name === name);
   }
 
   /**
@@ -1136,7 +1155,7 @@ export class StreamingAgentRuntime {
     // tool; a permission switched off is said as such; an installed MCP tool
     // is used. Only a genuinely external need reaches the Marketplace card.
     const manifest = this.capabilityManifest(runId, state);
-    const need = resolveCapabilityNeed(query, manifest, (n) => this.isKnownTool(n), { filesChanged: this.filesChangedCount(runId) });
+    const need = resolveCapabilityNeed(query, manifest, (n) => this.isKnownTool(runId, n), { filesChanged: this.filesChangedCount(runId) });
     this.store.emit(runId, "capability.resolved", { query, kind: need.kind, tools: "tools" in need ? need.tools : [] });
     if (need.kind === "native") {
       return `You already have ORVYN's core tools for this: ${need.tools.join(", ")}. They are not MCP tools and need no install. Do not look for another tool. Do the task with them now.`;
@@ -1151,9 +1170,9 @@ export class StreamingAgentRuntime {
     type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean };
     let servers: Candidate[] = [];
     let reason = "";
-    if (this.isKnownTool("search_capabilities")) {
+    if (this.isKnownTool(runId, "search_capabilities")) {
       try {
-        const found = await this.tools.execute("search_capabilities", { query }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot } as any);
+        const found = await this.gatewayFor(runId).execute("search_capabilities", { query }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot, approval: { granted: true, scope: "internal", grantedBy: "runtime" } } as any);
         const required = found.ok ? (found.meta?.capabilityRequired as { reason?: string; recommendedServers?: Candidate[] } | undefined) : undefined;
         servers = required?.recommendedServers ?? [];
         reason = required?.reason ?? "";
@@ -1162,7 +1181,7 @@ export class StreamingAgentRuntime {
       }
     }
     const pick = servers.find((c) => c.canonicalId && !c.oauth);
-    if (pick && this.isKnownTool("install_mcp_server")) return this.installWithApproval(runId, state, query, pick, servers);
+    if (pick && this.isKnownTool(runId, "install_mcp_server")) return this.installWithApproval(runId, state, query, pick, servers);
     const primary = servers[0]?.name || servers[0]?.server;
     this.store.emit(runId, "capability.required", {
       query,
@@ -1218,7 +1237,7 @@ export class StreamingAgentRuntime {
     this.store.emit(runId, "tool.started", { callId, tool: "install_mcp_server", args: call.arguments });
     let result;
     try {
-      result = await this.tools.execute("install_mcp_server", { canonicalId: pick.canonicalId, ...(secrets ? { secrets } : {}) }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot } as any);
+      result = await this.gatewayFor(runId).execute("install_mcp_server", { canonicalId: pick.canonicalId, ...(secrets ? { secrets } : {}) }, "coder", { signal: state.controller.signal, runId, workspaceRoot: state.projectRoot, approval: { granted: true, scope: "once", approvalId: callId, grantedBy: "user" } } as any);
     } catch (err: any) {
       result = { ok: false, error: String(err?.message ?? err) };
     }
@@ -1263,7 +1282,7 @@ export class StreamingAgentRuntime {
     }
     if (reply?.usage) this.noteCredits(runId, state, helper.config.id, reply.usage as TokenUsage);
     const seen = new Set<string>();
-    const calls: ToolCall[] = unwrapParallelCalls(reply?.toolCalls ?? [], (n) => this.isKnownTool(n)).filter((c: ToolCall) => c?.name && !seen.has(c.id) && seen.add(c.id));
+    const calls: ToolCall[] = unwrapParallelCalls(reply?.toolCalls ?? [], (n) => this.isKnownTool(runId, n)).filter((c: ToolCall) => c?.name && !seen.has(c.id) && seen.add(c.id));
     if (!acceptHelperStep(calls)) {
       state.helperRejects++;
       this.store.emit(runId, "route.step", { modelId: helper.config.id, accepted: false, reason: calls.length ? "The helper wanted to change something; the main model takes this step." : "Nothing more to gather; the main model takes this step." });
@@ -1547,8 +1566,12 @@ export class StreamingAgentRuntime {
     }
 
     // Mode controls tool permissions as well as prompting, so a read-only
-    // mode genuinely cannot write even if the model tries.
-    const def = applyMode(this.tools.registry, mode);
+    // mode genuinely cannot write even if the model tries. All of it is
+    // applied to this run's SCOPED gateway — the shared tenant registry is
+    // never mutated by a run.
+    const runGateway = this.scopedGateway();
+    this.runTools.set(runId, runGateway);
+    const def = applyMode(runGateway.registry, mode);
     // Composer access mode rides ON TOP of the mode when the caller passes
     // one (run-scoped snapshot — changing the composer later affects future
     // runs only). Profiles only upgrade ask→allowed and never touch denied,
@@ -1556,9 +1579,8 @@ export class StreamingAgentRuntime {
     // Access. Without an explicit mode, the tenant's autonomy profile applies
     // exactly as before.
     const accessMode = options?.accessMode && isAccessMode(options.accessMode) ? options.accessMode : undefined;
-    const previousProfile = this.tools.profile;
-    if (accessMode) applyAccessMode(this.tools.registry, accessMode);
-    else this.tools.applyProfile();
+    if (accessMode) applyAccessMode(runGateway.registry, accessMode);
+    else runGateway.applyProfile();
 
     let toolModelError: string | undefined;
     let toolFallbackReason: string | undefined;
@@ -1598,7 +1620,7 @@ export class StreamingAgentRuntime {
       resources: catalog,
     });
     const exposed = def.toolsEnabled
-      ? new Set(selectToolNames(this.tools.list().map((t) => t.name), intent, {
+      ? new Set(selectToolNames(runGateway.list().map((t) => t.name), intent, {
           repositoryDetected: workspace.repositoryDetected,
           // Read-only modes drop the desktop; every capable run keeps it —
           // "try now"-style follow-ups must not lose the desktop mid-thread.
@@ -1606,10 +1628,10 @@ export class StreamingAgentRuntime {
         }))
       : null;
     const runCaps = summarizeCapabilities(
-      this.tools.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: this.tools.getPermission(t.name) })),
+      runGateway.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: runGateway.getPermission(t.name) })),
       { modelTools: def.toolsEnabled && provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     // A recovered run resumes from its durable checkpoint, not from scratch:
@@ -1642,7 +1664,6 @@ export class StreamingAgentRuntime {
       cachedTokensSum: 0,
       promptTokensSum: 0,
       ...(accessMode ? { accessMode } : {}),
-      previousProfile,
       createdArtifacts: [],
       projectFileEvidence: [],
       instruction,
@@ -1785,7 +1806,7 @@ export class StreamingAgentRuntime {
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
-    const toolNames = new Set(this.tools.list().map((tool) => tool.name));
+    const toolNames = new Set(runGateway.list().map((tool) => tool.name));
     const routed = routeSkills({
       instruction,
       runMode: mode,
@@ -1872,7 +1893,7 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
-            const toolNames = this.toolDefinitions(state?.exposedTools ?? null).map((t) => t.name);
+            const toolNames = this.toolDefinitions(runId, state?.exposedTools ?? null).map((t) => t.name);
         // §17: the capability registry learns this run's real tool surface.
         seedCapabilities(toolNames);
         this.store.emit(runId, "run.diagnostics", {
@@ -2025,7 +2046,7 @@ export class StreamingAgentRuntime {
           organizationId: scope.organizationId,
           projectId: scope.projectId,
           resources: catalog,
-          toolNames: this.tools.list().map((t) => t.name),
+          toolNames: runGateway.list().map((t) => t.name),
           hasLocalProject: workspace.available,
           cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
           cloudWorkspaceAvailable: state?.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
@@ -2119,13 +2140,15 @@ export class StreamingAgentRuntime {
   }
 
   /**
-   * Swaps the gateway's coding tools for remote variants bound to this run's
-   * Tool RPC channel. The originals are saved and restored by teardownRemote.
-   * Safe because the API enforces one active run per tenant.
+   * Swaps THIS RUN's coding tools for remote variants bound to its Tool RPC
+   * channel. Everything mounts on the run's scoped gateway — the shared
+   * tenant gateway is never touched, so no teardown restore is needed and
+   * nothing can leak into another run.
    */
   private mountRemoteTools(runId: string): void {
     const state = this.runs.get(runId);
     if (!state?.execution) return;
+    const gateway = this.gatewayFor(runId);
     const remoteNames = new Set([
       "read_file", "write_file", "edit_file", "list_directory", "search_code", "search_files",
       "terminal", "run_command", "run_tests", "run_typecheck",
@@ -2136,22 +2159,20 @@ export class StreamingAgentRuntime {
       "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
-    state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
-    state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));
-    registerRemoteTools(this.tools, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
+    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
     this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
-    applyMode(this.tools.registry, state.mode);
-    if (state.accessMode) applyAccessMode(this.tools.registry, state.accessMode);
-    else this.tools.applyProfile();
+    applyMode(gateway.registry, state.mode);
+    if (state.accessMode) applyAccessMode(gateway.registry, state.accessMode);
+    else gateway.applyProfile();
     // Tools with no remote variant must not run on the control plane while
     // the model believes it is inside the mission container. Remote variants
     // (write_file, terminal, git, start_process) keep the run's access mode.
     if (state.execution.location === "OVH_WORKER") {
       const localOnlyStateful = new Set(["move_file", "ssh_exec"]);
-      for (const t of this.tools.list()) {
-        if (localOnlyStateful.has(t.name) && !remoteNames.has(t.name)) this.tools.setPermission(t.name, "denied");
+      for (const t of gateway.list()) {
+        if (localOnlyStateful.has(t.name) && !remoteNames.has(t.name)) gateway.setPermission(t.name, "denied");
       }
     }
   }
@@ -2168,7 +2189,7 @@ export class StreamingAgentRuntime {
     state.networkRequestable = rec?.provider === "openshell";
     if (!state.networkRequestable) return;
     const store = this.store;
-    this.tools.register({
+    this.gatewayFor(runId).register({
       name: NETWORK_ACCESS_TOOL,
       description: "The cloud workspace has no network access by default. If a step truly needs it (installing packages, cloning from GitHub, reaching a deploy API, SSH to the user's server), request a reviewed access profile. A workspace owner must approve; until then the network stays closed. Never retry a blocked command or try to work around the policy.",
       parameters: {
@@ -2197,35 +2218,17 @@ export class StreamingAgentRuntime {
     });
   }
 
+  /**
+   * Drops the run's Tool RPC state and its scoped gateway. There is nothing
+   * to restore: remote mounts, per-run denials and mode/profile application
+   * all lived on the scoped registry, which is discarded here — the shared
+   * tenant gateway was never touched.
+   */
   private teardownRemote(runId: string): void {
-    const state = this.runs.get(runId);
     toolRpc.cleanup(runId);
-    this.restoreAccessMode(runId);
-    if (state?.replacedTools) {
-      for (const tool of state.replacedTools) this.tools.register(tool);
-      state.replacedTools = undefined;
-      applyMode(this.tools.registry, state.mode);
-      this.tools.applyProfile();
-    }
-    // Per-run denials of local-only tools are undone exactly — a snapshot
-    // restore, so a remote run never constrains the next local run.
-    if (state?.savedPermissions) {
-      for (const [name, permission] of state.savedPermissions) this.tools.setPermission(name, permission);
-      state.savedPermissions = undefined;
-    }
-  }
-
-  /** Puts the gateway back the way it was before this run mounted its
-   *  composer access mode — a run's permissions never leak into the next.
-   *  Re-applying the mode baseline undoes every profile upgrade AND the ASK
-   *  downgrade; the previous autonomy profile is then re-applied on top. */
-  private restoreAccessMode(runId: string): void {
-    const state = this.runs.get(runId);
-    if (!state?.previousProfile) return;
-    this.tools.profile = state.previousProfile;
-    applyMode(this.tools.registry, state.mode);
-    this.tools.applyProfile();
-    state.previousProfile = undefined;
+    // A blocked run can be resumed on the same scoped surface — keep its
+    // gateway; only a run whose state is discarded loses it.
+    if (this.store.get(runId)?.status !== "blocked") this.runTools.delete(runId);
   }
 
   private relevantMemory(projectRoot: string, instruction: string): string {
@@ -2368,7 +2371,7 @@ export class StreamingAgentRuntime {
       organizationId: state.execution?.organizationId || "",
       projectId: state.execution?.projectId ?? null,
       resources,
-      toolNames: this.tools.list().map((t) => t.name),
+      toolNames: this.gatewayFor(runId).list().map((t) => t.name),
       hasLocalProject: inspectWorkspace(state.projectRoot).available,
       cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
       cloudWorkspaceAvailable: state.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
@@ -2398,7 +2401,10 @@ export class StreamingAgentRuntime {
     const messages = state.resumeMessages;
     const mode = state.resumeMode ?? "agent";
     void this.loop(runId, messages, state.instruction, mode).finally(() => {
-      if (this.store.get(runId)?.status !== "blocked") this.runs.delete(runId);
+      if (this.store.get(runId)?.status !== "blocked") {
+        this.runTools.delete(runId);
+        this.runs.delete(runId);
+      }
     });
     return true;
   }
@@ -2413,7 +2419,7 @@ export class StreamingAgentRuntime {
     // Context composition breakdown: pre-request accounting of what
     // the next model call carries. Provider-reported totals stay
     // authoritative for the overall count; these shares explain it.
-    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : [];
+    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(runId, state.exposedTools) : [];
     let toolDefinitionTokens = 0;
     let mcpToolTokens = 0;
     for (const t of toolDefs) {
@@ -2509,7 +2515,7 @@ export class StreamingAgentRuntime {
         : {}),
     });
 
-    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : [];
+    const toolDefs = state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(runId, state.exposedTools) : [];
     this.store.emit(runId, "run.diagnostics", {
       runId,
       tenantId: state.execution?.tenantId ?? "",
@@ -2525,7 +2531,7 @@ export class StreamingAgentRuntime {
 
     let steps = 0;
     let consecutiveFailures = 0;
-    const tools = () => (state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(state.exposedTools) : undefined);
+    const tools = () => (state.toolsEnabled && provider.supportsTools() ? this.toolDefinitions(runId, state.exposedTools) : undefined);
     const fail = (message: string, extra: Record<string, unknown> = {}) => {
       if (state.cancelled) return cancelled();
       this.store.emit(runId, "run.error", { message, ...extra });
@@ -2785,7 +2791,7 @@ export class StreamingAgentRuntime {
         // Drop malformed calls rather than sending the model a reply to a tool
         // it never named; keep duplicates out so one id is answered once.
         const seen = new Set<string>();
-        const calls = unwrapParallelCalls(streamedCalls, (n) => this.isKnownTool(n)).filter((c) => {
+        const calls = unwrapParallelCalls(streamedCalls, (n) => this.isKnownTool(runId, n)).filter((c) => {
           if (!c?.name || seen.has(c.id)) return false;
           seen.add(c.id);
           return true;
@@ -2974,7 +2980,7 @@ export class StreamingAgentRuntime {
         if (
           state.toolsEnabled &&
           state.researchNudges < 1 &&
-          this.webResearchAvailable() &&
+          this.webResearchAvailable(runId) &&
           needsWebResearch(state.instruction) &&
           !(this.store.get(runId)?.events ?? []).some((e) => (e.type === "tool.completed" || e.type === "tool.failed") && !e.data?.verifier && /^(web_search|fetch_url|browser_open|browser_navigate)$/.test(String(e.data?.tool ?? "")))
         ) {
@@ -3282,6 +3288,10 @@ export class StreamingAgentRuntime {
     const screenshots: Array<{ b64: string; mediaType: string; name: string }> = [];
     const runnable: ToolCall[] = [];
     const previews = new Map<string, EditPreview | undefined>();
+    // Approval evidence, keyed by call id: the registry boundary fails closed
+    // on "ask"-permission tools, so the grant each call was sanctioned under
+    // is carried all the way to execute().
+    const grants = new Map<string, ToolApproval>();
     /** Calls that failed because a capability is missing → what to ask the user to install. */
     const gaps = new Map<string, string>();
 
@@ -3349,7 +3359,7 @@ export class StreamingAgentRuntime {
       }
 
       // A tool the model invented: find one to install instead of failing.
-      if (!this.isKnownTool(call.name)) {
+      if (!this.isKnownTool(runId, call.name)) {
         const message = `There is no tool named "${call.name}" in this run.`;
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: message, errorType: "CAPABILITY_UNAVAILABLE", retryable: false, envelope: this.refusalEnvelope(state, call, message) });
         replies.set(call.id, message);
@@ -3384,7 +3394,7 @@ export class StreamingAgentRuntime {
         continue;
       }
 
-      const spec = this.tools.list().find((t) => t.name === call.name);
+      const spec = this.gatewayFor(runId).list().find((t) => t.name === call.name);
       const schema = spec?.parameters as ToolParameterSchema | undefined;
       // Metadata only (never file contents): which keys, how big.
       const argMeta = {
@@ -3443,7 +3453,7 @@ export class StreamingAgentRuntime {
       this.store.emit(runId, "tool.validated", { callId: call.id, ...argMeta });
       if (state.pendingRepairs.delete(call.name)) this.store.emit(runId, "tool.repaired", { callId: call.id, tool: call.name });
 
-      const permission = this.tools.getPermission(call.name);
+      const permission = this.gatewayFor(runId).getPermission(call.name);
       if (permission === "denied") {
         const denied = permissionDeniedPayload(call.name);
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: denied.error, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, denied.error) });
@@ -3477,7 +3487,9 @@ export class StreamingAgentRuntime {
         ((call.name === "terminal" || call.name === "run_command" || call.name === "ssh_exec") &&
           isDestructiveCommand(String((call.arguments as any).command ?? "")));
 
+      let promptShown = false;
       if (decision.ask || destructive) {
+        promptShown = true;
         this.store.emit(runId, "approval.required", {
           callId: call.id,
           tool: call.name,
@@ -3514,6 +3526,19 @@ export class StreamingAgentRuntime {
           }));
           continue;
         }
+      }
+
+      // The call is sanctioned at this point: a just-shown prompt the user
+      // approved, an earlier "Allow for Run", or an access-mode policy grant.
+      // Carry that evidence so the registry's fail-closed ask check passes.
+      if (permission === "ask") {
+        const forRun = state.approvedTools.has(call.name);
+        grants.set(call.id, {
+          granted: true,
+          scope: forRun ? "mission" : "once",
+          approvalId: call.id,
+          grantedBy: promptShown || forRun ? "user" : "policy",
+        });
       }
 
       runnable.push(call);
@@ -3592,12 +3617,13 @@ export class StreamingAgentRuntime {
             runId,
           },
           () =>
-            this.tools.execute(call.name, call.arguments, "coder", projectToolContext(state, {
+            this.gatewayFor(runId).execute(call.name, call.arguments, "coder", projectToolContext(state, {
               signal: state.controller.signal,
               executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
               toolUseId: call.id,
               runId,
               tenantId: state.execution?.tenantId || undefined,
+              approval: grants.get(call.id),
               onOutput: terminalLike && !remoteRun ? (chunk) => this.store.emit(runId, "terminal.output", { callId: call.id, data: chunk, live: true }) : undefined,
             }))
         );
@@ -3631,7 +3657,7 @@ export class StreamingAgentRuntime {
           | undefined;
         const activated = Array.isArray(result.meta.activated) ? result.meta.activated : [];
         for (const name of activated) {
-          if (typeof name === "string" && this.isKnownTool(name)) state.exposedTools?.add(name);
+          if (typeof name === "string" && this.isKnownTool(runId, name)) state.exposedTools?.add(name);
         }
         const asked = String((call.arguments as { query?: string })?.query ?? "").trim();
         if (required && asked) {
@@ -3865,7 +3891,7 @@ export class StreamingAgentRuntime {
         const fullError = result.error ?? "unknown error";
         // A failing command with a huge output (a build log) is condensed for the model too.
         const error = shouldCondense(call.name, fullError) ? await this.condenseForModel(runId, state, call, fullError, command) : fullError;
-        const errorType = classifyExecutedToolFailure(error);
+        const errorType = result.errorType ?? classifyExecutedToolFailure(error);
         // The typed error model: recovery is decided by the failure CLASS,
         // never by a string match at the call site — and a tool error is
         // never a reason to switch models.
@@ -3980,17 +4006,31 @@ export class StreamingAgentRuntime {
     let seq = 0;
     const verifier = new VerificationRuntime({
       provider,
-      toolDefinitions: this.toolDefinitions(VERIFIER_TOOLS),
+      // Same provider failover every other role gets: a provider outage mid-
+      // verification swaps to a compatible model instead of killing the check.
+      generateModel: async (prov, request) => {
+        try {
+          return await prov.generate(request as never);
+        } catch (err) {
+          if (state.cancelled) throw err;
+          const failure = classifyModelFailure(err);
+          if (!failure) throw err;
+          const next = this.failoverModel(runId, state, prov, failure, String((err as Error)?.message ?? err));
+          if (!next) throw err;
+          return next.generate(request as never);
+        }
+      },
+      toolDefinitions: this.toolDefinitions(runId, VERIFIER_TOOLS),
       signal: state.controller.signal,
       tools: {
         execute: async (tool, args) => {
           // Read-only tools only (VerificationRuntime refuses the rest). A tool
           // the project denies stays denied; running code needs full access.
-          if (this.tools.getPermission(tool) === "denied") return { ok: false, error: `${tool} is denied for this project.` };
+          if (this.gatewayFor(runId).getPermission(tool) === "denied") return { ok: false, error: `${tool} is denied for this project.` };
           if (/^run_(tests|typecheck|linter)$/.test(tool) && state.accessMode !== "full_access") {
             return { ok: false, error: `${tool} needs approval; the verifier does not ask. Rely on the run's own test evidence.` };
           }
-          return this.tools.execute(tool, args, "coder", { ...context, toolUseId: `verify_${attempt}_${++seq}` });
+          return this.gatewayFor(runId).execute(tool, args, "coder", { ...context, toolUseId: `verify_${attempt}_${++seq}`, approval: { granted: true, scope: "internal", grantedBy: "runtime" } });
         },
       },
       onToolCall: (call, result) => {

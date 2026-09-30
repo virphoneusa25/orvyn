@@ -9,13 +9,17 @@ import { collectSources } from "../runSources";
 
 /** ORION's final answer in a run: what it said after its last tool (or the whole reply). */
 function finalAnswerText(events: AgentEvent[]): string {
+  // The settlement summary is the machine-approved final answer — when the
+  // run settled, prefer it over reconstructing prose from message deltas.
+  const settled = [...events].reverse().find((e) => e.type === "mission.settled");
+  const settledSummary = String(settled?.data.summary ?? "").trim();
   let lastTool = -1;
   events.forEach((e, i) => { if (e.type === "tool.completed" || e.type === "tool.failed") lastTool = i; });
   let text = "";
   events.forEach((e, i) => { if (e.type === "message.retracted") text = ""; else if (e.type === "message.delta" && i > lastTool) text += String(e.data.content ?? ""); });
   if (!text.trim()) text = events.filter((e) => e.type === "message.delta").map((e) => String(e.data.content ?? "")).join("");
   const grounded = [...events].reverse().find((e) => e.type === "message.grounded");
-  return String(grounded?.data.content ?? text).trim();
+  return String(grounded?.data.content ?? (settledSummary || text)).trim();
 }
 import React, { useEffect, useState } from "react";
 import { MessageContent } from "./MessageContent";
@@ -269,7 +273,7 @@ export function AgentActivityList({
             // Thought rows: while one is the live activity (no endTs, run
             // still streaming) it reads as an active state — "Working…" with
             // the pulse. Once real activity follows, it becomes the quiet
-            // historical marker "Thought · 3s". The hover summary is a safe
+            // historical marker "Planning · 3s". The hover summary is a safe
             // one-line status label — never private reasoning.
             if (item.thought) {
               const live = !item.thought.endTs && (status === "running" || status === "awaiting_approval");
@@ -283,16 +287,16 @@ export function AgentActivityList({
                 : undefined;
               if (live) return null;
               if (!dur && !item.thought.summary) return null;
-              // "Thought · 5 seconds": a quiet marker. The summary is a safe
+              // "Planning · 5 seconds": a quiet marker. The summary is a safe
               // one-line status label (never private reasoning), shown on hover.
               return (
                 <div
                   key={item.key}
                   className="stream-thought"
-                  title={item.thought.summary ?? "Thought"}
+                  title={item.thought.summary ?? "Planning"}
                 >
                   <span aria-hidden="true" className="stream-thought-icon">✦</span>
-                  <span className="stream-thought-label">Thought</span>
+                  <span className="stream-thought-label">Planning</span>
                   {dur ? <span>· {dur}</span> : null}
                 </div>
               );
@@ -486,6 +490,10 @@ export function CapabilityCard({ item, install, onInstalled }: {
   const [state, setState] = useState<"idle" | "installing" | "done" | "error">("idle");
   const [error, setError] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  // If the run settles while a secret is typed but unsubmitted, drop it.
+  useEffect(() => {
+    if (settled || item.settled) setSecrets({});
+  }, [settled, item.settled]);
   if (install) {
     const need = install.secrets ?? [];
     const run = async () => {
@@ -502,6 +510,10 @@ export function CapabilityCard({ item, install, onInstalled }: {
         onInstalled?.();
       } catch (err: any) {
         setState("error"); setError(String(err?.message ?? err));
+      } finally {
+        // Secret values live in component state only for the duration of the
+        // request — never linger after success, failure, or cancel.
+        setSecrets({});
       }
     };
     return (
@@ -529,7 +541,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
             <button data-testid="capability-install" disabled={state === "installing" || need.some((n) => !secrets[n]?.trim())} onClick={() => void run()} style={btn("var(--accent)")}>
               {state === "installing" ? "Installing…" : `Install ${install.name}`}
             </button>
-            <button onClick={() => setSettled(true)} style={btn("var(--border)")}>Not now</button>
+            <button onClick={() => { setSecrets({}); setSettled(true); }} style={btn("var(--border)")}>Not now</button>
           </div>
         )}
       </div>
@@ -581,10 +593,18 @@ function ApprovalCard({
   // buttons (the run-level error surfaces separately) — never a silent click.
   const [busy, setBusy] = useState(false);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  // A typed-but-unsubmitted secret is dropped the moment the item settles.
+  useEffect(() => {
+    if (item.settled) setSecrets({});
+  }, [item.settled]);
   const act = (approved: boolean, scope?: "once" | "mission") => {
     setBusy(true);
     const filled = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v.trim()));
-    Promise.resolve(onApprove(item.key, approved, scope, approved && Object.keys(filled).length ? filled : undefined)).finally(() => setBusy(false));
+    Promise.resolve(onApprove(item.key, approved, scope, approved && Object.keys(filled).length ? filled : undefined)).finally(() => {
+      setBusy(false);
+      // Clear secret fields as soon as the answer leaves — approved or denied.
+      setSecrets({});
+    });
   };
   // Answered: one quiet line ("Approved  $ npm test"); the step's own row follows.
   if (item.settled && !item.install) {
@@ -701,7 +721,18 @@ export function RunFooter({
 
   if (!finished) return null;
 
-  const endEvent = [...events].reverse().find((e) => e.type === "run.completed" || e.type === "run.partial");
+  // mission.settled is the authoritative terminal event; the legacy run.*
+  // events are mirrors kept for older sessions and replayed history.
+  const endEvent =
+    [...events].reverse().find((e) => e.type === "mission.settled") ??
+    [...events].reverse().find(
+      (e) =>
+        e.type === "run.completed" ||
+        e.type === "run.partial" ||
+        e.type === "run.blocked" ||
+        e.type === "run.error" ||
+        e.type === "run.cancelled"
+    );
   const time = endEvent
     ? new Date(endEvent.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : null;
@@ -724,10 +755,8 @@ export function RunFooter({
   }
   const hasChanges = edits.size > 0;
 
-  const fullText = events
-    .filter((e) => e.type === "message.delta")
-    .map((e) => String(e.data.content ?? ""))
-    .join("");
+  // One source of final truth: the same settlement-aware text AnswerActions uses.
+  const fullText = finalAnswerText(events);
 
   async function copy() {
     try {

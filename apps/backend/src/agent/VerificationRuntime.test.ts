@@ -218,12 +218,17 @@ test("a file-only CSS task does NOT require browser verification (no page change
   assert.equal(result.verdict, "PASS", "a correct standalone css file verifies without a browser");
 });
 
-test("collectVerificationEvidence derives website from page changes, not intent", () => {
+test("collectVerificationEvidence requires the browser for page changes and intent-scoped visual work", () => {
   const events = [
     { type: "tool.completed", sequence: 1, data: { callId: "c1", tool: "write_file", envelope: { toolName: "write_file", status: "success", userSummary: "w", evidence: [{ type: "file", file: "demo-styles.css", operation: "write" }] } } },
   ];
-  const cssOnly = collectVerificationEvidence("create a css file", events as never, { website: true });
-  assert.equal(cssOnly.website, false, "css-only change with frontend intent → browser not required");
+  // No frontend intent → a standalone css file is file-deliverable.
+  const cssOnly = collectVerificationEvidence("create a css file", events as never);
+  assert.equal(cssOnly.website, false, "css-only change without frontend intent → browser not required");
+  // Frontend intent + a frontend file changed IS a visual change: "make the
+  // navbar responsive" editing only styles.css must see a browser.
+  const visual = collectVerificationEvidence("make the navbar responsive", events as never, { website: true });
+  assert.equal(visual.website, true, "frontend intent + css change → browser verification required");
   const pageEvents = [
     { type: "tool.completed", sequence: 1, data: { callId: "c1", tool: "write_file", envelope: { toolName: "write_file", status: "success", userSummary: "w", evidence: [{ type: "file", file: "index.html", operation: "write" }] } } },
   ];

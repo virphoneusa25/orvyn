@@ -20,7 +20,9 @@ export type TaskStatus =
   | "FAILED"
   | "REWORK"
   | "COMPLETED"
-  | "BLOCKED";
+  | "BLOCKED"
+  /** Never ran — a dependency failed or the plan had a cycle. Terminal. */
+  | "SKIPPED";
 
 export type MissionStatus = "QUEUED" | "PLANNING" | "RUNNING" | "REVIEW" | "COMPLETED" | "FAILED" | "BLOCKED";
 
@@ -32,6 +34,8 @@ export interface Task {
   agent: AgentRole;
   status: TaskStatus;
   attempts: number;
+  /** Task ids that must reach COMPLETED before this task may run. */
+  dependsOn?: string[];
   result?: string;
   reviewNotes?: string;
   createdAt: number;
@@ -59,7 +63,7 @@ export interface Mission {
 }
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  QUEUED: ["PLANNING", "RUNNING", "BLOCKED"],
+  QUEUED: ["PLANNING", "RUNNING", "BLOCKED", "SKIPPED"],
   PLANNING: ["RUNNING", "FAILED", "BLOCKED"],
   RUNNING: ["WAITING", "TESTING", "REVIEW", "COMPLETED", "FAILED", "BLOCKED"],
   WAITING: ["RUNNING", "FAILED", "BLOCKED"],
@@ -69,6 +73,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   FAILED: ["REWORK"],
   COMPLETED: [],
   BLOCKED: ["RUNNING", "REWORK"],
+  SKIPPED: [],
 };
 
 export class TaskEngine {
@@ -136,7 +141,7 @@ export class TaskEngine {
     if (status === "BLOCKED") this.bus.missionBlocked(m);
   }
 
-  addTask(missionId: string, description: string, agent: AgentRole): Task | undefined {
+  addTask(missionId: string, description: string, agent: AgentRole, dependsOn?: string[]): Task | undefined {
     const m = this.missions.get(missionId);
     if (!m) return undefined;
     const task: Task = {
@@ -146,6 +151,7 @@ export class TaskEngine {
       agent,
       status: "QUEUED",
       attempts: 0,
+      ...(dependsOn?.length ? { dependsOn } : {}),
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -198,6 +204,7 @@ export class TaskEngine {
         status: t.status,
         attempts: t.attempts,
         reviewNotes: t.reviewNotes,
+        dependsOn: t.dependsOn,
       })),
     };
   }

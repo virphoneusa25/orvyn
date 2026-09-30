@@ -30,7 +30,13 @@ export interface TaskIntent {
   successCriteria: string[];
   /** A conceptual question. The runtime may answer it without tools. */
   informational: boolean;
+  /** How heavy the execution path should be — the mission router reads this. */
+  executionComplexity: ExecutionComplexity;
+  /** Broad multi-domain work justifies the multi-agent runtime; simple work does not. */
+  preferMultiAgent: boolean;
 }
+
+export type ExecutionComplexity = "answer" | "simple" | "standard" | "complex";
 
 const INFO =
   /^(what|why|how|when|who|explain|describe|compare|tell me about|what can you|can you co-work)\b/i;
@@ -60,66 +66,134 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const database = has(goal, /\b(database|postgres|mysql|sqlite|sql query|schema)\b/i);
   const deploy = has(goal, /\b(deploy|release|rollout|ship to production)\b/i) || mode === "deploy";
   const browser =
-    has(goal, /\b(browser|homepage|webpage|open the (app|site|page)|screenshot|viewport|mobile view)\b/i) ||
+    // "screenshot" alone is not a browser signal — desktop screenshots exist.
+    has(goal, /\b(browser|homepage|webpage|website|web app|open the (app|site|page)|viewport|mobile view)\b/i) ||
     // "Open example.com", "go to https://…": a site to look at, not a file.
     has(goal, /\b(open|visit|go to|navigate to|browse to|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
   const desktop = has(goal, /\b(desktop|on screen|settings dialog|computer-use)\b/i);
-  const artifact = has(goal, /\b(logo|png|jpe?g|gif|webp|svg|pdf|docx|xlsx|zip|generate an image)\b/i) && !usesGivenFile(goal);
+  // A deliverable file, not a keyword in passing: needs a produce verb AND an
+  // artifact type — "Explain PDF compression" is not an artifact request.
+  const artifact =
+    !usesGivenFile(goal) &&
+    (has(goal, /\bgenerate an image\b/i) ||
+      (has(goal, /\b(create|generate|make|export|produce|build)\b/i) &&
+        has(goal, /\b(logo|png|jpe?g|gif|webp|svg|pdf|docx|xlsx|zip|image|document|spreadsheet)\b/i)));
   const integration = has(goal, /\b(mcp|external api|webhook|integration)\b/i);
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
   const frontend = has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server|hero (?:image|animation|background|section)|(?:site|page) background)\b/i);
+  // Frontend implementation verbs make a frontend task engineering work —
+  // "Redesign the dashboard" is a code task even without the word "code".
+  const frontendAction = has(goal, /\b(create|build|redesign|change|update|add|remove|implement|fix|modify|replace|restyle|retheme|theme|layout|design|polish|animate|make|rename|reorder|resize|improve)\b/i);
+  // "My configured test server" is a server, not the word "test" implying
+  // code work — that one adjective pair is neutralized for the code signal.
+  const codeText = remoteText.replace(/\btest\s+server\b/gi, "server");
   const code =
     mode === "code" ||
-    has(goal, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|file)\b/i);
+    (frontend && frontendAction) ||
+    has(codeText, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|class|component|endpoint|route|module|file|code|codebase)\b/i);
   const terminal = has(goal, /\b(npm |node |pytest|terminal|run the|run tests|build|dev server|start it|keep it running|serve)\b/i) || code || server || deploy;
-
-  let category: TaskCategory = "general";
-  if (research && !code && !server) category = "research";
-  else if (artifact && !code) category = "artifact";
-  else if (desktop) category = "desktop";
-  else if (browser && !code) category = "browser";
-  else if (database) category = "database";
-  else if (server) category = "server";
-  else if (deploy) category = "deploy";
-  else if (integration) category = "integration";
-  else if (automation) category = "automation";
-  else if (cloud) category = "cloud";
-  else if (code) category = "code";
 
   const action = has(
     goal,
-    /\b(create|fix|generate|edit|update|implement|refactor|deploy|install|build|run|start|stop|write|inspect|verify|debug|modify|screenshot|login|log into|ssh)\b/i
+    /\b(create|fix|generate|edit|update|implement|refactor|deploy|install|build|run|start|stop|write|inspect|verify|debug|modify|replace|add|remove|change|restyle|connect|configure|set up|setup|delete|rename|move|make|redesign|screenshot|login|log into|ssh)\b/i
   );
   const greeting = /^(hi+|hello+|hey+|yo|sup|hiya|howdy|thanks|thank you|thx)[!.?\s]*$/i.test(goal);
-  const informational = greeting || (goal.length > 0 && INFO.test(goal) && !action && category === "general");
+  // "How do I deploy X?" is a question even though it names an action.
+  const howTo = /^how\s+(do|can|should|would|to)\b/i.test(goal);
+  // Informational intent is independent of the domain: "What is PostgreSQL?"
+  // is a question even though it touches the database category.
+  const informational = greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo));
+
+  // The action outranks the resource: "deploy to my server" is a deploy task
+  // that happens to use a server, not server administration.
+  let category: TaskCategory = "general";
+  if (research && !action) category = "research";
+  else if (artifact && !code) category = "artifact";
+  else if (automation && !code && !deploy) category = "automation";
+  else if (deploy) category = "deploy";
+  else if (integration) category = "integration";
+  else if (database && !code) category = "database";
+  else if (server && !code) category = "server";
+  else if (cloud) category = "cloud";
+  else if (code) category = "code";
+  else if (browser) category = "browser";
+  else if (desktop) category = "desktop";
 
   const success: string[] = [];
   if (server) success.push("Remote command output from the resolved server.");
   if (code && has(goal, /\b(test|verify|fix)\b/i)) success.push("The requested check ran and its result is in the tool log.");
+  if (frontend && !informational) {
+    success.push(
+      "The requested frontend change exists in the bound workspace.",
+      "The project build or relevant diagnostics complete successfully.",
+      "The canonical preview loads successfully.",
+      "Required CSS, JavaScript, and image assets load without blocking errors.",
+      "Browser verification confirms the requested UI behavior.",
+      "No blocking browser console errors remain."
+    );
+  }
+  if (deploy && !informational) {
+    success.push(
+      "Deployment command completed successfully.",
+      "The deployed service reports healthy.",
+      "The expected production endpoint responds successfully."
+    );
+  }
+  if (database && !informational) {
+    success.push(
+      "The requested database operation completed against the intended database.",
+      "The resulting schema or data state was read back and verified."
+    );
+  }
+  if (integration && !informational) {
+    success.push(
+      "The integration is configured.",
+      "A real connectivity or interoperability check succeeded."
+    );
+  }
   if (artifact) success.push("A persisted artifact id.");
-  if (desktop || browser) success.push("A screenshot or verification event from this session.");
+  if ((desktop || browser) && !informational) success.push("A screenshot or verification event from this session.");
   if (has(goal, /\b(read it back|what it says|what it contains)\b/i)) success.push("A read of the file that was written.");
   if (success.length === 0 && !informational) success.push("The requested outcome is supported by a tool result.");
+
+  const domains = [code, frontend, deploy, server, database, integration, artifact, automation].filter(Boolean).length;
+  const executionComplexity: ExecutionComplexity = informational
+    ? "answer"
+    : domains >= 3 || (deploy && (server || code)) || (frontend && (integration || database))
+      ? "complex"
+      : code && domains === 1
+        ? "simple"
+        : "standard";
 
   return {
     category,
     goal,
-    requiresWorkspace: category === "code" || category === "deploy" || has(goal, /\b(file|repo|workspace|project)\b/i),
+    requiresWorkspace:
+      !informational &&
+      (category === "code" ||
+        category === "deploy" ||
+        frontend ||
+        database ||
+        has(goal, /\b(file|repo|workspace|project|codebase)\b/i)),
     requiresRemoteResource:
       !informational &&
       !frontend &&
       (has(goal, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
         (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
     requiresTerminal: terminal && !informational,
-    requiresBrowser: browser || frontend,
-    requiresDesktop: desktop || frontend,
-    requiresArtifact: artifact,
-    requiresExternalIntegration: integration,
-    requiresFrontend: frontend,
-    requiresBrowserVerification: frontend,
+    requiresBrowser: !informational && (browser || frontend),
+    // Frontend work is verified by headless browser, not the Virtual Desktop —
+    // Desktop is only for tasks that explicitly need GUI interaction.
+    requiresDesktop: !informational && desktop,
+    requiresArtifact: !informational && artifact,
+    requiresExternalIntegration: !informational && integration,
+    requiresFrontend: frontend && !informational,
+    requiresBrowserVerification: frontend && !informational,
     successCriteria: success,
     informational,
+    executionComplexity,
+    preferMultiAgent: executionComplexity === "complex",
   };
 }
