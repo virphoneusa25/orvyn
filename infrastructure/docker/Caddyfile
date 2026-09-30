@@ -1,6 +1,7 @@
 # infrastructure/docker/Caddyfile
 # Caddy auto-provisions and renews a Let's Encrypt cert for {$DOMAIN} as
-# long as DNS points at this server and ports 80/443 are reachable.
+# long as DNS points at this server and ports 80/443 are reachable. Compose
+# supplies the production hostname when DOMAIN is absent from .env.
 
 {$DOMAIN} {
 	# REST API + WebSocket both proxy to the backend container.

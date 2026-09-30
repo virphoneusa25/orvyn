@@ -71,7 +71,7 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      - DOMAIN=${DOMAIN}
+      - DOMAIN=${DOMAIN:-orvyn.virphoneusa.com}
       - STAGING_DOMAIN=${STAGING_DOMAIN:-staging.orvyn.virphoneusa.com}
       - ORVYN_APP_HOST=${ORVYN_APP_HOST:-app.kernelailabs.com}
       - ORVYN_ADMIN_HOST=${ORVYN_ADMIN_HOST:-admin.kernelailabs.com}
