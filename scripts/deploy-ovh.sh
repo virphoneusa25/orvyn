@@ -44,6 +44,12 @@ rsync -az --delete -e "$RSH" \
 rsync -az --delete -e "$RSH" \
   "$ROOT/infrastructure/" "$HOST:$REMOTE/infrastructure/"
 
+# The worker image bakes in the OpenShell acceptance suite (apps/worker/Dockerfile
+# copies it from scripts/acceptance), so it must be in the build context.
+"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/scripts/acceptance'"
+rsync -az -e "$RSH" \
+  "$ROOT/scripts/acceptance/openshell-sandbox.mjs" "$HOST:$REMOTE/scripts/acceptance/"
+
 # The backend image copies resources/skills. The OVH build context is this
 # partial sync, not a git checkout, so the directory has to be sent explicitly.
 rsync -az --delete -e "$RSH" \
@@ -139,134 +145,8 @@ fi"; then
   fi
 fi
 
-echo "Validating Caddy configuration on $HOST"
-"${SSH[@]}" "$HOST" "set -euo pipefail
-cd '$REMOTE'
-docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"
-
-echo "Rebuilding backend + worker on $HOST"
-"${SSH[@]}" "$HOST" "set -euo pipefail
-cd '$REMOTE'
-# OpenShell sandboxes are opt-in per server: only with OPENSHELL_ENABLED=true in .env.
-OS_COMPOSE=''
-if grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null; then
-  OS_COMPOSE='-f infrastructure/ovh/compose.openshell.yml'
-  echo 'OpenShell overlay: enabled'
-  # Never carry a pass bit across a new provider build. The exact gateway,
-  # worker and workload are proved below before OpenShell selection unlocks.
-  { grep -v '^OPENSHELL_ACCEPTANCE_PASSED=' .env || true; echo 'OPENSHELL_ACCEPTANCE_PASSED=false'; } > .env.tmp
-  mv .env.tmp .env && chmod 600 .env
-  bash infrastructure/openshell/setup.sh
-  docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml \$OS_COMPOSE up -d --no-deps openshell-gateway
-  # Register the private mTLS gateway, then prove an RPC reaches it before
-  # importing profiles. A local gateway-list entry alone does not mean the
-  # freshly started gateway is accepting requests yet.
-  gateway_registered=0
-  for _ in \$(seq 1 30); do
-    if sudo /usr/local/lib/orvyn-openshell/openshell gateway list 2>/dev/null | grep -qE '(^|[[:space:]])orvyn([[:space:]]|$)'; then
-      gateway_registered=1
-      break
-    fi
-    if sudo /usr/local/lib/orvyn-openshell/openshell gateway add https://\${OPENSHELL_BRIDGE_IP:-172.17.0.1}:8080 --local --name orvyn >/tmp/orvyn-gateway-add.log 2>&1; then
-      gateway_registered=1
-      break
-    fi
-    sleep 2
-  done
-  if [ \$gateway_registered -ne 1 ]; then cat /tmp/orvyn-gateway-add.log >&2 || true; exit 1; fi
-  gateway_ready=0
-  for _ in \$(seq 1 30); do
-    if sudo /usr/local/lib/orvyn-openshell/openshell provider profile list --gateway orvyn >/tmp/orvyn-gateway-ready.log 2>&1; then
-      gateway_ready=1
-      break
-    fi
-    sleep 2
-  done
-  if [ \$gateway_ready -ne 1 ]; then cat /tmp/orvyn-gateway-ready.log >&2 || true; exit 1; fi
-  sudo /usr/local/lib/orvyn-openshell/openshell provider profile lint \
-    --from infrastructure/openshell/provider-profiles
-  # Import new profiles and update existing ones with the optimistic-lock
-  # resource version exported by the live gateway. OpenShell imports are
-  # create-only, so replaying a directory import would break every redeploy.
-  profile_tmp=\$(mktemp -d)
-  trap 'rm -rf "\$profile_tmp"' EXIT
-  for profile_file in infrastructure/openshell/provider-profiles/*.yaml; do
-    profile_id=\$(awk '/^id:/ { print \$2; exit }' "\$profile_file")
-    if sudo /usr/local/lib/orvyn-openshell/openshell provider profile export \
-      "\$profile_id" --global --gateway orvyn --output yaml \
-      > "\$profile_tmp/current.yaml" 2>/dev/null; then
-      resource_version=\$(awk '/^resource_version:/ { print \$2; exit }' "\$profile_tmp/current.yaml")
-      test -n "\$resource_version"
-      awk -v version="\$resource_version" \
-        'NR == 1 { print; print \"resource_version: \" version; next } { print }' \
-        "\$profile_file" > "\$profile_tmp/update.yaml"
-      sudo /usr/local/lib/orvyn-openshell/openshell provider profile update \
-        "\$profile_id" --file "\$profile_tmp/update.yaml" --global --gateway orvyn
-    else
-      sudo /usr/local/lib/orvyn-openshell/openshell provider profile import \
-        --file "\$profile_file" --global --gateway orvyn
-    fi
-  done
-  rm -rf "\$profile_tmp"
-  trap - EXIT
-fi
-docker compose \
-  -f docker-compose.yml \
-  -f infrastructure/ovh/compose.prod.yml \
-  -f infrastructure/ovh/compose.control-plane.yml \
-  -f infrastructure/ovh/compose.worker.yml \
-  \$OS_COMPOSE \
-  up -d --build --no-deps backend worker
-# Caddy: pick up new site blocks (app/admin hosts) without dropping connections.
-docker compose \
-  -f docker-compose.yml \
-  -f infrastructure/ovh/compose.prod.yml \
-  -f infrastructure/ovh/compose.control-plane.yml \
-  -f infrastructure/ovh/compose.worker.yml \
-  \$OS_COMPOSE \
-  up -d --no-deps caddy
-docker compose \
-  -f docker-compose.yml \
-  -f infrastructure/ovh/compose.prod.yml \
-  -f infrastructure/ovh/compose.control-plane.yml \
-  -f infrastructure/ovh/compose.worker.yml \
-  \$OS_COMPOSE \
-  exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || echo 'caddy reload skipped'
-docker compose \
-  -f docker-compose.yml \
-  -f infrastructure/ovh/compose.prod.yml \
-  -f infrastructure/ovh/compose.control-plane.yml \
-  -f infrastructure/ovh/compose.worker.yml \
-  \$OS_COMPOSE \
-  ps
-
-if [ -n "\$OS_COMPOSE" ]; then
-  echo 'Running mandatory OpenShell acceptance gate'
-  mkdir -p /opt/orvyn/workspaces/_acceptance
-  docker compose \
-    -f docker-compose.yml \
-    -f infrastructure/ovh/compose.prod.yml \
-    -f infrastructure/ovh/compose.control-plane.yml \
-    -f infrastructure/ovh/compose.worker.yml \
-    \$OS_COMPOSE \
-    exec -T \
-      -e ORVYN_WORKER_DIST=/app/dist/sandbox \
-      -e ORVYN_TEST_DOCKER_IMAGE=orvyn/sandbox:0.1.2-2 \
-      -e ORVYN_TEST_WORKSPACE_ROOT=/opt/orvyn/workspaces/_acceptance \
-      worker node /app/acceptance/openshell-sandbox.mjs --json /opt/orvyn/workspaces/_acceptance/report.json
-  sudo install -D -m 0644 /opt/orvyn/workspaces/_acceptance/report.json /var/lib/openshell/acceptance.json
-  { grep -v '^OPENSHELL_ACCEPTANCE_PASSED=' .env || true; echo 'OPENSHELL_ACCEPTANCE_PASSED=true'; } > .env.tmp
-  mv .env.tmp .env && chmod 600 .env
-  docker compose \
-    -f docker-compose.yml \
-    -f infrastructure/ovh/compose.prod.yml \
-    -f infrastructure/ovh/compose.control-plane.yml \
-    -f infrastructure/ovh/compose.worker.yml \
-    \$OS_COMPOSE \
-    up -d --no-deps backend
-  echo 'OpenShell acceptance gate passed; provider selection unlocked'
-fi
-"
+echo "Rebuilding on $HOST (Caddy check, optional OpenShell, backend + worker)"
+"${SSH[@]}" "$HOST" "cd '$REMOTE' && bash infrastructure/ovh/remote-deploy.sh"
 
 echo "Waiting for $PUBLIC_HEALTH"
 ok=0

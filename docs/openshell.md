@@ -190,12 +190,20 @@ Service `openshell-gateway` (compose overlay `infrastructure/ovh/compose.openshe
 | Health / monitoring | distroless image, no in-container probe. The worker calls the gateway health RPC every 60 s and reports it with its heartbeat; admin System Health shows "Sandbox runtime: OpenShell gateway" (healthy workers, version, latency, active, failed/24 h, provision time, denials, reconnects, fallbacks). |
 | Kernel | Linux ≥ 6.2 (Landlock ABI v3). `setup.sh` refuses older kernels. |
 
-The deploy script adds the overlay only when the server's `.env` contains
-`OPENSHELL_ENABLED=true`. In that case it runs setup, starts the gateway,
-imports every provider profile, rebuilds the worker, runs the real gateway
-acceptance suite, saves `/var/lib/openshell/acceptance.json`, then sets the
-pass bit and restarts the backend. Any failed check stops the deployment with
-the pass bit false.
+The server-side steps live in real files, not quoted SSH strings:
+`infrastructure/ovh/remote-deploy.sh` (called by `scripts/deploy-ovh.sh`),
+`infrastructure/openshell/prepare.sh` and `infrastructure/openshell/accept.sh`.
+
+When the server's `.env` contains `OPENSHELL_ENABLED=true`, a deploy first
+resets `OPENSHELL_ACCEPTANCE_PASSED=false`, then `prepare.sh` runs setup,
+starts the gateway, registers it and upserts every provider profile. Only if
+that succeeds is the overlay included when backend and worker are rebuilt.
+`accept.sh` then runs the real gateway suite in the new worker and saves
+`/var/lib/openshell/acceptance.json`; on success the pass bit is set and the
+backend restarted. A failure in either step is a warning, never a failed
+deploy: the core services still ship and every mission stays on Docker,
+because the backend selects OpenShell only when the pass bit is true AND the
+organization is on the canary.
 
 ## Staged rollout
 

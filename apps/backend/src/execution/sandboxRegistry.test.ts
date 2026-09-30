@@ -60,9 +60,10 @@ test("selection: Docker unless the deployment enables OpenShell AND the org is i
   const input = { organizationId: "org-a", tenantId: "t-a", projectId: "p-a", planId: "pro", runId: "r", workspaceId: "p-a" };
   assert.equal(selectSandbox(input, reg, {}).provider, "docker");
   assert.equal(selectSandbox(input, reg, { ORVYN_EXECUTION_PROVIDER: "auto" }).provider, "docker", "not enabled");
-  const on = { ORVYN_EXECUTION_PROVIDER: "auto", OPENSHELL_ENABLED: "true" };
+  const on = { ORVYN_EXECUTION_PROVIDER: "auto", OPENSHELL_ENABLED: "true", OPENSHELL_ACCEPTANCE_PASSED: "true" };
   assert.equal(selectSandbox(input, reg, on).provider, "docker", "enabled but not in canary");
   reg.setFlag("org", "org-a", OPENSHELL_FLAG, true, "staff:x");
+  assert.equal(selectSandbox(input, reg, { ...on, OPENSHELL_ACCEPTANCE_PASSED: "false" }).provider, "docker", "a flagged org stays on Docker until this deploy's acceptance passed");
   const plan = selectSandbox(input, reg, on);
   assert.equal(plan.provider, "openshell");
   assert.equal(plan.fallback, "docker", "auto falls back");
@@ -77,7 +78,8 @@ test("selection: canary list and percentage (percentage only after acceptance)",
   const reg = freshRegistry();
   const input = { organizationId: "org-z", projectId: null };
   const on = { ORVYN_EXECUTION_PROVIDER: "auto", OPENSHELL_ENABLED: "true" };
-  assert.equal(openShellEligible(input, reg, { ...on, OPENSHELL_CANARY_ORGS: "org-y, org-z" }).eligible, true);
+  assert.equal(openShellEligible(input, reg, { ...on, OPENSHELL_CANARY_ORGS: "org-y, org-z" }).eligible, false, "not even the canary list before acceptance");
+  assert.equal(openShellEligible(input, reg, { ...on, OPENSHELL_CANARY_ORGS: "org-y, org-z", OPENSHELL_ACCEPTANCE_PASSED: "true" }).eligible, true);
   assert.equal(openShellEligible(input, reg, { ...on, OPENSHELL_CANARY_PERCENT: "100" }).eligible, false, "no global activation before acceptance");
   assert.equal(openShellEligible(input, reg, { ...on, OPENSHELL_CANARY_PERCENT: "100", OPENSHELL_ACCEPTANCE_PASSED: "true" }).eligible, true);
 });

@@ -6,12 +6,14 @@
 //   ORVYN_EXECUTION_PROVIDER = docker | openshell | auto   (default docker)
 //   OPENSHELL_ENABLED        = true to allow OpenShell at all (default off)
 //   OPENSHELL_CANARY_ORGS    = comma-separated organization ids (canary)
-//   OPENSHELL_CANARY_PERCENT = 0-100, honored only with OPENSHELL_ACCEPTANCE_PASSED=true
+//   OPENSHELL_CANARY_PERCENT = 0-100
+//   OPENSHELL_ACCEPTANCE_PASSED = true only after the live acceptance gate of
+//                              THIS deploy passed (set by remote-deploy.sh)
 //
 // An organization (or project) reaches OpenShell only when the deployment
-// enables it AND it is in the canary: flag `openshell_runtime` on the org or
-// project, or listed in OPENSHELL_CANARY_ORGS, or inside the percentage
-// rollout once acceptance has passed. A flag set to false always wins.
+// enables it, the acceptance gate passed, AND it is in the canary: flag
+// `openshell_runtime` on the org or project, listed in OPENSHELL_CANARY_ORGS,
+// or inside the percentage rollout. A flag set to false always wins.
 //
 // `auto` falls back to Docker when the gateway is unavailable; `openshell`
 // does not (the run fails truthfully). Either way the choice is recorded.
@@ -96,6 +98,7 @@ export function openShellEligible(input: Pick<SelectionInput, "organizationId" |
   const mode = (env.ORVYN_EXECUTION_PROVIDER || "docker").toLowerCase();
   if (mode === "docker") return { eligible: false, reason: "provider policy: docker" };
   if (env.OPENSHELL_ENABLED !== "true") return { eligible: false, reason: "OpenShell disabled on this deployment" };
+  if (env.OPENSHELL_ACCEPTANCE_PASSED !== "true") return { eligible: false, reason: "OpenShell acceptance has not passed on this deployment" };
   const projectFlag = input.projectId ? registry.flag("project", input.projectId, OPENSHELL_FLAG) : null;
   const orgFlag = registry.flag("org", input.organizationId, OPENSHELL_FLAG);
   if (projectFlag === false || orgFlag === false) return { eligible: false, reason: "flag off for this organization/project" };
@@ -104,7 +107,7 @@ export function openShellEligible(input: Pick<SelectionInput, "organizationId" |
   const canary = String(env.OPENSHELL_CANARY_ORGS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   if (canary.includes(input.organizationId)) return { eligible: true, reason: "canary list" };
   const percent = Number(env.OPENSHELL_CANARY_PERCENT ?? 0);
-  if (env.OPENSHELL_ACCEPTANCE_PASSED === "true" && inPercent(input.organizationId, percent)) return { eligible: true, reason: `rollout ${percent}%` };
+  if (inPercent(input.organizationId, percent)) return { eligible: true, reason: `rollout ${percent}%` };
   return { eligible: false, reason: "not in the OpenShell canary" };
 }
 

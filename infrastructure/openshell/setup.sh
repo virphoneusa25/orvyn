@@ -29,6 +29,14 @@ if [ "$(printf '%s\n6.2\n' "$kernel" | sort -V | head -1)" != "6.2" ]; then
   exit 1
 fi
 
+# 1b. gateway.toml asks Docker for its RuntimeDefault AppArmor profile, which
+#     only works when the daemon reports AppArmor support.
+if grep -q '^app_armor_profile *= *"RuntimeDefault"' infrastructure/openshell/gateway.toml \
+  && ! docker info --format '{{json .SecurityOptions}}' | grep -q apparmor; then
+  echo "Docker does not report AppArmor support, but gateway.toml requires RuntimeDefault. Enable AppArmor on this host or set app_armor_profile = \"Unconfined\"." >&2
+  exit 1
+fi
+
 # 2. Pinned images (never :latest).
 docker pull "ghcr.io/nvidia/openshell/gateway@$GATEWAY_DIGEST"
 docker pull "ghcr.io/nvidia/openshell/supervisor@$SUPERVISOR_DIGEST"
