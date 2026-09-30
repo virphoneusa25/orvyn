@@ -31,6 +31,7 @@ export interface ToolResponse {
   stderr?: string;
   exitCode?: number;
   error?: string;
+  meta?: Record<string, unknown>;
   durationMs: number;
 }
 

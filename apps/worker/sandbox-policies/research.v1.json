@@ -99,6 +99,9 @@
           },
           {
             "path": "/usr/local/bin/node"
+          },
+          {
+            "path": "/ms-playwright/chromium-1187/chrome-linux/chrome"
           }
         ]
       }

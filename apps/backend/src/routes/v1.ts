@@ -8,7 +8,7 @@ import { desktopRouter } from "./desktop";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth, localWorkerServices, requestLocalServiceStop } from "./localWorker";
 import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
-import { summarizeRuns, threadHistory } from "../agent/runThread";
+import { instructionOf, summarizeRuns, threadHistory } from "../agent/runThread";
 import { recordRunAnswer, recordRunInstruction } from "../sessions/sessionMessages";
 import { sessionState } from "../sessions/sessionState";
 import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath, resolveWorkspace } from "../documents/workspace";
@@ -30,6 +30,7 @@ import { MODES } from "../agent/modes";
 import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
 import { promises as fsp } from "fs";
+import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
 
 export const v1Router = Router();
 
@@ -84,9 +85,58 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
     if (process.env.ORVYN_CLOUD_MODE === "true") throw new Error("tenant required");
     return tenantManager.ensureLocalDefault().runStore;
   }
-  const tenant = tenantManager.get(tenantId);
-  if (!tenant) throw new Error(`Unknown tenant ${tenantId}`);
+  // Boot recovery runs before a customer makes their first request. Recreate
+  // the tenant services from their durable stores so live missions can resume.
+  const tenant = tenantManager.get(tenantId) ?? tenantManager.create(tenantId, "", tenantId);
   return tenant.runStore;
+}, (tenantId, runId) => {
+  const tenant = tenantManager.get(tenantId);
+  const run = tenant?.runStore.get(runId);
+  if (!tenant || !run) return;
+  const session = tenant.sessions.sessionOfRun(runId);
+  const instruction = tenant.sessions.messageOfRun(runId)?.content || instructionOf(run);
+  if (!instruction.trim()) {
+    tenant.runStore.emit(runId, "run.error", { message: "The control plane restarted, but the durable run instruction was unavailable." });
+    tenant.runStore.setStatus(runId, "error");
+    return;
+  }
+  const record = sandboxRegistry().forRun(runId);
+  if (!record) {
+    tenant.runStore.emit(runId, "run.error", { message: "The control plane restarted, but the sandbox record was unavailable." });
+    tenant.runStore.setStatus(runId, "error");
+    return;
+  }
+  _regTools(tenant, run.projectRoot);
+  const previousRunIds = session?.runIds.filter((id) => id !== runId) ?? [];
+  tenant.agentRuntime.start(
+    run.projectRoot,
+    instruction,
+    undefined,
+    (tenant.sessions.messageOfRun(runId)?.mode || "agent") as any,
+    undefined,
+    threadHistory(tenant.runStore, previousRunIds),
+    undefined,
+    {
+      location: "OVH_WORKER",
+      remoteProjectRoot: "",
+      tenantId,
+      organizationId: record.organizationId,
+      userId: record.userId,
+      projectId: record.projectId,
+      workspaceId: record.workspaceId,
+      targetRequested: "ovh_worker",
+      targetActual: "ovh_worker",
+      executionLabel: "ORVYN Cloud",
+      hostPlatform: "linux",
+      fallbackReason: "control plane restart recovery",
+    },
+    {
+      recoverRunId: runId,
+      workspaceId: session?.workspaceId ?? record.workspaceId,
+      previousRunIds,
+      workspaceIdentity: { created: false, restored: true, fresh: false },
+    },
+  );
 }));
 
 // Validate every explicit project root before an endpoint uses it. A forced

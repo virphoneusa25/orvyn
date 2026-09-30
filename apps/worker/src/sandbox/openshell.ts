@@ -26,6 +26,7 @@ import { renderPolicy } from "./policies";
 import {
   SandboxError,
   type AttachSession,
+  type AttachOptions,
   type CreateSandboxSpec,
   type CredentialGrant,
   type ExecOptions,
@@ -60,7 +61,7 @@ export function openShellConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Op
     caCertFile: env.OPENSHELL_TLS_CA || undefined,
     clientCertFile: env.OPENSHELL_TLS_CERT || undefined,
     clientKeyFile: env.OPENSHELL_TLS_KEY || undefined,
-    image: env.OPENSHELL_SANDBOX_IMAGE || "orvyn/sandbox:0.1.2-1",
+    image: env.OPENSHELL_SANDBOX_IMAGE || "orvyn/sandbox:0.1.2-2",
     readyTimeoutS: Number(env.OPENSHELL_READY_TIMEOUT_S) || 120,
   };
 }
@@ -130,7 +131,7 @@ export class OpenShellExecutionProvider implements ExecutionSandboxProvider {
       network: "policy",
       networkPolicyTemplates: ["code-basic", "web-development", "research", "github", "deployment", "server-admin"],
       liveNetworkPolicyUpdate: true, credentialBroker: true, reconnect: true, retainedSandboxes: true,
-      browser: false, gpu: false,
+      browser: true, gpu: false,
     };
   }
 
@@ -349,10 +350,10 @@ export class OpenShellExecutionProvider implements ExecutionSandboxProvider {
     return result;
   }
 
-  async attach(handle: SandboxHandle, opts: { cols?: number; rows?: number } = {}): Promise<AttachSession> {
+  async attach(handle: SandboxHandle, opts: AttachOptions = {}): Promise<AttachSession> {
     const c = await this.connect();
-    const session = await c.sandbox.execInteractive(handle.name, ["sh"], {
-      workspace: handle.scope, workdir: "/workspace", tty: true, cols: opts.cols ?? 120, rows: opts.rows ?? 32,
+    const session = await c.sandbox.execInteractive(handle.name, opts.command?.length ? opts.command : ["sh"], {
+      workspace: handle.scope, workdir: opts.cwd ?? "/workspace", tty: opts.tty ?? true, cols: opts.cols ?? 120, rows: opts.rows ?? 32,
     });
     const listeners: Array<(s: string) => void> = [];
     void (async () => {

@@ -147,6 +147,23 @@ async function waitForStatus(store: RunStore, runId: string, timeoutMs = 4_000):
   return store.get(runId)?.status ?? "unknown";
 }
 
+test("boot recovery resumes the same durable run and tells the model to inspect existing work", async () => {
+  const h = harness([[{ delta: "Recovered and verified.", done: true }]]);
+  const root = mkdtempSync(join(tmpdir(), "orvyn-recover-runtime-"));
+  h.store.create("run-recover", root);
+  h.store.emit("run-recover", "message.delta", { content: "work completed before restart" });
+
+  const id = h.runtime.start(root, "Continue the deployment", undefined, "agent", undefined, [], undefined, undefined, {
+    recoverRunId: "run-recover",
+  });
+  assert.equal(id, "run-recover");
+  assert.equal(await waitForStatus(h.store, id), "completed");
+  assert.ok(h.store.get(id)?.events.some((event) => event.data?.content === "work completed before restart"));
+  const prompt = h.provider.requests[0]?.messages.map((message) => String(message.content ?? "")).join("\n") ?? "";
+  assert.match(prompt, /control plane restarted/i);
+  assert.match(prompt, /inspect the current files and git diff/i);
+});
+
 test("answers every parallel tool call exactly once, in the order requested", async () => {
   const h = harness([
     [

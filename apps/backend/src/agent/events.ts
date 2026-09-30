@@ -317,16 +317,26 @@ export class RunStore {
             turns: Number(rec.turns ?? 0),
           };
         } else if (rec.t === "ev" && run) {
-          run.events.push(rec.e as AgentEvent);
-          run.nextSequence = Math.max(run.nextSequence, (rec.e.sequence as number) + 1);
-          this.replayQueueEvent(run.id, rec.e as AgentEvent);
+          const event = rec.e as AgentEvent;
+          run.events.push(event);
+          run.nextSequence = Math.max(run.nextSequence, (event.sequence as number) + 1);
+          if (event.type === "run.execution") {
+            const location = String(event.data?.location ?? "");
+            run.execution = {
+              executionLocation: location,
+              reason: event.data?.fallbackReason ? String(event.data.fallbackReason) : undefined,
+              workerId: event.data?.workerId ? String(event.data.workerId) : undefined,
+              startedAt: Number(event.timestamp || Date.now()),
+            };
+          }
+          this.replayQueueEvent(run.id, event);
         }
       }
       if (run) {
         // A run that was mid-flight when the process died can never progress
         // again — its runtime state is gone. Mark it honestly instead of
         // leaving a permanent "running"/"awaiting_approval" ghost.
-        if (!isTerminal(run.status)) {
+        if (!isTerminal(run.status) && run.execution?.executionLocation !== "OVH_WORKER") {
           const seq = run.nextSequence++;
           const ghost: AgentEvent = {
             id: `evt_${run.id.slice(0, 6)}_${seq}`,

@@ -5,25 +5,28 @@
 # change with it, or every allowed connection is denied:
 #   /usr/local/bin/node   /usr/bin/python3.12   /usr/bin/git
 #   /usr/lib/git-core/git-remote-http   /usr/bin/curl   /usr/bin/ssh
+#   /ms-playwright/chromium-1187/chrome-linux/chrome
 #
 # Build (on the server, tag pinned — never :latest):
-#   docker build -t orvyn/sandbox:0.1.2-1 infrastructure/openshell/sandbox-image
+#   docker build -t orvyn/sandbox:0.1.2-2 infrastructure/openshell/sandbox-image
 FROM node:20.19.5-bookworm-slim AS node
 
-FROM ubuntu:24.04
+FROM mcr.microsoft.com/playwright@sha256:b27e719ecbfef153e13fd24e8341736733bf2658b229677eb21ff57ff5d7fb29
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git python3 openssh-client coreutils \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
- && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g playwright-core@1.55.0 \
  && node --version && npm --version && git --version
+COPY browser-server.mjs mcp-server.mjs /usr/local/lib/orvyn/
 # OpenShell refuses root workloads. uid/gid 1000 must match OPENSHELL_SANDBOX_UID
 # on the worker, which hands the workspace files to this user.
 RUN (userdel -r ubuntu 2>/dev/null || true) \
  && groupadd --gid 1000 sandbox && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash sandbox \
- && install -d -o sandbox -g sandbox /sandbox /workspace
+ && install -d -o sandbox -g sandbox /sandbox /workspace /home/sandbox/.cache
 WORKDIR /sandbox
 USER sandbox
 CMD ["/bin/bash"]

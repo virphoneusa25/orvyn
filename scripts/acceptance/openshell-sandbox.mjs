@@ -7,14 +7,11 @@
 //   npm run build -w @orvyn/worker
 //   OPENSHELL_GATEWAY_URL=https://openshell-gateway:8080 \
 //   OPENSHELL_TLS_CA=... OPENSHELL_TLS_CERT=... OPENSHELL_TLS_KEY=... \
-//   OPENSHELL_SANDBOX_IMAGE=orvyn/sandbox:0.1.2-1 \
-//   ORVYN_TEST_DOCKER_IMAGE=orvyn/sandbox:0.1.2-1 \
+//   OPENSHELL_SANDBOX_IMAGE=orvyn/sandbox:0.1.2-2 \
+//   ORVYN_TEST_DOCKER_IMAGE=orvyn/sandbox:0.1.2-2 \
 //   ORVYN_TEST_WORKSPACE_ROOT=/opt/orvyn/workspaces/_acceptance \
 //   node scripts/acceptance/openshell-sandbox.mjs [--json report.json]
 //
-// Optional: ORVYN_TEST_CREDENTIAL_TYPE=orvyn-github (profile imported on the
-// gateway) enables the credential-brokering checks.
-
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -34,13 +31,18 @@ const cfg = {
   caCertFile: process.env.OPENSHELL_TLS_CA,
   clientCertFile: process.env.OPENSHELL_TLS_CERT,
   clientKeyFile: process.env.OPENSHELL_TLS_KEY,
-  image: process.env.OPENSHELL_SANDBOX_IMAGE || "orvyn/sandbox:0.1.2-1",
+  image: process.env.OPENSHELL_SANDBOX_IMAGE || "orvyn/sandbox:0.1.2-2",
   readyTimeoutS: 120,
 };
 if (!cfg.gateway) { console.error("OPENSHELL_GATEWAY_URL is required"); process.exit(2); }
-const SECRET = `ghp_ORVYN_ACCEPTANCE_${Math.random().toString(36).slice(2)}`;
-const credType = process.env.ORVYN_TEST_CREDENTIAL_TYPE || "";
-cfg.credentialSource = async () => ({ GITHUB_TOKEN: SECRET });
+const SECRET = `ORVYN_ACCEPTANCE_${Math.random().toString(36).slice(2)}`;
+const credentialFixtures = {
+  github: { type: "orvyn-github", env: { GITHUB_TOKEN: `ghp_${SECRET}`, GH_TOKEN: `ghp_${SECRET}` } },
+  vercel: { type: "orvyn-vercel", env: { VERCEL_TOKEN: `vercel_${SECRET}` } },
+  netlify: { type: "orvyn-netlify", env: { NETLIFY_AUTH_TOKEN: `netlify_${SECRET}` } },
+  cloudflare: { type: "orvyn-cloudflare", env: { CLOUDFLARE_API_TOKEN: `cloudflare_${SECRET}` } },
+};
+cfg.credentialSource = async (_runId, integrationId) => credentialFixtures[integrationId]?.env ?? null;
 const root = process.env.ORVYN_TEST_WORKSPACE_ROOT || fs.mkdtempSync(path.join(os.tmpdir(), "orvyn-os-accept-"));
 fs.mkdirSync(root, { recursive: true });
 const SANDBOX_UID = Number(process.env.OPENSHELL_SANDBOX_UID) || 1000;
@@ -70,6 +72,39 @@ function workspace(name) {
 }
 const sid = (tag) => `sbx_${tag}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const pct = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+
+async function helperConversation(handle, script, calls) {
+  const session = await p.attach(handle, { command: ["node", script], cwd: "/workspace", tty: false });
+  let buffer = "";
+  const pending = new Map();
+  session.onData((chunk) => {
+    buffer += chunk;
+    let end;
+    while ((end = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, end).trim(); buffer = buffer.slice(end + 1);
+      try {
+        const parsed = JSON.parse(line);
+        const waiter = pending.get(parsed.id);
+        if (waiter) { pending.delete(parsed.id); waiter(parsed); }
+      } catch { /* helper diagnostic */ }
+    }
+  });
+  try {
+    const replies = [];
+    for (const [op, args = {}] of calls) {
+      const requestId = `accept-${Date.now()}-${Math.random()}`;
+      const response = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`${op} helper timed out`)); }, 30_000);
+        pending.set(requestId, (value) => { clearTimeout(timer); resolve(value); });
+      });
+      session.write(`${JSON.stringify({ id: requestId, op, args })}\n`);
+      replies.push(await response);
+    }
+    return replies;
+  } finally {
+    await session.close().catch(() => {});
+  }
+}
 
 const p = new OpenShellExecutionProvider(cfg);
 const handles = [];
@@ -154,6 +189,56 @@ await check("cross-tenant sandbox access: org B cannot look up, exec in, or atta
   return "not found in org B's scope";
 });
 
+await check("interactive terminal attaches to the authorized sandbox", async () => {
+  const session = await p.attach(A, { cols: 100, rows: 30 });
+  let output = "";
+  session.onData((chunk) => { output += chunk; });
+  session.write("printf ORVYN_ATTACH_OK\\n\nexit\n");
+  const code = await Promise.race([
+    session.exited,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("interactive terminal did not exit")), 15_000)),
+  ]);
+  await session.close().catch(() => {});
+  assert(output.includes("ORVYN_ATTACH_OK"), `terminal output missing marker: ${output.slice(-300)}`);
+  assert(code === 0, `terminal exited ${code}`);
+  return "input/output and exit status verified";
+});
+
+await check("browser runs inside the sandbox and returns screenshot evidence", async () => {
+  fs.writeFileSync(path.join(wsA, "browser.html"), "<!doctype html><title>ORVYN sandbox browser</title><h1 id=proof>inside sandbox</h1>");
+  fs.chownSync(path.join(wsA, "browser.html"), SANDBOX_UID, SANDBOX_UID);
+  const server = await p.exec(A, "python3 -m http.server 8765 --directory /workspace >/tmp/orvyn-http.log 2>&1 &", { timeoutS: 10 });
+  assert(server.exitCode === 0, server.stderr);
+  const [opened, shot] = await helperConversation(A, "/usr/local/lib/orvyn/browser-server.mjs", [
+    ["open", { url: "http://127.0.0.1:8765/browser.html" }],
+    ["screenshot", {}],
+  ]);
+  assert(opened.ok && /ORVYN sandbox browser/.test(opened.output), JSON.stringify(opened).slice(0, 300));
+  assert(shot.ok && String(shot.meta?.screenshot?.b64 ?? "").length > 1000, "screenshot bytes missing");
+  assert(shot.meta?.url === "http://127.0.0.1:8765/browser.html", `browser session lost its page: ${JSON.stringify(shot.meta)}`);
+  return "page title and PNG bytes returned by sandbox Chromium";
+});
+
+await check("MCP stdio server starts and is called inside the sandbox", async () => {
+  fs.mkdirSync(path.join(wsA, ".orvyn"), { recursive: true });
+  fs.writeFileSync(path.join(wsA, "mcp-fixture.mjs"), `
+import readline from "node:readline";
+for await (const line of readline.createInterface({input:process.stdin})) {
+  const m=JSON.parse(line); if(m.id==null) continue;
+  const result=m.method==="initialize"?{protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"fixture",version:"1"}}:m.method==="tools/list"?{tools:[{name:"echo",description:"echo"}]}:{content:[{type:"text",text:String(m.params?.arguments?.text??"")}],isError:false};
+  process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:m.id,result})+"\\n");
+}`);
+  fs.writeFileSync(path.join(wsA, ".orvyn", "mcp.json"), JSON.stringify({ servers: { fixture: { command: "node", args: ["/workspace/mcp-fixture.mjs"] } } }));
+  for (const file of [path.join(wsA, "mcp-fixture.mjs"), path.join(wsA, ".orvyn"), path.join(wsA, ".orvyn", "mcp.json")]) fs.chownSync(file, SANDBOX_UID, SANDBOX_UID);
+  const [listed, called] = await helperConversation(A, "/usr/local/lib/orvyn/mcp-server.mjs", [
+    ["list", {}],
+    ["call", { server: "fixture", tool: "echo", arguments: { text: "MCP_IN_SANDBOX" } }],
+  ]);
+  assert(listed.ok && /fixture:/.test(listed.output) && /echo/.test(listed.output), JSON.stringify(listed));
+  assert(called.ok && called.output === "MCP_IN_SANDBOX", JSON.stringify(called));
+  return "stdio tools/list and tools/call verified";
+});
+
 await check("cross-tenant mount: org B cannot mount org A's workspace volume", async () => {
   const c = await p.connect();
   const volA = `orvyn-ws-${A.sandboxId.replace(/^sbx_/, "").toLowerCase()}`;
@@ -193,29 +278,30 @@ await check("live policy update: web-development opens registries for node/pytho
   const other = await p.exec(A, `node -e "fetch('https://example.com').then(r=>console.log(r.status)).catch(e=>{console.error(String(e.cause||e));process.exit(3)})"`, { timeoutS: 30 });
   assert(classifyExecOutput(other) === "network_policy_denied", `node → example.com was not policy-denied: ${other.stderr.slice(0, 160)}`);
   const allowed = await p.exec(A, `node -e "fetch('https://registry.npmjs.org/').then(r=>console.log(r.status)).catch(e=>{console.error(String(e.cause||e));process.exit(3)})"`, { timeoutS: 30 });
-  const denied = classifyExecOutput(allowed) === "network_policy_denied";
-  assert(!denied, `allowed host was denied by policy: ${allowed.stderr.slice(0, 200)}`);
-  return `curl blocked; example.com blocked; node→registry ${allowed.exitCode === 0 ? `HTTP ${allowed.stdout.trim()}` : "not policy-denied (upstream egress unavailable here)"}`;
+  assert(allowed.exitCode === 0, `allowed egress did not reach the registry: ${allowed.stderr.slice(0, 240)}`);
+  assert(/^200\s*$/.test(allowed.stdout), `registry returned unexpected status: ${allowed.stdout.slice(0, 80)}`);
+  return "curl blocked; example.com blocked; node→registry HTTP 200";
 });
 
-if (credType) {
-  await check("credential brokering: the token never enters the sandbox", async () => {
+for (const [integrationId, fixture] of Object.entries(credentialFixtures)) {
+  await check(`credential brokering (${integrationId}): token never enters the sandbox`, async () => {
     const C = await p.createSandbox({
-      sandboxId: sid("c"), identity: id("org-a", "run-c"), workspaceHostPath: workspace("org-a-cred"), resources: res,
-      policyTemplate: "github", retention: "ephemeral",
-      credentials: [{ organizationId: "org-a", integrationId: "github", type: credType }],
+      sandboxId: sid(`c${integrationId}`), identity: id("org-a", `run-c-${integrationId}`), workspaceHostPath: workspace(`org-a-cred-${integrationId}`), resources: res,
+      policyTemplate: integrationId === "github" ? "github" : "deployment", retention: "ephemeral",
+      credentials: [{ organizationId: "org-a", integrationId, type: fixture.type }],
     });
     handles.push(C);
-    const r = await p.exec(C, "env | grep -E '^(GITHUB|GH)_TOKEN=' ; cat /proc/[0-9]*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c ORVYN_ACCEPTANCE || true");
+    const envName = Object.keys(fixture.env)[0];
+    const r = await p.exec(C, `env | grep -E '^${envName}=' ; cat /proc/[0-9]*/environ 2>/dev/null | tr '\\0' '\\n' | grep -c ORVYN_ACCEPTANCE || true`);
     assert(!r.stdout.includes(SECRET), "secret value visible inside the sandbox");
-    const ex = await p.exec(C, 'curl -sS -m 8 -H "Authorization: Bearer $GITHUB_TOKEN" https://example.com/ -o /dev/null', { timeoutS: 20 });
+    const ex = await p.exec(C, `curl -sS -m 8 -H "Authorization: Bearer \$${envName}" https://example.com/ -o /dev/null`, { timeoutS: 20 });
     assert(ex.exitCode !== 0, "token could be sent to a non-GitHub host");
     return `sandbox sees ${r.stdout.split("\n")[0].replace(/=.*/, "=<placeholder>") || "no token var"}; exfil host blocked`;
   });
-  await check("credential grants are organization-scoped", async () => {
+  await check(`credential grant (${integrationId}) is organization-scoped`, async () => {
     let refused = false;
     try {
-      await p.createSandbox({ sandboxId: sid("x"), identity: id("org-b", "run-x"), workspaceHostPath: workspace("org-b-x"), resources: res, policyTemplate: "github", retention: "ephemeral", credentials: [{ organizationId: "org-a", integrationId: "github", type: credType }] });
+      await p.createSandbox({ sandboxId: sid(`x${integrationId}`), identity: id("org-b", `run-x-${integrationId}`), workspaceHostPath: workspace(`org-b-x-${integrationId}`), resources: res, policyTemplate: integrationId === "github" ? "github" : "deployment", retention: "ephemeral", credentials: [{ organizationId: "org-a", integrationId, type: fixture.type }] });
     } catch (e) { refused = e?.kind === "credential_policy_denied"; }
     assert(refused, "org B was able to use org A's credential grant");
   });
@@ -276,5 +362,5 @@ for (const h of handles) await p.destroy(h).catch(() => {});
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 const jsonAt = process.argv.indexOf("--json");
-if (jsonAt > 0) fs.writeFileSync(process.argv[jsonAt + 1], JSON.stringify({ gateway: "private", at: new Date().toISOString(), results, perf }, null, 2));
+if (jsonAt > 0) fs.writeFileSync(process.argv[jsonAt + 1], JSON.stringify({ schemaVersion: 1, openshellVersion: "0.1.2", workloadImage: cfg.image, gateway: "private", at: new Date().toISOString(), results, perf }, null, 2));
 process.exit(failed.length ? 1 : 0);

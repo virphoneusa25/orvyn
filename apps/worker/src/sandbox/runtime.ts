@@ -12,6 +12,8 @@ import {
   SandboxError,
   isPolicyTemplate,
   type CreateSandboxSpec,
+  type AttachOptions,
+  type AttachSession,
   type CredentialGrant,
   type ExecOptions,
   type ExecResult,
@@ -202,6 +204,13 @@ export class SandboxRuntime {
     }
     await this.events.report(runId, { sandboxId: handle.sandboxId, execMs: result.completedAt - result.startedAt });
     return denial ? { ...result, failureKind: denial } : result;
+  }
+
+  /** Opens a live bidirectional process inside the run's existing sandbox. */
+  async attach(runId: string, opts: AttachOptions = {}): Promise<AttachSession> {
+    const handle = this.handles.get(runId);
+    if (!handle) throw new SandboxError("sandbox_unavailable", "No sandbox for this run.");
+    return this.providers[handle.provider]!.attach(handle, opts);
   }
 
   async applyPolicy(runId: string, template: PolicyTemplateId, params: Record<string, string[]>, credentials: CredentialGrant[] = []): Promise<void> {

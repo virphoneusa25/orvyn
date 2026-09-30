@@ -12,6 +12,7 @@ import { docker, labelValue } from "./dockerCli";
 import {
   SandboxError,
   type AttachSession,
+  type AttachOptions,
   type CreateSandboxSpec,
   type ExecOptions,
   type ExecResult,
@@ -158,8 +159,9 @@ export class DockerExecutionProvider implements ExecutionSandboxProvider {
     });
   }
 
-  async attach(handle: SandboxHandle): Promise<AttachSession> {
-    const p = spawn("docker", ["exec", "-i", "-w", "/workspace", handle.providerSandboxId || handle.name, "sh"], { windowsHide: true });
+  async attach(handle: SandboxHandle, opts: AttachOptions = {}): Promise<AttachSession> {
+    const command = opts.command?.length ? opts.command : ["sh"];
+    const p = spawn("docker", ["exec", "-i", "-w", opts.cwd ?? "/workspace", handle.providerSandboxId || handle.name, ...command], { windowsHide: true });
     const listeners: Array<(c: string) => void> = [];
     const emit = (d: Buffer) => { const s = d.toString("utf8"); for (const l of listeners) l(s); };
     p.stdout.on("data", emit);

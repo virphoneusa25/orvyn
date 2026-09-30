@@ -18,6 +18,10 @@ COPY apps/worker/tsconfig.json ./
 COPY apps/worker/src/ ./src/
 RUN npx tsc -p tsconfig.json && rm -f dist/sandbox/*.test.js dist/sandbox/*.test.d.ts
 
+# The production deploy runs this against the real gateway before it enables
+# provider selection, so an upgrade can never inherit an older pass result.
+COPY scripts/acceptance/openshell-sandbox.mjs ./acceptance/openshell-sandbox.mjs
+
 # Reviewed network policy templates (the only policies a sandbox can get).
 COPY apps/worker/sandbox-policies/ ./sandbox-policies/
 

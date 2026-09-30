@@ -1222,6 +1222,7 @@ export function App() {
         height={chrome.layout.bottomTerminalHeight}
         onHeightChange={(h) => chrome.setBottomTerminalHeight(h)}
         onClose={() => chrome.setBottomTerminalOpen(false)}
+        remoteRunId={agentRun.events.some((event) => event.type === "run.execution" && event.data?.location === "OVH_WORKER") ? activeRunId : null}
       />
 
       <StatusBar />

@@ -14,10 +14,12 @@ import { toolRpc } from "../execution/ToolRpc";
 import { readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
 import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
-import { selectSandbox, type SandboxPlan } from "../execution/sandbox/selection";
+import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
 import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { githubToken } from "../integrations/githubConnection";
+import { deploymentCredential } from "../integrations/deploymentConnections";
+import { sandboxTerminalBroker } from "../execution/SandboxTerminalBroker";
 import {
   assertTrustedMission,
   countActiveByTenant,
@@ -76,7 +78,10 @@ const jobQueue: PendingJob[] = [];
  * whose journals replay with a live status are re-queued with recover=true
  * so the next worker reattaches to the sandbox and workspace bytes.
  */
-function recoverOrphanedRunsOnBoot(getStore: (tenantId?: string) => RunStore): void {
+function recoverOrphanedRunsOnBoot(
+  getStore: (tenantId?: string) => RunStore,
+  resumeRun?: (tenantId: string, runId: string) => void,
+): void {
   try {
     const dataDir = process.env.ORVYN_DATA_DIR || "";
     if (!dataDir) return;
@@ -96,18 +101,58 @@ function recoverOrphanedRunsOnBoot(getStore: (tenantId?: string) => RunStore): v
             if (run.status === "running" || run.status === "queued" || run.status === "awaiting_approval") {
               const already = jobQueue.some((j) => j.runId === runId);
               if (already) continue;
-              rememberTenant(runId, tenantId);
+              const record = sandboxRegistry().forRun(runId);
+              const identity = record ? assertTrustedMission({
+                runId,
+                tenantId: record.tenantId,
+                organizationId: record.organizationId,
+                userId: record.userId,
+                projectId: record.projectId,
+              }) : assertTrustedMission({
+                runId,
+                tenantId,
+                organizationId: tenantId,
+                userId: tenantId,
+                projectId: null,
+              });
+              rememberTenant(runId, tenantId, identity);
+              const canonical = bindCanonicalRoot(runId, run.projectRoot || "");
+              const plan: SandboxPlan | undefined = record ? {
+                sandboxId: record.id,
+                provider: record.provider,
+                fallback: record.provider === "openshell" && String(process.env.ORVYN_EXECUTION_PROVIDER).toLowerCase() === "openshell" ? "none" : "docker",
+                policyTemplate: record.policyTemplate as PolicyTemplateId,
+                resources: resourcesForPlan(creditLedger.planOf(tenantId)),
+                retention: record.retention,
+                credentials: [],
+                reason: "backend restart recovery",
+              } : planSandbox(identity);
               jobQueue.push({
                 runId,
-                missionId: "",
+                missionId: record?.missionId || `mission_${runId.slice(0, 8)}`,
                 instruction: "",
                 projectRoot: run.projectRoot || "",
+                canonicalProjectRoot: canonical,
                 tenantId,
+                organizationId: identity.organizationId,
+                userId: identity.userId,
+                projectId: identity.projectId,
+                workspace: missionWorkspacePath(WORKSPACE_ROOT, tenantId, plan?.retention === "retained" ? plan.sandboxId : runId),
                 createdAt: Date.now(),
                 role: "executor" as const,
                 recover: true,
+                ...(plan ? { sandbox: plan } : {}),
               });
               store.emit(runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Control plane restarted — reconnecting to the mission workspace" });
+              try {
+                resumeRun?.(tenantId, runId);
+              } catch (error: any) {
+                const queued = jobQueue.findIndex((job) => job.runId === runId);
+                if (queued >= 0) jobQueue.splice(queued, 1);
+                store.emit(runId, "run.error" as AgentEventType, { message: `Mission recovery failed: ${String(error?.message ?? error).slice(0, 300)}` });
+                store.setStatus(runId, "error");
+                continue;
+              }
               recovered++;
             }
           } catch { /* individual run read failure is not fatal */ }
@@ -195,7 +240,8 @@ export function workerStats(): { online: number; total: number } {
  * this control plane (ORVYN_DATA_DIR). The worker stages that tree over HTTP
  * and syncs changes back before its sandbox is removed.
  */
-export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string, canonicalProjectRoot?: string): void {
+export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string, canonicalProjectRoot?: string, recover = false): void {
+  if (jobQueue.some((job) => job.runId === runId)) return;
   const mission = assertTrustedMission({
     ...(typeof identity === "string" ? { tenantId: identity } : identity ?? {}),
     runId,
@@ -221,6 +267,7 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
     workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, sandbox?.retention === "retained" ? sandbox.sandboxId : mission.runId),
     role: "executor",
     createdAt: Date.now(),
+    ...(recover ? { recover: true } : {}),
     ...(sandbox ? { sandbox } : {}),
   });
 }
@@ -257,6 +304,7 @@ function finishJob(runId: string): void {
   const job = jobQueue.find((j) => j.runId === runId);
   if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
   try { sandboxRegistry().expireRequests(runId); } catch { /* registry unavailable */ }
+  sandboxTerminalBroker.closeRun(runId);
 }
 
 /** Admin System Health: per-worker sandbox runtime reports (no secrets, no paths). */
@@ -285,7 +333,8 @@ setInterval(pruneStaleWorkers, 15_000).unref();
 
 export function workerRouter(
   auth: (req: any) => any,
-  getRunStore: (tenantId?: string) => RunStore
+  getRunStore: (tenantId?: string) => RunStore,
+  resumeRun?: (tenantId: string, runId: string) => void,
 ): Router {
   const r = Router();
 
@@ -319,7 +368,7 @@ export function workerRouter(
   };
 
   // Boot-time recovery: scan for orphaned runs 5s after startup.
-  setTimeout(() => recoverOrphanedRunsOnBoot(getRunStore), 5_000).unref?.();
+  setTimeout(() => recoverOrphanedRunsOnBoot(getRunStore, resumeRun), 5_000).unref?.();
 
   // ── Worker loss → recovery ───────────────────────────────────────────
   // A job assigned to a worker that stopped heartbeating is re-queued with
@@ -415,6 +464,62 @@ export function workerRouter(
     res.json(applied);
   });
 
+  // ── Interactive portal terminal relay ────────────────────────────────
+  // Customer calls are tenant-bound. The worker only receives opaque
+  // actions and returns terminal bytes; it never receives browser auth.
+  r.post("/terminals/:runId/open", (req, res) => {
+    const caller = auth(req) as { id?: string };
+    const tenantId = String(caller?.id ?? "");
+    if (!tenantId || tenantForRun(req.params.runId) !== tenantId) return res.status(404).json({ error: "Run not found" });
+    const job = jobQueue.find((j) => j.runId === req.params.runId);
+    if (!job?.assignedTo) return res.status(409).json({ error: "The sandbox is not ready yet" });
+    const session = sandboxTerminalBroker.open(req.params.runId, tenantId, Number(req.body?.cols) || 120, Number(req.body?.rows) || 32);
+    res.status(201).json({ sessionId: session.id });
+  });
+
+  r.post("/terminals/:sessionId/input", (req, res) => {
+    const caller = auth(req) as { id?: string };
+    const ok = sandboxTerminalBroker.input(req.params.sessionId, String(caller?.id ?? ""), String(req.body?.data ?? ""));
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: "Terminal not found" });
+  });
+
+  r.post("/terminals/:sessionId/resize", (req, res) => {
+    const caller = auth(req) as { id?: string };
+    const ok = sandboxTerminalBroker.resize(req.params.sessionId, String(caller?.id ?? ""), Number(req.body?.cols) || 120, Number(req.body?.rows) || 32);
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: "Terminal not found" });
+  });
+
+  r.post("/terminals/:sessionId/close", (req, res) => {
+    const caller = auth(req) as { id?: string };
+    const ok = sandboxTerminalBroker.close(req.params.sessionId, String(caller?.id ?? ""));
+    res.status(ok ? 200 : 404).json(ok ? { ok: true } : { error: "Terminal not found" });
+  });
+
+  r.get("/terminals/:sessionId/output", (req, res) => {
+    const caller = auth(req) as { id?: string };
+    const out = sandboxTerminalBroker.read(req.params.sessionId, String(caller?.id ?? ""), Number(req.query.after) || 0);
+    res.status(out ? 200 : 404).json(out ?? { error: "Terminal not found" });
+  });
+
+  r.get("/terminals/:runId/worker-next", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const job = jobQueue.find((j) => j.runId === req.params.runId);
+    const workerId = String(req.query.workerId ?? "");
+    if (!job || job.assignedTo !== workerId) return res.status(409).json({ error: "This run is not assigned to this worker" });
+    res.json({ action: sandboxTerminalBroker.poll(req.params.runId) });
+  });
+
+  r.post("/terminals/:sessionId/worker-event", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const session = sandboxTerminalBroker.get(req.params.sessionId, String(tenantForRun(String(req.body?.runId ?? "")) ?? ""));
+    const job = session ? jobQueue.find((j) => j.runId === session.runId) : undefined;
+    if (!session || !job || job.assignedTo !== String(req.body?.workerId ?? "")) return res.status(409).json({ error: "Terminal is not assigned to this worker" });
+    const type = String(req.body?.type ?? "") as "output" | "exit" | "error";
+    if (!["output", "exit", "error"].includes(type)) return res.status(400).json({ error: "Invalid terminal event" });
+    sandboxTerminalBroker.push(session.id, { type, data: String(req.body?.data ?? "").slice(0, 64_000), exitCode: Number(req.body?.exitCode ?? 0) });
+    res.json({ ok: true });
+  });
+
   // ── Tool RPC: worker polls for the next tool request ─────────────────
   // The response also tells the worker when the control-plane run has
   // finished, so it can collect artifacts and clean the container up. The
@@ -423,6 +528,12 @@ export function workerRouter(
     if (denyUnlessWorker(req, res)) return;
     if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
       return res.status(404).json({ error: "Not found" });
+    }
+    const workerId = String(req.query.workerId ?? "");
+    const assigned = jobQueue.find((j) => j.runId === req.params.runId)?.assignedTo;
+    const worker = workers.get(workerId);
+    if (!workerId || !worker || worker.status === "offline" || assigned !== workerId) {
+      return res.status(409).json({ error: "This run was reassigned to another worker (you were declared offline). Stop serving it." });
     }
     const request = toolRpc.poll(req.params.runId);
     let finished = false;
@@ -454,10 +565,10 @@ export function workerRouter(
     // submit results. A zombie worker (declared dead, run reassigned,
     // process still alive) would corrupt the new worker's mission.
     {
-      const caller = auth(req) as { id?: string };
-      const workerId = String(caller?.id ?? "");
+      const workerId = String(req.body?.workerId ?? "");
       const assigned = jobQueue.find((j) => j.runId === req.params.runId)?.assignedTo;
-      if (assigned && assigned !== workerId) {
+      const worker = workers.get(workerId);
+      if (!workerId || !worker || worker.status === "offline" || assigned !== workerId) {
         return res.status(409).json({ error: `This run was reassigned to another worker (you were declared offline). Stop serving it.` });
       }
     }
@@ -469,6 +580,7 @@ export function workerRouter(
       stderr: req.body.stderr ? String(req.body.stderr) : undefined,
       exitCode: Number(req.body.exitCode ?? 0),
       error: req.body.error ? String(req.body.error) : undefined,
+      meta: req.body.meta && typeof req.body.meta === "object" ? req.body.meta as Record<string, unknown> : undefined,
       durationMs: Number(req.body.durationMs ?? 0),
     });
     res.json({ ok: resolved });
@@ -609,11 +721,12 @@ export function workerRouter(
     const reg = sandboxRegistry();
     const allowed = credentialAllowed(reg, req.params.runId, req.params.integrationId);
     if (!allowed.ok) return res.status(403).json({ error: "Not permitted" });
-    if (req.params.integrationId !== "github") return res.status(404).json({ error: "Unknown integration" });
-    const token = githubToken(allowed.tenantId);
-    if (!token) return res.json({ credentials: null });
+    const credentials = req.params.integrationId === "github"
+      ? (() => { const token = githubToken(allowed.tenantId); return token ? { GITHUB_TOKEN: token, GH_TOKEN: token } : null; })()
+      : deploymentCredential(allowed.tenantId, req.params.integrationId);
+    if (!credentials) return res.json({ credentials: null });
     reg.audit("credential.attached", "worker", { sandboxId: allowed.sandboxId, organizationId: allowed.organizationId, detail: { integrationId: req.params.integrationId } });
-    res.json({ credentials: { GITHUB_TOKEN: token } });
+    res.json({ credentials });
   });
 
   /** Sandbox ids still in use, for the worker's reconciliation pass. */

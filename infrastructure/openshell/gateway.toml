@@ -15,9 +15,9 @@ log_level           = "info"
 compute_driver      = "docker"
 
 [openshell.drivers.docker]
-default_image         = "orvyn/sandbox:0.1.2-1"
-sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:0.1.2"
-supervisor_image      = "ghcr.io/nvidia/openshell/supervisor:0.1.2"
+default_image         = "orvyn/sandbox:0.1.2-2"
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox@sha256:bf4797b6c511f2d8ba02955dbba4bf76c1f0dd6d83531420c5408d5f1fb9d72f"
+supervisor_image      = "ghcr.io/nvidia/openshell/supervisor@sha256:d7b5264bb6bc56f4796e6fa3617b8e4a8d785be0b7293542efd8cc250b0fb67a"
 image_pull_policy     = "if_not_present"
 sandbox_label         = "openshell"
 # Sandboxes call back through the host bridge. https: mTLS is on.
@@ -29,7 +29,9 @@ sandbox_pids_limit    = 1024
 # only ever be attached inside the organization it was labeled for.
 allow_driver_config   = true
 enable_bind_mounts    = true
-app_armor_profile     = "Unconfined"
+# The OVH host has AppArmor. Acceptance proves the Docker runtime profile can
+# support the supervisor before this configuration is allowed to go live.
+app_armor_profile     = "RuntimeDefault"
 
 [openshell.drivers.docker.resource_admission]
 enabled = true

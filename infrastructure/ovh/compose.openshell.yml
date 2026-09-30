@@ -20,7 +20,7 @@
 
 services:
   openshell-gateway:
-    image: ghcr.io/nvidia/openshell/gateway:0.1.2  # TODO: pin by digest after first pull: docker inspect --format='{{.RepoDigests}}' ghcr.io/nvidia/openshell/gateway:0.1.2
+    image: ghcr.io/nvidia/openshell/gateway@sha256:2fe4dad9118e14ab80a8258b545ea6e6cd74c3469e24ad4e6610f964d98913a2
     restart: unless-stopped
     # The Docker driver needs the host socket. The gateway never receives
     # customer traffic; it only creates, runs and deletes sandbox containers.
@@ -65,7 +65,7 @@ services:
       - OPENSHELL_TLS_CA=/etc/orvyn/openshell/tls/ca.crt
       - OPENSHELL_TLS_CERT=/etc/orvyn/openshell/tls/client/tls.crt
       - OPENSHELL_TLS_KEY=/etc/orvyn/openshell/tls/client/tls.key
-      - OPENSHELL_SANDBOX_IMAGE=${OPENSHELL_SANDBOX_IMAGE:-orvyn/sandbox:0.1.2-1}
+      - OPENSHELL_SANDBOX_IMAGE=${OPENSHELL_SANDBOX_IMAGE:-orvyn/sandbox:0.1.2-2}
       - OPENSHELL_SANDBOX_UID=1000
     volumes:
       - /etc/orvyn/openshell/tls/ca.crt:/etc/orvyn/openshell/tls/ca.crt:ro

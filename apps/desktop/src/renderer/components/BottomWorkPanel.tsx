@@ -395,6 +395,96 @@ export function useTerminalSession(): TerminalState {
   };
 }
 
+/** Interactive shell attached to the active cloud mission sandbox. */
+export function useSandboxTerminalSession(runId: string | null): TerminalState {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [output, setOutput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const sequence = useRef(0);
+  const sessionRef = useRef<string | null>(null);
+  sessionRef.current = sessionId;
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let stopped = false;
+    const poll = async () => {
+      while (!stopped && sessionRef.current === sessionId) {
+        try {
+          const res = await fetch(apiUrl(`/worker/terminals/${encodeURIComponent(sessionId)}/output?after=${sequence.current}`), { headers: authHeaders() });
+          if (!res.ok) break;
+          const body = await res.json();
+          for (const event of body.events ?? []) {
+            sequence.current = Math.max(sequence.current, Number(event.sequence) || 0);
+            if (event.type === "output" || event.type === "error") {
+              setOutput((current) => (current + stripAnsi(String(event.data ?? ""))).slice(-64_000));
+            }
+          }
+          if (body.closed) break;
+        } catch { /* retry while the mission is live */ }
+        await new Promise((resolve) => window.setTimeout(resolve, 200));
+      }
+    };
+    void poll();
+    return () => { stopped = true; };
+  }, [sessionId]);
+
+  useEffect(() => {
+    const previousSession = sessionRef.current;
+    if (previousSession) {
+      void fetch(apiUrl(`/worker/terminals/${encodeURIComponent(previousSession)}/close`), {
+        method: "POST",
+        headers: authHeaders(),
+      }).catch(() => undefined);
+    }
+    setSessionId(null);
+    setOutput("");
+    sequence.current = 0;
+  }, [runId]);
+
+  return {
+    sessionId,
+    output,
+    busy,
+    start: async () => {
+      if (!runId || sessionRef.current || busy) return;
+      setBusy(true);
+      try {
+        const res = await fetch(apiUrl(`/worker/terminals/${encodeURIComponent(runId)}/open`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ cols: 120, rows: 32 }),
+        });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error || "Unable to attach to the mission terminal");
+        sequence.current = 0;
+        setOutput("");
+        setSessionId(String(body.sessionId));
+      } catch (error: any) {
+        setOutput(String(error?.message ?? error));
+      } finally {
+        setBusy(false);
+      }
+    },
+    sendLine: async (line: string) => {
+      const id = sessionRef.current;
+      if (!id) return;
+      await fetch(apiUrl(`/worker/terminals/${encodeURIComponent(id)}/input`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ data: line + "\n" }),
+      });
+    },
+    kill: async () => {
+      const id = sessionRef.current;
+      if (!id) return;
+      await fetch(apiUrl(`/worker/terminals/${encodeURIComponent(id)}/close`), { method: "POST", headers: authHeaders() }).catch(() => undefined);
+      setSessionId(null);
+      setOutput("");
+      sequence.current = 0;
+    },
+  };
+}
+
 export function TerminalView({ term }: { term: TerminalState }) {
   const [input, setInput] = useState("");
   const outRef = useRef<HTMLDivElement | null>(null);

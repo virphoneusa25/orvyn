@@ -130,6 +130,15 @@ export interface AttachSession {
   exited: Promise<number>;
 }
 
+export interface AttachOptions {
+  cols?: number;
+  rows?: number;
+  /** Defaults to an interactive shell. Used by sandbox resident helpers. */
+  command?: string[];
+  cwd?: string;
+  tty?: boolean;
+}
+
 export interface RuntimeCapabilities {
   filesystem: boolean;
   terminal: boolean;
@@ -160,7 +169,7 @@ export interface ExecutionSandboxProvider {
   /** Finds a live sandbox again (after a worker restart). Null when it is gone. */
   getSandbox(sandboxId: string, identity: SandboxIdentity): Promise<SandboxHandle | null>;
   exec(handle: SandboxHandle, command: string, opts?: ExecOptions): Promise<ExecResult>;
-  attach(handle: SandboxHandle, opts?: { cols?: number; rows?: number }): Promise<AttachSession>;
+  attach(handle: SandboxHandle, opts?: AttachOptions): Promise<AttachSession>;
   stop(handle: SandboxHandle): Promise<void>;
   destroy(handle: SandboxHandle): Promise<void>;
   getCapabilities(): RuntimeCapabilities;

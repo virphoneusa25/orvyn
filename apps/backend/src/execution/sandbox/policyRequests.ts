@@ -13,7 +13,12 @@ import { POLICY_TEMPLATES, templatesForPlan, type PolicyTemplateId } from "./sel
 /** Templates that carry an integration credential, and which one. */
 export const TEMPLATE_CREDENTIALS: Partial<Record<PolicyTemplateId, Array<{ integrationId: string; type: string }>>> = {
   github: [{ integrationId: "github", type: "orvyn-github" }],
-  deployment: [{ integrationId: "github", type: "orvyn-github" }],
+  deployment: [
+    { integrationId: "github", type: "orvyn-github" },
+    { integrationId: "vercel", type: "orvyn-vercel" },
+    { integrationId: "netlify", type: "orvyn-netlify" },
+    { integrationId: "cloudflare", type: "orvyn-cloudflare" },
+  ],
 };
 
 /** Customer-facing names. Never a vendor or runtime name. */

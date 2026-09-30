@@ -1,29 +1,34 @@
 import React, { useEffect, useRef } from "react";
 import { clampTerminalHeight, TERMINAL_MIN_HEIGHT } from "../desktopLayout";
-import { TerminalView, useTerminalSession } from "./BottomWorkPanel";
+import { TerminalView, useSandboxTerminalSession, useTerminalSession } from "./BottomWorkPanel";
 
 export function TerminalDrawer({
   open,
   height,
   onHeightChange,
   onClose,
+  remoteRunId,
 }: {
   open: boolean;
   height: number;
   onHeightChange: (h: number) => void;
   onClose: () => void;
+  remoteRunId?: string | null;
 }) {
-  const term = useTerminalSession();
+  const localTerm = useTerminalSession();
+  const sandboxTerm = useSandboxTerminalSession(remoteRunId ?? null);
+  const term = remoteRunId ? sandboxTerm : localTerm;
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-  const started = useRef(false);
+  const started = useRef<string | null>(null);
+  const terminalKey = remoteRunId ? `sandbox:${remoteRunId}` : "local";
 
   useEffect(() => {
-    if (open && !term.sessionId && !term.busy && !started.current) {
-      started.current = true;
+    if (open && !term.sessionId && !term.busy && started.current !== terminalKey) {
+      started.current = terminalKey;
       void term.start();
     }
-    if (!open) started.current = false;
-  }, [open, term.sessionId, term.busy]);
+    if (!open) started.current = null;
+  }, [open, term.sessionId, term.busy, terminalKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +78,7 @@ export function TerminalDrawer({
       <div style={{ display: "flex", alignItems: "center", height: 26, padding: "0 8px", flexShrink: 0 }}>
         <span style={{ fontSize: 10.5, fontWeight: 650, letterSpacing: 0.6, color: "var(--orvyn-text-muted)" }}>TERMINAL</span>
         <span style={{ marginLeft: 8, fontSize: 10, color: "var(--orvyn-text-muted)" }}>
-          Local shell · same PTY as the right-panel Terminal tab
+          {remoteRunId ? "Mission sandbox shell · scoped to this run" : "Local shell · same PTY as the right-panel Terminal tab"}
         </span>
         <button
           type="button"

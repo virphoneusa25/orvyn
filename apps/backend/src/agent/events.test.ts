@@ -87,6 +87,25 @@ test("a run that was in-flight at shutdown replays as an honest error, not a gho
   }
 });
 
+test("a cloud-worker run remains live on replay so boot recovery can re-queue it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-runs-"));
+  try {
+    const live = new RunStore(dir);
+    live.create("run-remote", "/opt/orvyn/data/workspaces/t/p");
+    live.emit("run-remote", "run.started", { instruction: "long cloud work" });
+    live.emit("run-remote", "run.execution", { location: "OVH_WORKER", remoteProjectRoot: "/workspace" });
+    live.setStatus("run-remote", "awaiting_approval");
+
+    const revived = new RunStore(dir);
+    const run = revived.get("run-remote");
+    assert.equal(run?.status, "awaiting_approval");
+    assert.equal(run?.execution?.executionLocation, "OVH_WORKER");
+    assert.equal(run?.events.some((event) => event.type === "run.error"), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("steer: queued on a live run, drained once at the boundary, rejected when terminal", () => {
   const store = new RunStore();
   store.create("run-st", "C:/proj");

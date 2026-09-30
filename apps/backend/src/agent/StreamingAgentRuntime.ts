@@ -348,6 +348,8 @@ export interface RunOptions {
   workspaceId?: string;
   /** Earlier runs of this conversation (oldest first): a follow-up starts with their site preview. */
   previousRunIds?: string[];
+  /** Internal boot recovery: continue this durable run id instead of minting a new one. */
+  recoverRunId?: string;
 }
 
 /**
@@ -1449,7 +1451,9 @@ export class StreamingAgentRuntime {
     execution?: ExecutionSpec,
     options?: RunOptions
   ): string {
-    const runId = randomUUID();
+    const recovering = Boolean(options?.recoverRunId);
+    const runId = options?.recoverRunId ?? randomUUID();
+    if (recovering && !this.store.get(runId)) throw new Error(`Cannot recover unknown run ${runId}`);
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     // "Auto" with the customer's own model set as default: their model runs the task.
@@ -1476,7 +1480,11 @@ export class StreamingAgentRuntime {
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
           return this.modelService.router.resolve("agent");
         })();
-    this.store.create(runId, projectRoot);
+    if (!recovering) this.store.create(runId, projectRoot);
+    else {
+      this.store.setStatus(runId, "running");
+      this.store.emit(runId, "agent.phase", { phase: "PREPARE", note: "Control plane restarted — resuming from the durable workspace" });
+    }
     // The user attached an image (a logo, a screenshot): a model without
     // vision literally cannot see it, and "use the logo attached" degrades
     // to a note about a file the model can never look at. Route the run to
@@ -1658,15 +1666,6 @@ export class StreamingAgentRuntime {
               ? "Generated files are saved to this project and to Files → Generated."
               : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to ORVYN Cloud.",
       });
-      if (execution.location === "OVH_WORKER") {
-        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
-          tenantId: execution.tenantId ?? "",
-          organizationId: execution.organizationId ?? "",
-          userId: execution.userId ?? "",
-          projectId: execution.projectId ?? null,
-          runId,
-        }, projectRoot);
-      }
     } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.executionLabel === "Cloud") {
       // Cloud workspace on the control plane (no project folder): say so, so
       // the run is never mistaken for work on the user's computer.
@@ -1693,13 +1692,32 @@ export class StreamingAgentRuntime {
     // one-click Undo can put it back. Best-effort: a non-git folder simply
     // has no undo (gitHead is null there — an empty snapshot would make Undo
     // a silent no-op, so it is skipped and the button reports why).
-    // Phase 2: only snapshot a tree this process can actually see. A run whose
-    // tools execute on the Local Worker or an OVH worker must not make the
-    // control plane create "<client path>/.orvyn/checkpoints" on its own disk.
-    const toolsRunHere = !execution || execution.location === "LOCAL";
-    if (this.checkpoints && toolsRunHere) {
+    // The OVH worker receives a copy of `projectRoot`, which is the canonical
+    // Cloud workspace on this control plane. Snapshot that source of truth
+    // before queueing remote tool calls. Local Worker paths still belong to
+    // the customer's computer and must never be opened here.
+    const checkpointVisibleHere = !execution || execution.location === "LOCAL" || execution.location === "OVH_WORKER";
+    const queueRemoteRun = (): void => {
+      if (execution?.location !== "OVH_WORKER") return;
+      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
+        tenantId: execution.tenantId ?? "",
+        organizationId: execution.organizationId ?? "",
+        userId: execution.userId ?? "",
+        projectId: execution.projectId ?? null,
+        runId,
+      }, projectRoot, recovering);
+    };
+    if (recovering) {
+      // Preserve the original pre-run checkpoint. Recovery continues from the
+      // durable workspace instead of replacing Undo with a mid-run snapshot.
+      queueRemoteRun();
+    } else if (this.checkpoints && checkpointVisibleHere) {
       void this.checkpoints
-        .create(projectRoot, { note: `pre-run: ${instruction.slice(0, 80)}` })
+        .create(projectRoot, {
+          note: `pre-run: ${instruction.slice(0, 80)}`,
+          missionId: `mission_${runId.slice(0, 8)}`,
+          taskId: runId,
+        })
         .then((cp) => {
           if (!cp.gitRepo) return;
           this.store.setCheckpoint(runId, cp.id);
@@ -1707,11 +1725,21 @@ export class StreamingAgentRuntime {
             id: cp.id,
             note: "pre-run snapshot (Undo available)",
             files: cp.files.length,
+            createdAt: cp.createdAt,
+            gitHead: cp.gitHead,
+            missionId: cp.missionId,
+            taskId: cp.taskId,
           });
         })
         .catch(() => {
           // No checkpoint, no Undo — not worth failing the run over.
-        });
+        })
+        // The remote worker must not receive its first tool request until the
+        // pre-run snapshot is durable. A failed snapshot still queues the run;
+        // it simply has no Undo button.
+        .finally(queueRemoteRun);
+    } else {
+      queueRemoteRun();
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
@@ -1793,6 +1821,7 @@ export class StreamingAgentRuntime {
           .join("\n"),
       },
       ...history,
+      ...(recovering ? [{ role: "user" as const, content: "[Runtime recovery] The control plane restarted during this run. Continue the same task from the durable workspace. Inspect the current files and git diff before changing anything, do not repeat completed work, and re-run required verification before finishing." }] : []),
       { role: "user", content: instruction, attachments },
     ];
 
@@ -2059,6 +2088,9 @@ export class StreamingAgentRuntime {
       "git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit",
       "start_process", "stop_process", "read_process_logs", "list_processes",
       "delete_file",
+      "browser_open", "browser_navigate", "browser_set_viewport", "browser_click",
+      "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
+      "browser_evidence", "mcp_list", "mcp_call",
     ]);
     state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
     state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));

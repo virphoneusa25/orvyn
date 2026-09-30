@@ -304,7 +304,11 @@ function ApiKeys() {
 }
 
 function Connections() {
-  const c = useApi<{ github: { connected: boolean; login?: string }; desktop: { connected: boolean; devices: { id: string; device: string; lastUsedAt: number }[] } }>("/account/connections");
+  const { toast } = useStore();
+  const c = useApi<{ github: { connected: boolean; login?: string }; deployment: Record<string, { connected: boolean }>; desktop: { connected: boolean; devices: { id: string; device: string; lastUsedAt: number }[] } }>("/account/connections");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [token, setTokenValue] = useState("");
+  const providers = [["vercel", "Vercel"], ["netlify", "Netlify"], ["cloudflare", "Cloudflare"]] as const;
   return (
     <Section title="Connections" sub="Apps and services linked to your ORVYN account.">
       <div className="setting-row">
@@ -317,6 +321,20 @@ function Connections() {
         <div className="grow"><b>GitHub</b><span className="sub">{c.data?.github.connected ? `Connected as ${c.data.github.login ?? "your account"} — ORVYN can work with your repositories.` : "Connect from ORVYN Desktop to let ORVYN work with your repositories."}</span></div>
         {c.data?.github.connected ? <span className="tag tag--green">Connected</span> : <span className="tag tag--muted">Not connected</span>}
       </div>
+      {providers.map(([id, label]) => {
+        const connected = c.data?.deployment?.[id]?.connected;
+        return <div className="setting-row" key={id}>
+          <span className="qa__icon" style={{ width: 36, height: 36 }}><Icon.plug size={18} /></span>
+          <div className="grow"><b>{label}</b><span className="sub">{connected ? "Deployment credential stored securely for approved cloud missions." : `Connect ${label} for approved deployment missions.`}</span></div>
+          {connected ? <><span className="tag tag--green">Connected</span><button className="btn btn--sm btn--ghost" onClick={async () => { await api(`/account/connections/${id}`, { method: "DELETE" }); c.reload(); toast(`${label} disconnected.`); }}>Disconnect</button></> : <button className="btn btn--sm" onClick={() => { setEditing(id); setTokenValue(""); }}>Connect</button>}
+        </div>;
+      })}
+      {editing ? <Modal title={`Connect ${providers.find(([id]) => id === editing)?.[1] ?? editing}`} onClose={() => setEditing(null)}>
+        <form onSubmit={async (e) => { e.preventDefault(); try { await api(`/account/connections/${editing}`, { method: "PUT", body: { token } }); toast("Connection saved."); setEditing(null); setTokenValue(""); c.reload(); } catch (err: any) { toast(err.message); } }}>
+          <div className="field"><label htmlFor="deployment-token">Provider token</label><input id="deployment-token" className="input" type="password" autoComplete="off" value={token} onChange={(e) => setTokenValue(e.target.value)} required /><span className="hint">Encrypted and never shown again. It is released only through an approved sandbox credential profile.</span></div>
+          <div className="modal__actions"><button type="button" className="btn" onClick={() => setEditing(null)}>Cancel</button><button className="btn btn--primary" type="submit" disabled={token.trim().length < 12}>Connect</button></div>
+        </form>
+      </Modal> : null}
     </Section>
   );
 }

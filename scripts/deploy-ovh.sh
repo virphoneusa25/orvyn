@@ -152,7 +152,30 @@ OS_COMPOSE=''
 if grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null; then
   OS_COMPOSE='-f infrastructure/ovh/compose.openshell.yml'
   echo 'OpenShell overlay: enabled'
+  # Never carry a pass bit across a new provider build. The exact gateway,
+  # worker and workload are proved below before OpenShell selection unlocks.
+  { grep -v '^OPENSHELL_ACCEPTANCE_PASSED=' .env || true; echo 'OPENSHELL_ACCEPTANCE_PASSED=false'; } > .env.tmp
+  mv .env.tmp .env && chmod 600 .env
+  bash infrastructure/openshell/setup.sh
   docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml \$OS_COMPOSE up -d --no-deps openshell-gateway
+  # Register the private mTLS gateway and import every credential profile on
+  # each deployment. Import is an upsert in OpenShell, so profile changes are
+  # part of the same acceptance-gated upgrade as the images and worker code.
+  gateway_ready=0
+  for _ in \$(seq 1 30); do
+    if sudo /usr/local/lib/orvyn-openshell/openshell gateway list 2>/dev/null | grep -qE '(^|[[:space:]])orvyn([[:space:]]|$)'; then
+      gateway_ready=1
+      break
+    fi
+    if sudo /usr/local/lib/orvyn-openshell/openshell gateway add https://\${OPENSHELL_BRIDGE_IP:-172.17.0.1}:8080 --local --name orvyn >/tmp/orvyn-gateway-add.log 2>&1; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [ \$gateway_ready -ne 1 ]; then cat /tmp/orvyn-gateway-add.log >&2 || true; exit 1; fi
+  sudo /usr/local/lib/orvyn-openshell/openshell provider profile import \
+    --from infrastructure/openshell/provider-profiles --global --gateway orvyn
 fi
 docker compose \
   -f docker-compose.yml \
@@ -183,6 +206,33 @@ docker compose \
   -f infrastructure/ovh/compose.worker.yml \
   \$OS_COMPOSE \
   ps
+
+if [ -n "\$OS_COMPOSE" ]; then
+  echo 'Running mandatory OpenShell acceptance gate'
+  mkdir -p /opt/orvyn/workspaces/_acceptance
+  docker compose \
+    -f docker-compose.yml \
+    -f infrastructure/ovh/compose.prod.yml \
+    -f infrastructure/ovh/compose.control-plane.yml \
+    -f infrastructure/ovh/compose.worker.yml \
+    \$OS_COMPOSE \
+    exec -T \
+      -e ORVYN_WORKER_DIST=/app/dist/sandbox \
+      -e ORVYN_TEST_DOCKER_IMAGE=orvyn/sandbox:0.1.2-2 \
+      -e ORVYN_TEST_WORKSPACE_ROOT=/opt/orvyn/workspaces/_acceptance \
+      worker node /app/acceptance/openshell-sandbox.mjs --json /opt/orvyn/workspaces/_acceptance/report.json
+  sudo install -D -m 0644 /opt/orvyn/workspaces/_acceptance/report.json /var/lib/openshell/acceptance.json
+  { grep -v '^OPENSHELL_ACCEPTANCE_PASSED=' .env || true; echo 'OPENSHELL_ACCEPTANCE_PASSED=true'; } > .env.tmp
+  mv .env.tmp .env && chmod 600 .env
+  docker compose \
+    -f docker-compose.yml \
+    -f infrastructure/ovh/compose.prod.yml \
+    -f infrastructure/ovh/compose.control-plane.yml \
+    -f infrastructure/ovh/compose.worker.yml \
+    \$OS_COMPOSE \
+    up -d --no-deps backend
+  echo 'OpenShell acceptance gate passed; provider selection unlocked'
+fi
 "
 
 echo "Waiting for $PUBLIC_HEALTH"

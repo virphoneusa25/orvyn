@@ -1,0 +1,20 @@
+id: orvyn-vercel
+display_name: Vercel (ORVYN)
+description: Organization-scoped Vercel deployment token
+category: deployment
+credentials:
+  - name: api_token
+    description: Vercel token brokered by ORVYN
+    env_vars: [VERCEL_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: api.vercel.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries: [/usr/local/bin/node, /usr/bin/curl]

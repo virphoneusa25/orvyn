@@ -1,0 +1,20 @@
+id: orvyn-cloudflare
+display_name: Cloudflare (ORVYN)
+description: Organization-scoped Cloudflare API token
+category: deployment
+credentials:
+  - name: api_token
+    description: Cloudflare token brokered by ORVYN
+    env_vars: [CLOUDFLARE_API_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: api.cloudflare.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries: [/usr/local/bin/node, /usr/bin/curl]

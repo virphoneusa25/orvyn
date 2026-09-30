@@ -20,7 +20,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { SandboxRuntime, normalizePlan, type SandboxPlan } from "./sandbox/runtime";
 import { openShellConfigFromEnv } from "./sandbox/openshell";
-import { SandboxError, type SandboxHandle } from "./sandbox/types";
+import { SandboxError, type AttachSession, type SandboxHandle } from "./sandbox/types";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
@@ -141,6 +141,119 @@ const runtime = new SandboxRuntime({
 }, { openshellConfig });
 const jobIdentity = new Map<string, JobAssignment>();
 const cancelledRuns = new Set<string>();
+/** A stale worker must not sync, release, or delete a sandbox after reassignment. */
+const fencedRuns = new Set<string>();
+
+type HelperReply = { id: string; ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> };
+
+/** JSON-lines bridge to a long-lived helper process inside the sandbox. */
+class SandboxHelper {
+  private buffer = "";
+  private pending = new Map<string, { resolve: (reply: HelperReply) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private constructor(private readonly session: AttachSession) {
+    session.onData((chunk) => this.consume(chunk));
+    void session.exited.then((code) => {
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error(`sandbox helper exited (${code})`)); }
+      this.pending.clear();
+    });
+  }
+  static async start(runId: string, script: string): Promise<SandboxHelper> {
+    return new SandboxHelper(await runtime.attach(runId, { command: ["node", script], cwd: "/workspace", tty: false }));
+  }
+  private consume(chunk: string): void {
+    this.buffer += chunk;
+    let end: number;
+    while ((end = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, end).trim();
+      this.buffer = this.buffer.slice(end + 1);
+      if (!line) continue;
+      try {
+        const reply = JSON.parse(line) as HelperReply;
+        const pending = this.pending.get(reply.id);
+        if (!pending) continue;
+        this.pending.delete(reply.id);
+        clearTimeout(pending.timer);
+        pending.resolve(reply);
+      } catch { /* helper or child process diagnostic */ }
+    }
+  }
+  request(op: string, args: Record<string, unknown>, timeoutMs = 45_000): Promise<HelperReply> {
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`sandbox helper ${op} timed out`)); }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.session.write(`${JSON.stringify({ id, op, args })}\n`);
+    });
+  }
+  async close(): Promise<void> { await this.session.close(); }
+}
+
+const browserHelpers = new Map<string, SandboxHelper>();
+const mcpHelpers = new Map<string, SandboxHelper>();
+const portalTerminals = new Map<string, { runId: string; session: AttachSession }>();
+
+async function helperFor(runId: string, kind: "browser" | "mcp"): Promise<SandboxHelper> {
+  const map = kind === "browser" ? browserHelpers : mcpHelpers;
+  let helper = map.get(runId);
+  if (!helper) {
+    helper = await SandboxHelper.start(runId, `/usr/local/lib/orvyn/${kind}-server.mjs`);
+    map.set(runId, helper);
+  }
+  return helper;
+}
+
+async function closeHelpers(runId: string): Promise<void> {
+  for (const map of [browserHelpers, mcpHelpers]) {
+    const helper = map.get(runId);
+    map.delete(runId);
+    if (helper) await helper.close().catch(() => {});
+  }
+}
+
+async function terminalEvent(runId: string, sessionId: string, type: "output" | "exit" | "error", data = "", exitCode?: number): Promise<void> {
+  await cp(`/api/v1/worker/terminals/${encodeURIComponent(sessionId)}/worker-event`, "POST", {
+    runId, workerId: WORKER_ID, type, data, exitCode,
+  }).catch(() => {});
+}
+
+async function pollPortalTerminal(runId: string): Promise<void> {
+  const res = await cp(`/api/v1/worker/terminals/${encodeURIComponent(runId)}/worker-next?workerId=${encodeURIComponent(WORKER_ID)}`).catch(() => null);
+  const action = res?.action as { sessionId?: string; type?: string; data?: string; cols?: number; rows?: number } | undefined;
+  if (!action?.sessionId || !action.type) return;
+  const sessionId = action.sessionId;
+  try {
+    if (action.type === "open") {
+      if (portalTerminals.has(sessionId)) return;
+      const session = await runtime.attach(runId, { cols: action.cols, rows: action.rows, cwd: "/workspace", tty: true });
+      portalTerminals.set(sessionId, { runId, session });
+      session.onData((chunk) => { void terminalEvent(runId, sessionId, "output", chunk); });
+      void session.exited.then((code) => {
+        portalTerminals.delete(sessionId);
+        void terminalEvent(runId, sessionId, "exit", "", code);
+      });
+      return;
+    }
+    const current = portalTerminals.get(sessionId);
+    if (!current || current.runId !== runId) return;
+    if (action.type === "input") current.session.write(String(action.data ?? ""));
+    else if (action.type === "resize") current.session.resize?.(Number(action.cols) || 120, Number(action.rows) || 32);
+    else if (action.type === "close") {
+      portalTerminals.delete(sessionId);
+      await current.session.close();
+    }
+  } catch (error: any) {
+    portalTerminals.delete(sessionId);
+    await terminalEvent(runId, sessionId, "error", String(error?.message ?? error).slice(0, 1000));
+  }
+}
+
+async function closePortalTerminals(runId: string): Promise<void> {
+  const owned = [...portalTerminals.entries()].filter(([, value]) => value.runId === runId);
+  for (const [sessionId, value] of owned) {
+    portalTerminals.delete(sessionId);
+    await value.session.close().catch(() => {});
+  }
+}
 
 function sanitizeSegment(raw: string): string {
   const value = String(raw ?? "").trim();
@@ -639,7 +752,18 @@ async function transferProject(workspaceDir: string, sourcePath: string): Promis
 async function pollForToolRequests(runId: string): Promise<void> {
   while (activeContainers.has(runId) && !cancelledRuns.has(runId)) {
     try {
-      const res = await cp("/api/v1/worker/tools/" + runId + "/next");
+      await pollPortalTerminal(runId);
+      let res: any;
+      try {
+        res = await cp("/api/v1/worker/tools/" + runId + `/next?workerId=${encodeURIComponent(WORKER_ID)}`);
+      } catch (error: any) {
+        if (/reassigned|offline|assigned/i.test(String(error?.message ?? error))) {
+          fencedRuns.add(runId);
+          console.warn(`[worker] fenced from ${runId}: ${String(error?.message ?? error)}`);
+          return;
+        }
+        throw error;
+      }
       if (res.finished) {
         console.log("[worker] control plane reports run finished: " + runId);
         return;
@@ -662,7 +786,7 @@ async function pollForToolRequests(runId: string): Promise<void> {
       if (res.request) {
         const req = res.request;
         console.log("[worker] tool RPC: " + req.tool + " requestId=" + req.requestId);
-        let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string; failureKind?: string };
+        let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string; failureKind?: string; meta?: Record<string, unknown> };
         switch (req.tool) {
           case "read_file": {
             const r = await remoteReadFile(runId, String(req.arguments.path ?? ""), req.arguments.encoding === "base64");
@@ -723,6 +847,25 @@ async function pollForToolRequests(runId: string): Promise<void> {
           case "run_typecheck": {
             const r = await remoteTerminal(runId, "npx --no-install tsc --noEmit 2>&1 || echo 'typescript not installed'");
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "browser_open": case "browser_navigate": case "browser_set_viewport": case "browser_click": case "browser_type": case "browser_scroll": case "browser_console_errors": case "browser_screenshot": case "browser_evidence": {
+            try {
+              const op = req.tool.replace(/^browser_/, "").replace("set_viewport", "viewport").replace("console_errors", "errors");
+              const reply = await (await helperFor(runId, "browser")).request(op, req.arguments);
+              result = { ok: reply.ok, output: reply.output, error: reply.error, exitCode: reply.ok ? 0 : 1, meta: reply.meta };
+            } catch (error: any) {
+              result = { ok: false, error: `Sandbox browser failed: ${String(error?.message ?? error)}`, exitCode: 1 };
+            }
+            break;
+          }
+          case "mcp_list": case "mcp_call": {
+            try {
+              const reply = await (await helperFor(runId, "mcp")).request(req.tool === "mcp_list" ? "list" : "call", req.arguments);
+              result = { ok: reply.ok, output: reply.output, error: reply.error, exitCode: reply.ok ? 0 : 1 };
+            } catch (error: any) {
+              result = { ok: false, error: `Sandbox MCP failed: ${String(error?.message ?? error)}`, exitCode: 1 };
+            }
             break;
           }
           case "git_status": {
@@ -797,11 +940,17 @@ async function pollForToolRequests(runId: string): Promise<void> {
           default:
             result = { ok: false, error: "Unknown tool: " + req.tool };
         }
-        await cp("/api/v1/worker/tools/" + runId + "/result", "POST", {
+        const submitted = await cp("/api/v1/worker/tools/" + runId + "/result", "POST", {
           requestId: req.requestId, runId: runId, ok: result.ok,
           output: result.output, stderr: result.stderr, exitCode: result.exitCode,
           error: result.error, failureKind: result.failureKind, durationMs: Date.now() - req.createdAt,
-        }).catch(e => console.warn("[worker] result failed: " + e.message));
+          meta: result.meta, workerId: WORKER_ID,
+        }).catch(e => ({ error: e.message }));
+        if (submitted?.error && /reassigned|offline|assigned/i.test(String(submitted.error))) {
+          fencedRuns.add(runId);
+          console.warn(`[worker] fenced from ${runId}: ${submitted.error}`);
+          return;
+        }
         console.log("[worker] tool result: " + req.tool + " ok=" + result.ok);
       }
     } catch { /* transient */ }
@@ -916,6 +1065,13 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     await pollForToolRequests(runId);
     console.log("[worker] tool RPC loop ended for " + runId);
 
+    // The replacement worker now owns the shared workspace and provider
+    // handle. The stale process exits without copying or deleting anything.
+    if (fencedRuns.has(runId)) {
+      releaseReason = "run reassigned";
+      return;
+    }
+
     // Sandbox bytes go back to the durable workspace before anything is removed.
     await syncBack();
 
@@ -937,12 +1093,16 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     console.error(`[worker] executeJob FAILED: ${runId}: ${err.message}`);
   } finally {
     stopCancelPolling(cancelTimer);
-    try { await syncBack(); } catch { /* already logged */ }
+    const fenced = fencedRuns.has(runId);
+    if (!fenced) try { await syncBack(); } catch { /* already logged */ }
     const force = cancelledRuns.has(runId) || releaseReason !== "run finished";
-    await runtime.release(runId, releaseReason, { force }).catch(() => {});
+    await closeHelpers(runId);
+    await closePortalTerminals(runId);
+    if (!fenced) await runtime.release(runId, releaseReason, { force }).catch(() => {});
     activeContainers.delete(runId);
     cancelledRuns.delete(runId);
-    if (plan.retention !== "retained" || force) {
+    fencedRuns.delete(runId);
+    if (!fenced && (plan.retention !== "retained" || force)) {
       try { removeEphemeralSandbox(workspace, canonical); } catch {}
     }
     jobIdentity.delete(runId);

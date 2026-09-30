@@ -73,8 +73,8 @@ function makeRemoteTool(
   };
 }
 
-function rpcResponseToResult(name: string, response: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string }): ToolResult {
-  if (response.ok) return { ok: true, output: response.output ?? "" };
+function rpcResponseToResult(name: string, response: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string; meta?: Record<string, unknown> }): ToolResult {
+  if (response.ok) return { ok: true, output: response.output ?? "", ...(response.meta ? { meta: response.meta } : {}) };
   const err = response.error ?? `Remote tool failed (exit ${response.exitCode ?? "?"})`;
   // A failing command still carries the evidence — test output, compiler
   // errors, grep misses. Surface it so the model can diagnose the failure
@@ -223,4 +223,20 @@ export function registerRemoteTools(
   gateway.register(makeRemoteTool("stop_process", "Stop a process this run started", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "ask", rpc, runId));
   gateway.register(makeRemoteTool("read_process_logs", "Read logs from a tracked process", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "allowed", rpc, runId));
   gateway.register(makeRemoteTool("list_processes", "List processes ORION started for this project", gitRead, "allowed", rpc, runId));
+
+  // Browser state and MCP child processes live inside the mission sandbox.
+  // The control plane keeps the same logical tool names and permission gates.
+  const browserSession = { type: "string", description: "Browser session id (the sandbox has one session per run)" };
+  gateway.register(makeRemoteTool("browser_open", "Open a URL in the sandbox browser", { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_navigate", "Navigate the sandbox browser", { type: "object", properties: { url: { type: "string" }, sessionId: browserSession }, required: ["url"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_set_viewport", "Resize the sandbox browser", { type: "object", properties: { preset: { type: "string", enum: ["desktop", "tablet", "mobile"] }, width: { type: "number" }, height: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_click", "Click an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, sessionId: browserSession }, required: ["selector"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_type", "Type into an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, text: { type: "string" }, submit: { type: "boolean" }, sessionId: browserSession }, required: ["selector", "text"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_scroll", "Scroll the sandbox browser", { type: "object", properties: { deltaY: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_console_errors", "Report browser console and network errors from inside the sandbox", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("browser_screenshot", "Capture the sandbox browser viewport", { type: "object", properties: { fullPage: { type: "boolean" }, sessionId: browserSession } }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("browser_evidence", "Return sandbox browser URL, errors, actions and screenshots", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId));
+
+  gateway.register(makeRemoteTool("mcp_list", "List tools from MCP servers configured in .orvyn/mcp.json; stdio servers run inside the sandbox", { type: "object", properties: {} }, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("mcp_call", "Call an MCP tool inside the sandbox", { type: "object", properties: { server: { type: "string" }, tool: { type: "string" }, arguments: { type: "object" } }, required: ["server", "tool"] }, "ask", rpc, runId));
 }

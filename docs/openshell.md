@@ -6,8 +6,10 @@ execution layer**. ORION's model loop, tools, permissions, verification,
 tenancy, billing and the portal are unchanged, and OpenShell is not a control
 plane: the backend decides everything and the worker obeys.
 
-Status: **Stage 1 (built, tested locally against a real 0.1.2 gateway).
-Disabled by default.** Docker stays the default for every organization.
+Status: **alpha, pre-1.0. Production host installation and acceptance are
+mandatory for every OpenShell-enabled deployment.** Organization rollout is
+still controlled independently by canary flags; a successful acceptance run
+does not enroll a customer.
 
 Never name the runtime, the sandbox vendor or the hosting provider in
 customer-facing text. Customer events say "workspace", "network access",
@@ -17,23 +19,27 @@ customer-facing text. Customer events say "workspace", "network access",
 
 | Piece | Version | Where |
 |---|---|---|
-| Gateway | `ghcr.io/nvidia/openshell/gateway:0.1.2` | `infrastructure/ovh/compose.openshell.yml` |
-| Supervisor / sandbox runtime | `ghcr.io/nvidia/openshell/{supervisor,sandbox}:0.1.2` | `infrastructure/openshell/gateway.toml` |
+| Gateway | `ghcr.io/nvidia/openshell/gateway@sha256:2fe4…13a2` | `infrastructure/ovh/compose.openshell.yml` |
+| Supervisor / sandbox runtime | immutable `sha256:d7b5…b67a` / `sha256:bf47…d72f` | `infrastructure/openshell/gateway.toml` |
 | TypeScript SDK | `@nvidia/openshell-sdk` 0.1.2, built from tag `v0.1.2` (commit `6648bd0c`) | `apps/worker/vendor/nvidia-openshell-sdk-0.1.2.tgz` (sha256 `ddd80075…76f5`) |
 | SDK deps | `@bufbuild/protobuf` 2.12.1, `@connectrpc/connect(-node)` 2.1.2 | `apps/worker/package.json` (exact) |
 | CLI (admin only) | `openshell_0.1.2-1_amd64.deb`, sha256 `1f5416ea…23df` | `infrastructure/openshell/setup.sh` |
-| Workload image | `orvyn/sandbox:0.1.2-1` (Ubuntu 24.04, node 20.19.5, git, curl, python 3.12, ssh; user `sandbox` uid 1000) | `infrastructure/openshell/sandbox-image/Dockerfile` |
+| Browser base | Playwright image `sha256:b27e…b29` with Chromium 1187 | `infrastructure/openshell/sandbox-image/Dockerfile` |
+| Workload image | `orvyn/sandbox:0.1.2-2` (node 20.19.5, Chromium, git, curl, python 3.12, ssh; user `sandbox` uid 1000) | `infrastructure/openshell/sandbox-image/Dockerfile` |
 
 The SDK is vendored because GitHub Packages needs a token even for public
-packages. `setup.sh` records the image digests in `/var/lib/openshell-digests.txt`.
-Upgrades are a deliberate change to these pins plus a full acceptance run.
+packages. `setup.sh` pulls the three upstream images by digest, builds the
+versioned workload, and records the exact manifest in
+`/var/lib/openshell-digests.txt`. The deploy script clears the previous pass
+bit and runs the full live acceptance suite after every enabled deployment.
+Only that run can set `OPENSHELL_ACCEPTANCE_PASSED=true` again.
 
 ## How a mission runs
 
 ```
 portal / desktop ─► backend (control plane) ─► job queue ─► worker ─► ExecutionSandboxProvider ─► gateway ─► sandbox
-                     model loop, tools,          (in memory;    │         docker | openshell        (mTLS,
-                     permissions, billing        Redis later)   │                                    private)
+                     model loop, tools,          (live queue +  │         docker | openshell        (mTLS,
+                     permissions, billing        journal recovery)                                  private)
                                                                 └─ tool RPC (/worker/tools/:run/next|result)
 ```
 
@@ -79,15 +85,33 @@ portal / desktop ─► backend (control plane) ─► job queue ─► worker �
   admission stays **on**, so the gateway refuses to mount it into any other
   organization's sandbox (tested). Raw bind mounts are never used.
 - **Process**: non-root uid 1000, all capabilities dropped, `no_new_privs`,
-  Landlock filesystem policy (write only `/workspace`, `/tmp`), pids limit,
-  CPU/memory limits from the plan, no restart policy.
+  Docker `RuntimeDefault` AppArmor, Landlock filesystem policy (write only
+  `/workspace`, `/tmp`), pids limit, CPU/memory limits from the plan, no
+  restart policy.
 - **Network**: deny by default. Unapproved names resolve to synthetic
   `198.18.x.x` addresses and the connect is refused; loopback, link-local and
   metadata addresses are always blocked. Rules are per binary (real paths in
   the workload image).
-- **Credentials**: brokered per organization + integration, stored in the
-  gateway, injected as placeholders resolved by the proxy only toward the
-  endpoints the profile allows. The value never enters the sandbox.
+- **Credentials**: GitHub, Vercel, Netlify and Cloudflare tokens are encrypted
+  per tenant in the control plane, brokered per organization + integration,
+  and stored in the gateway. The sandbox sees placeholders resolved by the
+  proxy only toward the profile's approved endpoint. The value never enters
+  the sandbox.
+
+## In-sandbox interactive capabilities
+
+- **Browser**: a persistent Chromium helper runs inside the mission sandbox;
+  navigation, input, viewport, screenshots, console errors and evidence use
+  the same remote tool names as local execution.
+- **MCP**: `.orvyn/mcp.json` is read in the mission workspace. Stdio servers
+  start inside the sandbox; HTTP servers remain subject to the sandbox network
+  policy. Tool discovery and calls cross the existing worker RPC channel.
+- **Portal terminal**: the customer terminal attaches to the assigned
+  sandbox. The control plane relays bounded actions/output and enforces tenant,
+  run and worker assignment; shell bytes and the PTY remain on the worker.
+- **Checkpoint identity**: remote run events persist the canonical project
+  root, checkpoint id, creation time, git head, mission id and task id before
+  the job is made visible to a worker.
 
 ## Policy templates
 
@@ -132,10 +156,16 @@ model switch continues on the same sandbox and bytes.
 - **Worker restart**: sandboxes outlive the worker process. The control plane
   marks a worker offline after 45 s without heartbeat and re-queues its active
   jobs with `recover: true`; tool calls it had already taken fail with a clear
-  message, queued ones wait. The next worker keeps the workspace bytes on the
-  host and reattaches (`sandbox.reconnected`).
-- **Backend restart**: unchanged from before (runs are marked failed; there is
-  no resume yet — see limitations).
+  message, queued ones wait. Polling and result submission are both fenced to
+  the currently assigned worker. A stale worker exits without syncing,
+  releasing or deleting the replacement worker's workspace/sandbox. The next
+  worker keeps the workspace bytes on the host and reattaches
+  (`sandbox.reconnected`).
+- **Backend restart**: journal replay keeps OVH worker runs live. Five seconds
+  after boot the backend scans every tenant RunStore journal, reconstructs the
+  recorded sandbox plan and mission identity, and re-queues live runs with
+  `recover: true`. The worker reattaches to the same provider sandbox and
+  durable workspace.
 - **Reconciliation** (every 10 min, first pass 30 s after boot): the worker
   asks `/worker/sandboxes/live` and removes ORVYN sandboxes that are not live
   and older than 2 min, ephemeral sandboxes of finished runs, and retained
@@ -148,7 +178,7 @@ Service `openshell-gateway` (compose overlay `infrastructure/ovh/compose.openshe
 
 | Item | Value |
 |---|---|
-| Image | `ghcr.io/nvidia/openshell/gateway:0.1.2`, `user: "0"` (Docker socket) |
+| Image | immutable gateway digest `sha256:2fe4…13a2`, `user: "0"` (Docker socket) |
 | Ports | `8080` gRPC+mTLS, published **only** on the Docker bridge IP (`OPENSHELL_BRIDGE_IP`, default `172.17.0.1`); `8081` health on the container loopback only. No Caddy route. |
 | Private networking | worker → `https://openshell-gateway:8080` on the compose network; sandbox supervisors → `host.openshell.internal:8080` via host-gateway. Customer browsers have no path to it. |
 | Volumes | `/var/run/docker.sock`; `/var/lib/openshell` (gateway SQLite); `/etc/orvyn/openshell/tls` (read-only PKI); `infrastructure/openshell/gateway.toml` (read-only) |
@@ -160,20 +190,22 @@ Service `openshell-gateway` (compose overlay `infrastructure/ovh/compose.openshe
 | Health / monitoring | distroless image, no in-container probe. The worker calls the gateway health RPC every 60 s and reports it with its heartbeat; admin System Health shows "Sandbox runtime: OpenShell gateway" (healthy workers, version, latency, active, failed/24 h, provision time, denials, reconnects, fallbacks). |
 | Kernel | Linux ≥ 6.2 (Landlock ABI v3). `setup.sh` refuses older kernels. |
 
-The deploy script adds the overlay and starts the gateway only when the
-server's `.env` contains `OPENSHELL_ENABLED=true`.
+The deploy script adds the overlay only when the server's `.env` contains
+`OPENSHELL_ENABLED=true`. In that case it runs setup, starts the gateway,
+imports every provider profile, rebuilds the worker, runs the real gateway
+acceptance suite, saves `/var/lib/openshell/acceptance.json`, then sets the
+pass bit and restarts the backend. Any failed check stops the deployment with
+the pass bit false.
 
 ## Staged rollout
 
-1. **Local/dev** (done): unit tests, real-gateway acceptance (19/19), worker
-   end-to-end on both providers (12/12 each).
-2. **Server, dark**: run `infrastructure/openshell/setup.sh`; set
-   `OPENSHELL_ENABLED=true`, `ORVYN_EXECUTION_PROVIDER=auto`; redeploy. No
-   organization is in the canary, so nothing changes for customers. Import the
-   `orvyn-github` profile. Run `scripts/acceptance/openshell-sandbox.mjs`
-   inside the worker container (`ORVYN_WORKER_DIST=/app/dist/sandbox`,
-   `ORVYN_TEST_WORKSPACE_ROOT=/opt/orvyn/workspaces/_acceptance`) and the
-   worker e2e. Every check must pass.
+1. **Local/dev**: all package builds and unit tests must pass. The Docker
+   provider integration test is allowed to skip only on a machine with no
+   Docker daemon.
+2. **Server, dark**: set `OPENSHELL_ENABLED=true` and
+   `ORVYN_EXECUTION_PROVIDER=auto`, with no canary organizations and canary
+   percentage 0. Deploy normally. Setup, profile import and the complete live
+   acceptance suite are automatic and blocking.
 3. **Internal canary**: turn on `openshell_runtime` for ORVYN's own
    organization (admin → customer → Sandboxes → "OpenShell canary on").
    Watch System Health for a week: failures, fallbacks, provision p95, denials.
@@ -202,20 +234,24 @@ server's `.env` contains `OPENSHELL_ENABLED=true`.
   canary gating, plan tiers, request → approval → credential flow, failure
   classes, worker-loss handling.
 - `scripts/acceptance/openshell-sandbox.mjs` — real gateway: mTLS, cross-tenant
-  filesystem/sandbox/terminal/mount, deny-by-default network, live policy,
-  credential exfiltration, durability, worker restart, reconciliation,
-  performance.
+  filesystem/sandbox/terminal/mount, deny-by-default network, proved outbound
+  HTTP 200 after policy approval, interactive attach, Chromium screenshot,
+  in-sandbox MCP call, all four credential profiles and exfiltration refusal,
+  durability, worker restart, reconciliation and performance. Its JSON report
+  identifies the OpenShell version and workload image.
 - `scripts/acceptance/worker-sandbox-e2e.mjs` — the real worker process, one
   mission end to end, on either provider.
 
 
-## Limitations (updated 2026-09-30)
+## Remaining alpha constraints (updated 2026-09-30)
 
-- Backend restart now re-queues orphaned runs (boot recovery scans RunStore
-  journals for live-status runs and re-queues with recover=true).
-- Worker fencing: tool result submissions are rejected if the submitting
-  worker is not the one currently assigned (prevents zombie workers).
-- Compose pins by version tag; digest pinning requires a manual pull +
-  `docker inspect` after first deploy. setup.sh records digests at install.
-- Browser inside the sandbox, portal terminal attach, MCP inside the sandbox,
-  checkpoint fields, and non-GitHub credentials remain open.
+- The queue itself is still memory resident. Recovery reconstructs live cloud
+  jobs from durable journals and the sandbox registry after a backend restart;
+  it is not a general Redis-backed queue.
+- `enable_bind_mounts=true` remains required for the local-driver named volume
+  that exposes the canonical mission workspace. Raw host bind mounts are not
+  accepted: resource admission stays enabled and the volume carries the exact
+  organization workspace label. Cross-tenant attachment is in acceptance.
+- OpenShell is pre-1.0. Every enabled deploy, image update, gateway config
+  change or provider profile update must pass the production acceptance gate
+  again before selection is unlocked.
