@@ -198,7 +198,7 @@ if grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null; then
       resource_version=\$(awk '/^resource_version:/ { print \$2; exit }' "\$profile_tmp/current.yaml")
       test -n "\$resource_version"
       awk -v version="\$resource_version" \
-        'NR == 1 { print; print "resource_version: " version; next } { print }' \
+        'NR == 1 { print; print \"resource_version: \" version; next } { print }' \
         "\$profile_file" > "\$profile_tmp/update.yaml"
       sudo /usr/local/lib/orvyn-openshell/openshell provider profile update \
         "\$profile_id" --file "\$profile_tmp/update.yaml" --global --gateway orvyn
