@@ -226,6 +226,23 @@ export function WorkGroupRow({ group }: { group: WorkGroupItem }) {
       </div>
     );
   }
+  // §11: groups with more than 5 actions collapse into a "▸ N actions"
+  // line — the conversation stays readable, details are one click away.
+  if (group.items.length > 5) {
+    const verb = group.type === "browser" ? "Browser actions" : group.type === "checks" ? "Checks" : "Actions";
+    const status = group.status === "running" ? "running" : group.status === "done" ? "done" : group.status === "failed" ? "failed" : "done";
+    return (
+      <details className="activity-phase tool-line-group" data-testid="workgroup-collapsed">
+        <summary className={`tool-line tool-line--${status}`}>
+          <span className="tool-line__row">
+            <span className="tool-line__verb">{group.status === "running" ? verb : `${group.items.length} actions`}</span>
+            <span className="tool-line__count">· {group.items.length} {group.items.length === 1 ? "action" : "actions"}</span>
+          </span>
+        </summary>
+        <div className="tool-line-group__items">{group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}</div>
+      </details>
+    );
+  }
   return (
     <div className="activity-phase">
       {group.items.map((item) => <ToolActivityRow key={item.key} item={item} />)}

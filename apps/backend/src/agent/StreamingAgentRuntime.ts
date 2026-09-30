@@ -1,6 +1,7 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { budgetFinalNote, budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
+import { capabilityRegistry, capabilityForTool, reportToolResult, seedCapabilities } from "../capabilities/wiring";
 import { planSkeleton, planPromptNote, type MissionPlan } from "./missionPlan";
 import { scorecardFromChecks, requiredChecksForTask } from "./verificationScorecard";
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
@@ -1830,7 +1831,9 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
-        const toolNames = this.toolDefinitions(state?.exposedTools ?? null).map((t) => t.name);
+            const toolNames = this.toolDefinitions(state?.exposedTools ?? null).map((t) => t.name);
+        // §17: the capability registry learns this run's real tool surface.
+        seedCapabilities(toolNames);
         this.store.emit(runId, "run.diagnostics", {
           taskIntent: intent,
           capabilities: runCaps,
@@ -2818,6 +2821,9 @@ export class StreamingAgentRuntime {
         const failedTools: string[] = [];
         const failureClasses = new Set<string>();
         for (const e of batch) {
+          // §17: every result feeds the capability registry's rolling
+          // reliability/health so selection learns which sources work.
+          reportToolResult(String(e.data?.tool ?? ""), e.type === "tool.completed");
           if (e.type !== "tool.failed") {
             state.failureStreak = 0;
             continue;

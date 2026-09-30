@@ -644,25 +644,50 @@ export function WorkStream({
 
         {/* Finished runs can be retried: a NEW run with the same instruction,
             never an overwrite of the historical one. */}
-        {(run.status === "error" || run.status === "cancelled") && retryInstruction && (
-          <div style={{ margin: "6px 0" }}>
-            <button
-              onClick={() => {
-                onRunStarted(null);
-                void send(retryInstruction, true);
-              }}
-              style={{
-                background: "transparent",
-                border: "1px solid var(--orvyn-border)",
-                borderRadius: 6,
-                color: "var(--orvyn-text-secondary)",
-                fontSize: 11.5,
-                padding: "4px 12px",
-                cursor: "pointer",
-              }}
-            >
-              ↻ Retry this request
-            </button>
+        {(run.status === "error" || run.status === "cancelled" || run.status === "partial") && retryInstruction && (
+          <div style={{ margin: "6px 0", display: "flex", gap: 8 }}>
+            {/* §53: a partial run has a checkpoint — the work exists and the
+                follow-up CONTINUES from it (the backend threads history). A
+                hard error restarts the request fresh. */}
+            {run.status === "partial" && (
+              <button
+                onClick={() => {
+                  onRunStarted(null);
+                  void send(`Continue from where this run stopped: ${retryInstruction}`, true);
+                }}
+                style={{
+                  background: "#2563eb",
+                  border: "1px solid #2563eb",
+                  borderRadius: 6,
+                  color: "#f8fafc",
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  padding: "4px 12px",
+                  cursor: "pointer",
+                }}
+              >
+                ▶ Resume from checkpoint
+              </button>
+            )}
+            {run.status !== "partial" && (
+              <button
+                onClick={() => {
+                  onRunStarted(null);
+                  void send(retryInstruction, true);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--orvyn-border)",
+                  borderRadius: 6,
+                  color: "var(--orvyn-text-secondary)",
+                  fontSize: 11.5,
+                  padding: "4px 12px",
+                  cursor: "pointer",
+                }}
+              >
+                ↻ Retry this request
+              </button>
+            )}
           </div>
         )}
 
