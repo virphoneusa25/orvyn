@@ -20,7 +20,7 @@
 
 services:
   openshell-gateway:
-    image: ghcr.io/nvidia/openshell/gateway:0.1.2
+    image: ghcr.io/nvidia/openshell/gateway:0.1.2  # TODO: pin by digest after first pull: docker inspect --format='{{.RepoDigests}}' ghcr.io/nvidia/openshell/gateway:0.1.2
     restart: unless-stopped
     # The Docker driver needs the host socket. The gateway never receives
     # customer traffic; it only creates, runs and deletes sandbox containers.

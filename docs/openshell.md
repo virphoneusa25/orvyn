@@ -207,3 +207,15 @@ server's `.env` contains `OPENSHELL_ENABLED=true`.
   performance.
 - `scripts/acceptance/worker-sandbox-e2e.mjs` — the real worker process, one
   mission end to end, on either provider.
+
+
+## Limitations (updated 2026-09-30)
+
+- Backend restart now re-queues orphaned runs (boot recovery scans RunStore
+  journals for live-status runs and re-queues with recover=true).
+- Worker fencing: tool result submissions are rejected if the submitting
+  worker is not the one currently assigned (prevents zombie workers).
+- Compose pins by version tag; digest pinning requires a manual pull +
+  `docker inspect` after first deploy. setup.sh records digests at install.
+- Browser inside the sandbox, portal terminal attach, MCP inside the sandbox,
+  checkpoint fields, and non-GitHub credentials remain open.

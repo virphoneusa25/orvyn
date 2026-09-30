@@ -7,6 +7,7 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
+import * as path from "path";
 import type { RunStore } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
@@ -70,6 +71,54 @@ interface PendingJob {
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
+/**
+ * Boot-time recovery: a backend restart lost the in-memory job queue. Runs
+ * whose journals replay with a live status are re-queued with recover=true
+ * so the next worker reattaches to the sandbox and workspace bytes.
+ */
+function recoverOrphanedRunsOnBoot(getStore: (tenantId?: string) => RunStore): void {
+  try {
+    const dataDir = process.env.ORVYN_DATA_DIR || "";
+    if (!dataDir) return;
+    const dirs = fs.readdirSync(dataDir).filter((d) => d.startsWith("runs-"));
+    let recovered = 0;
+    for (const dir of dirs) {
+      const tenantId = dir.replace(/^runs-/, "");
+      const runDir = path.join(dataDir, dir);
+      try {
+        const journals = fs.readdirSync(runDir).filter((f) => f.endsWith(".jsonl"));
+        for (const journal of journals) {
+          const runId = journal.replace(/\.jsonl$/, "");
+          try {
+            const store = getStore(tenantId);
+            const run = store.get(runId);
+            if (!run) continue;
+            if (run.status === "running" || run.status === "queued" || run.status === "awaiting_approval") {
+              const already = jobQueue.some((j) => j.runId === runId);
+              if (already) continue;
+              rememberTenant(runId, tenantId);
+              jobQueue.push({
+                runId,
+                missionId: "",
+                instruction: "",
+                projectRoot: run.projectRoot || "",
+                tenantId,
+                createdAt: Date.now(),
+                role: "executor" as const,
+                recover: true,
+              });
+              store.emit(runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Control plane restarted — reconnecting to the mission workspace" });
+              recovered++;
+            }
+          } catch { /* individual run read failure is not fatal */ }
+        }
+      } catch { /* directory read failure is not fatal */ }
+    }
+    if (recovered > 0) console.log(`[worker-registry] boot recovery: re-queued ${recovered} orphaned run(s) after backend restart`);
+  } catch (err) {
+    console.warn("[worker-registry] boot recovery scan failed:", err);
+  }
+}
 /** Tenant bound when a job was queued. Survives removal from the queue so late events still land in the right store. */
 const runTenants = new Map<string, string>();
 const runMissions = new Map<string, MissionIdentity>();
@@ -269,6 +318,9 @@ export function workerRouter(
     return false;
   };
 
+  // Boot-time recovery: scan for orphaned runs 5s after startup.
+  setTimeout(() => recoverOrphanedRunsOnBoot(getRunStore), 5_000).unref?.();
+
   // ── Worker loss → recovery ───────────────────────────────────────────
   // A job assigned to a worker that stopped heartbeating is re-queued with
   // recover=true while its run is still active. The next worker reattaches
@@ -397,6 +449,17 @@ export function workerRouter(
     if (denyUnlessWorker(req, res)) return;
     if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
       return res.status(404).json({ error: "Not found" });
+    }
+    // Worker fencing: only the worker currently assigned to this run may
+    // submit results. A zombie worker (declared dead, run reassigned,
+    // process still alive) would corrupt the new worker's mission.
+    {
+      const caller = auth(req) as { id?: string };
+      const workerId = String(caller?.id ?? "");
+      const assigned = jobQueue.find((j) => j.runId === req.params.runId)?.assignedTo;
+      if (assigned && assigned !== workerId) {
+        return res.status(409).json({ error: `This run was reassigned to another worker (you were declared offline). Stop serving it.` });
+      }
     }
     const resolved = toolRpc.resolve({
       requestId: String(req.body.requestId ?? ""),
