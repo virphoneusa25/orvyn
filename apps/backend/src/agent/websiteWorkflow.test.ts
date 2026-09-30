@@ -191,7 +191,7 @@ test("a one-page website is written, served, and checked before the final answer
   const runId = h.runtime.start(root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
   const status = await waitFor(h.store, runId);
   const failure = h.store.get(runId)?.events.find((e) => e.type === "run.error");
-  assert.equal(status, "completed", String(failure?.data?.message ?? status));
+  assert.equal(status, "partial", String(failure?.data?.message ?? status));
 
   const html = readFileSync(join(root, "index.html"), "utf8");
   const css = readFileSync(join(root, "styles.css"), "utf8");

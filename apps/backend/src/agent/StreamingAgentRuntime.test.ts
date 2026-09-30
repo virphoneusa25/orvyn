@@ -317,6 +317,7 @@ test("records streamed token usage on the run", async () => {
 });
 
 test("a spent model-request budget ends with a written summary as Partial, not an error", async () => {
+    // §4: a budget-limited run is PARTIAL — the outcome has "execution budget" reasons.
   const previous = process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
   process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = "1";
   try {
@@ -327,7 +328,7 @@ test("a spent model-request budget ends with a written summary as Partial, not a
     ]);
 
     const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
-    assert.equal(await waitForStatus(h.store, runId), "completed");
+    assert.equal(await waitForStatus(h.store, runId), "partial");
 
     const run = h.store.get(runId)!;
     assert.ok(!run.events.some((e) => e.type === "run.error"), "reaching the budget is not a failure");
@@ -367,6 +368,7 @@ test("a model that ignores the budget wrap-up is stopped with a clear error", as
 });
 
 test("a spent tool-call budget answers further calls without running them, then settles", async () => {
+    // §4: a budget-limited run is PARTIAL.
   const previous = process.env.ORVYN_RUN_MAX_TOOL_CALLS;
   process.env.ORVYN_RUN_MAX_TOOL_CALLS = "1";
   try {
@@ -378,7 +380,7 @@ test("a spent tool-call budget answers further calls without running them, then 
     ]);
 
     const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "tool budget test");
-    assert.equal(await waitForStatus(h.store, runId), "completed");
+    assert.equal(await waitForStatus(h.store, runId), "partial");
 
     const run = h.store.get(runId)!;
     const reached = run.events.find((e) => e.type === "run.budget_reached");

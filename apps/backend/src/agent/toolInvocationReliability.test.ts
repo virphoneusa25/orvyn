@@ -107,7 +107,7 @@ test("a write that omits content is corrected in the same run without escalation
     [{ delta: "Created index.html with Hello World.", done: true }],
   ]);
   const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
-  assert.equal(await settle(h.store, runId), "completed");
+  assert.equal(await settle(h.store, runId), "partial");
 
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(failed.length, 1);
@@ -143,7 +143,7 @@ test("a write that omits path names path and then retries with both fields", asy
     [{ delta: "Created index.html.", done: true }],
   ]);
   const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
-  assert.equal(await settle(h.store, runId), "completed");
+  assert.equal(await settle(h.store, runId), "partial");
 
   const failed = h.store.get(runId)!.events.find((e) => e.type === "tool.failed")!;
   assert.equal(failed.data.errorType, "INVALID_ARGUMENTS");

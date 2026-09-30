@@ -180,6 +180,7 @@ export type RunStatus =
   | "awaiting_approval"
   | "verifying"
   | "blocked"
+  | "partial"
   | "completed"
   | "error"
   | "cancelled";
@@ -197,7 +198,7 @@ export interface QueueItem {
 
 /** A run is finished when no further events can arrive for it. */
 export function isTerminal(status: RunStatus): boolean {
-  return status === "completed" || status === "error" || status === "cancelled" || status === "blocked";
+  return status === "completed" || status === "partial" || status === "error" || status === "cancelled" || status === "blocked";
 }
 
 export interface Run {

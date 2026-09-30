@@ -3022,7 +3022,11 @@ export class StreamingAgentRuntime {
         const unsaid = outcome.reasons.filter((r) => !r.startsWith("Needs a tool"));
         if (unsaid.length) this.speak(runId, `Not fully done yet — ${unsaid.join(" ")}`);
         this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length, outcome: outcome.outcome });
-        this.store.setStatus(runId, "completed");
+        // §4/§64: "completed" requires every required check to pass. A
+        // partial outcome (the verifier found blockers, the preview had
+        // errors, a permission is still needed) is an honest PARTIAL — the
+        // mission shows what was done and what remains, never "✓ Completed".
+        this.store.setStatus(runId, outcome.outcome === "complete" ? "completed" : "partial");
       },
 
       onTurnLimit: () => {
