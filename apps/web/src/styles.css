@@ -686,3 +686,9 @@ body:has(.viewas-banner) .app { padding-top: 40px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.thumb-loading { display: inline-block; border-radius: 8px; background: linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,.1), rgba(255,255,255,.04)); background-size: 200% 100%; animation: shimmer 1.4s infinite linear; }
+.gen-image { display: block; margin-top: 10px; padding: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: rgba(0,0,0,.25); cursor: zoom-in; max-width: min(460px, 100%); }
+.gen-image img { display: block; width: 100%; height: auto; }
+.gen-image .thumb-loading { width: 460px; max-width: 100%; height: 300px; border-radius: 0; }
+.gen-image__bar { display: flex; gap: 6px; margin-top: 8px; }

@@ -52,12 +52,36 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
 }
 
 /** Fetches a file with the session and returns a blob URL (for thumbnails, previews, downloads). */
-export async function blobUrl(path: string): Promise<{ url: string; type: string; blob: Blob }> {
+export async function blobUrl(path: string, timeoutMs = 45_000): Promise<{ url: string; type: string; blob: Blob }> {
   const token = getToken();
-  const res = await fetch(`/api/v1${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) throw new ApiError(res.status, `Could not load the file (${res.status})`);
-  const blob = await res.blob();
-  return { url: URL.createObjectURL(blob), type: blob.type, blob };
+  const ctl = new AbortController();
+  const timer = window.setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`/api/v1${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: ctl.signal });
+    if (!res.ok) throw new ApiError(res.status, `Could not load the file (${res.status})`);
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type, blob };
+  } catch (err: any) {
+    if (err?.name === "AbortError") throw new ApiError(0, "The file took too long to load. Try again.");
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+const imageLinks = new Map<string, { url: string; exp: number }>();
+
+/**
+ * A short-lived direct URL for an image (a capability link, like HTML previews):
+ * the browser loads and caches it itself — no script-side download, so a big
+ * generated image shows as soon as its bytes arrive.
+ */
+export async function imageLink(artifactId: string): Promise<string> {
+  const hit = imageLinks.get(artifactId);
+  if (hit && hit.exp > Date.now()) return hit.url;
+  const r = await api<{ url: string }>(`/artifacts/${encodeURIComponent(artifactId)}/preview-link`, { method: "POST", body: {} });
+  imageLinks.set(artifactId, { url: r.url, exp: Date.now() + 4 * 60_000 });
+  return r.url;
 }
 
 /** Saves a file to the user's computer (no model involved, no credits). */

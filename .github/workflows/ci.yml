@@ -128,16 +128,17 @@ jobs:
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           # Account email (verification links), sign-in and billing: same path.
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST || secrets.SMTP_SERVER || vars.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE || vars.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER || secrets.SMTP_USERNAME || vars.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS || secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM || secrets.SMTP_FROM_EMAIL || vars.SMTP_FROM }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || secrets.GOOGLE_OAUTH_CLIENT_ID || vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          # GitHub refuses secret names that start with GITHUB_, so these arrive as GH_* (or ORVYN_GITHUB_*).
+          GITHUB_CLIENT_ID: ${{ secrets.GH_CLIENT_ID || secrets.GH_OAUTH_CLIENT_ID || secrets.ORVYN_GITHUB_CLIENT_ID || secrets.OAUTH_GITHUB_CLIENT_ID || vars.GH_CLIENT_ID || vars.ORVYN_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET || secrets.GH_OAUTH_CLIENT_SECRET || secrets.ORVYN_GITHUB_CLIENT_SECRET || secrets.OAUTH_GITHUB_CLIENT_SECRET }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           # Not secret: Stripe price ids (STRIPE_PRICE_*), ORVYN_PUBLIC_ORIGIN and the
@@ -152,8 +153,9 @@ jobs:
           # provider reach the server. Say which ones this deploy could not send
           # (names only — never values). They must be REPOSITORY secrets with
           # these exact names; environment-scoped secrets never reach this job.
-          for n in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
-            if [ -z "${!n}" ]; then echo "::warning title=Sign-in secret missing::$n is empty in this deploy, so the server keeps its previous value (none on a fresh server) and that sign-in button stays disabled. Add it under Settings → Secrets and variables → Actions → Repository secrets with exactly this name."; else echo "Sign-in secret present: $n"; fi
+          for n in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET SMTP_HOST SMTP_USER SMTP_PASS SMTP_FROM; do
+            case "$n" in GITHUB_*) name="GH_${n#GITHUB_}";; *) name="$n";; esac
+            if [ -z "${!n}" ]; then echo "::warning title=Secret missing::$name is not set for this deploy, so the server keeps its previous value (none on a fresh server). Add it under Settings → Secrets and variables → Actions → Repository secrets named exactly $name."; else echo "Secret present: $name"; fi
           done
           if [ -z "$OVH_SSH_PRIVATE_KEY" ]; then
             # Fail loudly: a green job that deployed nothing hid for days that

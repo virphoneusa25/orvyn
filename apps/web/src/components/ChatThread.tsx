@@ -7,7 +7,7 @@ import { Markdown } from "../lib/markdown";
 import { navigate } from "../lib/router";
 import { useStore } from "../lib/store";
 import { signal } from "../lib/events";
-import { FileVisual } from "./FileVisual";
+import { FileVisual, Thumb } from "./FileVisual";
 import { Icon } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 import { Orb } from "./Orb";
@@ -77,6 +77,22 @@ export function FileChip({ f, big }: { f: FileRef; big?: boolean }) {
           <button className="btn btn--sm" onClick={() => preview(f)} data-testid="chip-preview"><Icon.eye size={14} /> Preview</button>
           <button className="btn btn--sm" onClick={() => void downloadArtifact(f.artifactId, f.name)} data-testid="chip-download"><Icon.download size={14} /> Download</button>
         </span>
+      </div>
+    </div>
+  );
+}
+
+/** An image ORVYN made: shown large in the conversation (click to open), with Download. */
+function GeneratedImage({ f }: { f: FileRef }) {
+  const preview = usePreview();
+  return (
+    <div data-testid="generated-image">
+      <button className="gen-image" onClick={() => preview(f)} aria-label={`Open ${f.name}`}>
+        <Thumb artifactId={f.artifactId} name={f.name} fallbackSize={300} />
+      </button>
+      <div className="gen-image__bar">
+        <button className="btn btn--sm" onClick={() => preview(f)} data-testid="chip-preview"><Icon.eye size={14} /> Open</button>
+        <button className="btn btn--sm" onClick={() => void downloadArtifact(f.artifactId, f.name)} data-testid="chip-download"><Icon.download size={14} /> Download</button>
       </div>
     </div>
   );
@@ -282,7 +298,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                 {m.attachments?.length ? (
                   <div className="bubble__files">{m.attachments.map((f, i) => f.artifactId ? <FileChip key={f.artifactId} f={f} /> : <span key={i} className="pending-file"><span>{f.name} · uploading…</span></span>)}</div>
                 ) : null}
-                {m.artifacts?.length ? <div className="bubble__files">{m.artifacts.map((f) => <FileChip key={f.artifactId} f={f} big />)}</div> : null}
+                {m.artifacts?.length ? <div className="bubble__files">{m.artifacts.map((f) => fileKind(f.name, f.mimeType) === "image" ? <GeneratedImage key={f.artifactId} f={f} /> : <FileChip key={f.artifactId} f={f} big />)}</div> : null}
                 {m.error ? (m.code?.startsWith("CREDITS") ? <UpgradePrompt code={m.code} message={m.error} /> : (
                   <div className="msg-error" role="alert"><span>{m.error}</span>{m.retry && !busy ? <button className="btn btn--sm" onClick={() => void send(m.retry)}><Icon.retry size={14} /> Retry</button> : null}</div>
                 )) : null}

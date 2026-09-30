@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { blobUrl } from "../lib/api";
+import { blobUrl, imageLink } from "../lib/api";
 import { fileKind, KIND_STYLE } from "../lib/fileKinds";
 
 /** The typed icon for a file (HTML, CSS, JS, TS, JSON, PDF…). */
@@ -15,27 +15,39 @@ export function FileIcon({ name, mimeType = "", size = 34 }: { name: string; mim
 
 const cache = new Map<string, string>();
 
-/** An image's real thumbnail (loaded with the session when it scrolls into view). */
+/**
+ * An image's real thumbnail, loaded when it scrolls into view: first as a
+ * short-lived direct link (the browser loads it itself), then — if that fails —
+ * fetched with the session. Never stuck on "loading": it ends as the picture
+ * or as the file's icon.
+ */
 export function Thumb({ artifactId, name, className, fallbackSize = 40 }: { artifactId: string; name: string; className?: string; fallbackSize?: number }) {
   const [src, setSrc] = useState<string | null>(cache.get(artifactId) ?? null);
   const [failed, setFailed] = useState(false);
+  const [triedBlob, setTriedBlob] = useState(false);
   const ref = useRef<HTMLSpanElement | null>(null);
+  const viaBlob = () => {
+    setTriedBlob(true);
+    blobUrl(`/artifacts/${encodeURIComponent(artifactId)}/preview`)
+      .then(({ url }) => { cache.set(artifactId, url); setSrc(url); })
+      .catch(() => setFailed(true));
+  };
   useEffect(() => {
     if (src || failed) return;
     const el = ref.current;
     if (!el) return;
+    const start = () => { imageLink(artifactId).then(setSrc).catch(viaBlob); };
+    if (typeof IntersectionObserver === "undefined") { start(); return; }
     const io = new IntersectionObserver((entries) => {
       if (!entries.some((e) => e.isIntersecting)) return;
       io.disconnect();
-      blobUrl(`/artifacts/${encodeURIComponent(artifactId)}/preview`)
-        .then(({ url }) => { cache.set(artifactId, url); setSrc(url); })
-        .catch(() => setFailed(true));
+      start();
     }, { rootMargin: "200px" });
     io.observe(el);
     return () => io.disconnect();
-  }, [artifactId, src, failed]);
-  if (src) return <img className={className} src={src} alt={name} data-testid="thumb" />;
-  return <span ref={ref} style={{ display: "inline-grid" }}>{failed ? <FileIcon name={name} mimeType="image/png" size={fallbackSize} /> : <span className="faint" style={{ fontSize: 12 }}>…</span>}</span>;
+  }, [artifactId, src, failed]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (src) return <img className={className} src={src} alt={name} data-testid="thumb" loading="lazy" onError={() => { cache.delete(artifactId); setSrc(null); if (triedBlob) setFailed(true); else viaBlob(); }} />;
+  return <span ref={ref} style={{ display: "inline-grid" }}>{failed ? <FileIcon name={name} mimeType="image/png" size={fallbackSize} /> : <span className="thumb-loading" style={{ width: fallbackSize, height: fallbackSize }} aria-label="Loading image" />}</span>;
 }
 
 /** Thumbnail for images, typed icon for everything else. */
