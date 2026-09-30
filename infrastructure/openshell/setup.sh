@@ -50,7 +50,30 @@ EOF
 # 3. mTLS PKI. Server SANs: the worker's service name, the sandbox callback
 #    name, and the bridge address the host-side CLI uses.
 BRIDGE_IP=${OPENSHELL_BRIDGE_IP:-172.17.0.1}
-if [ ! -f "$TLS/ca.crt" ]; then
+pki_files=(
+  ca.crt ca.key
+  server/tls.crt server/tls.key
+  client/tls.crt client/tls.key
+  jwt/signing.pem jwt/public.pem jwt/kid
+)
+pki_present=0
+for pki_file in "${pki_files[@]}"; do
+  if sudo test -f "$TLS/$pki_file"; then
+    pki_present=$((pki_present + 1))
+  fi
+done
+
+lock_tls_permissions() {
+  sudo chown -R root:root "$TLS"
+  for dir in "$TLS" "$TLS/server" "$TLS/client" "$TLS/jwt"; do
+    sudo test ! -e "$dir" || sudo chmod 0700 "$dir"
+  done
+  for secret in "$TLS/ca.key" "$TLS/server/tls.key" "$TLS/client/tls.key" "$TLS/jwt/signing.pem"; do
+    sudo test ! -e "$secret" || sudo chmod 0600 "$secret"
+  done
+}
+
+if [ "$pki_present" -eq 0 ]; then
   sudo mkdir -p "$TLS"
   # The upstream gateway image runs as uid/gid 1000.  A root-owned 0755
   # output directory makes generate-certs fail with EPERM on a fresh host.
@@ -58,21 +81,18 @@ if [ ! -f "$TLS/ca.crt" ]; then
   # down as soon as the certificate generator exits.
   sudo chown 1000:1000 "$TLS"
   sudo chmod 0700 "$TLS"
+  trap lock_tls_permissions EXIT
   sudo docker run --rm -v "$TLS:/out" "ghcr.io/nvidia/openshell/gateway:$VERSION" \
     generate-certs --output-dir /out --server-san openshell-gateway --server-san host.openshell.internal --server-san "$BRIDGE_IP"
-  sudo chown -R root:root "$TLS"
-  sudo chmod 0700 "$TLS" "$TLS/server" "$TLS/client" "$TLS/jwt"
-  sudo chmod 600 "$TLS"/ca.key "$TLS"/server/tls.key "$TLS"/client/tls.key "$TLS"/jwt/signing.pem
+  lock_tls_permissions
+  trap - EXIT
+elif [ "$pki_present" -ne "${#pki_files[@]}" ]; then
+  echo "OpenShell PKI is incomplete at $TLS ($pki_present/${#pki_files[@]} files). Refusing to rotate live certificates automatically." >&2
+  exit 1
 fi
 # Existing installations may have been generated before ownership was locked
 # down. Enforce it on every setup/upgrade, not only on first certificate issue.
-sudo chown -R root:root "$TLS"
-for dir in "$TLS" "$TLS/server" "$TLS/client" "$TLS/jwt"; do
-  [ ! -e "$dir" ] || sudo chmod 0700 "$dir"
-done
-for secret in "$TLS/ca.key" "$TLS/server/tls.key" "$TLS/client/tls.key" "$TLS/jwt/signing.pem"; do
-  [ ! -e "$secret" ] || sudo chmod 0600 "$secret"
-done
+lock_tls_permissions
 sudo mkdir -p /var/lib/openshell
 
 # 4. Pinned CLI (admin use on the host only), checksum-verified.
