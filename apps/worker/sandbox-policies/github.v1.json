@@ -1,0 +1,182 @@
+{
+  "id": "github",
+  "version": 1,
+  "description": "Clone, fetch and push to GitHub. Credentials only through an attached, organization-scoped provider.",
+  "parameters": [],
+  "policy": {
+    "version": 1,
+    "filesystem": {
+      "include_workdir": true,
+      "read_only": [
+        "/usr",
+        "/lib",
+        "/bin",
+        "/etc",
+        "/proc",
+        "/dev/urandom",
+        "/var/log"
+      ],
+      "read_write": [
+        "/workspace",
+        "/tmp",
+        "/dev/null"
+      ]
+    },
+    "landlock": {
+      "compatibility": "best_effort"
+    },
+    "process": {
+      "run_as_user": "sandbox",
+      "run_as_group": "sandbox"
+    },
+    "network_policies": {
+      "github_read": {
+        "name": "github_read",
+        "endpoints": [
+          {
+            "host": "github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "rules": [
+              {
+                "allow": {
+                  "method": "GET",
+                  "path": "/**/info/refs*"
+                }
+              },
+              {
+                "allow": {
+                  "method": "POST",
+                  "path": "/**/git-upload-pack"
+                }
+              }
+            ]
+          },
+          {
+            "host": "api.github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "codeload.github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "objects.githubusercontent.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "raw.githubusercontent.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/bin/git"
+          },
+          {
+            "path": "/usr/lib/git-core/git-remote-http"
+          },
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/local/bin/node"
+          }
+        ]
+      },
+      "github_push": {
+        "name": "github_push",
+        "endpoints": [
+          {
+            "host": "github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "rules": [
+              {
+                "allow": {
+                  "method": "GET",
+                  "path": "/**/info/refs*"
+                }
+              },
+              {
+                "allow": {
+                  "method": "POST",
+                  "path": "/**/git-upload-pack"
+                }
+              },
+              {
+                "allow": {
+                  "method": "POST",
+                  "path": "/**/git-receive-pack"
+                }
+              }
+            ]
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/bin/git"
+          },
+          {
+            "path": "/usr/lib/git-core/git-remote-http"
+          }
+        ]
+      },
+      "package_registries": {
+        "name": "package_registries",
+        "endpoints": [
+          {
+            "host": "registry.npmjs.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "registry.yarnpkg.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "pypi.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "files.pythonhosted.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/local/bin/node"
+          },
+          {
+            "path": "/usr/bin/python3.12"
+          }
+        ]
+      }
+    }
+  }
+}

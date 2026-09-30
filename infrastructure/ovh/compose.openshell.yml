@@ -1,0 +1,84 @@
+# infrastructure/ovh/compose.openshell.yml
+#
+# OpenShell execution sandboxes underneath the ORVYN worker (optional).
+# Included by scripts/deploy-ovh.sh ONLY when the server's .env has
+# OPENSHELL_ENABLED=true. Without it nothing here runs and every mission uses
+# the Docker sandbox exactly as before. Rollback = set OPENSHELL_ENABLED=false
+# (or ORVYN_EXECUTION_PROVIDER=docker) and redeploy; no database rollback.
+#
+# One-time setup on the server: infrastructure/openshell/setup.sh
+#
+# Network exposure (private by construction):
+#   - 8080 (gRPC, mTLS) is published ONLY on the Docker bridge address
+#     (${OPENSHELL_BRIDGE_IP:-172.17.0.1}) so sandbox supervisors can call
+#     back through host.openshell.internal. It is never bound to a public
+#     interface, and Caddy has no route to it.
+#   - The worker reaches it over the internal compose network by service name.
+#   - 8081 (health) listens on the container's loopback only.
+#   - Every caller must present a client certificate signed by the gateway CA
+#     (the worker has one; customer browsers never do).
+
+services:
+  openshell-gateway:
+    image: ghcr.io/nvidia/openshell/gateway:0.1.2
+    restart: unless-stopped
+    # The Docker driver needs the host socket. The gateway never receives
+    # customer traffic; it only creates, runs and deletes sandbox containers.
+    user: "0"
+    command: []
+    ports:
+      - "${OPENSHELL_BRIDGE_IP:-172.17.0.1}:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/openshell:/var/lib/openshell
+      - /etc/orvyn/openshell/tls:/etc/openshell/tls:ro
+      - ./infrastructure/openshell/gateway.toml:/etc/openshell/gateway.toml:ro
+    environment:
+      OPENSHELL_GATEWAY_CONFIG: /etc/openshell/gateway.toml
+      OPENSHELL_DB_URL: "sqlite:/var/lib/openshell/gateway.db?mode=rwc"
+      XDG_DATA_HOME: /var/lib/openshell
+      HOME: /var/lib/openshell
+      OPENSHELL_TLS_CERT: /etc/openshell/tls/server/tls.crt
+      OPENSHELL_TLS_KEY: /etc/openshell/tls/server/tls.key
+      OPENSHELL_TLS_CLIENT_CA: /etc/openshell/tls/ca.crt
+      OPENSHELL_ENABLE_MTLS_AUTH: "true"
+      OPENSHELL_LOCAL_TLS_DIR: /etc/openshell/tls
+      # Client material the gateway stages into each sandbox supervisor so it can call back.
+      OPENSHELL_DOCKER_TLS_CA: /etc/openshell/tls/ca.crt
+      OPENSHELL_DOCKER_TLS_CERT: /etc/openshell/tls/client/tls.crt
+      OPENSHELL_DOCKER_TLS_KEY: /etc/openshell/tls/client/tls.key
+    extra_hosts:
+      - "host.openshell.internal:host-gateway"
+    # The gateway image is distroless (no shell for a probe). Liveness is
+    # watched by the worker (health RPC every 60 s) and shown in admin
+    # System Health; a failed gateway sends auto-mode missions to Docker.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  worker:
+    environment:
+      - OPENSHELL_ENABLED=${OPENSHELL_ENABLED:-false}
+      - OPENSHELL_GATEWAY_URL=https://openshell-gateway:8080
+      - OPENSHELL_TLS_CA=/etc/orvyn/openshell/tls/ca.crt
+      - OPENSHELL_TLS_CERT=/etc/orvyn/openshell/tls/client/tls.crt
+      - OPENSHELL_TLS_KEY=/etc/orvyn/openshell/tls/client/tls.key
+      - OPENSHELL_SANDBOX_IMAGE=${OPENSHELL_SANDBOX_IMAGE:-orvyn/sandbox:0.1.2-1}
+      - OPENSHELL_SANDBOX_UID=1000
+    volumes:
+      - /etc/orvyn/openshell/tls/ca.crt:/etc/orvyn/openshell/tls/ca.crt:ro
+      - /etc/orvyn/openshell/tls/client:/etc/orvyn/openshell/tls/client:ro
+    depends_on:
+      openshell-gateway:
+        condition: service_started
+
+  backend:
+    environment:
+      - ORVYN_EXECUTION_PROVIDER=${ORVYN_EXECUTION_PROVIDER:-docker}
+      - OPENSHELL_ENABLED=${OPENSHELL_ENABLED:-false}
+      - OPENSHELL_CANARY_ORGS=${OPENSHELL_CANARY_ORGS:-}
+      - OPENSHELL_CANARY_PERCENT=${OPENSHELL_CANARY_PERCENT:-0}
+      - OPENSHELL_ACCEPTANCE_PASSED=${OPENSHELL_ACCEPTANCE_PASSED:-false}
+      - ORVYN_SANDBOX_RETAIN=${ORVYN_SANDBOX_RETAIN:-false}

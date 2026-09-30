@@ -89,6 +89,16 @@ export type AgentEventType =
   | "sandbox.started"
   | "sandbox.ready"
   | "sandbox.stopped"
+  // --- Execution sandbox lifecycle (provider-neutral; no vendor names in data) ---
+  | "sandbox.created"
+  | "sandbox.reconnected"
+  | "sandbox.exec.started"
+  | "sandbox.exec.completed"
+  | "sandbox.policy.denied"
+  | "sandbox.policy.requested"
+  | "sandbox.policy.updated"
+  | "sandbox.failed"
+  | "sandbox.destroyed"
   // --- Remote execution: where a run's tools execute (no local fallback) ---
   | "run.execution"
   // --- Steering: user instructions delivered at the next safe boundary ---

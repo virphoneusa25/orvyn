@@ -1,0 +1,37 @@
+# ORVYN GitHub credential profile for OpenShell 0.1.2.
+# Derived from providers/github.yaml at NVIDIA/OpenShell v0.1.2 (Apache-2.0),
+# with binaries pinned to the ORVYN sandbox image. Import once per gateway:
+#   openshell provider profile import -f orvyn-github.yaml --global
+#
+# The token is sent only as a bearer header to the endpoints below. The
+# sandbox sees a placeholder, never the value. Push stays denied here; the
+# reviewed `github`/`deployment` policy templates add git-receive-pack after a
+# person approves the request.
+id: orvyn-github
+display_name: GitHub (ORVYN)
+description: GitHub API and Git transport for ORVYN missions
+category: source_control
+credentials:
+  - name: api_token
+    description: Organization-scoped GitHub token brokered by ORVYN
+    env_vars: [GITHUB_TOKEN, GH_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+discovery:
+  credentials: [api_token]
+endpoints:
+  - host: api.github.com
+    port: 443
+    protocol: rest
+    access: read-only
+    enforcement: enforce
+  - host: github.com
+    port: 443
+    protocol: rest
+    enforcement: enforce
+    rules:
+      - allow: { method: GET, path: "**" }
+      - allow: { method: HEAD, path: "**" }
+      - allow: { method: POST, path: "/**/git-upload-pack" }
+binaries: [/usr/bin/git, /usr/lib/git-core/git-remote-http, /usr/bin/curl]

@@ -251,6 +251,11 @@ async function main() {
     const audit = await page.innerText("[data-testid=acct-audit]");
     ok(["Admin credit adjustment", "Support note added", "Password reset sent", "Verification email sent", "Account paused", "Account reactivated"].every((x) => audit.includes(x)), "the account's audit log records every action", audit.slice(0, 400));
     await shot(page, "admin-account-audit");
+    // Sandboxes tab: runtime flag + sandbox list; opening it is itself audited.
+    await page.click("[data-testid=tab-sandboxes]");
+    await page.waitForSelector("text=Execution runtime", { timeout: 10000 });
+    ok(/openshell_runtime/.test(await page.innerText("main")), "the customer's Sandboxes tab shows the runtime flag");
+    await shot(page, "admin-account-sandboxes");
 
     console.log("\n5. View as customer");
     await page.click("[data-testid=tab-overview]");
@@ -278,6 +283,10 @@ async function main() {
     await shot(page, "admin-provider-costs");
     await page.goto(`${ADMIN}/admin/health`); await page.waitForSelector("[data-testid=health-table]");
     ok(!/99\.9/.test(await page.innerText("[data-testid=health-table]")), "system health shows real checks, no invented uptime");
+    ok(/Sandbox runtime: Docker/.test(await page.innerText("[data-testid=health-table]")) && /Sandbox runtime: OpenShell gateway/.test(await page.innerText("[data-testid=health-table]")), "system health lists both sandbox runtimes");
+    await page.goto(`${ADMIN}/admin/workers`); await page.waitForSelector("[data-testid=runtime-tiles]", { timeout: 10000 });
+    ok(/Runtime policy/.test(await page.innerText("[data-testid=runtime-tiles]")) && /docker/.test(await page.innerText("[data-testid=runtime-tiles]")), "workers page shows the execution runtime (docker by default)");
+    await shot(page, "admin-runtime");
     await shot(page, "admin-health");
     ok(errors.length === 0, "no uncaught errors in the Admin Portal", errors.join(" | "));
   } catch (err) {

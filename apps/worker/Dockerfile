@@ -7,14 +7,19 @@ RUN apt-get update -qq && apt-get install -y -qq docker.io && rm -rf /var/lib/ap
 
 WORKDIR /app
 
-# Install ALL deps (including typescript for compilation)
+# Install ALL deps (including typescript for compilation). The OpenShell SDK
+# is vendored (built from the pinned v0.1.2 tag; its registry needs a token).
 COPY apps/worker/package.json ./
+COPY apps/worker/vendor/ ./vendor/
 RUN npm install
 
 # Copy source and build
 COPY apps/worker/tsconfig.json ./
 COPY apps/worker/src/ ./src/
-RUN npx tsc -p tsconfig.json
+RUN npx tsc -p tsconfig.json && rm -f dist/sandbox/*.test.js dist/sandbox/*.test.d.ts
+
+# Reviewed network policy templates (the only policies a sandbox can get).
+COPY apps/worker/sandbox-policies/ ./sandbox-policies/
 
 # Remove devDependencies (keep only what's needed at runtime)
 RUN npm prune --production

@@ -17,6 +17,8 @@ import { mailConfigured, securityNoticeMail, sendMail, teamInviteMail } from "..
 import { requirePrincipal } from "../middleware/tenant";
 import { publicOrigin } from "./auth";
 import type { OrgRole, Principal } from "../identity/principal";
+import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { decideRequest, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
 
 export const accountRouter = Router();
 
@@ -217,6 +219,42 @@ accountRouter.get("/connections", (req, res) => {
   });
 });
 
+// ── Network access requests from cloud missions ─────────────────────────
+// A mission's workspace starts with no network. When ORION needs some, it
+// files a request; an owner or admin of the organization decides here.
+
+function canManage(p: Principal): boolean {
+  const role = authService.memberRole(p.organizationId, p.userId) ?? p.role;
+  return role === "owner" || role === "admin";
+}
+
+function requestView(r: ReturnType<ReturnType<typeof sandboxRegistry>["policyRequest"]>) {
+  if (!r) return null;
+  return {
+    id: r.id, runId: r.runId, access: TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template,
+    hosts: r.params.host ?? [], reason: r.reason, status: r.status, createdAt: r.createdAt, decidedAt: r.decidedAt,
+  };
+}
+
+accountRouter.get("/network-requests", (req, res) => {
+  const p = person(req, res, false);
+  if (!p) return;
+  const rows = sandboxRegistry().policyRequests({ organizationId: p.organizationId, limit: 50 });
+  res.json({ canDecide: canManage(p), requests: rows.map(requestView) });
+});
+
+accountRouter.post("/network-requests/:id", (req, res) => {
+  const p = person(req, res);
+  if (!p) return;
+  if (!canManage(p)) return res.status(403).json({ error: "Only an owner or admin can decide network access." });
+  if (typeof req.body?.approve !== "boolean") return res.status(400).json({ error: "approve must be true or false." });
+  try {
+    const out = decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `user:${p.userId}`, { organizationId: p.organizationId });
+    if (!out) return res.status(404).json({ error: "Request not found." });
+    res.json({ request: requestView(out) });
+  } catch (err) { fail(res, err); }
+});
+
 // ── Notifications (derived from the account's real state) ───────────────
 
 accountRouter.get("/notifications", (req, res) => {
@@ -236,6 +274,14 @@ accountRouter.get("/notifications", (req, res) => {
     if (win.limit > 0 && win.used / win.limit >= 0.8) {
       out.push({ id, kind: "warning", title: `You've used ${Math.min(100, Math.round((win.used / win.limit) * 100))}% of your ${label} allowance`, body: `It refills ${new Date(win.resetAt).toUTCString().slice(0, 22)} UTC.`, href: "/usage", at: now });
     }
+  }
+  if (canManage(p)) {
+    try {
+      for (const r of sandboxRegistry().policyRequests({ organizationId: p.organizationId, status: "pending", limit: 10 })) {
+        const label = TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template;
+        out.push({ id: `netreq-${r.id}`, kind: "warning", title: `A task is asking for network access: ${label}`, body: `${r.reason || "No reason given."}${r.params.host?.length ? ` (${r.params.host.join(", ")})` : ""}`, at: r.createdAt, networkRequestId: r.id } as any);
+      }
+    } catch { /* registry unavailable */ }
   }
   const invites = authService.invitesForEmail(p.email);
   for (const i of invites) {

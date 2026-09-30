@@ -1,0 +1,34 @@
+{
+  "id": "code-basic",
+  "version": 1,
+  "description": "No network. Code, tests and builds run with the project's existing dependencies only.",
+  "parameters": [],
+  "policy": {
+    "version": 1,
+    "filesystem": {
+      "include_workdir": true,
+      "read_only": [
+        "/usr",
+        "/lib",
+        "/bin",
+        "/etc",
+        "/proc",
+        "/dev/urandom",
+        "/var/log"
+      ],
+      "read_write": [
+        "/workspace",
+        "/tmp",
+        "/dev/null"
+      ]
+    },
+    "landlock": {
+      "compatibility": "best_effort"
+    },
+    "process": {
+      "run_as_user": "sandbox",
+      "run_as_group": "sandbox"
+    },
+    "network_policies": {}
+  }
+}

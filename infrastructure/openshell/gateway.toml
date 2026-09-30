@@ -1,0 +1,39 @@
+# OpenShell gateway for ORVYN (private; pinned 0.1.2). Mounted read-only at
+# /etc/openshell/gateway.toml by infrastructure/ovh/compose.openshell.yml.
+#
+# Only the worker (and admin diagnostics through it) talks to this gateway,
+# over mTLS. Customer browsers never reach it: it listens on the Docker
+# bridge address only, and the port is never published on a public interface.
+[openshell]
+version = 2
+
+[openshell.gateway]
+# 0.0.0.0 inside the container; compose publishes it on the bridge IP only.
+bind_address        = "0.0.0.0:8080"
+health_bind_address = "127.0.0.1:8081"
+log_level           = "info"
+compute_driver      = "docker"
+
+[openshell.drivers.docker]
+default_image         = "orvyn/sandbox:0.1.2-1"
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:0.1.2"
+supervisor_image      = "ghcr.io/nvidia/openshell/supervisor:0.1.2"
+image_pull_policy     = "if_not_present"
+sandbox_label         = "openshell"
+# Sandboxes call back through the host bridge. https: mTLS is on.
+grpc_endpoint         = "https://host.openshell.internal:8080"
+sandbox_pids_limit    = 1024
+# ORVYN mounts exactly one workspace per sandbox through a Docker volume that
+# is a bind of that run's directory and is labeled for exactly one OpenShell
+# workspace (= one ORVYN organization). Admission stays ON, so a volume can
+# only ever be attached inside the organization it was labeled for.
+allow_driver_config   = true
+enable_bind_mounts    = true
+app_armor_profile     = "Unconfined"
+
+[openshell.drivers.docker.resource_admission]
+enabled = true
+
+[openshell.drivers.docker.resource_admission.required_labels]
+"openshell.ai/sandbox-attachable" = "true"
+"openshell.ai/sandbox-attachable-workspace" = "${workspace}"

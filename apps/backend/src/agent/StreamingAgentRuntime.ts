@@ -115,6 +115,13 @@ import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
 import { sha256Hex } from "../artifacts/bytes";
 import { promises as fs } from "fs";
 import { resolveSafePath } from "../execution/pathSafety";
+import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
+import { POLICY_TEMPLATES } from "../execution/sandbox/selection";
+import { creditLedger } from "../billing/creditLedgerInstance";
+
+/** Asks a person to widen this run's sandbox network policy. Never widens it itself. */
+const NETWORK_ACCESS_TOOL = "request_network_access";
 
 /** Where a run's tools execute. LOCAL is the default; OVH_WORKER forces
  *  remote execution with NO local fallback — if the worker cannot serve the
@@ -215,6 +222,8 @@ interface RunState {
   instruction: string;
   intent: TaskIntent;
   exposedTools: Set<string> | null;
+  /** The run's cloud sandbox enforces a network policy a person can widen on request. */
+  networkRequestable?: boolean;
   resolvedResources: RegisteredResource[];
   gateRetries: number;
   /** Independent verification rounds that did not PASS (VerificationRuntime). */
@@ -583,6 +592,8 @@ export class StreamingAgentRuntime {
     return this.tools
       .list()
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
+      // Only runs whose sandbox can open network access ever see this tool.
+      .filter((t) => t.name !== NETWORK_ACCESS_TOOL || Boolean(allow?.has(t.name)))
       // Only tools this run's role can actually execute: offering one the
       // gateway will always refuse (host_desktop_* needs SYSTEM) sends the
       // model down a dead end ("Role 'coder' lacks SYSTEM capability").
@@ -1969,6 +1980,7 @@ export class StreamingAgentRuntime {
           return;
         }
         if (state) state.exposedTools = new Set(prepared.relevantTools);
+        if (state?.networkRequestable) state.exposedTools?.add(NETWORK_ACCESS_TOOL);
         await this.loop(runId, messages, instruction, mode, provider);
       } catch (err: any) {
         const st = this.runs.get(runId);
@@ -2051,6 +2063,7 @@ export class StreamingAgentRuntime {
     state.replacedTools = this.tools.list().filter((t) => remoteNames.has(t.name));
     state.savedPermissions = new Map(this.tools.list().map((t) => [t.name, this.tools.getPermission(t.name)] as const));
     registerRemoteTools(this.tools, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
+    this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(this.tools.registry, state.mode);
@@ -2068,6 +2081,46 @@ export class StreamingAgentRuntime {
   }
 
   /** Restores local tools and drops the run's Tool RPC state. */
+  /**
+   * request_network_access: offered only when the run's sandbox enforces a
+   * deny-by-default policy that a person can widen. The tool files a request;
+   * it never changes the policy. Approval happens in the portal.
+   */
+  private mountNetworkAccessTool(runId: string, state: RunState): void {
+    let rec = null;
+    try { rec = state.execution?.location === "OVH_WORKER" ? sandboxRegistry().forRun(runId) : null; } catch { rec = null; }
+    state.networkRequestable = rec?.provider === "openshell";
+    if (!state.networkRequestable) return;
+    const store = this.store;
+    this.tools.register({
+      name: NETWORK_ACCESS_TOOL,
+      description: "The cloud workspace has no network access by default. If a step truly needs it (installing packages, cloning from GitHub, reaching a deploy API, SSH to the user's server), request a reviewed access profile. A workspace owner must approve; until then the network stays closed. Never retry a blocked command or try to work around the policy.",
+      parameters: {
+        type: "object",
+        properties: {
+          access: { type: "string", enum: POLICY_TEMPLATES.filter((t) => t !== "code-basic"), description: Object.entries(TEMPLATE_LABELS).filter(([k]) => k !== "code-basic").map(([k, v]) => `${k}: ${v}`).join("; ") },
+          hosts: { type: "array", items: { type: "string" }, description: "Only for server-admin: the server hostnames." },
+          reason: { type: "string", description: "One sentence the owner will read: what needs the network and why." },
+        },
+        required: ["access", "reason"],
+      },
+      defaultPermission: "allowed",
+      async execute(args, context) {
+        const id = context?.runId || runId;
+        const tenantId = context?.tenantId || state.execution?.tenantId || "";
+        let planId: string | null = null;
+        try { planId = creditLedger.planOf(tenantId) ?? null; } catch { planId = null; }
+        const out = requestNetworkAccess(sandboxRegistry(), {
+          runId: id, template: String(args.access ?? ""), hosts: Array.isArray(args.hosts) ? args.hosts.map(String) : [],
+          reason: String(args.reason ?? "").slice(0, 300), planId,
+        });
+        if (!out.ok) return { ok: false, error: out.message };
+        store.emit(id, "sandbox.policy.requested", { requestId: out.request.id, access: TEMPLATE_LABELS[out.request.template as keyof typeof TEMPLATE_LABELS] ?? out.request.template, reason: out.request.reason });
+        return { ok: true, output: out.message };
+      },
+    });
+  }
+
   private teardownRemote(runId: string): void {
     const state = this.runs.get(runId);
     toolRpc.cleanup(runId);
@@ -2261,6 +2314,7 @@ export class StreamingAgentRuntime {
       return false;
     }
     state.exposedTools = new Set(prepared.relevantTools);
+    if (state.networkRequestable) state.exposedTools.add(NETWORK_ACCESS_TOOL);
     state.introSpoken = true;
     state.phase = "acting";
     this.store.setStatus(runId, "running");

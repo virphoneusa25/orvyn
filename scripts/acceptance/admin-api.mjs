@@ -287,7 +287,7 @@ async function main() {
     ok(costs.status === 200 && costs.json.models?.some((m) => /nebius/i.test(m.provider) || /GLM/i.test(m.model)), "provider costs show internal provider/model names to admins", JSON.stringify(costs.json.models?.slice(0, 2)));
     ok(!/nebius|GLM/i.test((await call("/billing/stats", "GET", null, bob.token)).text), "…while the customer's own usage never names them");
     const health = await call("/admin/health", "GET", null, boss.token);
-    ok(health.status === 200 && health.json.checks.length === 8 && health.json.checks.every((c) => ["operational", "degraded", "down", "not_configured"].includes(c.status)) && !JSON.stringify(health.json).includes("99.9"), "system health: 8 real checks, no invented uptime", JSON.stringify(health.json.checks.map((c) => `${c.id}:${c.status}`)));
+    ok(health.status === 200 && health.json.checks.length === 10 && ["sandbox-docker", "sandbox-openshell"].every((id) => health.json.checks.some((c) => c.id === id)) && health.json.checks.every((c) => ["operational", "degraded", "down", "not_configured"].includes(c.status)) && !JSON.stringify(health.json).includes("99.9"), "system health: 10 real checks (incl. both sandbox runtimes), no invented uptime", JSON.stringify(health.json.checks.map((c) => `${c.id}:${c.status}`)));
     const auditAll = await call("/admin/audit?limit=100", "GET", null, boss.token);
     ok(auditAll.json.audit.length >= 10, "the global audit log holds every staff action");
     const adb = new DatabaseSync(join(dataDir, "auth.db"));

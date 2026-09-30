@@ -23,7 +23,10 @@ import { sendPasswordReset, sendVerification } from "./auth";
 import { mailConfigured, passwordResetMail, paymentFailedMail, securityNoticeMail, verificationMail } from "../onboarding/mailer";
 import { verificationRequired } from "../onboarding/provisioning";
 import { accountGateEnabled } from "../middleware/accountReady";
-import { workerStats } from "./worker";
+import { workerRuntimeReports, workerStats } from "./worker";
+import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { OPENSHELL_FLAG } from "../execution/sandbox/selection";
+import { decideRequest } from "../execution/sandbox/policyRequests";
 import { redisHealth } from "../identity/redisNamespace";
 import { providerHealthSnapshot } from "../models/modelAvailability";
 import { tenantManager, creditsEnforced } from "../tenancy/TenantManager";
@@ -551,11 +554,42 @@ async function healthChecks(): Promise<{ status: "operational" | "degraded" | "d
   } catch {
     checks.push({ id: "storage", name: "Object Storage", status: "down", detail: "not writable" });
   }
+  for (const c of sandboxHealthChecks()) checks.push(c);
   const providers = providerHealthSnapshot();
   const cooling = providers.filter((p) => p.coolingDown).length;
   checks.push({ id: "routing", name: "Provider Routing", status: providers.length && cooling === providers.length ? "down" : cooling ? "degraded" : "operational", detail: providers.length ? `${providers.length - cooling}/${providers.length} providers healthy` : "no provider errors recorded" });
   const status = checks.some((c) => c.status === "down") ? "down" : checks.some((c) => c.status === "degraded") ? "degraded" : "operational";
   return { status, checks };
+}
+
+/**
+ * Execution sandboxes, per provider, from what the workers report and what
+ * the registry recorded in the last 24 h. Internal only.
+ */
+function sandboxHealthChecks(): Check[] {
+  const out: Check[] = [];
+  const reports = workerRuntimeReports().filter((w) => w.status !== "offline" && w.sandboxRuntime);
+  let stats: ReturnType<ReturnType<typeof sandboxRegistry>["stats"]>["byProvider"] | null = null;
+  try { stats = sandboxRegistry().stats(86_400_000).byProvider; } catch { stats = null; }
+  for (const [id, name] of [["docker", "Sandbox runtime: Docker"], ["openshell", "Sandbox runtime: OpenShell gateway"]] as const) {
+    const rs = reports.map((w) => w.sandboxRuntime![id]).filter((r) => r && r.enabled);
+    const st = stats?.[id];
+    const numbers = st ? ` · ${st.active} active · ${st.failed} failed/24 h${st.avgProvisionMs !== null ? ` · provision ${st.avgProvisionMs} ms avg` : ""}${st.policyDenials ? ` · ${st.policyDenials} policy denials` : ""}${st.reconnects ? ` · ${st.reconnects} reconnects` : ""}${st.fallbacks ? ` · ${st.fallbacks} fallbacks` : ""}` : "";
+    if (!rs.length) {
+      out.push({ id: `sandbox-${id}`, name, status: id === "docker" && reports.length ? "down" : "not_configured", detail: id === "openshell" ? `disabled${process.env.OPENSHELL_ENABLED === "true" ? " on workers" : ""}${numbers}` : `no worker reporting${numbers}` });
+      continue;
+    }
+    const healthy = rs.filter((r) => r.health?.healthy).length;
+    const latency = rs.map((r) => r.health?.latencyMs).filter((n) => typeof n === "number") as number[];
+    const version = rs.find((r) => r.health?.version)?.health?.version;
+    out.push({
+      id: `sandbox-${id}`, name,
+      status: healthy === rs.length ? "operational" : healthy ? "degraded" : "down",
+      detail: `${healthy}/${rs.length} worker${rs.length === 1 ? "" : "s"} healthy${version ? ` · v${version}` : ""}${numbers}`,
+      ...(latency.length ? { latencyMs: Math.max(...latency) } : {}),
+    });
+  }
+  return out;
 }
 
 adminRouter.get("/health", need("read"), wrap(async (req, res) => {
@@ -571,6 +605,72 @@ adminRouter.get("/workers", need("read"), wrap((_req, res) => {
     try { const q = (t as any).multiAgentRuntime?.queueStats?.(); running += Number(q?.running ?? 0); queued += Number(q?.queued ?? 0); } catch { /* not loaded */ }
   }
   res.json({ workers: workerStats(), runs: { running, queued, loadedAccounts: tenants.length }, sessions: adminService().sessionStats() });
+}));
+
+// ---------- execution runtime (sandboxes) ----------
+
+adminRouter.get("/runtime", need("read"), wrap((_req, res) => {
+  const reg = sandboxRegistry();
+  const day = 86_400_000;
+  const orgName = (orgId: string) => { try { return (staffStore().db.prepare(`SELECT name FROM organizations WHERE id = ?`).get(orgId) as any)?.name ?? null; } catch { return null; } };
+  const failures = (reg.db.prepare(`SELECT * FROM execution_sandboxes WHERE state = 'failed' OR fallback_reason IS NOT NULL ORDER BY updated_at DESC LIMIT 25`).all() as any[])
+    .map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenant_id, customer: adminService().orgByTenant(r.tenant_id)?.name ?? null, state: r.state, error: r.last_error, fallback: r.fallback_reason, at: r.updated_at }));
+  res.json({
+    config: {
+      mode: (process.env.ORVYN_EXECUTION_PROVIDER || "docker").toLowerCase(),
+      openshellEnabled: process.env.OPENSHELL_ENABLED === "true",
+      canaryOrgs: String(process.env.OPENSHELL_CANARY_ORGS ?? "").split(",").filter(Boolean).length,
+      canaryPercent: Number(process.env.OPENSHELL_CANARY_PERCENT ?? 0),
+      acceptancePassed: process.env.OPENSHELL_ACCEPTANCE_PASSED === "true",
+    },
+    workers: workerRuntimeReports(),
+    stats: reg.stats(day).byProvider,
+    active: reg.active().slice(0, 50).map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenantId, customer: adminService().orgByTenant(r.tenantId)?.name ?? null, state: r.state, policy: `${r.policyTemplate}.v${r.policyVersion}`, retention: r.retention, createdAt: r.createdAt })),
+    failures,
+    flags: reg.flags(OPENSHELL_FLAG).map((f) => ({ ...f, name: f.scope === "org" ? orgName(f.scopeId) : null })),
+    pendingRequests: reg.policyRequests({ status: "pending", limit: 50 }).map((r) => ({ ...r, customer: orgName(r.organizationId) })),
+    audit: reg.auditLog({ limit: 60 }),
+    denials24h: reg.countAudit("network.denied", day),
+  });
+}));
+
+adminRouter.put("/runtime/flags", need("staff.manage"), wrap((req: AdminRequest, res) => {
+  const scope = req.body?.scope === "project" ? "project" : req.body?.scope === "org" ? "org" : null;
+  const scopeId = String(req.body?.scopeId ?? "").trim();
+  if (!scope || !scopeId || typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "scope (org|project), scopeId and enabled are required." });
+  if (scope === "org") {
+    const exists = staffStore().db.prepare(`SELECT id FROM organizations WHERE id = ?`).get(scopeId);
+    if (!exists) return res.status(404).json({ error: "No such organization." });
+  }
+  sandboxRegistry().setFlag(scope, scopeId, OPENSHELL_FLAG, req.body.enabled, `staff:${req.staff!.email}`);
+  sandboxRegistry().audit("runtime.flag", `staff:${req.staff!.email}`, { organizationId: scope === "org" ? scopeId : null, detail: { scope, scopeId, flag: OPENSHELL_FLAG, enabled: req.body.enabled } });
+  audit(req, "runtime.flag", null, { scope, scopeId, flag: OPENSHELL_FLAG, enabled: req.body.enabled });
+  res.json({ ok: true });
+}));
+
+adminRouter.post("/runtime/requests/:id", need("support.write"), wrap((req: AdminRequest, res) => {
+  if (typeof req.body?.approve !== "boolean") return res.status(400).json({ error: "approve must be true or false." });
+  try {
+    const out = decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `staff:${req.staff!.email}`);
+    if (!out) return res.status(404).json({ error: "No such request." });
+    audit(req, req.body.approve ? "runtime.request.approve" : "runtime.request.deny", null, { requestId: out.id, template: out.template });
+    res.json({ request: out });
+  } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
+}));
+
+/** A customer's sandboxes. Viewing is itself audited (admin sandbox access). */
+adminRouter.get("/customers/:id/sandboxes", need("read"), wrap((req: AdminRequest, res) => {
+  const id = customerOr404(req, res); if (!id) return;
+  const org = adminService().orgByTenant(id)!;
+  const reg = sandboxRegistry();
+  reg.audit("admin.sandbox.access", `staff:${req.staff!.email}`, { organizationId: org.id, detail: { tenantId: id } });
+  res.json({
+    runtimeFlag: reg.flag("org", org.id, OPENSHELL_FLAG),
+    organizationId: org.id,
+    sandboxes: reg.listForTenant(id, 50),
+    requests: reg.policyRequests({ organizationId: org.id, limit: 25 }),
+    audit: reg.auditLog({ organizationId: org.id, limit: 50 }),
+  });
 }));
 
 /** Backups: the status the host's backup timer writes into the data volume (no host or bucket names). */

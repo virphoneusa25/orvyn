@@ -18,13 +18,15 @@ import { randomUUID } from "crypto";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
+import { SandboxRuntime, normalizePlan, type SandboxPlan } from "./sandbox/runtime";
+import { openShellConfigFromEnv } from "./sandbox/openshell";
+import { SandboxError, type SandboxHandle } from "./sandbox/types";
 
 // ── Configuration ──────────────────────────────────────────────────────────
 
 const CONTROL_PLANE = process.env.ORVYN_CONTROL_PLANE || "http://localhost:4570";
 const API_KEY = process.env.ORVYN_API_KEY || "";
 const WORKSPACE_DIR = process.env.ORVYN_WORKSPACE_DIR || "/opt/orvyn/workspaces";
-const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:20-slim";
 const MAX_CONCURRENT = Number(process.env.ORVYN_MAX_CONCURRENT_RUNS) || 2;
 const HEARTBEAT_INTERVAL = 15_000;
 const POLL_INTERVAL = 2_000;
@@ -62,6 +64,10 @@ interface JobAssignment {
    * never decides what to run and NEVER emits run.completed.
    */
   role?: "executor";
+  /** Execution sandbox plan chosen by the control plane (provider, policy, limits, retention). */
+  sandbox?: unknown;
+  /** Set when the control plane re-queued this run after its worker died. */
+  recover?: boolean;
 }
 
 interface WorkerInfo {
@@ -75,6 +81,7 @@ interface WorkerInfo {
   status: "online" | "busy" | "offline";
   activeRuns: number;
   lastHeartbeat: number;
+  sandboxRuntime?: Record<string, unknown>;
 }
 
 interface CommandResult {
@@ -114,7 +121,24 @@ async function cp(pathname: string, method = "GET", body?: unknown, timeoutMs = 
 
 // ── Worker state ───────────────────────────────────────────────────────────
 
-const activeContainers = new Map<string, string>(); // runId → containerId
+const activeContainers = new Map<string, string>(); // runId → sandboxId
+/** UID the OpenShell sandbox user runs as; workspace files are handed to it. */
+const SANDBOX_UID = Number(process.env.OPENSHELL_SANDBOX_UID) || 1000;
+
+// ── Execution sandboxes (docker by default; OpenShell when the plan says so) ─
+const openshellConfig = process.env.OPENSHELL_ENABLED === "true" ? openShellConfigFromEnv() : null;
+if (openshellConfig) {
+  // Brokered credentials come from the control plane for one run and one
+  // integration, go straight into the gateway, and are never logged.
+  openshellConfig.credentialSource = async (runId, integrationId) => {
+    const res = await cp(`/api/v1/worker/credentials/${encodeURIComponent(runId)}/${encodeURIComponent(integrationId)}`, "GET", undefined, 15_000).catch(() => null);
+    return res && res.credentials && typeof res.credentials === "object" ? res.credentials as Record<string, string> : null;
+  };
+}
+const runtime = new SandboxRuntime({
+  emit: (runId, type, data) => emitEvent(runId, type, data),
+  report: (runId, body) => cp(`/api/v1/worker/sandboxes/${encodeURIComponent(runId)}/report`, "POST", { ...body, workerId: WORKER_ID }).then(() => undefined).catch(() => undefined),
+}, { openshellConfig });
 const jobIdentity = new Map<string, JobAssignment>();
 const cancelledRuns = new Set<string>();
 
@@ -245,7 +269,7 @@ function workerInfo(): WorkerInfo {
   return {
     workerId: WORKER_ID,
     hostname: os.hostname(),
-    capabilities: ["docker", "node", "mission-execution", "browser", "desktop"],
+    capabilities: ["docker", "node", "mission-execution", "browser", "desktop", ...(runtime.providers.openshell ? ["isolated-runtime"] : [])],
     cpuCount: os.cpus().length,
     ramMb: Math.round(os.totalmem() / 1024 / 1024),
     diskGb: Math.round(os.freemem() / 1024 / 1024 / 1024),
@@ -253,6 +277,7 @@ function workerInfo(): WorkerInfo {
     status: activeContainers.size >= MAX_CONCURRENT ? "busy" : "online",
     activeRuns: activeContainers.size,
     lastHeartbeat: Date.now(),
+    sandboxRuntime: runtime.stats(),
   };
 }
 
@@ -294,11 +319,9 @@ function startCancelPolling(runId: string): NodeJS.Timeout {
       if (res.cancelled || res.stopRequested) {
         console.log(`[worker] CANCEL received for ${runId}`);
         cancelledRuns.add(runId);
-        const containerId = activeContainers.get(runId);
-        if (containerId) {
-          console.log(`[worker] docker rm -f ${containerId.slice(0, 12)}`);
-          const rm = await docker(["rm", "-f", containerId]);
-          console.log(`[worker] cancel rm result: code=${rm.code}`);
+        if (activeContainers.has(runId)) {
+          await runtime.release(runId, "run cancelled", { force: true }).catch(() => {});
+          console.log(`[worker] cancel: sandbox for ${runId} removed`);
         }
       }
     } catch { /* control plane unreachable — next poll will retry */ }
@@ -348,7 +371,59 @@ function workspacePath(runId: string, relative: string): string | null {
   const base = workspaceFor(job);
   const resolved = path.resolve(base, clean);
   if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
+  // The sandboxed process can create symlinks in /workspace. The worker runs
+  // with host privileges, so it must never follow one out of the workspace.
+  if (!insideRealWorkspace(base, resolved)) return null;
   return resolved;
+}
+
+/** True when every existing component of `target` stays inside the real workspace. */
+function insideRealWorkspace(base: string, target: string): boolean {
+  let realBase: string;
+  try { realBase = fs.realpathSync(base); } catch { return true; } // not created yet
+  let probe = target;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const st = fs.lstatSync(probe);
+      if (st.isSymbolicLink()) return false;
+      const real = fs.realpathSync(probe);
+      const full = tail.length ? path.join(real, ...tail.reverse()) : real;
+      return full === realBase || full.startsWith(realBase + path.sep);
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      tail.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+/** Files the worker writes are handed to the sandbox user, so the sandbox can edit them too. */
+function ownForSandbox(runId: string, target: string): void {
+  const handle = runtime.handleFor(runId);
+  if (handle?.provider !== "openshell") return;
+  try {
+    const base = workspaceFor(jobIdentity.get(runId)!);
+    let dir = path.dirname(target);
+    fs.chownSync(target, SANDBOX_UID, SANDBOX_UID);
+    while (dir.startsWith(base) && dir !== path.dirname(base)) {
+      fs.chownSync(dir, SANDBOX_UID, SANDBOX_UID);
+      if (dir === base) break;
+      dir = path.dirname(dir);
+    }
+  } catch { /* best effort: the sandbox can still read */ }
+}
+
+function chownTree(root: string, uid: number): void {
+  const walk = (p: string) => {
+    let st: fs.Stats;
+    try { st = fs.lstatSync(p); } catch { return; }
+    if (st.isSymbolicLink()) return;
+    try { fs.chownSync(p, uid, uid); } catch { /* keep going */ }
+    if (st.isDirectory()) for (const e of fs.readdirSync(p)) walk(path.join(p, e));
+  };
+  walk(root);
 }
 
 /** Reads a file from the mission workspace (the container's /workspace). */
@@ -407,6 +482,7 @@ async function remoteWriteFile(runId: string, filePath: string, content: string,
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (append) fs.appendFileSync(target, content, "utf8");
     else fs.writeFileSync(target, content, "utf8");
+    ownForSandbox(runId, target);
     const bytesWritten = Buffer.byteLength(content, "utf8");
     if (large) {
       return {
@@ -452,19 +528,35 @@ async function remoteEditFile(runId: string, filePath: string, oldStr: string, n
         return { ok: false, output: "", exitCode: 1, stderr: `DESTRUCTIVE_REWRITE: this edit replaces essentially all of ${filePath}. Use targeted old_string/new_string edits; a full rewrite needs the user to ask for a redesign.` };
       }
       fs.writeFileSync(target, updated, "utf8");
+      ownForSandbox(runId, target);
       return { ok: true, output: `Replaced ${filePath} (${newLines} lines, was ${oldLines}) — full redesign authorized; the pre-mission checkpoint can undo it.`, exitCode: 0 };
     }
     fs.writeFileSync(target, updated, "utf8");
+    ownForSandbox(runId, target);
     return { ok: true, output: "Edited " + filePath, exitCode: 0 };
   } catch (e: any) {
     return { ok: false, output: "", exitCode: 1, stderr: e.code === "ENOENT" ? `File not found: ${filePath}` : e.message };
   }
 }
 
-/** Runs a terminal command INSIDE the mission container. */
-async function remoteTerminal(containerId: string, command: string): Promise<CommandResult> {
-  const r = await docker(["exec", containerId, "sh", "-c", command]);
-  return { ok: r.code === 0, output: r.stdout + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.code, stderr: r.stderr };
+/** Runs a terminal command INSIDE the run's sandbox, with the plan's per-command timeout. */
+async function remoteTerminal(runId: string, command: string, timeoutS?: number): Promise<CommandResult & { failureKind?: string }> {
+  const plan = jobPlans.get(runId);
+  try {
+    const r = await runtime.exec(runId, command, { timeoutS: timeoutS ?? plan?.resources.commandTimeoutS ?? 300 });
+    let stderr = r.stderr;
+    if (r.timedOut) stderr = `TIMEOUT: the command exceeded ${timeoutS ?? plan?.resources.commandTimeoutS ?? 300}s and was stopped.\n${stderr}`;
+    if (r.failureKind === "network_policy_denied") {
+      stderr = `NETWORK_POLICY_DENIED: this workspace's network policy blocked the connection. Do not retry or work around it. If the task needs this host, call request_network_access; otherwise continue without it.\n${stderr}`;
+    } else if (r.failureKind === "credential_policy_denied") {
+      stderr = `CREDENTIAL_POLICY_DENIED: no credential is attached for this destination. Do not ask for or paste secrets.\n${stderr}`;
+    }
+    return { ok: r.exitCode === 0, output: r.stdout + (stderr ? "\n" + stderr : ""), exitCode: r.exitCode, stderr, ...(r.failureKind ? { failureKind: r.failureKind } : {}) };
+  } catch (e: any) {
+    const kind = e instanceof SandboxError ? e.kind : "tool_internal";
+    const msg = kind === "sandbox_unavailable" ? `SANDBOX_UNAVAILABLE: ${e.message}` : String(e?.message ?? e);
+    return { ok: false, output: "", exitCode: -1, stderr: msg, failureKind: kind };
+  }
 }
 
 function parseGitPorcelain(text: string): { branch: string; clean: boolean; modified: string[]; staged: string[]; untracked: string[] } {
@@ -504,7 +596,7 @@ function shq(s: string): string {
  * the command with the terminal tool — the worker never hardcodes a project's
  * test file.
  */
-async function remoteRunTests(runId: string, containerId: string): Promise<CommandResult> {
+async function remoteRunTests(runId: string): Promise<CommandResult> {
   const pkgPath = workspacePath(runId, "package.json");
   let npmScript = false;
   try {
@@ -519,31 +611,24 @@ async function remoteRunTests(runId: string, containerId: string): Promise<Comma
       stderr: "No \"test\" script found in package.json. Run the project's test command with the terminal tool instead.",
     };
   }
-  return remoteTerminal(containerId, "npm test 2>&1");
+  return remoteTerminal(runId, "npm test 2>&1");
 }
 
-/** Copies the project into the container workspace.
+/** Copies the project into the run's workspace (the sandbox's /workspace).
+ *  Host-side and provider-agnostic; symlinks are not carried over.
  *  Returns "ok" | "missing" (no such source) | "failed" (transfer error). */
-async function transferProject(containerId: string, sourcePath: string): Promise<"ok" | "missing" | "failed"> {
+async function transferProject(workspaceDir: string, sourcePath: string): Promise<"ok" | "missing" | "failed"> {
   if (!sourcePath || !fs.existsSync(sourcePath)) return "missing";
-  // tar pipe: stream project into container's /workspace. --no-same-owner:
-  // the container drops every capability, so restoring source ownership
-  // (chown) would fail — and ownership is irrelevant inside the sandbox.
-  const workspace = "/workspace";
-  return new Promise((resolve) => {
-    const tar = spawn("tar", ["cf", "-", "-C", sourcePath, "."], { windowsHide: true });
-    const dock = spawn("docker", ["exec", "-i", containerId, "tar", "-xf", "-", "--no-same-owner", "-C", workspace], { windowsHide: true });
-    let err = "";
-    dock.stderr.on("data", (d) => (err += d));
-    tar.stderr.on("data", (d) => (err += d));
-    tar.stdout.pipe(dock.stdin);
-    dock.on("close", (code) => {
-      console.log(`[worker] project transfer: code=${code} err=${err.slice(0, 100)}`);
-      resolve(code === 0 ? "ok" : "failed");
+  try {
+    fs.cpSync(sourcePath, workspaceDir, {
+      recursive: true, force: true,
+      filter: (src) => { try { return !fs.lstatSync(src).isSymbolicLink(); } catch { return false; } },
     });
-    tar.on("error", () => resolve("failed"));
-    dock.on("error", () => resolve("failed"));
-  });
+    return "ok";
+  } catch (e: any) {
+    console.log(`[worker] project transfer failed: ${String(e?.message ?? e).slice(0, 100)}`);
+    return "failed";
+  }
 }
 
 // Tool RPC: the worker polls for tool requests from the control plane's
@@ -551,7 +636,7 @@ async function transferProject(containerId: string, sourcePath: string): Promise
 // MODEL decides which tools to call; the worker is a dumb executor. The loop
 // ends when the control-plane run finishes (observed via the `finished` flag
 // — the worker NEVER decides completion itself) or the run is cancelled.
-async function pollForToolRequests(runId: string, containerId: string): Promise<void> {
+async function pollForToolRequests(runId: string): Promise<void> {
   while (activeContainers.has(runId) && !cancelledRuns.has(runId)) {
     try {
       const res = await cp("/api/v1/worker/tools/" + runId + "/next");
@@ -559,10 +644,25 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
         console.log("[worker] control plane reports run finished: " + runId);
         return;
       }
+      if (res.policyUpdate && typeof res.policyUpdate.requestId === "string") {
+        // A person approved wider network access for this run. The template
+        // is a reviewed file on this worker; the control plane only names it.
+        const u = res.policyUpdate;
+        let applied = false;
+        let error: string | undefined;
+        try {
+          await runtime.applyPolicy(runId, u.template, u.params ?? {}, Array.isArray(u.credentials) ? u.credentials : []);
+          applied = true;
+          await emitEvent(runId, "sandbox.policy.updated", { policy: u.template });
+        } catch (e: any) {
+          error = String(e?.message ?? e).slice(0, 200);
+        }
+        await cp(`/api/v1/worker/sandboxes/${encodeURIComponent(runId)}/policy/${encodeURIComponent(u.requestId)}`, "POST", { ok: applied, error }).catch(() => {});
+      }
       if (res.request) {
         const req = res.request;
         console.log("[worker] tool RPC: " + req.tool + " requestId=" + req.requestId);
-        let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string };
+        let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string; failureKind?: string };
         switch (req.tool) {
           case "read_file": {
             const r = await remoteReadFile(runId, String(req.arguments.path ?? ""), req.arguments.encoding === "base64");
@@ -591,7 +691,7 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
           case "list_directory": {
             const rel = req.arguments.path ? String(req.arguments.path) : "";
             const target = rel ? "/workspace/" + rel.replace(/^[/\\]+/, "") : "/workspace";
-            const r = await remoteTerminal(containerId, "ls -la " + shq(target));
+            const r = await remoteTerminal(runId, "ls -la " + shq(target));
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
@@ -599,35 +699,35 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
             const q = String(req.arguments.query ?? req.arguments.pattern ?? "");
             const cmd = "grep -rn --binary-files=without-match " + shq(q) +
               " /workspace --include=*.js --include=*.ts --include=*.jsx --include=*.tsx --include=*.json --include=*.py --include=*.go --include=*.rs --include=*.md 2>/dev/null | head -50";
-            const r = await remoteTerminal(containerId, cmd);
+            const r = await remoteTerminal(runId, cmd);
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "terminal": case "run_command": {
             const cmd = String(req.arguments.command ?? "");
             await emitEvent(runId, "terminal.started", { command: cmd });
-            const r = await remoteTerminal(containerId, cmd);
+            const r = await remoteTerminal(runId, cmd);
             await emitEvent(runId, "terminal.output", { data: (r.output || "").slice(0, 4000) });
             await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0, exitCode: r.exitCode });
-            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode, failureKind: r.failureKind };
             break;
           }
           case "run_tests": {
             await emitEvent(runId, "terminal.started", { command: "npm test" });
-            const r = await remoteRunTests(runId, containerId);
+            const r = await remoteRunTests(runId);
             await emitEvent(runId, "terminal.output", { data: (r.output || r.stderr || "").slice(0, 4000) });
             await emitEvent(runId, "terminal.completed", { exitOk: r.exitCode === 0, exitCode: r.exitCode });
             result = { ok: r.exitCode === 0, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "run_typecheck": {
-            const r = await remoteTerminal(containerId, "npx --no-install tsc --noEmit 2>&1 || echo 'typescript not installed'");
+            const r = await remoteTerminal(runId, "npx --no-install tsc --noEmit 2>&1 || echo 'typescript not installed'");
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           case "git_status": {
             console.log(JSON.stringify({ event: "git.status.start", runId }));
-            const r = await remoteTerminal(containerId, "git status --porcelain=v1 -b");
+            const r = await remoteTerminal(runId, "git status --porcelain=v1 -b");
             const text = (r.output || "") + (r.stderr || "");
             if (/not a git repository/i.test(text)) {
               const snapshot = { branch: "", clean: true, modified: [] as string[], staged: [] as string[], untracked: [] as string[] };
@@ -646,7 +746,7 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
             break;
           }
           case "git_diff": {
-            const r = await remoteTerminal(containerId, "git diff");
+            const r = await remoteTerminal(runId, "git diff");
             result = r.ok || /not a git repository/i.test(r.output || "")
               ? { ok: true, output: r.output || "(no diff)", exitCode: r.exitCode }
               : { ok: false, error: (r.output || r.stderr || "git diff failed"), exitCode: r.exitCode };
@@ -654,17 +754,44 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
           }
           case "git_log": {
             const limit = Math.min(Math.max(Number(req.arguments.limit) || 20, 1), 200);
-            const r = await remoteTerminal(containerId, "git log --oneline --decorate -n" + limit);
+            const r = await remoteTerminal(runId, "git log --oneline --decorate -n" + limit);
             result = r.ok || /not a git repository/i.test(r.output || "")
               ? { ok: true, output: r.output || "(no commits)", exitCode: r.exitCode }
               : { ok: false, error: (r.output || r.stderr || "git log failed"), exitCode: r.exitCode };
             break;
           }
           case "git_branch": {
-            const r = await remoteTerminal(containerId, "git branch -a --no-color");
+            const r = await remoteTerminal(runId, "git branch -a --no-color");
             result = r.ok || /not a git repository/i.test(r.output || "")
               ? { ok: true, output: r.output || "(no branches)", exitCode: r.exitCode }
               : { ok: false, error: (r.output || r.stderr || "git branch failed"), exitCode: r.exitCode };
+            break;
+          }
+          case "delete_file": {
+            const target = workspacePath(runId, String(req.arguments.path ?? ""));
+            if (!target || target === workspacePath(runId, "")) { result = { ok: false, error: "path escapes the workspace", exitCode: 1 }; break; }
+            try {
+              const st = fs.lstatSync(target);
+              if (st.isDirectory()) { result = { ok: false, error: "delete_file removes files, not folders", exitCode: 1 }; break; }
+              fs.unlinkSync(target);
+              result = { ok: true, output: "Deleted " + String(req.arguments.path), exitCode: 0 };
+            } catch (e: any) {
+              result = { ok: false, error: e.code === "ENOENT" ? "File not found: " + String(req.arguments.path) : e.message, exitCode: 1 };
+            }
+            break;
+          }
+          case "git_checkout": {
+            const branch = String(req.arguments.branch ?? "");
+            if (!/^[A-Za-z0-9._\/-]{1,200}$/.test(branch) || branch.startsWith("-")) { result = { ok: false, error: "invalid branch name", exitCode: 1 }; break; }
+            const r = await remoteTerminal(runId, "git checkout " + (req.arguments.create === true ? "-b " : "") + shq(branch) + " 2>&1");
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
+            break;
+          }
+          case "git_commit": {
+            const message = String(req.arguments.message ?? "").slice(0, 2000);
+            if (!message.trim()) { result = { ok: false, error: "commit message required", exitCode: 1 }; break; }
+            const r = await remoteTerminal(runId, "git add -A && git -c user.name='ORVYN' -c user.email='agent@orvyn.invalid' commit -m " + shq(message) + " 2>&1");
+            result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
           default:
@@ -673,7 +800,7 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
         await cp("/api/v1/worker/tools/" + runId + "/result", "POST", {
           requestId: req.requestId, runId: runId, ok: result.ok,
           output: result.output, stderr: result.stderr, exitCode: result.exitCode,
-          error: result.error, durationMs: Date.now() - req.createdAt,
+          error: result.error, failureKind: result.failureKind, durationMs: Date.now() - req.createdAt,
         }).catch(e => console.warn("[worker] result failed: " + e.message));
         console.log("[worker] tool result: " + req.tool + " ok=" + result.ok);
       }
@@ -684,21 +811,23 @@ async function pollForToolRequests(runId: string, containerId: string): Promise<
 
 // ── Mission container lifecycle ────────────────────────────────────────────
 
+/** Sandbox plan per active run (limits used by tool calls). */
+const jobPlans = new Map<string, SandboxPlan>();
+
 async function executeJob(raw: JobAssignment): Promise<void> {
   const job = trustedJob(raw);
   const runId = job.runId;
   jobIdentity.set(runId, job);
-  console.log(`[worker] executeJob START: ${runId} tenant=${job.tenantId} (role=${job.role ?? "executor"})`);
-  // Distinct prefix from the SERVICE container (orvyn-worker-N): mission
-  // containers must never match the worker's own name in any filter.
-  const tenantTag = sanitizeSegment(job.tenantId || "unknown").replace(/[^A-Za-z0-9]/g, "").slice(0, 12);
-  const containerName = `orvyn-mission-${tenantTag}-${runId.slice(0, 8)}`;
-  let containerId = "";
+  const plan = normalizePlan(job.sandbox, runId, CONTAINER_LIFETIME_S);
+  jobPlans.set(runId, plan);
+  console.log(`[worker] executeJob START: ${runId} tenant=${job.tenantId} sandbox=${plan.sandboxId} (role=${job.role ?? "executor"}${job.recover ? ", recovering" : ""})`);
   const cancelTimer = startCancelPolling(runId);
 
   const workspace = workspaceFor(job);
   const canonical = String(job.canonicalProjectRoot ?? "");
   let synced = false;
+  let handle: SandboxHandle | undefined;
+  let releaseReason = "run finished";
   const syncBack = async (): Promise<void> => {
     if (synced || !canonical) return;
     try {
@@ -711,48 +840,26 @@ async function executeJob(raw: JobAssignment): Promise<void> {
   try {
     // The control-plane runtime owns run.started and run.completed — the
     // worker never claims either. It only reports its own lifecycle.
-    await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: "Preparing remote mission container" });
+    await emitEvent(runId, "agent.phase", { phase: "UNDERSTAND", note: job.recover ? "Reconnecting to the mission workspace" : "Preparing remote mission container" });
 
     if (!ephemeralSandboxDeletable(workspace, canonical)) {
       throw new Error("refusing to use the canonical workspace as the mission sandbox");
     }
-    fs.rmSync(workspace, { recursive: true, force: true });
-    fs.mkdirSync(workspace, { recursive: true });
-
-    // Canonical project → ephemeral sandbox. The control plane reads
-    // ORVYN_DATA_DIR; this worker does not need that volume mounted.
+    // A recovered run keeps the bytes its first worker left on this host;
+    // everything else starts from the durable (canonical) workspace.
+    const keepBytes = (job.recover || plan.retention === "retained") && fs.existsSync(workspace);
     let canonicalStaged = false;
-    try {
-      canonicalStaged = await stageCanonicalIntoSandbox(runId, workspace);
-    } catch (e: any) {
-      console.warn(`[worker] canonical stage failed for ${runId}: ${e.message}`);
+    if (!keepBytes) {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.mkdirSync(workspace, { recursive: true });
+      try {
+        canonicalStaged = await stageCanonicalIntoSandbox(runId, workspace);
+      } catch (e: any) {
+        console.warn(`[worker] canonical stage failed for ${runId}: ${e.message}`);
+      }
+    } else {
+      canonicalStaged = true;
     }
-
-    const create = await docker([
-      "create", "--name", containerName,
-      "--network", "none",
-      "--cap-drop", "ALL",
-      "--security-opt", "no-new-privileges",
-      "--memory", "1g", "--cpus", "1", "--pids-limit", "256",
-      "--label", `orvyn.tenant_id=${job.tenantId}`,
-      "--label", `orvyn.run_id=${runId}`,
-      "--label", `orvyn.organization_id=${job.organizationId || ""}`,
-      "-v", `${workspace}:/workspace`,
-      "-w", "/workspace",
-      SANDBOX_IMAGE,
-      "sleep", String(CONTAINER_LIFETIME_S),
-    ]);
-    if (create.code !== 0) throw new Error(`Container create failed: ${create.stderr}`);
-    containerId = create.stdout;
-    activeContainers.set(runId, containerId);
-
-    const start = await docker(["start", containerId]);
-    if (start.code !== 0) throw new Error(`Container start failed: ${start.stderr}`);
-
-    await emitEvent(runId, "sandbox.started", {
-      container: containerName, image: SANDBOX_IMAGE, network: "none",
-      capDrop: "ALL", memory: "1g", cpus: "1", pidsLimit: 256,
-    });
 
     // Transfer a checkout that actually exists on this machine. A Windows
     // path from the desktop, or a missing folder, is not a failure: the
@@ -761,10 +868,9 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     const foreign = /^[A-Za-z]:[\\/]/.test(source) || source.startsWith("\\\\");
     const workspaceRoot = path.resolve(WORKSPACE_DIR);
     const isParentWorkspace = Boolean(source) && path.resolve(source) === workspaceRoot;
-    // A staged canonical tree is the project. Do not overlay some other folder.
     if (!canonicalStaged && source && !foreign && !isParentWorkspace) {
       await emitEvent(runId, "agent.phase", { phase: "DISCOVER", note: "Transferring project to remote workspace" });
-      const transferred = await transferProject(containerId, source);
+      const transferred = await transferProject(workspace, source);
       await emitEvent(runId, "tool.completed", {
         tool: "project_transfer",
         preview: transferred === "ok"
@@ -775,19 +881,39 @@ async function executeJob(raw: JobAssignment): Promise<void> {
         ok: transferred === "ok",
       });
       if (transferred === "failed") throw new Error(`Project transfer failed: ${source}`);
-    } else {
+    } else if (!canonicalStaged) {
       await emitEvent(runId, "agent.phase", {
         phase: "PREPARE",
         note: "No local checkout on this worker. Using the Cloud workspace.",
       });
     }
+    if (plan.provider === "openshell") chownTree(workspace, SANDBOX_UID);
+
+    handle = await runtime.acquire(runId, plan, {
+      organizationId: job.organizationId || job.tenantId || "",
+      tenantId: job.tenantId || "",
+      userId: job.userId || "",
+      projectId: job.projectId ?? null,
+      workspaceId: String(job.projectId ?? runId),
+      missionId: job.missionId,
+      runId,
+    }, workspace);
+    // A fallback to docker runs as root in the container; hand files back.
+    if (handle.provider === "docker" && plan.provider === "openshell") chownTree(workspace, 0);
+    activeContainers.set(runId, handle.sandboxId);
+
+    await emitEvent(runId, "sandbox.started", {
+      container: handle.name, network: handle.provider === "docker" ? "none" : "policy",
+      capDrop: "ALL", memory: `${plan.resources.memoryMb}m`, cpus: String(plan.resources.cpus), pidsLimit: plan.resources.pidsLimit,
+      policy: handle.policyTemplate,
+    });
 
     // ENTER THE TOOL RPC LOOP — the control-plane ORION model drives all
     // tool calls from here. The worker executes generic requests only.
-    await emitEvent(runId, "sandbox.ready", { container: containerName, projectRoot: job.projectRoot ?? "" });
+    await emitEvent(runId, "sandbox.ready", { container: handle.name, projectRoot: job.projectRoot ?? "" });
     await emitEvent(runId, "agent.phase", { phase: "EXECUTE", note: "Mission container ready for tool requests" });
     console.log("[worker] entering tool RPC loop for " + runId);
-    await pollForToolRequests(runId, containerId);
+    await pollForToolRequests(runId);
     console.log("[worker] tool RPC loop ended for " + runId);
 
     // Sandbox bytes go back to the durable workspace before anything is removed.
@@ -796,29 +922,31 @@ async function executeJob(raw: JobAssignment): Promise<void> {
     // Collect artifacts BEFORE cleanup — real files from the run.
     const artifacts = await collectArtifacts(runId);
     await emitEvent(runId, "artifacts.collected", { files: artifacts });
-    await emitEvent(runId, "sandbox.stopped", { container: containerName, reason: "run finished" });
+    await emitEvent(runId, "sandbox.stopped", { container: handle.name, reason: "run finished" });
   } catch (err: any) {
     // Never a worker-side run.completed / run.error for the model's outcome:
     // the control plane owns the verdict. A worker infrastructure failure is
     // reported as a sandbox event; the control-plane tool call that was
     // waiting on the RPC fails truthfully on its own timeout.
     const wasCancelled = cancelledRuns.has(runId);
+    releaseReason = wasCancelled ? "run cancelled" : "worker infrastructure failure";
     await emitEvent(runId, "sandbox.stopped", {
-      container: containerName,
-      reason: wasCancelled ? "run cancelled" : `worker infrastructure failure: ${err.message}`,
+      container: handle?.name ?? plan.sandboxId,
+      reason: wasCancelled ? "run cancelled" : `worker infrastructure failure: ${err instanceof SandboxError ? err.message : err.message}`,
     }).catch(() => {});
     console.error(`[worker] executeJob FAILED: ${runId}: ${err.message}`);
   } finally {
     stopCancelPolling(cancelTimer);
     try { await syncBack(); } catch { /* already logged */ }
-    if (containerId) {
-      const rm = await docker(["rm", "-f", containerId]);
-      console.log(`[worker] cleanup container ${containerId.slice(0, 12)}: code=${rm.code}`);
-    }
+    const force = cancelledRuns.has(runId) || releaseReason !== "run finished";
+    await runtime.release(runId, releaseReason, { force }).catch(() => {});
     activeContainers.delete(runId);
     cancelledRuns.delete(runId);
-    try { removeEphemeralSandbox(workspace, canonical); } catch {}
+    if (plan.retention !== "retained" || force) {
+      try { removeEphemeralSandbox(workspace, canonical); } catch {}
+    }
     jobIdentity.delete(runId);
+    jobPlans.delete(runId);
     console.log(`[worker] executeJob DONE: ${runId} tenant=${job.tenantId} (worker alive: yes)`);
   }
 }
@@ -895,6 +1023,21 @@ async function cleanupStaleMissionContainers(): Promise<void> {
   }
 }
 
+const RECONCILE_INTERVAL = Number(process.env.ORVYN_SANDBOX_RECONCILE_MS) || 10 * 60_000;
+
+async function reconcileSandboxes(): Promise<void> {
+  try {
+    const res = await cp(`/api/v1/worker/sandboxes/live?workerId=${encodeURIComponent(WORKER_ID)}`, "GET", undefined, 15_000);
+    // Without an answer from the control plane nothing is judged an orphan.
+    if (!res || !Array.isArray(res.live)) return;
+    const out = await runtime.reconcile(new Set<string>(res.live.map(String)));
+    if (out.removed.length) console.log(`[worker] reconcile: removed ${out.removed.length} sandbox(es), kept ${out.kept}`);
+    await cp(`/api/v1/worker/sandboxes/reconciled`, "POST", { workerId: WORKER_ID, removed: out.removed, kept: out.kept }).catch(() => {});
+  } catch (e: any) {
+    console.warn(`[worker] reconcile failed: ${String(e?.message ?? e).slice(0, 120)}`);
+  }
+}
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -906,10 +1049,16 @@ async function main(): Promise<void> {
 
   await detectDocker();
   await cleanupStaleMissionContainers();
+  await runtime.refreshHealth();
+  console.log(`[worker]   Sandbox providers: ${Object.keys(runtime.providers).join(", ")}`);
   await register();
 
   setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL);
   setInterval(() => void pollForJobs(), POLL_INTERVAL);
+  setInterval(() => void runtime.refreshHealth(), 60_000).unref();
+  // Reconciliation: orphans, finished runs' sandboxes, retained sandboxes past TTL.
+  setTimeout(() => void reconcileSandboxes(), 30_000).unref();
+  setInterval(() => void reconcileSandboxes(), RECONCILE_INTERVAL).unref();
 
   console.log(`[worker] Running — heartbeat ${HEARTBEAT_INTERVAL / 1000}s, poll ${POLL_INTERVAL / 1000}s, cancel-check ${CANCEL_POLL_INTERVAL / 1000}s`);
 }

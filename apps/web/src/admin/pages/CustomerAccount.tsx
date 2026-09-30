@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { api } from "../../lib/api";
 import { navigate } from "../../lib/router";
 import { useQuery } from "../query";
 import { fmtAgo, fmtCompact, fmtDate, fmtIn, fmtNum, fmtUsd, domainOf } from "../format";
@@ -23,7 +24,7 @@ export interface CustomerDetail {
 }
 type Member = { userId: string; email: string; name: string | null; role: string; joinedAt: number; verified: boolean; lastSeenAt: number | null };
 
-const TABS: [string, string, AIconName][] = [["overview", "Overview", "dashboard"], ["subscription", "Subscription", "sub"], ["usage", "Usage", "chart"], ["invoices", "Invoices", "invoice"], ["projects", "Projects", "folder"], ["workspaces", "Workspaces", "layers"], ["audit", "Audit", "audit"]];
+const TABS: [string, string, AIconName][] = [["overview", "Overview", "dashboard"], ["subscription", "Subscription", "sub"], ["usage", "Usage", "chart"], ["invoices", "Invoices", "invoice"], ["projects", "Projects", "folder"], ["workspaces", "Workspaces", "layers"], ["sandboxes", "Sandboxes", "shield"], ["audit", "Audit", "audit"]];
 
 function change(now: number, before: number): number | null { if (!before) return now ? null : 0; return Math.round(((now - before) / before) * 1000) / 10; }
 
@@ -59,7 +60,7 @@ export function CustomerAccount({ id, tab }: { id: string; tab: string }) {
       <nav className="a-pagetabs" aria-label="Customer sections">
         {TABS.map(([t, l, ic]) => { const Ic = A[ic]; return <button key={t} className={`a-pagetab${tab === t ? " is-on" : ""}`} aria-current={tab === t ? "page" : undefined} onClick={() => navigate(t === "overview" ? `/admin/customers/${id}` : `/admin/customers/${id}/${t}`)} data-testid={`tab-${t}`}><Ic /> {l}</button>; })}
       </nav>
-      {!c ? <SkeletonRows rows={6} h={60} /> : tab === "overview" ? <Overview c={c} /> : tab === "subscription" ? <SubscriptionTab c={c} /> : tab === "usage" ? <UsageTab c={c} /> : tab === "invoices" ? <InvoicesTab id={id} full /> : tab === "projects" ? <ProjectsTab id={id} /> : tab === "workspaces" ? <WorkspacesTab id={id} /> : tab === "audit" ? <AuditTab id={id} /> : <Empty icon="folder" title="Unknown section" />}
+      {!c ? <SkeletonRows rows={6} h={60} /> : tab === "overview" ? <Overview c={c} /> : tab === "subscription" ? <SubscriptionTab c={c} /> : tab === "usage" ? <UsageTab c={c} /> : tab === "invoices" ? <InvoicesTab id={id} full /> : tab === "projects" ? <ProjectsTab id={id} /> : tab === "workspaces" ? <WorkspacesTab id={id} /> : tab === "sandboxes" ? <SandboxesTab id={id} /> : tab === "audit" ? <AuditTab id={id} /> : <Empty icon="folder" title="Unknown section" />}
     </div>
   );
 }
@@ -334,6 +335,66 @@ function WorkspacesTab({ id }: { id: string }) {
           <tbody>{q.data.workspaces.map((w) => <tr key={w.id} style={{ cursor: "default" }}><td>{w.name}</td><td className="a-mono">{w.projectId}</td><td>{fmtDate(w.createdAt)}</td><td><CopyId value={w.id} /></td></tr>)}</tbody></table>
       )}
     </Card>
+  );
+}
+
+interface SandboxRow { id: string; provider: string; state: string; policyTemplate: string; policyVersion: number; retention: string; runId: string | null; projectId: string | null; provisionMs: number | null; reconnects: number; execCount: number; policyDenials: number; fallbackReason: string | null; lastError: string | null; createdAt: number; updatedAt: number }
+interface SandboxData { runtimeFlag: boolean | null; organizationId: string; sandboxes: SandboxRow[]; requests: { id: string; template: string; status: string; reason: string; params: Record<string, string[]>; createdAt: number; decidedBy: string | null }[]; audit: { id: string; type: string; actor: string; detail: Record<string, unknown>; at: number }[] }
+
+/** Execution sandboxes for this customer: provider, state, policy, failures. Opening this tab is audited. */
+function SandboxesTab({ id }: { id: string }) {
+  const me = useAdmin();
+  const q = useQuery<SandboxData>(`/admin/customers/${id}/sandboxes`);
+  const [busy, setBusy] = useState(false);
+  const setFlag = async (enabled: boolean | null) => {
+    if (!q.data) return;
+    setBusy(true);
+    try { await api(`/admin/runtime/flags`, { method: "PUT", body: { scope: "org", scopeId: q.data.organizationId, enabled } }); q.reload(); } finally { setBusy(false); }
+  };
+  const decide = async (rid: string, approve: boolean) => { await api(`/admin/runtime/requests/${rid}`, { method: "POST", body: { approve } }); q.reload(); };
+  const d = q.data;
+  return (
+    <>
+      <ErrorBox error={q.error} retry={q.reload} />
+      <Card title="Execution runtime" sub="Which sandbox runs this customer's cloud missions (internal)" action={canDo(me, "staff.manage") && d ? (
+        <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <button className={`btn btn--sm${d.runtimeFlag === true ? " btn--primary" : ""}`} disabled={busy} onClick={() => void setFlag(true)} data-testid="openshell-on">OpenShell canary on</button>
+          <button className={`btn btn--sm${d.runtimeFlag === false ? " btn--primary" : ""}`} disabled={busy} onClick={() => void setFlag(false)}>Force Docker</button>
+        </span>
+      ) : null}>
+        {!d ? <SkeletonRows rows={2} /> : <p className="muted" style={{ margin: 0 }}>Flag <span className="a-mono">openshell_runtime</span>: <b>{d.runtimeFlag === null ? "not set (deployment default)" : d.runtimeFlag ? "on" : "off"}</b>. The deployment must also have OpenShell enabled; otherwise missions stay on Docker.</p>}
+      </Card>
+      <Card title="Sandboxes" sub="Latest 50">
+        {!d ? <SkeletonRows rows={5} /> : !d.sandboxes.length ? <Empty icon="shield" title="No cloud sandboxes yet">They appear when this customer runs a mission in ORVYN Cloud.</Empty> : (
+          <div className="a-table-wrap"><table className="a-table" data-testid="sandbox-table">
+            <thead><tr><th>Sandbox</th><th>Provider</th><th>State</th><th>Policy</th><th>Retention</th><th className="num">Provision</th><th className="num">Commands</th><th className="num">Denials</th><th>Notes</th><th>Updated</th></tr></thead>
+            <tbody>{d.sandboxes.map((s) => (
+              <tr key={s.id} style={{ cursor: "default" }}>
+                <td><CopyId value={s.id} /></td><td>{s.provider}</td><td style={{ textTransform: "capitalize" }}>{s.state}</td>
+                <td className="a-mono">{s.policyTemplate}.v{s.policyVersion}</td><td>{s.retention}</td>
+                <td className="num">{s.provisionMs === null ? "—" : `${s.provisionMs} ms`}</td><td className="num">{fmtNum(s.execCount)}</td><td className="num">{fmtNum(s.policyDenials)}</td>
+                <td className="muted" style={{ maxWidth: 260 }}>{[s.fallbackReason && `fell back: ${s.fallbackReason}`, s.reconnects ? `${s.reconnects} reconnects` : "", s.lastError].filter(Boolean).join(" · ") || "—"}</td>
+                <td>{fmtAgo(s.updatedAt)}</td>
+              </tr>
+            ))}</tbody>
+          </table></div>
+        )}
+      </Card>
+      <div className="a-acct-row2">
+        <Card title="Network access requests">
+          {!d ? <SkeletonRows rows={3} /> : !d.requests.length ? <Empty icon="shield" title="No requests" /> : (
+            <table className="a-table"><thead><tr><th>Access</th><th>Reason</th><th>Status</th><th /></tr></thead>
+              <tbody>{d.requests.map((r) => <tr key={r.id} style={{ cursor: "default" }}><td className="a-mono">{r.template}{r.params.host?.length ? ` (${r.params.host.join(", ")})` : ""}</td><td className="muted">{r.reason || "—"}</td><td>{r.status}{r.decidedBy ? <span className="muted"> · {r.decidedBy}</span> : null}</td>
+                <td>{r.status === "pending" && canDo(me, "support.write") ? <span style={{ display: "flex", gap: 6 }}><button className="btn btn--sm btn--primary" onClick={() => void decide(r.id, true)}>Approve</button><button className="btn btn--sm" onClick={() => void decide(r.id, false)}>Deny</button></span> : null}</td></tr>)}</tbody></table>
+          )}
+        </Card>
+        <Card title="Sandbox audit" sub="Credential attachment, policy changes, denials, staff access">
+          {!d ? <SkeletonRows rows={4} /> : !d.audit.length ? <Empty icon="audit" title="Nothing recorded" /> : (
+            <table className="a-table"><tbody>{d.audit.map((a) => <tr key={a.id} style={{ cursor: "default" }}><td className="a-mono">{a.type}</td><td className="muted">{a.actor}</td><td className="muted" style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{JSON.stringify(a.detail)}</td><td>{fmtAgo(a.at)}</td></tr>)}</tbody></table>
+          )}
+        </Card>
+      </div>
+    </>
   );
 }
 

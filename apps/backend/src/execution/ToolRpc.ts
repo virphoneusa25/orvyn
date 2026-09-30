@@ -140,6 +140,24 @@ export class ToolRpcChannel {
     this.queues.delete(runId);
   }
 
+  /**
+   * The worker serving this run died. Requests it had already taken may or
+   * may not have run, so they fail with that truth (the model re-checks the
+   * workspace). Requests still queued stay queued for the recovering worker.
+   */
+  failInFlight(runId: string, reason: string): number {
+    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
+    let n = 0;
+    for (const [requestId, pending] of [...this.pending]) {
+      if (pending.request.runId !== runId || queued.has(requestId)) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(requestId);
+      pending.resolve({ requestId, runId, ok: false, error: reason, durationMs: Date.now() - pending.request.createdAt });
+      n++;
+    }
+    return n;
+  }
+
   /** Clean up a completed run: pending requests resolve as finished (they
    *  can never be served) and the queue is dropped. */
   cleanup(runId: string): void {

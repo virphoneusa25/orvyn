@@ -5,9 +5,15 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/index.js",
-    "dev": "tsc -p . && node dist/index.js"
+    "dev": "tsc -p . && node dist/index.js",
+    "test": "tsc -p . && node --test dist/sandbox/*.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@bufbuild/protobuf": "2.12.1",
+    "@connectrpc/connect": "2.1.2",
+    "@connectrpc/connect-node": "2.1.2",
+    "@nvidia/openshell-sdk": "file:vendor/nvidia-openshell-sdk-0.1.2.tgz"
+  },
   "devDependencies": {
     "typescript": "^5.4.0",
     "@types/node": "^20.0.0"

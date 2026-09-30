@@ -29,3 +29,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## NVIDIA OpenShell (TypeScript SDK and provider profile)
+
+Upstream project: https://github.com/NVIDIA/OpenShell (tag `v0.1.2`)
+
+`apps/worker/vendor/nvidia-openshell-sdk-0.1.2.tgz` is the `@nvidia/openshell-sdk` package built unmodified from `sdk/typescript` at that tag; its `LICENSE` file is inside the archive. `infrastructure/openshell/provider-profiles/orvyn-github.yaml` is adapted from `providers/github.yaml` at the same tag. Both are licensed under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.

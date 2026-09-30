@@ -12,6 +12,11 @@ import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
 import { readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
+import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
+import { selectSandbox, type SandboxPlan } from "../execution/sandbox/selection";
+import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
+import { creditLedger } from "../billing/creditLedgerInstance";
+import { githubToken } from "../integrations/githubConnection";
 import {
   assertTrustedMission,
   countActiveByTenant,
@@ -31,6 +36,8 @@ interface WorkerRecord {
   status: "online" | "busy" | "offline";
   activeRuns: number;
   lastHeartbeat: number;
+  /** Sandbox provider health and counters reported by the worker (admin only). */
+  sandboxRuntime?: Record<string, any>;
 }
 
 interface PendingJob {
@@ -55,6 +62,10 @@ interface PendingJob {
    * worker-driven path must not come back.
    */
   role?: "executor";
+  /** Execution sandbox plan (provider, policy template, plan-tier limits, retention). */
+  sandbox?: SandboxPlan;
+  /** Re-queued after the worker serving it died; the next worker reattaches. */
+  recover?: boolean;
 }
 
 const workers = new Map<string, WorkerRecord>();
@@ -146,6 +157,7 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
   });
   rememberTenant(runId, mission.tenantId, mission);
   const canonical = bindCanonicalRoot(runId, canonicalProjectRoot || projectRoot);
+  const sandbox = planSandbox(mission);
   jobQueue.push({
     runId,
     missionId: `mission_${runId.slice(0, 8)}`,
@@ -156,10 +168,52 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
     organizationId: mission.organizationId,
     userId: mission.userId,
     projectId: mission.projectId,
-    workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, mission.runId),
+    // A retained sandbox keeps one workspace directory per project across runs.
+    workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, sandbox?.retention === "retained" ? sandbox.sandboxId : mission.runId),
     role: "executor",
     createdAt: Date.now(),
+    ...(sandbox ? { sandbox } : {}),
   });
+}
+
+/**
+ * Chooses and records the run's execution sandbox. The registry row exists
+ * before any worker sees the job, so every sandbox has an owner on record.
+ * A registry failure never blocks a run: it falls back to the legacy Docker
+ * plan the worker derives on its own.
+ */
+function planSandbox(mission: MissionIdentity): SandboxPlan | undefined {
+  try {
+    const planId = creditLedger.planOf(mission.tenantId) ?? null;
+    const plan = selectSandbox({
+      organizationId: mission.organizationId, tenantId: mission.tenantId, projectId: mission.projectId,
+      planId, runId: mission.runId, workspaceId: String(mission.projectId ?? mission.runId),
+    }, sandboxRegistry());
+    sandboxRegistry().plan({
+      id: plan.sandboxId, provider: plan.provider, organizationId: mission.organizationId, tenantId: mission.tenantId,
+      userId: mission.userId, projectId: mission.projectId, workspaceId: String(mission.projectId ?? mission.runId),
+      runId: mission.runId, missionId: `mission_${mission.runId.slice(0, 8)}`, policyTemplate: plan.policyTemplate,
+      retention: plan.retention, expiresAt: Date.now() + plan.resources.maxLifetimeS * 1000,
+    });
+    sandboxRegistry().audit("sandbox.planned", "control-plane", { sandboxId: plan.sandboxId, organizationId: mission.organizationId, detail: { provider: plan.provider, reason: plan.reason, retention: plan.retention, runId: mission.runId } });
+    return plan;
+  } catch (err: any) {
+    console.warn(`[worker-registry] sandbox plan failed for ${mission.runId}: ${String(err?.message ?? err).slice(0, 200)}`);
+    return undefined;
+  }
+}
+
+/** Removes a finished run's job so it no longer counts against the tenant's concurrency. */
+function finishJob(runId: string): void {
+  const job = jobQueue.find((j) => j.runId === runId);
+  if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
+  try { sandboxRegistry().expireRequests(runId); } catch { /* registry unavailable */ }
+}
+
+/** Admin System Health: per-worker sandbox runtime reports (no secrets, no paths). */
+export function workerRuntimeReports(): Array<{ workerId: string; status: string; lastHeartbeat: number; sandboxRuntime: Record<string, any> | null }> {
+  pruneStaleWorkers();
+  return [...workers.values()].map((w) => ({ workerId: w.workerId, status: w.status, lastHeartbeat: w.lastHeartbeat, sandboxRuntime: w.sandboxRuntime ?? null }));
 }
 
 /** Removes any queued job for the run and drops pending tool RPCs. */
@@ -214,6 +268,40 @@ export function workerRouter(
     }
     return false;
   };
+
+  // ── Worker loss → recovery ───────────────────────────────────────────
+  // A job assigned to a worker that stopped heartbeating is re-queued with
+  // recover=true while its run is still active. The next worker reattaches
+  // to the same sandbox (it outlives the worker process) and the same
+  // workspace bytes. Tool calls the dead worker had taken fail truthfully.
+  const recoverOrphanedJobs = (): void => {
+    pruneStaleWorkers();
+    for (const job of jobQueue) {
+      if (!job.assignedTo) continue;
+      const w = workers.get(job.assignedTo);
+      if (w && w.status !== "offline") continue;
+      let active = false;
+      try {
+        const run = getRunStore(job.tenantId).get(job.runId);
+        active = Boolean(run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled");
+      } catch { active = false; }
+      if (!active) { finishJob(job.runId); continue; }
+      const lost = job.assignedTo;
+      job.assignedTo = undefined;
+      job.recover = true;
+      const failed = toolRpc.failInFlight(job.runId, "The cloud worker running this step restarted before it finished. Check the workspace state (read the file / list the folder) before retrying.");
+      try {
+        getRunStore(job.tenantId).emit(job.runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Reconnecting to the mission workspace" });
+        const rec = sandboxRegistry().forRun(job.runId);
+        if (rec) {
+          sandboxRegistry().report(rec.id, { state: "recovering" });
+          sandboxRegistry().audit("sandbox.recovering", "control-plane", { sandboxId: rec.id, organizationId: rec.organizationId, detail: { lostWorker: lost, failedToolCalls: failed } });
+        }
+      } catch { /* best effort */ }
+      console.warn(`[worker-registry] worker ${lost} lost; re-queued ${job.runId} for recovery (${failed} in-flight tool call(s) failed)`);
+    }
+  };
+  setInterval(recoverOrphanedJobs, 20_000).unref();
 
   // ── Registration ─────────────────────────────────────────────────────
   r.post("/register", (req, res) => {
@@ -293,8 +381,15 @@ export function workerRouter(
         ? run.status === "completed" || run.status === "error" || run.status === "cancelled"
         : false;
     } catch { /* store unavailable — keep serving */ }
-    if (finished) toolRpc.cleanup(req.params.runId);
-    res.json({ request, finished });
+    if (finished) {
+      toolRpc.cleanup(req.params.runId);
+      finishJob(req.params.runId);
+    }
+    let policyUpdate = null;
+    if (!finished) {
+      try { policyUpdate = pendingPolicyUpdate(sandboxRegistry(), req.params.runId); } catch { /* registry unavailable */ }
+    }
+    res.json({ request, finished, ...(policyUpdate ? { policyUpdate } : {}) });
   });
 
   // ── Tool RPC: worker submits the tool result ──────────────────────────
@@ -396,6 +491,100 @@ export function workerRouter(
     };
     jobQueue.push(job);
     res.status(201).json({ runId: job.runId, missionId: job.missionId, workspace: job.workspace, tenantId: mission.tenantId });
+  });
+
+  // ── Execution sandbox registry (worker reports; admin-only detail) ──
+  r.post("/sandboxes/:runId/report", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const runId = req.params.runId;
+    if (!bindWorkerRun(runId) && !tenantForRun(runId)) return res.status(404).json({ error: "Not found" });
+    const reg = sandboxRegistry();
+    const b = req.body ?? {};
+    const rec = reg.get(String(b.sandboxId ?? ""));
+    // A report can only touch the sandbox recorded for this very run.
+    if (!rec || rec.runId !== runId) return res.status(404).json({ error: "Not found" });
+    if (b.fallbackTo === "docker" && rec.provider !== "docker") {
+      reg.recordFallback(rec.id, "docker", String(b.fallbackReason ?? "unavailable"));
+      reg.audit("sandbox.fallback", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { reason: String(b.fallbackReason ?? "").slice(0, 200) } });
+    }
+    if (b.reconnect) { reg.bump(rec.id, "reconnects"); reg.audit("sandbox.reconnected", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId }); }
+    if (b.policyDenied) { reg.bump(rec.id, "policyDenials"); reg.audit("network.denied", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { kind: String(b.policyDenied) } }); }
+    if (typeof b.execMs === "number") reg.addExec(rec.id, b.execMs);
+    const patch: Partial<SandboxRecord> = {};
+    if (typeof b.state === "string") patch.state = b.state as SandboxRecord["state"];
+    if (typeof b.providerSandboxId === "string") patch.providerSandboxId = b.providerSandboxId.slice(0, 120);
+    if (typeof b.workerId === "string") patch.workerId = b.workerId.slice(0, 120);
+    if (typeof b.provisionMs === "number") patch.provisionMs = Math.round(b.provisionMs);
+    if (typeof b.policyTemplate === "string") patch.policyTemplate = b.policyTemplate.slice(0, 40);
+    if (typeof b.policyVersion === "number") patch.policyVersion = b.policyVersion;
+    if (typeof b.lastError === "string") patch.lastError = b.lastError;
+    if (typeof b.destroyedAt === "number") patch.destroyedAt = b.destroyedAt;
+    if (Object.keys(patch).length) reg.report(rec.id, patch);
+    if (b.state === "ready" && !b.released) reg.audit("sandbox.ready", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { provisionMs: patch.provisionMs ?? null } });
+    if (b.state === "failed") reg.audit("sandbox.failed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { error: String(b.lastError ?? "").slice(0, 200) } });
+    if (typeof b.destroyedAt === "number") reg.audit("sandbox.destroyed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId });
+    res.json({ ok: true });
+  });
+
+  r.post("/sandboxes/:runId/policy/:requestId", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const reg = sandboxRegistry();
+    const pr = reg.policyRequest(req.params.requestId);
+    if (!pr || pr.runId !== req.params.runId) return res.status(404).json({ error: "Not found" });
+    const ok = req.body?.ok === true;
+    reg.markPolicyApplied(pr.id, ok);
+    if (ok) reg.report(pr.sandboxId ?? "", { policyTemplate: pr.template });
+    reg.audit(ok ? "policy.expansion.applied" : "policy.expansion.failed", "worker", { sandboxId: pr.sandboxId, organizationId: pr.organizationId, detail: { requestId: pr.id, template: pr.template, error: ok ? undefined : String(req.body?.error ?? "").slice(0, 200) } });
+    res.json({ ok: true });
+  });
+
+  // Brokered credential for one run + one integration. Only for an OpenShell
+  // sandbox whose approved template needs it; the value goes straight into
+  // the gateway's credential store and never into the sandbox or any log.
+  r.get("/credentials/:runId/:integrationId", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const reg = sandboxRegistry();
+    const allowed = credentialAllowed(reg, req.params.runId, req.params.integrationId);
+    if (!allowed.ok) return res.status(403).json({ error: "Not permitted" });
+    if (req.params.integrationId !== "github") return res.status(404).json({ error: "Unknown integration" });
+    const token = githubToken(allowed.tenantId);
+    if (!token) return res.json({ credentials: null });
+    reg.audit("credential.attached", "worker", { sandboxId: allowed.sandboxId, organizationId: allowed.organizationId, detail: { integrationId: req.params.integrationId } });
+    res.json({ credentials: { GITHUB_TOKEN: token } });
+  });
+
+  /** Sandbox ids still in use, for the worker's reconciliation pass. */
+  r.get("/sandboxes/live", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const reg = sandboxRegistry();
+    const now = Date.now();
+    const live = reg.active().filter((s) => {
+      if (s.retention === "retained") return !s.expiresAt || s.expiresAt > now;
+      const job = s.runId ? jobQueue.find((j) => j.runId === s.runId) : undefined;
+      if (job) return true;
+      try {
+        const run = getRunStore(s.tenantId).get(s.runId ?? "");
+        return Boolean(run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled");
+      } catch { return true; } // unknown → keep; never delete on doubt
+    }).map((s) => s.id);
+    res.json({ live });
+  });
+
+  r.post("/sandboxes/reconciled", (req, res) => {
+    if (denyUnlessWorker(req, res)) return;
+    const reg = sandboxRegistry();
+    const removed: string[] = Array.isArray(req.body?.removed) ? req.body.removed.map(String).slice(0, 500) : [];
+    for (const id of removed) {
+      const rec = reg.get(id);
+      if (rec && !["completed", "failed", "stopped"].includes(rec.state)) reg.report(id, { state: "stopped", destroyedAt: Date.now(), lastError: "removed by reconciliation" });
+    }
+    // Rows the worker never reported back on (a crash before destroy) are closed here.
+    for (const rec of reg.staleCandidates(6 * 3600_000)) {
+      if (rec.retention === "retained" && rec.expiresAt && rec.expiresAt > Date.now()) continue;
+      reg.report(rec.id, { state: "stopped", lastError: "stale: no report for 6 h" });
+    }
+    if (removed.length) reg.audit("sandbox.reconciled", `worker:${String(req.body?.workerId ?? "")}`, { detail: { removed: removed.length, kept: Number(req.body?.kept ?? 0) } });
+    res.json({ ok: true });
   });
 
   // ── Worker list (monitoring/debugging) ──────────────────────────────

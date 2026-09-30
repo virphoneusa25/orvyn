@@ -142,11 +142,19 @@ fi
 echo "Rebuilding backend + worker on $HOST"
 "${SSH[@]}" "$HOST" "set -euo pipefail
 cd '$REMOTE'
+# OpenShell sandboxes are opt-in per server: only with OPENSHELL_ENABLED=true in .env.
+OS_COMPOSE=''
+if grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null; then
+  OS_COMPOSE='-f infrastructure/ovh/compose.openshell.yml'
+  echo 'OpenShell overlay: enabled'
+  docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml \$OS_COMPOSE up -d --no-deps openshell-gateway
+fi
 docker compose \
   -f docker-compose.yml \
   -f infrastructure/ovh/compose.prod.yml \
   -f infrastructure/ovh/compose.control-plane.yml \
   -f infrastructure/ovh/compose.worker.yml \
+  \$OS_COMPOSE \
   up -d --build --no-deps backend worker
 # Caddy: pick up new site blocks (app/admin hosts) without dropping connections.
 docker compose \
@@ -154,18 +162,21 @@ docker compose \
   -f infrastructure/ovh/compose.prod.yml \
   -f infrastructure/ovh/compose.control-plane.yml \
   -f infrastructure/ovh/compose.worker.yml \
+  \$OS_COMPOSE \
   up -d --no-deps caddy
 docker compose \
   -f docker-compose.yml \
   -f infrastructure/ovh/compose.prod.yml \
   -f infrastructure/ovh/compose.control-plane.yml \
   -f infrastructure/ovh/compose.worker.yml \
+  \$OS_COMPOSE \
   exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || echo 'caddy reload skipped'
 docker compose \
   -f docker-compose.yml \
   -f infrastructure/ovh/compose.prod.yml \
   -f infrastructure/ovh/compose.control-plane.yml \
   -f infrastructure/ovh/compose.worker.yml \
+  \$OS_COMPOSE \
   ps
 "
 

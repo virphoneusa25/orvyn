@@ -77,6 +77,68 @@ export function Workers() {
           </div>
         </>
       )}
+      <SandboxRuntime />
+    </>
+  );
+}
+
+interface RuntimeData {
+  config: { mode: string; openshellEnabled: boolean; canaryOrgs: number; canaryPercent: number; acceptancePassed: boolean };
+  workers: { workerId: string; status: string; lastHeartbeat: number; sandboxRuntime: Record<string, any> | null }[];
+  stats: Record<string, { active: number; failed: number; created: number; avgProvisionMs: number | null; p95ProvisionMs: number | null; reconnects: number; policyDenials: number; execCount: number; execMs: number; fallbacks: number }>;
+  active: { id: string; provider: string; customer: string | null; state: string; policy: string; retention: string; createdAt: number }[];
+  failures: { id: string; provider: string; customer: string | null; state: string; error: string | null; fallback: string | null; at: number }[];
+  flags: { scope: string; scopeId: string; enabled: boolean; name: string | null; updatedBy: string; updatedAt: number }[];
+  pendingRequests: { id: string; template: string; customer: string | null; reason: string; createdAt: number }[];
+  denials24h: number;
+}
+
+/** Execution sandboxes: provider health, canary state, failures (internal). */
+export function SandboxRuntime() {
+  const q = useQuery<RuntimeData>("/admin/runtime", { refreshMs: 30_000 });
+  const d = q.data;
+  const tile = (label: string, value: string, sub: string) => <div className="a-card"><div className="a-kpi__label">{label}</div><div className="a-kpi__value">{value}</div><div className="a-kpi__sub">{sub}</div></div>;
+  const os = d?.stats.openshell, dk = d?.stats.docker;
+  const gw = d?.workers.map((w) => w.sandboxRuntime?.openshell).find((r) => r?.enabled);
+  return (
+    <>
+      <ErrorBox error={q.error} retry={q.reload} />
+      {!d ? <SkeletonRows rows={2} h={90} /> : (
+        <>
+          <div className="a-grid4" style={{ marginTop: 14 }} data-testid="runtime-tiles">
+            {tile("Runtime policy", d.config.mode, d.config.openshellEnabled ? `OpenShell enabled · ${d.config.canaryOrgs} canary orgs${d.config.acceptancePassed ? ` · ${d.config.canaryPercent}% rollout` : ""}` : "OpenShell disabled")}
+            {tile("OpenShell gateway", gw ? (gw.health?.healthy ? "Healthy" : "Down") : "—", gw ? `v${gw.health?.version ?? "?"} · ${gw.health?.latencyMs ?? "?"} ms` : "no worker reports it")}
+            {tile("Active sandboxes", `${fmtNum(os?.active ?? 0)} / ${fmtNum(dk?.active ?? 0)}`, "OpenShell / Docker")}
+            {tile("Failed (24 h)", `${fmtNum(os?.failed ?? 0)} / ${fmtNum(dk?.failed ?? 0)}`, `${fmtNum((os?.fallbacks ?? 0))} fell back to Docker`)}
+          </div>
+          <div className="a-grid4" style={{ marginTop: 14 }}>
+            {tile("Provision time", os?.avgProvisionMs != null ? `${os.avgProvisionMs} ms` : "—", `OpenShell avg · p95 ${os?.p95ProvisionMs ?? "—"} ms · Docker ${dk?.avgProvisionMs ?? "—"} ms`)}
+            {tile("Policy denials", fmtNum(d.denials24h), "blocked network attempts, 24 h")}
+            {tile("Reconnects", fmtNum((os?.reconnects ?? 0) + (dk?.reconnects ?? 0)), "sandbox reattach after a worker restart, 24 h")}
+            {tile("Pending approvals", fmtNum(d.pendingRequests.length), "network access requests")}
+          </div>
+          <Card title="Workers" sub="Per-worker sandbox provider health (CPU/RAM per sandbox are plan-tier limits)">
+            {!d.workers.length ? <Empty icon="cpu" title="No execution worker has registered" /> : <table className="a-table"><thead><tr><th>Worker</th><th>Status</th><th>Docker</th><th>OpenShell</th><th className="num">Commands</th><th>Heartbeat</th></tr></thead>
+              <tbody>{d.workers.map((w) => { const o = w.sandboxRuntime?.openshell, k = w.sandboxRuntime?.docker; return (
+                <tr key={w.workerId} style={{ cursor: "default" }}><td className="a-mono">{w.workerId}</td><td>{w.status}</td>
+                  <td>{k ? `${k.health?.healthy ? "ok" : "down"} · ${k.active} active` : "—"}</td>
+                  <td>{o?.enabled ? `${o.health?.healthy ? "ok" : "down"} · ${o.active} active · ${o.failures} failures · ${o.policyDenials} denials` : "disabled"}</td>
+                  <td className="num">{fmtNum((k?.execs ?? 0) + (o?.execs ?? 0))}</td><td>{fmtAgo(w.lastHeartbeat)}</td></tr>); })}</tbody></table>}
+          </Card>
+          <Card title="Recent failures and fallbacks">
+            {!d.failures.length ? <Empty icon="heart" title="None recorded" /> : (
+              <table className="a-table"><thead><tr><th>Sandbox</th><th>Customer</th><th>Provider</th><th>State</th><th>Reason</th><th>When</th></tr></thead>
+                <tbody>{d.failures.map((f) => <tr key={f.id} style={{ cursor: "default" }}><td className="a-mono">{f.id}</td><td>{f.customer ?? "—"}</td><td>{f.provider}</td><td>{f.state}</td><td className="muted">{f.fallback ? `fell back: ${f.fallback}` : f.error ?? "—"}</td><td>{fmtAgo(f.at)}</td></tr>)}</tbody></table>
+            )}
+          </Card>
+          <Card title="Canary flags" sub="openshell_runtime — set per customer on the customer's Sandboxes tab">
+            {!d.flags.length ? <Empty icon="flag" title="No organization is on the canary" /> : (
+              <table className="a-table"><thead><tr><th>Scope</th><th>Organization / project</th><th>State</th><th>By</th><th>When</th></tr></thead>
+                <tbody>{d.flags.map((f) => <tr key={`${f.scope}:${f.scopeId}`} style={{ cursor: "default" }}><td>{f.scope}</td><td>{f.name ?? <span className="a-mono">{f.scopeId}</span>}</td><td>{f.enabled ? "on" : "off"}</td><td className="muted">{f.updatedBy}</td><td>{fmtAgo(f.updatedAt)}</td></tr>)}</tbody></table>
+            )}
+          </Card>
+        </>
+      )}
     </>
   );
 }

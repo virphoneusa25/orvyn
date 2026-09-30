@@ -7,9 +7,9 @@ import { signal, useSignal } from "../lib/events";
 import { Icon } from "./Icons";
 import { useDismiss } from "./Menu";
 
-export interface Note { id: string; kind: "warning" | "info" | "danger"; title: string; body: string; href?: string; at: number; inviteId?: string }
+export interface Note { id: string; kind: "warning" | "info" | "danger"; title: string; body: string; href?: string; at: number; inviteId?: string; networkRequestId?: string }
 
-/** The bell: real account signals (low credits, usage windows, payment problems, team invitations). */
+/** The bell: real account signals (low credits, usage windows, payment problems, team invitations, network access requests). */
 export function Notifications() {
   const { refresh, toast, me } = useStore();
   const [open, setOpen] = useState(false);
@@ -31,6 +31,13 @@ export function Notifications() {
     } catch (err: any) { toast(err.message); }
   };
   const decline = async (n: Note) => { await api(`/account/invites/${n.inviteId}/decline`, { method: "POST", body: {} }).catch(() => undefined); load(); };
+  const decideNetwork = async (n: Note, approve: boolean) => {
+    try {
+      await api(`/account/network-requests/${n.networkRequestId}`, { method: "POST", body: { approve } });
+      toast(approve ? "Network access approved for that task." : "Request declined. The task continues without network access.");
+    } catch (err: any) { toast(err.message); }
+    load();
+  };
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -49,6 +56,8 @@ export function Notifications() {
                 <p>{n.body}</p>
                 {n.inviteId ? (
                   <div className="row"><button className="btn btn--primary btn--sm" onClick={() => void accept(n)} data-testid="accept-invite">Join workspace</button><button className="btn btn--sm btn--ghost" onClick={() => void decline(n)}>Decline</button><span className="faint" style={{ fontSize: 11.5, marginLeft: "auto" }}>{ago(n.at)}</span></div>
+                ) : n.networkRequestId ? (
+                  <div className="row"><button className="btn btn--primary btn--sm" onClick={() => void decideNetwork(n, true)} data-testid="approve-network">Allow</button><button className="btn btn--sm btn--ghost" onClick={() => void decideNetwork(n, false)} data-testid="deny-network">Decline</button><span className="faint" style={{ fontSize: 11.5, marginLeft: "auto" }}>{ago(n.at)}</span></div>
                 ) : n.href ? <button className="btn btn--sm" onClick={() => { setOpen(false); navigate(n.href!); }}>Open</button> : null}
               </div>
             </div>

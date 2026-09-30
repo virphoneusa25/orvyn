@@ -1,0 +1,53 @@
+{
+  "id": "server-admin",
+  "version": 1,
+  "description": "SSH (port 22) to hosts the organization approved. No other network.",
+  "parameters": [
+    "host"
+  ],
+  "policy": {
+    "version": 1,
+    "filesystem": {
+      "include_workdir": true,
+      "read_only": [
+        "/usr",
+        "/lib",
+        "/bin",
+        "/etc",
+        "/proc",
+        "/dev/urandom",
+        "/var/log"
+      ],
+      "read_write": [
+        "/workspace",
+        "/tmp",
+        "/dev/null"
+      ]
+    },
+    "landlock": {
+      "compatibility": "best_effort"
+    },
+    "process": {
+      "run_as_user": "sandbox",
+      "run_as_group": "sandbox"
+    },
+    "network_policies": {
+      "ssh_targets": {
+        "name": "ssh_targets",
+        "endpoints": [
+          {
+            "host": "{{host}}",
+            "port": 22,
+            "protocol": "tcp",
+            "tls": "NETWORK_TLS_MODE_SKIP"
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/bin/ssh"
+          }
+        ]
+      }
+    }
+  }
+}

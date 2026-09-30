@@ -163,6 +163,10 @@ export function classifyExecutedToolFailure(error: string): ToolErrorType {
   // Write-safety interception (not a crash): the guard steered the agent to a
   // targeted edit or a read-first. Rendered as a warning, never a fatal ✕.
   if (/\b(DESTRUCTIVE_REWRITE|READ_FIRST_BEFORE_REWRITE|AUTHORIZED_REWRITE)\b/.test(text)) return "WRITE_GUARD";
+  // The execution sandbox refused the action. A policy decision, never a
+  // model or provider failure: nothing here may trigger a model switch.
+  if (/\b(NETWORK_POLICY_DENIED|CREDENTIAL_POLICY_DENIED)\b/.test(text)) return "PERMISSION_DENIED";
+  if (/\bSANDBOX_UNAVAILABLE\b/.test(text)) return "CAPABILITY_UNAVAILABLE";
   if (RESOURCE_MISSING_RE.test(text) && !/old_string not found/i.test(text)) return "RESOURCE_MISSING";
   if (PERMISSION_RE.test(text)) return "PERMISSION_DENIED";
   if (TIMEOUT_RE.test(text)) return "TIMEOUT";
