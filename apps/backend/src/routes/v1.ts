@@ -889,13 +889,23 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     }
   } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
-      return res.status(409).json({
-        error: routed.actual === "local_sandbox"
-          ? "Local Sandbox requires the desktop Local Worker (and Docker). It is offline — the project was not sent to ORVYN Cloud."
-          : "Local execution requires the desktop Local Worker. It is offline — the project was not sent to ORVYN Cloud.",
-        executionTargetRequested: routed.requested,
-        executionTargetActual: routed.actual,
-      });
+      // Auto never strands the user: when the desktop Local Worker is offline
+      // (a fresh sign-in, the worker hasn't registered yet, a restart), the
+      // run falls back to the ORVYN Cloud worker — the mirror image of the
+      // cloud→local fallback above. An EXPLICITLY requested local target
+      // still 409s: the user asked for their computer, not a silent switch.
+      if (routed.requested === "auto" && hasOnlineWorker()) {
+        routed.actual = "ovh_worker";
+        routed.fallbackReason = "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
+      } else {
+        return res.status(409).json({
+          error: routed.actual === "local_sandbox"
+            ? "Local Sandbox requires the desktop Local Worker (and Docker). It is offline — the project was not sent to ORVYN Cloud."
+            : "Local execution requires the desktop Local Worker. It is offline — the project was not sent to ORVYN Cloud.",
+          executionTargetRequested: routed.requested,
+          executionTargetActual: routed.actual,
+        });
+      }
     }
   }
 
