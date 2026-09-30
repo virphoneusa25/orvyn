@@ -107,6 +107,13 @@ export function isVisualTool(name: string): boolean {
   return VISUAL_TOOL.test(name);
 }
 
+const BROWSER_INFRA = /Workbench Browser (did not answer|is not ready|refused the command|is not attached)|not attached to ORVYN Desktop|No browser session|Unknown browser session|was closed in the Workbench|could not be captured|Could not launch a browser|Playwright is not installed|did not answer within/i;
+
+/** The browser could not be reached or driven: a tooling problem, not a defect in the site. */
+export function isBrowserInfrastructureFailure(error: string): boolean {
+  return BROWSER_INFRA.test(error);
+}
+
 /** Identical compiler/runtime lines count as one fingerprint. */
 export function failureFingerprint(text: string): string {
   const line = text

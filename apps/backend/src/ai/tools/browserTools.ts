@@ -60,7 +60,16 @@ function viewportLabel(v: WorkbenchSession["viewport"]): string {
 
 /** The tool result for a visible-session command: the session id is always in it. */
 function sessionResult(r: Record<string, unknown>, summary: string, extraLines: string[] = [], meta: Record<string, unknown> = {}): ToolResult {
-  if (r.ok !== true) return { ok: false, error: String(r.error ?? "The Workbench Browser refused the command."), meta: r.sessionId ? { browserSessionId: r.sessionId } : undefined };
+  if (r.ok !== true) {
+    const error = String(r.error ?? "The Workbench Browser refused the command.");
+    // Tell the model what to do instead of retrying the same call in a loop.
+    const hint = /did not answer|not ready|not attached/i.test(error)
+      ? " The Workbench Browser is busy or unavailable right now. Do not retry the browser in a loop: to check page content (a title, a heading, text), read the project's source files, or fetch the URL with an HTTP tool."
+      : /No browser session|Unknown browser session|was closed in the Workbench/i.test(error)
+        ? " Call browser_open with the URL first (without a sessionId), then use the browserSessionId it returns."
+        : "";
+    return { ok: false, error: error + hint, meta: r.sessionId ? { browserSessionId: r.sessionId } : undefined };
+  }
   const s = r.session as WorkbenchSession;
   return {
     ok: true,

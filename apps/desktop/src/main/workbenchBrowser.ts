@@ -49,6 +49,9 @@ type Guest = {
   shown?: boolean;
 };
 
+/** How long a navigation waits for the page before answering (it keeps loading). */
+const NAVIGATE_WAIT_MS = 12_000;
+
 export class WorkbenchBrowserManager {
   private disposing = false;
   private readonly guests = new Map<string, Guest>();
@@ -280,9 +283,20 @@ export class WorkbenchBrowserManager {
     guest.tab.title = parsed.url.replace(/^https?:\/\//, "");
     guest.tab.lastActiveAt = Date.now();
     this.activeId = id;
-    await guest.view.webContents.loadURL(parsed.url).catch(() => {
+    // loadURL settles only when EVERY subresource has loaded. A page with one
+    // slow font or image kept ORION's browser_open waiting past the worker's
+    // deadline ("The Workbench Browser did not answer"). Wait for the page
+    // itself (DOM ready) or a bounded time; loading continues in the tab.
+    const wc = guest.view.webContents;
+    const loaded = wc.loadURL(parsed.url).catch(() => {
       /* did-fail-load updates the tab */
     });
+    let onReady: () => void = () => {};
+    let timer: NodeJS.Timeout | undefined;
+    const domReady = new Promise<void>((resolve) => { onReady = () => resolve(); wc.once("dom-ready", onReady); });
+    await Promise.race([loaded, domReady, new Promise((r) => { timer = setTimeout(r, NAVIGATE_WAIT_MS); })]);
+    clearTimeout(timer);
+    if (!wc.isDestroyed()) wc.removeListener("dom-ready", onReady);
     this.applyUrl(guest.tab, guest.view.webContents.getURL() || parsed.url);
     this.syncNav(guest.tab, guest.view.webContents);
     this.remember(guest.tab);

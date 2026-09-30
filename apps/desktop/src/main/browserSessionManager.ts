@@ -157,7 +157,9 @@ export class BrowserSessionManager {
       return this.ok(existing);
     }
     const sessionId = `bs_${randomBytes(6).toString("hex")}`;
-    const tabId = await this.workbench.createSessionTab(sessionId, cmd.url);
+    // The tab and session exist BEFORE the page loads: a slow page must never
+    // leave the run without its session ("No browser session for this run").
+    const tabId = await this.workbench.createSessionTab(sessionId);
     const now = Date.now();
     const session: BrowserSession = {
       sessionId,
@@ -174,6 +176,7 @@ export class BrowserSessionManager {
     };
     this.sessions.set(sessionId, session);
     this.trim();
+    if (cmd.url) await this.workbench.navigate(tabId, cmd.url);
     this.syncFromTab(session);
     this.workbench.reveal(tabId);
     return this.ok(session);
@@ -221,14 +224,19 @@ export class BrowserSessionManager {
   }
 
   private find(cmd: { sessionId?: string; runId?: string }): BrowserSession | undefined {
-    if (cmd.sessionId) return this.sessions.get(String(cmd.sessionId));
+    if (cmd.sessionId) {
+      const named = this.sessions.get(String(cmd.sessionId));
+      // Models sometimes pass another id (a desktop session "desk_…") as the
+      // browser session. That is not a browser session: use the run's own.
+      if (named || /^bs_/.test(String(cmd.sessionId)) || !cmd.runId) return named;
+    }
     if (!cmd.runId) return undefined;
     return [...this.sessions.values()].filter((s) => s.runId === cmd.runId && !s.closed).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   }
 
   private require(cmd: { sessionId?: string; runId?: string }): BrowserSession {
     const s = this.find(cmd);
-    if (!s) throw new Error(cmd.sessionId ? `Unknown browser session ${cmd.sessionId}.` : "No browser session for this run. Call browser_open first.");
+    if (!s) throw new Error(cmd.sessionId && /^bs_/.test(String(cmd.sessionId)) ? `Unknown browser session ${cmd.sessionId}.` : "No browser session for this run. Call browser_open first.");
     if (s.closed || !this.workbench.hasTab(s.tabId)) {
       s.closed = true;
       throw new Error(`Browser session ${s.sessionId} was closed in the Workbench. Call browser_open to start a new one.`);

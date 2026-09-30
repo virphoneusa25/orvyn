@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideBuildRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom } from "./websiteMission";
+import { decideBuildRepair, emptyWebsiteMission, failureFingerprint, isBrowserInfrastructureFailure, isBuildCommand, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom } from "./websiteMission";
 
 test("the first build failure stays on the current model", () => {
   const d = decideBuildRepair(emptyWebsiteMission(), "error TS2322");
@@ -65,4 +65,13 @@ test("build commands and fingerprints are stable", () => {
   assert.equal(isBuildCommand("npm run build"), true);
   assert.equal(isBuildCommand("ls"), false);
   assert.equal(failureFingerprint("noise\nerror TS2304: Cannot find name Foo\n"), "error TS2304: Cannot find name Foo");
+});
+
+test("an unreachable browser is a tooling failure, not a site defect (never spends the repair budget)", () => {
+  assert.equal(isBrowserInfrastructureFailure("The Workbench Browser did not answer."), true);
+  assert.equal(isBrowserInfrastructureFailure("No browser session for this run. Call browser_open first."), true);
+  assert.equal(isBrowserInfrastructureFailure("Unknown browser session desk_2b641150-e33."), true);
+  assert.equal(isBrowserInfrastructureFailure("The Workbench Browser did not answer within 30s."), true);
+  assert.equal(isBrowserInfrastructureFailure("Uncaught TypeError: x is undefined"), false);
+  assert.equal(isWebsiteImplementation("Inspect the active project and verify the current header site title"), false);
 });

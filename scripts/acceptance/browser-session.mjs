@@ -134,7 +134,13 @@ function screen(name) {
 
 async function main() {
   const tls = makeCert();
-  const site = createHttpsServer(tls, (req, res) => { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(EXAMPLE); });
+  const site = createHttpsServer(tls, (req, res) => {
+    // /slow: the page itself arrives at once, but one image never finishes
+    // (a stalled font or CDN image on a real site).
+    if (req.url === "/slow") { res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); return res.end('<!doctype html><title>Slow</title><h1>ORVYN Telecom</h1><img src="/hang.png">'); }
+    if (req.url === "/hang.png") { res.writeHead(200, { "Content-Type": "image/png" }); return; }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); res.end(EXAMPLE);
+  });
   await new Promise((r) => site.listen(SITE_PORT, "127.0.0.1", r));
   await new Promise((r) => model.listen(MODEL_PORT, "127.0.0.1", r));
 
@@ -166,6 +172,11 @@ async function main() {
     const workerUp = await waitFor(async () => (await api("/local-worker/health")).json.state === "ready", 30_000, 500);
     ok(Boolean(workerUp), "the desktop's Local Worker is connected to the control plane");
     screen("0-before.png");
+    // Home deliberately shows no Workbench panes; the user watches ORION's
+    // browser from the mission view. Open it (command palette → New Chat).
+    await win.keyboard.press("Control+Shift+P");
+    await win.getByText("New Chat", { exact: true }).first().click({ timeout: 5000 }).catch(() => {});
+    await sleep(600);
 
     const report = () => app.evaluate(() => {
       const b = globalThis.__orvynBrowser;
@@ -275,6 +286,20 @@ async function main() {
     ok(hidden.ok && hidden.w > 100 && hidden.h > 100, "…and ORION's screenshot still works", JSON.stringify(hidden));
     ok(hidden.stillHidden && hidden.attached === false, "…without showing the tab to the user", JSON.stringify(hidden));
     await app.evaluate(() => globalThis.__orvynBrowser.workbench.setSurfaceVisible(true));
+
+    // ── A page with a subresource that never finishes ───────────────────────
+    // browser_open used to wait for EVERY subresource, past the Local Worker's
+    // deadline: "The Workbench Browser did not answer." on every call.
+    console.log(`\nA page that never finishes loading`);
+    const slow = await app.evaluate(async () => {
+      const b = globalThis.__orvynBrowser;
+      const t0 = Date.now();
+      const r = await b.sessions.handle({ op: "open", runId: "slow-run", url: "https://example.com/slow" });
+      const again = await b.sessions.handle({ op: "state", runId: "slow-run", sessionId: "desk_2b641150-e33" });
+      return { ok: r.ok, error: r.ok ? null : r.error, ms: Date.now() - t0, sid: r.session?.sessionId, stateOk: again.ok, stateSid: again.session?.sessionId, stateErr: again.ok ? null : again.error };
+    });
+    ok(slow.ok && slow.ms < 20_000, `browser_open answers even while the page is still loading (${slow.ms}ms)`, JSON.stringify(slow));
+    ok(slow.stateOk && slow.stateSid === slow.sid, "a mistaken desktop session id falls back to the run's own browser session", JSON.stringify(slow));
   } catch (err) {
     failures++; console.error("HARNESS ERROR:", err.stack ?? err.message);
   } finally {

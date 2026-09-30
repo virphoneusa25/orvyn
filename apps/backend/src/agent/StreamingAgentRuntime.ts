@@ -59,7 +59,7 @@ import {
 } from "./runCapabilities";
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
 import { selectAgentModel } from "../models/selectModel";
-import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
+import { decideBuildRepair, decideVisualRepair, emptyWebsiteMission, failureFingerprint, isBrowserInfrastructureFailure, isBuildCommand, isVisualTool, isWebsiteImplementation, syncWebsitePhase, websiteActionPrompt, websiteEvidenceFrom, type WebsiteMissionState } from "./websiteMission";
 import { buildCapabilityManifest, manifestPrompt, resolveCapabilityNeed, type CapabilityManifest } from "./capabilityManifest";
 import { siteAssetRefs, noteUnreadable, BINARY_ASSET, siteFileText } from "./sitePreview";
 import { applySiteEdit, composeSiteDocumentSource, forgetSiteFile, inheritSiteFiles, missingLinkedAssets, hasSiteFile, isSiteAssetPath, moveSiteFile, publishRememberedSite, rememberedSiteFiles, rememberSiteBinary, rememberSiteFile } from "./sitePreview";
@@ -3758,6 +3758,12 @@ export class StreamingAgentRuntime {
     const build = isBuildCommand(command);
     const visual = isVisualTool(tool);
     if (!build && !visual) return;
+    // Only a site being BUILT has a repair budget. A verify/inspect task that
+    // opens the browser is not repairing anything, and a browser that could
+    // not be reached (the Workbench did not answer, no session yet) says
+    // nothing about the site: neither may end the run as "budget exhausted".
+    if (!build && !isWebsiteImplementation(state.instruction)) return;
+    if (visual && isBrowserInfrastructureFailure(error)) return;
     const fp = failureFingerprint(error);
     const decision = build ? decideBuildRepair(state.website, fp) : decideVisualRepair(state.website, fp);
     if (build) state.website.buildAttempts += 1;
