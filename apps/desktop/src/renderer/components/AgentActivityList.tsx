@@ -701,7 +701,7 @@ export function RunFooter({
 
   if (!finished) return null;
 
-  const endEvent = [...events].reverse().find((e) => e.type === "run.completed");
+  const endEvent = [...events].reverse().find((e) => e.type === "run.completed" || e.type === "run.partial");
   const time = endEvent
     ? new Date(endEvent.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : null;

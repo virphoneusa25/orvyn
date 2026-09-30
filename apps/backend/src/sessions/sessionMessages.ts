@@ -46,7 +46,10 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
   if (!run) return;
   if (isTerminal(run.status)) { save(); return; }
   const unsubscribe = store.subscribe(runId, (e) => {
-    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled") {
+    // A mid-run block pauses for a resource — the answer isn't final yet.
+    // Only a settlement-emitted (terminal) block ends the capture.
+    const terminalBlock = e.type === "run.blocked" && e.data.terminal === true;
+    if (e.type === "run.completed" || e.type === "run.partial" || e.type === "run.error" || e.type === "run.cancelled" || terminalBlock) {
       unsubscribe();
       // After the event is in the log, so the answer includes the last words.
       setImmediate(() => { try { save(); } catch { /* storage must never break a run */ } });

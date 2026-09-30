@@ -33,6 +33,7 @@ export function missionDetailFromRuntime(m:ApiMissionDetail, events:AgentEvent[]
     if(e.type==="message.completed") { const body=messageBuffer.trim(); if(body) activity.push({id:e.id,kind:"assistant",title:"ORION",body}); messageBuffer=""; }
     if(e.type==="usage.updated") usage={promptTokens:Number(e.data.promptTokens??0),completionTokens:Number(e.data.completionTokens??0),turns:Number(e.data.turns??0),modelId:e.data.modelId?String(e.data.modelId):undefined};
     if(e.type==="run.completed") deliverable=String(e.data.summary??e.data.result??"Mission completed.");
+    if(e.type==="run.partial") deliverable=String(e.data.summary??e.data.result??"Partially completed — some checks did not pass.");
     if(e.type==="run.error") activity.push({id:e.id,kind:"error",title:"Run failed",body:String(e.data.message??"Unknown error")});
   }
   if(messageBuffer.trim()) activity.push({id:"live-message",kind:"assistant",title:"ORION",body:messageBuffer.trim()});

@@ -20,7 +20,7 @@ export function MissionPlan({ events, status }: { events: AgentEvent[]; status: 
     // No Astra plan. For a live run that's normal pre-planning; for a
     // terminal run it means the request never became a mission — saying
     // "Working" then would contradict the status badge.
-    if (status === "completed" || status === "error" || status === "cancelled") {
+    if (status === "completed" || status === "partial" || status === "blocked" || status === "error" || status === "cancelled") {
       return (
         <Card title="MISSION PLAN" badge={statusBadge(status)}>
           <div style={{ fontSize: 12, color: "var(--orvyn-text-muted)", padding: "2px 0" }}>
@@ -234,6 +234,7 @@ function friendlyEventType(type: string): string {
     "run.started": "Request accepted",
     "run.queued": "Queued — waiting for a mission slot",
     "run.completed": "Completed",
+    "run.partial": "Partially completed — some checks did not pass",
     "run.cancelled": "Stopped",
     "plan.created": "Plan ready",
     "mission.completed": "Mission completed",
@@ -273,7 +274,7 @@ function statusBadge(status: string): React.ReactNode {
   const color =
     status === "completed" ? "var(--orvyn-green)"
     : status === "error" ? "var(--orvyn-red)"
-    : status === "cancelled" ? "var(--orvyn-yellow)"
+    : status === "cancelled" || status === "partial" || status === "blocked" ? "var(--orvyn-yellow)"
     : "var(--orvyn-purple-hi)";
   return (
     <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, color, border: `1px solid ${color}55`, borderRadius: 4, padding: "1px 7px" }}>

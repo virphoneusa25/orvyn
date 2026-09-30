@@ -79,9 +79,13 @@ test("a run that was in-flight at shutdown replays as an honest error, not a gho
     const revived = new RunStore(dir);
     const run = revived.get("run-ddd");
     assert.equal(run?.status, "error", "non-terminal run replayed as error");
+    const ghost = run?.events.find((e) => e.type === "run.error");
+    assert.match(String(ghost?.data.message), /restarted/i);
+    // The durable-checkpoint marker follows it: this is a resumable
+    // interruption, not a dead run.
     const last = run?.events[run.events.length - 1];
-    assert.equal(last?.type, "run.error");
-    assert.match(String(last?.data.message), /restarted/i);
+    assert.equal(last?.type, "mission.interrupted");
+    assert.equal(last?.data.resumable, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

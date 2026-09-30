@@ -17,9 +17,9 @@ import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelp
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
-import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, type GroundedArtifact } from "../artifacts/claimValidator";
+import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
-import { evaluateCompletionGates } from "./completionGates";
+import { asksForVerification, evaluateCompletionGates, TEST_COMMAND } from "./completionGates";
 import { collectRunEvidence, introductionFor, planSteps, progressFor, type RunEvidence } from "./conversationCoordinator";
 import { assessRenderedPage } from "./browserVerification";
 import { checkPreview } from "./previewCheck";
@@ -87,6 +87,18 @@ import {
   permissionDeniedPayload,
   workspaceSnapshot,
 } from "./toolFailure";
+import { classifyToolError, recoveryGuidance } from "./toolErrors";
+import {
+  REPORT_RESULT_TOOL,
+  reportResultToolDefinition,
+  parseResultRequest,
+  settleResult,
+  settlementCriteria,
+  type MissionResultRequest,
+  type SettlementCriterion,
+} from "./resultContract";
+import { buildCheckpoint, resumePrompt, type MissionCheckpoint } from "./missionCheckpoint";
+import { previewEnvironmentKey } from "../persistence/LocalStore";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
@@ -120,6 +132,7 @@ import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
 import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
 import { POLICY_TEMPLATES } from "../execution/sandbox/selection";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { classifyExecutionHints } from "../execution/classifyExecution";
 
 /** Asks a person to widen this run's sandbox network policy. Never widens it itself. */
 const NETWORK_ACCESS_TOOL = "request_network_access";
@@ -333,7 +346,21 @@ interface RunState {
   heldFinal?: boolean;
   /** The last real answer ORION wrote before a nudge retracted it; used if the final turn comes back empty. */
   lastAnswer?: string;
+  /** report_result calls the model filed (accepted or rejected). */
+  completionAttempts: number;
+  /** Criteria a rejected completion was missing — a repeat of the same gap is a loop, not progress. */
+  lastRejectedCriteria: string[];
+  /** Bounded nudges toward report_result before settlement judges the evidence alone. */
+  resultNudges: number;
+  /** The accepted completion request; complete() re-settles it against fresh evidence. */
+  resultRequest?: MissionResultRequest;
+  /** Durable resume data when this run continues from a checkpoint after a restart. */
+  restoredCheckpoint?: MissionCheckpoint;
+  /** The `url:status` pair already recorded into preview_environments for this run. */
+  recordedPreviewUrl?: string;
 }
+
+/** Model-shaped tool call events for provider turns and the persisted event log. */
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
 export interface RunOptions {
@@ -602,7 +629,10 @@ export class StreamingAgentRuntime {
       // model down a dead end ("Role 'coder' lacks SYSTEM capability").
       .filter((t) => this.tools.permissions.checkRole(t.name, "coder").allowed)
       .filter((t) => !allow || allow.has(t.name))
-      .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
+      .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
+      // The terminal contract is always offered: a tool-enabled run ends
+      // through report_result, never by the model simply stopping.
+      .concat(reportResultToolDefinition() as ToolDefinition);
   }
 
   /** Opens the right-hand preview for pages this run wrote, and lists those files. */
@@ -1582,6 +1612,13 @@ export class StreamingAgentRuntime {
     const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable() ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const gapNotes = capabilityGapNotes(instruction, runCaps);
 
+    // A recovered run resumes from its durable checkpoint, not from scratch:
+    // the checkpoint carries the plan, files changed, errors and verification
+    // evidence the new execution needs to continue the SAME mission.
+    const restored = recovering
+      ? ((this.memoryStore?.loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null)
+      : null;
+
     this.runs.set(runId, {
       controller: new AbortController(),
       toolsEnabled: def.toolsEnabled,
@@ -1634,6 +1671,10 @@ export class StreamingAgentRuntime {
       filesRead: new Set<string>(),
       taskScope: classifyTaskScope(instruction),
       failureStreak: 0,
+      completionAttempts: 0,
+      lastRejectedCriteria: [],
+      resultNudges: 0,
+      ...(restored ? { restoredCheckpoint: restored } : {}),
       readOnlyStreak: 0,
       helperRejects: 0,
       helperSteps: 0,
@@ -1822,7 +1863,7 @@ export class StreamingAgentRuntime {
           .join("\n"),
       },
       ...history,
-      ...(recovering ? [{ role: "user" as const, content: "[Runtime recovery] The control plane restarted during this run. Continue the same task from the durable workspace. Inspect the current files and git diff before changing anything, do not repeat completed work, and re-run required verification before finishing." }] : []),
+      ...(recovering ? [{ role: "user" as const, content: restored ? resumePrompt(restored) : "[Runtime recovery] The control plane restarted during this run. Continue the same task from the durable workspace. Inspect the current files and git diff before changing anything, do not repeat completed work, and re-run required verification before calling report_result." }] : []),
       { role: "user", content: instruction, attachments },
     ];
 
@@ -2854,6 +2895,9 @@ export class StreamingAgentRuntime {
         this.enterPhase(runId, "observing");
         this.noteWebsiteProgress(runId, state);
         this.speakProgress(runId);
+        // A finished tool batch is a meaningful step: checkpoint the mission
+        // so a crash or restart resumes here instead of starting over.
+        this.saveMissionCheckpoint(runId, state);
         if (outcome === "cancelled") return cancelled();
         if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
           const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -2868,6 +2912,9 @@ export class StreamingAgentRuntime {
         // The budget wrap-up answer is the run's last word: no nudges, no
         // further repair rounds. verify() settles it as Partial.
         if (state.budgetFinal) return { kind: "verify" };
+        // The agent already filed an accepted report_result: this answer is
+        // the user-facing summary that goes with it — straight to settlement.
+        if (state.resultRequest) return { kind: "verify" };
         if (state.website) this.noteWebsiteProgress(runId, state);
         const websiteWork = Boolean(state.website) && isWebsiteImplementation(state.instruction);
         const websiteEvidence = websiteWork ? websiteEvidenceFrom(this.store.get(runId)?.events ?? []) : null;
@@ -2969,6 +3016,29 @@ export class StreamingAgentRuntime {
           });
           return { kind: "continue", reason: "reply announced a next step without doing it" };
         }
+        // A run that did tool work must end through the terminal contract,
+        // not by trailing off. Nudge toward report_result a bounded number of
+        // times; after the budget the settlement step still judges the
+        // evidence, so a missing tool call can never upgrade the outcome.
+        if (
+          state.toolsEnabled &&
+          state.toolCalls > 0 &&
+          state.resultNudges < 2 &&
+          (mode === "agent" || mode === "multitask")
+        ) {
+          state.resultNudges += 1;
+          if (streamedText) this.store.emit(runId, "message.retracted", { reason: "terminal result must go through report_result" });
+          messages.push({ role: "assistant", content: content || "" });
+          messages.push({
+            role: "user",
+            content:
+              "Before your final answer: call report_result once with { status, summary, evidence }. " +
+              "Use 'completed' only if every required verification actually passed — the runtime checks the evidence and rejects a premature completion, sending you back to work. " +
+              "If something required is unverifiable or unfinished, report 'partial' (or 'blocked'/'failed') honestly and say what remains in the summary.",
+          });
+          this.store.emit(runId, "agent.continue", { reason: "final answer filed without report_result", attempt: state.resultNudges });
+          return { kind: "continue", reason: "final answer without the terminal result contract" };
+        }
         // The streamed sentence is not the final answer yet. Verification still
         // has to finish; the same text is published from complete() afterward.
         const willVerify = isImplementationTask(collectVerificationEvidence(
@@ -2991,6 +3061,10 @@ export class StreamingAgentRuntime {
       // goes back to this same run with the findings.
       verify: async (_turn, reply) => {
         if (state.budgetFinal) return { kind: "approved" };
+        // Settlement already judged the criteria when it accepted the
+        // report_result call; complete() re-derives them fresh, so this turn
+        // only produces the user-facing summary.
+        if (state.resultRequest) return { kind: "approved" };
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         // The site changed and has a live preview: it must load as the styled
@@ -3109,16 +3183,49 @@ export class StreamingAgentRuntime {
         if (state.intent.requiresFrontend && (state.siteFilesWritten ?? 0) > 0) this.publishSitePreview(runId, []);
         const outcome = runOutcome(this.store.get(runId)?.events ?? []);
         this.store.emit(runId, "run.outcome", { ...outcome });
-        // The answer never outruns the evidence: say plainly what is not done.
-        // (A tool waiting on the install card was already asked for in ORION's own answer.)
-        const unsaid = outcome.reasons.filter((r) => !r.startsWith("Needs a tool"));
-        if (unsaid.length) this.speak(runId, `Not fully done yet — ${unsaid.join(" ")}`);
-        this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length, outcome: outcome.outcome });
-        // §4/§64: "completed" requires every required check to pass. A
-        // partial outcome (the verifier found blockers, the preview had
-        // errors, a permission is still needed) is an honest PARTIAL — the
-        // mission shows what was done and what remains, never "✓ Completed".
-        this.store.setStatus(runId, outcome.outcome === "complete" ? "completed" : "partial");
+
+        // ── Settlement: the only writer of the terminal status ───────────
+        // The agent's report_result (or, after the nudge budget, the final
+        // answer as an implicit completion request) is judged against the
+        // criteria matrix re-derived HERE from the run's own evidence. Late
+        // evidence can only ever downgrade a requested status — never
+        // upgrade it — so "Not fully done yet" + "Completed" is impossible
+        // by construction.
+        const criteria = this.settlementCriteriaFor(runId, state);
+        const request: MissionResultRequest = state.resultRequest ?? {
+          status: outcome.outcome === "complete" ? "completed" : "partial",
+          summary: String(content ?? "").slice(0, 500) || outcome.reasons.join(" ") || "The run ended.",
+        };
+        const verdict = settleResult({ request, criteria });
+        const settled = verdict.accepted ? verdict.status : "partial";
+        const reasons = [
+          ...(verdict.accepted ? [] : verdict.incomplete.map((c) => `${c.id}: ${c.status}${c.detail ? ` — ${c.detail}` : ""}`)),
+          ...outcome.reasons.filter((r) => !r.startsWith("Needs a tool")),
+        ];
+        this.store.emit(runId, "mission.settled", {
+          requested: request.status,
+          status: settled,
+          summary: (verdict.accepted ? verdict.summary : request.summary).slice(0, 500),
+          criteria: criteria.map((c) => ({ id: c.id, required: c.required, status: c.status, detail: c.detail ?? null })),
+          viaContract: Boolean(state.resultRequest),
+        });
+        if (settled !== "completed" && reasons.length) {
+          this.speak(runId, `Not fully done yet — ${[...new Set(reasons)].slice(0, 4).join(" ")}`);
+        }
+        // The terminal event names the outcome — "run.completed" only ever
+        // means the settlement actually accepted completed, so no listener
+        // can render ✓ Completed for a partial or blocked mission.
+        if (settled === "completed") {
+          this.store.emit(runId, "run.completed", { steps, artifactCount: state.createdArtifacts.length, outcome: "complete" });
+        } else if (settled === "partial") {
+          this.store.emit(runId, "run.partial", { steps, artifactCount: state.createdArtifacts.length, outcome: "partial", reasons: [...new Set(reasons)].slice(0, 6) });
+        } else if (settled === "blocked") {
+          this.store.emit(runId, "run.blocked", { message: request.summary.slice(0, 500) || "The mission is blocked.", terminal: true });
+        } else {
+          this.store.emit(runId, "run.error", { message: request.summary.slice(0, 500) || "The mission failed.", code: "MISSION_FAILED" });
+        }
+        this.saveMissionCheckpoint(runId, state);
+        this.store.setStatus(runId, settled === "completed" ? "completed" : settled === "blocked" ? "blocked" : settled === "failed" ? "error" : "partial");
       },
 
       onTurnLimit: () => {
@@ -3180,6 +3287,46 @@ export class StreamingAgentRuntime {
 
     for (const call of calls) {
       if (state.cancelled) return "cancelled";
+
+      // ── Terminal result contract ────────────────────────────────────────
+      // report_result never reaches the gateway: settlement judges it HERE
+      // against the run's own evidence. A rejected completion is a normal
+      // tool result — the agent keeps working; an accepted one settles the
+      // mission in complete(), which re-derives the criteria fresh.
+      if (call.name === REPORT_RESULT_TOOL) {
+        const parsed = parseResultRequest(call.arguments);
+        state.completionAttempts += 1;
+        if (!parsed.ok) {
+          this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: parsed.error, errorType: "INVALID_ARGUMENTS", errorClass: "fixable", retryable: true });
+          replies.set(call.id, JSON.stringify({ ok: false, error: "CompletionRejected", message: `Invalid report_result call: ${parsed.error}`, guidance: "Call report_result with { status, summary, evidence } once the required verification has passed." }));
+          continue;
+        }
+        const request = parsed.request;
+        const criteria = this.settlementCriteriaFor(runId, state);
+        const verdict = settleResult({ request, criteria });
+        this.store.emit(runId, "mission.result.requested", { callId: call.id, status: request.status, accepted: verdict.accepted });
+        if (!verdict.accepted) {
+          const gap = verdict.incomplete.map((c) => c.id).sort().join(",");
+          // The same rejected gap twice in a row is a repair loop the model
+          // is not breaking: say so instead of letting it re-ask forever.
+          const repeated = gap === [...state.lastRejectedCriteria].sort().join(",");
+          state.lastRejectedCriteria = verdict.incomplete.map((c) => c.id);
+          this.store.emit(runId, "mission.result.rejected", {
+            callId: call.id,
+            incomplete: verdict.incomplete.map((c) => c.id),
+            attempt: state.completionAttempts,
+            repeated,
+          });
+          replies.set(call.id, repeated
+            ? `${verdict.modelText}\nNOTE: the same criteria were rejected again. Do NOT re-request completion unchanged — fix the listed items with tools, or report partial/blocked with an honest summary.`
+            : verdict.modelText);
+          continue;
+        }
+        state.resultRequest = request;
+        replies.set(call.id, JSON.stringify({ ok: true, settled: verdict.status, message: `Settlement accepted: the mission ends as "${verdict.status}". Reply once with the final user-facing summary — no more tool calls.` }));
+        continue;
+      }
+
       if (state.website && call.arguments && typeof call.arguments === "object") {
         const args = call.arguments as Record<string, unknown>;
         for (const key of ["path", "from", "to"]) {
@@ -3719,6 +3866,11 @@ export class StreamingAgentRuntime {
         // A failing command with a huge output (a build log) is condensed for the model too.
         const error = shouldCondense(call.name, fullError) ? await this.condenseForModel(runId, state, call, fullError, command) : fullError;
         const errorType = classifyExecutedToolFailure(error);
+        // The typed error model: recovery is decided by the failure CLASS,
+        // never by a string match at the call site — and a tool error is
+        // never a reason to switch models.
+        const typedError = classifyToolError({ tool: call.name, error, errorType });
+        this.store.emit(runId, "tool.error.classified", { callId: call.id, tool: call.name, errorClass: typedError.toolErrorClass, code: typedError.code, retryable: typedError.retryable });
         const requestedPath = String(toolArgs.path ?? toolArgs.file ?? toolArgs.from ?? "");
         const workspace = errorType === "RESOURCE_MISSING" ? workspaceSnapshot(workspaceRoot, requestedPath) : undefined;
         this.store.emit(runId, "tool.failed", {
@@ -3726,13 +3878,24 @@ export class StreamingAgentRuntime {
           tool: call.name,
           error,
           errorType,
-          retryable: errorType === "TIMEOUT" || errorType === "TRANSIENT_PROVIDER_ERROR",
+          errorClass: typedError.toolErrorClass,
+          retryable: typedError.retryable,
           ...(workspace ? { workspace } : {}),
           envelope: envelopeForEvent(envelope),
         });
         this.noteWebsiteFailure(runId, state, call.name, command, error);
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: false });
-        replies.set(call.id, executedFailurePayload({ tool: call.name, error, errorType, workspace }));
+        // The typed class and its recovery rule travel inside the JSON
+        // payload — callers and tests parse tool replies.
+        const payload = executedFailurePayload({ tool: call.name, error, errorType, workspace });
+        try {
+          const parsed = JSON.parse(payload) as Record<string, unknown>;
+          parsed.errorClass = typedError.toolErrorClass;
+          parsed.recovery = recoveryGuidance(typedError);
+          replies.set(call.id, JSON.stringify(parsed));
+        } catch {
+          replies.set(call.id, payload);
+        }
         const gap = capabilityGapFor({ toolName: call.name, error: fullError });
         if (gap) gaps.set(call.id, gap);
       }
@@ -3936,6 +4099,104 @@ export class StreamingAgentRuntime {
     }
   }
 
+  /**
+   * The criteria settlement judges a report_result request against — derived
+   * from the task's own words and the run's event log, never from the model's
+   * claims. Mirrors the completion gates so both layers agree on what a task
+   * requires.
+   */
+  private settlementCriteriaFor(runId: string, state: RunState): SettlementCriterion[] {
+    const events = this.store.get(runId)?.events ?? [];
+    const hints = classifyExecutionHints(state.instruction);
+    const prose = state.instruction.replace(/[\w./\\-]+\.[A-Za-z0-9]{1,8}\b/g, " ");
+    const verification = [...events].reverse().find((e) => e.type === "verification.completed");
+    const verdict = String(verification?.data?.verdict ?? "");
+    const findings = (verification?.data?.findings as { severity?: string; check?: string }[] | undefined) ?? [];
+    // Same rule verify() applies: a PARTIAL verdict with no blockers is
+    // accepted when nothing actionable remains (verifier-side gaps) or it
+    // already survived its repair round — environmental gaps like missing
+    // git/browser cannot be fixed by the agent and must not loop forever.
+    const verifierAccepted =
+      verdict === "PARTIAL" &&
+      !findings.some((f) => f.severity === "blocker") &&
+      (state.verifyRounds >= 1 || findings.every((f) => f.check === "verifier-unavailable"));
+    const visualTask =
+      (!state.intent.category && hints.isVisual && !hints.isArtifact) ||
+      ((state.intent.category === "browser" || state.intent.category === "desktop") &&
+        /\b(verify|screenshot|homepage|dialog)\b/i.test(state.instruction));
+    return settlementCriteria({
+      instruction: state.instruction,
+      events,
+      needsArtifact: looksLikeFileDeliverableRequest(state.instruction) || hints.isArtifact,
+      needsWorkspaceWrite: looksLikeWorkspaceFileTask(state.instruction),
+      needsTests: Boolean(hints.isLocalCoding && asksForVerification(prose)) || events.some((e) => e.type === "tool.input" && TEST_COMMAND.test(String((e.data?.input as { command?: unknown } | undefined)?.command ?? ""))),
+      // Same trigger as the completion gates: a single index.html file is a
+      // file write, not a website mission — preview/console apply only when
+      // the task literally asked for a site.
+      website: isWebsiteImplementation(state.instruction),
+      needsVisual: visualTask,
+      verifierVerdict: verdict === "PASS" || verdict === "FAIL" || verdict === "PARTIAL" ? verdict : null,
+      verifierAccepted,
+      implementationWork: isImplementationTask(collectVerificationEvidence(state.instruction, events, { website: Boolean(state.website) || undefined })),
+    });
+  }
+
+  /**
+   * Durable mission state, rewritten at meaningful steps. The event log is
+   * the audit trail; the checkpoint is the RESUME record a restarted control
+   * plane or a replacement worker continues from. Also owns the canonical
+   * preview_environments row — one record per run, written here so a preview
+   * URL is never inferred from another run or project.
+   */
+  private saveMissionCheckpoint(runId: string, state: RunState): void {
+    if (!this.memoryStore) return;
+    try {
+      const events = this.store.get(runId)?.events ?? [];
+      const checkpoint = buildCheckpoint({
+        runId,
+        objective: state.instruction,
+        phase: state.phase,
+        events,
+        plan: state.missionPlan,
+        state: {
+          workspaceId: this.store.get(runId)?.workspaceId ?? state.workspaceId ?? null,
+          tenantId: state.execution?.tenantId,
+          organizationId: state.execution?.organizationId,
+          projectId: state.execution?.projectId ?? null,
+          sandboxId: sandboxRegistry().forRun(runId)?.id ?? null,
+          modelId: state.actualModelId,
+          route: state.route ? { profile: state.route.profile, tier: state.route.tier } : undefined,
+          executionLocation: state.execution?.location,
+        },
+      });
+      this.memoryStore.saveMissionCheckpoint(runId, checkpoint, state.phase);
+      const previewUrl = checkpoint.verificationEvidence.previewUrl;
+      if (previewUrl) {
+        // The canonical record is upserted every checkpoint (status may move
+        // active → verified); the event fires only when the pair changes.
+        const verified = events.some((e) => e.type === "preview.verified");
+        const status = verified ? "verified" : "active";
+        this.memoryStore.savePreviewEnvironment({
+          id: previewEnvironmentKey(runId),
+          organizationId: state.execution?.organizationId ?? null,
+          projectId: state.execution?.projectId ?? null,
+          workspaceId: this.store.get(runId)?.workspaceId ?? state.workspaceId ?? null,
+          runId,
+          url: previewUrl,
+          status,
+        });
+        const recorded = `${previewUrl}:${status}`;
+        if (state.recordedPreviewUrl !== recorded) {
+          state.recordedPreviewUrl = recorded;
+          this.store.emit(runId, "preview.environment", { url: previewUrl, status });
+        }
+      }
+      this.store.emit(runId, "mission.checkpoint", { phase: state.phase, filesChanged: checkpoint.filesChanged.length, errors: checkpoint.errors.length });
+    } catch {
+      // Checkpointing is bookkeeping — it must never break a live run.
+    }
+  }
+
   private enterPhase(runId: string, phase: RunPhase): void {
     const state = this.runs.get(runId);
     if (!state || !canEnterPhase(state.phase, phase)) return;
@@ -3955,6 +4216,9 @@ export class StreamingAgentRuntime {
       repositoryDetected: state.repositoryDetected,
       taskIntent: state.intent.category,
     });
+    // A phase change is a meaningful step: the durable checkpoint follows it,
+    // so a restarted control plane resumes the same mission at this point.
+    this.saveMissionCheckpoint(runId, state);
   }
 
   private speak(runId: string, text: string): void {

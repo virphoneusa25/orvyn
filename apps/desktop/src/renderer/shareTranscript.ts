@@ -64,6 +64,7 @@ function eventLine(e: TranscriptEvent): string | null {
     return `Terminal: ${redactSecrets(String(d.chunk ?? d.output ?? "")).slice(0, 140)}`;
   }
   if (e.type === "run.completed") return "Run completed";
+  if (e.type === "run.partial") return "Run partially completed";
   if (e.type === "run.error") return `Run error: ${redactSecrets(String(d.message ?? "")).slice(0, 140)}`;
   if (e.type === "approval.required") return `Approval required: ${String(d.tool ?? "tool")}`;
   return null;

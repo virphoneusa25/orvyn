@@ -56,7 +56,7 @@ const BUILD_TOOLS = /^(write_file|edit_file|apply_edit|create_document|artifact_
 export function deriveMissionStages(events: Ev[], runStatus: string): MissionStageView | null {
   const started =
     events.some((e) => e.type === "run.started" || e.type === "tool.started" || e.type === "preview.available") ||
-    ["running", "completed", "error", "failed", "cancelled", "verifying", "awaiting_approval", "queued", "cancelling", "streaming", "working"].includes(runStatus);
+    ["running", "completed", "partial", "error", "failed", "cancelled", "verifying", "awaiting_approval", "queued", "cancelling", "streaming", "working"].includes(runStatus);
   if (!started) {
     return { stages: MISSION_STAGES.map((name) => ({ name, state: "pending" as const })) };
   }
@@ -115,9 +115,9 @@ export function deriveMissionStages(events: Ev[], runStatus: string): MissionSta
   }
 
   const verifyPassed = verdict === "PASS" || (verdict === "none" && desktopVerified);
-  const live = !["completed", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
+  const live = !["completed", "partial", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
   const finishedOk = runStatus === "completed";
-  const finishedBad = ["error", "failed", "blocked"].includes(runStatus);
+  const finishedBad = ["partial", "error", "failed", "blocked"].includes(runStatus);
   let active: StageName | null = null;
   if (live) {
     if (verifyStarted && verdict === "none") active = "Verify";
@@ -204,7 +204,7 @@ export function deriveMissionPhases(events: Ev[], runStatus: string): MissionVie
     }
   }
   if (!anyTool) return null;
-  const finished = ["completed", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
+  const finished = ["completed", "partial", "error", "failed", "cancelled", "blocked", "stopped"].includes(runStatus);
   const ok = runStatus === "completed";
   if (ok) touched.add("Deliver");
   const activeIdx = PHASES.indexOf(active);

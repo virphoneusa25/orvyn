@@ -22,7 +22,7 @@ export interface RunUsage {
 
 /** A run is over when no further events can arrive for it. */
 export function isRunFinished(status: string): boolean {
-  return status === "completed" || status === "error" || status === "cancelled";
+  return status === "completed" || status === "partial" || status === "error" || status === "cancelled" || status === "blocked";
 }
 
 export function useAgentRun(
@@ -111,11 +111,20 @@ export function useAgentRun(
       if (e.type === "run.cancelled" && prev.some((x) => x.type === "run.cancelled")) return prev;
       return [...prev, e];
     });
-    if (stoppedRef.current && e.type !== "run.cancelled" && e.type !== "run.completed" && e.type !== "run.error") return;
+    if (stoppedRef.current && e.type !== "run.cancelled" && e.type !== "run.completed" && e.type !== "run.partial" && e.type !== "run.error") return;
     if (e.type === "approval.required") setStatus("awaiting_approval");
     else if (e.type === "run.queued") setStatus("queued");
     else if (e.type === "run.started") setStatus("running");
-    else if (e.type === "run.blocked") setStatus("awaiting_approval");
+    else if (e.type === "run.blocked") {
+      // Mid-run blocks pause for a resource/approval (resumable); a terminal
+      // block is the settlement verdict — the run is over, not waiting.
+      if (e.data.terminal === true) {
+        setStatus("blocked");
+        noteActiveRunId(null);
+        streamRef.current?.close();
+        void poll(e.runId);
+      } else setStatus("awaiting_approval");
+    }
     else if (e.type === "run.completed") {
       setStatus("completed");
       noteActiveRunId(null);
@@ -123,6 +132,13 @@ export function useAgentRun(
       // Settle-side events (e.g. desktop control returning to the user) land
       // right after the terminal event — the SSE above closes on it, so one
       // last tail fetch renders them in this chat.
+      void poll(e.runId);
+    } else if (e.type === "run.partial") {
+      // A mission that ended with honest remaining gaps is terminal but is
+      // NOT a success — never render it as completed.
+      setStatus("partial");
+      noteActiveRunId(null);
+      streamRef.current?.close();
       void poll(e.runId);
     } else if (e.type === "run.error") {
       setStatus("error");

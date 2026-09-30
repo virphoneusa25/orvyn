@@ -649,9 +649,62 @@ test("a model stream that never yields is aborted by the idle watchdog, not left
     const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "say something");
     const status = await waitForStatus(h.store, runId, 10_000);
     assert.notEqual(status, "running", "the run must not sit in running forever");
-    assert.ok(["completed", "error", "failed", "cancelled"].includes(status), `settled state, got ${status}`);
+    assert.ok(["completed", "partial", "error", "failed", "cancelled"].includes(status), `settled state, got ${status}`);
   } finally {
     if (previousIdle === undefined) delete process.env.ORVYN_MODEL_STREAM_IDLE_MS;
     else process.env.ORVYN_MODEL_STREAM_IDLE_MS = previousIdle;
   }
+});
+
+// The event NAME must match the outcome: a UI that listens for "run.completed"
+// must never see one for a mission that did not fully pass its settlement
+// criteria. mission.settled is the canonical record; run.* events are
+// status-specific mirrors of it.
+test("a partially-settled run emits run.partial and never run.completed", async () => {
+  const previous = process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
+  process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = "1";
+  try {
+    const h = harness([
+      [toolCallChunk("call_a", "read_file"), { delta: "", done: true }],
+      [{ delta: "Read the file. Nothing was verified.", done: true }],
+    ]);
+    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "partial event test");
+    assert.equal(await waitForStatus(h.store, runId), "partial");
+
+    const events = h.store.get(runId)!.events;
+    assert.equal(
+      events.some((e) => e.type === "run.completed"),
+      false,
+      "run.completed on a partial mission is the exact false-completion bug"
+    );
+    const partial = events.find((e) => e.type === "run.partial");
+    assert.ok(partial, "a partial settlement emits run.partial");
+    assert.equal(partial.data.outcome, "partial");
+    // mission.settled is the authoritative terminal record and must agree.
+    const settled = events.find((e) => e.type === "mission.settled");
+    assert.equal(settled?.data.status, "partial");
+    // No terminal event may contradict the settled status.
+    for (const e of events) {
+      if (e.type === "mission.settled") assert.equal(e.data.status, "partial");
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
+    else process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = previous;
+  }
+});
+
+test("a fully-settled run emits run.completed and never run.partial", async () => {
+  const h = harness([[{ delta: "Done.", done: true }]]);
+  const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "completed event test");
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+
+  const events = h.store.get(runId)!.events;
+  assert.ok(events.some((e) => e.type === "run.completed"), "a completed mission emits run.completed");
+  assert.equal(events.some((e) => e.type === "run.partial"), false);
+  const settled = events.find((e) => e.type === "mission.settled");
+  assert.equal(settled?.data.status, "completed");
+  // run.completed may only appear after the settlement decision.
+  const idxSettled = events.findIndex((e) => e.type === "mission.settled");
+  const idxCompleted = events.findIndex((e) => e.type === "run.completed");
+  assert.ok(idxSettled >= 0 && idxCompleted > idxSettled, "settlement precedes the completed event");
 });

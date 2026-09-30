@@ -95,6 +95,41 @@ CREATE TABLE IF NOT EXISTS learning_records (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_learning_kind ON learning_records (kind, created_at);
+-- Durable mission resume state: one row per run, rewritten at meaningful steps.
+CREATE TABLE IF NOT EXISTS mission_checkpoints (
+  run_id TEXT PRIMARY KEY,
+  checkpoint_json TEXT NOT NULL,
+  phase TEXT,
+  updated_at INTEGER NOT NULL
+);
+-- Canonical preview record per run/workspace: a run's preview URL is never
+-- inferred, never shared across projects, and never survives its owner.
+CREATE TABLE IF NOT EXISTS preview_environments (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT,
+  project_id TEXT,
+  workspace_id TEXT,
+  run_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_preview_scope ON preview_environments (workspace_id, run_id, updated_at);
+-- Content-addressed blobs (screenshots, frames): keyed by sha256, scoped by tenant path.
+CREATE TABLE IF NOT EXISTS blobs (
+  key TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  organization_id TEXT,
+  project_id TEXT,
+  workspace_id TEXT,
+  run_id TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blobs_run ON blobs (run_id, created_at);
 `;
 
 export function defaultDataDir(): string {
@@ -106,6 +141,11 @@ export function defaultDataDir(): string {
     return path.join(os.tmpdir(), "orvyn-test-data", String(process.pid));
   }
   return path.join(os.homedir(), ".orvyn", "data");
+}
+
+/** One canonical preview record per run — a stale or foreign preview can never be resolved through it. */
+export function previewEnvironmentKey(runId: string): string {
+  return `pv_${runId}`;
 }
 
 export interface ArtifactRowInput {
@@ -481,6 +521,103 @@ export class LocalStore {
         createdAt: Number(r.created_at),
       }));
     }) ?? [];
+  }
+
+  // ---------- mission checkpoints ----------
+
+  /** One row per run; each meaningful step rewrites it. */
+  saveMissionCheckpoint(runId: string, checkpoint: unknown, phase?: string): void {
+    this.guard("saveMissionCheckpoint", () =>
+      this.db
+        .prepare(
+          `INSERT INTO mission_checkpoints (run_id, checkpoint_json, phase, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(run_id) DO UPDATE SET checkpoint_json=excluded.checkpoint_json, phase=excluded.phase, updated_at=excluded.updated_at`
+        )
+        .run(runId, JSON.stringify(checkpoint), phase ?? null, Date.now())
+    );
+  }
+
+  loadMissionCheckpoint(runId: string): unknown | null {
+    return this.guard("loadMissionCheckpoint", () => {
+      const row: any = this.db.prepare(`SELECT checkpoint_json FROM mission_checkpoints WHERE run_id = ?`).get(runId);
+      return row ? JSON.parse(String(row.checkpoint_json)) : null;
+    }) ?? null;
+  }
+
+  deleteMissionCheckpoint(runId: string): void {
+    this.guard("deleteMissionCheckpoint", () => this.db.prepare(`DELETE FROM mission_checkpoints WHERE run_id = ?`).run(runId));
+  }
+
+  // ---------- canonical preview environments ----------
+
+  savePreviewEnvironment(input: {
+    id: string; organizationId?: string | null; projectId?: string | null;
+    workspaceId?: string | null; runId: string; url: string; status: string;
+  }): void {
+    const now = Date.now();
+    this.guard("savePreviewEnvironment", () =>
+      this.db
+        .prepare(
+          `INSERT INTO preview_environments (id, organization_id, project_id, workspace_id, run_id, url, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET url=excluded.url, status=excluded.status, updated_at=excluded.updated_at`
+        )
+        .run(input.id, input.organizationId ?? null, input.projectId ?? null, input.workspaceId ?? null, input.runId, input.url, input.status, now, now)
+    );
+  }
+
+  /** The preview record owned by THIS run/workspace — never another run's URL. */
+  previewEnvironmentFor(runId: string, workspaceId?: string | null): any | null {
+    return this.guard("previewEnvironmentFor", () => {
+      const row: any = workspaceId
+        ? this.db.prepare(`SELECT * FROM preview_environments WHERE run_id = ? AND workspace_id = ? ORDER BY updated_at DESC LIMIT 1`).get(runId, workspaceId)
+        : this.db.prepare(`SELECT * FROM preview_environments WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1`).get(runId);
+      if (!row) return null;
+      return {
+        id: String(row.id), organizationId: row.organization_id, projectId: row.project_id,
+        workspaceId: row.workspace_id, runId: String(row.run_id), url: String(row.url),
+        status: String(row.status), createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
+      };
+    }) ?? null;
+  }
+
+  setPreviewEnvironmentStatus(id: string, status: string): void {
+    this.guard("setPreviewEnvironmentStatus", () =>
+      this.db.prepare(`UPDATE preview_environments SET status = ?, updated_at = ? WHERE id = ?`).run(status, Date.now(), id)
+    );
+  }
+
+  // ---------- content-addressed blobs ----------
+
+
+  saveBlobRow(input: {
+    key: string; sha256: string; mediaType: string; size: number; path: string;
+    organizationId?: string | null; projectId?: string | null;
+    workspaceId?: string | null; runId?: string | null;
+  }): void {
+    this.guard("saveBlobRow", () =>
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO blobs (key, sha256, media_type, size, path, organization_id, project_id, workspace_id, run_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(input.key, input.sha256, input.mediaType, input.size, input.path,
+          input.organizationId ?? null, input.projectId ?? null, input.workspaceId ?? null, input.runId ?? null, Date.now())
+    );
+  }
+
+  getBlobRow(key: string): any | null {
+    return this.guard("getBlobRow", () => {
+      const r: any = this.db.prepare(`SELECT * FROM blobs WHERE key = ?`).get(key);
+      if (!r) return null;
+      return {
+        key: String(r.key), sha256: String(r.sha256), mediaType: String(r.media_type),
+        size: Number(r.size), path: String(r.path), organizationId: r.organization_id,
+        projectId: r.project_id, workspaceId: r.workspace_id, runId: r.run_id,
+        createdAt: Number(r.created_at),
+      };
+    }) ?? null;
   }
 
   // ---------- models ----------

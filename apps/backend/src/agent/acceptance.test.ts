@@ -158,7 +158,7 @@ test("acceptance fixture: search → read → edit → real diff → tests pass"
             body: JSON.stringify({ approved: true, scope: "mission" }),
           }).catch(() => {});
         }
-        if (["run.completed", "run.error", "run.cancelled"].includes(ev.type)) {
+        if (["run.completed", "run.partial", "run.blocked", "run.error", "run.cancelled"].includes(ev.type)) {
           terminal = ev.type;
           break outer;
         }

@@ -55,7 +55,10 @@ export type AgentEventType =
   | "context.updated"
   | "approval.required"
   | "approval.resolved"
+  /** Terminal event emitted ONLY when settlement accepted "completed". */
   | "run.completed"
+  /** Terminal event for a mission that ended with honest remaining gaps. */
+  | "run.partial"
   | "plan.created"
   | "task.started"
   | "task.completed"
@@ -104,8 +107,6 @@ export type AgentEventType =
   // --- Steering: user instructions delivered at the next safe boundary ---
   | "steer.queued"
   | "steer.delivered"
-  // --- Remote execution: where a run's tools execute (no local fallback) ---
-  | "run.execution"
   | "run.diagnostics"
   | "website.build.failed"
   | "website.visual.failed"
@@ -163,7 +164,6 @@ export type AgentEventType =
   | "tool.repaired"
   | "run.stalled"
   | "desktop.target"
-  | "desktop.failed"
   | "capability.installed"
   | "model.unavailable"
   | "model.failover"
@@ -173,7 +173,24 @@ export type AgentEventType =
   | "resource.required"
   | "run.blocked"
   | "write.guard"
-  | "skills.routed";
+  | "skills.routed"
+  // --- Terminal result contract + durable mission state ---
+  /** The agent filed a completion request through report_result. */
+  | "mission.result.requested"
+  /** Settlement refused it — required criteria are still unmet. */
+  | "mission.result.rejected"
+  /** Settlement accepted; this is the ONLY event that may precede status=completed. */
+  | "mission.settled"
+  /** A durable checkpoint was written (phase change, tool batch, verification). */
+  | "mission.checkpoint"
+  /** The process died mid-mission; a checkpoint exists and the run can resume. */
+  | "mission.interrupted"
+  /** A steering instruction superseded part of the plan; remaining work is replanned. */
+  | "plan.superseded"
+  /** A failed tool call was classified into the typed error model. */
+  | "tool.error.classified"
+  /** A canonical preview environment record was written/updated. */
+  | "preview.environment";
 
 export interface AgentEvent {
   id: string;
@@ -350,6 +367,19 @@ export class RunStore {
           run.status = "error";
           this.log(run.id, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status: "error" });
           this.log(run.id, { t: "ev", e: ghost });
+          // A durable mission checkpoint makes this a resumable interruption,
+          // not a dead run — POST /agent/stream/runs/:id/resume continues it.
+          const seq2 = run.nextSequence++;
+          const interrupted: AgentEvent = {
+            id: `evt_${run.id.slice(0, 6)}_${seq2}`,
+            runId: run.id,
+            sequence: seq2,
+            type: "mission.interrupted",
+            timestamp: Date.now(),
+            data: { reason: "backend restart", resumable: true },
+          };
+          run.events.push(interrupted);
+          this.log(run.id, { t: "ev", e: interrupted });
         }
         this.runs.set(run.id, run);
       }
@@ -707,7 +737,10 @@ export class RunStore {
     if (run.status === status) return;
     run.status = status;
     this.log(runId, { t: "run", projectRoot: run.projectRoot, createdAt: run.createdAt, status, ...(run.checkpointId ? { checkpointId: run.checkpointId } : {}) });
-    if (status === "completed" || status === "error" || status === "cancelled") {
+    // Every terminal status releases what the run held (desktop control,
+    // credits, worker leases). "blocked" is excluded: a blocked run keeps its
+    // hold because it can be resumed by a follow-up on the same mission.
+    if (status === "completed" || status === "partial" || status === "error" || status === "cancelled") {
       for (const cb of this.terminalListeners) {
         try { cb(runId, status); } catch { /* a listener must not break the settle */ }
       }

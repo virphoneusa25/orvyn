@@ -65,6 +65,8 @@ function describe(e: FeedEvent): string | null {
       return `checkpoint ${d.checkpointId} restored`;
     case "run.completed":
       return "run completed";
+    case "run.partial":
+      return "run partially completed";
     case "run.error":
       return `run error: ${String(d.message ?? "").slice(0, 140)}`;
     default:

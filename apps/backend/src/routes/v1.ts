@@ -1165,7 +1165,7 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
   const unsubscribe = t.runStore.subscribe(req.params.id, (e) => {
     if (res.writableEnded || res.destroyed) { unsubscribe(); return; }
     res.write(`data: ${JSON.stringify(e)}\n\n`);
-    if (e.type === "run.completed" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") {
+    if (e.type === "run.completed" || e.type === "run.partial" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") {
       clearInterval(heartbeat);
       res.end();
       unsubscribe();

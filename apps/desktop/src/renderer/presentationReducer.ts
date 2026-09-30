@@ -826,6 +826,16 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
             : "Completed",
         });
         continue;
+      case "run.partial":
+        closeThought(e.timestamp);
+        items.push({
+          kind: "summary",
+          key: e.id,
+          ok: false,
+          cancelled: false,
+          detail: `Partially completed${Array.isArray(e.data.reasons) && e.data.reasons.length ? ` — ${String(e.data.reasons[0]).slice(0, 140)}` : " — some checks did not pass"}`,
+        });
+        continue;
       case "run.blocked":
         closeThought(e.timestamp);
         items.push({

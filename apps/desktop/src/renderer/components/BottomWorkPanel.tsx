@@ -81,6 +81,8 @@ function describe(e: FeedEvent): string | null {
       return "checkpoint restored";
     case "run.completed":
       return "run completed";
+    case "run.partial":
+      return "run partially completed";
     case "run.cancelled":
       return "run stopped by user";
     case "run.error":

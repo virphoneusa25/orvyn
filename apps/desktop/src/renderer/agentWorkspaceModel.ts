@@ -444,10 +444,10 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     if (type === "approval.resolved") waitingApproval = false;
 
     let routed = routeEvent(e);
-    if ((type === "run.completed" || type === "mission.completed") && previews.size > 0) {
+    if ((type === "run.completed" || type === "run.partial" || type === "mission.completed") && previews.size > 0) {
       const last = [...previews.values()].at(-1)!;
       routed = { line: `Preview ${last.url}`, priority: 96, tab: "preview", previewUrl: last.url, switchTab: true };
-    } else if ((type === "run.completed" || type === "mission.completed") && artifacts.size > 0) {
+    } else if ((type === "run.completed" || type === "run.partial" || type === "mission.completed") && artifacts.size > 0) {
       const first = [...artifacts.values()][0];
       routed = {
         line: `${first.path} is in Files → Generated`,
@@ -464,7 +464,7 @@ export function deriveAgentWorkspace(events: WorkspaceEvent[], opts?: { projectN
     }
   }
 
-  const finished = events.some((e) => e.type === "run.completed" || e.type === "mission.completed");
+  const finished = events.some((e) => e.type === "run.completed" || e.type === "run.partial" || e.type === "mission.completed");
   const blocked = events.some((e) => e.type === "run.blocked" || e.type === "resource.required");
   const reviewable = diffs.length > 0 && artifacts.size === 0;
   if (finished && reviewable && !blocked && previews.size === 0) {

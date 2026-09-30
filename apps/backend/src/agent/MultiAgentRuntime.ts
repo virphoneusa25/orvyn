@@ -646,17 +646,29 @@ export class MultiAgentRuntime {
       this.store.emit(runId, "message.delta", { content: chunk });
     }
     this.store.emit(runId, "message.completed", {});
-    this.store.emit(runId, "run.completed", {
-      tasksTotal: mission.tasks.length,
-      tasksCompleted: done,
-      tasksFailed: mission.tasks.length - done,
-      missionStatus,
-    });
-    if (!blocked) {
+    // The terminal event names the outcome — a blocked mission must never
+    // arrive as "run.completed", or a listener that trusts the event name
+    // renders ✓ Completed for work that failed review.
+    if (blocked) {
+      this.store.emit(runId, "run.blocked", {
+        terminal: true,
+        message: "Mission failed final review — your decision is needed.",
+        tasksTotal: mission.tasks.length,
+        tasksCompleted: done,
+        tasksFailed: mission.tasks.length - done,
+        missionStatus,
+      });
+    } else {
+      this.store.emit(runId, "run.completed", {
+        tasksTotal: mission.tasks.length,
+        tasksCompleted: done,
+        tasksFailed: mission.tasks.length - done,
+        missionStatus,
+      });
       this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
     }
     this.missionApproved.delete(runId);
-    this.store.setStatus(runId, "completed");
+    this.store.setStatus(runId, blocked ? "blocked" : "completed");
   }
 
   private workerModelFor(role: AgentRole): AIModelProvider {

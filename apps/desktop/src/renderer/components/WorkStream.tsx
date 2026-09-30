@@ -637,7 +637,7 @@ export function WorkStream({
         {(run.events.length > 0 || runActive) && (
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
-            <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "error" || run.status === "cancelled"}
+            <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "partial" || run.status === "blocked" || run.status === "error" || run.status === "cancelled"}
               onRegenerate={retryInstruction ? () => { void send(retryInstruction, true); } : undefined} />
           </div>
         )}
