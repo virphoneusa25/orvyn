@@ -1,7 +1,7 @@
 id: orvyn-vercel
 display_name: Vercel (ORVYN)
 description: Organization-scoped Vercel deployment token
-category: deployment
+category: other
 credentials:
   - name: api_token
     description: Vercel token brokered by ORVYN

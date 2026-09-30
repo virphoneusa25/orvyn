@@ -158,24 +158,57 @@ if grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null; then
   mv .env.tmp .env && chmod 600 .env
   bash infrastructure/openshell/setup.sh
   docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml \$OS_COMPOSE up -d --no-deps openshell-gateway
-  # Register the private mTLS gateway and import every credential profile on
-  # each deployment. Import is an upsert in OpenShell, so profile changes are
-  # part of the same acceptance-gated upgrade as the images and worker code.
-  gateway_ready=0
+  # Register the private mTLS gateway, then prove an RPC reaches it before
+  # importing profiles. A local gateway-list entry alone does not mean the
+  # freshly started gateway is accepting requests yet.
+  gateway_registered=0
   for _ in \$(seq 1 30); do
     if sudo /usr/local/lib/orvyn-openshell/openshell gateway list 2>/dev/null | grep -qE '(^|[[:space:]])orvyn([[:space:]]|$)'; then
-      gateway_ready=1
+      gateway_registered=1
       break
     fi
     if sudo /usr/local/lib/orvyn-openshell/openshell gateway add https://\${OPENSHELL_BRIDGE_IP:-172.17.0.1}:8080 --local --name orvyn >/tmp/orvyn-gateway-add.log 2>&1; then
+      gateway_registered=1
+      break
+    fi
+    sleep 2
+  done
+  if [ \$gateway_registered -ne 1 ]; then cat /tmp/orvyn-gateway-add.log >&2 || true; exit 1; fi
+  gateway_ready=0
+  for _ in \$(seq 1 30); do
+    if sudo /usr/local/lib/orvyn-openshell/openshell provider profile list --gateway orvyn >/tmp/orvyn-gateway-ready.log 2>&1; then
       gateway_ready=1
       break
     fi
     sleep 2
   done
-  if [ \$gateway_ready -ne 1 ]; then cat /tmp/orvyn-gateway-add.log >&2 || true; exit 1; fi
-  sudo /usr/local/lib/orvyn-openshell/openshell provider profile import \
-    --from infrastructure/openshell/provider-profiles --global --gateway orvyn
+  if [ \$gateway_ready -ne 1 ]; then cat /tmp/orvyn-gateway-ready.log >&2 || true; exit 1; fi
+  sudo /usr/local/lib/orvyn-openshell/openshell provider profile lint \
+    --from infrastructure/openshell/provider-profiles
+  # Import new profiles and update existing ones with the optimistic-lock
+  # resource version exported by the live gateway. OpenShell imports are
+  # create-only, so replaying a directory import would break every redeploy.
+  profile_tmp=\$(mktemp -d)
+  trap 'rm -rf "\$profile_tmp"' EXIT
+  for profile_file in infrastructure/openshell/provider-profiles/*.yaml; do
+    profile_id=\$(awk '/^id:/ { print \$2; exit }' "\$profile_file")
+    if sudo /usr/local/lib/orvyn-openshell/openshell provider profile export \
+      "\$profile_id" --global --gateway orvyn --output yaml \
+      > "\$profile_tmp/current.yaml" 2>/dev/null; then
+      resource_version=\$(awk '/^resource_version:/ { print \$2; exit }' "\$profile_tmp/current.yaml")
+      test -n "\$resource_version"
+      awk -v version="\$resource_version" \
+        'NR == 1 { print; print "resource_version: " version; next } { print }' \
+        "\$profile_file" > "\$profile_tmp/update.yaml"
+      sudo /usr/local/lib/orvyn-openshell/openshell provider profile update \
+        "\$profile_id" --file "\$profile_tmp/update.yaml" --global --gateway orvyn
+    else
+      sudo /usr/local/lib/orvyn-openshell/openshell provider profile import \
+        --file "\$profile_file" --global --gateway orvyn
+    fi
+  done
+  rm -rf "\$profile_tmp"
+  trap - EXIT
 fi
 docker compose \
   -f docker-compose.yml \

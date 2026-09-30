@@ -1,7 +1,7 @@
 id: orvyn-netlify
 display_name: Netlify (ORVYN)
 description: Organization-scoped Netlify deployment token
-category: deployment
+category: other
 credentials:
   - name: api_token
     description: Netlify token brokered by ORVYN

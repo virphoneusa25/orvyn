@@ -1,7 +1,7 @@
 id: orvyn-cloudflare
 display_name: Cloudflare (ORVYN)
 description: Organization-scoped Cloudflare API token
-category: deployment
+category: other
 credentials:
   - name: api_token
     description: Cloudflare token brokered by ORVYN
