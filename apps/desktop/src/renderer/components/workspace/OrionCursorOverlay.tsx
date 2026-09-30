@@ -40,6 +40,22 @@ export function OrionCursorOverlay({
             }}
           />
         )}
+        {cursor.kind === "scroll" && (
+          <span
+            style={{
+              position: "absolute",
+              left: -14,
+              top: 18,
+              width: 46,
+              fontSize: 10,
+              fontWeight: 700,
+              color: "#7dd3fc",
+              textAlign: "center",
+            }}
+          >
+            ↕ scroll
+          </span>
+        )}
         {cursor.kind === "type" && (
           <span
             style={{

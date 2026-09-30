@@ -639,7 +639,7 @@ async function sandboxAct(
     } else {
       const gx = Math.max(0, Math.round(x));
       const gy = Math.max(0, Math.round(y));
-      await dockerExec(session.containerId, ["sh", "-c", `eval "$(xdotool getmouselocation --shell)"; for i in 1 2 3 4 5 6 7 8 9 10; do xdotool mousemove $(( X + (${gx} - X) * i / 10 )) $(( Y + (${gy} - Y) * i / 10 )); done`], 1500).catch(() => undefined);
+      await dockerExec(session.containerId, ["sh", "-c", `eval "$(xdotool getmouselocation --shell)"; for i in 2 5 8; do xdotool mousemove $(( X + (${gx} - X) * i / 10 )) $(( Y + (${gy} - Y) * i / 10 )); done`], 1500).catch(() => undefined);
     }
   }
 

@@ -930,6 +930,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   t.usage.agentRuns++;
   // A follow-up continues the conversation: the session's runs are its history.
   const history: {role: "user" | "assistant";content:string}[] = threadHistory(t.runStore, session.runIds);
+  // A CONTINUATION ("continue", "try again", "also…") must not feel like a
+  // new task: the model gets an explicit continuation contract so it picks
+  // up where the previous run left off instead of restating the plan.
+  if (history.length > 0) {
+    history.unshift({
+      role: "user",
+      content: `[Runtime note] You are CONTINUING this conversation — the work above is done and its files exist. Pick up where it left off. Do not restart, re-plan, or rebuild what the previous run already made.`,
+    });
+    history.unshift({ role: "assistant", content: "Understood — continuing from the previous work." });
+  }
   const runId = t.agentRuntime.start(
     boundRoot,
     req.body.instruction,

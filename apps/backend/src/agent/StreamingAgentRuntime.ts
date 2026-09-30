@@ -347,7 +347,7 @@ export interface RunOptions {
  * to finish and exists only as a runaway guard. Context pressure is handled by
  * compaction rather than by refusing to continue.
  */
-const MAX_STEPS = Number(process.env.ORVYN_AGENT_MAX_STEPS) || 48;
+const MAX_STEPS = Number(process.env.ORVYN_AGENT_MAX_STEPS) || 200;
 const FAILURE_CIRCUIT_BREAKER = 5;
 /** Workspace wording for the model. Host paths stay out of normal chat. */
 function workspaceAnchor(
@@ -3026,7 +3026,14 @@ export class StreamingAgentRuntime {
       },
 
       onTurnLimit: () => {
-        fail(`Stopped after ${MAX_STEPS} steps without finishing.`);
+        // The turn limit is a runaway guard, not a task deadline. Complex
+        // missions legitimately need more turns; the token budget
+        // (ORVYN_RUN_MAX_TOKENS) is the real ceiling. At the turn limit the
+        // model gets a final wrap-up instruction instead of a hard fail.
+        state.pendingNotes.push(
+          `[Runtime note] You have reached the turn limit (${MAX_STEPS}). Deliver your final answer NOW: summarize what was accomplished, what is verified, and what remains. Do not start new work.`
+        );
+        state.forceStopReason = undefined; // let the completion evaluator judge
       },
 
       onTurn: (record) => {
