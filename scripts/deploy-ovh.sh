@@ -139,6 +139,11 @@ fi"; then
   fi
 fi
 
+echo "Validating Caddy configuration on $HOST"
+"${SSH[@]}" "$HOST" "set -euo pipefail
+cd '$REMOTE'
+docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"
+
 echo "Rebuilding backend + worker on $HOST"
 "${SSH[@]}" "$HOST" "set -euo pipefail
 cd '$REMOTE'
@@ -202,6 +207,17 @@ if ! curl -fsS -m 8 "$PUBLIC_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
   exit 1
 fi
 echo "Live commit: $COMMIT"
+
+# The primary API can be healthy while a portal hostname is misrouted. Verify
+# both public shells, their same-origin API, and the provider-status endpoint.
+for surface in app admin; do
+  if [[ "$surface" == app ]]; then host="${ORVYN_APP_HOST:-app.kernelailabs.com}"; else host="${ORVYN_ADMIN_HOST:-admin.kernelailabs.com}"; fi
+  origin="https://$host"
+  curl -fsS -m 12 "$origin/" | grep -Fq "name=\"orvyn-surface\" content=\"$surface\"" || { echo "$origin is not serving the $surface portal" >&2; exit 1; }
+  curl -fsS -m 12 "$origin/api/v1/health" | grep -q '"status":"ok"' || { echo "$origin API health failed" >&2; exit 1; }
+  curl -fsS -m 12 "$origin/api/v1/onboarding/providers" | grep -q '"email":' || { echo "$origin auth-provider status failed" >&2; exit 1; }
+  echo "Verified $origin: $surface portal, API, auth-provider status"
+done
 
 echo "Building orvyn-desktop image on $HOST"
 if ! "${SSH[@]}" "$HOST" "cd '$REMOTE/infrastructure/desktop' && docker build -t orvyn-desktop:latest ."; then

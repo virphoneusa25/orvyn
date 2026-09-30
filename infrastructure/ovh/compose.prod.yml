@@ -15,10 +15,10 @@ services:
       - ORVYN_CLOUD_MODE=true
       - ORVYN_PUBLIC_URL=${ORVYN_PUBLIC_URL:-https://orvyn.virphoneusa.com}
       # Customer portal and staff Admin Portal hosts (the backend routes by host).
-      # Unset: everything (including /admin) is served on every host. Set them
-      # (repository variables) once the DNS records for both hosts are live.
-      - ORVYN_APP_HOST=${ORVYN_APP_HOST:-}
-      - ORVYN_ADMIN_HOST=${ORVYN_ADMIN_HOST:-}
+      # These production hostnames already have live DNS. Keep the backend's
+      # host-based portal and admin API routing active if .env lacks overrides.
+      - ORVYN_APP_HOST=${ORVYN_APP_HOST:-app.kernelailabs.com}
+      - ORVYN_ADMIN_HOST=${ORVYN_ADMIN_HOST:-admin.kernelailabs.com}
     restart: always
     healthcheck:
       # node:20-slim has no curl; use node's built-in fetch.
