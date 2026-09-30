@@ -63,6 +63,9 @@ rsync -az -e "$RSH" \
 #   account email (verification links): SMTP_*
 #   sign-in and billing (added when the apps exist): GOOGLE_*, GITHUB_*, STRIPE_*
 # Repository variables (not secrets) arrive as one JSON object; only these names are taken.
+# One combined secret per provider (GOOGLE_OAUTH, ORVYN_GH_SECRET) is split
+# into the ID/secret pair the server reads.
+while IFS='=' read -r k v; do [[ -n "$k" ]] && export "$k=$v"; done < <(python3 "$ROOT/scripts/split-oauth-secrets.py")
 if [[ -n "${DEPLOY_VARS:-}" ]]; then
   while IFS='=' read -r k v; do [[ -n "$k" ]] && export "$k=$v"; done < <(python3 -c '
 import json, os, re
@@ -72,6 +75,10 @@ for k, v in d.items():
         print(f"{k}={v}")
 ')
 fi
+# Say what this deploy can send (names only, never values).
+for n in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET SMTP_HOST SMTP_USER SMTP_PASS SMTP_FROM; do
+  if [[ -n "${!n:-}" ]]; then echo "Secret present: $n"; else echo "::warning title=Not set::$n is not set for this deploy — the server keeps its previous value (none on a fresh server)."; fi
+done
 PRICE_NAMES=""
 # ANNUAL is the canonical repository-variable suffix; YEARLY kept so an older
 # variable set still reaches the server's .env.
