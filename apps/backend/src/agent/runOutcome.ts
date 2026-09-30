@@ -20,5 +20,6 @@ export function runOutcome(events: Ev[]): RunOutcome {
   const installed = events.some((e) => e.type === "capability.installed");
   if (needed.length && !installed) reasons.push(`Needs a tool that is not installed: ${needed[0]}.`);
   if (events.some((e) => e.type === "permission.required")) reasons.push("ORVYN needs permission to modify this workspace.");
+  if (events.some((e) => e.type === "run.budget_reached")) reasons.push("Stopped at this run's execution budget before everything was verified. Say \"continue\" to pick up where it left off.");
   return { outcome: reasons.length ? "partial" : "complete", reasons };
 }

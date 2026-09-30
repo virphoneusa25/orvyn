@@ -316,33 +316,57 @@ test("records streamed token usage on the run", async () => {
   assert.ok(run.events.some((e) => e.type === "usage.updated"));
 });
 
-test("stops with a clear error when the run's model-request budget is spent", async () => {
+test("a spent model-request budget ends with a written summary as Partial, not an error", async () => {
   const previous = process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
   process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = "1";
   try {
-    // Turn 1 returns a tool call; turn 2 would finish. With a budget of 1
-    // model call the run must stop before the second request.
+    // Turn 1 runs a tool and spends the budget of 1. Turn 2 is the wrap-up.
     const h = harness([
       [toolCallChunk("call_a", "read_file"), { delta: "", done: true }],
-      [{ delta: "done", done: true }],
+      [{ delta: "Checked the header. Remaining: nothing verified in the browser.", done: true }],
     ]);
 
     const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
-    assert.equal(await waitForStatus(h.store, runId), "error");
+    assert.equal(await waitForStatus(h.store, runId), "completed");
 
     const run = h.store.get(runId)!;
-    const budgetError = run.events.find((e) => e.type === "run.error");
-    assert.ok(budgetError, "a budget exhaustion must surface as run.error");
-    assert.match(String(budgetError.data.message), /reached its execution limit/);
+    assert.ok(!run.events.some((e) => e.type === "run.error"), "reaching the budget is not a failure");
+    const reached = run.events.find((e) => e.type === "run.budget_reached");
+    assert.ok(reached, "the budget is recorded");
     // The env-var detail rides in `detail` for admins, not the customer message.
-    assert.match(String(budgetError.data.detail), /model requests: 1\/1/);
+    assert.match(String(reached.data.detail), /model requests: 1\/1/);
+    const outcome = [...run.events].reverse().find((e) => e.type === "run.outcome");
+    assert.equal(outcome?.data.outcome, "partial");
+    // The wrap-up turn was told to stop using tools.
+    const last = h.provider.requests[h.provider.requests.length - 1];
+    assert.ok(last.messages.some((m) => m.role === "user" && /reached its execution budget/.test(String(m.content))));
   } finally {
     if (previous === undefined) delete process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
     else process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = previous;
   }
 });
 
-test("stops with a clear error when the run's tool-call budget is spent", async () => {
+test("a model that ignores the budget wrap-up is stopped with a clear error", async () => {
+  const previous = process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
+  process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = "1";
+  try {
+    const h = harness([
+      [toolCallChunk("call_a", "read_file"), { delta: "", done: true }],
+      [toolCallChunk("call_b", "read_file"), { delta: "", done: true }],
+      [toolCallChunk("call_c", "read_file"), { delta: "", done: true }],
+      [{ delta: "done", done: true }],
+    ]);
+    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
+    assert.equal(await waitForStatus(h.store, runId), "error");
+    const err = h.store.get(runId)!.events.find((e) => e.type === "run.error");
+    assert.match(String(err?.data.message), /reached its execution limit/);
+  } finally {
+    if (previous === undefined) delete process.env.ORVYN_RUN_MAX_MODEL_REQUESTS;
+    else process.env.ORVYN_RUN_MAX_MODEL_REQUESTS = previous;
+  }
+});
+
+test("a spent tool-call budget answers further calls without running them, then settles", async () => {
   const previous = process.env.ORVYN_RUN_MAX_TOOL_CALLS;
   process.env.ORVYN_RUN_MAX_TOOL_CALLS = "1";
   try {
@@ -350,25 +374,22 @@ test("stops with a clear error when the run's tool-call budget is spent", async 
     const h = harness([
       [toolCallChunk("call_a", "read_file"), { delta: "", done: true }],
       [toolCallChunk("call_b", "read_file"), { delta: "", done: true }],
-      [{ delta: "done", done: true }],
+      [{ delta: "Summary: read one file; nothing else verified.", done: true }],
     ]);
 
     const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "tool budget test");
-    assert.equal(await waitForStatus(h.store, runId), "error");
+    assert.equal(await waitForStatus(h.store, runId), "completed");
 
     const run = h.store.get(runId)!;
-    const budgetError = run.events.find((e) => e.type === "run.error");
-    assert.ok(budgetError, "a budget exhaustion must surface as run.error");
-    assert.match(String(budgetError.data.message), /reached its execution limit/);
-    assert.match(String(budgetError.data.detail), /tool calls: 1\/1/);
-    // The turn that tripped the cap must not leave unanswered tool calls.
+    const reached = run.events.find((e) => e.type === "run.budget_reached");
+    assert.match(String(reached?.data.detail), /tool calls: 1\/1/);
+    // Every tool call got exactly one reply (unanswered tool_calls would 400).
     const requests = h.provider.requests;
     const last = requests[requests.length - 1];
-    const assistantToolTurns = last.messages.filter((m) => m.role === "assistant" && m.toolCalls);
-    const toolReplies = last.messages.filter((m) => m.role === "tool");
-    if (assistantToolTurns.length > 0) {
-      assert.equal(toolReplies.length, assistantToolTurns[0].toolCalls!.length, "unanswered tool_calls would 400 the next request");
-    }
+    const asked = last.messages.filter((m) => m.role === "assistant" && m.toolCalls).reduce((n, m) => n + m.toolCalls!.length, 0);
+    const replies = last.messages.filter((m) => m.role === "tool");
+    assert.equal(replies.length, asked, "unanswered tool_calls would 400 the next request");
+    assert.match(String(replies[replies.length - 1].content), /Not run: this run has reached its execution budget/);
   } finally {
     if (previous === undefined) delete process.env.ORVYN_RUN_MAX_TOOL_CALLS;
     else process.env.ORVYN_RUN_MAX_TOOL_CALLS = previous;

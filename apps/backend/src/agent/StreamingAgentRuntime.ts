@@ -1,5 +1,5 @@
 import { CONVERSATION_STYLE } from "./conversationStyle";
-import { budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
+import { budgetFinalNote, budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
 import { planSkeleton, planPromptNote, type MissionPlan } from "./missionPlan";
 import { scorecardFromChecks, requiredChecksForTask } from "./verificationScorecard";
@@ -272,6 +272,8 @@ interface RunState {
   pendingNotes: string[];
   /** One-shot soft budget warning fired at 75% of the run's token cap. */
   budgetWarned?: boolean;
+  /** The run hit its execution budget: one last tool-free turn writes the summary, then it settles as Partial. */
+  budgetFinal?: { reason: string; detail: string; graceTurns: number };
   /** Site files THIS run wrote (a read-only run must not mint a new preview). */
   siteFilesWritten?: number;
   /** §7 structured plan, machine-owned, emitted before the first edit. */
@@ -2427,16 +2429,30 @@ export class StreamingAgentRuntime {
         // customer message stays human; the environment-variable detail rides
         // in `detail` for admins and logs.
         const capRequests = runCap("ORVYN_RUN_MAX_MODEL_REQUESTS");
-        if (capRequests > 0 && state.modelCalls >= capRequests) {
-          const f = fail("This run reached its execution limit before it could finish. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `model requests: ${state.modelCalls}/${capRequests} (ORVYN_RUN_MAX_MODEL_REQUESTS)` });
-          return { outcome: f.outcome, reason: f.reason };
-        }
         const capTokens = runCap("ORVYN_RUN_MAX_TOKENS");
         const runUsage = this.store.get(runId)?.usage;
         const spent = runUsage ? runUsage.promptTokens + runUsage.completionTokens : 0;
-        if (capTokens > 0 && spent >= capTokens) {
-          const f = fail("This run reached its execution limit before verification completed. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `tokens: ${spent}/${capTokens} (ORVYN_RUN_MAX_TOKENS)` });
-          return { outcome: f.outcome, reason: f.reason };
+        const overRequests = capRequests > 0 && state.modelCalls >= capRequests;
+        const overTokens = capTokens > 0 && spent >= capTokens;
+        if (overRequests || overTokens) {
+          // The budget no longer kills a run mid-step. The first time it is
+          // reached the model gets a final, tool-free turn to report what is
+          // done, verified and left; the run then settles as Partial with
+          // that summary (and "continue" picks it up). Only a model that
+          // ignores the wrap-up twice is stopped hard.
+          const detail = overRequests
+            ? `model requests: ${state.modelCalls}/${capRequests} (ORVYN_RUN_MAX_MODEL_REQUESTS)`
+            : `tokens: ${spent}/${capTokens} (ORVYN_RUN_MAX_TOKENS)`;
+          if (!state.budgetFinal) {
+            state.budgetFinal = { reason: "execution budget", detail, graceTurns: 0 };
+            this.enterBudgetWrapUp(runId, state, messages, detail);
+          } else if (state.budgetFinal.graceTurns >= 2) {
+            const f = fail("This run reached its execution limit before it could finish. Your changes so far are saved — say \"continue\" to pick up where it left off.", { code: "RUN_LIMIT", detail });
+            return { outcome: f.outcome, reason: f.reason };
+          }
+          state.budgetFinal.graceTurns += 1;
+          state.modelCalls++;
+          return null;
         }
         // Soft budget: at 75% the run is TOLD to wrap up, so it finishes
         // with a verified summary instead of dying at the hard cap
@@ -2680,8 +2696,17 @@ export class StreamingAgentRuntime {
         // Tool-call runaway guard, checked before the batch so no call is
         // left unanswered by stopping mid-batch.
         const capTools = runCap("ORVYN_RUN_MAX_TOOL_CALLS");
-        if (capTools > 0 && state.toolCalls >= capTools) {
-          return fail("This run reached its execution limit before it could finish. Your changes so far are saved.", { code: "RUN_LIMIT", detail: `tool calls: ${state.toolCalls}/${capTools} (ORVYN_RUN_MAX_TOOL_CALLS)` });
+        if (capTools > 0 && state.toolCalls >= capTools && !state.budgetFinal) {
+          state.budgetFinal = { reason: "execution budget", detail: `tool calls: ${state.toolCalls}/${capTools} (ORVYN_RUN_MAX_TOOL_CALLS)`, graceTurns: 0 };
+          this.enterBudgetWrapUp(runId, state, null, state.budgetFinal.detail);
+        }
+        if (state.budgetFinal) {
+          // Past the budget no tool runs: every call gets the same answer,
+          // so the conversation stays valid and the next turn is the summary.
+          for (const call of calls) {
+            messages.push({ role: "tool", name: call.name, toolCallId: call.id, content: "Not run: this run has reached its execution budget. Do not call any more tools. Reply now with the final summary: what was changed, what was verified, and what remains." });
+          }
+          return { kind: "ok" };
         }
         state.toolCalls += calls.length;
 
@@ -2748,6 +2773,9 @@ export class StreamingAgentRuntime {
 
       onFinalAnswer: (_turn, { content, streamedText }) => {
         if (String(content ?? "").trim()) state.lastAnswer = String(content);
+        // The budget wrap-up answer is the run's last word: no nudges, no
+        // further repair rounds. verify() settles it as Partial.
+        if (state.budgetFinal) return { kind: "verify" };
         if (state.website) this.noteWebsiteProgress(runId, state);
         const websiteWork = Boolean(state.website) && isWebsiteImplementation(state.instruction);
         const websiteEvidence = websiteWork ? websiteEvidenceFrom(this.store.get(runId)?.events ?? []) : null;
@@ -2870,6 +2898,7 @@ export class StreamingAgentRuntime {
       // PASS lets the completion evaluator see it. FAIL (or PARTIAL, once)
       // goes back to this same run with the findings.
       verify: async (_turn, reply) => {
+        if (state.budgetFinal) return { kind: "approved" };
         this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         // The site changed and has a live preview: it must load as the styled
@@ -3743,6 +3772,14 @@ export class StreamingAgentRuntime {
       workspaceRoot: state.projectRoot,
       blocked: true,
     }));
+  }
+
+  /** Budget reached: record it (the run settles as Partial) and ask for the final summary. */
+  private enterBudgetWrapUp(runId: string, state: RunState, messages: AIMessage[] | null, detail: string): void {
+    this.store.emit(runId, "run.budget_reached", { detail, message: "This run reached its execution budget. ORION is writing up what is done and what remains." });
+    const note = budgetFinalNote();
+    if (messages) messages.push({ role: "user", content: note });
+    else state.pendingNotes.push(note);
   }
 
   private noteWebsiteProgress(runId: string, state: RunState): void {

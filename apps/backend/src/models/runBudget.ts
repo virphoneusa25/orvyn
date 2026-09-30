@@ -20,6 +20,11 @@ export function budgetWrapNote(usedPct: number): string {
   return `[Runtime note] This run has used ${usedPct}% of its execution budget. Wrap up now: finish the change in progress, verify with the fastest meaningful check (browser_* or one terminal command — not a long suite), and deliver a final summary of what is done and what remains. Do not start new large work.`;
 }
 
+/** The last turn once the budget is reached: no tools, an honest summary. */
+export function budgetFinalNote(): string {
+  return `[Runtime note] This run has reached its execution budget. Do NOT call any more tools. Reply now with the final summary: what you changed (files), what you verified and how, and exactly what remains unfinished or unverified. The user can say "continue" to resume from here.`;
+}
+
 /**
  * A model without vision cannot see an attached image, so "use the logo
  * attached" is a note about a file it can never look at. Pick the first

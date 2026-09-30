@@ -64,6 +64,7 @@ export type AgentEventType =
   | "review.passed"
   | "review.rejected"
   | "run.error"
+  | "run.budget_reached"
   | "run.cancelled"
   /** Rolling token/cost accounting for the run. */
   | "usage.updated"
