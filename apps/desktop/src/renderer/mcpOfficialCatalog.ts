@@ -383,11 +383,9 @@ export async function resolveMarketplaceCatalog(input: {
   degraded?: boolean;
 }> {
   const parsed = parseApiJson(input.status, input.text, input.contentType);
-  const cloudCatalog: MarketServer[] = officialMarketplaceOnly(
-    parsed.ok
-      ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
-      : []
-  );
+  const cloudCatalog: MarketServer[] = parsed.ok
+    ? ((parsed.body?.results ?? []).map((r: { server: MarketServer }) => r.server).filter(Boolean) as MarketServer[])
+    : [];
   const cloudDegraded = Boolean(parsed.ok && (parsed.body?.degradedFlag || (Array.isArray(parsed.body?.degraded) && parsed.body.degraded.length)));
   const decision = decideCatalogSource({
     status: input.status,

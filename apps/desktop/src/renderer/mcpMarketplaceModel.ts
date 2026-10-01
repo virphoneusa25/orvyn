@@ -452,6 +452,7 @@ export function providerWarning(health: { id: string; name: string; status: stri
     .filter((h) => !["online", "disabled", "needs-key"].includes(h.status))
     .map((h) => {
       if (h.status === "slow") return `${h.name} is responding slowly`;
+      if (h.status === "timeout") return `${h.name} timed out`;
       if (h.status === "auth-required") return `${h.name} needs a signed-in session`;
       if (h.status === "rate-limited") return `${h.name} is rate-limited`;
       return `${h.name} unavailable`;

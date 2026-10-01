@@ -40,6 +40,9 @@ export interface RegistryHealth {
   latencyMs?: number;
   resultCount?: number;
   errorClass?: string;
+  lastSuccessAt?: number;
+  lastAttemptAt?: number;
+  cachedResults?: number;
 }
 
 export interface McpPackage {

@@ -107,8 +107,15 @@ async function refreshWorkers(): Promise<void> {
     if (!res.ok) return;
     const data = await res.json();
     const online = Array.isArray(data.workers)
-      ? data.workers.filter((w: { status?: string }) => w.status && w.status !== "offline").length
-      : 0;
+      ? data.workers.filter((w: { status?: string; lastHeartbeat?: number; online?: boolean }) => {
+          if (typeof w.online === "boolean") return w.online;
+          if (w.status === "offline") return false;
+          if (typeof w.lastHeartbeat !== "number") return false;
+          return Date.now() - w.lastHeartbeat < 45_000;
+        }).length
+      : typeof data.online === "number"
+        ? data.online
+        : 0;
     apply({ type: "workers", online });
   } catch {
     // Leave the last count. A failed poll is not "zero workers".

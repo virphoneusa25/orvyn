@@ -114,6 +114,12 @@ export function Sidebar(props: SidebarProps) {
   const [cloudLabel, setCloudLabel] = useState("Local mode");
   const [cloudOn, setCloudOn] = useState(false);
   const [modelLine, setModelLine] = useState("Auto");
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    void window.orvyn?.system?.getAppInfo?.().then((info) => {
+      if (info?.version) setAppVersion(info.version.replace(/^v/i, ""));
+    }).catch(() => undefined);
+  }, []);
   useEffect(() => onConnectionFacts((facts) => {
     const viewState = describeConnection(facts);
     const on = viewState.signedIn && viewState.modeLabel === "Cloud";
@@ -183,7 +189,7 @@ export function Sidebar(props: SidebarProps) {
           <span className="ov-dot ov-dot--sm" style={{ background: cloudOn ? "var(--ov-green)" : "var(--ov-faint)" }} />
           {cloudLabel}
         </span>
-        <span>v0.1.0</span>
+        <span>{appVersion ? `v${appVersion}` : null}</span>
       </div>
     </nav>
   );

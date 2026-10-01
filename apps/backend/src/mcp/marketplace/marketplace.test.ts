@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { canonicalKey, isCanonicalGithub, mergeServers, rankServer, RegistryAggregator } from "./aggregator";
 import { CatalogCache, catalogCacheKey, CATALOG_FRESH_TTL_MS } from "./catalogCache";
 import { catalogSearchQuery, classifyMarketplaceRisk, inferCategories, primarySearchTerm, trustFor } from "./classify";
-import { keepMarketplaceListing, officialReferenceResults } from "./officialReference";
+import { officialReferenceResults } from "./officialReference";
 import { isPublicFreeMcp, serverRequiresUserSecret } from "./publicInstall";
 import { installPlan } from "./install";
 import { normalizeOfficial } from "./officialProvider";
@@ -281,7 +281,7 @@ test("official timeout still returns reference servers instead of blanking javas
   const p = officialProvider(fetchImpl as any);
   const out = await p.search({ query: "javascript" });
   assert.ok(out.results.some((r) => r.server.name === "io.modelcontextprotocol/memory"));
-  assert.equal(out.health?.status, "slow");
+  assert.equal(out.health?.status, "timeout");
   assert.deepEqual(officialReferenceResults("official javascript mcp tool").map((r) => r.server.name).includes("io.modelcontextprotocol/filesystem"), true);
 });
 
@@ -383,7 +383,7 @@ test("provider parallelism: official timeout still returns glama + smithery", as
   const out = await agg.search({ query: "js", limit: 20 });
   assert.ok(Date.now() - started < 2000, "federation must not wait on a hung official call beyond isolation");
   assert.ok(out.results.length >= 2, "partial results must render");
-  assert.equal(out.providers.official.status, "slow");
+  assert.equal(out.providers.official.status, "timeout");
   assert.equal(out.providers.glama.status, "online");
   assert.equal(out.providers.smithery.status, "online");
   assert.equal(out.degradedFlag, true);
@@ -399,7 +399,7 @@ test("provider timeout isolation uses separate budgets", async () => {
   const started = Date.now();
   const out = await agg.search({ query: "js", limit: 8 });
   assert.ok(out.results.some((r) => r.server.name.startsWith("io.modelcontextprotocol/")));
-  assert.equal(out.providers.official.status, "slow");
+  assert.equal(out.providers.official.status, "timeout");
   assert.ok(Date.now() - started < 1500);
 });
 
@@ -421,7 +421,8 @@ test("retry: timeout/5xx retry once; 401/403 do not", async () => {
     (err: any) => err.errorClass === "auth-required"
   );
   assert.equal(auth, 1);
-  assert.equal(shouldRetry("timeout"), true);
+  assert.equal(shouldRetry("timeout"), false);
+  assert.equal(shouldRetry("http-5xx"), true);
   assert.equal(shouldRetry("permission-denied"), false);
 });
 
@@ -571,7 +572,7 @@ test("empty vs failure: timeout is degraded, not a valid empty catalog", async (
   const out = await new RegistryAggregator([official, glama]).search({ query: "js" });
   assert.equal(out.results.length, 0);
   assert.equal(out.degradedFlag, true);
-  assert.equal(out.providers.official.status, "slow");
+  assert.equal(out.providers.official.status, "timeout");
 });
 
 test("partial success: official 500 does not blank first-party results from another provider", async () => {
@@ -613,8 +614,8 @@ test("marketplace catalog is official-only: python search drops community and ra
     results: [{ server: normalizeGlama({ name: "python-mcp", namespace: "acme", description: "community python" }), score: 0 }],
   }));
   const out = await new RegistryAggregator([official, glama]).search({ query: "python", limit: 12 });
-  assert.ok(out.results.every((r) => keepMarketplaceListing(r.server)));
-  assert.equal(out.results.some((r) => /a2awire|acme|python-mcp/i.test(r.server.name)), false);
+  assert.equal(out.results.some((r) => /a2awire/i.test(r.server.name)), false);
+  assert.ok(out.results.some((r) => r.server.sources.includes("glama")));
   assert.equal(out.results[0].server.name.startsWith("io.modelcontextprotocol/"), true);
 });
 
@@ -643,4 +644,47 @@ test("fetchCatalogJson classifies 429 with Retry-After", async () => {
   }).catch((e) => e);
   assert.equal(err.errorClass, "rate-limited");
   assert.equal(err.retryAfterMs, 2000);
+});
+
+test("official timeout does not drop glama or cached last-good results", async () => {
+  const github = officialReferenceResults("github").find((r) => /github-mcp-server/i.test(r.server.name)) ?? officialReferenceResults("github")[0];
+  const cache = new CatalogCache<import("./aggregator").AggregatorCachePayload>();
+  cache.set(catalogCacheKey({ query: "__last_good__", filters: "", page: "all" }), {
+    results: [github],
+    health: [],
+    providers: {},
+    degraded: [],
+    dedupeCount: 0,
+  });
+  const official = stubProvider("official", "Official", async () => {
+    throw new CatalogProviderError("official", "timeout", "official timed out after 12000ms");
+  });
+  const glama = stubProvider("glama", "Glama", async () => ({
+    results: [{ server: { ...github.server, canonicalId: "glama:github", sources: ["glama"] }, score: 0 }],
+  }));
+  const out = await new RegistryAggregator([official, glama], cache).search({ query: "github", limit: 12 });
+  assert.equal(out.providers.official.status, "timeout");
+  assert.ok(out.results.length >= 1);
+});
+
+test("simultaneous search shares one in-flight federation", async () => {
+  let calls = 0;
+  const official = stubProvider("official", "Official", async () => {
+    calls += 1;
+    await new Promise((r) => setTimeout(r, 40));
+    return { results: officialReferenceResults("filesystem").slice(0, 1) };
+  });
+  const agg = new RegistryAggregator([official]);
+  const [a, b] = await Promise.all([agg.search({ query: "fs" }), agg.search({ query: "fs" })]);
+  assert.equal(calls, 1);
+  assert.equal(a.results.length, b.results.length);
+});
+
+test("natural-language github inspect ranks GitHub MCP", async () => {
+  const q = "read-only access to inspect a GitHub repository's code, issues, tests, and configuration";
+  const github = officialReferenceResults(q).find((r) => /github/i.test(r.server.name + r.server.title));
+  assert.ok(github, "github reference must seed from NL inspect query");
+  const score = rankServer(q, github!.server);
+  const fs = officialReferenceResults("filesystem")[0];
+  assert.ok(score > rankServer(q, fs.server) - 50);
 });

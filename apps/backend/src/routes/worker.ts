@@ -14,6 +14,7 @@ import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
 import { deleteWorkspacePaths, readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
+import { WORKER_STALE_MS, countOnlineWorkers, isWorkerOnline } from "./workerPresence";
 import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
 import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
 import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
@@ -267,12 +268,7 @@ export function hasOnlineWorker(): boolean {
 
 /** Real worker registry stats for health reporting — never a stub count. */
 export function workerStats(): { online: number; total: number } {
-  const cutoff = Date.now() - 45_000;
-  let online = 0;
-  for (const w of workers.values()) {
-    if (w.status !== "offline" && w.lastHeartbeat >= cutoff) online++;
-  }
-  return { online, total: workers.size };
+  return { online: countOnlineWorkers(workers.values()), total: workers.size };
 }
 
 /**
@@ -367,7 +363,7 @@ export function cancelWorkerRun(runId: string): void {
 
 // Mark workers offline if heartbeat is stale (>45s)
 function pruneStaleWorkers(): void {
-  const cutoff = Date.now() - 45_000;
+  const cutoff = Date.now() - WORKER_STALE_MS;
   for (const [id, w] of workers) {
     if (w.lastHeartbeat < cutoff) {
       w.status = "offline";
@@ -425,7 +421,7 @@ export function workerRouter(
     for (const job of jobQueue) {
       if (!job.assignedTo) continue;
       const w = workers.get(job.assignedTo);
-      if (w && w.status !== "offline") continue;
+      if (w && isWorkerOnline(w)) continue;
       let active = false;
       try {
         const run = getRunStore(job.tenantId).get(job.runId);
@@ -477,7 +473,7 @@ export function workerRouter(
     if (denyUnlessWorker(req, res)) return;
     const workerId = String(req.query.workerId ?? "");
     const worker = workers.get(workerId);
-    if (!worker || worker.status === "offline") {
+    if (!isWorkerOnline(worker)) {
       return res.status(409).json({ error: "Worker not registered or offline" });
     }
     const eligible = jobQueue.filter((j): j is PendingJob & { tenantId: string } => Boolean(j.tenantId));
@@ -815,8 +811,12 @@ export function workerRouter(
     auth(req);
     pruneStaleWorkers();
     res.json({
-      workers: [...workers.values()],
+      workers: [...workers.values()].map((w) => ({
+        ...w,
+        online: isWorkerOnline(w),
+      })),
       queued: jobQueue.filter((j) => !j.assignedTo).length,
+      online: countOnlineWorkers(workers.values()),
     });
   });
 

@@ -27,6 +27,7 @@ export type CatalogErrorClass =
 export type ProviderHealthStatus =
   | "online"
   | "slow"
+  | "timeout"
   | "auth-required"
   | "rate-limited"
   | "offline"
@@ -48,7 +49,9 @@ export class CatalogProviderError extends Error {
 }
 
 export function shouldRetry(errorClass: CatalogErrorClass): boolean {
-  return errorClass === "timeout" || errorClass === "network" || errorClass === "http-5xx";
+  // Timeouts already consumed the provider budget. Retrying them serializes
+  // another full wait and can exceed the renderer abort window.
+  return errorClass === "network" || errorClass === "http-5xx";
 }
 
 export function classifyHttpStatus(status: number, html = false): CatalogErrorClass {
@@ -67,7 +70,7 @@ export function healthFromErrorClass(errorClass: CatalogErrorClass | undefined, 
     if (timeoutMs && latencyMs != null && latencyMs >= timeoutMs * 0.7) return "slow";
     return "online";
   }
-  if (errorClass === "timeout") return "slow";
+  if (errorClass === "timeout") return "timeout";
   if (errorClass === "needs-key") return "needs-key";
   if (errorClass === "disabled") return "disabled";
   if (errorClass === "auth-required") return "auth-required";
@@ -216,6 +219,16 @@ export async function fetchCatalogJson(input: {
   return retryIdempotent(run, input.provider);
 }
 
+export function logCatalogEvent(event: string, fields: Record<string, unknown>): void {
+  const safe: Record<string, unknown> = { event };
+  for (const [key, value] of Object.entries(fields)) {
+    if (/key|token|secret|authorization|password|header/i.test(key)) continue;
+    if (typeof value === "string") safe[key] = value.slice(0, 180);
+    else safe[key] = value;
+  }
+  console.info(JSON.stringify(safe));
+}
+
 export function logProviderFailure(input: {
   provider: string;
   query: string;
@@ -223,14 +236,16 @@ export function logProviderFailure(input: {
   status?: number;
   errorClass: CatalogErrorClass;
 }): void {
-  console.info(
-    JSON.stringify({
-      event: "mcp.catalog.provider",
-      provider: input.provider,
-      query: String(input.query ?? "").slice(0, 80),
-      duration: input.duration,
-      status: input.status ?? 0,
-      errorClass: input.errorClass,
-    })
-  );
+  const event =
+    input.errorClass === "timeout"
+      ? "mcp.registry.request.timeout"
+      : "mcp.registry.request.completed";
+  logCatalogEvent(event, {
+    registry: input.provider,
+    operation: "search",
+    status: input.errorClass,
+    elapsedMs: input.duration,
+    httpStatus: input.status ?? 0,
+    query: String(input.query ?? "").slice(0, 80),
+  });
 }

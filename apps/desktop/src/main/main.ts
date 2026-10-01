@@ -11,6 +11,7 @@ import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowse
 import { fetchOfficialRegistry } from "./officialRegistryFetch";
 import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
+import { sampleHostStats } from "./systemStats";
 
 let browserManager: WorkbenchBrowserManager | null = null;
 let browserSessions: BrowserSessionManager | null = null;
@@ -720,44 +721,12 @@ ipcMain.handle("terminal:kill", (_evt, sessionId: string) => {
 // Live machine stats for the status bar. Real samples only: CPU from a
 // two-point idle-delta across cores (loadavg is always 0 on Windows), RAM
 // from os memory, disk from statfs on the system drive.
-ipcMain.handle("system:getStats", async () => {
-  try {
-    const sample = () => {
-      let idle = 0;
-      let total = 0;
-      for (const c of os.cpus()) {
-        idle += c.times.idle;
-        total += c.times.idle + c.times.user + c.times.nice + c.times.sys + c.times.irq;
-      }
-      return { idle, total };
-    };
-    const a = sample();
-    await new Promise((r) => setTimeout(r, 250));
-    const b = sample();
-    const cpuPercent = b.total > a.total ? Math.round((1 - (b.idle - a.idle) / (b.total - a.total)) * 100) : 0;
-    const ramPercent = Math.round((1 - os.freemem() / os.totalmem()) * 100);
+ipcMain.handle("system:getStats", async () => sampleHostStats());
 
-    let diskPercent = 0;
-    try {
-      const statfs = (fs as unknown as {
-        statfs?: (p: string) => Promise<{ bavail: number; blocks: number }>;
-      }).statfs;
-      if (statfs) {
-        const st = await statfs(os.platform() === "win32" ? "C:\\" : "/");
-        diskPercent = Math.round((1 - st.bavail / st.blocks) * 100);
-      }
-    } catch {
-      // statfs unavailable — RAM only.
-    }
-    return {
-      cpuPercent: Math.min(100, Math.max(0, cpuPercent)),
-      ramPercent,
-      diskPercent,
-    };
-  } catch {
-    return { cpuPercent: 0, ramPercent: 0, diskPercent: 0 };
-  }
-});
+ipcMain.handle("system:getAppInfo", () => ({
+  version: app.getVersion(),
+  name: app.getName(),
+}));
 
 ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: string }) => {
   return writeConfig({

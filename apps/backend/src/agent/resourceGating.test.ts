@@ -81,6 +81,57 @@ test("a frontend task that names a remote target still requires it", () => {
   if (res.status === "blocked") assert.equal(res.resourceType, "server");
 });
 
+test("GitHub read-only inspection does not require SSH", () => {
+  const q = "read-only access to inspect a GitHub repository's code, issues, tests, and configuration";
+  const intent = inferTaskIntent(q);
+  assert.equal(intent.requiresGitHub, true);
+  assert.equal(intent.requiresRemoteResource, false);
+  assert.equal(intent.resourceRequirements.includes("server"), false);
+  const workerOnly: RegisteredResource = {
+    resourceId: "worker:1",
+    tenantId: "t1",
+    organizationId: "o1",
+    authorized: true,
+    projectId: null,
+    type: "cloud_worker",
+    capabilities: ["sandbox"],
+    status: "ready",
+    labels: ["worker"],
+  };
+  const res = resolve(q, [workerOnly]);
+  assert.equal(res.status, "ok");
+});
+
+test("explicit SSH task requires a server; a cloud worker is not a server", () => {
+  const res = resolve("SSH into my server and inspect nginx", [
+    {
+      resourceId: "worker:1",
+      tenantId: "t1",
+      organizationId: "o1",
+      authorized: true,
+      projectId: null,
+      type: "cloud_worker",
+      capabilities: ["sandbox"],
+      status: "ready",
+      labels: ["worker"],
+    },
+  ]);
+  assert.equal(res.status, "blocked");
+  if (res.status === "blocked") assert.equal(res.resourceType, "server");
+});
+
+test("a missing unrelated resource cannot block a coding task", () => {
+  const intent = inferTaskIntent("Build me a React login page");
+  assert.equal(intent.resourceRequirements.includes("server"), false);
+  assert.equal(resolve("Build me a React login page").status, "ok");
+});
+
+test("browser tasks require the browser capability, not SSH", () => {
+  const intent = inferTaskIntent("Open the website homepage in the browser");
+  assert.equal(intent.requiresBrowser, true);
+  assert.equal(intent.requiresRemoteResource, false);
+});
+
 test("action prompts are run turns", () => {
   for (const q of ["Check nginx on my server", "Build me a React login page", "Deploy this", "Fix the login page on my connected server"]) {
     assert.equal(routeTurn(q, "auto"), "run", q);

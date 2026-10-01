@@ -58,3 +58,12 @@ test("user sessions cannot poll as a worker", () => {
   assert.equal(denied.ok, false);
   assert.equal(assertWorkerCredential("default").ok, true);
 });
+
+test("fresh heartbeat is online; expired heartbeat is not", async () => {
+  const { isWorkerOnline, countOnlineWorkers, WORKER_STALE_MS } = await import("./workerPresence");
+  const now = 1_000_000;
+  assert.equal(isWorkerOnline({ status: "idle", lastHeartbeat: now - 1_000 }, now), true);
+  assert.equal(isWorkerOnline({ status: "idle", lastHeartbeat: now - WORKER_STALE_MS - 1 }, now), false);
+  assert.equal(isWorkerOnline({ status: "offline", lastHeartbeat: now }, now), false);
+  assert.equal(countOnlineWorkers([{ status: "idle", lastHeartbeat: now }, { status: "idle", lastHeartbeat: now - WORKER_STALE_MS - 5 }], now), 1);
+});

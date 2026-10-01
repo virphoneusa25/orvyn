@@ -6,6 +6,7 @@ import {
   CatalogProviderError,
   classifyThrown,
   healthFromErrorClass,
+  logCatalogEvent,
   logProviderFailure,
   PROVIDER_TIMEOUTS_MS,
   withProviderTimeout,
@@ -31,6 +32,7 @@ export interface AggregatorCachePayload {
   dedupeCount: number;
 }
 
+const LAST_GOOD_KEY = catalogCacheKey({ query: "__last_good__", filters: "", page: "all" });
 const DEFAULT_TIMEOUT: Record<string, number> = { ...PROVIDER_TIMEOUTS_MS, private: PROVIDER_TIMEOUTS_MS.private };
 
 export function canonicalKey(server: MarketplaceMcpServer): string {
@@ -96,9 +98,9 @@ export function rankServer(query: string, server: MarketplaceMcpServer, extraToo
     if (toolHay.includes(t)) score += 16;
     if (canonical.includes(t)) score += 10;
   }
-  if (isCanonicalGithub(server) && (!q || /github/.test(q))) score += 90;
+  if (isCanonicalGithub(server) && (!q || /github|issue|pull|repository|read-only|inspect|workflow/.test(q))) score += 90;
   if (isCanonicalPostgres(server) && /postgres|postgresql/.test(q)) score += 70;
-  if (isOfficialReferenceServer(server) && (!q || /javascript|typescript|\bjs\b|python|\bpy\b|node|filesystem|fetch|git|memory|time|official/.test(q))) {
+  if (isOfficialReferenceServer(server) && (!q || /\b(javascript|typescript|js|python|py|node|nodejs|filesystem|fetch|git|memory|time|official)\b/.test(q))) {
     score += 400;
   }
   if (server.sources.includes("official")) score += 8;
@@ -125,6 +127,7 @@ export class RegistryAggregator {
   readonly cache: CatalogCache<AggregatorCachePayload>;
   private embedder = new HashingEmbedder(64);
   private refreshing = new Set<string>();
+  private inflight = new Map<string, Promise<MarketplaceSearchResponse>>();
   private timeouts: Record<string, number>;
 
   constructor(
@@ -171,17 +174,59 @@ export class RegistryAggregator {
       filters: query.category ?? "",
       page: `${query.limit ?? 24}:${query.cursor ?? ""}`,
     });
+    const flightKey = `${key}|${query.refresh ? "refresh" : "live"}`;
+    const existing = this.inflight.get(flightKey);
+    if (existing) return existing;
+    const run = this.searchOnce(query, key).finally(() => {
+      if (this.inflight.get(flightKey) === run) this.inflight.delete(flightKey);
+    });
+    this.inflight.set(flightKey, run);
+    return run;
+  }
+
+  private async searchOnce(query: RegistrySearch, key: string): Promise<MarketplaceSearchResponse> {
     const cached = query.refresh ? undefined : this.cache.get(key);
     if (cached?.freshness === "fresh") {
+      logCatalogEvent("mcp.registry.cache.hit", { cacheAvailable: true, resultCount: cached.payload.results.length });
       return envelope(cached.payload, { fromCache: true, stale: false, cache: "hit" });
     }
     if (cached?.freshness === "stale") {
+      logCatalogEvent("mcp.registry.cache.stale", { cacheAvailable: true, staleCacheAgeMs: Date.now() - cached.at });
       this.refreshInBackground(key, query);
       return envelope(cached.payload, { fromCache: true, stale: true, cache: "stale" });
     }
     const live = await this.federate(query);
-    if (cacheable(live)) this.cache.set(key, live);
-    return envelope(live, { fromCache: false, stale: false, cache: "miss" });
+    const merged = this.mergeLastGood(live);
+    if (cacheable(merged)) {
+      this.cache.set(key, merged);
+      if (merged.results.some((r) => r.server.sources.some((s) => s !== "local"))) {
+        this.cache.set(LAST_GOOD_KEY, merged);
+      }
+    }
+    logCatalogEvent("mcp.marketplace.results.merged", {
+      resultCount: merged.results.length,
+      fromCache: false,
+      degraded: merged.degraded.length,
+    });
+    return envelope(merged, { fromCache: false, stale: false, cache: "miss" });
+  }
+
+  private mergeLastGood(live: AggregatorCachePayload): AggregatorCachePayload {
+    const remotesFailed = live.health.some((h) => h.id !== "local" && ["timeout", "offline", "error", "slow"].includes(h.status));
+    if (!remotesFailed) return live;
+    const last = this.cache.get(LAST_GOOD_KEY);
+    if (!last?.payload.results.length) return live;
+    const merged = new Map(live.results.map((row) => [canonicalKey(row.server), row]));
+    for (const row of last.payload.results) {
+      const k = canonicalKey(row.server);
+      if (!merged.has(k)) merged.set(k, row);
+    }
+    const cachedCount = last.payload.results.length;
+    const health = live.health.map((h) =>
+      ["timeout", "offline", "error", "slow"].includes(h.status) ? { ...h, cachedResults: cachedCount } : h
+    );
+    logCatalogEvent("mcp.registry.cache.stale", { cacheAvailable: true, cachedResults: cachedCount });
+    return { ...live, results: [...merged.values()], health, providers: Object.fromEntries(health.map((h) => [h.id, h])) };
   }
 
   private refreshInBackground(key: string, query: RegistrySearch): void {
@@ -256,7 +301,7 @@ export class RegistryAggregator {
     const qVec = await this.embedder.embed(query.query || "mcp server");
     const results: RegistryResult[] = [];
     for (const row of merged.values()) {
-      if (query.category && !row.server.categories.includes(query.category)) continue;
+      if (query.category && !row.server.installed && !row.server.categories.includes(query.category)) continue;
       const verified = verificationFor(row.server);
       if (verified) row.server.trust = verified;
       const lexical = rankServer(query.query, row.server, row.matchedTools ?? row.server.tools ?? []);
@@ -271,8 +316,11 @@ export class RegistryAggregator {
       if (ao !== bo) return bo - ao;
       return b.score - a.score;
     });
+    const installed = results.filter((r) => r.server.installed || r.server.sources.includes("local"));
+    const rest = results.filter((r) => !r.server.installed && !r.server.sources.includes("local"));
+    const limit = query.limit ?? 24;
     return {
-      results: results.slice(0, query.limit ?? 24),
+      results: [...installed, ...rest.slice(0, Math.max(0, limit - installed.length))],
       health,
       providers,
       degraded,
@@ -286,11 +334,21 @@ export class RegistryAggregator {
   ): Promise<{ results: RegistryResult[]; health: RegistryHealth }> {
     const timeoutMs = timeoutFor(provider.id, this.timeouts);
     const started = Date.now();
+    logCatalogEvent("mcp.registry.request.started", { registry: provider.id, operation: "search" });
     try {
       const out = await withProviderTimeout(provider.search(query), timeoutMs, provider.id);
       const latencyMs = Date.now() - started;
       const hinted = out.health;
       const status: ProviderHealthStatus = hinted?.status ?? healthFromErrorClass(undefined, latencyMs, timeoutMs);
+      if (status === "online" || status === "slow") {
+        logCatalogEvent("mcp.registry.request.completed", {
+          registry: provider.id,
+          operation: "search",
+          status,
+          elapsedMs: latencyMs,
+          resultCount: out.results.length,
+        });
+      }
       return {
         results: out.results,
         health: {
@@ -299,7 +357,9 @@ export class RegistryAggregator {
           status,
           latencyMs,
           resultCount: out.results.length,
-          detail: hinted?.detail ?? (status === "slow" ? `${provider.name} is responding slowly` : undefined),
+          lastAttemptAt: Date.now(),
+          lastSuccessAt: status === "online" || status === "slow" ? Date.now() : undefined,
+          detail: hinted?.detail ?? (status === "slow" ? `${provider.name} is responding slowly` : status === "timeout" ? `${provider.name} timed out` : undefined),
           errorClass: hinted?.errorClass,
         },
       };

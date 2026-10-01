@@ -180,8 +180,8 @@ export function McpMarketplace({
       const [searchRes, healthRes, statusRes, updateRes] = await Promise.all([
         skipMarket
           ? Promise.resolve(new Response("<!DOCTYPE html>", { status: 404, headers: { "content-type": "text/html" } }))
-          : fetchOne(apiUrl(`/mcp/marketplace/search?${params}`), 16_000),
-        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetchOne(apiUrl("/mcp/marketplace/health"), 8_000),
+          : fetchOne(apiUrl(`/mcp/marketplace/search?${params}`), 20_000),
+        skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetchOne(apiUrl("/mcp/marketplace/health"), 14_000),
         fetchOne(apiUrl("/mcp/statuses"), 8_000),
         skipMarket ? Promise.resolve(new Response("{}", { status: 404 })) : fetchOne(apiUrl("/mcp/marketplace/updates"), 8_000),
       ]);
@@ -231,6 +231,18 @@ export function McpMarketplace({
       setUpdates(updateParsed.body.updates ?? []);
     } catch (err: any) {
       if (mine !== searchGen.current) return;
+      try {
+        const statusRes = await fetch(apiUrl("/mcp/statuses"), { headers: authHeaders(), signal: AbortSignal.timeout(8_000) });
+        const statusText = await statusRes.text();
+        const statusParsed = parseApiJson(statusRes.status, statusText, statusRes.headers.get("content-type") ?? undefined);
+        const statuses = await fetchInstalledMcpStatuses(statusParsed.ok ? (statusParsed.body.servers ?? []) : []);
+        if (mine !== searchGen.current) return;
+        const kept = mergeInstalled(previous, statuses);
+        resultsRef.current = kept;
+        setResults(kept);
+      } catch {
+        /* keep previous */
+      }
       setCatalogState("degraded");
       setEmptyKind(previous.length ? "provider-failure" : "offline");
       setDegraded(["Some registries are unavailable"]);
@@ -508,7 +520,7 @@ export function McpMarketplace({
             banner={capabilityBanner || (submittedQuery && recReason(selected.canonicalId)) || undefined}
           />
         ) : (
-          <EmptyDetail loading={loading} query={submittedQuery} />
+          <EmptyDetail loading={loading} query={submittedQuery} emptyKind={emptyKind} fromCache={fromCache} counts={{ installed: groups.installed.length, cached: fromCache ? results.length : 0 }} />
         )}
       </section>
 
@@ -586,13 +598,20 @@ export function McpMarketplace({
             </div>
           )}
           {warnings.length > 0 && catalogState !== "official-fallback" && (
-            <div data-testid="marketplace-degraded" style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 8 }}>{warnings[0]}</div>
+            <div data-testid="marketplace-degraded" style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 8 }}>
+              {warnings[0]}
+              {providers.official?.status === "timeout" && (
+                <button type="button" style={{ ...ghostBtn, marginLeft: 8, padding: "2px 8px" }} onClick={() => submitSearch(q, { refresh: true })}>
+                  Retry Official
+                </button>
+              )}
+            </div>
           )}
           {error && catalogState === "auth-required" && (
             <div style={{ fontSize: 11, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>{error}</div>
           )}
-          {fromCache && emptyKind === "offline" && (
-            <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>Offline · showing cached catalog</div>
+          {fromCache && (
+            <div style={{ fontSize: 10.5, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>Cached marketplace results</div>
           )}
         </div>
 
@@ -1225,6 +1244,17 @@ function InstallDrawer({ server, busy, onClose, onInstall }: { server: MarketSer
         {review && (
           <div>
             <p style={body}>{server.description}</p>
+            <p style={body}>Publisher: {server.publisher || "Unknown"}</p>
+            <p style={body}>Registry: {server.sources.map((s) => SOURCE_LABEL[s]).join(", ")}</p>
+            <p style={body}>Version: {server.version ?? "advertised"}</p>
+            <p style={body}>Runtime: {transportLabel(server)}</p>
+            {server.transports[0]?.kind === "stdio" && (
+              <p style={body}>Command: {server.transports[0].command} {(server.transports[0].args ?? []).join(" ")}</p>
+            )}
+            <p style={body}>Network: {server.networkRequired ? "required" : "not required"}</p>
+            {server.auth.filter((a) => a.kind !== "none").map((a) => (
+              <p key={a.label} style={body}>Permissions / auth: {a.label}</p>
+            ))}
             {isPublicFreeMcp(server) ? (
               <p style={body}>No API key required. This public MCP server installs into your local ORVYN environment.</p>
             ) : null}
@@ -1296,6 +1326,9 @@ function ProviderDots({ providers }: { providers: Record<string, ProviderStatusV
       {dots.map((d) => (
         <span key={d.id} title={d.title} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           {d.label}
+          <span title={d.title} style={{ fontSize: 9, opacity: 0.85 }}>
+            {d.title.split(": ")[1]}
+          </span>
           <span
             style={{
               width: 7,
@@ -1311,10 +1344,41 @@ function ProviderDots({ providers }: { providers: Record<string, ProviderStatusV
   );
 }
 
-function EmptyDetail({ loading, query }: { loading: boolean; query: string }) {
+function EmptyDetail({
+  loading,
+  query,
+  emptyKind,
+  fromCache,
+  counts,
+}: {
+  loading: boolean;
+  query: string;
+  emptyKind: string;
+  fromCache: boolean;
+  counts: { installed: number; cached: number };
+}) {
+  if (loading) {
+    return <div style={{ padding: 40, color: "var(--orvyn-text-muted)", fontSize: 13.5 }}>Searching registries…</div>;
+  }
+  if (emptyKind === "true-empty" && query) {
+    return (
+      <div style={{ padding: 40, color: "var(--orvyn-text-muted)", fontSize: 13.5, maxWidth: 520 }}>
+        <div style={{ fontSize: 16, fontWeight: 650, color: "var(--orvyn-text)", marginBottom: 8 }}>No MCP server matches this request yet.</div>
+        <p>Try: GitHub · repository · read-only · source code</p>
+      </div>
+    );
+  }
   return (
-    <div style={{ padding: 40, color: "var(--orvyn-text-muted)", fontSize: 13.5 }}>
-      {loading ? "Searching registries…" : query ? `No server selected for “${query}”.` : "Select an MCP server from the marketplace."}
+    <div style={{ padding: 40, color: "var(--orvyn-text-muted)", fontSize: 13.5, maxWidth: 520 }}>
+      {query
+        ? `No matching MCP server is selected for “${query}”.`
+        : "Select an MCP server from the marketplace."}
+      {(counts.installed > 0 || fromCache) && (
+        <p style={{ marginTop: 12 }}>
+          {counts.installed ? `${counts.installed} installed servers stay listed.` : ""}
+          {fromCache ? " Cached marketplace results are shown." : ""}
+        </p>
+      )}
     </div>
   );
 }

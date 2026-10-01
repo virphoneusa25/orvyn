@@ -8,6 +8,7 @@ export const MARKETPLACE_DEBOUNCE_MS = 350;
 export type ProviderDotStatus =
   | "online"
   | "slow"
+  | "timeout"
   | "auth-required"
   | "rate-limited"
   | "offline"
@@ -49,27 +50,39 @@ export function emptyKindFor(input: {
   if (input.catalogState === "auth-required") return "auth-required";
   const remotes = Object.entries(input.providers).filter(([id]) => REMOTE_IDS.has(id) || id !== "local");
   const useful = remotes.filter(([, p]) => ["online", "needs-key", "disabled"].includes(p.status));
-  const failed = remotes.filter(([, p]) => ["slow", "offline", "error", "rate-limited", "auth-required"].includes(p.status));
+  const failed = remotes.filter(([, p]) => ["slow", "timeout", "offline", "error", "rate-limited", "auth-required"].includes(p.status));
   if (input.catalogState === "offline" || (failed.length && !useful.length && !input.fromCache)) return "offline";
   if (failed.length) return "provider-failure";
   return "true-empty";
 }
 
-export function degradedBanner(providers: Record<string, { status: string; name?: string }>, fromCache = false): string | undefined {
+export function degradedBanner(providers: Record<string, { status: string; name?: string; resultCount?: number }>, fromCache = false): string | undefined {
   const rows = Object.entries(providers);
   const official = rows.find(([id]) => id === "official")?.[1];
   const onlineRemotes = rows.filter(([id, p]) => id !== "local" && p.status === "online");
+  const timeout = rows.filter(([, p]) => p.status === "timeout");
   const slow = rows.filter(([, p]) => p.status === "slow");
   const auth = rows.filter(([, p]) => p.status === "auth-required");
   const offline = rows.filter(([id, p]) => id !== "local" && (p.status === "offline" || p.status === "error"));
+  const installed = rows.find(([id]) => id === "local")?.[1]?.resultCount ?? 0;
   if (auth.length && onlineRemotes.length) return "Cloud account/session requires attention. Showing public registry discovery.";
+  if (official?.status === "timeout") {
+    const extras = [
+      installed ? `${installed} installed servers` : "",
+      fromCache ? "cached marketplace entries" : "",
+      ...onlineRemotes.map(([id, p]) => `${p.resultCount ?? 0} results from ${p.name ?? id}`),
+    ].filter(Boolean);
+    const showing = extras.length ? ` Showing: ${extras.join(" · ")}.` : "";
+    return `Official registry temporarily unavailable.${showing}`;
+  }
   if (official?.status === "slow" && onlineRemotes.length) {
     return "Official Registry is responding slowly. Showing results from available sources.";
   }
-  if (fromCache && offline.length && !onlineRemotes.length) return "Offline · showing cached catalog";
+  if (fromCache && offline.length && !onlineRemotes.length) return "Cached marketplace results";
   if (offline.length && onlineRemotes.length) return "Some registries are unavailable";
   if (slow.length && onlineRemotes.length) return `${slow[0][1].name ?? "A registry"} is responding slowly. Showing results from available sources.`;
-  if (offline.length && !onlineRemotes.length && fromCache) return "Marketplace is temporarily offline.";
+  if (timeout.length) return `${timeout[0][1].name ?? "A registry"} timed out. Showing installed and cached results.`;
+  if (offline.length && !onlineRemotes.length && fromCache) return "Cached marketplace results";
   if (offline.length && !onlineRemotes.length) return "Marketplace is temporarily offline.";
   return undefined;
 }
@@ -96,8 +109,10 @@ export function providerDots(providers: Record<string, { status: string }>): { i
   ];
   return order.map((row) => {
     const status = providers[row.id]?.status ?? "disabled";
-    const filled = status === "online" || status === "slow";
-    return { id: row.id, label: row.label, filled, title: `${row.label}: ${status}` };
+    const filled = status === "online";
+    const labelStatus =
+      status === "timeout" ? "Timeout" : status === "online" ? "Connected" : status === "slow" ? "Degraded" : status;
+    return { id: row.id, label: row.label, filled, title: `${row.label}: ${labelStatus}` };
   });
 }
 
@@ -118,7 +133,9 @@ export function healthToProviders(health: { id: string; name: string; status: st
 
 export function diagnosticsLine(providers: Record<string, ProviderStatusView>, cache?: string): string {
   const parts = Object.values(providers).map((p) => {
-    if (p.status === "slow" || p.status === "offline" || p.status === "error") return `${p.name}: ${p.status}`;
+    if (p.status === "slow" || p.status === "timeout" || p.status === "offline" || p.status === "error") {
+      return `${p.name}: ${p.status === "timeout" ? "Timeout" : p.status}`;
+    }
     const n = p.resultCount ?? 0;
     const ms = p.latencyMs != null ? ` / ${p.latencyMs}ms` : "";
     return `${p.name}: ${n} results${ms}`;

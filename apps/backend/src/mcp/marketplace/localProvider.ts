@@ -15,9 +15,9 @@ export function localProvider(manager: McpManager): McpRegistryProvider {
       for (const cfg of manager.listServers()) {
         const status = manager.status(cfg.id);
         const hay = `${cfg.name} ${cfg.description ?? ""} ${cfg.command ?? ""} ${cfg.url ?? ""}`.toLowerCase();
-        if (q && !hay.includes(q) && !q.split(/\s+/).some((w) => hay.includes(w))) continue;
         const server = fromInstalled(cfg, status);
-        results.push({ server, score: 80 });
+        const matched = !q || hay.includes(q) || q.split(/\s+/).some((w) => w.length > 2 && hay.includes(w));
+        results.push({ server, score: matched ? 80 : 8 });
       }
       return { results };
     },

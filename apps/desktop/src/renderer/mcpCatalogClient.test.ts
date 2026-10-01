@@ -76,6 +76,20 @@ test("stale search generation ignores obsolete responses", () => {
   assert.equal(latestOnly(gen, second, "github"), "github");
 });
 
+test("timeout is not a valid empty catalog", () => {
+  assert.equal(
+    emptyKindFor({ resultCount: 0, providers: { official: { status: "timeout" }, glama: { status: "online" } } }),
+    "provider-failure"
+  );
+});
+
+test("official timeout banner keeps installed/cached context", () => {
+  assert.match(
+    degradedBanner({ official: { status: "timeout", name: "Official" }, local: { status: "online", name: "Installed", resultCount: 4 } }) ?? "",
+    /Official registry temporarily unavailable/i
+  );
+});
+
 test("provider dots stay compact", () => {
   const dots = providerDots({ official: { status: "online" }, glama: { status: "needs-key" }, smithery: { status: "offline" } });
   assert.deepEqual(dots.map((d) => d.label), ["Official", "Glama", "Smithery"]);

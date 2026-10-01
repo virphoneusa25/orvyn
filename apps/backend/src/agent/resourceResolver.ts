@@ -11,9 +11,11 @@ export type ResourceType =
   | "server"
   | "database"
   | "cloud_account"
+  | "cloud_worker"
   | "deployment"
   | "browser_session"
   | "desktop_session"
+  | "github_connection"
   | "mcp"
   | "artifact_store";
 
@@ -55,7 +57,14 @@ export type ResolveResult =
  * their resolver result must be "not applicable", never "blocked".
  */
 export function externalResourceRequired(intent: TaskIntent): boolean {
-  return !intent.informational && (intent.requiresRemoteResource || intent.category === "database");
+  return !intent.informational && (intent.requiresRemoteResource || intent.resourceRequirements.includes("database"));
+}
+
+export function resourceIsRequired(intent: TaskIntent, resourceType: ResourceType): boolean {
+  if (resourceType === "server") return intent.resourceRequirements.includes("server") || intent.requiresRemoteResource;
+  if (resourceType === "database") return intent.resourceRequirements.includes("database");
+  if (resourceType === "github_connection") return intent.resourceRequirements.includes("github_connection");
+  return intent.resourceRequirements.includes(resourceType as TaskIntent["resourceRequirements"][number]);
 }
 
 function visible(resources: RegisteredResource[], tenantId: string, type: ResourceType): RegisteredResource[] {
@@ -70,7 +79,16 @@ function named(instruction: string, resources: RegisteredResource[]): Registered
 export function resolveResources(input: ResolveInput): ResolveResult {
   const { intent, instruction, tenantId } = input;
   const picked: RegisteredResource[] = [];
-  if (!externalResourceRequired(intent)) return { status: "ok", resources: picked };
+  if (!externalResourceRequired(intent) && !intent.requiresGitHub) {
+    return { status: "ok", resources: picked };
+  }
+
+  if (intent.requiresGitHub && !intent.requiresRemoteResource) {
+    const github = visible(input.resources, tenantId, "github_connection");
+    if (github.length) picked.push(named(instruction, github) ?? github[0]);
+    // A missing GitHub connection is a capability gap, not an SSH server gap.
+    return { status: "ok", resources: picked };
+  }
 
   if (intent.requiresRemoteResource) {
     const servers = visible(input.resources, tenantId, "server");

@@ -112,15 +112,14 @@ export function officialProvider(
         }
         return { results, cursor: lastCursor };
       } catch (err: any) {
-        if (!seeded.length) throw err;
         return {
           results: seeded,
           health: {
             id: "official",
             name: "Official MCP Registry",
-            status: healthFromErrorClass(err?.errorClass ?? "network"),
+            status: healthFromErrorClass(err?.errorClass ?? "timeout"),
             detail: String(err?.message ?? err).slice(0, 160),
-            errorClass: err?.errorClass,
+            errorClass: err?.errorClass ?? "timeout",
             resultCount: seeded.length,
           },
         };

@@ -112,6 +112,24 @@ test("no server blocks a remote check, and two servers are not guessed", () => {
   assert.equal(many.resources.status, "blocked");
 });
 
+test("github inspect preflight is not blocked by a missing git clone or SSH server", () => {
+  const result = prepareRunPreflight({
+    instruction: "Inspect my GitHub repository",
+    projectRoot: join(tmpdir(), "no-git-orvyn"),
+    tenantId: "t1",
+    organizationId: "o1",
+    projectId: null,
+    resources: [],
+    toolNames: TOOLS,
+    hasLocalProject: false,
+    cloudControlPlane: true,
+    cloudWorkspaceAvailable: true,
+  });
+  assert.equal(result.intent.requiresGitHub, true);
+  assert.equal(result.canExecute, true);
+  assert.equal(result.relevantTools.includes("ssh_exec"), false);
+});
+
 test("another tenant's server is not a match", () => {
   const result = prepareRunPreflight({
     instruction: "Check the staging server.",

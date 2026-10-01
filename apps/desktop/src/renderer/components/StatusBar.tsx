@@ -19,7 +19,13 @@ interface StatusBarState {
   health: Health | null;
   runningRuns: number;
   activeMissions: number;
-  stats: { cpuPercent: number; ramPercent: number; diskPercent: number } | null;
+  appVersion: string | null;
+  stats: {
+    cpuPercent: number | null;
+    ramPercent: number | null;
+    diskPercent: number | null;
+    sourceLabel?: string;
+  } | null;
 }
 
 export function StatusBar() {
@@ -28,6 +34,7 @@ export function StatusBar() {
     health: null,
     runningRuns: 0,
     activeMissions: 0,
+    appVersion: null,
     stats: null,
   });
 
@@ -39,7 +46,7 @@ export function StatusBar() {
         const headers = authHeaders();
         const runsUrl = apiUrl("/agent/stream/runs");
         const missionsUrl = apiUrl("/missions");
-        const [h, runsRes, missionsRes, stats] = await Promise.all([
+        const [h, runsRes, missionsRes, stats, appInfo] = await Promise.all([
           fetch(healthUrl()).then((r) => r.json()).catch(() => null),
           fetch(runsUrl, { headers }).then((r) => {
             noteProtectedStatus(r.status, runsUrl);
@@ -50,6 +57,7 @@ export function StatusBar() {
             return r.json();
           }).catch(() => ({ missions: [] })),
           window.orvyn.system?.getStats?.().catch(() => null) ?? null,
+          window.orvyn.system?.getAppInfo?.().catch(() => null) ?? null,
         ]);
         const runs = runsRes;
         const missions = missionsRes;
@@ -60,7 +68,13 @@ export function StatusBar() {
         const active = (missions.missions ?? []).filter((m: { status: string }) =>
           ["RUNNING", "PLANNING", "REVIEW", "QUEUED"].includes(m.status)
         ).length;
-        setState({ health: h, runningRuns: running, activeMissions: active, stats });
+        setState({
+          health: h,
+          runningRuns: running,
+          activeMissions: active,
+          appVersion: appInfo?.version ? String(appInfo.version).replace(/^v/i, "") : null,
+          stats,
+        });
       } catch {
         if (alive) setState((s) => ({ ...s, health: null }));
       }
@@ -105,7 +119,7 @@ export function StatusBar() {
           {item.label}
         </span>
       ))}
-      {state.health?.version && <span>v{state.health.version}</span>}
+      {state.appVersion && <span>v{state.appVersion}</span>}
       <span title="Desktop build identity. Packaged Electron does not update from git until you install a new build.">Desktop {shortBuildSha()}</span>
       <span>Backend: {connection.statusFacts.backend}</span>
       <span>Account: {connection.statusFacts.account}</span>
@@ -114,17 +128,17 @@ export function StatusBar() {
       <span style={{ marginLeft: "auto", display: "inline-flex", gap: 16 }}>
         {state.stats && (
           <>
-            <span>CPU {state.stats.cpuPercent}%</span>
-            <span>RAM {state.stats.ramPercent}%</span>
-            {state.stats.diskPercent > 0 && <span>Disk {state.stats.diskPercent}%</span>}
+            <span title={state.stats.sourceLabel || "This PC"}>CPU {state.stats.cpuPercent == null ? "—" : `${state.stats.cpuPercent}%`}</span>
+            <span title={state.stats.sourceLabel || "This PC — host OS memory, not ORVYN Cloud"}>RAM {state.stats.ramPercent == null ? "—" : `${state.stats.ramPercent}%`}</span>
+            <span title={state.stats.sourceLabel || "This PC — system volume"}>Disk {state.stats.diskPercent == null ? "—" : `${state.stats.diskPercent}%`}</span>
           </>
         )}
         <ServicesIndicator />
-        <span>
+        <span title="Runs currently executing">
           {state.runningRuns} running
         </span>
-        <span>
-          {state.activeMissions} mission{state.activeMissions === 1 ? "" : "s"}
+        <span title="Missions in RUNNING, PLANNING, REVIEW, or QUEUED. The sidebar badge counts missions waiting on you.">
+          {state.activeMissions} active mission{state.activeMissions === 1 ? "" : "s"}
         </span>
       </span>
     </div>

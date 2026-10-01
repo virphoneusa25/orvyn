@@ -27,6 +27,19 @@ export interface TaskIntent {
   requiresExternalIntegration: boolean;
   requiresFrontend: boolean;
   requiresBrowserVerification: boolean;
+  /** GitHub API / MCP inspect — not a local clone and not SSH. */
+  requiresGitHub: boolean;
+  /** Explicit resource classes this task needs. Unrelated missing resources must not block. */
+  resourceRequirements: Array<
+    | "workspace"
+    | "repository"
+    | "server"
+    | "database"
+    | "github_connection"
+    | "browser_session"
+    | "desktop_session"
+    | "mcp"
+  >;
   successCriteria: string[];
   /** A conceptual question. The runtime may answer it without tools. */
   informational: boolean;
@@ -62,7 +75,13 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   // "Start the dev server" is a local service in the project, not a remote
   // machine to log into. Only what is left after removing those counts.
   const remoteText = goal.replace(/\b(?:dev|development|local|vite|next(?:\.js)?|preview|web|http|static|node|express|api)\s+server\b/gi, "");
-  const server = has(remoteText, /\b(server|ssh|hostname|uptime|remote host|log into|login to)\b/i) || mode === "server";
+  const githubInspect =
+    /\bgithub\b/i.test(goal) &&
+    /\b(inspect|read-only|issues?|pull requests?|\bprs?\b|workflows?|repository|repo)\b/i.test(goal) &&
+    !/\b(ssh|clone (it |the repo )?on my|on my (server|vps|host)|remote host)\b/i.test(goal);
+  const server =
+    (!githubInspect && (has(remoteText, /\b(ssh|hostname|uptime|remote host|log into|login to)\b/i) || has(remoteText, /\bserver\b/i))) ||
+    mode === "server";
   const database = has(goal, /\b(database|postgres|mysql|sqlite|sql query|schema)\b/i);
   const deploy = has(goal, /\b(deploy|release|rollout|ship to production)\b/i) || mode === "deploy";
   const browser =
@@ -113,6 +132,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   else if (artifact && !code) category = "artifact";
   else if (automation && !code && !deploy) category = "automation";
   else if (deploy) category = "deploy";
+  else if (githubInspect) category = "integration";
   else if (integration) category = "integration";
   else if (database && !code) category = "database";
   else if (server && !code) category = "server";
@@ -172,27 +192,39 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     goal,
     requiresWorkspace:
       !informational &&
+      !githubInspect &&
       (category === "code" ||
         category === "deploy" ||
         frontend ||
         database ||
         has(goal, /\b(file|repo|workspace|project|codebase)\b/i)),
-    // "Deploy my website to my server" is frontend AND needs the server —
-    // a frontend keyword must not waive a named remote target. The remoteText
-    // strip above already removes "dev server"-style false positives.
     requiresRemoteResource:
       !informational &&
-      (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
+      !githubInspect &&
+      (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|remote host)\b/i) ||
+        (has(remoteText, /\bserver\b/i) && !/\bmcp\s+server\b/i.test(goal)) ||
         (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
-    requiresTerminal: terminal && !informational,
+    requiresTerminal: terminal && !informational && !githubInspect,
     requiresBrowser: !informational && (browser || frontend),
-    // Frontend work is verified by headless browser, not the Virtual Desktop —
-    // Desktop is only for tasks that explicitly need GUI interaction.
     requiresDesktop: !informational && desktop,
     requiresArtifact: !informational && artifact,
-    requiresExternalIntegration: !informational && integration,
+    requiresExternalIntegration: !informational && (integration || githubInspect),
+    requiresGitHub: !informational && githubInspect,
     requiresFrontend: frontend && !informational,
     requiresBrowserVerification: frontend && !informational,
+    resourceRequirements: [
+      ...(!informational && !githubInspect && (category === "code" || category === "deploy" || frontend || database || has(goal, /\b(file|repo|workspace|project|codebase)\b/i))
+        ? (["workspace"] as const)
+        : []),
+      ...(!informational && githubInspect ? (["github_connection"] as const) : []),
+      ...(!informational && !githubInspect && (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|remote host)\b/i) || (has(remoteText, /\bserver\b/i) && !/\bmcp\s+server\b/i.test(goal)) || (deploy && has(goal, /\b(server|remote|ssh)\b/i)))
+        ? (["server"] as const)
+        : []),
+      ...(!informational && category === "database" ? (["database"] as const) : []),
+      ...(!informational && (browser || frontend) ? (["browser_session"] as const) : []),
+      ...(!informational && desktop ? (["desktop_session"] as const) : []),
+      ...(!informational && (integration || githubInspect) ? (["mcp"] as const) : []),
+    ],
     successCriteria: success,
     informational,
     executionComplexity,

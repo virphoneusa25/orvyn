@@ -14,6 +14,8 @@ export interface OfficialReferenceSpec {
   keywords: string[];
   networkRequired: boolean;
   filesystemScope: MarketplaceMcpServer["filesystemScope"];
+  publisher?: string;
+  repository?: string;
 }
 
 /** First-party MCP reference servers from modelcontextprotocol/servers.
@@ -76,7 +78,7 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
     registry: "pypi",
     identifier: "mcp-server-git",
     version: "2026.8.18",
-    keywords: ["python", "py", "pypi", "uvx", "git", "repository"],
+    keywords: ["python", "py", "pypi", "uvx", "git", "repository", "github"],
     networkRequired: false,
     filesystemScope: "project",
   },
@@ -104,6 +106,33 @@ export const OFFICIAL_REFERENCE_SERVERS: OfficialReferenceSpec[] = [
     networkRequired: false,
     filesystemScope: "none",
   },
+  {
+    name: "io.github.github/github-mcp-server",
+    title: "GitHub",
+    description:
+      "Official GitHub MCP server for read-only inspection of repositories, issues, pull requests, tests, workflows, and configuration.",
+    language: "typescript",
+    registry: "npm",
+    identifier: "@modelcontextprotocol/server-github",
+    version: "0.20.0",
+    keywords: [
+      "github",
+      "repository",
+      "issues",
+      "pull",
+      "pr",
+      "tests",
+      "workflows",
+      "inspect",
+      "read-only",
+      "code",
+      "configuration",
+    ],
+    networkRequired: true,
+    filesystemScope: "none",
+    publisher: "io.github.github",
+    repository: "https://github.com/github/github-mcp-server",
+  },
 ];
 
 const JS_TERMS = new Set(["js", "javascript", "typescript", "ts", "node", "nodejs"]);
@@ -120,7 +149,7 @@ export function isOfficialReferenceServer(server: {
   packages?: { identifier?: string }[];
 }): boolean {
   const id = `${server.canonicalId ?? ""} ${server.name ?? ""}`.toLowerCase();
-  if (id.includes("io.modelcontextprotocol/")) return true;
+  if (id.includes("io.modelcontextprotocol/") || /io\.github\.github\/github-mcp-server/i.test(id)) return true;
   const pkgs = (server.packages ?? []).map((p) => (p.identifier ?? "").toLowerCase());
   return pkgs.some((p) => REFERENCE_PACKAGES.has(p));
 }
@@ -159,8 +188,8 @@ export function keepMarketplaceListing(
   },
   providerId?: string
 ): boolean {
-  if (providerId === "local" || providerId === "private") return true;
-  if ((server.sources ?? []).some((s) => s === "local" || s === "private")) return true;
+  if (providerId === "local" || providerId === "private" || providerId === "glama" || providerId === "smithery") return true;
+  if ((server.sources ?? []).some((s) => s === "local" || s === "private" || s === "glama" || s === "smithery")) return true;
   if (server.installed) return true;
   return isFirstPartyOfficialServer(server);
 }
@@ -221,10 +250,10 @@ function toMarketplace(spec: OfficialReferenceSpec): MarketplaceMcpServer {
     name: spec.name,
     title: spec.title,
     description: spec.description,
-    publisher: "io.modelcontextprotocol",
+    publisher: spec.publisher ?? "io.modelcontextprotocol",
     sources: ["official"],
-    repository: "https://github.com/modelcontextprotocol/servers",
-    homepage: "https://modelcontextprotocol.io/examples",
+    repository: spec.repository ?? "https://github.com/modelcontextprotocol/servers",
+    homepage: spec.repository ?? "https://modelcontextprotocol.io/examples",
     iconUrl: "https://github.com/modelcontextprotocol.png?size=80",
     categories: inferCategories(spec.title, spec.description),
     packages: [{ registry: spec.registry, identifier: pkgId, version: spec.version, transportHint: "stdio" }],
@@ -234,8 +263,8 @@ function toMarketplace(spec: OfficialReferenceSpec): MarketplaceMcpServer {
     auth: [{ kind: "none", label: "No auth advertised" }],
     trust: trustFor({
       sources: ["official"],
-      publisher: "io.modelcontextprotocol",
-      repository: "https://github.com/modelcontextprotocol/servers",
+      publisher: spec.publisher ?? "io.modelcontextprotocol",
+      repository: spec.repository ?? "https://github.com/modelcontextprotocol/servers",
       verified: true,
     }),
     compatibility: "compatible",

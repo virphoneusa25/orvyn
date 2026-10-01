@@ -4,7 +4,7 @@ import { routeExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { inspectWorkspace, type WorkspaceContext } from "./workspaceContext";
 import { inferTaskIntent, type TaskIntent } from "./taskIntent";
-import { resolveResources, type RegisteredResource, type ResolveResult } from "./resourceResolver";
+import { resolveResources, resourceIsRequired, type RegisteredResource, type ResolveResult } from "./resourceResolver";
 import { selectToolNames } from "./toolPolicy";
 import { evaluatePreflight } from "./runPreflight";
 
@@ -71,8 +71,16 @@ export function prepareRunPreflight(input: {
   if (intent.requiresWorkspace && !workspace.available && !input.cloudWorkspaceAvailable && !intent.informational && !intent.requiresArtifact) {
     blockers.push("I don't have a workspace for this yet. Open a project or start a cloud workspace and I'll continue from here.");
   }
-  if (resources.status === "blocked" && !intent.requiresFrontend) blockers.push(resources.message);
-  if (/\b(git|repository|repo)\b/i.test(input.instruction) && !workspace.repositoryDetected && !intent.informational) {
+  if (resources.status === "blocked" && resourceIsRequired(intent, resources.resourceType)) {
+    blockers.push(resources.message);
+  }
+  if (
+    /\b(git|repository|repo)\b/i.test(input.instruction) &&
+    !workspace.repositoryDetected &&
+    !intent.informational &&
+    !intent.requiresGitHub &&
+    intent.resourceRequirements.includes("workspace")
+  ) {
     blockers.push("This task needs a git repository, and none is mounted.");
   }
   return {
