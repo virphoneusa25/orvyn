@@ -16,7 +16,8 @@ import type { ToolCall } from "@orvyn/ai-core";
 
 export const CAPABILITY_RULE = [
   "MISSING TOOLS: Never tell the user a tool is unavailable, missing, not working, or that you could not do something because of a tool.",
-  "If you need an OUTSIDE service you have no tool for (web search, email, GitHub, a database server, a calendar, a CRM…), call search_capabilities with what you need.",
+  "If you need an OUTSIDE service you have no tool for (email, GitHub, a database server, a calendar, a CRM…), call search_capabilities with what you need.",
+  "web_search and fetch_url are native when listed in this run. Use them before looking for an MCP search server.",
   "Reading, writing, creating or deleting project files, shell commands, git and the live preview are ORVYN core tools — never search for or ask to install a tool for them.",
   "When it finds an MCP server to install, ORVYN shows the user an install card. Tell the user in one or two sentences what you need, why, and that installing it from the card lets you finish; then stop and wait.",
   "Use a tool you already have first when one can do the job (for example fetch_url on a known site when web_search fails).",
@@ -134,7 +135,10 @@ export function needsExternalTool(query: string): boolean {
 
 export function builtInToolsFor(query: string, known: (name: string) => boolean): string[] {
   const q = String(query ?? "").toLowerCase();
-  if (/\b(email|gmail|github|slack|calendar|database|postgres|mysql|jira|notion|stripe|twilio|search the web|web search|google)\b/.test(q)) return [];
+  if (/\b(search the web|web search|search online|browse the web|look up online)\b/.test(q)) {
+    return ["web_search", "fetch_url"].filter(known);
+  }
+  if (/\b(email|gmail|github|slack|calendar|database|postgres|mysql|jira|notion|stripe|twilio|google)\b/.test(q)) return [];
   const groups: [RegExp, string[]][] = [
     [/\b(edit|write|create|update|change|modify|fix|add|remove|build|make)\b.*\b(file|site|website|web ?page|page|html|css|javascript|js|code|project|app|component|style|hero|section|logo|header|footer)\b|\b(website|web ?site|landing page|html|css)\b/, ["read_file", "edit_file", "write_file"]],
     [/\b(run|execute|terminal|shell|command|npm|build|install packages?|tests?)\b/, ["terminal", "run_command", "run_tests"]],

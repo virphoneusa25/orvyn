@@ -397,6 +397,12 @@ export function resolveRunWorkspace(input: WorkspacePreflightInput): WorkspacePr
   const record = session.workspaceId ? input.sessions.getWorkspace(session.workspaceId) : undefined;
   const leaving = explicitProjectChange(input);
 
+  // Research, browser review, image generation, and other workspace-free
+  // turns must not be blocked by stale files from an earlier project in the
+  // same conversation. The guard still applies to every task that will read
+  // or change project files.
+  if (!actionable && !leaving) return { status: "skipped" };
+
   if (session.workspaceId && !record && !leaving && !input.filesOnClient) {
     return mismatch(session, session.projectId ?? "", session.workspaceId, session.projectRoot ?? "");
   }

@@ -490,6 +490,11 @@ export function CapabilityCard({ item, install, onInstalled }: {
   const [state, setState] = useState<"idle" | "installing" | "done" | "error">("idle");
   const [error, setError] = useState("");
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const secretLabel = (name: string) => {
+    if (/authorization|token/i.test(name) && /github/i.test(install?.name ?? "")) return "GitHub access token";
+    if (/authorization/i.test(name)) return "Access token";
+    return name.replace(/_/g, " ");
+  };
   // If the run settles while a secret is typed but unsubmitted, drop it.
   useEffect(() => {
     if (settled || item.settled) setSecrets({});
@@ -543,7 +548,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
           </div>
         ) : null}
         {state !== "done" && !settled && !(connectGithub && !githubLinked) && need.map((n) => (
-          <input key={n} type="password" placeholder={`${n} (needed by ${install.name})`} value={secrets[n] ?? ""}
+          <input key={n} type="password" placeholder={secretLabel(n)} aria-label={secretLabel(n)} value={secrets[n] ?? ""}
             onChange={(e) => setSecrets({ ...secrets, [n]: e.target.value })}
             style={{ display: "block", width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }} />
         ))}
@@ -551,7 +556,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
         {state === "done" ? (
           <span data-testid="capability-installed" style={{ fontSize: 11.5, color: "var(--success)" }}>Installed {install.name} — ORION is continuing.</span>
         ) : settled ? (
-          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Not installed.</span>
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Skipped. ORION will continue without {install.name}; you can connect it later from Tools &amp; MCP.</span>
         ) : connectGithub && !githubLinked ? null : (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button data-testid="capability-install" disabled={state === "installing" || need.some((n) => !secrets[n]?.trim())} onClick={() => void run()} style={btn("var(--accent)")}>

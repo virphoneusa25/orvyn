@@ -7,7 +7,15 @@ import { DEFAULT_TOOL_BUDGET, type MarketplaceMcpServer } from "./types";
 export function secretNamesFor(server: MarketplaceMcpServer): string[] {
   const names = new Set<string>();
   for (const t of server.transports ?? []) for (const h of t.headers ?? []) if (h.secret || h.required) names.add(h.name);
-  for (const a of server.auth ?? []) if (a.kind === "api_key" || a.kind === "bearer" || a.kind === "custom") names.add(String((a as { name?: string }).name ?? (a.kind === "api_key" ? "API_KEY" : "TOKEN")));
+  // Registry rows often describe the same bearer credential twice: once as
+  // the required Authorization header and again as generic bearer auth. One
+  // credential must produce one field in the approval card.
+  const hasAuthorization = [...names].some((name) => name.toLowerCase() === "authorization");
+  for (const a of server.auth ?? []) {
+    if (a.kind !== "api_key" && a.kind !== "bearer" && a.kind !== "custom") continue;
+    if (a.kind === "bearer" && hasAuthorization) continue;
+    names.add(String((a as { name?: string }).name ?? (a.kind === "api_key" ? "API_KEY" : "TOKEN")));
+  }
   return [...names];
 }
 

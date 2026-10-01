@@ -352,6 +352,14 @@ export class Orchestrator {
       const seen = requested.get(query);
       if (seen) return seen;
       let servers: NonNullable<ChatActivity["servers"]> = [];
+      // Web search and page reads are already native chat tools. A model that
+      // asks for an MCP search server after using them must be redirected to
+      // the tools it has instead of showing a contradictory install card.
+      if (/\b(search|browse|look up|research)\b.*\b(web|online|internet)\b|\bweb search\b/i.test(query)) {
+        const note = "Use web_search and fetch_url; they are already available in this chat. Do not ask the user to install another search tool.";
+        requested.set(query, note);
+        return note;
+      }
       // A tool the user already installed can do it: use that instead of asking again.
       const ready = installedTools.filter((t) => /search/i.test(query) ? /search/i.test(t.name) : true);
       if (ready.length && /search/i.test(query)) {

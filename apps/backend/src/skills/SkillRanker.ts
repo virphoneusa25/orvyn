@@ -235,6 +235,10 @@ function sshExplanation(instruction: string): boolean {
   return /\bhow\b.{0,40}\bssh\b|\bwhat is ssh\b|\bexplain ssh\b/i.test(instruction);
 }
 
+function sshConnectionSetup(instruction: string): boolean {
+  return /\b(connect|add|configure|set ?up|login|log in|paste|credential|private key|password|ip address|hostname)\b.{0,80}\b(ssh|server|vps|host)\b|\b(ssh|server|vps|host)\b.{0,80}\b(connect|add|configure|set ?up|login|log in|credential|private key|password|ip address|hostname)\b/i.test(instruction);
+}
+
 function browserExplanation(instruction: string): boolean {
   return /\bhow\b.{0,40}\bbrowsers?\b|\bwhat is a browser\b|\bexplain (the )?browsers?\b/i.test(instruction);
 }
@@ -256,7 +260,7 @@ function capabilityReason(skill: RankableSkill, request: RankRequest): string | 
     if (missing.length) return `required tool unavailable: ${missing[0]}`;
   }
 
-  if (request.resources?.ssh === false && isSshSkill(skill) && !sshExplanation(request.instruction)) {
+  if (request.resources?.ssh === false && isSshSkill(skill) && !sshExplanation(request.instruction) && !sshConnectionSetup(request.instruction)) {
     return "ssh server resource unavailable";
   }
 
