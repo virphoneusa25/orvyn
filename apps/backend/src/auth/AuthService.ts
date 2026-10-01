@@ -31,6 +31,7 @@ import {
   type TenantProject,
 } from "../identity/principal";
 import { isolation404, scopedGet } from "../identity/isolation";
+import { LEGAL_VERSION } from "../legal/documents";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -126,6 +127,23 @@ export class AuthService {
     this.migrateVerification();
     this.migrateAccountSecurity();
     this.migratePortal();
+    this.migrateLegal();
+  }
+
+  /** Versioned legal acceptance shared by Desktop, Cloud and Admin reporting. */
+  private migrateLegal(): void {
+    try { this.db.exec(`ALTER TABLE users ADD COLUMN terms_accepted_at INTEGER`); } catch { /* present */ }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS legal_acceptances (
+        user_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        source TEXT NOT NULL,
+        accepted_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_legal_acceptances_version ON legal_acceptances (version, accepted_at);
+      CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id, accepted_at);
+    `);
   }
 
   /** Team invitations, personal API keys, chat share links and project details (customer portal). */
@@ -375,10 +393,66 @@ export class AuthService {
     };
   }
 
-  /** Records that the user accepted the Terms and Privacy Policy (sign-up). */
-  acceptTerms(userId: string, now = Date.now()): void {
-    try { this.db.exec(`ALTER TABLE users ADD COLUMN terms_accepted_at INTEGER`); } catch { /* present */ }
+  /** Records acceptance of the current ORVYN legal bundle. Kept under the old method name for compatibility. */
+  acceptTerms(userId: string, now = Date.now(), source = "legacy"): void {
+    this.acceptLegal(userId, LEGAL_VERSION, source, now);
+  }
+
+  acceptLegal(userId: string, version: string, source = "web", now = Date.now()): { version: string; source: string; acceptedAt: number } {
+    if (version !== LEGAL_VERSION) throw Object.assign(new Error("The legal terms have changed. Review and accept the current version."), { status: 409, code: "LEGAL_VERSION_OUTDATED" });
+    const exists = this.db.prepare(`SELECT id FROM users WHERE id = ?`).get(userId);
+    if (!exists) throw Object.assign(new Error("User not found"), { status: 404 });
+    this.db.prepare(
+      `INSERT INTO legal_acceptances (user_id, version, source, accepted_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, version) DO UPDATE SET source = excluded.source, accepted_at = excluded.accepted_at`
+    ).run(userId, version, source.slice(0, 40), now);
     this.db.prepare(`UPDATE users SET terms_accepted_at = ? WHERE id = ?`).run(now, userId);
+    return { version, source: source.slice(0, 40), acceptedAt: now };
+  }
+
+  legalAcceptance(userId: string, version = LEGAL_VERSION): { version: string; source: string; acceptedAt: number } | null {
+    const row = this.db.prepare(`SELECT version, source, accepted_at FROM legal_acceptances WHERE user_id = ? AND version = ?`).get(userId, version) as any;
+    return row ? { version: String(row.version), source: String(row.source), acceptedAt: Number(row.accepted_at) } : null;
+  }
+
+  hasAcceptedCurrentLegal(userId: string): boolean {
+    return Boolean(this.legalAcceptance(userId, LEGAL_VERSION));
+  }
+
+  legalAdminSummary(limit = 100): {
+    currentVersion: string;
+    users: number;
+    acceptedCurrent: number;
+    pendingCurrent: number;
+    adoptionPct: number;
+    recent: { userId: string; email: string; name: string | null; version: string; source: string; acceptedAt: number }[];
+    versions: { version: string; accepted: number; firstAt: number; lastAt: number }[];
+  } {
+    const users = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as any)?.n ?? 0);
+    const acceptedCurrent = Number((this.db.prepare(`SELECT COUNT(DISTINCT user_id) AS n FROM legal_acceptances WHERE version = ?`).get(LEGAL_VERSION) as any)?.n ?? 0);
+    const recent = (this.db.prepare(
+      `SELECT l.user_id, u.email, u.name, l.version, l.source, l.accepted_at
+       FROM legal_acceptances l JOIN users u ON u.id = l.user_id
+       ORDER BY l.accepted_at DESC LIMIT ?`
+    ).all(Math.min(500, Math.max(1, limit))) as any[]).map((x) => ({
+      userId: String(x.user_id), email: String(x.email), name: x.name == null ? null : String(x.name),
+      version: String(x.version), source: String(x.source), acceptedAt: Number(x.accepted_at),
+    }));
+    const versions = (this.db.prepare(
+      `SELECT version, COUNT(DISTINCT user_id) AS accepted, MIN(accepted_at) AS first_at, MAX(accepted_at) AS last_at
+       FROM legal_acceptances GROUP BY version ORDER BY last_at DESC`
+    ).all() as any[]).map((x) => ({
+      version: String(x.version), accepted: Number(x.accepted), firstAt: Number(x.first_at), lastAt: Number(x.last_at),
+    }));
+    return {
+      currentVersion: LEGAL_VERSION,
+      users,
+      acceptedCurrent,
+      pendingCurrent: Math.max(0, users - acceptedCurrent),
+      adoptionPct: users ? Math.round((acceptedCurrent / users) * 1000) / 10 : 100,
+      recent,
+      versions,
+    };
   }
 
   /** Names the organization a new account starts with (the company given at sign-up). */
