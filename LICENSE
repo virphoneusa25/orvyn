@@ -1,34 +1,266 @@
-ORVYN PROPRIETARY SOFTWARE LICENSE NOTICE
+# ORVYN Software License Agreement
 
-Copyright © 2026 Kernel AI Labs. All rights reserved.
+**Effective Date: October 1, 2026**
 
-ORVYN, ORION, associated software, source code, models, orchestration logic,
-interfaces, documentation, designs, workflows, and related materials are
-proprietary to Kernel AI Labs except for separately identified third-party
-components.
+This Software License Agreement (“Agreement”) is a legal agreement between you (“you,” “your,” or “User”) and **Kernel AI Labs** (“Kernel AI Labs,” “we,” “us,” or “our”) governing your access to and use of the **ORVYN** software platform, desktop application, cloud services, artificial intelligence features, agents, tools, APIs, integrations, and related services (collectively, the “Software”).
 
-NO OPEN-SOURCE LICENSE IS GRANTED BY THIS FILE.
+By installing, accessing, creating an account for, or using ORVYN, you agree to be bound by this Agreement. If you do not agree to these terms, do not install, access, or use the Software.
 
-Possession of, access to, or publication of this source code does not grant
-permission to copy, modify, distribute, sublicense, sell, host, offer as a
-service, create derivative works from, reverse engineer, or commercially
-exploit ORVYN except as expressly permitted by a written agreement with
-Kernel AI Labs or by applicable law that cannot be waived.
+## 1. License Grant
 
-Authorized end-user use of ORVYN is governed by EULA.md and any applicable
-Terms of Service, subscription terms, enterprise agreement, privacy policy,
-acceptable-use policy, and other written terms supplied by Kernel AI Labs.
+Subject to your compliance with this Agreement and any applicable subscription terms, Kernel AI Labs grants you a limited, revocable, non-exclusive, non-transferable, non-sublicensable license to install and use ORVYN for your personal or authorized business purposes.
 
-Third-party software included with ORVYN remains governed by its own license
-terms. See THIRD_PARTY_NOTICES.md and any license files distributed with
-those components.
+This Agreement grants you a license to use the Software. It does not transfer ownership of ORVYN, its source code, intellectual property, models, systems, infrastructure, trademarks, or other proprietary technology.
 
-Trademarks, product names, logos, and brand assets of Kernel AI Labs and ORVYN
-may not be used without prior written permission except as permitted by law.
+Your license may be subject to plan-specific limitations, including usage credits, model availability, concurrent agents, cloud-compute allowances, storage limits, API access, team seats, and other service entitlements.
 
-THE SOFTWARE IS PROVIDED SUBJECT TO THE APPLICABLE WRITTEN AGREEMENT. TO THE
-MAXIMUM EXTENT PERMITTED BY LAW, NO RIGHTS OR WARRANTIES ARE IMPLIED BY
-ACCESS TO THIS REPOSITORY.
+## 2. Ownership
 
-For licensing inquiries, use the official Kernel AI Labs / ORVYN support or
-account channels.
+ORVYN and all related software, interfaces, designs, workflows, agent systems, orchestration technology, trademarks, branding, documentation, and proprietary components are owned by Kernel AI Labs or its licensors and are protected by applicable intellectual property laws.
+
+Except for the limited rights expressly granted under this Agreement, Kernel AI Labs reserves all rights, title, and interest in and to the Software.
+
+Nothing in this Agreement gives you ownership rights in ORVYN or any Kernel AI Labs intellectual property.
+
+## 3. User Content and Project Files
+
+You retain ownership of source code, documents, files, prompts, data, images, projects, and other materials that you lawfully provide to ORVYN (“User Content”).
+
+You grant Kernel AI Labs a limited right to process User Content only as reasonably necessary to operate, secure, maintain, and provide the services you request.
+
+You are responsible for ensuring that you have the legal right to upload, process, modify, transmit, or otherwise use any User Content submitted through ORVYN.
+
+Kernel AI Labs does not claim ownership of your project source code solely because it is processed by ORVYN.
+
+## 4. AI-Generated Output
+
+ORVYN may generate source code, text, recommendations, configurations, documents, images, analyses, commands, plans, or other output using artificial intelligence systems.
+
+Subject to applicable law and third-party rights, Kernel AI Labs does not claim ownership of AI-generated output created specifically for you through your use of ORVYN.
+
+AI-generated output may be inaccurate, incomplete, insecure, non-functional, or similar to material produced for other users. You are responsible for reviewing, testing, validating, and determining whether any generated output is appropriate for your intended use.
+
+You should independently review important code, infrastructure changes, security configurations, financial information, legal information, production deployments, and other high-impact outputs before relying on them.
+
+## 5. Agentic and Autonomous Actions
+
+ORVYN may include autonomous or semi-autonomous agents capable of performing actions on your behalf, including:
+
+- reading and modifying project files;
+- executing terminal or shell commands;
+- running tests and builds;
+- accessing development environments;
+- interacting with websites or browsers;
+- connecting to servers;
+- using SSH or remote execution;
+- deploying applications;
+- interacting with APIs and connected services;
+- installing or invoking tools, skills, plugins, or MCP servers; and
+- operating cloud or sandbox environments.
+
+Certain actions may require your approval depending on your selected access mode, permissions, organizational policies, or the assessed risk of the action.
+
+You remain responsible for the environments, credentials, servers, repositories, accounts, and resources that you authorize ORVYN to access.
+
+Kernel AI Labs may restrict, require confirmation for, or refuse actions that present elevated security, safety, infrastructure, compliance, or operational risk.
+
+## 6. Access Modes and Permissions
+
+ORVYN may provide configurable access levels such as read-only, approval-required, balanced, autonomous, or full-access modes.
+
+Your selected access mode determines the level of authority ORVYN may exercise within supported environments.
+
+Certain high-risk or destructive actions may require explicit approval regardless of the selected access mode.
+
+You are responsible for selecting appropriate access levels for your projects, servers, organizations, and users.
+
+## 7. Accounts and Credentials
+
+You are responsible for maintaining the confidentiality of your ORVYN account credentials and for all activity performed through your account.
+
+You may not share credentials in violation of your subscription terms or allow unauthorized individuals to access your account.
+
+Credentials used for third-party integrations should be limited to the minimum permissions necessary for the requested task.
+
+You must promptly notify Kernel AI Labs if you believe your account or credentials have been compromised.
+
+## 8. Third-Party AI Models and Services
+
+ORVYN may route requests to third-party artificial intelligence providers, cloud platforms, infrastructure providers, search providers, model hosts, software services, and APIs.
+
+These providers may include multiple model vendors selected dynamically based on cost, performance, availability, capabilities, user settings, or service requirements.
+
+The availability of any specific model or third-party service is not guaranteed.
+
+Kernel AI Labs may add, remove, replace, reroute, or discontinue third-party providers or models without materially changing the overall functionality of the service.
+
+Your use of certain third-party integrations may also be subject to the third party’s own terms and policies.
+
+## 9. Tools, Plugins, Skills, and Integrations
+
+ORVYN may support third-party tools, plugins, MCP servers, APIs, extensions, skills, repositories, and other integrations.
+
+Kernel AI Labs does not control all third-party integrations and is not responsible for their independent operation, availability, security, accuracy, or data-handling practices.
+
+You are responsible for determining whether a third-party integration is appropriate for your use.
+
+## 10. Cloud Compute and Remote Execution
+
+ORVYN may provide hosted workers, sandboxes, virtual environments, browser sessions, desktop environments, or other cloud-compute resources.
+
+Cloud resources may be temporary, automatically terminated, restricted by policy, or subject to usage limits.
+
+You should not rely on temporary cloud execution environments as your sole location for critical files or data unless the service specifically identifies the storage as persistent.
+
+Kernel AI Labs may terminate idle, expired, abusive, compromised, or policy-violating compute sessions.
+
+## 11. Subscriptions, Credits, and Usage
+
+Certain ORVYN features require a paid subscription, usage credits, compute credits, purchased capacity, or another paid entitlement.
+
+Usage may be measured based on factors including:
+
+- AI model consumption;
+- token usage;
+- cloud worker time;
+- browser or desktop compute;
+- image generation;
+- search-provider usage;
+- storage;
+- third-party API usage; and
+- other metered services.
+
+Unused credits, expiration rules, top-ups, refunds, and subscription renewals are governed by the applicable billing terms presented to you at purchase.
+
+Kernel AI Labs may establish reasonable usage limits to protect service reliability, control abuse, and manage infrastructure costs.
+
+## 12. Acceptable Use
+
+You may not use ORVYN to:
+
+- violate applicable law;
+- gain unauthorized access to systems, accounts, devices, or networks;
+- distribute malware or malicious code;
+- interfere with or disrupt systems or services;
+- bypass authentication, authorization, billing, usage, or security controls;
+- attempt to obtain Kernel AI Labs source code through unauthorized means;
+- reverse engineer the Software except where expressly permitted by applicable law;
+- resell, sublicense, lease, or redistribute the Software without authorization;
+- use ORVYN to infringe intellectual property, privacy, or other legal rights;
+- misrepresent generated material as independently verified when it has not been verified; or
+- use the platform in a manner that creates unreasonable security, operational, infrastructure, or legal risk.
+
+Kernel AI Labs may suspend or terminate access when reasonably necessary to prevent abuse, security incidents, fraud, legal violations, or material violations of this Agreement.
+
+## 13. Restrictions
+
+Unless Kernel AI Labs gives you written authorization, you may not:
+
+1. copy or redistribute the Software except for authorized installation;
+2. modify or create derivative versions of proprietary ORVYN components;
+3. remove copyright, trademark, licensing, attribution, or proprietary notices;
+4. sublicense or sell access to ORVYN;
+5. use ORVYN to create a competing service by extracting proprietary system behavior, prompts, routing logic, or internal technology;
+6. circumvent technical restrictions, usage controls, account limits, or security measures; or
+7. access non-public ORVYN systems or infrastructure except through authorized interfaces.
+
+## 14. Updates and Changes
+
+Kernel AI Labs may update ORVYN from time to time to add features, improve security, modify model routing, correct defects, change system architecture, or maintain compatibility.
+
+Certain updates may be installed automatically.
+
+Features may be added, changed, replaced, or discontinued as the platform evolves.
+
+## 15. Beta and Experimental Features
+
+Certain ORVYN features may be identified as beta, preview, experimental, early access, or otherwise pre-release.
+
+Such features may contain errors, change significantly, be unavailable at times, or be discontinued without notice.
+
+Experimental features should not be relied upon for mission-critical workloads unless expressly approved for production use.
+
+## 16. Security and Backups
+
+ORVYN may include safeguards such as sandboxing, access controls, approval gates, permission profiles, encrypted communications, isolated workers, and other security mechanisms.
+
+No system can guarantee complete security.
+
+You are responsible for maintaining appropriate backups, access controls, source-control practices, disaster-recovery procedures, and security policies for your own projects and infrastructure.
+
+You should maintain backups of important files before authorizing automated modification or deployment.
+
+## 17. No Warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED “AS IS” AND “AS AVAILABLE.”
+
+KERNEL AI LABS DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, RELIABILITY, AVAILABILITY, AND ERROR-FREE OPERATION.
+
+KERNEL AI LABS DOES NOT WARRANT THAT AI-GENERATED OUTPUT WILL BE ACCURATE, SECURE, COMPLETE, UNIQUE, OR SUITABLE FOR YOUR INTENDED USE.
+
+## 18. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, KERNEL AI LABS AND ITS AFFILIATES, OFFICERS, EMPLOYEES, CONTRACTORS, PROVIDERS, AND LICENSORS WILL NOT BE LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, INCLUDING LOSS OF PROFITS, REVENUE, DATA, BUSINESS OPPORTUNITIES, OR GOODWILL.
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, KERNEL AI LABS' TOTAL AGGREGATE LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR THIS AGREEMENT WILL NOT EXCEED THE AMOUNT YOU PAID TO KERNEL AI LABS FOR ORVYN DURING THE TWELVE MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM.
+
+Some jurisdictions do not allow certain limitations, so portions of this section may not apply to you.
+
+## 19. Indemnification
+
+To the extent permitted by law, you agree to defend, indemnify, and hold harmless Kernel AI Labs and its affiliates, personnel, contractors, and licensors from claims, liabilities, losses, damages, and expenses arising from:
+
+- your unlawful use of the Software;
+- your violation of this Agreement;
+- your User Content;
+- your violation of third-party rights; or
+- actions performed through systems, accounts, credentials, or infrastructure you authorized ORVYN to access.
+
+## 20. Suspension and Termination
+
+Kernel AI Labs may suspend or terminate your license or access if you materially violate this Agreement, fail to pay applicable charges, create a security or abuse risk, or use the Software unlawfully.
+
+You may stop using ORVYN at any time.
+
+Upon termination, your license to use the Software ends. Provisions concerning ownership, restrictions, disclaimers, liability, indemnification, and other provisions that by their nature should survive will remain effective.
+
+## 21. Export and Sanctions Compliance
+
+You may not use, export, re-export, transfer, or make ORVYN available in violation of applicable export-control, sanctions, or trade laws.
+
+You are responsible for ensuring that your use of ORVYN complies with applicable restrictions.
+
+## 22. Governing Law
+
+This Agreement will be governed by the laws of the United States and the applicable laws of the state in which Kernel AI Labs is organized, without regard to conflict-of-law principles.
+
+Any additional dispute-resolution, venue, arbitration, or class-action-waiver provisions presented in Kernel AI Labs' Terms of Service are incorporated into this Agreement where applicable.
+
+## 23. Changes to this Agreement
+
+Kernel AI Labs may update this Agreement as ORVYN evolves.
+
+If a material change is made, we may provide notice through the application, website, email, or another reasonable method.
+
+Continued use of ORVYN after the effective date of an updated Agreement constitutes acceptance of the updated terms where permitted by law.
+
+## 24. Entire Agreement
+
+This Agreement, together with the applicable Terms of Service, Privacy Policy, billing terms, subscription terms, and any enterprise agreement between you and Kernel AI Labs, constitutes the agreement governing your licensed use of ORVYN.
+
+If an enterprise or separately signed agreement conflicts with this Agreement, the separately signed agreement controls to the extent of the conflict.
+
+## 25. Contact
+
+Questions regarding this Software License Agreement may be directed to:
+
+**Kernel AI Labs**  
+**Product:** ORVYN  
+**Website:** Kernel AI Labs / ORVYN official website  
+**Support:** Through the support or account portal available within ORVYN
+
+---
+
+**© 2026 Kernel AI Labs. All rights reserved.**
+
+ORVYN, ORION, Kernel AI Labs, associated logos, and related product names are trademarks or proprietary marks of Kernel AI Labs or their respective owners.
