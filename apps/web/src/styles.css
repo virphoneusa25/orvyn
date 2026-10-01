@@ -54,6 +54,7 @@ body {
     radial-gradient(800px 520px at 0% 110%, rgba(34, 211, 238, 0.05), transparent 60%),
     var(--bg);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 a { color: var(--violet-3); text-decoration: none; }
 a:hover { color: #ddd6fe; }
@@ -153,7 +154,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .me__name { font-weight: 600; font-size: 13.5px; line-height: 1.2; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .me__plan { font-size: 11.5px; color: var(--muted); }
 
-.content { flex: 1; overflow: auto; padding: 28px 32px 40px; }
+.content { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 28px 32px 40px; }
 .content--full { overflow: hidden; display: flex; flex-direction: column; padding: 0; }
 .content--full > * { flex: 1; min-height: 0; }
 .page { max-width: 1240px; margin: 0 auto; }
@@ -188,7 +189,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .grid { display: grid; gap: 16px; }
 
 /* ---------- home ---------- */
-.home { max-width: 1120px; margin: 0 auto; }
+.home { width: 100%; max-width: 1120px; min-width: 0; margin: 0 auto; }
 .home-hero { display: grid; justify-items: center; text-align: center; padding: 14px 0 6px; }
 .home-hero__orb { width: 112px; height: 112px; border-radius: 50%; position: relative; margin-bottom: 14px; }
 .home-hero__orb video, .home-hero__orb img { position: relative; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
@@ -205,7 +206,8 @@ input, textarea, select { font: inherit; color: var(--text); }
 .meter__value { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meter__value small { font-size: 13px; font-weight: 500; color: var(--muted); }
 .meter__foot { font-size: 12px; color: var(--muted); }
-.home-cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; }
+.home-cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; min-width: 0; }
+.home-cols > *, .home-cols .grid, .home-cols .card, .home-cols .list { min-width: 0; }
 .home-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .qa__btn {
   display: flex; align-items: center; gap: 12px; text-align: left;
@@ -515,6 +517,7 @@ input, textarea, select { font: inherit; color: var(--text); }
 .file-card__name { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-card__meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-card__actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.file-list { width: 100%; max-width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 .file-list .table td { padding: 8px 12px; }
 .file-list__name { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .file-list__name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -702,7 +705,7 @@ body:has(.viewas-banner) .app { padding-top: 40px; }
 
   .content { padding: 20px max(16px, env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
   .content--full { padding: 0; }
-  .page, .home { width: 100%; min-width: 0; }
+  .page, .home { width: 100%; max-width: 100%; min-width: 0; overflow-x: clip; }
   .page-head { align-items: flex-start; margin-bottom: 18px; }
   .page-head > .row, .page-head > div:last-child { flex-wrap: wrap; }
   .page-title { font-size: 22px; }
@@ -752,7 +755,7 @@ body:has(.viewas-banner) .app { padding-top: 40px; }
   .projects-grid { grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); }
   .files-grid { grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr)); }
   .files-bar > .search { max-width: none; flex: 1 1 220px; }
-  .file-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .file-list { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
   .table { min-width: 620px; }
   .settings__nav { margin: 0 -4px; padding: 4px; scrollbar-width: none; }
   .settings__nav::-webkit-scrollbar { display: none; }

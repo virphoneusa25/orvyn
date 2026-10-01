@@ -10,6 +10,10 @@ const screenshotDir = process.env.ORVYN_RESPONSIVE_SCREENSHOTS;
 const now = Date.now();
 const session = { sessionId: "alpha", title: "Generate an image of a sunrise over snowy mountains", projectId: "p1", projectRoot: null, runIds: [], pinned: false, createdAt: now - 80_000, updatedAt: now, messageCount: 2, lastMessage: "Here is the image and a short summary." };
 const project = { id: "p1", name: "Kernel AI Labs Website", projectRoot: null, createdAt: now - 100_000, updatedAt: now, userId: "u1", description: "Product website, launch assets and agent workspace." };
+const artifacts = [
+  { artifactId: "a1", name: "generated-very-wide-production-homepage-mobile-screenshot-with-a-long-file-name.png", mimeType: "image/png", size: 483921, kind: "generated", chatId: "alpha", projectId: "p1", createdAt: now - 10_000, previewable: true },
+  { artifactId: "a2", name: "customer-portal-release-notes-and-verification-report.pdf", mimeType: "application/pdf", size: 92341, kind: "upload", chatId: null, projectId: "p1", createdAt: now - 20_000, previewable: true },
+];
 const wallet = {
   plan: { id: "pro", label: "Pro", priceLabel: "$20 / month" },
   includedBalance: 120000, purchasedBalance: 30659, reservedBalance: 0, availableBalance: 150659,
@@ -34,7 +38,7 @@ function responseFor(url) {
   ] };
   if (p === "/projects" || p.startsWith("/projects?")) return { projects: [project] };
   if (p === "/projects/p1") return { project };
-  if (p === "/artifacts" || p.startsWith("/artifacts?")) return { artifacts: [] };
+  if (p === "/artifacts" || p.startsWith("/artifacts?")) return { artifacts };
   if (p === "/billing/stats") return { daily: [], byModel: [], byKind: [] };
   if (p === "/billing/account") return { invoices: [], paymentMethod: { brand: "visa", last4: "4242", expMonth: 12, expYear: 2030 }, subscription: { cancelAtPeriodEnd: false, currentPeriodEnd: now + 1_200_000_000, status: "active" } };
   if (p === "/onboarding/plans") return { plans: [{ id: "pro", label: "Pro", priceMonthlyUsd: 20, priceAnnualUsd: 200, monthlyCredits: 200000, rolling5h: 10000, rolling7d: 90000, parallelAgents: 3, features: { premiumModels: "full", teamSeats: 3, priority: "high", apiAccess: true } }], packs: [] };
@@ -48,9 +52,13 @@ function responseFor(url) {
 
 const pages = [
   ["home", "/"], ["chats", "/chats/alpha"], ["project", "/projects/p1/chats/alpha"],
-  ["settings", "/settings"], ["billing", "/billing"], ["connections", "/settings/connections"],
+  ["files", "/files"], ["settings", "/settings"], ["billing", "/billing"], ["connections", "/settings/connections"],
 ];
-const viewports = [[320, 720], [360, 800], [375, 812], [390, 844], [414, 896], [430, 932], [768, 1024], [1024, 768], [1440, 900], [1920, 1080]];
+const allViewports = [[320, 720], [360, 800], [375, 812], [390, 844], [414, 896], [430, 932], [768, 1024], [1024, 768], [1440, 900], [1920, 1080]];
+const requestedViewport = /^\d+x\d+$/.test(process.env.ORVYN_RESPONSIVE_VIEWPORT ?? "")
+  ? process.env.ORVYN_RESPONSIVE_VIEWPORT.split("x").map(Number)
+  : null;
+const viewports = requestedViewport ? [requestedViewport] : allViewports;
 let server;
 if (ownServer) {
   server = spawn(process.execPath, [path.resolve("node_modules/vite/bin/vite.js"), "--config", path.resolve("apps/web/vite.config.ts"), "--host", "127.0.0.1", "--port", "5199"], { cwd: process.cwd(), stdio: "ignore", windowsHide: true });
@@ -68,14 +76,26 @@ try {
   if (screenshotDir) await mkdir(screenshotDir, { recursive: true });
   for (const [width, height] of viewports) {
     const context = await browser.newContext({ viewport: { width, height } });
-    await context.addInitScript(() => localStorage.setItem("orvyn.session", "responsive-test"));
+    await context.addInitScript(() => {
+      localStorage.setItem("orvyn.session", "responsive-test");
+      localStorage.setItem("orvyn.filesView", "list");
+    });
     const page = await context.newPage();
     await page.route("**/api/v1/**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responseFor(route.request().url())) }));
     for (const [name, route] of pages) {
-      await page.goto(`${origin}${route}`, { waitUntil: "networkidle" });
+      // The signed-in shell keeps background account requests alive. Waiting
+      // for the rendered app is the stable readiness signal for this layout
+      // acceptance; networkidle can hang even though the page is complete.
+      await page.goto(`${origin}${route}`, { waitUntil: "domcontentloaded" });
       await page.locator(".app").waitFor({ state: "visible" });
       const dimensions = await page.evaluate(() => ({ viewport: window.innerWidth, page: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
       assert.ok(dimensions.page <= dimensions.viewport && dimensions.body <= dimensions.viewport, `${name} overflowed at ${width}x${height}: ${JSON.stringify(dimensions)}`);
+      if (name === "files" && width <= 820) {
+        const table = page.locator(".file-list");
+        await table.waitFor({ state: "visible" });
+        const overflow = await table.evaluate((el) => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+        assert.ok(overflow.scroll > overflow.client, `files table should scroll inside its panel at ${width}x${height}: ${JSON.stringify(overflow)}`);
+      }
       if (width <= 820) {
         await page.getByRole("button", { name: "Open navigation" }).click();
         await page.locator(".side.is-open").waitFor({ state: "visible" });
