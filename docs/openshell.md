@@ -198,12 +198,13 @@ When the server's `.env` contains `OPENSHELL_ENABLED=true`, a deploy first
 resets `OPENSHELL_ACCEPTANCE_PASSED=false`, then `prepare.sh` runs setup,
 starts the gateway, registers it and upserts every provider profile. Only if
 that succeeds is the overlay included when backend and worker are rebuilt.
-`accept.sh` then runs the real gateway suite in the new worker and saves
-`/var/lib/openshell/acceptance.json`; on success the pass bit is set and the
-backend restarted. A failure in either step is a warning, never a failed
-deploy: the core services still ship and every mission stays on Docker,
-because the backend selects OpenShell only when the pass bit is true AND the
-organization is on the canary.
+`accept.sh` then runs the real gateway suite in the new worker and saves the
+latest report, including failures, at `/var/lib/openshell/acceptance.json`.
+On success the pass bit is set and the backend restarts. A failed OpenShell
+check does not interrupt the core service rollout: the deploy first verifies
+the API and both portals, then fails the CI job with OpenShell still locked.
+Every mission stays on Docker because the backend selects OpenShell only when
+the pass bit is true AND the organization is on the canary.
 
 ## Staged rollout
 

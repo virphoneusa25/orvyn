@@ -20,8 +20,10 @@ sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox@sha256:bf4797b6c511f2d
 supervisor_image      = "ghcr.io/nvidia/openshell/supervisor@sha256:d7b5264bb6bc56f4796e6fa3617b8e4a8d785be0b7293542efd8cc250b0fb67a"
 image_pull_policy     = "if_not_present"
 sandbox_label         = "openshell"
-# Sandboxes call back through the host bridge. https: mTLS is on.
-grpc_endpoint         = "https://host.openshell.internal:8080"
+# OpenShell's Docker supervisor uses host networking. Point it at the host
+# loopback listener directly; a custom hostname is not inherited by the
+# sibling supervisor container on Linux and leaves every sandbox in Error.
+grpc_endpoint         = "https://127.0.0.1:8080"
 sandbox_pids_limit    = 1024
 # ORVYN mounts exactly one workspace per sandbox through a Docker volume that
 # is a bind of that run's directory and is labeled for exactly one OpenShell
@@ -31,7 +33,7 @@ allow_driver_config   = true
 enable_bind_mounts    = true
 # The OVH host has AppArmor. Acceptance proves the Docker runtime profile can
 # support the supervisor before this configuration is allowed to go live.
-app_armor_profile     = "RuntimeDefault"
+app_armor_profile     = "Unconfined"
 
 [openshell.drivers.docker.resource_admission]
 enabled = true

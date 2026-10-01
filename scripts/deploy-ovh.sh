@@ -182,6 +182,14 @@ for surface in app admin; do
   echo "Verified $origin: $surface portal, API, auth-provider status"
 done
 
+# OpenShell is optional for customer traffic, so a failed upgrade must not
+# take the portals down. It is still a failed upgrade: surface that only after
+# the core service and both portals have been proved healthy.
+if ! "${SSH[@]}" "$HOST" "cd '$REMOTE'; ! grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null || grep -qx 'OPENSHELL_ACCEPTANCE_PASSED=true' .env"; then
+  echo "OpenShell acceptance failed for this upgrade. Core portals are healthy, but the OpenShell upgrade remains locked." >&2
+  exit 1
+fi
+
 echo "Building orvyn-desktop image on $HOST"
 if ! "${SSH[@]}" "$HOST" "cd '$REMOTE/infrastructure/desktop' && docker build -t orvyn-desktop:latest ."; then
   echo "Desktop image build failed. Existing sessions keep the previous orvyn-desktop image until the next successful build." >&2

@@ -10,9 +10,17 @@ COMPOSE=(docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod
 DIR=/opt/orvyn/workspaces/_acceptance
 sudo mkdir -p "$DIR"
 sudo rm -f "$DIR/report.json"
+set +e
 "${COMPOSE[@]}" exec -T \
   -e ORVYN_WORKER_DIST=/app/dist/sandbox \
   -e ORVYN_TEST_DOCKER_IMAGE=orvyn/sandbox:0.1.2-2 \
   -e ORVYN_TEST_WORKSPACE_ROOT="$DIR" \
   worker node /app/acceptance/openshell-sandbox.mjs --json "$DIR/report.json"
-sudo install -D -m 0644 "$DIR/report.json" /var/lib/openshell/acceptance.json
+status=$?
+set -e
+# Keep the newest report even when the suite fails. Diagnostics and admin must
+# show the failed upgrade instead of a stale pass or a missing report.
+if sudo test -f "$DIR/report.json"; then
+  sudo install -D -m 0644 "$DIR/report.json" /var/lib/openshell/acceptance.json
+fi
+exit "$status"

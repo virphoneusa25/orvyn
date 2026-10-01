@@ -27,6 +27,9 @@ services:
     user: "0"
     command: []
     ports:
+      # OpenShell's host-networked supervisor callback. The server certificate
+      # includes 127.0.0.1 and mTLS is still mandatory.
+      - "127.0.0.1:8080:8080"
       - "${OPENSHELL_BRIDGE_IP:-172.17.0.1}:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

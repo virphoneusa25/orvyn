@@ -397,10 +397,24 @@ export class ModelService {
     const ciCode = ciKey ? `ci:${process.env.CHEAPER_INFERENCE_CODE_MODEL?.trim() || "gpt-5.6-terra"}` : "";
 
     const ciImage = ciKey ? `ci:${process.env.CHEAPER_INFERENCE_IMAGE_MODEL?.trim() || "nano-banana"}` : "";
+    const defaultProvider = process.env.ORVYN_DEFAULT_MODEL_PROVIDER?.trim().toLowerCase();
+    const preferCi = Boolean(ciKey && ["cheaper_inference", "cheaper-inference", "ci"].includes(defaultProvider || ""));
 
-    // OpenAI stays the default when a key is present. Cheaper Inference is
-    // registered alongside it; tab-complete and images use the cheaper models.
-    if (openaiKey) {
+    // An explicit provider preference prevents an expired secondary key from
+    // adding a failed request before every answer. Embeddings can still stay
+    // on OpenAI while chat and agent roles use Cheaper Inference.
+    if (preferCi) {
+      this.router.setOverride("chat", ciChat);
+      this.router.setOverride("code", ciCode || ciChat);
+      this.router.setOverride("completion", ciChat);
+      this.router.setOverride("agent", ciCode || ciChat);
+      this.router.setOverride("planner", ciCode || ciChat);
+      this.router.setOverride("reviewer", ciCode || ciChat);
+      this.router.setOverride("executor", ciChat);
+      this.router.setOverride("vision", ciChat);
+      if (ciImage) this.router.setOverride("image", ciImage);
+      if (openaiKey) this.router.setOverride("embedding", process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small");
+    } else if (openaiKey) {
       this.router.setOverride("chat", chatId);
       this.router.setOverride("code", codeId);
       this.router.setOverride("agent", codeId);
