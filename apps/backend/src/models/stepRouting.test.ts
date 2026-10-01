@@ -17,7 +17,7 @@ test("a helper takes look-around steps on the Code and Server agents only, after
   const code = startRoute({ profile: "code", instruction: "Build the settings page", availableIds: ids });
   const server = startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids });
   assert.equal(helperFor(code, code.registryId!, ids), "mistral:codestral-25-08");
-  assert.equal(helperFor(server, server.registryId!, ids), "openrouter:deepseek/deepseek-v3.2");
+  assert.equal(helperFor(server, server.registryId!, ids), "fw:accounts/fireworks/models/deepseek-v4p1-flash");
   assert.equal(shouldUseHelper({ route: code, readOnlyStreak: 2, helperRejects: 0, currentModelId: code.registryId!, pinned: false }), true);
   assert.equal(shouldUseHelper({ route: code, readOnlyStreak: 1, helperRejects: 0, currentModelId: code.registryId!, pinned: false }), false);
   assert.equal(shouldUseHelper({ route: code, readOnlyStreak: 3, helperRejects: 2, currentModelId: code.registryId!, pinned: false }), false, "gives up after two rejected steps");

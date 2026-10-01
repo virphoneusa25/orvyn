@@ -31,8 +31,8 @@ sandbox_pids_limit    = 1024
 # only ever be attached inside the organization it was labeled for.
 allow_driver_config   = true
 enable_bind_mounts    = true
-# The OVH host has AppArmor. Acceptance proves the Docker runtime profile can
-# support the supervisor before this configuration is allowed to go live.
+# Keep the pre-1.0 upstream compatibility setting. Landlock and OpenShell's
+# supervisor still enforce the filesystem and network policies inside it.
 app_armor_profile     = "Unconfined"
 
 [openshell.drivers.docker.resource_admission]

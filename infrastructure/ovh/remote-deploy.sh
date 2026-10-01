@@ -20,7 +20,18 @@ set_env() { # set_env NAME VALUE — rewrite one line of .env, keep mode 600
   mv .env.tmp .env
   chmod 600 .env
 }
+set_default_env() { # keep an operator override, otherwise install the production default
+  grep -q "^$1=" .env 2>/dev/null || set_env "$1" "$2"
+}
 warn() { echo "::warning title=OpenShell::$*"; echo "WARNING: $*" >&2; }
+
+# Qwen3 Embedding 8B is the production memory/RAG lane when Nebius is present.
+# Its 4096-dimensional vector space is stored separately and rebuilt by the
+# index service; an explicit operator setting always wins.
+if grep -q '^NEBIUS_API_KEY=.' .env 2>/dev/null; then
+  set_default_env ORVYN_EMBED_MODEL nebius:Qwen/Qwen3-Embedding-8B
+  set_default_env ORVYN_EMBED_DIMS 4096
+fi
 
 echo "Validating Caddy configuration"
 docker compose "${BASE[@]}" run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile

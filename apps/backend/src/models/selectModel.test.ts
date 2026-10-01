@@ -77,9 +77,10 @@ test("an unhealthy model is skipped", () => {
   assert.equal(choice.registryId, laneModel("engineering").registryId, "Auto → (agent tier shares the unhealthy model) → heavy");
 });
 
-test("Premium (requested) puts GPT-5.6 Sol first", () => {
-  const choice = selectAgentModel({ intent: inferTaskIntent("Fix the failing test."), requestedModelId: "premium", availableIds: withSonnet });
-  assert.equal(choice.registryId, laneModel("premium").registryId);
+test("Premium (requested) puts Kimi K3 first and keeps Sol exceptional", () => {
+  const choice = selectAgentModel({ intent: inferTaskIntent("Fix the failing test."), requestedModelId: "premium", availableIds: [...withSonnet, "nebius:moonshotai/Kimi-K3"] });
+  assert.equal(choice.registryId, "nebius:moonshotai/Kimi-K3");
+  assert.notEqual(choice.registryId, laneModel("premium").registryId);
 });
 
 test("image quality and edits stay on Kontext models", () => {
@@ -108,10 +109,10 @@ test("image quality and edits stay on Kontext models", () => {
 
 test("a thinking-heavy task goes to a strong reasoning model (not Sol by default); a pinned model still wins", () => {
   const intent = inferTaskIntent("What should we name our foundation model family?", "auto");
-  const deep = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: [...withSonnet, "gemini:gemini-3.8-flash"], deep: true });
-  assert.equal(deep.registryId, "gemini:gemini-3.8-flash", "Gemini 3.8 Flash first for deep questions");
-  const noGemini = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: withSonnet, deep: true });
-  assert.equal(noGemini.registryId, laneModel("premium-alt").registryId, "then Claude Sonnet 5 — GPT-5.6 Sol is not the default");
+  const deep = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: [...withSonnet, "nebius:deepseek-ai/DeepSeek-V4-Pro"], deep: true });
+  assert.equal(deep.registryId, "nebius:deepseek-ai/DeepSeek-V4-Pro", "DeepSeek V4 Pro first for deep questions");
+  const noDeepSeek = selectAgentModel({ intent, composerMode: "auto", requestedModelId: "auto", availableIds: withSonnet, deep: true });
+  assert.equal(noDeepSeek.registryId, laneModel("premium-alt").registryId, "then Claude Sonnet 5 — GPT-5.6 Sol is not the default");
   const pinned = selectAgentModel({ intent, composerMode: "auto", requestedModelId: laneModel("fast").registryId, availableIds: ids, deep: true });
   assert.equal(pinned.registryId, laneModel("fast").registryId);
 });

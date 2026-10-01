@@ -19,7 +19,7 @@ test("run events lose vendor identity; the conversation is untouched", () => {
     },
   };
   const out = redactForCustomer(event, IDS) as any;
-  assert.equal(out.data.modelId, "ORVYN Code");
+  assert.equal(out.data.modelId, "ORVYN Auto");
   assert.equal(out.data.to, "ORVYN Fast");
   assert.equal(out.data.provider, "ORVYN");
   assert.equal(out.data.endpoint, undefined);
@@ -50,8 +50,8 @@ test("the catalog is six ORVYN models, and routing never lands on a customer's o
   const fast = selectAgentModel({ intent: { category: "general", informational: true, requiresFrontend: false, goal: "hi" } as any, requestedModelId: "fast", availableIds: ["ci:gpt-5.6-luna"] });
   assert.equal(fast.pinned, false);
   assert.equal(fast.registryId, "ci:gpt-5.6-luna");
-  const reasoning = selectAgentModel({ intent: { category: "general", informational: true, requiresFrontend: false, goal: "why" } as any, requestedModelId: "reasoning", availableIds: ["nebius:moonshotai/Kimi-K3"] });
-  assert.equal(reasoning.registryId, "nebius:moonshotai/Kimi-K3");
+  const reasoning = selectAgentModel({ intent: { category: "general", informational: true, requiresFrontend: false, goal: "why" } as any, requestedModelId: "reasoning", availableIds: ["nebius:deepseek-ai/DeepSeek-V4-Pro"] });
+  assert.equal(reasoning.registryId, "nebius:deepseek-ai/DeepSeek-V4-Pro");
   const own = selectAgentModel({ intent: { category: "general", informational: false, requiresFrontend: false, goal: "x" } as any, requestedModelId: "my:cheap", availableIds: ["ci:gpt-5.6-luna"] });
   assert.equal(own.pinned, true);
   assert.equal(own.registryId, "my:cheap");
@@ -74,6 +74,6 @@ test("usage keyed by model or provider is re-keyed under ORVYN names and merged"
   const stats = { providers: { fireworks: 100, nebius: 50 }, days: [{ day: "2026-09-29", models: { "fw:accounts/fireworks/models/glm-5p3": { credits: 3, tokens: 10 }, "ci:gpt-5.6-luna": { credits: 1, tokens: 5 }, "my:mine": { credits: 0, tokens: 7 } } }] };
   const out = redactForCustomer(stats, IDS) as any;
   assert.deepEqual(out.providers, { ORVYN: 150 });
-  assert.deepEqual(Object.keys(out.days[0].models).sort(), ["ORVYN Code", "ORVYN Fast", "my:mine"]);
+  assert.deepEqual(Object.keys(out.days[0].models).sort(), ["ORVYN Auto", "ORVYN Fast", "my:mine"]);
   assert.doesNotMatch(JSON.stringify(out), /fireworks|nebius|gpt-5/i);
 });

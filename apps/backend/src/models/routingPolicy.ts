@@ -22,7 +22,10 @@ export type Tier =
   | "auto"          // everyday agent work
   | "agent"         // tool-heavy fallback for everyday work
   | "code"          // normal coding / builds (long-horizon agentic coding)
-  | "advanced"      // long-horizon agents, server diagnosis, strong reasoning
+  | "server"        // efficient long-context server diagnosis
+  | "research"      // research and long-document synthesis
+  | "vision"        // screenshots and computer-use understanding
+  | "premium"       // long-horizon premium agent work
   | "heavy"         // hard engineering and repairs
   | "deep"          // premium recovery
   | "ultra";        // extreme escalation only
@@ -37,23 +40,26 @@ export interface TierDef {
 }
 
 export const TIERS: Record<Tier, TierDef> = {
-  utility: { tier: "utility", weight: 1, label: "Utility", candidates: ["mistral:mistral-small-4-0-26-03", "ci:gpt-5.6-luna", "fw:accounts/fireworks/models/glm-5p3-flash", "nebius:zai-org/GLM-5.3-Flash", "nebius:nvidia/Nemotron-3_5-Lightning"] },
+  utility: { tier: "utility", weight: 1, label: "Utility", candidates: ["mistral:mistral-small-4-0-26-03", "ci:gpt-5.6-luna", "ci:deepseek-v4-flash", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:nvidia/Nemotron-3_5-Lightning"] },
   "code-helper": { tier: "code-helper", weight: 1, label: "Code helper", candidates: ["mistral:codestral-25-08", "nebius:Qwen/Qwen3-30B-A3B-Instruct-2507"] },
-  auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["openrouter:deepseek/deepseek-v3.2", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:zai-org/GLM-5.3-Flash"] },
-  agent: { tier: "agent", weight: 2, label: "Agent", candidates: ["openrouter:minimax/minimax-m2.5", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:Qwen/Qwen3.5-397B-A17B"] },
+  auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash"] },
+  agent: { tier: "agent", weight: 3, label: "Advanced Auto", candidates: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "openrouter:minimax/minimax-m2.5", "nebius:Qwen/Qwen3.5-397B-A17B"] },
   code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
-  advanced: { tier: "advanced", weight: 4, label: "Advanced", candidates: ["gemini:gemini-3.8-flash", "nebius:moonshotai/Kimi-K3", "nebius:Qwen/Qwen3.5-397B-A17B"] },
-  heavy: { tier: "heavy", weight: 6, label: "Heavy engineering", candidates: ["fw:accounts/fireworks/models/glm-5p3", "nebius:zai-org/GLM-5.3", "mistral:zai-glm-5-3"] },
-  deep: { tier: "deep", weight: 12, label: "Deep", candidates: ["ci:claude-sonnet-5", "nebius:deepseek-ai/DeepSeek-V4-Pro"] },
+  server: { tier: "server", weight: 2, label: "Server diagnosis", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
+  research: { tier: "research", weight: 3, label: "Research", candidates: ["nebius:Qwen/Qwen3.5-397B-A17B", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
+  vision: { tier: "vision", weight: 2, label: "Vision", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash", "nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash"] },
+  premium: { tier: "premium", weight: 8, label: "Premium agent", candidates: ["nebius:moonshotai/Kimi-K3", "ci:kimi-k3"] },
+  heavy: { tier: "heavy", weight: 6, label: "Heavy engineering", candidates: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3"] },
+  deep: { tier: "deep", weight: 12, label: "Deep", candidates: ["nebius:deepseek-ai/DeepSeek-V4-Pro", "ci:deepseek-v4-pro", "deepseek-v4-pro", "ci:claude-sonnet-5"] },
   ultra: { tier: "ultra", weight: 25, label: "Ultra", candidates: ["ci:gpt-5.6-sol"] },
 };
 
 /** The climb for each profile. Ultra is appended only when allowed. */
 export const LADDERS: Record<RouteProfile, Tier[]> = {
   code: ["code", "heavy", "deep"],
-  server: ["advanced", "heavy", "deep"],
-  auto: ["auto", "agent", "heavy", "deep"],
-  deep: ["advanced", "deep"],
+  server: ["server", "heavy", "deep"],
+  auto: ["auto", "agent", "deep"],
+  deep: ["deep"],
 };
 
 /** Credits a run of each profile may spend before it stops (0 = no cap). */
@@ -118,10 +124,13 @@ export interface ModelHealthLike { registryId: string; failureRate: number }
 const FAMILY: Record<Tier, RegExp | null> = {
   utility: /(llama-?3\.[1-3]-8b|qwen3?-?(4|8|14)b|gemma|mistral-small)/i,
   "code-helper": /(qwen.*coder.*(30b|32b)|codestral|devstral)/i,
-  auto: /deepseek-(v3|chat)(?!.*r1)/i,
-  agent: /(minimax|gpt-oss-120b|qwen3-?235b)/i,
+  auto: /glm.*flash/i,
+  agent: /(glm-?4\.?[5-9]|glm-?5|minimax|gpt-oss-120b)/i,
   code: /(kimi-?k2|qwen3?-?coder-?480b)/i,
-  advanced: /(qwen3-?235b|llama-?4-?maverick|gpt-oss-120b)/i,
+  server: /gemini.*flash/i,
+  research: /(qwen3.*397b|qwen3-?235b|llama-?4-?maverick)/i,
+  vision: /(qwen3.*vl|gemini.*flash)/i,
+  premium: /kimi-?k3/i,
   heavy: /glm-?4\.?[5-9]|glm-?5/i,
   deep: /(deepseek-r1|kimi.*thinking|qwen3.*thinking)/i,
   ultra: null,
@@ -135,9 +144,10 @@ function firstRegistered(tier: Tier, available: Set<string>, health: ModelHealth
     return !(h && h.failureRate >= 0.5);
   };
   // Candidates keep their order; a provider with a poor recent record drops behind healthy ones.
+  const preferred = tier === "auto" && ["cheaper_inference", "cheaper-inference", "ci"].includes((process.env.ORVYN_DEFAULT_MODEL_PROVIDER ?? "").toLowerCase()) ? "ci:" : "";
   const ranked = TIERS[tier].candidates
-    .map((id, i) => ({ id, i, degraded: providerHealthScore(id) < 0.5 }))
-    .sort((a, b) => Number(a.degraded) - Number(b.degraded) || a.i - b.i);
+    .map((id, i) => ({ id, i, degraded: providerHealthScore(id) < 0.5, preferred: Boolean(preferred && id.startsWith(preferred)) }))
+    .sort((a, b) => Number(a.degraded) - Number(b.degraded) || Number(b.preferred) - Number(a.preferred) || a.i - b.i);
   for (const { id } of ranked) if (usable(id)) return id;
   const family = FAMILY[tier];
   if (family) {

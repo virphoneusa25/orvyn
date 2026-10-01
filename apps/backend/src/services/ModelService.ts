@@ -79,7 +79,10 @@ function cheaperInferenceModels(): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
   const certified = CERTIFIED_MODELS.filter((m) => m.provider === "cheaper-inference" && !m.image).map((m) => m.apiModelId);
-  return [...new Set([chatId, codeId, ...extra, ...certified])];
+  // Seed every production routing lane synchronously. The live catalog refresh
+  // later stamps exact capabilities, but routing must be correct from boot.
+  const routed = ["glm-5.3-flash", "glm-5.3", "kimi-k3", "deepseek-v4-flash", "deepseek-v4-pro", "gemini-3.7-flash", "google/gemini-3.5-flash-lite"];
+  return [...new Set([chatId, codeId, ...routed, ...extra, ...certified])];
 }
 
 // DeepSeek speaks the OpenAI wire protocol, so the existing adapter carries it.

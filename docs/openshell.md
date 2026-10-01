@@ -85,7 +85,7 @@ portal / desktop ─► backend (control plane) ─► job queue ─► worker �
   admission stays **on**, so the gateway refuses to mount it into any other
   organization's sandbox (tested). Raw bind mounts are never used.
 - **Process**: non-root uid 1000, all capabilities dropped, `no_new_privs`,
-  Docker `RuntimeDefault` AppArmor, Landlock filesystem policy (write only
+  upstream-compatible Docker `Unconfined` AppArmor, Landlock filesystem policy (write only
   `/workspace`, `/tmp`), pids limit, CPU/memory limits from the plan, no
   restart policy.
 - **Network**: deny by default. Unapproved names resolve to synthetic

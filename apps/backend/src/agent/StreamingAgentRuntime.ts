@@ -1092,7 +1092,7 @@ export class StreamingAgentRuntime {
     // Level 3: emergency — any capable agent model.
     if (!next) {
       how = "emergency";
-      for (const tier of ["auto", "agent", "heavy", "code", "advanced", "deep"] as const) {
+      for (const tier of ["auto", "agent", "code", "server", "research", "vision", "premium", "heavy", "deep"] as const) {
         const id = TIERS[tier].candidates.find((c) => ids.includes(c) && usable(registry.get(c)));
         if (id) { next = registry.get(id); break; }
       }

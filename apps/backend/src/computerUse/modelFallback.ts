@@ -1,6 +1,7 @@
 import type { AIModelProvider, ModelRegistry } from "@orvyn/ai-core";
 import { allowlistAllows, readComputerUsePolicy } from "./modelPolicy";
 import { isVisualComputerCompatible, isComputerUseCompatible, resolveRuntimeCapabilities } from "./modelComputerCapabilities";
+import { TIERS } from "../models/routingPolicy";
 
 export interface FallbackDecision {
   switched: boolean;
@@ -26,12 +27,20 @@ export function pickCompatibleComputerModel(
   const requireVision = opts?.requireVision !== false;
   const allow = opts?.allowlist?.length ? new Set(opts.allowlist) : null;
   const match = requireVision ? isVisualComputerCompatible : isComputerUseCompatible;
-  return registry.list().find((p) => {
+  const eligible = (p: AIModelProvider) => {
     if (p.config.id === currentId) return false;
     if (allow && !allowlistAllows([...allow], p.config.id, p.config.provider)) return false;
     if (!p.config.capabilities.agent) return false;
     return match(p);
-  });
+  };
+  // Computer use is a visual lane: Qwen/Gemini-class vision models first,
+  // then the registry as a compatibility fallback.
+  const preferred = [...TIERS.vision.candidates, ...TIERS.server.candidates, ...TIERS.auto.candidates];
+  for (const id of preferred) {
+    const provider = registry.get(id);
+    if (provider && eligible(provider)) return provider;
+  }
+  return registry.list().find(eligible);
 }
 
 export function decideComputerUseFallback(input: {

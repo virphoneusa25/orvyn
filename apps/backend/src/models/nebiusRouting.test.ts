@@ -13,9 +13,9 @@ test("with only Nebius registered, each tier uses the matching Nebius model fami
     "nebius:Qwen/Qwen3-235B-A22B-Instruct-2507",
   ];
   assert.equal(startRoute({ profile: "code", instruction: "Refactor utils", availableIds: ids }).registryId, "nebius:moonshotai/Kimi-K2-Instruct");
-  assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: ids }).registryId, "nebius:deepseek-ai/DeepSeek-V3-0324");
-  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:Qwen/Qwen3-235B-A22B-Instruct-2507");
-  assert.equal(weightFor("nebius:zai-org/GLM-4.5"), 6);
+  assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: ids }).registryId, "nebius:zai-org/GLM-4.5");
+  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:zai-org/GLM-4.5");
+  assert.equal(weightFor("nebius:zai-org/GLM-4.5"), 3);
   // Named candidates still win when their provider is configured.
   assert.equal(startRoute({ profile: "code", instruction: "Refactor utils", availableIds: [...ids, "fw:accounts/fireworks/models/kimi-k2p7-code"] }).registryId, "fw:accounts/fireworks/models/kimi-k2p7-code");
 });

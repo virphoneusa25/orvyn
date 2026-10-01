@@ -15,7 +15,7 @@ export interface ModelHealth {
 
 export interface AgentModelChoice {
   registryId: string | null;
-  /** The routing tier that serves the run ("code", "advanced", "heavy"…), or "pinned". */
+  /** The routing tier that serves the run ("code", "server", "heavy"…), or "pinned". */
   lane: Tier | "pinned";
   reason: string;
   pinned: boolean;
@@ -56,16 +56,17 @@ export function selectAgentModel(input: {
   let route = startRoute({ profile, instruction: input.intent.goal ?? "", availableIds: input.availableIds, health });
   if (laneRequest === "reasoning" || laneRequest === "research" || laneRequest === "vision") {
     // ORVYN's named models (customer catalog): a fixed ladder per model.
-    const tiers: Tier[] = laneRequest === "reasoning" ? ["advanced", "heavy", "deep"] : laneRequest === "research" ? ["advanced", "deep"] : ["advanced", "auto", "agent"];
+    const tiers: Tier[] = laneRequest === "reasoning" ? ["deep"] : laneRequest === "research" ? ["research", "deep"] : ["vision", "server", "auto"];
     const pool = laneRequest === "vision" ? (input.visionIds ?? []) : input.availableIds;
     const hit = stepFrom(tiers, 0, pool, health);
     const fallbackVision = laneRequest === "vision" && !hit ? (input.visionIds ?? [])[0] ?? null : null;
     route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? tiers[0]!, registryId: hit?.registryId ?? fallbackVision, weight: TIERS[hit?.tier ?? tiers[0]!].weight, reason: `${laneRequest[0]!.toUpperCase()}${laneRequest.slice(1)} (requested).` };
   } else if (laneRequest === "premium") {
-    // The user asked for the strongest model: Ultra first, Deep behind it.
-    const tiers: Tier[] = ["ultra", "deep", "heavy"];
+    // Premium long-horizon work starts on Kimi K3. Ultra remains a separate,
+    // explicitly enabled exceptional escalation and is never selected here.
+    const tiers: Tier[] = ["premium", "deep"];
     const hit = stepFrom(tiers, 0, input.availableIds, health);
-    route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? "ultra", registryId: hit?.registryId ?? null, weight: TIERS[hit?.tier ?? "ultra"].weight, reason: "Premium lane (requested)." };
+    route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? "premium", registryId: hit?.registryId ?? null, weight: TIERS[hit?.tier ?? "premium"].weight, reason: "Premium lane (requested)." };
   } else if (laneRequest === "fast" || (input.intent.informational && !input.deep && profile !== "server" && !input.intent.requiresFrontend)) {
     // Quick informational work (a question, not a change) starts on the utility tier.
     const tiers: Tier[] = ["utility", ...LADDERS[profile]];

@@ -37,9 +37,9 @@ export const CUSTOMER_MODELS: CustomerModel[] = [
 export const CUSTOMER_TIERS: Record<Exclude<CustomerModelId, "vision">, Tier[]> = {
   auto: LADDERS.auto,
   fast: ["utility", "auto", "agent"],
-  reasoning: ["advanced", "heavy", "deep"],
+  reasoning: ["deep"],
   code: LADDERS.code,
-  research: ["advanced", "deep"],
+  research: ["research", "deep"],
 };
 
 /** Prefix for customer-owned models, so they can never collide with ORVYN's. */
@@ -65,7 +65,7 @@ interface RegistryView { id: string; vision: boolean; chat: boolean; mock: boole
 export function resolveCustomerModel(id: CustomerModelId, registry: RegistryView[]): string | null {
   const platform = registry.filter((r) => !isUserModelId(r.id) && !r.mock);
   if (id === "vision") {
-    const preferred = stepFrom(["advanced", "auto", "agent"], 0, platform.filter((r) => r.vision).map((r) => r.id));
+    const preferred = stepFrom(["vision", "server", "auto"], 0, platform.filter((r) => r.vision).map((r) => r.id));
     return preferred?.registryId ?? platform.find((r) => r.vision && r.chat)?.id ?? null;
   }
   return stepFrom(CUSTOMER_TIERS[id], 0, platform.map((r) => r.id))?.registryId ?? null;
@@ -95,7 +95,10 @@ export function customerNameFor(registryId: string): string {
     case "utility": case "code-helper": return "ORVYN Fast";
     case "auto": case "agent": return "ORVYN Auto";
     case "code": case "heavy": return "ORVYN Code";
-    case "advanced": case "deep": case "ultra": return "ORVYN Reasoning";
+    case "server": return "ORVYN Auto";
+    case "research": return "ORVYN Research";
+    case "vision": return "ORVYN Vision";
+    case "premium": case "deep": case "ultra": return "ORVYN Reasoning";
     default: return "ORVYN";
   }
 }

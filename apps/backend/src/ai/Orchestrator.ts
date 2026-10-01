@@ -12,7 +12,7 @@ const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
 import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
-import { startRoute } from "../models/routingPolicy";
+import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
 import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
@@ -285,14 +285,18 @@ export class Orchestrator {
         // Fall through to the requested task.
       }
     }
-    // Thinking-heavy questions (strategy, planning, naming, architecture, or
-    // the user asked for deep reasoning) go to the strongest reasoning model.
-    // Routing policy: a strong reasoning model first (Gemini 3.8 Flash), Claude
-    // Sonnet 5 behind it; GPT-5.6 Sol only when ultra escalation is allowed.
+    // Thinking-heavy questions go directly to the reasoning lane.
     if (req.task === "chat" && isDeepQuestion(req.userMessage, req.reasoningEffort)) {
       const route = startRoute({ profile: "deep", instruction: req.userMessage, availableIds: this.modelService.registry.list().map((p) => p.config.id) });
       const deep = route.registryId ? this.modelService.registry.get(route.registryId) : undefined;
       if (deep && (deep.config.capabilities as any).chat !== false) return deep;
+    }
+    // A normal answer-only chat starts on the utility lane. This avoids the
+    // agent runtime entirely and keeps provider/model names behind ORION.
+    if (req.task === "chat") {
+      const hit = stepFrom(["utility", "auto", "agent"], 0, this.modelService.registry.list().map((p) => p.config.id));
+      const fast = hit ? this.modelService.registry.get(hit.registryId) : undefined;
+      if (fast && (fast.config.capabilities as any).chat !== false && !isRouteBlocked(fast.config.id)) return fast;
     }
     const routed = this.modelService.router.resolve(req.task);
     if (!isRouteBlocked(routed.config.id)) return routed;
@@ -300,7 +304,7 @@ export class Orchestrator {
     return this.chatAlternative(routed) ?? routed;
   }
 
-  /** Same model on another provider first, then the Auto ladder, then any chat model with tools. */
+  /** Same model on another provider first, then same/stronger lanes, then any capable chat model. */
   private chatAlternative(current: AIModelProvider): AIModelProvider | undefined {
     const registry = this.modelService.registry;
     const ok = (p: AIModelProvider | undefined): p is AIModelProvider =>
@@ -309,8 +313,8 @@ export class Orchestrator {
       const p = registry.get(id);
       if (ok(p)) return p;
     }
-    const route = startRoute({ profile: "auto", instruction: "", availableIds: registry.list().map((p) => p.config.id).filter((id) => id !== current.config.id) });
-    const routed = route.registryId ? registry.get(route.registryId) : undefined;
+    const hit = stepFrom(["utility", "auto", "agent", "deep"], 0, registry.list().map((p) => p.config.id).filter((id) => id !== current.config.id));
+    const routed = hit ? registry.get(hit.registryId) : undefined;
     if (ok(routed)) return routed;
     return registry.list().find((p) => ok(p));
   }

@@ -38,8 +38,8 @@ export const CERTIFIED_MODELS: LaneModel[] = [
   },
   {
     lane: "fast-secondary",
-    registryId: "fw:accounts/fireworks/models/glm-5p3-flash",
-    apiModelId: "accounts/fireworks/models/glm-5p3-flash",
+    registryId: "fw:accounts/fireworks/models/deepseek-v4p1-flash",
+    apiModelId: "accounts/fireworks/models/deepseek-v4p1-flash",
     provider: "fireworks",
     contextWindow: 1_040_000,
     tools: true,
@@ -50,8 +50,8 @@ export const CERTIFIED_MODELS: LaneModel[] = [
   },
   {
     lane: "auto",
-    registryId: "fw:accounts/fireworks/models/deepseek-v4p1-flash",
-    apiModelId: "accounts/fireworks/models/deepseek-v4p1-flash",
+    registryId: "fw:accounts/fireworks/models/glm-5p3-flash",
+    apiModelId: "accounts/fireworks/models/glm-5p3-flash",
     provider: "fireworks",
     contextWindow: 1_040_000,
     tools: true,

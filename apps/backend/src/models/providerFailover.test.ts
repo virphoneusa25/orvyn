@@ -63,7 +63,7 @@ test("same model on the other provider first; then the tier's next model", () =>
 
 test("the curated Nebius set serves every agent tier as a second provider", () => {
   const curated = new Set(NEBIUS_CURATED.map((m) => `nebius:${m.id}`));
-  for (const tier of ["utility", "code-helper", "auto", "agent", "code", "advanced", "heavy", "deep"] as const) {
+  for (const tier of ["utility", "code-helper", "auto", "agent", "code", "research", "vision", "premium", "heavy", "deep"] as const) {
     assert.ok(TIERS[tier].candidates.some((id) => curated.has(id)), `${tier} has a Nebius candidate`);
   }
   for (const id of Object.values(TIERS).flatMap((t) => t.candidates).filter((id) => id.startsWith("nebius:"))) {
@@ -73,5 +73,5 @@ test("the curated Nebius set serves every agent tier as a second provider", () =
   const ids = [...curated];
   assert.equal(startRoute({ profile: "code", instruction: "Refactor utils", availableIds: ids }).registryId, NB_KIMI);
   assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3-Flash");
-  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:moonshotai/Kimi-K3");
+  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3");
 });
