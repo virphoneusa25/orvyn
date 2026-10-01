@@ -77,7 +77,7 @@ export function needsActionWorkspace(instruction: string, composerMode?: string)
   if (intent.informational) return false;
   if (intent.requiresFrontend || intent.requiresWorkspace) return true;
   if (intent.category === "code" || intent.category === "deploy" || intent.category === "automation") return true;
-  if (/\b(create|write|edit|add|update|implement|fix|build|generate|modify)\b/i.test(instruction) && !intent.requiresArtifact) return true;
+  if (/\b(create|write|edit|add|update|implement|fix|build|generate|modify|change|replace|rename|refactor|remove|delete)\b/i.test(instruction) && !intent.requiresArtifact) return true;
   return false;
 }
 
