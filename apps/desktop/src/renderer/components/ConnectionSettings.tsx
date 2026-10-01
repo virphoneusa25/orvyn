@@ -252,7 +252,7 @@ export function ConnectionSettings() {
             onChange={(e) => setAuthPassword(e.target.value)}
             type="password"
             style={{ ...inputStyle(), marginBottom: 10 }}
-            onKeyDown={(e) => e.key === "Enter" && !authBusy && handleAuth()}
+            onKeyDown={(e) => e.key === "Enter" && !authBusy && (authMode !== "register" || legalAccepted) && handleAuth()}
           />
           {authMode === "register" && (
             <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 11, lineHeight: 1.45, color: "#aeb6c6", marginBottom: 10, cursor: "pointer" }}>
