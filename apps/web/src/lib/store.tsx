@@ -19,6 +19,7 @@ export interface Me {
   staff?: { role: string } | null;
   paused?: { since: number } | null;
   viewAs?: { staffEmail: string; expiresAt: number; paused: boolean } | null;
+  legal?: { version: string; accepted: boolean; acceptance: { version: string; source: string; acceptedAt: number } | null };
 }
 
 export interface Window { used: number; limit: number; resetAt: number }
@@ -80,6 +81,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const m = await api<Me>("/auth/me");
       setMe(m);
       if (m.paused && !m.viewAs) { setGate("ACCOUNT_PAUSED"); setStatus("paused"); return; }
+      if (m.legal && !m.legal.accepted && !m.viewAs) { setGate("LEGAL_ACCEPTANCE_REQUIRED"); setStatus("gated"); return; }
       const verified = m.user.emailVerified !== false || m.verificationRequired === false;
       if (!verified && !m.viewAs) { setGate("EMAIL_NOT_VERIFIED"); setStatus("gated"); return; }
       if (!m.onboarding?.completedAt && !m.viewAs) { setGate("ONBOARDING_REQUIRED"); setStatus("gated"); return; }
@@ -90,7 +92,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { setToken(null); setMe(null); setStatus("signed-out"); return; }
       if (err instanceof ApiError && err.code === "ACCOUNT_PAUSED") { setStatus("paused"); return; }
-      if (err instanceof ApiError && (err.code === "EMAIL_NOT_VERIFIED" || err.code === "ONBOARDING_REQUIRED")) { setGate(err.code); setStatus("gated"); return; }
+      if (err instanceof ApiError && (err.code === "EMAIL_NOT_VERIFIED" || err.code === "ONBOARDING_REQUIRED" || err.code === "LEGAL_ACCEPTANCE_REQUIRED")) { setGate(err.code); setStatus("gated"); return; }
       setStatus("ready");
     }
   }, [refreshBilling]);
