@@ -13,6 +13,7 @@ import { CustomersPage } from "./pages/Customers";
 import { CustomerAccount } from "./pages/CustomerAccount";
 import { Organizations, Subscriptions, UsageCredits, Invoices, Support } from "./pages/Lists";
 import { Plans, Topups, Flags, Integrations, EmailTemplates } from "./pages/Platform";
+import { SoftwareReleases } from "./pages/SoftwareReleases";
 import { ProviderCosts, SystemHealth, Workers, Backups, AuditLogs, StaffSettings } from "./pages/Operations";
 
 export interface AdminMe { staff: { id: string; email: string; name: string | null; role: string }; permissions: string[] }
@@ -38,6 +39,7 @@ const NAV: { section?: string; items: { to: string; label: string; icon: AIconNa
     { to: "/admin/flags", label: "Feature Flags", icon: "flag" },
     { to: "/admin/integrations", label: "Integrations", icon: "plug" },
     { to: "/admin/email-templates", label: "Email Templates", icon: "mail" },
+    { to: "/admin/releases", label: "Software Releases", icon: "layers" },
   ] },
   { section: "Operations", items: [
     { to: "/admin/provider-costs", label: "Provider Costs", icon: "dollar", perm: "costs.read" },
@@ -63,6 +65,7 @@ const TITLES: [RegExp, string, string][] = [
   [/^\/admin\/flags/, "Feature Flags", "Runtime switches of this deployment."],
   [/^\/admin\/integrations/, "Integrations", "Payments, email, sign-in and infrastructure."],
   [/^\/admin\/email-templates/, "Email Templates", "Every email ORVYN sends."],
+  [/^\/admin\/releases/, "Software Releases", "ORVYN Desktop versions, rollout, and adoption."],
   [/^\/admin\/provider-costs/, "Provider Costs", "Internal model costs against credits charged."],
   [/^\/admin\/health/, "System Health", "Live checks of every ORVYN service."],
   [/^\/admin\/workers/, "Workers & Sessions", "Execution workers, runs and signed-in sessions."],
@@ -165,6 +168,7 @@ function page(path: string): ReactNode {
   if (path === "/admin/flags") return <Flags />;
   if (path === "/admin/integrations") return <Integrations />;
   if (path === "/admin/email-templates") return <EmailTemplates />;
+  if (path === "/admin/releases") return <SoftwareReleases />;
   if (path === "/admin/provider-costs") return <ProviderCosts />;
   if (path === "/admin/health") return <SystemHealth />;
   if (path === "/admin/workers") return <Workers />;

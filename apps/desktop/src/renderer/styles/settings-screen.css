@@ -489,3 +489,18 @@
 .settings-btn { background: transparent; border: 1px solid #2a3244; border-radius: 8px; color: #dfe6f3; padding: 7px 13px; font-size: 12.5px; cursor: pointer; }
 .settings-btn:hover:not(:disabled) { border-color: #4c5a7a; }
 .settings-btn:disabled { opacity: .5; cursor: default; }
+
+.updates-settings { max-width: 640px; }
+.updates-dl { display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; margin: 16px 0; }
+.updates-dl dt { color: #8b95ad; }
+.updates-dl dd { margin: 0; }
+.updates-fieldset { border: 1px solid #1a2233; border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
+.updates-radio, .updates-check { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; font-size: 13px; }
+.update-banner { padding: 8px 12px; }
+.update-banner--required { position: absolute; inset: 40px 0 0; z-index: 36; background: rgba(7, 11, 20, 0.78); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; pointer-events: auto; }
+.update-banner__card { background: #0d1422; border: 1px solid #243049; border-radius: 14px; padding: 18px 20px; max-width: 460px; box-shadow: 0 18px 40px rgba(0,0,0,.35); }
+.update-banner__card h2 { margin: 0 0 8px; font-size: 16px; }
+.update-banner__actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.update-banner__actions button { background: #152033; border: 1px solid #2a3b58; color: #e7eefc; border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.update-progress { height: 8px; background: #152033; border-radius: 99px; overflow: hidden; margin-top: 10px; }
+.update-progress span { display: block; height: 100%; background: #5b8def; }

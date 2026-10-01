@@ -6,9 +6,14 @@ coverage/
 # The imported coverage skill is a package, not a test-coverage report.
 !resources/imported-skills/claude-skills/skills/coverage/
 !resources/imported-skills/claude-skills/skills/coverage/**
-.env
-.env.local
-.env.*.local
+*.pfx
+*.p12
+*.p8
+*.key
+*private*.pem
+*.cer
+*.crt
+!apps/desktop/resources/entitlements.mac.plist
 *.log
 *.zip
 .DS_Store

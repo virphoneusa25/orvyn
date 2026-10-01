@@ -13,6 +13,7 @@
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/geist-sans": "^5.3.0",
     "@fontsource/instrument-serif": "^5.3.0",
+    "electron-updater": "^6.8.9",
     "pdfjs-dist": "^6.3.289"
   },
   "devDependencies": {
@@ -65,6 +66,29 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "mac": {
+      "target": [
+        "zip",
+        "dmg"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://updates.kernelailabs.com/orvyn/stable/"
+      }
+    ]
   }
 }

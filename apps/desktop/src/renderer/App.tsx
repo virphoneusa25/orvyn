@@ -16,6 +16,7 @@ import { LearningCenter } from "./components/LearningCenter";
 import { SkillsIntelligence } from "./components/skills/SkillsIntelligence";
 import { BillingPanel } from "./components/BillingPanel";
 import { HostDesktopBanner } from "./components/HostDesktopBanner";
+import { UpdateBanner } from "./components/UpdatesSettings";
 import { ViewId } from "./components/Navigation";
 import { Sidebar } from "./components/redesign/Shell";
 import { submitOrvynCommand } from "./orvynCommand";
@@ -813,6 +814,7 @@ export function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", minWidth: 0, background: "var(--bg-app)", color: "var(--text)" }}>
       <HostDesktopBanner />
+      <UpdateBanner missionActive={runIsActive} />
       <TitleBar
         menus={appMenus}
         title={openFile ? openFile.path : workspace?.root ?? "ORVYN"}

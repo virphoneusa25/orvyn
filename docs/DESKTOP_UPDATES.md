@@ -18,6 +18,8 @@ If the status bar SHA does not match the branch HEAD you expected, you are still
 
 User data (chats, safeStorage session, workspace prefs) should survive an upgrade-in-place. Do not wipe `%APPDATA%` just to update the executable.
 
-## Future
+## Auto-update (packaged installs)
 
-ORVYN still needs a signed auto-update / release channel (electron-updater or equivalent). That is not shipped in this milestone. The status-bar SHA is the source of truth until then.
+See [docs/releases/DESKTOP_RELEASES.md](releases/DESKTOP_RELEASES.md). Packaged ORVYN checks `https://updates.kernelailabs.com/orvyn/{stable|beta|canary}/` through `electron-updater`. Branch CI installers (`ORVYN-Setup-<short-sha>.exe`) remain unsigned development artifacts and are not the customer feed.
+
+The status bar SHA is still useful for matching a local installer to a CI run. Customer production versions use SemVer from `apps/desktop/package.json`.

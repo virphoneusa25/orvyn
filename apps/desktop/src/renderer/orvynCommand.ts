@@ -11,6 +11,7 @@
 // landing in chat.
 
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
+import { requiredUpdateBlocksCloudSubmit } from "./update/updateGate";
 import { noteActiveRunId } from "./connectionRuntime";
 import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, upsertAssistantActivity, retractAssistantText, agentRunRestoreError, followUpRunBinding, type ChatMessage } from "./chatSession";
 import { createSession } from "./sessionsApi";
@@ -249,6 +250,12 @@ function restoreBlock(): CommandOutcome | null {
 }
 
 export async function submitOrvynCommand(cmd: OrvynCommand): Promise<CommandOutcome> {
+  if (requiredUpdateBlocksCloudSubmit() && isCloudBackend(getConnectionConfig().backendUrl)) {
+    return {
+      kind: "error",
+      error: "A required ORVYN update is needed before cloud missions can continue. Local projects on this computer are still available.",
+    };
+  }
   const blocked = restoreBlock();
   if (blocked) return blocked;
   const binding = followUpRunBinding();

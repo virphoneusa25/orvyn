@@ -12,6 +12,7 @@ import { fetchOfficialRegistry } from "./officialRegistryFetch";
 import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
 import { sampleHostStats } from "./systemStats";
+import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
 
 let browserManager: WorkbenchBrowserManager | null = null;
 let browserSessions: BrowserSessionManager | null = null;
@@ -22,6 +23,7 @@ let localEngine: ChildProcess | null = null;
 let engineStarting = false;
 let quitting = false;
 let engineTimer: ReturnType<typeof setInterval> | undefined;
+let updateService: ReturnType<typeof createDesktopUpdateService> | null = null;
 
 async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
   if (quitting || engineStarting) return false;
@@ -67,6 +69,8 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
 
 app.on("before-quit", () => {
   quitting = true;
+  updateService?.handleWillQuit();
+  updateService?.stop();
   if (engineTimer) clearInterval(engineTimer);
   localEngine?.kill();
   localWorkerManager.stop();
@@ -211,6 +215,9 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle("browser:sessions", () => sessions.list());
     (globalThis as { __orvynBrowser?: unknown }).__orvynBrowser = { sessions, workbench: browserManager };
     void registerElectronBrowserTarget(browserManager);
+    updateService = createDesktopUpdateService(readConfig);
+    registerUpdateIpc(updateService);
+    void updateService.start();
   });
 }
 

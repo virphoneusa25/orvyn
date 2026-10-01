@@ -5,13 +5,14 @@ import { UsageStatsPage } from "./UsageStatsPage";
 import { ModelManager } from "./ModelManager";
 import { BillingPanel } from "./BillingPanel";
 import { AccountSecurity } from "./AccountSecurity";
+import { UpdatesSettings } from "./UpdatesSettings";
 import logo from "../assets/logo-lockup.png";
 import "../styles/settings-screen.css";
 
 type SectionId =
   | "general" | "appearance" | "models" | "browser" | "computer" | "shortcuts"
   | "memory" | "subagents" | "plugins" | "mcp" | "skills" | "commands" | "hooks"
-  | "usage" | "billing" | "security" | "vault" | "cloud";
+  | "usage" | "billing" | "security" | "vault" | "cloud" | "updates";
 
 const NAV: { label: string; items: { id: SectionId; label: string; icon: React.ReactNode }[] }[] = [
   {
@@ -45,6 +46,7 @@ const NAV: { label: string; items: { id: SectionId; label: string; icon: React.R
       { id: "security", label: "Security", icon: <Shield /> },
       { id: "vault", label: "Vault / Secrets", icon: <Lock /> },
       { id: "cloud", label: "Cloud & Execution", icon: <Cloud /> },
+      { id: "updates", label: "Updates", icon: <Refresh /> },
     ],
   },
 ];
@@ -118,6 +120,8 @@ export function SettingsScreen({
           <UsageStatsPage />
         ) : section === "skills" ? (
           <SkillsPage />
+        ) : section === "updates" ? (
+          <UpdatesSettings />
         ) : (
           <section>
             <h1>{NAV.flatMap((g) => g.items).find((i) => i.id === section)?.label}</h1>
@@ -151,6 +155,7 @@ function Card() { return <Svg><rect x="2" y="5" width="20" height="14" rx="2" />
 function Shield() { return <Svg><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Svg>; }
 function Lock() { return <Svg><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></Svg>; }
 function Cloud() { return <Svg><path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12 3.5 3.5 0 0 0 6 19z" /></Svg>; }
+function Refresh() { return <Svg><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></Svg>; }
 function Gear() { return <Svg><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.1-2.7V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 4.6 15H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 8.3l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.3z" /></Svg>; }
 function Pencil() { return <Svg><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></Svg>; }
 function Clock() { return <Svg><circle cx="12" cy="12" r="9" /><path d="M12 7v6l4 2" /></Svg>; }

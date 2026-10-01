@@ -1,3 +1,4 @@
+import { desktopReleaseStore } from "../releases/desktopReleaseStore";
 import { accountRouter } from "./account";
 import { publicOrigin } from "./auth";
 import { documentRouter } from "./documents";
@@ -5,6 +6,7 @@ import { learnFromUserMessage, type MemoryStoreLike } from "../memory/userMemory
 import { memoryModel } from "../memory/learnModel";
 import { mcpRouter } from "./mcp";
 import { desktopRouter } from "./desktop";
+import { releasesRouter } from "./releases";
 import { workerRouter, hasOnlineWorker } from "./worker";
 import { localWorkerRouter, hasOnlineLocalWorker, queueLocalHostJob, localWorkerHealth, localWorkerServices, requestLocalServiceStop } from "./localWorker";
 import { serviceManager, type ServiceRecord } from "../services/ServiceManager";
@@ -40,6 +42,7 @@ v1Router.use("/account", accountRouter);
 v1Router.use(customerRedaction);
 v1Router.use("/documents", documentRouter);
 v1Router.use("/desktop", desktopRouter());
+v1Router.use("/releases", releasesRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
 v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string) => {
   const tenant = tenantManager.get(tenantId) ?? (tenantId === "default" ? tenantManager.ensureLocalDefault() : undefined);
@@ -2279,15 +2282,23 @@ v1Router.post("/billing/portal", async (req, res) => {
   }
 });
 
-/** Where to get ORVYN Desktop (links configured on the server; none are invented). */
-v1Router.get("/downloads/desktop", (_req, res) => {
-  const link = (k: string) => process.env[k]?.trim() || null;
-  res.json({
-    windows: link("ORVYN_DESKTOP_DOWNLOAD_WINDOWS"),
-    mac: link("ORVYN_DESKTOP_DOWNLOAD_MAC"),
-    linux: link("ORVYN_DESKTOP_DOWNLOAD_LINUX"),
-    version: link("ORVYN_DESKTOP_VERSION"),
-  });
+/** Where to get ORVYN Desktop (control-plane catalog; env links still win). */
+v1Router.get("/downloads/desktop", (req, res) => {
+  const d = desktopReleaseStore().publicDownloads();
+  let installations: { platform: string; version: string; channel: string; current: boolean }[] | undefined;
+  try {
+    const t = requireTenant(req);
+    const latest = d.version;
+    installations = desktopReleaseStore().installationsForAccount(t.id).map((i) => ({
+      platform: i.platform,
+      version: i.version,
+      channel: i.channel,
+      current: Boolean(latest && i.version === latest),
+    }));
+  } catch {
+    installations = undefined;
+  }
+  res.json({ ...d, installations });
 });
 
 /** Invoices, the card on file and the subscription's renewal (read from Stripe; the ledger stays the balance). */

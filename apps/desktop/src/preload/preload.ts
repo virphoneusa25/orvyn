@@ -91,8 +91,26 @@ contextBridge.exposeInMainWorld("orvyn", {
     officialSearch: (query: string, limit?: number, cursor?: string) =>
       ipcRenderer.invoke("marketplace:officialSearch", query, limit, cursor),
   },
+  updates: {
+    getState: () => ipcRenderer.invoke("updates:getState"),
+    check: () => ipcRenderer.invoke("updates:check"),
+    download: () => ipcRenderer.invoke("updates:download"),
+    restartAndInstall: (opts?: { force?: boolean }) => ipcRenderer.invoke("updates:restartAndInstall", opts),
+    installOnExit: () => ipcRenderer.invoke("updates:installOnExit"),
+    setChannel: (channel: string) => ipcRenderer.invoke("updates:setChannel", channel),
+    setAutoDownload: (v: boolean) => ipcRenderer.invoke("updates:setAutoDownload", v),
+    setAutoCheck: (v: boolean) => ipcRenderer.invoke("updates:setAutoCheck", v),
+    setInstallOnExit: (v: boolean) => ipcRenderer.invoke("updates:setInstallOnExit", v),
+    setWorkBusy: (v: boolean) => ipcRenderer.invoke("updates:setWorkBusy", v),
+    dismiss: () => ipcRenderer.invoke("updates:dismiss"),
+    onChange: (cb: (state: unknown) => void) => {
+      const h = (_e: unknown, v: unknown) => cb(v);
+      ipcRenderer.on("updates:changed", h);
+      return () => ipcRenderer.removeListener("updates:changed", h);
+    },
+  },
   browser: {
-    list: () => ipcRenderer.invoke("browser:list"),
+      list: () => ipcRenderer.invoke("browser:list"),
     create: (kind?: "browser" | "preview", url?: string) => ipcRenderer.invoke("browser:create", kind, url),
     navigate: (id: string, url: string) => ipcRenderer.invoke("browser:navigate", id, url),
     back: (id: string) => ipcRenderer.invoke("browser:back", id),

@@ -102,6 +102,20 @@ export interface OrvynBridge {
   marketplace?: {
     officialSearch(query: string, limit?: number, cursor?: string): Promise<{ ok: boolean; status?: number; body: unknown; error?: string }>;
   };
+  updates?: {
+    getState(): Promise<unknown>;
+    check(): Promise<unknown>;
+    download(): Promise<unknown>;
+    restartAndInstall(opts?: { force?: boolean }): Promise<{ ok: boolean; code?: string; message?: string }>;
+    installOnExit(): Promise<unknown>;
+    setChannel(channel: string): Promise<unknown>;
+    setAutoDownload(v: boolean): Promise<unknown>;
+    setAutoCheck(v: boolean): Promise<unknown>;
+    setInstallOnExit(v: boolean): Promise<unknown>;
+    setWorkBusy(v: boolean): Promise<{ ok: boolean }>;
+    dismiss(): Promise<unknown>;
+    onChange(cb: (state: unknown) => void): () => void;
+  };
   browser?: {
     list(): Promise<WorkbenchBrowserState>;
     create(kind?: "browser" | "preview", url?: string): Promise<WorkbenchBrowserState>;

@@ -34,6 +34,7 @@ import { customerCatalogEnabled } from "../models/customerCatalog";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { artifactStorageRoot } from "../documents/workspace";
 import { adminHostMismatch } from "../http/hosts";
+import { desktopReleaseStore } from "../releases/desktopReleaseStore";
 
 interface Staff { id: string; email: string; name: string | null; role: StaffRole }
 type AdminRequest = Request & { staff?: Staff };
@@ -462,6 +463,7 @@ adminRouter.get("/flags", need("read"), wrap((_req, res) => {
       flag("GITHUB_CLIENT_ID", "GitHub sign-in", Boolean(env.GITHUB_CLIENT_ID?.trim() && env.GITHUB_CLIENT_SECRET?.trim()), "Continue with GitHub and repository access."),
       flag("STRIPE_SECRET_KEY", "Online payments", billingService().enabled, "Checkout, customer portal, auto-recharge."),
       flag("ORVYN_DESKTOP_DOWNLOAD_WINDOWS", "Desktop download link", Boolean(env.ORVYN_DESKTOP_DOWNLOAD_WINDOWS?.trim()), "Download Desktop page in the Cloud portal."),
+      flag("ORVYN_UPDATE_BASE_URL", "Desktop update feed", Boolean(env.ORVYN_UPDATE_BASE_URL?.trim()), "Public HTTPS prefix for electron-updater (default updates.kernelailabs.com/orvyn)."),
     ],
   });
 }));
@@ -708,6 +710,43 @@ adminRouter.delete("/staff/:userId", need("staff.manage"), wrap((req, res) => {
   staffStore().removeStaff(member.userId);
   audit(req, "staff.remove", null, { email: member.email });
   res.json({ ok: true });
+}));
+
+adminRouter.get("/releases", need("read"), wrap((_req, res) => {
+  res.json(desktopReleaseStore().summary());
+}));
+
+adminRouter.post("/releases", need("staff.manage"), wrap((req, res) => {
+  const release = desktopReleaseStore().upsertFromPipeline({
+    version: String(req.body?.version ?? ""),
+    channel: req.body?.channel,
+    title: req.body?.title,
+    notes: req.body?.notes,
+    artifacts: Array.isArray(req.body?.artifacts) ? req.body.artifacts : [],
+    gitSha: req.body?.gitSha,
+    status: req.body?.status,
+  });
+  audit(req, "desktop.release.record", null, { version: release.version, channel: release.channel });
+  res.json({ release });
+}));
+
+adminRouter.patch("/releases/:id", need("support.write"), wrap((req, res) => {
+  const body = req.body ?? {};
+  const requiredChange = body.required !== undefined || body.minimumSupportedVersion !== undefined;
+  if (requiredChange && !can(req.staff?.role, "staff.manage")) {
+    return res.status(403).json({ error: "Marking a required update needs a super admin.", code: "FORBIDDEN" });
+  }
+  const release = desktopReleaseStore().patch(String(req.params.id), {
+    ...(body.notes !== undefined ? { notes: body.notes } : {}),
+    ...(body.title !== undefined ? { title: body.title } : {}),
+    ...(body.rolloutPercent !== undefined ? { rolloutPercent: body.rolloutPercent } : {}),
+    ...(body.status !== undefined ? { status: body.status } : {}),
+    ...(body.required !== undefined ? { required: body.required } : {}),
+    ...(body.minimumSupportedVersion !== undefined ? { minimumSupportedVersion: body.minimumSupportedVersion } : {}),
+    allowRequired: can(req.staff?.role, "staff.manage"),
+  });
+  audit(req, "desktop.release.patch", null, { id: release.id, status: release.status, rolloutPercent: release.rolloutPercent });
+  res.json({ release });
 }));
 
 // Nothing under /admin falls through to the customer API.
