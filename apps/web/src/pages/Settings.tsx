@@ -7,6 +7,7 @@ import { signal } from "../lib/events";
 import { useApi } from "../lib/useApi";
 import { Icon } from "../components/Icons";
 import { Empty, Modal, PageHead, hueFor, initials, workspaceLabel } from "../components/Bits";
+import { LegalSettingsPanel } from "./Legal";
 
 interface DeviceSession { id: string; device: string; createdAt: number; lastUsedAt: number; current: boolean }
 interface Member { userId: string; email: string; name: string | null; role: "owner" | "admin" | "member"; joinedAt: number; you: boolean }
@@ -21,6 +22,7 @@ const TABS: { id: string; label: string; icon: keyof typeof Icon }[] = [
   { id: "api-keys", label: "API keys", icon: "key" },
   { id: "connections", label: "Connections", icon: "plug" },
   { id: "models", label: "Models", icon: "layers" },
+  { id: "legal", label: "Legal & Privacy", icon: "shield" },
 ];
 
 export function Settings({ tab = "profile" }: { tab?: string }) {
@@ -42,6 +44,7 @@ export function Settings({ tab = "profile" }: { tab?: string }) {
           {current === "api-keys" ? <ApiKeys /> : null}
           {current === "connections" ? <Connections /> : null}
           {current === "models" ? <OwnModels /> : null}
+          {current === "legal" ? <LegalSettingsPanel /> : null}
         </div>
       </div>
     </div>
