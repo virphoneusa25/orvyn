@@ -25,6 +25,25 @@ set_default_env() { # keep an operator override, otherwise install the productio
 }
 warn() { echo "::warning title=OpenShell::$*"; echo "WARNING: $*" >&2; }
 
+# PostgreSQL keeps the password from the first volume initialization. A lost
+# .env line therefore makes a later compose deploy use the development
+# fallback while the live role still has the original password. Generate an
+# explicit production password once and reconcile the existing internal role
+# through its local socket before the backend is rebuilt. The value is never
+# printed or passed as a process argument.
+if ! grep -q '^ORVYN_PG_PASSWORD=.' .env 2>/dev/null; then
+  set_env ORVYN_PG_PASSWORD "$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  echo "Generated persistent PostgreSQL credential"
+fi
+pg_password=$(sed -n 's/^ORVYN_PG_PASSWORD=//p' .env | head -n 1)
+if docker compose "${BASE[@]}" ps --services --status running 2>/dev/null | grep -qx postgres; then
+  pg_password_sql=${pg_password//\'/\'\'}
+  printf "ALTER ROLE orvyn WITH PASSWORD '%s';\n" "$pg_password_sql" \
+    | docker compose "${BASE[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U orvyn -d orvyn >/dev/null
+  echo "PostgreSQL application credential reconciled"
+fi
+unset pg_password pg_password_sql
+
 # Qwen3 Embedding 8B is the production memory/RAG lane when Nebius is present.
 # Its 4096-dimensional vector space is stored separately and rebuilt by the
 # index service; an explicit operator setting always wins.
