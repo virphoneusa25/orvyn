@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { getConnectionConfig, loadConnectionConfig, saveConnectionConfig, apiUrl, authHeaders } from "../connection";
+import { LegalSettings, LEGAL_VERSION } from "./LegalSettings";
 
 interface ProfileInfo {
   id: string;
@@ -29,6 +30,9 @@ export function ConnectionSettings() {
   const [authName, setAuthName] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [legalAccepted, setLegalAccepted] = useState(false);
+  const [legalAcceptance, setLegalAcceptance] = useState<{ version: string; acceptedAt: number } | null>(null);
+  const [legalBusy, setLegalBusy] = useState(false);
 
   useEffect(() => {
     loadConnectionConfig().then((c) => {
@@ -39,7 +43,11 @@ export function ConnectionSettings() {
       if (c.apiKey.startsWith("orvsess_")) {
         fetch(apiUrl("/auth/me"), { headers: { Authorization: `Bearer ${c.apiKey}` } })
           .then((r) => (r.ok ? r.json() : null))
-          .then((d) => d && setAccount(d.user))
+          .then((d) => {
+            if (!d) return;
+            setAccount(d.user);
+            setLegalAcceptance(d.legalAcceptance ?? null);
+          })
           .catch(() => {});
       }
     });
@@ -92,8 +100,12 @@ export function ConnectionSettings() {
     setAuthBusy(true);
     try {
       const path = authMode === "register" ? "/auth/register" : "/auth/login";
-      const body: Record<string, string> = { email: authEmail.trim(), password: authPassword };
+      const body: Record<string, unknown> = { email: authEmail.trim(), password: authPassword };
       if (authMode === "register" && authName.trim()) body.name = authName.trim();
+      if (authMode === "register") {
+        body.legalAccepted = legalAccepted;
+        body.legalVersion = LEGAL_VERSION;
+      }
       const base = backendUrl.trim().replace(/\/$/, "") || getConnectionConfig().backendUrl.replace(/\/$/, "");
       const res = await fetch(`${base}/api/v1${path}`, {
         method: "POST",
@@ -107,7 +119,9 @@ export function ConnectionSettings() {
       await saveConnectionConfig({ backendUrl: base, apiKey: data.token });
       setApiKey(data.token);
       setAccount(data.user);
+      setLegalAcceptance(data.legalAcceptance ?? null);
       setAuthPassword("");
+      setLegalAccepted(false);
     } catch (err: any) {
       setAuthError(err.message);
     } finally {
@@ -125,6 +139,26 @@ export function ConnectionSettings() {
     await saveConnectionConfig({ backendUrl: cfg.backendUrl, apiKey: "" });
     setApiKey("");
     setAccount(null);
+    setLegalAcceptance(null);
+  }
+
+  async function acceptCurrentLegalTerms() {
+    setLegalBusy(true);
+    setAuthError("");
+    try {
+      const res = await fetch(apiUrl("/auth/legal/accept"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ version: LEGAL_VERSION }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setLegalAcceptance(data.acceptance ?? null);
+    } catch (err: any) {
+      setAuthError(err.message);
+    } finally {
+      setLegalBusy(false);
+    }
   }
 
   return (
@@ -220,9 +254,22 @@ export function ConnectionSettings() {
             style={{ ...inputStyle(), marginBottom: 10 }}
             onKeyDown={(e) => e.key === "Enter" && !authBusy && handleAuth()}
           />
+          {authMode === "register" && (
+            <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 11, lineHeight: 1.45, color: "#aeb6c6", marginBottom: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={legalAccepted}
+                onChange={(e) => setLegalAccepted(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                I agree to the ORVYN Software License Agreement and Acceptable Use Policy, and acknowledge the Privacy and AI & Agent disclosures (version {LEGAL_VERSION}).
+              </span>
+            </label>
+          )}
           <button
             onClick={handleAuth}
-            disabled={authBusy || !authEmail.trim() || !authPassword}
+            disabled={authBusy || !authEmail.trim() || !authPassword || (authMode === "register" && !legalAccepted)}
             style={{ background: "#3b5bfd", border: "none", borderRadius: 6, color: "white", padding: "6px 14px", cursor: "pointer", opacity: authBusy ? 0.6 : 1 }}
           >
             {authBusy ? "Working…" : authMode === "register" ? "Create account" : "Sign in"}
@@ -273,6 +320,12 @@ export function ConnectionSettings() {
           {profileError}
         </div>
       )}
+
+      <LegalSettings
+        acceptance={legalAcceptance}
+        onAccept={account ? acceptCurrentLegalTerms : undefined}
+        accepting={legalBusy}
+      />
     </div>
   );
 }
