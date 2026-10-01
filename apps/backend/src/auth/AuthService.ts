@@ -21,6 +21,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import * as path from "path";
 import * as fs from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
+import { LEGAL_VERSION } from "../legal/policy";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -37,6 +38,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+CREATE TABLE IF NOT EXISTS legal_acceptances (
+  user_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  accepted_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_legal_acceptances_user ON legal_acceptances (user_id);
 `;
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -49,6 +57,11 @@ export interface User {
   email: string;
   name: string | null;
   createdAt: number;
+}
+
+export interface LegalAcceptance {
+  version: string;
+  acceptedAt: number;
 }
 
 function hashPassword(password: string): string {
@@ -80,10 +93,18 @@ export class AuthService {
     this.db.exec(SCHEMA);
   }
 
-  register(email: string, password: string, name?: string): { user: User; token: string } {
+  register(
+    email: string,
+    password: string,
+    name?: string,
+    legal?: { accepted: boolean; version: string }
+  ): { user: User; token: string; legalAcceptance: LegalAcceptance } {
     const normalized = email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new Error("Invalid email address");
     if (password.length < 8) throw new Error("Password must be at least 8 characters");
+    if (!legal?.accepted || legal.version !== LEGAL_VERSION) {
+      throw new Error("You must accept the current ORVYN legal terms before creating an account");
+    }
     const existing = this.db.prepare(`SELECT id FROM users WHERE email = ?`).get(normalized);
     if (existing) throw new Error("An account with this email already exists");
 
@@ -96,7 +117,8 @@ export class AuthService {
     this.db
       .prepare(`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`)
       .run(user.id, user.email, user.name, hashPassword(password), user.createdAt);
-    return { user, token: this.createSession(user.id) };
+    const legalAcceptance = this.recordLegalAcceptance(user.id, LEGAL_VERSION);
+    return { user, token: this.createSession(user.id), legalAcceptance };
   }
 
   login(email: string, password: string): { user: User; token: string } {
@@ -135,6 +157,22 @@ export class AuthService {
 
   logout(token: string): void {
     this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
+  }
+
+  recordLegalAcceptance(userId: string, version: string = LEGAL_VERSION): LegalAcceptance {
+    if (version !== LEGAL_VERSION) throw new Error("The legal version is not current");
+    const acceptedAt = Date.now();
+    this.db
+      .prepare(`INSERT INTO legal_acceptances (user_id, version, accepted_at) VALUES (?, ?, ?) ON CONFLICT(user_id, version) DO UPDATE SET accepted_at = excluded.accepted_at`)
+      .run(userId, version, acceptedAt);
+    return { version, acceptedAt };
+  }
+
+  getLegalAcceptance(userId: string, version: string = LEGAL_VERSION): LegalAcceptance | null {
+    const row = this.db
+      .prepare(`SELECT version, accepted_at FROM legal_acceptances WHERE user_id = ? AND version = ?`)
+      .get(userId, version) as any;
+    return row ? { version: String(row.version), acceptedAt: Number(row.accepted_at) } : null;
   }
 
   userCount(): number {
