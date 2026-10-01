@@ -13,6 +13,7 @@ import { mailConfigured, passwordResetMail, securityNoticeMail, sendMail, verifi
 import { createHash, randomBytes } from "node:crypto";
 import { authorizeUrl, exchangeCode, exchangeCodeWithToken, oauthConfigured, oauthProvider } from "../auth/oauthProviders";
 import { saveGithubConnection } from "../integrations/githubConnection";
+import { LEGAL_VERSION, publicLegalBundle } from "../legal/documents";
 
 /** Public origin for links in email (the address the user reached us at). */
 export function publicOrigin(req: Request): string {
@@ -71,7 +72,9 @@ authRouter.post("/register", async (req, res) => {
   // The web sign-up asks for a full name and agreement to the Terms (the desktop app collects its own).
   const web = req.body?.client === "web";
   if (web && String(req.body?.name ?? "").trim().split(/\s+/).filter(Boolean).length < 2) return res.status(400).json({ error: "Enter your first and last name." });
-  if (web && req.body?.acceptTerms !== true) return res.status(400).json({ error: "Agree to the Terms of Service and Privacy Policy to create an account." });
+  if (web && (req.body?.legalAccepted !== true || String(req.body?.legalVersion ?? "") !== LEGAL_VERSION)) {
+    return res.status(400).json({ error: "Review and accept the current ORVYN Software License, Privacy Policy, Acceptable Use Policy, and AI & Agent Disclosure to create an account.", code: "LEGAL_ACCEPTANCE_REQUIRED" });
+  }
   try {
     const { user, token, organization } = authService.register(
       String(req.body.email ?? ""),
@@ -79,7 +82,8 @@ authRouter.post("/register", async (req, res) => {
       req.body.name ? String(req.body.name) : undefined,
       deviceOf(req),
     );
-    if (req.body?.acceptTerms === true) authService.acceptTerms(user.id);
+    if (web) authService.acceptLegal(user.id, LEGAL_VERSION, "web-signup");
+    else if (req.body?.acceptTerms === true) authService.acceptTerms(user.id, Date.now(), String(req.body?.client ?? "client"));
     if (typeof req.body?.organization === "string" && req.body.organization.trim() && organization?.id) authService.nameOrganization(organization.id, req.body.organization);
     const session = authService.verifyPrincipal(token);
     // A new account starts onboarding at email verification (or straight at
@@ -200,7 +204,39 @@ authRouter.get("/me", (req, res) => {
     staff: view ? null : (() => { const role = staffStore().roleOf(session.user.id); return role ? { role } : null; })(),
     paused: paused && !view ? { since: paused.at } : null,
     viewAs: view ? { staffEmail: view.staffEmail, expiresAt: view.expiresAt, paused: Boolean(paused) } : null,
+    legal: view ? { version: LEGAL_VERSION, accepted: true, acceptance: null } : {
+      version: LEGAL_VERSION,
+      accepted: authService.hasAcceptedCurrentLegal(session.user.id),
+      acceptance: authService.legalAcceptance(session.user.id),
+    },
   });
+});
+
+/** Public legal bundle. Signed-in callers also receive their acceptance status. */
+authRouter.get("/legal", (req, res) => {
+  const token = bearerToken(req);
+  const session = token ? authService.verifyPrincipal(token) : null;
+  res.json({
+    ...publicLegalBundle(),
+    acceptance: session ? authService.legalAcceptance(session.user.id) : null,
+    accepted: session ? authService.hasAcceptedCurrentLegal(session.user.id) : false,
+  });
+});
+
+authRouter.post("/legal/accept", (req, res) => {
+  const token = bearerToken(req);
+  const session = token ? authService.verifyPrincipal(token) : null;
+  if (!session) return res.status(401).json({ error: "Not signed in" });
+  try {
+    const acceptance = authService.acceptLegal(
+      session.user.id,
+      String(req.body?.version ?? ""),
+      String(req.body?.source ?? "web"),
+    );
+    res.json({ accepted: true, acceptance, version: LEGAL_VERSION });
+  } catch (err: any) {
+    res.status(err?.status ?? 400).json({ error: err.message, code: err?.code });
+  }
 });
 
 function verifiedPage(ok: boolean): string {
