@@ -479,9 +479,12 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         continue;
       }
 
-      case "steer.queued":
-        items.push({ kind: "status", key: e.id, label: `↳ Steering received — “${String(e.data.text ?? "").slice(0, 90)}” · applying at the next safe checkpoint`, ephemeral: false, tone: "working" });
+      case "steer.queued": {
+        const text = String(e.data.text ?? "").trim();
+        if (!text || /^[\s?!.…,;:\-—]+$/u.test(text)) continue;
+        items.push({ kind: "status", key: e.id, label: `↳ Steering received — “${text.slice(0, 90)}” · applying at the next safe checkpoint`, ephemeral: false, tone: "working" });
         continue;
+      }
       case "steer.delivered":
         items.push({ kind: "status", key: e.id, label: `✓ Steering applied — “${String(e.data.text ?? "").slice(0, 90)}” now directs this run`, ephemeral: false, tone: "working" });
         continue;
@@ -589,7 +592,7 @@ export function reducePresentation(events: AgentEventLike[], runStatus: string):
         closeThought(e.timestamp);
         items.push({
           kind: "capability",
-          key: String(e.id),
+          key: String(e.data.callId ?? e.id),
           query: String(e.data.query ?? ""),
           reason: String(e.data.reason ?? "ORION needs an additional capability."),
           recommendedServers: Array.isArray(e.data.recommendedServers) ? (e.data.recommendedServers as CapabilityRequiredItem["recommendedServers"]) : [],

@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
 import { HonestState } from "./HonestState";
+import { filterCustomerProjectPaths } from "../projectPathFilter";
 
 function Shell({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
@@ -39,16 +40,27 @@ interface ServerRow {
   host: string;
   user: string;
   port: number;
+  scope?: string;
+  hasVaultKey?: boolean;
 }
 
 export function ServersWorkspace({ projectRoot }: { projectRoot: string | null }) {
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [checks, setChecks] = useState<Record<string, { busy: boolean; ok?: boolean; output?: string }>>({});
+  const [host, setHost] = useState("");
+  const [user, setUser] = useState("");
+  const [port, setPort] = useState("22");
+  const [alias, setAlias] = useState("");
+  const [keyPath, setKeyPath] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [scope, setScope] = useState<"session" | "mission" | "reusable">("reusable");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const load = useCallback(async () => {
-    if (!projectRoot) return setServers([]);
     try {
-      const data = await fetch(apiUrl(`/servers?projectRoot=${encodeURIComponent(projectRoot)}`), {
+      const qs = projectRoot ? `?projectRoot=${encodeURIComponent(projectRoot)}` : "";
+      const data = await fetch(apiUrl(`/servers${qs}`), {
         headers: authHeaders(),
       }).then((r) => r.json());
       setServers(data.servers ?? []);
@@ -81,12 +93,85 @@ export function ServersWorkspace({ projectRoot }: { projectRoot: string | null }
     }
   }
 
+  async function connect() {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await fetch(apiUrl("/servers"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          projectRoot,
+          host,
+          user,
+          port: Number(port) || 22,
+          alias,
+          keyPath: keyPath.trim() || undefined,
+          privateKey: privateKey.trim() || undefined,
+          scope,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not add the server.");
+      setHost("");
+      setUser("");
+      setPort("22");
+      setAlias("");
+      setKeyPath("");
+      setPrivateKey("");
+      await load();
+    } catch (err: any) {
+      setError(String(err.message ?? err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field: React.CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--orvyn-border)",
+    background: "var(--orvyn-surface-1)",
+    color: "var(--orvyn-text)",
+    fontSize: 13,
+  };
+
   return (
-    <Shell title="Servers" subtitle="SSH connections from this project's .orvyn/ssh.json — the same allowlist the agent uses.">
+    <Shell title="Servers" subtitle="Paste an IP or hostname to start an SSH connection. Keys can stay in the vault; reusable servers are written to .orvyn/ssh.json without secret material.">
+      <Card>
+        <div style={{ display: "grid", gap: 8, maxWidth: 560 }}>
+          <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="IP or hostname (host:port optional)" aria-label="Server host" style={field} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px", gap: 8 }}>
+            <input value={user} onChange={(e) => setUser(e.target.value)} placeholder="User" aria-label="SSH user" style={field} />
+            <input value={port} onChange={(e) => setPort(e.target.value)} placeholder="Port" aria-label="SSH port" style={field} />
+          </div>
+          <input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="Alias (optional)" aria-label="Server alias" style={field} />
+          <input value={keyPath} onChange={(e) => setKeyPath(e.target.value)} placeholder="Private key path (optional, ~/.ssh/id_ed25519)" aria-label="SSH key path" style={field} />
+          <textarea value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} placeholder="Or paste a private key — stored in the vault, never in ssh.json" aria-label="SSH private key" rows={3} style={{ ...field, fontFamily: "var(--font-mono)", fontSize: 11 }} />
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--orvyn-text-secondary)" }}>
+            {(["reusable", "session", "mission"] as const).map((s) => (
+              <label key={s} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input type="radio" name="ssh-scope" checked={scope === s} onChange={() => setScope(s)} />
+                {s === "reusable" ? "Reusable server" : s === "session" ? "This session" : "This mission"}
+              </label>
+            ))}
+          </div>
+          {error && <div style={{ fontSize: 12, color: "var(--orvyn-red)" }}>{error}</div>}
+          <button
+            onClick={() => void connect()}
+            disabled={busy || !host.trim() || !user.trim()}
+            style={{ height: 34, padding: "0 14px", borderRadius: 8, border: "1px solid var(--accent, #6C5CFF)", background: "var(--accent, #6C5CFF)", color: "#fff", fontSize: 13, cursor: "pointer", width: "fit-content" }}
+          >
+            {busy ? "Connecting…" : "Connect"}
+          </button>
+        </div>
+      </Card>
       {servers.length === 0 ? (
         <HonestState
           title="NO SERVERS CONNECTED"
-          message={'Add a host to .orvyn/ssh.json in the project root — {"hosts":[{"alias":"prod","host":"1.2.3.4","user":"ubuntu","keyPath":"~/.ssh/id_ed25519"}]} — and it appears here. The agent can then SSH in with your approval.'}
+          message="Paste an IP or hostname above to add the first host. Reusable servers are saved for this project; session and mission credentials stay vaulted for that window of work."
         />
       ) : (
         servers.map((s) => {
@@ -98,6 +183,8 @@ export function ServersWorkspace({ projectRoot }: { projectRoot: string | null }
                   <div style={{ fontSize: 13.5, fontWeight: 600 }}>{s.alias}</div>
                   <div style={{ fontSize: 11.5, color: "var(--orvyn-text-muted)" }}>
                     {s.user}@{s.host}:{s.port}
+                    {s.scope ? ` · ${s.scope}` : ""}
+                    {s.hasVaultKey ? " · vault key" : ""}
                   </div>
                   {check?.output && (
                     <div style={{ fontSize: 11, color: check.ok ? "var(--orvyn-green)" : "var(--orvyn-red)", fontFamily: "var(--font-mono)", marginTop: 4, whiteSpace: "pre-wrap" }}>
@@ -245,7 +332,7 @@ export function ProjectsWorkspace({
   onUseCloud?: () => void;
 }) {
   const norm = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
-  const list = recents.filter((r) => r && !/@orvyn[\\/]+desktop[\\/]+workspace$/i.test(r) && !/[\\/]@orvyn[\\/].*workspace$/i.test(r));
+  const list = filterCustomerProjectPaths(recents);
   const row: React.CSSProperties = {
     display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "11px 14px", textAlign: "left", cursor: "pointer",
     background: "var(--orvyn-surface-2)", border: "1px solid var(--orvyn-border-soft)", borderRadius: 10, color: "var(--orvyn-text)",

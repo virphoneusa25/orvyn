@@ -59,6 +59,10 @@ test("invalid channel and telemetry stay privacy-safe", () => {
   assert.equal(inv.length, 1);
   assert.equal(inv[0]?.version, "1.4.2");
   assert.equal("macAddress" in inv[0]!, false);
+  const listed = s.summary().installations;
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.version, "1.4.2");
+  assert.equal(listed[0]?.channel, "stable");
 });
 
 test("public downloads never include storage credentials", () => {

@@ -122,6 +122,7 @@ test("steer: queued on a live run, drained once at the boundary, rejected when t
   store.create("run-st", "C:/proj");
   assert.equal(store.steer("run-st", "Keep it short."), true);
   assert.equal(store.steer("run-st", ""), false, "empty text rejected");
+  assert.equal(store.steer("run-st", "?"), false, "punctuation-only text rejected");
   assert.equal(store.steer("run-missing", "x"), false);
   const drained = store.takeSteer("run-st");
   assert.deepEqual(drained, ["Keep it short."]);

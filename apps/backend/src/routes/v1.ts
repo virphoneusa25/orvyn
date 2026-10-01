@@ -791,9 +791,10 @@ v1Router.post("/chat/completions", async (req, res) => {
 
 // --- Streaming agent runs (typed event protocol) ---
 import { registerProjectToolsFor as _regTools, registerWorkspaceFreeToolsFor as _regFreeTools } from "../ai/registerProjectTools";
-import { isTerminal } from "../agent/events";
+import { isMeaningfulSteer, isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
+import { listResolvedHosts, upsertSshHost } from "../ssh/sshHostStore";
 import { inferTaskIntent } from "../agent/taskIntent";
 import { routeTurn } from "../agent/turnRouting";
 import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace, type WorkspaceResolved } from "../agent/workspacePreflight";
@@ -1420,6 +1421,9 @@ v1Router.get("/agent/stream/runs/:id/events.json", (req, res) => {
 v1Router.post("/agent/stream/runs/:id/steer", (req, res) => {
   const t = requireTenant(req);
   const text = String(req.body.text ?? "");
+  if (!isMeaningfulSteer(text)) {
+    return res.status(400).json({ error: "Steering needs a real instruction." });
+  }
   const ok = t.runStore.steer(req.params.id, text);
   if (!ok) return res.status(409).json({ error: "Run is not active — queue the instruction instead." });
   res.json({ ok: true });
@@ -1934,15 +1938,57 @@ v1Router.get("/missions/:id", (req, res) => {
 v1Router.get("/servers", async (req, res) => {
   const t = requireTenant(req);
   const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
-  if (!root) return res.json({ servers: [] });
   try {
-    const hosts = await loadSshHosts(root);
+    const hosts = await listResolvedHosts({
+      projectRoot: root || null,
+      tenantId: t.id,
+      runId: String(req.query.runId ?? "").trim() || undefined,
+    });
     res.json({
-      servers: hosts.map((h) => ({ alias: h.alias, host: h.host, user: h.user, port: h.port ?? 22 })),
+      servers: hosts.map((h) => ({
+        alias: h.alias,
+        host: h.host,
+        user: h.user,
+        port: h.port ?? 22,
+        scope: h.scope ?? "reusable",
+        hasVaultKey: Boolean(h.vaultKeyName),
+      })),
     });
   } catch {
-    // No ssh.json or malformed — an empty list, not an error.
     res.json({ servers: [] });
+  }
+});
+
+v1Router.post("/servers", async (req, res) => {
+  const t = requireTenant(req);
+  const root = String(req.body.projectRoot ?? req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
+  try {
+    const host = await upsertSshHost({
+      tenantId: t.id,
+      localStore: t.localStore,
+      projectRoot: root || null,
+      runId: String(req.body.runId ?? "").trim() || undefined,
+      alias: String(req.body.alias ?? ""),
+      host: String(req.body.host ?? ""),
+      user: String(req.body.user ?? ""),
+      port: req.body.port != null ? Number(req.body.port) : undefined,
+      keyPath: req.body.keyPath != null ? String(req.body.keyPath) : undefined,
+      privateKey: req.body.privateKey != null ? String(req.body.privateKey) : undefined,
+      scope: req.body.scope === "session" || req.body.scope === "mission" ? req.body.scope : "reusable",
+    });
+    res.json({
+      ok: true,
+      server: {
+        alias: host.alias,
+        host: host.host,
+        user: host.user,
+        port: host.port ?? 22,
+        scope: host.scope ?? "reusable",
+        hasVaultKey: Boolean(host.vaultKeyName),
+      },
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Could not add the server." });
   }
 });
 

@@ -183,6 +183,7 @@ export const OFFICIAL_REFERENCE_SEEDS: Array<{
   { name: "io.modelcontextprotocol/git", title: "Git", description: "Official Python MCP reference server for Git repositories.", language: "python", identifier: "mcp-server-git", version: "2026.8.18", registry: "pypi" },
   { name: "io.modelcontextprotocol/fetch", title: "Fetch", description: "Official Python MCP reference server for fetching web content.", language: "python", identifier: "mcp-server-fetch", version: "2026.8.18", registry: "pypi" },
   { name: "io.modelcontextprotocol/time", title: "Time", description: "Official Python MCP reference server for time and timezones.", language: "python", identifier: "mcp-server-time", version: "2026.8.18", registry: "pypi" },
+  { name: "io.github.github/github-mcp-server", title: "GitHub", description: "Official GitHub MCP server for repositories, issues, pull requests, and workflows.", language: "typescript", identifier: "@modelcontextprotocol/server-github", version: "0.20.0", registry: "npm" },
 ];
 
 export function officialReferenceMarketServers(query: string): MarketServer[] {
@@ -204,9 +205,11 @@ export function officialReferenceMarketServers(query: string): MarketServer[] {
       name: spec.name,
       title: spec.title,
       description: spec.description,
-      publisher: "io.modelcontextprotocol",
+      publisher: spec.name.startsWith("io.github.github") ? "io.github.github" : "io.modelcontextprotocol",
       sources: ["official"],
-      repository: "https://github.com/modelcontextprotocol/servers",
+      repository: spec.name.includes("github-mcp-server")
+        ? "https://github.com/github/github-mcp-server"
+        : "https://github.com/modelcontextprotocol/servers",
       homepage: "https://modelcontextprotocol.io/examples",
       categories: spec.language === "python" ? ["Version Control", "Developer Tools"] : ["Developer Tools"],
       packages: [{ registry: spec.registry, identifier: spec.identifier, version: spec.version }],
@@ -327,11 +330,7 @@ export async function searchOfficialRegistry(
   for (let page = 0; page < maxPages; page++) {
     const res = await impl(query, limit, cursor);
     if (!res.ok) {
-      if (page === 0 && !collected.length) {
-        const err = new Error(res.error || "Official registry unavailable");
-        (err as Error & { catalogPartial?: boolean }).catalogPartial = true;
-        throw err;
-      }
+      if (page === 0 && !collected.length) break;
       break;
     }
     collected.push(...serversFromOfficialBody(res.body));
@@ -511,7 +510,7 @@ async function defaultOfficialFetch(query: string, limit: number, cursor?: strin
   if (cursor) params.set("cursor", cursor);
   const res = await fetch(`${OFFICIAL_REGISTRY_URL}/v0.1/servers?${params}`, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(20_000),
   });
   const text = await res.text();
   if (text.trim().startsWith("<") || /text\/html/i.test(res.headers.get("content-type") ?? "")) {

@@ -344,7 +344,7 @@ export function AgentActivityList({
           case "approval":
             return <ApprovalCard key={item.key} item={item} onApprove={onApprove} />;
           case "capability":
-            return <CapabilityCard key={item.key} item={item} />;
+            return <CapabilityCard key={item.key} item={item} onDeny={() => onApprove(item.key, false)} />;
           case "attachment":
             return <ArtifactCard key={item.key} item={item} />;
           default:
@@ -480,11 +480,12 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
 /** The actual image, fetched with auth and shown at thumbnail size. */
 
 
-export function CapabilityCard({ item, install, onInstalled }: {
+export function CapabilityCard({ item, install, onInstalled, onDeny }: {
   item: CapabilityRequiredItem;
   /** Chat: the server ORION found; the button installs it and the reply continues. */
   install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean; connect?: string; secretsProvided?: string[] };
   onInstalled?: () => void;
+  onDeny?: () => void;
 }) {
   const [settled, setSettled] = useState(Boolean(item.settled));
   const [state, setState] = useState<"idle" | "installing" | "done" | "error">("idle");
@@ -544,7 +545,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
               Connect GitHub
             </button>
             <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Source Control → GitHub — ORION uses your sign-in.</span>
-            <button onClick={() => setSettled(true)} style={btn("var(--border)")}>Not now</button>
+            <button onClick={() => { setSettled(true); onDeny?.(); }} style={btn("var(--border)")}>Not now</button>
           </div>
         ) : null}
         {state !== "done" && !settled && !(connectGithub && !githubLinked) && need.map((n) => (
@@ -555,14 +556,14 @@ export function CapabilityCard({ item, install, onInstalled }: {
         {error && <div style={{ fontSize: 11.5, color: "var(--danger)", marginBottom: 6 }}>{error}</div>}
         {state === "done" ? (
           <span data-testid="capability-installed" style={{ fontSize: 11.5, color: "var(--success)" }}>Installed {install.name} — ORION is continuing.</span>
-        ) : settled ? (
-          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Skipped. ORION will continue without {install.name}; you can connect it later from Tools &amp; MCP.</span>
+        )         : settled ? (
+          <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Skipped. ORION continues without this capability (capability-denied).</span>
         ) : connectGithub && !githubLinked ? null : (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button data-testid="capability-install" disabled={state === "installing" || need.some((n) => !secrets[n]?.trim())} onClick={() => void run()} style={btn("var(--accent)")}>
               {state === "installing" ? "Installing…" : `Install ${install.name}`}
             </button>
-            <button onClick={() => { setSecrets({}); setSettled(true); }} style={btn("var(--border)")}>Not now</button>
+            <button onClick={() => { setSecrets({}); setSettled(true); onDeny?.(); }} style={btn("var(--border)")}>Not now</button>
           </div>
         )}
       </div>
@@ -584,7 +585,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
         {free ? " Official public MCP tools install on this desktop with no API key." : ""}
       </div>
       {settled ? (
-        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Cancelled — ORION will not install this itself.</span>
+        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Not now — ORION continues without this capability (capability-denied).</span>
       ) : (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button data-testid="capability-install" onClick={() => openMarket(named || item.query || "")} style={btn("var(--accent)")}>
@@ -593,8 +594,8 @@ export function CapabilityCard({ item, install, onInstalled }: {
           <button onClick={() => openMarket(item.query || primary)} style={btn("var(--border)")}>
             View MCP options
           </button>
-          <button onClick={() => setSettled(true)} style={btn("var(--border)")}>
-            Cancel
+          <button onClick={() => { setSettled(true); onDeny?.(); }} style={btn("var(--border)")}>
+            Not now
           </button>
         </div>
       )}

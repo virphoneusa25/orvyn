@@ -303,9 +303,6 @@ export function WorkStream({
     // durable queue is the explicit secondary choice (Queue button) or the
     // fallback when the run settles mid-click.
     if (runActive && !bypassQueue && run.runId) {
-      setPrompt("");
-      setAttachments([]);
-      setChips([]);
       try {
         if (!forceQueue) {
           const steered = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/steer`), {
@@ -313,12 +310,24 @@ export function WorkStream({
             headers: { "Content-Type": "application/json", ...authHeaders() },
             body: JSON.stringify({ text: outgoing }),
           });
-          if (steered.ok) return;
+          if (steered.ok) {
+            setPrompt("");
+            setAttachments([]);
+            setChips([]);
+            return;
+          }
+          if (steered.status === 400) {
+            setError("Steering needs a real instruction.");
+            return;
+          }
           if (steered.status === 409) {
             await send(instruction, true);
             return;
           }
         }
+        setPrompt("");
+        setAttachments([]);
+        setChips([]);
         const r = await fetch(apiUrl(`/agent/stream/runs/${run.runId}/queue`), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -499,10 +508,11 @@ export function WorkStream({
   // claimed the key (e.g. a palette dismissal).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && runActive && !e.defaultPrevented) {
-        e.preventDefault();
-        void run.stop();
-      }
+      if (e.key !== "Escape" || !runActive || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable='true']") || t.isContentEditable)) return;
+      e.preventDefault();
+      void run.stop();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

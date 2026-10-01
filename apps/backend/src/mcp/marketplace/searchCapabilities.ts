@@ -1,5 +1,6 @@
 import type { McpManager } from "../McpManager";
 import type { RegistryAggregator } from "./aggregator";
+import { officialReferenceResults } from "./officialReference";
 import { isPublicFreeMcp, serverRequiresUserSecret } from "./publicInstall";
 import { DEFAULT_TOOL_BUDGET, type MarketplaceMcpServer } from "./types";
 
@@ -144,6 +145,27 @@ export class CapabilityIndex {
           installed: Boolean(r.server.installed),
           trust: r.server.trust?.level,
           official: r.server.sources?.includes("official"),
+        }),
+      }));
+    }
+    if (!market.length) {
+      const seeded = officialReferenceResults(query);
+      for (const r of seeded) if (r.server.canonicalId) this.seen.set(r.server.canonicalId, r.server);
+      market = seeded.map((r) => ({
+        kind: "marketplace" as const,
+        name: r.server.title || r.server.name,
+        server: r.server.name,
+        description: r.server.description.slice(0, 220),
+        installed: Boolean(r.server.installed),
+        canonicalId: r.server.canonicalId,
+        trust: r.server.trust?.level ?? this.rankContext.trustOf?.(r.server.canonicalId),
+        freeInstall: isPublicFreeMcp(r.server),
+        secrets: serverRequiresUserSecret(r.server) ? secretNamesFor(r.server) : [],
+        oauth: (r.server.auth ?? []).some((a) => a.kind === "oauth"),
+        score: rankHit(q, r.server.name, r.server.description, {
+          installed: Boolean(r.server.installed),
+          trust: r.server.trust?.level,
+          official: true,
         }),
       }));
     }

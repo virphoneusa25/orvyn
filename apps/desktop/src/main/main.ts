@@ -9,6 +9,7 @@ import { createWriteStream } from "fs";
 import { connectionFileRecord } from "./connectionRecord";
 import { createWorkbenchBrowserManager, registerBrowserIpc, type WorkbenchBrowserManager } from "./workbenchBrowser";
 import { fetchOfficialRegistry } from "./officialRegistryFetch";
+import { filterCustomerProjectPaths, isCustomerProjectPath } from "./projectPathFilter";
 import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
 import { sampleHostStats } from "./systemStats";
@@ -118,16 +119,17 @@ async function loadRecents(): Promise<string[]> {
   try {
     const raw = await fs.readFile(recentsPath(), "utf-8");
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === "string") : [];
+    return Array.isArray(parsed) ? filterCustomerProjectPaths(parsed.filter((p) => typeof p === "string")) : [];
   } catch {
     return [];
   }
 }
 
 async function pushRecent(folder: string): Promise<string[]> {
+  if (!isCustomerProjectPath(folder)) return loadRecents();
   const recents = (await loadRecents()).filter((p) => path.resolve(p) !== path.resolve(folder));
   recents.unshift(folder);
-  const next = recents.slice(0, MAX_RECENTS);
+  const next = filterCustomerProjectPaths(recents).slice(0, MAX_RECENTS);
   await fs.writeFile(recentsPath(), JSON.stringify(next, null, 2), "utf-8");
   return next;
 }

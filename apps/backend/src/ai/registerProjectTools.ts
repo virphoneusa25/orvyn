@@ -130,7 +130,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   g.register(makeWebSearchTool());
 
   // Remote administration (hosts allow-listed in .orvyn/ssh.json)
-  g.register(makeSshExecTool(projectRoot));
+  g.register(makeSshExecTool(projectRoot, { tenantId: tenant.id, localStore: tenant.localStore }));
 
   // Browser QA (Playwright). Registered always; each call returns a typed
   // "Playwright is not installed" error until the optional dep is added.

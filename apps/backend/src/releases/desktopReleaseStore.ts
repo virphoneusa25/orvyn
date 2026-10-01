@@ -251,14 +251,52 @@ export class DesktopReleaseStore {
     };
   }
 
-  summary(): { channels: Record<ReleaseChannel, string | null>; adoption: { version: string; count: number; percent: number }[]; releases: DesktopRelease[]; failures: number } {
+  summary(): {
+    channels: Record<ReleaseChannel, string | null>;
+    adoption: { version: string; count: number; percent: number }[];
+    releases: DesktopRelease[];
+    failures: number;
+    installations: {
+      installationId: string;
+      accountId: string | null;
+      platform: string;
+      arch: string;
+      version: string;
+      channel: string;
+      lastEvent: string | null;
+      lastSeen: number;
+    }[];
+  } {
     const channels = { stable: null, beta: null, canary: null } as Record<ReleaseChannel, string | null>;
     for (const ch of RELEASE_CHANNELS) channels[ch] = this.current(ch).latest;
     const rows = this.db.prepare("SELECT version, COUNT(*) AS n FROM desktop_installations GROUP BY version ORDER BY n DESC").all() as { version: string; n: number }[];
     const total = rows.reduce((s, r) => s + Number(r.n), 0) || 1;
     const adoption = rows.map((r) => ({ version: r.version, count: Number(r.n), percent: Math.round((Number(r.n) / total) * 100) }));
     const failures = Number((this.db.prepare("SELECT COUNT(*) AS n FROM desktop_update_events WHERE event = 'update_error'").get() as { n: number }).n);
-    return { channels, adoption, releases: this.list(), failures };
+    return { channels, adoption, releases: this.list(), failures, installations: this.listInstallations() };
+  }
+
+  listInstallations(): {
+    installationId: string;
+    accountId: string | null;
+    platform: string;
+    arch: string;
+    version: string;
+    channel: string;
+    lastEvent: string | null;
+    lastSeen: number;
+  }[] {
+    const rows = this.db.prepare("SELECT * FROM desktop_installations ORDER BY last_seen DESC LIMIT 200").all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      installationId: String(r.installation_id),
+      accountId: r.account_id ? String(r.account_id) : null,
+      platform: String(r.platform),
+      arch: String(r.arch),
+      version: String(r.version),
+      channel: String(r.channel),
+      lastEvent: r.last_event ? String(r.last_event) : null,
+      lastSeen: Number(r.last_seen),
+    }));
   }
 
   recordTelemetry(input: {

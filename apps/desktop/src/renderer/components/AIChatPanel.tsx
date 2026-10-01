@@ -23,6 +23,7 @@ import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivity
 import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 import { AgentComposer, Attachment } from "./AgentComposer";
 import { isRunFinished, useAgentRun } from "../useAgentRun";
+import { filterCustomerProjectPaths } from "../projectPathFilter";
 import { apiUrl, authHeaders } from "../connection";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
 import lockup from "../assets/logo-lockup.png";
@@ -661,6 +662,7 @@ function EmptyHome({
   onOpenRecent?: (folder: string) => void;
   onPrompt: (text: string) => void;
 }) {
+  const folders = filterCustomerProjectPaths(recents);
   const prompts = [
     "Explain this codebase like I'm new to it",
     "Help me design an API for a new feature",
@@ -727,12 +729,12 @@ function EmptyHome({
         </>
       )}
 
-      {recents.length > 0 && (
+      {folders.length > 0 && (
         <>
           <div style={{ fontSize: 11, opacity: 0.5, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 8 }}>
             Recent folders
           </div>
-          {recents.map((folder) => (
+          {folders.map((folder) => (
             <button
               key={folder}
               onClick={() => onOpenRecent?.(folder)}

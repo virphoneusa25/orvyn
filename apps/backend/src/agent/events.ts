@@ -259,6 +259,15 @@ export function isExecutionActive(status: RunStatus): boolean {
   return status === "queued" || status === "running" || status === "awaiting_approval" || status === "verifying";
 }
 
+/** Accidental composer noise (? / punctuation) must not steer or stop a run. */
+export function isMeaningfulSteer(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/^[\s?!.…,;:\-—]+$/u.test(trimmed)) return false;
+  if (trimmed.length <= 2 && /^[^\p{L}\p{N}]+$/u.test(trimmed)) return false;
+  return true;
+}
+
 /** A run is finished when no further events can arrive for it. Alias for isRunSettled — kept for existing callers. */
 export function isTerminal(status: RunStatus): boolean {
   return isRunSettled(status);
@@ -499,7 +508,7 @@ export class RunStore {
     const run = this.runs.get(runId);
     if (!run || isTerminal(run.status)) return false;
     const trimmed = text.trim();
-    if (!trimmed) return false;
+    if (!isMeaningfulSteer(trimmed)) return false;
     const list = this.steered.get(runId) ?? [];
     list.push(trimmed);
     this.steered.set(runId, list);

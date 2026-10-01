@@ -1183,27 +1183,28 @@ export class StreamingAgentRuntime {
     const pick = servers.find((c) => c.canonicalId && !c.oauth);
     if (pick && this.isKnownTool(runId, "install_mcp_server")) return this.installWithApproval(runId, state, query, pick, servers);
     const primary = servers[0]?.name || servers[0]?.server;
+    const callId = `cap_${Math.random().toString(36).slice(2, 10)}`;
+    const call: ToolCall = { id: callId, name: "search_capabilities", arguments: { query } };
     this.store.emit(runId, "capability.required", {
       query,
+      callId,
       reason: reason || (primary ? `ORION needs ${primary} to ${query}.` : "No tool for this is installed yet. Pick one in Tools & MCP → Marketplace and ORION will finish the task."),
       recommendedServers: servers,
       runId,
     });
-    // The capability is unavailable and the install card is showing. The run
-    // is now waiting on the USER to act (connect the tool), not on the model.
-    // Keep it recoverable: paused for capability, not stuck "running" with a
-    // spinner that never stops.
-    this.store.emit(runId, "run.blocked", {
-      message: primary
-        ? `This task needs ${primary} to ${query}. Connect it from the card above or Tools & MCP, then retry.`
-        : `This task needs a capability that is not installed yet. Add one from Tools & MCP → Marketplace, then retry.`,
-      code: "CAPABILITY_REQUIRED",
-      actions: ["retry", "open_tools", "cancel"],
-    });
     this.store.setStatus(runId, "awaiting_approval");
+    const { approved, timedOut } = await raceApprovalTimeout((settle) => {
+      this.pending.set(callId, { call, destructive: false, resolve: settle, runId });
+      return () => this.pending.delete(callId);
+    });
+    this.store.emit(runId, "approval.resolved", { callId, approved, ...(timedOut ? { timedOut: true } : {}) });
+    this.store.setStatus(runId, "running");
+    if (!approved) {
+      return `The user declined the additional capability for “${query}” (capability-denied). Do not ask again and do not say the tool is unavailable. Continue with the tools you have.`;
+    }
     return primary
-      ? `ORVYN is showing the user a card to connect ${primary} (it needs the user to sign in) so you can ${query}. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences that you need ${primary} to ${query}, and that connecting it from the card lets you finish — then stop.`
-      : `ORVYN found no tool to install that can ${query}, and is showing the user a card to add one. Do not say the tool is unavailable. If another tool you have can do it, use it; otherwise tell the user in one or two sentences what you need — then stop.`;
+      ? `The user is connecting ${primary} so you can ${query}. If another tool you have can do it now, use it; otherwise wait for the install to finish.`
+      : `The user is adding a tool for “${query}”. If another tool you have can do it, use it; otherwise continue without claiming the capability is unavailable.`;
   }
 
   /**
@@ -1232,7 +1233,7 @@ export class StreamingAgentRuntime {
     const secrets = this.approvalInputs.get(callId);
     this.approvalInputs.delete(callId);
     if (!approved) {
-      return `The user did not approve installing ${name}. Do not say the tool is unavailable and do not ask again; finish the task as well as you can with the tools you have and mention in one sentence that installing ${name} would let you ${query}.`;
+      return `The user did not approve installing ${name} (capability-denied). Do not say the tool is unavailable and do not ask again; finish the task as well as you can with the tools you have.`;
     }
     this.store.emit(runId, "tool.started", { callId, tool: "install_mcp_server", args: call.arguments });
     let result;

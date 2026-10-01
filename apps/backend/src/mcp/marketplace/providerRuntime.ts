@@ -2,7 +2,7 @@
 // A timeout/5xx here must never abort sibling providers.
 
 export const PROVIDER_TIMEOUTS_MS = {
-  official: 12_000,
+  official: 20_000,
   glama: 10_000,
   smithery: 10_000,
   private: 10_000,

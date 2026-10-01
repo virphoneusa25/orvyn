@@ -10,7 +10,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import fs from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { authService } from "../auth/AuthService";
 import { can, staffStore, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
@@ -728,6 +728,21 @@ adminRouter.post("/releases", need("staff.manage"), wrap((req, res) => {
   });
   audit(req, "desktop.release.record", null, { version: release.version, channel: release.channel });
   res.json({ release });
+}));
+
+adminRouter.post("/releases/installs", need("staff.manage"), wrap((req, res) => {
+  const installationId = String(req.body?.installationId ?? `admin-${randomUUID()}`).slice(0, 80);
+  desktopReleaseStore().recordTelemetry({
+    installationId,
+    accountId: req.body?.accountId ? String(req.body.accountId) : undefined,
+    platform: req.body?.platform,
+    arch: req.body?.arch ?? "x64",
+    version: req.body?.version,
+    channel: req.body?.channel,
+    event: req.body?.event ?? "app_started",
+  });
+  audit(req, "desktop.install.record", null, { version: String(req.body?.version ?? ""), channel: String(req.body?.channel ?? "") });
+  res.json({ ok: true, installationId, summary: desktopReleaseStore().summary() });
 }));
 
 adminRouter.patch("/releases/:id", need("support.write"), wrap((req, res) => {

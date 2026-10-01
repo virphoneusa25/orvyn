@@ -17,22 +17,19 @@ import * as os from "os";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
+import type { LocalStore } from "../../persistence/LocalStore";
+import {
+  listResolvedHosts,
+  materializeIdentity,
+  sshConfigPath,
+  type SshCredentialScope,
+  type SshHostConfig,
+} from "../../ssh/sshHostStore";
 
-export interface SshHostConfig {
-  alias: string;
-  host: string;
-  user: string;
-  port?: number;
-  /** Path to a private key; ~ expanded. Omitted = ssh's default key discovery. */
-  keyPath?: string;
-}
+export { sshConfigPath, type SshCredentialScope, type SshHostConfig };
 
 export interface SshToolConfig {
   hosts: SshHostConfig[];
-}
-
-export function sshConfigPath(projectRoot: string): string {
-  return path.join(projectRoot, ".orvyn", "ssh.json");
 }
 
 export async function loadSshHosts(projectRoot: string): Promise<SshHostConfig[]> {
@@ -50,11 +47,14 @@ function expandHome(p: string): string {
   return p;
 }
 
-export function makeSshExecTool(projectRoot: string): AITool {
+export function makeSshExecTool(
+  projectRoot: string,
+  opts?: { tenantId?: string; localStore?: LocalStore }
+): AITool {
   return {
     name: "ssh_exec",
     description:
-      "Run a shell command on a remote server over SSH. Hosts must be pre-configured by the user in .orvyn/ssh.json — pass the alias, not a hostname. Key-based auth only. Output is captured and returned; very long output (journalctl, logs) comes back as a digest with the error lines verbatim, so prefer narrow commands (grep, tail -n, --since). Read-only commands run without asking; restarts, installs and config edits follow the access mode; dangerous commands (rm -rf, DROP DATABASE, firewall resets, reboot) always ask the user.",
+      "Run a shell command on a remote server over SSH. Hosts must be pre-configured by the user (Servers → Add server, or .orvyn/ssh.json) — pass the alias, not a hostname. Key-based auth only. Output is captured and returned; very long output (journalctl, logs) comes back as a digest with the error lines verbatim, so prefer narrow commands (grep, tail -n, --since). Read-only commands run without asking; restarts, installs and config edits follow the access mode; dangerous commands (rm -rf, DROP DATABASE, firewall resets, reboot) always ask the user.",
     parameters: {
       type: "object",
       properties: {
@@ -73,22 +73,35 @@ export function makeSshExecTool(projectRoot: string): AITool {
         return { ok: false, error: "Both \"host\" (an alias from .orvyn/ssh.json) and \"command\" are required." };
       }
 
-      let hosts: SshHostConfig[];
+      const root = workspaceRootFor(projectRoot, context);
+      let hosts: SshHostConfig[] = [];
       try {
-        // The allowlist lives in the project workspace. The command itself runs on the remote host.
-        hosts = await loadSshHosts(workspaceRootFor(projectRoot, context));
+        hosts = opts?.tenantId
+          ? await listResolvedHosts({ projectRoot: root, tenantId: opts.tenantId, runId: context?.runId })
+          : await loadSshHosts(root);
       } catch (err: any) {
         return {
           ok: false,
-          error: `No usable SSH configuration: ${err.message}. Create .orvyn/ssh.json with {"hosts":[{"alias":"myserver","host":"1.2.3.4","user":"root","keyPath":"~/.ssh/id_ed25519"}]}.`,
+          error: `No usable SSH configuration: ${err.message}. Add a server in Servers (paste the IP or hostname) or create .orvyn/ssh.json with {"hosts":[{"alias":"myserver","host":"1.2.3.4","user":"root","keyPath":"~/.ssh/id_ed25519"}]}.`,
         };
       }
 
+      if (!hosts.length) {
+        return {
+          ok: false,
+          error: `No usable SSH configuration. Add a server in Servers (paste the IP or hostname) or create .orvyn/ssh.json with {"hosts":[{"alias":"myserver","host":"1.2.3.4","user":"root","keyPath":"~/.ssh/id_ed25519"}]}.`,
+        };
+      }
       const target = hosts.find((h) => h.alias === alias);
       if (!target) {
         const known = hosts.map((h) => h.alias).join(", ") || "(none configured)";
         return { ok: false, error: `Unknown host alias "${alias}". Configured hosts: ${known}.` };
       }
+
+      const identity =
+        opts?.tenantId && opts.localStore
+          ? await materializeIdentity({ tenantId: opts.tenantId, localStore: opts.localStore, host: target })
+          : { keyPath: target.keyPath, cleanup: async () => undefined };
 
       const sshArgs = [
         "-o", "BatchMode=yes", // never prompt interactively; a hang here blocks the run
@@ -96,29 +109,34 @@ export function makeSshExecTool(projectRoot: string): AITool {
         "-o", "StrictHostKeyChecking=accept-new",
         "-p", String(target.port ?? 22),
       ];
-      if (target.keyPath) sshArgs.push("-i", expandHome(target.keyPath));
+      const keyPath = identity.keyPath ?? target.keyPath;
+      if (keyPath) sshArgs.push("-i", expandHome(keyPath));
       sshArgs.push(`${target.user}@${target.host}`, "--", command);
 
-      return await new Promise<ToolResult>((resolve) => {
-        execFile(
-          "ssh",
-          sshArgs,
-          { timeout: 120_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
-          (error, stdout, stderr) => {
-            if (error && !stdout && !stderr) {
-              const hint = (error as NodeJS.ErrnoException).code === "ENOENT"
-                ? "ssh is not installed on the backend host."
-                : "";
-              resolve({ ok: false, error: `SSH to "${alias}" failed: ${error.message}${hint ? ` (${hint})` : ""}` });
-              return;
+      try {
+        return await new Promise<ToolResult>((resolve) => {
+          execFile(
+            "ssh",
+            sshArgs,
+            { timeout: 120_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true },
+            (error, stdout, stderr) => {
+              if (error && !stdout && !stderr) {
+                const hint = (error as NodeJS.ErrnoException).code === "ENOENT"
+                  ? "ssh is not installed on the backend host."
+                  : "";
+                resolve({ ok: false, error: `SSH to "${alias}" failed: ${error.message}${hint ? ` (${hint})` : ""}` });
+                return;
+              }
+              // A nonzero exit code is still a successful command execution —
+              // the agent needs the output to diagnose, not an error wrapper.
+              const output = [stdout, stderr].filter(Boolean).join("\n").trim();
+              resolve({ ok: true, output: output || "(no output)" });
             }
-            // A nonzero exit code is still a successful command execution —
-            // the agent needs the output to diagnose, not an error wrapper.
-            const output = [stdout, stderr].filter(Boolean).join("\n").trim();
-            resolve({ ok: true, output: output || "(no output)" });
-          }
-        );
-      });
+          );
+        });
+      } finally {
+        await identity.cleanup();
+      }
     },
   };
 }

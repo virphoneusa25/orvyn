@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { DirEntry, WorkspaceState } from "../orvyn-bridge";
+import { filterCustomerProjectPaths } from "../projectPathFilter";
 
 // Code view explorer: ONLY the files in the open folder, as a tree you can
 // expand. ORION's generated files and run artifacts live in the Files tab
@@ -153,10 +154,10 @@ export function FileExplorer({
           >
             Open folder…
           </button>
-          {(workspace?.recents.length ?? 0) > 0 && (
+          {(filterCustomerProjectPaths(workspace?.recents ?? []).length) > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ opacity: 0.5, textTransform: "uppercase", fontSize: 11, marginBottom: 6 }}>Recent</div>
-              {workspace!.recents.map((folder) => (
+              {filterCustomerProjectPaths(workspace!.recents).map((folder) => (
                 <div
                   key={folder}
                   onClick={() => onOpenRecent(folder)}
