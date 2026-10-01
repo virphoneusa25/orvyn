@@ -44,8 +44,12 @@ const DOCS: Doc[] = [
 
 export function LegalSettings({
   acceptance,
+  onAccept,
+  accepting = false,
 }: {
   acceptance?: { version: string; acceptedAt: number } | null;
+  onAccept?: () => void;
+  accepting?: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const acceptedLabel = useMemo(() => {
@@ -60,6 +64,25 @@ export function LegalSettings({
         Current legal version: {LEGAL_VERSION}. Full source documents are also maintained under docs/legal/ and at the repository root.
       </div>
       <div style={{ fontSize: 11, opacity: 0.55, marginBottom: 12 }}>{acceptedLabel}</div>
+      {onAccept && (!acceptance || acceptance.version !== LEGAL_VERSION) && (
+        <button
+          onClick={onAccept}
+          disabled={accepting}
+          style={{
+            background: "#3b5bfd",
+            border: "none",
+            borderRadius: 6,
+            color: "white",
+            padding: "6px 12px",
+            fontSize: 12,
+            cursor: accepting ? "default" : "pointer",
+            opacity: accepting ? 0.6 : 1,
+            marginBottom: 12,
+          }}
+        >
+          {accepting ? "Recording acceptance…" : "Accept current legal terms"}
+        </button>
+      )}
       {DOCS.map((doc) => {
         const open = openId === doc.id;
         return (
