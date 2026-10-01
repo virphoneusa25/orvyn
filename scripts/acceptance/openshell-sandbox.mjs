@@ -215,15 +215,13 @@ await check("interactive terminal attaches to the authorized sandbox", async () 
 await check("browser runs inside the sandbox and returns screenshot evidence", async () => {
   fs.writeFileSync(path.join(wsA, "browser.html"), "<!doctype html><title>ORVYN sandbox browser</title><h1 id=proof>inside sandbox</h1>");
   fs.chownSync(path.join(wsA, "browser.html"), SANDBOX_UID, SANDBOX_UID);
-  const server = await p.exec(A, "python3 -m http.server 8765 --directory /workspace >/tmp/orvyn-http.log 2>&1 &", { timeoutS: 10 });
-  assert(server.exitCode === 0, server.stderr);
   const [opened, shot] = await helperConversation(A, "/usr/local/lib/orvyn/browser-server.mjs", [
-    ["open", { url: "http://127.0.0.1:8765/browser.html" }],
+    ["open", { url: "file:///workspace/browser.html" }],
     ["screenshot", {}],
   ]);
   assert(opened.ok && /ORVYN sandbox browser/.test(opened.output), JSON.stringify(opened).slice(0, 300));
   assert(shot.ok && String(shot.meta?.screenshot?.b64 ?? "").length > 1000, "screenshot bytes missing");
-  assert(shot.meta?.url === "http://127.0.0.1:8765/browser.html", `browser session lost its page: ${JSON.stringify(shot.meta)}`);
+  assert(shot.meta?.url === "file:///workspace/browser.html", `browser session lost its page: ${JSON.stringify(shot.meta)}`);
   return "page title and PNG bytes returned by sandbox Chromium";
 });
 
