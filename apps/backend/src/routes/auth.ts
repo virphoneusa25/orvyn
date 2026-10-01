@@ -36,7 +36,7 @@ authRouter.post("/register", (req, res) => {
 authRouter.post("/login", (req, res) => {
   try {
     const { user, token } = authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""));
-    res.json({ user, token });
+    res.json({ user, token, legalAcceptance: authService.getLegalAcceptance(user.id) });
   } catch (err: any) {
     // 429 for lockout, 401 for bad credentials.
     const status = err.message.startsWith("Too many") ? 429 : 401;
