@@ -9,6 +9,7 @@ import { makeInstallMcpServerTool } from "../ai/tools/searchCapabilities";
 import { marketplaceFor } from "../mcp/marketplace/service";
 import { MARKETPLACE_CATEGORIES } from "../mcp/marketplace/types";
 import { hardeningFor } from "../mcp/hardening/hardening";
+import { githubToken } from "../integrations/githubConnection";
 
 export function mcpRouter(requireTenant: (req: any) => any): Router {
   const r = Router();
@@ -230,7 +231,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     } as any;
     const result = t.toolGateway.list().some((x: { name: string }) => x.name === "install_mcp_server")
       ? await t.toolGateway.execute("install_mcp_server", args, undefined, context)
-      : await makeInstallMcpServerTool(() => marketplaceFor(t.mcpManager, t.localStore, t.id)).execute(args, context);
+      : await makeInstallMcpServerTool(() => marketplaceFor(t.mcpManager, t.localStore, t.id), { githubToken: () => githubToken(t.id) }).execute(args, context);
     const installed = (result.meta?.installed ?? {}) as { name?: string; tools?: string[]; serverId?: string; state?: string };
     try { hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("install", { serverId: installed.serverId, marketplaceId: canonicalId, via: "capability-card" }); } catch { /* audit is best-effort */ }
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error ?? "The install did not finish.", ...installed });

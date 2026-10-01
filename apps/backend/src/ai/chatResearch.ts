@@ -28,7 +28,7 @@ export interface ChatActivity {
   reason?: string;
   servers?: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean }[];
   /** The server ORION will install once the user approves (the card's Install button). */
-  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean; connect?: string; secretsProvided?: string[] };
   /** Set by the desktop once installed. */
   installed?: boolean;
   startedAt: number;

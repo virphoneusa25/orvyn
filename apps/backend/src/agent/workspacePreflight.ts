@@ -13,7 +13,7 @@ import { normalizeKnownFile, rootKey, type WorkSession, type WorkSessionStore } 
 export const WORKSPACE_STATE_MISMATCH = "WORKSPACE_STATE_MISMATCH";
 
 const DESKTOP_PLACEHOLDER = "/opt/orvyn/workspaces";
-const SKIP = new Set(["node_modules", "dist", ".git", "previews", ".orvyn", "coverage", "build", "out"]);
+const SKIP = new Set(["node_modules", "dist", ".git", "previews", ".orvyn", "coverage", "build", "out", "generated"]);
 
 export interface WorkspaceIdentity {
   sessionId: string;
@@ -290,7 +290,10 @@ function restoreOwnedWorkspace(
   ctx: { cwd: string; virtualRoot: string }
 ): WorkspacePreflightResult {
   const stored = record.projectRoot;
-  const known = input.sessions.knownFiles(record.workspaceId);
+  // generated/* entries are deliverables in artifact storage (Files →
+  // Generated), not project files — they cannot prove the workspace had a
+  // project, so they never trigger a WORKSPACE_STATE_MISMATCH.
+  const known = input.sessions.knownFiles(record.workspaceId).filter((f) => !/^generated\//i.test(f));
   const managed = managedWorkspaceDir(input.sessions.dataDirectory, input.tenantId, record.workspaceId);
   workspaceLog("project.workspace.resolve", {
     projectId: record.projectId,

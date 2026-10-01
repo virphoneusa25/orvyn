@@ -1,8 +1,25 @@
 import { AITool, ToolResult } from "../ToolTypes";
 import type { MarketplaceService } from "../../mcp/marketplace/service";
+import { secretNamesFor } from "../../mcp/marketplace/searchCapabilities";
 import { builtinComputerUseHit } from "../../computerUse/modelComputerCapabilities";
 
-export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AITool {
+/**
+ * Connections ORVYN already owns for this tenant (the signed-in user's GitHub
+ * OAuth grant). A GitHub MCP server must reuse that connection — never ask the
+ * user to paste a raw token into a chat card.
+ */
+export interface ConnectionHints {
+  githubToken?: () => string | null;
+}
+
+const GITHUBISH = /\bgithub\b/i;
+const SECRET_VALUE = /token|authoriz|api[-_ ]?key|pat\b|secret|credential|password/i;
+
+function githubish(server: { canonicalId?: string; server?: string; name?: string }): boolean {
+  return GITHUBISH.test(`${server.canonicalId ?? ""} ${server.server ?? ""} ${server.name ?? ""}`);
+}
+
+export function makeSearchCapabilitiesTool(market: () => MarketplaceService, connections?: ConnectionHints): AITool {
   return {
     name: "search_capabilities",
     description:
@@ -30,15 +47,25 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
       for (const h of hits.slice(0, 10)) {
         lines.push(`- [${h.kind}${h.installed ? ", installed" : ""}] ${h.name} · ${h.server} — ${h.description.slice(0, 140)}`);
       }
-      const recommended = askInstall.map((h) => ({
-        name: h.name,
-        server: h.server,
-        canonicalId: h.canonicalId,
-        description: h.description,
-        freeInstall: Boolean(h.freeInstall),
-        secrets: h.secrets ?? [],
-        oauth: Boolean(h.oauth),
-      }));
+      const recommended = askInstall.map((h) => {
+        const need = h.secrets ?? [];
+        // A GitHub server installs against the user's GitHub connection:
+        // secrets the stored OAuth token satisfies are marked provided, so
+        // the card renders Connect/Install instead of raw token fields.
+        const gh = githubish(h);
+        const provided = gh && connections?.githubToken?.() ? need.filter((n) => SECRET_VALUE.test(n)) : [];
+        return {
+          name: h.name,
+          server: h.server,
+          canonicalId: h.canonicalId,
+          description: h.description,
+          freeInstall: Boolean(h.freeInstall),
+          secrets: need,
+          oauth: Boolean(h.oauth),
+          ...(gh ? { connect: "github" } : {}),
+          ...(provided.length ? { secretsProvided: provided } : {}),
+        };
+      });
       if (askInstall.length) {
         const primary = askInstall[0].name;
         const free = recommended[0]?.freeInstall;
@@ -77,7 +104,7 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService): AI
  * and returns its tools. Never runs without the user's approval: it is an
  * "ask" tool the access modes never auto-allow.
  */
-export function makeInstallMcpServerTool(market: () => MarketplaceService): AITool {
+export function makeInstallMcpServerTool(market: () => MarketplaceService, connections?: ConnectionHints): AITool {
   return {
     name: "install_mcp_server",
     description:
@@ -102,10 +129,16 @@ export function makeInstallMcpServerTool(market: () => MarketplaceService): AITo
         server = m.index.serverFor(id);
       }
       if (!server) return { ok: false, error: `No MCP server with id ${id} was found in the marketplace. Call search_capabilities first.` };
-      const secrets = (args.secrets && typeof args.secrets === "object" ? args.secrets : undefined) as Record<string, string> | undefined;
+      const secrets = { ...((args.secrets && typeof args.secrets === "object" ? args.secrets : undefined) as Record<string, string> | undefined) };
+      // The signed-in user's GitHub OAuth grant satisfies a GitHub server's
+      // token secrets — they were never meant to be typed into a chat card.
+      if (githubish(server)) {
+        const token = connections?.githubToken?.();
+        if (token) for (const n of secretNamesFor(server)) if (SECRET_VALUE.test(n) && !String(secrets[n] ?? "").trim()) secrets[n] = token;
+      }
       let out;
       try {
-        out = await m.install(server, { connect: true, secrets, cwd: context?.workspaceRoot });
+        out = await m.install(server, { connect: true, secrets: Object.keys(secrets).length ? secrets : undefined, cwd: context?.workspaceRoot });
       } catch (err: any) {
         return { ok: false, error: `Installing ${server.title || server.name} failed: ${err?.message ?? err}` };
       }

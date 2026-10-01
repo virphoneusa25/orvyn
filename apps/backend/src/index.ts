@@ -32,6 +32,7 @@ import { Orchestrator } from "./ai/Orchestrator";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
 import { loadVaultKey } from "./secrets/vault";
+import { githubToken } from "./integrations/githubConnection";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
 import { readFileSync } from "fs";
@@ -504,8 +505,8 @@ function chatOwnTool(tenant: any, name: string) {
   switch (name) {
     case "web_search": return makeWebSearchTool();
     case "fetch_url": return makeFetchUrlTool();
-    case "search_capabilities": return makeSearchCapabilitiesTool(market);
-    case "install_mcp_server": return makeInstallMcpServerTool(market);
+    case "search_capabilities": return makeSearchCapabilitiesTool(market, { githubToken: () => githubToken(tenant.id) });
+    case "install_mcp_server": return makeInstallMcpServerTool(market, { githubToken: () => githubToken(tenant.id) });
     default: return null;
   }
 }

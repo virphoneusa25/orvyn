@@ -426,3 +426,39 @@ test("a blank project root is not the backend process directory", () => {
   assert.equal(dot.available, false);
   assert.notEqual(dot.path, process.cwd());
 });
+
+test("generated deliverables in history do not force a workspace state mismatch", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-gen-"));
+  const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-gen-"));
+  const first = open(dir);
+  const created = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.session,
+    instruction: "Build a landing page.",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(created.status, "resolved");
+  if (created.status !== "resolved") return;
+  // Image/document deliverables land in artifact storage as generated/ paths —
+  // they are not project files and must not count as missing workspace content.
+  first.sessions.rememberFiles(created.workspaceId, ["generated/logo.png", "generated/icons.svg"]);
+  // The server-side workspace directory is gone (restarted host, cleaned
+  // volume): only artifact-store paths were ever remembered, so there is no
+  // project state to mismatch — the run must keep going, not stop.
+  rmSync(created.projectRoot, { recursive: true, force: true });
+
+  const follow = resolveRunWorkspace({
+    sessions: first.sessions,
+    tenantId: "t1",
+    session: first.sessions.get(created.sessionId)!,
+    instruction: "Now build a landing page.",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(follow.status, "resolved");
+  if (follow.status !== "resolved") return;
+  assert.equal(follow.workspaceId, created.workspaceId);
+  assert.equal(existsSync(follow.projectRoot), true);
+});

@@ -116,7 +116,7 @@ export interface ApprovalItem {
   input: unknown;
   destructive: boolean;
   /** ORION found an MCP server it needs: approving installs it (and continues the task). */
-  install?: { name: string; canonicalId?: string; description?: string; query?: string; freeInstall?: boolean; secrets?: string[] };
+  install?: { name: string; canonicalId?: string; description?: string; query?: string; freeInstall?: boolean; secrets?: string[]; connect?: string; secretsProvided?: string[] };
   /** Command risk: read / change / dangerous (terminal and SSH). */
   risk?: "read" | "change" | "dangerous";
   preview?: unknown;

@@ -20,7 +20,7 @@ export interface ChatActivity {
   found?: { url: string; title: string; snippet?: string }[];
   error?: string;
   reason?: string;
-  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean; connect?: string; secretsProvided?: string[] };
   servers?: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean }[];
   startedAt: number;
   endedAt?: number;

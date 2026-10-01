@@ -1167,7 +1167,7 @@ export class StreamingAgentRuntime {
     if (need.kind === "installed") {
       return `Installed MCP tools already cover this: ${need.tools.join(", ")}. Use them now.`;
     }
-    type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean };
+    type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean; connect?: string; secretsProvided?: string[] };
     let servers: Candidate[] = [];
     let reason = "";
     if (this.isKnownTool(runId, "search_capabilities")) {
@@ -1210,7 +1210,7 @@ export class StreamingAgentRuntime {
    * ORION found an MCP server for what it needs: ask the user once ("Install
    * Brave Search?"), then install it, connect it and give the run its tools.
    */
-  private async installWithApproval(runId: string, state: RunState, query: string, pick: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[] }, alternatives: unknown[]): Promise<string> {
+  private async installWithApproval(runId: string, state: RunState, query: string, pick: { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; connect?: string; secretsProvided?: string[] }, alternatives: unknown[]): Promise<string> {
     const name = pick.name || pick.server || pick.canonicalId!;
     const callId = `install_${Math.random().toString(36).slice(2, 10)}`;
     const call: ToolCall = { id: callId, name: "install_mcp_server", arguments: { canonicalId: pick.canonicalId, reason: `ORION needs ${name} to ${query}.` } };
@@ -1220,7 +1220,7 @@ export class StreamingAgentRuntime {
       input: call.arguments,
       destructive: false,
       risk: "change",
-      install: { name, canonicalId: pick.canonicalId, description: pick.description ?? "", query, freeInstall: Boolean(pick.freeInstall), secrets: pick.secrets ?? [], alternatives },
+      install: { name, canonicalId: pick.canonicalId, description: pick.description ?? "", query, freeInstall: Boolean(pick.freeInstall), secrets: pick.secrets ?? [], connect: pick.connect, secretsProvided: pick.secretsProvided, alternatives },
     });
     this.store.setStatus(runId, "awaiting_approval");
     const { approved, timedOut } = await raceApprovalTimeout((settle) => {
@@ -1925,8 +1925,7 @@ export class StreamingAgentRuntime {
             message: preflight.message,
             choices: preflight.actions ?? [],
           });
-          this.store.emit(runId, "message.delta", { content: preflight.message ?? "" });
-          this.store.emit(runId, "run.blocked", { message: preflight.message, code: "RESOURCE_REQUIRED", actions: preflight.actions ?? [] });
+          this.store.emit(runId, "run.blocked", { message: preflight.message, code: "RESOURCE_REQUIRED", actions: preflight.actions ?? [], terminal: true });
           this.store.setStatus(runId, "blocked");
           if (state) {
             state.resumeMessages = messages;
@@ -1944,8 +1943,7 @@ export class StreamingAgentRuntime {
             message: resolution.message,
             choices: resolution.choices ?? [],
           });
-          this.store.emit(runId, "message.delta", { content: resolution.message });
-          this.store.emit(runId, "run.blocked", { message: resolution.message, code: resolution.code });
+          this.store.emit(runId, "run.blocked", { message: resolution.message, code: resolution.code, terminal: true });
           this.store.setStatus(runId, "blocked");
           if (state) {
             state.resumeMessages = messages;
@@ -2074,9 +2072,7 @@ export class StreamingAgentRuntime {
         if (!prepared.canExecute) {
           const message = prepared.blockers[0] ?? "This run cannot start.";
           this.enterPhase(runId, "blocked");
-          this.store.emit(runId, "message.delta", { content: message });
-          this.store.emit(runId, "message.completed", {});
-          this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT" });
+          this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT", terminal: true });
           this.store.setStatus(runId, "blocked");
           if (state) {
             state.resumeMessages = messages;

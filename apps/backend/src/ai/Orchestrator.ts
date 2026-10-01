@@ -359,13 +359,21 @@ export class Orchestrator {
         requested.set(query, note);
         return note;
       }
+      // "search the web" / "read a page" are THIS chat's own tools — a card
+      // asking the user to install a search MCP is wrong when web_search and
+      // fetch_url are already on the table (they just ran, or just worked).
+      if (web && /\b(search the web|web search|search online|browse|the internet|look ?up online|web ?page|fetch)\b/i.test(query)) {
+        const note = `You already have web_search and fetch_url in this chat — use them to ${query}. No install is needed and no card is shown to the user.`;
+        requested.set(query, note);
+        return note;
+      }
       // Work ORVYN's core tools do (edit the site, add the attached logo, run
       // a command) — anything that names no outside service — is never a
       // Marketplace card: hand it to a real task run now.
       if (!needsExternalTool(query) || builtInToolsFor(query, (n) => TASK_TOOLS.has(n)).length) {
         const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query, prompt: handoffPrompt(query, req), startedAt: Date.now(), endedAt: Date.now() };
         yield { delta: "", activity: handoff, done: false };
-        const note = `ORVYN is starting this as a task in the user's project right now, where ORION has file, terminal and browser tools. Do not ask for a tool or say one is missing. Tell the user in one short sentence that you are doing it now — then stop.`;
+        const note = `ORVYN is handing this to a task run in the user's project — its progress, or anything it still needs first, appears below. Do not ask for a tool or say one is missing. Tell the user in one short sentence that you are setting it up — then stop.`;
         requested.set(query, note);
         return note;
       }
@@ -385,7 +393,7 @@ export class Orchestrator {
         query,
         reason: reason || (primary ? `ORION needs ${primary} to ${query}.` : "No tool for this is installed yet. Pick one in Tools & MCP → Marketplace and ORION will finish the task."),
         servers,
-        ...(pick ? { install: { name: String(primary), canonicalId: pick.canonicalId!, description: pick.description, secrets: pick.secrets ?? [], freeInstall: pick.freeInstall } } : {}),
+        ...(pick ? { install: { name: String(primary), canonicalId: pick.canonicalId!, description: pick.description, secrets: pick.secrets ?? [], freeInstall: pick.freeInstall, connect: (pick as { connect?: string }).connect, secretsProvided: (pick as { secretsProvided?: string[] }).secretsProvided } } : {}),
         startedAt: Date.now(),
         endedAt: Date.now(),
       };
@@ -481,7 +489,7 @@ export class Orchestrator {
               yield { delta: "", activity: handoff, done: false };
               requested.set("task", "started");
             }
-            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "ORVYN started this as a task in the user's project (core file, terminal, git and browser tools). Tell the user in one short sentence that you're doing it now — then stop." });
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "ORVYN is handing this to a task run in the user's project (core file, terminal, git and browser tools) — progress or anything still needed appears below. Tell the user in one short sentence that you're setting it up — then stop." });
             continue;
           }
           if (call.name === "search_capabilities") {

@@ -483,7 +483,7 @@ function ArtifactCard({ item }: { item: AttachmentItem }) {
 export function CapabilityCard({ item, install, onInstalled }: {
   item: CapabilityRequiredItem;
   /** Chat: the server ORION found; the button installs it and the reply continues. */
-  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean };
+  install?: { name: string; canonicalId: string; description?: string; secrets?: string[]; freeInstall?: boolean; connect?: string; secretsProvided?: string[] };
   onInstalled?: () => void;
 }) {
   const [settled, setSettled] = useState(Boolean(item.settled));
@@ -495,7 +495,13 @@ export function CapabilityCard({ item, install, onInstalled }: {
     if (settled || item.settled) setSecrets({});
   }, [settled, item.settled]);
   if (install) {
-    const need = install.secrets ?? [];
+    // Secret names the user's existing connection already satisfies (a
+    // connected GitHub account covers a GitHub server's token) are never
+    // asked for — the backend fills them at install time.
+    const provided = new Set(install.secretsProvided ?? []);
+    const need = (install.secrets ?? []).filter((n) => !provided.has(n));
+    const connectGithub = install.connect === "github";
+    const githubLinked = connectGithub && provided.size > 0;
     const run = async () => {
       setState("installing"); setError("");
       try {
@@ -525,8 +531,18 @@ export function CapabilityCard({ item, install, onInstalled }: {
           {install.description ? `${install.description.slice(0, 220)} ` : ""}
           {install.freeInstall ? "Official public MCP tool, no API key. " : ""}
           ORVYN installs it on this desktop, connects it and ORION continues.
+          {githubLinked ? " Uses your connected GitHub account — no token to paste." : ""}
         </div>
-        {state !== "done" && !settled && need.map((n) => (
+        {connectGithub && !githubLinked && state !== "done" && !settled ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <button onClick={() => document.dispatchEvent(new CustomEvent("orvyn:nav", { detail: "scm" }))} style={btn("var(--accent)")}>
+              Connect GitHub
+            </button>
+            <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Source Control → GitHub — ORION uses your sign-in.</span>
+            <button onClick={() => setSettled(true)} style={btn("var(--border)")}>Not now</button>
+          </div>
+        ) : null}
+        {state !== "done" && !settled && !(connectGithub && !githubLinked) && need.map((n) => (
           <input key={n} type="password" placeholder={`${n} (needed by ${install.name})`} value={secrets[n] ?? ""}
             onChange={(e) => setSecrets({ ...secrets, [n]: e.target.value })}
             style={{ display: "block", width: "100%", boxSizing: "border-box", marginBottom: 6, padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }} />
@@ -536,7 +552,7 @@ export function CapabilityCard({ item, install, onInstalled }: {
           <span data-testid="capability-installed" style={{ fontSize: 11.5, color: "var(--success)" }}>Installed {install.name} — ORION is continuing.</span>
         ) : settled ? (
           <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>Not installed.</span>
-        ) : (
+        ) : connectGithub && !githubLinked ? null : (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button data-testid="capability-install" disabled={state === "installing" || need.some((n) => !secrets[n]?.trim())} onClick={() => void run()} style={btn("var(--accent)")}>
               {state === "installing" ? "Installing…" : `Install ${install.name}`}
@@ -617,7 +633,8 @@ function ApprovalCard({
     );
   }
   if (item.install) {
-    const need = item.install.secrets ?? [];
+    const provided = new Set(item.install.secretsProvided ?? []);
+    const need = (item.install.secrets ?? []).filter((n) => !provided.has(n));
     const missing = need.some((n) => !secrets[n]?.trim());
     return (
       <div style={card("var(--accent)")} data-testid="install-approval">

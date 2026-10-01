@@ -26,6 +26,7 @@ import {
 import { makeListSymbolsTool } from "./tools/symbolTools";
 import { makeTerminalTool } from "./tools/terminalTool";
 import { missingVerifierCapabilities } from "../agent/VerificationRuntime";
+import { githubToken } from "../integrations/githubConnection";
 import {
   makeGitStatusTool,
   makeGitDiffTool,
@@ -161,8 +162,8 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   // MCP (servers from .orvyn/mcp.json — the hub is the only MCP speaker)
   g.register(makeMcpListTool(tenant.mcpHub, projectRoot));
   g.register(makeMcpCallTool(tenant.mcpHub, projectRoot));
-  g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
-  g.register(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
+  g.register(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
+  g.register(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
   // registry.clear() above dropped namespaced mcp.* tools. Re-bind any
   // servers that are still CONNECTED so marketplace installs survive a run.
   tenant.mcpManager.reregisterConnectedTools();
@@ -209,8 +210,8 @@ export function registerWorkspaceFreeToolsFor(tenant: Tenant): void {
   for (const make of [makeBrowserOpenTool, makeBrowserNavigateTool, makeBrowserClickTool, makeBrowserTypeTool, makeBrowserScrollTool, makeBrowserViewportTool, makeBrowserScreenshotTool, makeBrowserConsoleErrorsTool, makeBrowserEvidenceTool]) add(make(key));
   registerDesktopTools((tool) => add(tool), key, tenant.id);
   registerHostDesktopTools((tool) => add(tool), tenant.id);
-  add(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
-  add(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id)));
+  add(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
+  add(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
 }
 
 /** Lets later-phase modules (diagnostics, browser, MCP…) plug into the same registration pass. */
