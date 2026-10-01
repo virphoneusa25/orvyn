@@ -106,10 +106,13 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     checks.migrations = { healthy: true, detail: "sqlite identity (local mode)" };
   }
 
-  // Workers — the real registry count (0 registered is healthy but reported
-  // honestly; forced-remote runs are refused while 0 are online).
+  // Workers — cloud execution is degraded when no worker can take a mission.
+  // Local desktop mode does not require the remote worker service.
   const ws = workerStats();
-  checks.workers = { healthy: true, detail: `${ws.online}/${ws.total} online` };
+  checks.workers = {
+    healthy: process.env.ORVYN_CLOUD_MODE !== "true" || ws.online > 0,
+    detail: `${ws.online}/${ws.total} online`,
+  };
 
   const qdrant = await probeQdrant();
   if (qdrant.status === "not_configured") {

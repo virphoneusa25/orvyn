@@ -25,6 +25,14 @@ set_default_env() { # keep an operator override, otherwise install the productio
 }
 warn() { echo "::warning title=OpenShell::$*"; echo "WARNING: $*" >&2; }
 
+# The backend and worker share this internal credential. Cloud mode rejects
+# worker registration without it, which leaves the portal online but unable to
+# execute missions. Generate it once and preserve it in the server-only .env.
+if ! grep -q '^ORVYN_API_KEY=.' .env 2>/dev/null; then
+  set_env ORVYN_API_KEY "$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  echo "Generated persistent worker control-plane credential"
+fi
+
 # PostgreSQL keeps the password from the first volume initialization. A lost
 # .env line therefore makes a later compose deploy use the development
 # fallback while the live role still has the original password. Generate an
