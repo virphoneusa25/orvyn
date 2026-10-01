@@ -8,21 +8,30 @@ import { DesktopReleaseStore } from "./desktopReleaseStore";
 const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), "orvyn-rel-"));
 
 test("pipeline upserts a signed-channel release and pause hides it from current", () => {
-  const s = new DesktopReleaseStore(dir());
-  s.upsertFromPipeline({ version: "1.4.2", channel: "stable", notes: "previous" });
-  const r = s.upsertFromPipeline({
-    version: "1.5.0",
-    channel: "stable",
-    notes: "<b>hi</b> Faster indexing",
-    artifacts: [{ platform: "win32", filename: "ORVYN-Setup-1.5.0.exe", url: "https://updates.kernelailabs.com/orvyn/stable/ORVYN-Setup-1.5.0.exe" }],
-  });
-  assert.equal(r.notes.includes("<b>"), false);
-  assert.equal(s.current("stable").latest, "1.5.0");
-  s.patch(r.id, { status: "paused" });
-  assert.equal(s.current("stable").latest, "1.4.2");
-  s.patch(r.id, { status: "published", rolloutPercent: 10 });
-  assert.equal(s.current("stable").latest, "1.5.0");
-  assert.equal(s.current("stable").rolloutPercent, 10);
+  const prevLatest = process.env.ORVYN_DESKTOP_VERSION;
+  const prevMin = process.env.ORVYN_DESKTOP_MINIMUM_SUPPORTED;
+  delete process.env.ORVYN_DESKTOP_VERSION;
+  delete process.env.ORVYN_DESKTOP_MINIMUM_SUPPORTED;
+  try {
+    const s = new DesktopReleaseStore(dir());
+    s.upsertFromPipeline({ version: "1.4.2", channel: "stable", notes: "previous" });
+    const r = s.upsertFromPipeline({
+      version: "1.5.0",
+      channel: "stable",
+      notes: "<b>hi</b> Faster indexing",
+      artifacts: [{ platform: "win32", filename: "ORVYN-Setup-1.5.0.exe", url: "https://updates.kernelailabs.com/orvyn/stable/ORVYN-Setup-1.5.0.exe" }],
+    });
+    assert.equal(r.notes.includes("<b>"), false);
+    assert.equal(s.current("stable").latest, "1.5.0");
+    s.patch(r.id, { status: "paused" });
+    assert.equal(s.current("stable").latest, "1.4.2");
+    s.patch(r.id, { status: "published", rolloutPercent: 10 });
+    assert.equal(s.current("stable").latest, "1.5.0");
+    assert.equal(s.current("stable").rolloutPercent, 10);
+  } finally {
+    if (prevLatest !== undefined) process.env.ORVYN_DESKTOP_VERSION = prevLatest;
+    if (prevMin !== undefined) process.env.ORVYN_DESKTOP_MINIMUM_SUPPORTED = prevMin;
+  }
 });
 
 test("required flag is refused without super-admin privilege", () => {

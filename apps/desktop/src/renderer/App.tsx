@@ -885,6 +885,7 @@ export function App() {
           onNewMission={() => { newChat(); setView("newtask"); setCenterMode("work"); setActiveRunId(null); }}
           onOpenSettings={() => setView("settings")}
           onOpenUsage={() => setView("usage")}
+          missionActive={runIsActive}
         />
 
         <div className="orvyn-main" style={{ minWidth: 0, minHeight: 0, display: "flex", overflow: "hidden" }}>

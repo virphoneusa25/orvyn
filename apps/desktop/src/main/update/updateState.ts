@@ -143,8 +143,17 @@ export function userFacingUpdateError(raw: string): string {
   if (/enospc|disk|space/.test(m)) return "There isn't enough disk space to download this update.";
   if (/eacces|eperm|permission/.test(m)) return "ORVYN doesn't have permission to install this update.";
   if (/404|not found|no update/.test(m)) return "Couldn't check for updates. ORVYN will try again later.";
-  if (/network|offline|enotfound|econn|aborted|timeout/.test(m)) {
+  if (/network|offline|enotfound|econn|aborted|timeout|http.?5\d\d|502|503|500/.test(m)) {
     return "Couldn't check for updates. ORVYN will try again later.";
   }
   return "Couldn't check for updates. ORVYN will try again later.";
+}
+
+/** Missing or unreachable feed — retry later, do not block the workspace. */
+export function isTransientUpdateFailure(raw: string): boolean {
+  const m = String(raw ?? "").toLowerCase();
+  if (/signature|code sign|not signed|checksum|sha512|integrity|enospc|disk|space|eacces|eperm|permission/.test(m)) {
+    return false;
+  }
+  return /404|not found|no update|cannot find|latest\.yml|enotfound|econn|aborted|timeout|network|offline|http.?[45]\d\d|status code 5|502|503|500|internal server/.test(m);
 }

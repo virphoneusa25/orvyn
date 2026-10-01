@@ -261,7 +261,11 @@ test("javascript and python searches include official reference servers even whe
   assert.deepEqual(supplementQueries("javascript").includes("typescript"), true);
   const filtered = officialMarketplaceOnly(ranked);
   assert.equal(filtered.some((s) => s.name.includes("a2awire")), false);
-  assert.ok(filtered.every((s) => s.name.startsWith("io.modelcontextprotocol/")));
+  assert.ok(filtered.some((s) => s.name === "io.modelcontextprotocol/filesystem"));
+  assert.ok(filtered.some((s) => s.name === "io.github.github/github-mcp-server"));
+  assert.ok(filtered.every((s) =>
+    s.name.startsWith("io.modelcontextprotocol/") || s.name === "io.github.github/github-mcp-server"
+  ));
 });
 
 test("preferKnownProducts + dedupe keep one GitHub card", () => {

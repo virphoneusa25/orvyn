@@ -42,6 +42,26 @@ class FakeUpdater extends EventEmitter implements AutoUpdaterLike {
   }
 }
 
+test("feed 500 or 404 is a quiet miss, not a blocking error", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "orvyn-upd-"));
+  const updater = new FakeUpdater();
+  const svc = new UpdateService({
+    userData: dir,
+    packaged: true,
+    currentVersion: "0.2.0",
+    platform: "win32",
+    arch: "x64",
+    getBackend: async () => ({ backendUrl: "", apiKey: "" }),
+    send: () => undefined,
+    loadUpdater: async () => updater,
+    fetchImpl: (async () => ({ ok: false, status: 500, json: async () => ({}) })) as typeof fetch,
+  });
+  const state = await svc.check();
+  assert.equal(state.status, "not_available");
+  assert.equal(updater.checks, 0);
+  await rm(dir, { recursive: true, force: true });
+});
+
 test("unpackaged app stays idle and does not require the update server", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "orvyn-upd-"));
   const sent: unknown[] = [];
@@ -78,6 +98,7 @@ test("available → download → install-on-exit and restart protection", async 
     getBackend: async () => ({ backendUrl: "", apiKey: "" }),
     send: () => undefined,
     loadUpdater: async () => updater,
+    fetchImpl: (async () => ({ ok: true, json: async () => ({}) })) as typeof fetch,
   });
   await svc.start();
   svc.stop();
@@ -114,6 +135,7 @@ test("signature failure is not installed and channel persists", async () => {
     getBackend: async () => ({ backendUrl: "", apiKey: "" }),
     send: () => undefined,
     loadUpdater: async () => updater,
+    fetchImpl: (async () => ({ ok: true, json: async () => ({}) })) as typeof fetch,
   });
   const failed = await svc.check();
   assert.equal(failed.status, "error");

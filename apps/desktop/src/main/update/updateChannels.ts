@@ -14,6 +14,12 @@ export function updateBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return raw;
 }
 
+export function latestManifestName(platform: NodeJS.Platform | string = process.platform): string {
+  if (platform === "darwin") return "latest-mac.yml";
+  if (platform === "linux") return "latest-linux.yml";
+  return "latest.yml";
+}
+
 export function feedUrlForChannel(channel: UpdateChannel, env?: NodeJS.ProcessEnv): string {
   return `${updateBaseUrl(env)}/${channel}/`;
 }

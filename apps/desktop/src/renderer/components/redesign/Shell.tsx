@@ -13,6 +13,7 @@ import { describeConnection } from "../../connectionState";
 import { getConnectionFacts, onConnectionFacts } from "../../connectionRuntime";
 import { readComposerDefaults } from "../../composerSettings";
 import { customerModelName } from "../../presentationReducer";
+import { NavUpdateCard } from "../UpdatesSettings";
 
 type WorkbenchNav = "files" | "changes" | "terminal" | "browser" | "environment";
 
@@ -95,6 +96,7 @@ export interface SidebarProps {
   onSwitchWorkspace?: () => void;
   onOpenSettings?: () => void;
   onOpenUsage?: () => void;
+  missionActive?: boolean;
 }
 
 function openWorkbenchTab(tab: WorkbenchNav) {
@@ -184,6 +186,7 @@ export function Sidebar(props: SidebarProps) {
           <span className="ov-model__sub">{modelLine === "Auto" ? "Best model for your task" : "Active model"}</span>
         </span>
       </button>
+      <NavUpdateCard missionActive={Boolean(props.missionActive)} onViewNotes={props.onOpenSettings} />
       <div className="ov-sidefoot">
         <span className="ov-sidefoot__cloud">
           <span className="ov-dot ov-dot--sm" style={{ background: cloudOn ? "var(--ov-green)" : "var(--ov-faint)" }} />

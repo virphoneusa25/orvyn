@@ -206,7 +206,9 @@ export class DesktopReleaseStore {
     }
     const notes = patch.notes !== undefined ? sanitizeNotes(patch.notes) : cur.notes;
     const title = patch.title !== undefined ? String(patch.title ?? "").slice(0, 200) : cur.title;
-    const publishedAt = status === "published" && !cur.publishedAt ? Date.now() : cur.publishedAt;
+    const publishedAt = status === "published" && cur.status !== "published"
+      ? Date.now()
+      : cur.publishedAt;
     this.db.prepare(`
       UPDATE desktop_releases SET notes=?, title=?, rollout_percent=?, status=?, required=?, minimum_supported=?, published_at=?
       WHERE id=?
@@ -219,7 +221,7 @@ export class DesktopReleaseStore {
     const row = this.db.prepare(`
       SELECT * FROM desktop_releases
       WHERE channel = ? AND status = 'published'
-      ORDER BY published_at DESC
+      ORDER BY published_at DESC, version DESC, rowid DESC
       LIMIT 1
     `).get(channel) as Record<string, unknown> | undefined;
     const envMin = process.env.ORVYN_DESKTOP_MINIMUM_SUPPORTED?.trim() || null;

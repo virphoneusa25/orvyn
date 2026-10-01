@@ -496,7 +496,7 @@
 .updates-dl dd { margin: 0; }
 .updates-fieldset { border: 1px solid #1a2233; border-radius: 10px; padding: 12px 14px; margin: 12px 0; }
 .updates-radio, .updates-check { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; font-size: 13px; }
-.update-banner { padding: 8px 12px; }
+.update-banner:not(.update-banner--required) { display: none; }
 .update-banner--required { position: absolute; inset: 40px 0 0; z-index: 36; background: rgba(7, 11, 20, 0.78); display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; pointer-events: auto; }
 .update-banner__card { background: #0d1422; border: 1px solid #243049; border-radius: 14px; padding: 18px 20px; max-width: 460px; box-shadow: 0 18px 40px rgba(0,0,0,.35); }
 .update-banner__card h2 { margin: 0 0 8px; font-size: 16px; }

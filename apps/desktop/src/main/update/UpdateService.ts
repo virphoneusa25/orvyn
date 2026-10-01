@@ -1,9 +1,10 @@
-import { feedUrlForChannel, parseUpdateChannel, versionMatchesChannel, type UpdateChannel } from "./updateChannels";
+import { feedUrlForChannel, latestManifestName, parseUpdateChannel, versionMatchesChannel, type UpdateChannel } from "./updateChannels";
 import { inStagedRollout, requiredUpdateBlocksCloud } from "./updatePolicy";
 import { loadUpdatePrefs, saveUpdatePrefs, type UpdatePrefs } from "./updatePrefs";
 import { UPDATE_IPC, parseBooleanArg, parseRestartArg } from "./updateIpc";
 import {
   initialUpdateState,
+  isTransientUpdateFailure,
   publicUpdateState,
   reduceUpdate,
   type DesktopUpdateState,
@@ -139,6 +140,12 @@ export class UpdateService {
     try {
       const updater = await this.ensureUpdater();
       if (!updater) {
+        this.state = reduceUpdate(this.state, { type: "not_available" });
+        this.emit();
+        return this.getState();
+      }
+      const reachable = await this.feedReachable();
+      if (!reachable) {
         this.state = reduceUpdate(this.state, { type: "not_available" });
         this.emit();
         return this.getState();
@@ -360,9 +367,25 @@ export class UpdateService {
     updater.on("error", (err: unknown) => this.onError(err));
   }
 
+  private async feedReachable(): Promise<boolean> {
+    const url = `${feedUrlForChannel(this.prefs.channel)}${latestManifestName(this.opts.platform)}`;
+    try {
+      const fetchImpl = this.opts.fetchImpl ?? fetch;
+      const res = await fetchImpl(url, { method: "GET", signal: AbortSignal.timeout(8000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   private onError(err: unknown): void {
     const raw = err instanceof Error ? err.message : String(err ?? "error");
     this.opts.log?.("update.error", { message: raw.slice(0, 240) });
+    if (isTransientUpdateFailure(raw) && !this.state.required) {
+      this.state = reduceUpdate(this.state, { type: "not_available" });
+      this.emit();
+      return;
+    }
     this.state = reduceUpdate(this.state, { type: "error", message: raw });
     void this.report("update_error");
     this.emit();

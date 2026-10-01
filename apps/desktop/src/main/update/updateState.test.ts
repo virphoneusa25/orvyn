@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseUpdateChannel, feedUrlForChannel, updateBaseUrl, versionMatchesChannel, DEFAULT_UPDATE_BASE_URL } from "./updateChannels.ts";
-import { reduceUpdate, initialUpdateState, userFacingUpdateError, publicUpdateState, sanitizeNotes } from "./updateState.ts";
+import { parseUpdateChannel, feedUrlForChannel, latestManifestName, updateBaseUrl, versionMatchesChannel, DEFAULT_UPDATE_BASE_URL } from "./updateChannels.ts";
+import { reduceUpdate, initialUpdateState, userFacingUpdateError, publicUpdateState, sanitizeNotes, isTransientUpdateFailure } from "./updateState.ts";
 import { compareSemver, requiredUpdateBlocksCloud, inStagedRollout, canPostpone, isBelowMinimum } from "./updatePolicy.ts";
 import { parseBooleanArg, parseRestartArg, UPDATE_IPC, UPDATE_IPC_COMMANDS, isUpdateIpc } from "./updateIpc.ts";
 
@@ -18,6 +18,8 @@ test("production feed never uses localhost", () => {
   assert.equal(updateBaseUrl({}), DEFAULT_UPDATE_BASE_URL);
   assert.equal(updateBaseUrl({ ORVYN_UPDATE_BASE_URL: "http://localhost:9000/orvyn" }), DEFAULT_UPDATE_BASE_URL);
   assert.equal(feedUrlForChannel("stable"), `${DEFAULT_UPDATE_BASE_URL}/stable/`);
+  assert.equal(latestManifestName("win32"), "latest.yml");
+  assert.equal(latestManifestName("darwin"), "latest-mac.yml");
   assert.equal(feedUrlForChannel("beta", { ORVYN_UPDATE_BASE_URL: "https://updates.example.com/orvyn" }), "https://updates.example.com/orvyn/beta/");
 });
 
@@ -66,6 +68,8 @@ test("user-facing errors never include stacks, paths, or secrets", () => {
   assert.equal(sig.includes("C:\\"), false);
   const off = userFacingUpdateError("ENOTFOUND updates.kernelailabs.com");
   assert.match(off, /try again later/i);
+  assert.equal(isTransientUpdateFailure("HTTP 500 Internal Server Error latest.yml"), true);
+  assert.equal(isTransientUpdateFailure("sha512 checksum mismatch"), false);
 });
 
 test("public state sanitizes notes HTML", () => {

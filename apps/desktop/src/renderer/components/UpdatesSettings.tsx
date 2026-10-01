@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { DesktopUpdateState } from "../update/desktopUpdateTypes";
 import { setRequiredDesktopUpdate } from "../update/updateGate";
 export { cloudMissionsBlockedByUpdate } from "../update/desktopUpdateTypes";
@@ -144,13 +144,7 @@ export function UpdateBanner({ missionActive }: { missionActive: boolean }) {
   useEffect(() => {
     setRequiredDesktopUpdate(Boolean(state?.required));
   }, [state?.required]);
-  const s = state;
-  const visible = useMemo(() => {
-    if (!s) return false;
-    if (s.required) return true;
-    return s.status === "available" || s.status === "downloading" || s.status === "downloaded" || (s.status === "error" && Boolean(s.error));
-  }, [s]);
-  if (!api || !s || !visible) return null;
+  if (!api || !state?.required) return null;
 
   async function restart() {
     if (missionActive && !confirm) {
@@ -162,77 +156,123 @@ export function UpdateBanner({ missionActive }: { missionActive: boolean }) {
     if (!out.ok) setMessage(out.message ?? "Couldn't restart ORVYN.");
   }
 
-  if (s.required) {
-    return (
-      <div className="update-banner update-banner--required" role="alertdialog" aria-labelledby="orvyn-required-update">
-        <div className="update-banner__card">
-          <h2 id="orvyn-required-update">ORVYN update required</h2>
-          <p>Your installed version is no longer supported. Local projects stay on this computer. Cloud missions stay paused until you update.</p>
-          <p className="settings-lead">
-            Installed: {s.currentVersion}<br />
-            Required: {s.minimumSupportedVersion ?? "newer"} or newer<br />
-            Latest: {s.availableVersion ?? "—"}
-          </p>
-          {s.releaseNotes ? <p>{s.releaseNotes}</p> : null}
-          {s.status === "downloading" ? <Progress state={s} /> : null}
-          {s.status === "downloaded" ? (
-            <div className="update-banner__actions">
-              <button type="button" onClick={() => void api.installOnExit()}>Install When ORVYN Closes</button>
-              <button type="button" onClick={() => void restart()}>Restart &amp; Install</button>
-            </div>
-          ) : (
-            <div className="update-banner__actions">
-              <button type="button" onClick={() => void api.download()}>Update ORVYN</button>
-              <button type="button" onClick={() => window.orvyn.window.close()}>Quit</button>
-            </div>
-          )}
-          {message ? <p className="settings-lead">{message}</p> : null}
-        </div>
+  return (
+    <div className="update-banner update-banner--required" role="alertdialog" aria-labelledby="orvyn-required-update">
+      <div className="update-banner__card">
+        <h2 id="orvyn-required-update">ORVYN update required</h2>
+        <p>Your installed version is no longer supported. Local projects stay on this computer. Cloud missions stay paused until you update.</p>
+        <p className="settings-lead">
+          Installed: {state.currentVersion}<br />
+          Required: {state.minimumSupportedVersion ?? "newer"} or newer<br />
+          Latest: {state.availableVersion ?? "—"}
+        </p>
+        {state.releaseNotes ? <p>{state.releaseNotes}</p> : null}
+        {state.status === "downloading" ? <Progress state={state} /> : null}
+        {state.status === "downloaded" ? (
+          <div className="update-banner__actions">
+            <button type="button" onClick={() => void api.installOnExit()}>Install When ORVYN Closes</button>
+            <button type="button" onClick={() => void restart()}>Restart &amp; Install</button>
+          </div>
+        ) : (
+          <div className="update-banner__actions">
+            <button type="button" onClick={() => void api.download()}>Update ORVYN</button>
+            <button type="button" onClick={() => window.orvyn.window.close()}>Quit</button>
+          </div>
+        )}
+        {message ? <p className="settings-lead">{message}</p> : null}
       </div>
-    );
+    </div>
+  );
+}
+
+function RefreshMark() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M20 12a8 8 0 0 0-13.7-5.7" stroke="url(#ov-upd-g)" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M6.3 4.2v4.1h4.1" stroke="url(#ov-upd-g)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 12a8 8 0 0 0 13.7 5.7" stroke="url(#ov-upd-g)" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M17.7 19.8v-4.1h-4.1" stroke="url(#ov-upd-g)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <defs>
+        <linearGradient id="ov-upd-g" x1="4" y1="4" x2="20" y2="20">
+          <stop stopColor="#c4b5fd" />
+          <stop offset="1" stopColor="#67e8f9" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+/** Compact card under Auto in the nav — matches the approved mockup. */
+export function NavUpdateCard({
+  missionActive,
+  onViewNotes,
+}: {
+  missionActive: boolean;
+  onViewNotes?: () => void;
+}) {
+  const api = orvynUpdates();
+  const [state, setState] = useState<DesktopUpdateState | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!api) return;
+    void api.getState().then(setState);
+    return api.onChange(setState);
+  }, [api]);
+  useEffect(() => {
+    if (!api) return;
+    void api.setWorkBusy(missionActive);
+  }, [api, missionActive]);
+  const s = state;
+  const ready = s && (s.status === "available" || s.status === "downloading" || s.status === "downloaded");
+  if (!api || !s || s.required || !ready) return null;
+  const version = s.availableVersion ?? "";
+  const subtitle =
+    s.status === "downloading"
+      ? `Downloading ORVYN v${version}… ${Math.round(s.progress?.percent ?? 0)}%`
+      : `ORVYN v${version} is ready to install`;
+
+  async function primary() {
+    if (s!.status === "downloaded") {
+      if (missionActive && !confirm) {
+        setConfirm(true);
+        setMessage("A mission is running. Confirm to restart anyway.");
+        return;
+      }
+      const out = await api!.restartAndInstall({ force: confirm && missionActive });
+      if (!out.ok) setMessage(out.message ?? "Couldn't restart ORVYN.");
+      return;
+    }
+    await api!.download();
   }
 
   return (
-    <div className="update-banner" role="status">
-      <div className="update-banner__card">
-        {s.status === "available" ? (
-          <>
-            <h2>Update available</h2>
-            <p>ORVYN {s.availableVersion}</p>
-            {s.releaseNotes ? <p>{s.releaseNotes}</p> : null}
-            <div className="update-banner__actions">
-              <button type="button" onClick={() => void api.dismiss()}>Later</button>
-              <button type="button" onClick={() => void api.download()}>Download Update</button>
-            </div>
-          </>
-        ) : null}
-        {s.status === "downloading" ? (
-          <>
-            <h2>Downloading ORVYN {s.availableVersion}</h2>
-            <Progress state={s} />
-          </>
-        ) : null}
-        {s.status === "downloaded" ? (
-          <>
-            <h2>ORVYN {s.availableVersion} is ready</h2>
-            <div className="update-banner__actions">
-              <button type="button" onClick={() => void api.installOnExit()}>Install When ORVYN Closes</button>
-              <button type="button" onClick={() => void restart()}>Restart &amp; Install</button>
-            </div>
-            {message ? <p className="settings-lead">{message}</p> : null}
-          </>
-        ) : null}
-        {s.status === "error" ? (
-          <>
-            <h2>Couldn't check for updates</h2>
-            <p>{s.error}</p>
-            <div className="update-banner__actions">
-              <button type="button" onClick={() => void api.dismiss()}>Dismiss</button>
-              <button type="button" onClick={() => void api.check()}>Try again</button>
-            </div>
-          </>
-        ) : null}
+    <div className="ov-update" role="status">
+      <div className="ov-update__row">
+        <span className="ov-update__icon"><RefreshMark /></span>
+        <span className="ov-update__copy">
+          <span className="ov-update__title">New Update Ready</span>
+          <span className="ov-update__sub">{subtitle}</span>
+        </span>
       </div>
+      <div className="ov-update__actions">
+        <button type="button" className="ov-update__cta" disabled={s.status === "downloading"} onClick={() => void primary()}>
+          {s.status === "downloading" ? "Downloading…" : "Update Now"}
+        </button>
+        <button
+          type="button"
+          className="ov-update__ghost"
+          onClick={() => {
+            if (s.releaseNotes) setNotesOpen((v) => !v);
+            else onViewNotes?.();
+          }}
+        >
+          View Notes
+        </button>
+      </div>
+      {notesOpen && s.releaseNotes ? <p className="ov-update__notes">{s.releaseNotes}</p> : null}
+      {message ? <p className="ov-update__notes">{message}</p> : null}
     </div>
   );
 }
