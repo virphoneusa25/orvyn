@@ -6,6 +6,7 @@ import { match, navigate, useLocation } from "./lib/router";
 import { PreviewProvider } from "./components/Preview";
 import { Shell } from "./components/Shell";
 import { SignIn, FinishSetup } from "./pages/SignIn";
+import { LegalAcceptanceGate } from "./pages/Legal";
 import { Home } from "./pages/Home";
 import { Chats } from "./pages/Chats";
 import { Projects, ProjectDetail } from "./pages/Projects";
@@ -34,7 +35,7 @@ function Toast() {
 }
 
 function Root() {
-  const { status } = useStore();
+  const { status, gate } = useStore();
   const { path } = useLocation();
 
   // Signed-in people never sit on /signin; signed-out people only see it.
@@ -57,7 +58,7 @@ function Root() {
   // The Admin Portal: its own shell and its own server-side check (staff only).
   if (path === "/admin" || path.startsWith("/admin/")) return <Suspense fallback={<div className="auth"><div className="muted">Loading Admin Portal…</div></div>}><AdminApp /></Suspense>;
   if (status === "paused") return <Paused />;
-  if (status === "gated") return <FinishSetup />;
+  if (status === "gated") return gate === "LEGAL_ACCEPTANCE_REQUIRED" ? <LegalAcceptanceGate /> : <FinishSetup />;
   return <><ViewAsBanner /><Shell>{page(path)}</Shell></>;
 }
 
