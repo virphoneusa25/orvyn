@@ -6,6 +6,7 @@
 
 import { Router, Request } from "express";
 import { authService } from "../auth/AuthService";
+import { LEGAL_VERSION, REQUIRED_LEGAL_DOCUMENTS } from "../legal/policy";
 
 export const authRouter = Router();
 
@@ -17,12 +18,16 @@ function bearerToken(req: Request): string | null {
 
 authRouter.post("/register", (req, res) => {
   try {
-    const { user, token } = authService.register(
+    const { user, token, legalAcceptance } = authService.register(
       String(req.body.email ?? ""),
       String(req.body.password ?? ""),
-      req.body.name ? String(req.body.name) : undefined
+      req.body.name ? String(req.body.name) : undefined,
+      {
+        accepted: req.body.legalAccepted === true,
+        version: String(req.body.legalVersion ?? ""),
+      }
     );
-    res.status(201).json({ user, token });
+    res.status(201).json({ user, token, legalAcceptance });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -49,5 +54,28 @@ authRouter.get("/me", (req, res) => {
   const token = bearerToken(req);
   const user = token ? authService.verify(token) : null;
   if (!user) return res.status(401).json({ error: "Not signed in" });
-  res.json({ user });
+  res.json({ user, legalAcceptance: authService.getLegalAcceptance(user.id) });
+});
+
+authRouter.get("/legal", (req, res) => {
+  const token = bearerToken(req);
+  const user = token ? authService.verify(token) : null;
+  res.json({
+    version: LEGAL_VERSION,
+    requiredDocuments: REQUIRED_LEGAL_DOCUMENTS,
+    acceptance: user ? authService.getLegalAcceptance(user.id) : null,
+  });
+});
+
+authRouter.post("/legal/accept", (req, res) => {
+  const token = bearerToken(req);
+  const user = token ? authService.verify(token) : null;
+  if (!user) return res.status(401).json({ error: "Not signed in" });
+  try {
+    const version = String(req.body.version ?? "");
+    const acceptance = authService.recordLegalAcceptance(user.id, version);
+    res.json({ acceptance });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
