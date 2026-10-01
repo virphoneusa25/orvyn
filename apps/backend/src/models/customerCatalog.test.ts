@@ -57,6 +57,14 @@ test("the catalog is six ORVYN models, and routing never lands on a customer's o
   assert.equal(own.registryId, "my:cheap");
 });
 
+test("Vision prefers an explicitly deployed Fireworks Qwen3-VL model over Gemini", () => {
+  const view = [
+    { id: "ci:google/gemini-3.5-flash-lite", vision: true, chat: true, mock: false },
+    { id: "fw:accounts/fireworks/models/qwen3-vl-30b-a3b-instruct", vision: true, chat: true, mock: false },
+  ];
+  assert.equal(resolveCustomerModel("vision", view), "fw:accounts/fireworks/models/qwen3-vl-30b-a3b-instruct");
+});
+
 test("a customer's model endpoint must be public https", async () => {
   const dns = (map: Record<string, string[]>) => async (h: string) => map[h] ?? [];
   await assert.rejects(assertPublicModelEndpoint("http://api.example.com/v1", dns({ "api.example.com": ["93.184.216.34"] })), /https/);

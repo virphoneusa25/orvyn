@@ -143,6 +143,11 @@ const OPENROUTER_MODELS: { id: string; context: number; temperature: number }[] 
   { id: "deepseek/deepseek-v3.2", context: 163840, temperature: 0.2 },
   { id: "minimax/minimax-m2.5", context: 205000, temperature: 0.2 },
 ];
+const FIREWORKS_VISION_MODELS = new Set([
+  "accounts/fireworks/models/qwen3-vl-8b-instruct",
+  "accounts/fireworks/models/qwen3-vl-30b-a3b-instruct",
+  "accounts/fireworks/models/qwen3-vl-32b-instruct",
+]);
 
 function nebiusEndpoint(): string {
   return (process.env.NEBIUS_BASE_URL?.trim() || "https://api.tokenfactory.nebius.com").replace(/\/v1\/?$/, "");
@@ -321,9 +326,16 @@ export class ModelService {
       const certified = CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId);
       const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
         .split(",").map((s) => s.trim()).filter(Boolean);
-      for (const id of [...new Set([...certified, ...extra])]) {
+      // Qwen3-VL on Fireworks is Deploy on Demand. Register only explicit
+      // account deployments, avoiding a guaranteed 404 on serverless plans.
+      const deployedVision = (process.env.FIREWORKS_VISION_MODELS ?? "")
+        .split(",").map((s) => s.trim()).filter((id) => FIREWORKS_VISION_MODELS.has(id));
+      for (const id of [...new Set([...certified, ...extra, ...deployedVision])]) {
         const lane = CERTIFIED_MODELS.find((m) => m.apiModelId === id);
-        this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane));
+        const visionLane = deployedVision.includes(id)
+          ? { contextWindow: 262144, tools: true, vision: true, agent: true, image: false, imageEditing: false }
+          : undefined;
+        this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane ?? visionLane));
       }
       void this.hideUndeployedFireworksImages(fireworksKey);
     }

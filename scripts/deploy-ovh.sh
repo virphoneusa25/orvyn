@@ -65,7 +65,7 @@ rsync -az -e "$RSH" \
 # Secrets from the deploy environment (GitHub secrets) go into the server's
 # .env, which deploys otherwise never touch. Values travel on stdin, never on
 # a command line. Unset ones are skipped (the server keeps what it has).
-#   model provider: NEBIUS_API_KEY
+#   model providers: NEBIUS_API_KEY, FIREWORKS_API_KEY
 #   account email (verification links): SMTP_*
 #   sign-in and billing (added when the apps exist): GOOGLE_*, GITHUB_*, STRIPE_*
 # Repository variables (not secrets) arrive as one JSON object; only these names are taken.
@@ -77,7 +77,7 @@ if [[ -n "${DEPLOY_VARS:-}" ]]; then
 import json, os, re
 d = json.loads(os.environ.get("DEPLOY_VARS") or "{}")
 for k, v in d.items():
-    if re.match(r"^(STRIPE_PRICE_[A-Z0-9_]+|ORVYN_PUBLIC_ORIGIN|ORVYN_APP_HOST|ORVYN_ADMIN_HOST|ORVYN_SUPER_ADMIN_EMAILS|ORVYN_TERMS_URL|ORVYN_PRIVACY_URL|BACKUP_S3_URI|BACKUP_S3_ENDPOINT|AWS_DEFAULT_REGION)$", k) and "\n" not in str(v):
+    if re.match(r"^(STRIPE_PRICE_[A-Z0-9_]+|ORVYN_PUBLIC_ORIGIN|ORVYN_APP_HOST|ORVYN_ADMIN_HOST|ORVYN_SUPER_ADMIN_EMAILS|ORVYN_TERMS_URL|ORVYN_PRIVACY_URL|FIREWORKS_VISION_MODELS|BACKUP_S3_URI|BACKUP_S3_ENDPOINT|AWS_DEFAULT_REGION)$", k) and "\n" not in str(v):
         print(f"{k}={v}")
 ')
 fi
@@ -90,7 +90,7 @@ PRICE_NAMES=""
 # variable set still reaches the server's .env.
 for plan in STARTER PRO POWER BUSINESS TEAM; do PRICE_NAMES="$PRICE_NAMES STRIPE_PRICE_${plan}_MONTHLY STRIPE_PRICE_${plan}_ANNUAL STRIPE_PRICE_${plan}_YEARLY"; done
 for pack in 10K 25K 50K 100K 250K 500K; do PRICE_NAMES="$PRICE_NAMES STRIPE_PRICE_PACK_${pack}"; done
-for name in NEBIUS_API_KEY SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
+for name in NEBIUS_API_KEY FIREWORKS_API_KEY FIREWORKS_VISION_MODELS SMTP_HOST SMTP_PORT SMTP_SECURE SMTP_USER SMTP_PASS SMTP_FROM \
   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
   ORVYN_PUBLIC_ORIGIN ORVYN_APP_HOST ORVYN_ADMIN_HOST ORVYN_SUPER_ADMIN_EMAILS ORVYN_TERMS_URL ORVYN_PRIVACY_URL $PRICE_NAMES; do
   value="${!name:-}"

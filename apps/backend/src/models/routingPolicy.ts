@@ -47,7 +47,7 @@ export const TIERS: Record<Tier, TierDef> = {
   code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
   server: { tier: "server", weight: 2, label: "Server diagnosis", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
   research: { tier: "research", weight: 3, label: "Research", candidates: ["nebius:Qwen/Qwen3.5-397B-A17B", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
-  vision: { tier: "vision", weight: 2, label: "Vision", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash", "nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash"] },
+  vision: { tier: "vision", weight: 2, label: "Vision", candidates: ["fw:accounts/fireworks/models/qwen3-vl-30b-a3b-instruct", "fw:accounts/fireworks/models/qwen3-vl-32b-instruct", "fw:accounts/fireworks/models/qwen3-vl-8b-instruct", "ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash", "nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash"] },
   premium: { tier: "premium", weight: 8, label: "Premium agent", candidates: ["nebius:moonshotai/Kimi-K3", "ci:kimi-k3"] },
   heavy: { tier: "heavy", weight: 6, label: "Heavy engineering", candidates: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3"] },
   deep: { tier: "deep", weight: 12, label: "Deep", candidates: ["nebius:deepseek-ai/DeepSeek-V4-Pro", "ci:deepseek-v4-pro", "deepseek-v4-pro", "ci:claude-sonnet-5"] },
