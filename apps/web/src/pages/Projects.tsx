@@ -103,6 +103,7 @@ function ProjectModal({ project, onClose, onSaved }: { project?: Project; onClos
 }
 
 export function ProjectDetail({ id, chat }: { id: string; chat?: string }) {
+  const { query } = useLocation();
   const { toast } = useStore();
   const project = useApi<{ project: Project }>(`/projects/${encodeURIComponent(id)}`);
   const sessions = useApi<{ sessions: SessionRow[] }>(`/sessions?projectId=${encodeURIComponent(id)}`);
@@ -124,9 +125,10 @@ export function ProjectDetail({ id, chat }: { id: string; chat?: string }) {
   const chats = [...(sessions.data?.sessions ?? [])].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt);
   const projectFiles = [...(files.data?.artifacts ?? [])].filter((a) => a.kind !== "run").sort((a, b) => b.createdAt - a.createdAt);
   const current = chats.find((s) => s.sessionId === chatId);
+  const showingThread = Boolean(chatId || query.get("new") === "1");
 
   return (
-    <div className="project">
+    <div className={`project${showingThread ? " project--thread" : ""}`}>
       <aside className="project__side">
         <div className="project__head">
           <div className="crumb"><button onClick={() => navigate("/projects")}>Projects</button><Icon.chev size={12} /></div>
@@ -140,7 +142,7 @@ export function ProjectDetail({ id, chat }: { id: string; chat?: string }) {
           </h1>
           <p>{p?.description || "Chats here share this project's files."}</p>
           <div className="project__actions">
-            <button className="btn btn--primary btn--sm" onClick={() => { setChatId(null); navigate(`/projects/${id}`); }}><Icon.plus size={15} /> New chat</button>
+            <button className="btn btn--primary btn--sm" onClick={() => { setChatId(null); navigate(`/projects/${id}?new=1`); }}><Icon.plus size={15} /> New chat</button>
             <button className="btn btn--sm" onClick={() => pick.current?.click()}><Icon.upload size={15} /> Upload</button>
           </div>
         </div>
@@ -178,6 +180,7 @@ export function ProjectDetail({ id, chat }: { id: string; chat?: string }) {
       </aside>
       <section className="chat-pane">
         <div className="chat-pane__head">
+          <button className="iconbtn mobile-only" onClick={() => navigate(`/projects/${id}`)} aria-label="Back to project"><Icon.back size={19} /></button>
           <h2>{current?.title ?? "New chat in this project"}</h2>
           {current ? <><button className="btn btn--sm btn--ghost" onClick={() => actions.share(current)}><Icon.share size={15} /> Share</button><ActionMenu label="Conversation actions" trigger={<Icon.more size={16} />} items={actions.items(current)} /></> : null}
         </div>

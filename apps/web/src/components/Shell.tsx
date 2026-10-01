@@ -35,7 +35,9 @@ function active(path: string, to: string): boolean {
 export function Shell({ children }: { children: React.ReactNode }) {
   const { path } = useLocation();
   const [palette, setPalette] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
   const full = path.startsWith("/chats") || /^\/projects\/[^/]+/.test(path);
+  useEffect(() => { setMobileNav(false); }, [path]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); }
@@ -45,9 +47,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }, []);
   return (
     <div className="app">
-      <Sidebar path={path} />
+      <Sidebar path={path} open={mobileNav} onClose={() => setMobileNav(false)} />
+      {mobileNav ? <button className="side-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} /> : null}
       <div className="main">
-        <TopBar onSearch={() => setPalette(true)} />
+        <TopBar onSearch={() => setPalette(true)} onMenu={() => setMobileNav(true)} />
         <main className={`content${full ? " content--full" : ""}`}>{children}</main>
       </div>
       {palette ? <CommandPalette onClose={() => setPalette(false)} /> : null}
@@ -55,7 +58,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Sidebar({ path }: { path: string }) {
+function Sidebar({ path, open, onClose }: { path: string; open: boolean; onClose: () => void }) {
   const { billing } = useStore();
   const [recents, setRecents] = useState<SessionRow[]>([]);
   const load = useCallback(() => {
@@ -67,15 +70,19 @@ function Sidebar({ path }: { path: string }) {
   const showUpsell = planId === "free" || planId === "starter";
   const openChat = path.startsWith("/chats/") ? path.split("/")[2] : null;
   return (
-    <aside className="side" aria-label="Sidebar">
-      <button className="brand" onClick={() => navigate("/")} aria-label="ORVYN Cloud home">
+    <aside className={`side${open ? " is-open" : ""}`} aria-label="Sidebar">
+      <div className="side__mobile-head">
+        <span>Navigation</span>
+        <button className="iconbtn" onClick={onClose} aria-label="Close navigation"><Icon.x size={20} /></button>
+      </div>
+      <button className="brand" onClick={() => { navigate("/"); onClose(); }} aria-label="ORVYN Cloud home">
         <span className="brand__mark"><Orb /></span>
         <span>
           <div className="brand__word">ORVYN</div>
           <div className="brand__sub">CLOUD</div>
         </span>
       </button>
-      <button className="btn btn--primary side__new" onClick={() => { navigate("/chats"); signal("sessions"); }} data-testid="side-new-chat" aria-label="New chat">
+      <button className="btn btn--primary side__new" onClick={() => { navigate("/chats?new=1"); signal("sessions"); onClose(); }} data-testid="side-new-chat" aria-label="New chat">
         <Icon.plus size={17} /> <span>New chat</span>
       </button>
       <nav className="nav" aria-label="Main">
@@ -169,7 +176,7 @@ function WorkspaceSwitcher() {
   );
 }
 
-function TopBar({ onSearch }: { onSearch: () => void }) {
+function TopBar({ onSearch, onMenu }: { onSearch: () => void; onMenu: () => void }) {
   const { me, billing, signOut } = useStore();
   const [menu, setMenu] = useState(false);
   const ref = useDismiss<HTMLDivElement>(menu, () => setMenu(false));
@@ -177,6 +184,8 @@ function TopBar({ onSearch }: { onSearch: () => void }) {
   const name = me?.user.name || me?.user.email || "";
   return (
     <header className="top">
+      <button className="iconbtn top__menu" onClick={onMenu} aria-label="Open navigation"><Icon.menu size={20} /></button>
+      <button className="top__brand" onClick={() => navigate("/")} aria-label="ORVYN Cloud home"><span className="brand__mark"><Orb /></span><span>ORVYN</span></button>
       <button className="search" onClick={onSearch} aria-label="Search" data-testid="open-search">
         <Icon.search size={17} />
         <span>Search chats, projects and files…</span>
@@ -185,7 +194,7 @@ function TopBar({ onSearch }: { onSearch: () => void }) {
       <div className="top__spacer" />
       <ModelPicker />
       <button className="credits-pill" onClick={() => navigate("/billing#credits")} data-testid="credits-pill" title="Credits available — add more">
-        <Icon.coins size={17} /> {num(available)} Credits
+        <Icon.coins size={17} /> <span className="credits-pill__label">{num(available)} Credits</span>
         <span className="credits-pill__plus"><Icon.plus size={15} /></span>
       </button>
       <Notifications />

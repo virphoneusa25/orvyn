@@ -66,6 +66,7 @@ export function Chats({ id }: { id?: string }) {
   const projects = useApi<{ projects: Project[] }>("/projects");
   const [q, setQ] = useState("");
   const [ask] = useState(() => query.get("q") ?? "");
+  const composing = query.get("new") === "1";
   const actions = useChatActions(reload, id);
   useSignal("sessions", reload);
   useEffect(() => { if (ask) navigate("/chats", { replace: true }); }, [ask]);
@@ -82,13 +83,13 @@ export function Chats({ id }: { id?: string }) {
   const current = data?.sessions.find((s) => s.sessionId === id);
 
   return (
-    <div className="chats">
+    <div className={`chats${id || ask || composing ? " chats--thread" : ""}`}>
       <section className="chats__list" aria-label="Conversations">
         <div className="chats__tools">
           <label className="search">
             <Icon.search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
           </label>
-          <button className="btn btn--icon" onClick={() => navigate("/chats")} data-testid="new-chat" aria-label="New chat" title="New chat"><Icon.edit size={16} /></button>
+          <button className="btn btn--icon" onClick={() => navigate("/chats?new=1")} data-testid="new-chat" aria-label="New chat" title="New chat"><Icon.edit size={16} /></button>
         </div>
         <div className="chats__scroll">
           {loading && !data ? <div className="list__empty" style={{ padding: 12 }}>Loading…</div> : null}
@@ -114,6 +115,7 @@ export function Chats({ id }: { id?: string }) {
       </section>
       <section className="chat-pane">
         <div className="chat-pane__head">
+          <button className="iconbtn mobile-only" onClick={() => navigate("/chats")} aria-label="Back to conversations"><Icon.back size={19} /></button>
           <h2 title={current?.title}>{current?.title ?? (id ? "Conversation" : "New chat")}</h2>
           {current ? (
             <>

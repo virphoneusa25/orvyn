@@ -7,6 +7,7 @@ const I = ({ d, size = 22, fill, children }: { d?: string; size?: number; fill?:
 );
 
 export const Icon = {
+  menu: (p: { size?: number }) => <I {...p} d="M4 7h16M4 12h16M4 17h16" />,
   home: (p: { size?: number }) => <I {...p} d="M3 11.5 12 4l9 7.5M5.5 9.8V20h13V9.8M10 20v-5.5h4V20" />,
   chat: (p: { size?: number }) => <I {...p} d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4A8 8 0 1 1 20 12zM8.5 11h.01M12 11h.01M15.5 11h.01" />,
   folder: (p: { size?: number }) => <I {...p} d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
