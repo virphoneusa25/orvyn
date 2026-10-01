@@ -11,6 +11,7 @@
       "include_workdir": true,
       "read_only": [
         "/usr",
+        "/ms-playwright",
         "/lib",
         "/bin",
         "/etc",

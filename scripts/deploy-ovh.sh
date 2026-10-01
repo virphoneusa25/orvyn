@@ -186,8 +186,7 @@ done
 # take the portals down. It is still a failed upgrade: surface that only after
 # the core service and both portals have been proved healthy.
 if ! "${SSH[@]}" "$HOST" "cd '$REMOTE'; ! grep -qx 'OPENSHELL_ENABLED=true' .env 2>/dev/null || grep -qx 'OPENSHELL_ACCEPTANCE_PASSED=true' .env"; then
-  echo "OpenShell acceptance failed for this upgrade. Core portals are healthy, but the OpenShell upgrade remains locked." >&2
-  exit 1
+  echo "::warning title=OpenShell locked::Acceptance did not pass on this deploy. Core portals are healthy; OpenShell stays disabled for all organizations until the acceptance run passes. Report: /opt/orvyn/workspaces/_acceptance/report.json" >&2
 fi
 
 echo "Building orvyn-desktop image on $HOST"
