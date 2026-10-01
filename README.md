@@ -111,3 +111,30 @@ scripts/          acceptance-mission.mjs harness
 docs/             architecture + deployment docs
 infrastructure/   Caddy config, OVH deployment assets
 ```
+
+## License and legal status
+
+ORVYN is **proprietary commercial software** owned by Kernel AI Labs. It is
+not released under an open-source license. Access to this repository does not
+grant permission to copy, redistribute, sublicense, host, resell, or create
+competing products from Kernel AI Labs proprietary materials except as
+expressly authorized in writing or required by applicable law.
+
+Authorized use is governed by:
+
+- [LICENSE](LICENSE) — proprietary source-code license notice
+- [EULA.md](EULA.md) — ORVYN Software License Agreement
+- [LEGAL.md](LEGAL.md) — legal/compliance document index
+- [ACCEPTABLE_USE.md](ACCEPTABLE_USE.md) — acceptable-use requirements
+- [AI_AGENT_DISCLOSURE.md](AI_AGENT_DISCLOSURE.md) — AI/agent disclosure
+- [PRIVACY.md](PRIVACY.md) — repository privacy summary and launch requirements
+- [SECURITY.md](SECURITY.md) — vulnerability-reporting policy
+- [NOTICE.md](NOTICE.md) — copyright and proprietary notice
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) — third-party license notices
+
+Third-party components remain governed by their own licenses. Nothing in the
+Kernel AI Labs proprietary license removes rights granted by those upstream
+licenses.
+
+**© 2026 Kernel AI Labs. All rights reserved.**
+
