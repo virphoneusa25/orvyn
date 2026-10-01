@@ -48,6 +48,16 @@ export type ResolveResult =
       choices?: string[];
     };
 
+/**
+ * Resolution is only authoritative when the intent explicitly needs an
+ * external target. Answer-only turns ("How do I configure nginx?") can name
+ * a resource class (category "server"/"database") without requiring one —
+ * their resolver result must be "not applicable", never "blocked".
+ */
+export function externalResourceRequired(intent: TaskIntent): boolean {
+  return !intent.informational && (intent.requiresRemoteResource || intent.category === "database");
+}
+
 function visible(resources: RegisteredResource[], tenantId: string, type: ResourceType): RegisteredResource[] {
   return resources.filter((r) => r.type === type && r.authorized && r.tenantId === tenantId && r.status === "ready");
 }
@@ -60,6 +70,7 @@ function named(instruction: string, resources: RegisteredResource[]): Registered
 export function resolveResources(input: ResolveInput): ResolveResult {
   const { intent, instruction, tenantId } = input;
   const picked: RegisteredResource[] = [];
+  if (!externalResourceRequired(intent)) return { status: "ok", resources: picked };
 
   if (intent.requiresRemoteResource) {
     const servers = visible(input.resources, tenantId, "server");

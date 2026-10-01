@@ -72,7 +72,7 @@ import { projectToolContext } from "../execution/workspaceBinding";
 import { normalizeKnownFile, workspaceModelNote } from "./workspacePreflight";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
-import { resolveResources, resourcesFromProject, type RegisteredResource } from "./resourceResolver";
+import { resolveResources, resourcesFromProject, externalResourceRequired, type RegisteredResource } from "./resourceResolver";
 import { internalPathRefusal, selectToolNames, shellServerRefusal, validateToolArguments, type ToolParameterSchema } from "./toolPolicy";
 import { defaultDataDir } from "../persistence/LocalStore";
 import {
@@ -1371,21 +1371,21 @@ export class StreamingAgentRuntime {
         this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? "")}` : args.content);
         break;
       case "edit_file":
-        this.store.emit(runId, "file.edit", { path: args.path, preview });
+        this.store.emit(runId, "file.edit", { path: args.path, preview, op: "modify" });
         // The preview follows edits too, not only whole-file writes.
         if (applySiteEdit(runId, String(args.path ?? ""), String(args.old_string ?? ""), String(args.new_string ?? ""), args.replace_all === true)) {
           this.republishPreview(runId, [String(args.path ?? "")]);
         }
         break;
       case "delete_file":
-        this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview });
+        this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview, op: "delete" });
         if (isSiteAssetPath(String(args.path ?? ""))) {
           forgetSiteFile(runId, String(args.path));
           this.republishPreview(runId, [String(args.path)]);
         }
         break;
       case "move_file":
-        this.store.emit(runId, "file.edit", { path: args.path ?? args.from, preview });
+        this.store.emit(runId, "file.edit", { path: args.path ?? args.from, to: args.to, preview, op: "move" });
         if (isSiteAssetPath(String(args.from ?? "")) || isSiteAssetPath(String(args.to ?? ""))) {
           moveSiteFile(runId, String(args.from ?? ""), String(args.to ?? ""));
           this.republishPreview(runId, [String(args.to ?? args.from ?? "")]);
@@ -1762,13 +1762,21 @@ export class StreamingAgentRuntime {
     const checkpointVisibleHere = !execution || execution.location === "LOCAL" || execution.location === "OVH_WORKER";
     const queueRemoteRun = (): void => {
       if (execution?.location !== "OVH_WORKER") return;
-      queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
-        tenantId: execution.tenantId ?? "",
-        organizationId: execution.organizationId ?? "",
-        userId: execution.userId ?? "",
-        projectId: execution.projectId ?? null,
-        runId,
-      }, projectRoot, recovering);
+      try {
+        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
+          tenantId: execution.tenantId ?? "",
+          organizationId: execution.organizationId ?? "",
+          userId: execution.userId ?? "",
+          projectId: execution.projectId ?? null,
+          runId,
+        }, projectRoot, recovering);
+      } catch (err: any) {
+        // A sandbox that cannot be planned under a mandatory provider (e.g.
+        // ORVYN_EXECUTION_PROVIDER=openshell with the run ineligible) must not
+        // degrade to a weaker executor — the run blocks truthfully.
+        this.store.emit(runId, "run.blocked", { message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`, resumable: true, reason: "sandbox_unavailable" });
+        this.store.setStatus(runId, "blocked");
+      }
     };
     if (recovering) {
       // Preserve the original pre-run checkpoint. Recovery continues from the
@@ -1926,7 +1934,10 @@ export class StreamingAgentRuntime {
           }
           return;
         }
-        if (resolution.status === "blocked" && !intent.requiresFrontend) {
+        // Resolution only blocks what the intent explicitly requires: a run
+        // whose answer needs no external target (or an answer-only turn that
+        // reached the runtime anyway) is never terminated by a resource miss.
+        if (resolution.status === "blocked" && externalResourceRequired(intent)) {
           this.store.emit(runId, "resource.required", {
             code: resolution.code,
             resourceType: resolution.resourceType,
@@ -4192,6 +4203,8 @@ export class StreamingAgentRuntime {
     if (!this.memoryStore) return;
     try {
       const events = this.store.get(runId)?.events ?? [];
+      const sandbox = sandboxRegistry().forRun(runId);
+      const runExecution = this.store.get(runId)?.execution;
       const checkpoint = buildCheckpoint({
         runId,
         objective: state.instruction,
@@ -4202,8 +4215,11 @@ export class StreamingAgentRuntime {
           workspaceId: this.store.get(runId)?.workspaceId ?? state.workspaceId ?? null,
           tenantId: state.execution?.tenantId,
           organizationId: state.execution?.organizationId,
+          userId: state.execution?.userId,
           projectId: state.execution?.projectId ?? null,
-          sandboxId: sandboxRegistry().forRun(runId)?.id ?? null,
+          sandboxId: sandbox?.id ?? null,
+          workerId: runExecution?.workerId ?? null,
+          executionProvider: sandbox?.provider,
           modelId: state.actualModelId,
           route: state.route ? { profile: state.route.profile, tier: state.route.tier } : undefined,
           executionLocation: state.execution?.location,

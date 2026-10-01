@@ -8,8 +8,7 @@
 // Nothing waits for the desktop to save a file: closing or crashing the app
 // right after sending loses nothing.
 
-import type { RunStore } from "../agent/events";
-import { isTerminal } from "../agent/events";
+import type { Run, RunStore } from "../agent/events";
 import { finalAnswerOf } from "../agent/runThread";
 import type { SessionMessage, WorkSessionStore } from "./WorkSessionStore";
 
@@ -33,15 +32,35 @@ export function recordRunInstruction(
   });
 }
 
+/**
+ * Whether the run's current state justifies persisting a final assistant
+ * message. `blocked` is settled but NOT necessarily answer-final: a mid-run
+ * block pauses for a resource and the run resumes — only a settlement-emitted
+ * (`terminal: true`) block ends the capture.
+ */
+function shouldPersistFinalAnswer(run: Run): boolean {
+  if (run.status === "completed" || run.status === "partial" || run.status === "error" || run.status === "cancelled") return true;
+  if (run.status === "blocked") {
+    return run.events.some((e) => e.type === "run.blocked" && e.data.terminal === true);
+  }
+  return false;
+}
+
 /** Stores ORION's final answer once the run reaches a terminal state. */
 export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, sessionId: string, runId: string): void {
   const save = () => {
     const run = store.get(runId);
     if (!run) return;
+    // A blocked run's fallback carries the actual reason (missing resource,
+    // approval, policy) — "interrupted" is only one of the possible causes.
+    const blockedReason = run.status === "blocked"
+      ? [...run.events].reverse().find((e) => e.type === "run.blocked" && typeof e.data.message === "string")?.data.message as string | undefined
+      : undefined;
     const answer = finalAnswerOf(run.events)
+      || blockedReason
       || (run.status === "cancelled" ? "Stopped."
         : run.status === "error" ? "The run ended with an error."
-        : run.status === "blocked" ? "The run was interrupted — resume it to continue."
+        : run.status === "blocked" ? "The run is blocked — it needs input or a required resource before it can continue."
         : run.status === "partial" ? "The run finished with remaining gaps."
         : "");
     if (!answer) return;
@@ -49,7 +68,7 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
   };
   const run = store.get(runId);
   if (!run) return;
-  if (isTerminal(run.status)) { save(); return; }
+  if (shouldPersistFinalAnswer(run)) { save(); return; }
   const unsubscribe = store.subscribe(runId, (e) => {
     // A mid-run block pauses for a resource — the answer isn't final yet.
     // Only a settlement-emitted (terminal) block ends the capture.
@@ -105,9 +124,13 @@ export class ChatTurnRecorder {
     this.sessions.updateMessage(this.replyId, { meta: { artifacts: list } });
   }
 
-  /** The reply so far was withdrawn (ORION researches first). */
+  /** The reply so far was withdrawn (ORION researches first). The persisted
+   *  copy is cleared too — an autosave may already have written the retracted
+   *  text, and a crash must not resurrect it. */
   retract(): void {
+    if (this.done) return;
     this.text = "";
+    if (this.replyId) this.sessions.updateMessage(this.replyId, { content: "" });
   }
 
   delta(chunk: string): void {

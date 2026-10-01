@@ -122,6 +122,13 @@ export function sandboxIdFor(input: Pick<SelectionInput, "organizationId" | "pro
 export function selectSandbox(input: SelectionInput, registry: Pick<SandboxRegistry, "flag">, env: NodeJS.ProcessEnv = process.env): SandboxPlan {
   const mode = (env.ORVYN_EXECUTION_PROVIDER || "docker").toLowerCase();
   const gate = openShellEligible(input, registry, env);
+  // ORVYN_EXECUTION_PROVIDER=openshell is a MANDATE: a deployment that
+  // requires OpenShell isolation must not quietly run the mission on Docker
+  // when the run is ineligible (flag off, acceptance pending, gateway down).
+  // The caller turns this into a blocked run, not a weakened sandbox.
+  if (mode === "openshell" && !gate.eligible) {
+    throw new Error(`OpenShell is required by this deployment but this run is not eligible: ${gate.reason}`);
+  }
   const provider: SandboxProvider = gate.eligible ? "openshell" : "docker";
   const retention = retentionFor(input.planId, input.projectId, provider, env);
   return {

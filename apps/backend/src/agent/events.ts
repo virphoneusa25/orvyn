@@ -247,6 +247,18 @@ export function releasesResources(status: RunStatus): boolean {
   return status === "completed" || status === "partial" || status === "error" || status === "cancelled";
 }
 
+/**
+ * The run is EXECUTION-ACTIVE: something is doing (or about to do) work right
+ * now — the model loop, a queued job, or a pending approval/verification.
+ * `blocked` is deliberately NOT active: it is settled for the user and holds
+ * its resources for resume, but nothing should be executing for it, and
+ * worker-loss recovery must not reassign it to a new worker while it waits.
+ * A blocked run becomes active again when resume puts it back on the loop.
+ */
+export function isExecutionActive(status: RunStatus): boolean {
+  return status === "queued" || status === "running" || status === "awaiting_approval" || status === "verifying";
+}
+
 /** A run is finished when no further events can arrive for it. Alias for isRunSettled — kept for existing callers. */
 export function isTerminal(status: RunStatus): boolean {
   return isRunSettled(status);

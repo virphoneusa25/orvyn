@@ -9,15 +9,17 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import type { RunStore } from "../agent/events";
-import { isRunSettled } from "../agent/events";
+import { isExecutionActive, isRunSettled } from "../agent/events";
 import type { AgentEventType } from "../agent/events";
 import { toolRpc } from "../execution/ToolRpc";
-import { readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
+import { deleteWorkspacePaths, readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
 import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
 import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
 import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { LocalStore } from "../persistence/LocalStore";
+import type { MissionCheckpoint } from "../agent/missionCheckpoint";
 import { githubToken } from "../integrations/githubConnection";
 import { deploymentCredential } from "../integrations/deploymentConnections";
 import { sandboxTerminalBroker } from "../execution/SandboxTerminalBroker";
@@ -74,6 +76,15 @@ interface PendingJob {
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
+
+/** The run's durable mission checkpoint, when one was persisted for it. */
+function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoint | null {
+  try {
+    return (new LocalStore(tenantId).loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null;
+  } catch {
+    return null;
+  }
+}
 /**
  * Boot-time recovery: a backend restart lost the in-memory job queue. Runs
  * whose journals replay with a live status are re-queued with recover=true
@@ -99,25 +110,35 @@ function recoverOrphanedRunsOnBoot(
             const store = getStore(tenantId);
             const run = store.get(runId);
             if (!run) continue;
-            if (run.status === "running" || run.status === "queued" || run.status === "awaiting_approval") {
+            if (isExecutionActive(run.status)) {
               const already = jobQueue.some((j) => j.runId === runId);
               if (already) continue;
               const record = sandboxRegistry().forRun(runId);
-              const identity = record ? assertTrustedMission({
+              // Recovery identity order — never fabricate org/user from the
+              // tenant id: sandbox record → durable mission checkpoint →
+              // block the run truthfully (it stays resumable via resume,
+              // which re-derives real identity from the session).
+              const cp = missionCheckpointFor(tenantId, runId);
+              const source = record
+                ? { organizationId: record.organizationId, userId: record.userId, projectId: record.projectId }
+                : cp
+                  ? { organizationId: cp.organizationId, userId: cp.userId, projectId: cp.projectId ?? null }
+                  : null;
+              if (!source?.organizationId || !source?.userId) {
+                store.emit(runId, "run.blocked" as AgentEventType, { message: "The backend restarted, and this run's mission identity could not be recovered durably. Resume it to continue with its real identity.", resumable: true, reason: "identity_unrecoverable" });
+                store.setStatus(runId, "blocked");
+                continue;
+              }
+              const identity = assertTrustedMission({
                 runId,
-                tenantId: record.tenantId,
-                organizationId: record.organizationId,
-                userId: record.userId,
-                projectId: record.projectId,
-              }) : assertTrustedMission({
-                runId,
-                tenantId,
-                organizationId: tenantId,
-                userId: tenantId,
-                projectId: null,
+                tenantId: record?.tenantId ?? cp?.tenantId ?? tenantId,
+                organizationId: source.organizationId,
+                userId: source.userId,
+                projectId: source.projectId ?? null,
               });
               rememberTenant(runId, tenantId, identity);
               const canonical = bindCanonicalRoot(runId, run.projectRoot || "");
+              let recoveryBlocked = false;
               const plan: SandboxPlan | undefined = record ? {
                 sandboxId: record.id,
                 provider: record.provider,
@@ -127,7 +148,20 @@ function recoverOrphanedRunsOnBoot(
                 retention: record.retention,
                 credentials: [],
                 reason: "backend restart recovery",
-              } : planSandbox(identity);
+              } : (() => {
+                try {
+                  return planSandbox(identity);
+                } catch (err: any) {
+                  // Mandatory-OpenShell deployments: a sandbox that cannot be
+                  // planned blocks the run truthfully — it never rides a
+                  // weaker provider the policy did not allow.
+                  store.emit(runId, "run.blocked" as AgentEventType, { message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`, resumable: true, reason: "sandbox_unavailable" });
+                  store.setStatus(runId, "blocked");
+                  recoveryBlocked = true;
+                  return undefined;
+                }
+              })();
+              if (recoveryBlocked) continue;
               jobQueue.push({
                 runId,
                 missionId: record?.missionId || `mission_${runId.slice(0, 8)}`,
@@ -192,11 +226,17 @@ export function listCanonicalFiles(runId: string): { canonical: boolean; files: 
   return { canonical: true, files: readWorkspaceTree(root) };
 }
 
-/** Write worker sandbox bytes back onto the durable workspace. Does not delete missing files. */
-export function applyCanonicalSync(runId: string, files: WorkspaceFile[]): { ok: true; written: string[] } | { ok: false; error: string } {
+/**
+ * Write worker sandbox bytes back onto the durable workspace. `deleted` is
+ * an explicit manifest of paths the worker removed — absence from `files`
+ * alone never deletes a canonical file.
+ */
+export function applyCanonicalSync(runId: string, files: WorkspaceFile[], deleted?: string[]): { ok: true; written: string[]; deleted: string[] } | { ok: false; error: string } {
   const root = canonicalRoots.get(runId);
   if (!root) return { ok: false, error: "no canonical workspace for this run" };
-  return { ok: true, written: writeWorkspaceTree(root, Array.isArray(files) ? files : []) };
+  const written = writeWorkspaceTree(root, Array.isArray(files) ? files : []);
+  const removed = Array.isArray(deleted) && deleted.length ? deleteWorkspacePaths(root, deleted) : [];
+  return { ok: true, written, deleted: removed };
 }
 
 export function canonicalRootForRun(runId: string): string | undefined {
@@ -276,8 +316,11 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
 /**
  * Chooses and records the run's execution sandbox. The registry row exists
  * before any worker sees the job, so every sandbox has an owner on record.
- * A registry failure never blocks a run: it falls back to the legacy Docker
- * plan the worker derives on its own.
+ * A registry failure on a docker/auto deployment falls back to the legacy
+ * Docker plan the worker derives on its own — but when the deployment
+ * MANDATES OpenShell (ORVYN_EXECUTION_PROVIDER=openshell), a failure or
+ * ineligible selection propagates so the run can block truthfully instead
+ * of silently losing its isolation.
  */
 function planSandbox(mission: MissionIdentity): SandboxPlan | undefined {
   try {
@@ -295,6 +338,7 @@ function planSandbox(mission: MissionIdentity): SandboxPlan | undefined {
     sandboxRegistry().audit("sandbox.planned", "control-plane", { sandboxId: plan.sandboxId, organizationId: mission.organizationId, detail: { provider: plan.provider, reason: plan.reason, retention: plan.retention, runId: mission.runId } });
     return plan;
   } catch (err: any) {
+    if (String(process.env.ORVYN_EXECUTION_PROVIDER).toLowerCase() === "openshell") throw err;
     console.warn(`[worker-registry] sandbox plan failed for ${mission.runId}: ${String(err?.message ?? err).slice(0, 200)}`);
     return undefined;
   }
@@ -385,7 +429,10 @@ export function workerRouter(
       let active = false;
       try {
         const run = getRunStore(job.tenantId).get(job.runId);
-        active = Boolean(run && !isRunSettled(run.status));
+        // Only an execution-active run gets a replacement worker. A settled
+        // run (partial/error/cancelled) is done, and a blocked one is paused
+        // awaiting its blocker — not something to reattach a worker to.
+        active = Boolean(run && isExecutionActive(run.status));
       } catch { active = false; }
       if (!active) { finishJob(job.runId); continue; }
       const lost = job.assignedTo;
@@ -460,7 +507,8 @@ export function workerRouter(
       return res.status(404).json({ error: "Not found" });
     }
     const files = Array.isArray(req.body?.files) ? req.body.files as WorkspaceFile[] : [];
-    const applied = applyCanonicalSync(req.params.runId, files);
+    const deleted = Array.isArray(req.body?.deleted) ? req.body.deleted.map((p: unknown) => String(p)) : undefined;
+    const applied = applyCanonicalSync(req.params.runId, files, deleted);
     if (!applied.ok) return res.status(409).json(applied);
     res.json(applied);
   });

@@ -4,7 +4,6 @@
 
 import { Router } from "express";
 import { toolRpc } from "../execution/ToolRpc";
-import { executeLocalTool } from "../localWorker/LocalToolExecutor";
 import { detectLocalEnvironment } from "../localWorker/environmentDetect";
 import type { ServiceRecord } from "../services/ServiceManager";
 import { noteWorkbenchBrowser, resolveWorkbenchBrowserCommand, takeWorkbenchBrowserCommands } from "../desktop/workbenchBrowserBridge";
@@ -194,7 +193,16 @@ export function localWorkerRouter(
   });
 
   r.post("/tools/:runId/result", (req, res) => {
-    requireTenant(req);
+    const t = requireTenant(req);
+    const job = jobs.find((j) => j.runId === req.params.runId);
+    if (job && job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
+    // Fence late results: only the worker this job was assigned to may
+    // resolve its ToolRPC — a re-registered process must not answer for a
+    // stale assignment (same rule the cloud worker route enforces).
+    const workerId = String(req.body.workerId ?? "");
+    if (job?.assignedTo && workerId && job.assignedTo !== workerId) {
+      return res.status(409).json({ error: "This run is assigned to another worker" });
+    }
     const resolved = toolRpc.resolve({
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
@@ -214,7 +222,11 @@ export function localWorkerRouter(
     if (!type) return res.status(400).json({ error: "type required" });
     try {
       const store = getRunStore(t.id);
-      if (!store.get(req.params.runId)) store.create(req.params.runId, String(data?.projectRoot ?? t.currentProjectRoot ?? "/local"));
+      // The run's project root comes from the JOB that owns this run (or the
+      // event payload) — never the tenant-global currentProjectRoot, which can
+      // point at a different project when runs overlap.
+      const jobRoot = jobs.find((j) => j.runId === req.params.runId)?.projectRoot;
+      if (!store.get(req.params.runId)) store.create(req.params.runId, String(data?.projectRoot ?? jobRoot ?? "/local"));
       const payload = { ...(data ?? {}) };
       // The worker does not know the model's call id. Attach the command that
       // is running now, so its output streams into the right row in the chat.
@@ -244,18 +256,12 @@ export function localWorkerRouter(
     res.json({ ok: true });
   });
 
-  r.post("/execute", async (req, res) => {
-    const t = requireTenant(req);
-    const projectRoot = String(req.body.projectRoot ?? t.currentProjectRoot ?? "");
-    if (!projectRoot) return res.status(400).json({ error: "projectRoot required" });
-    const result = await executeLocalTool({
-      tool: String(req.body.tool ?? ""),
-      arguments: req.body.arguments ?? {},
-      runId: typeof req.body.runId === "string" ? req.body.runId : undefined,
-      projectRoot,
-    });
-    res.json(result);
-  });
+  // NOTE: there is deliberately no direct /execute endpoint. Every tool call
+  // a local worker runs must arrive as a ToolRPC request the control plane
+  // already authorized through ToolGateway (permission → approval → workspace
+  // binding). A tenant-authenticated "run this tool at this path" route would
+  // be a bypass around all of it, so the worker protocol is poll → next →
+  // result only.
 
   return r;
 }

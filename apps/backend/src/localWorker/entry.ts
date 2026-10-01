@@ -154,6 +154,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
     await cp(`/api/v1/local-worker/tools/${job.runId}/result`, "POST", {
       requestId: req.requestId,
       runId: job.runId,
+      workerId: WORKER_ID,
       ok: result.ok,
       output: result.output,
       error: result.error,

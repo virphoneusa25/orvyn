@@ -177,10 +177,12 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
         frontend ||
         database ||
         has(goal, /\b(file|repo|workspace|project|codebase)\b/i)),
+    // "Deploy my website to my server" is frontend AND needs the server —
+    // a frontend keyword must not waive a named remote target. The remoteText
+    // strip above already removes "dev server"-style false positives.
     requiresRemoteResource:
       !informational &&
-      !frontend &&
-      (has(goal, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
+      (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|server|remote host)\b/i) ||
         (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
     requiresTerminal: terminal && !informational,
     requiresBrowser: !informational && (browser || frontend),

@@ -187,6 +187,9 @@ async function startMission(cmd: OrvynCommand): Promise<CommandOutcome> {
     body: JSON.stringify({ sessionId: chat.sessionId, messageId: message.id, projectRoot: cmd.projectRoot, goal: cmd.prompt, attachments: cmd.attachments, requestedModelId: cmd.requestedModelId, reasoningEffort: cmd.reasoningEffort, permissionMode: cmd.permissionMode }),
   });
   const data = await res.json();
+  // The backend owns the answer-vs-run decision too: it can decline to create
+  // a run for an answer-only prompt, in which case the chat path answers.
+  if (data.routed === "chat") return runChat(cmd);
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the mission" };
   if (data.runId) noteActiveRunId(String(data.runId));
   bindChatToRun(chat.id, data.sessionId, data.runId, { ...message, runId: data.runId });
@@ -223,6 +226,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
     }),
   });
   const data = await res.json();
+  if (data.routed === "chat") return runChat(cmd);
   if (!res.ok) return { kind: "error", error: data.error || "Could not start the task" };
   if (data.runId) noteActiveRunId(String(data.runId));
   bindChatToRun(chat.id, data.sessionId, data.runId, { ...message, runId: data.runId });

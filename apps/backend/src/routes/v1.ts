@@ -792,6 +792,7 @@ import { isTerminal } from "../agent/events";
 import { isAccessMode } from "../gateway/PermissionProfiles";
 import { loadSshHosts } from "../ai/tools/sshTools";
 import { inferTaskIntent } from "../agent/taskIntent";
+import { routeTurn } from "../agent/turnRouting";
 import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace, type WorkspaceResolved } from "../agent/workspacePreflight";
 import type { WorkSessionStore } from "../sessions/WorkSessionStore";
 
@@ -859,6 +860,17 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // aborts the run itself.
 v1Router.post("/agent/stream/runs", (req, res) => {
   const t = requireTenant(req);
+  // One owner per turn: an answer-only prompt is a chat turn — no run, no
+  // workspace preflight, no resource resolution, no worker scheduling. The
+  // client answers it over /ws/chat like any other chat message.
+  const instruction = String(req.body.instruction ?? req.body.goal ?? "");
+  const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
+  if (routeTurn(instruction, composerMode) === "chat") {
+    return res.json({
+      routed: "chat",
+      sessionId: typeof req.body.sessionId === "string" ? req.body.sessionId : undefined,
+    });
+  }
   // A run the wallet cannot pay for is refused up front, in plain words.
   const ownModel = t.modelService.isUserModel(String(t.modelService.effectiveRequest(req.body?.requestedModelId) ?? ""));
   if (creditsEnforced() && !ownModel) {
@@ -869,8 +881,6 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       throw err;
     }
   }
-  const instruction = String(req.body.instruction ?? req.body.goal ?? "");
-  const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
   const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
   let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
@@ -1469,6 +1479,11 @@ v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
 
 v1Router.post("/agent/orchestrate", (req, res) => {
   const t = requireTenant(req);
+  // Same one-owner rule as /agent/stream/runs: answer-only text is a chat
+  // turn, and a chat turn must never consume mission quota.
+  if (routeTurn(String(req.body.goal ?? ""), typeof req.body.composerMode === "string" ? req.body.composerMode : undefined) === "chat") {
+    return res.json({ routed: "chat" });
+  }
   // Monthly mission quota (0/unset = unlimited). Checked against the
   // persisted missions table so restarts don't reset the budget.
   const missionQuota = Number(process.env.ORVYN_QUOTA_MISSIONS_MONTH) || 0;

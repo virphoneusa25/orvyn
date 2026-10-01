@@ -256,6 +256,10 @@ export function useAgentRun(
         body: JSON.stringify(payload),
       });
       const data = await res.json();
+      if (data.routed === "chat") {
+        setError("That reads like a question — ask it in the chat and ORION will answer directly.");
+        return false;
+      }
       if (!res.ok) throw new Error(data.error || "Failed to start run");
       setRunId(data.runId);
       runIdRef.current = data.runId;

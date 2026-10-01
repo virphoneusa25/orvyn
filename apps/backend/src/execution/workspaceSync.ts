@@ -72,6 +72,29 @@ export function readWorkspaceTree(root: string): WorkspaceFile[] {
   return files;
 }
 
+/**
+ * Deletes canonical paths the worker explicitly reports as removed.
+ * Deletion is an explicit manifest — never inferred from absence — so a
+ * partial or empty sandbox can still not wipe the project.
+ */
+export function deleteWorkspacePaths(root: string, paths: string[]): string[] {
+  const base = path.resolve(root);
+  const deleted: string[] = [];
+  for (const p of Array.isArray(paths) ? paths : []) {
+    const rel = normalizeWorkspacePath(p);
+    if (!rel) continue;
+    const target = path.resolve(base, rel);
+    try {
+      assertInside(base, target);
+      if (fs.existsSync(target)) {
+        fs.rmSync(target, { recursive: true, force: true });
+        deleted.push(rel);
+      }
+    } catch { /* a path that escapes or fails is skipped, not fatal */ }
+  }
+  return deleted;
+}
+
 export function writeWorkspaceTree(root: string, files: WorkspaceFile[]): string[] {
   const base = path.resolve(root);
   fs.mkdirSync(base, { recursive: true });
