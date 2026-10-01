@@ -76,8 +76,10 @@ const pct = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Mat
 async function helperConversation(handle, script, calls) {
   const session = await p.attach(handle, { command: ["node", script], cwd: "/workspace", tty: false });
   let buffer = "";
+  let diagnostics = "";
   const pending = new Map();
   session.onData((chunk) => {
+    diagnostics = (diagnostics + chunk).slice(-4_000);
     buffer += chunk;
     let end;
     while ((end = buffer.indexOf("\n")) >= 0) {
@@ -94,11 +96,17 @@ async function helperConversation(handle, script, calls) {
     for (const [op, args = {}] of calls) {
       const requestId = `accept-${Date.now()}-${Math.random()}`;
       const response = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`${op} helper timed out`)); }, 30_000);
+        const timer = setTimeout(() => {
+          pending.delete(requestId);
+          reject(new Error(`${op} helper timed out${diagnostics ? `: ${diagnostics}` : ""}`));
+        }, 30_000);
         pending.set(requestId, (value) => { clearTimeout(timer); resolve(value); });
       });
       session.write(`${JSON.stringify({ id: requestId, op, args })}\n`);
-      replies.push(await response);
+      const exited = session.exited.then((code) => {
+        throw new Error(`${op} helper exited ${code}${diagnostics ? `: ${diagnostics}` : ""}`);
+      });
+      replies.push(await Promise.race([response, exited]));
     }
     return replies;
   } finally {

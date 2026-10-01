@@ -7,7 +7,11 @@ const context = await chromium.launchPersistentContext("/tmp/orvyn-browser-profi
   executablePath,
   headless: true,
   viewport: { width: 1280, height: 800 },
-  args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  // OpenShell deliberately denies the credential-changing and namespace
+  // syscalls Chromium's zygote uses. Keep every browser process inside the
+  // already isolated sandbox instead of asking Chromium to fork a second
+  // sandbox hierarchy of its own.
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-zygote", "--single-process"],
 });
 const page = context.pages()[0] ?? await context.newPage();
 const consoleErrors = [];
