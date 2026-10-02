@@ -11,6 +11,7 @@ export type ProgressState = "running" | "done" | "failed" | "waiting";
 export interface ProgressRow {
   id: string;
   kind: "plan" | "file" | "command" | "search" | "review" | "approval" | "other";
+  integration?: "github";
   label: string;
   detail?: string;
   state: ProgressState;
@@ -39,6 +40,16 @@ function toolKind(tool: string): ProgressRow["kind"] {
   if (/^(web_search|fetch_url|search_files)$/.test(tool)) return "search";
   if (/^(git_diff|git_status|browser_screenshot|verify|run_tests)$/.test(tool)) return "review";
   return "other";
+}
+
+function toolIntegration(tool: string): ProgressRow["integration"] {
+  return /^mcp\.(?:[^.]*github[^.]*)\./i.test(tool) ? "github" : undefined;
+}
+
+function toolLabel(tool: string): string {
+  const github = tool.match(/^mcp\.(?:[^.]*github[^.]*)\.(.+)$/i);
+  if (github) return `Using GitHub: ${github[1]!.replace(/[._]/g, " ")}`;
+  return TOOL_LABELS[tool] ?? `Using ${tool.replace(/[._]/g, " ")}`;
 }
 
 function toolDetail(input: Record<string, unknown>): string | undefined {
@@ -78,7 +89,8 @@ export function progressRows(events: AgentProgressEvent[]): ProgressRow[] {
       const row: ProgressRow = {
         id: `tool:${callId}`,
         kind: toolKind(tool),
-        label: TOOL_LABELS[tool] ?? `Using ${tool.replace(/[._]/g, " ")}`,
+        integration: toolIntegration(tool),
+        label: toolLabel(tool),
         detail: args ? toolDetail(args) : undefined,
         state: "running",
       };
@@ -89,7 +101,7 @@ export function progressRows(events: AgentProgressEvent[]): ProgressRow[] {
     if ((event.type === "tool.completed" || event.type === "tool.failed") && callId) {
       const tool = str(data.tool) || "tool";
       const row = byCall.get(callId) ?? {
-        id: `tool:${callId}`, kind: toolKind(tool), label: TOOL_LABELS[tool] ?? `Using ${tool.replace(/[._]/g, " ")}`,
+        id: `tool:${callId}`, kind: toolKind(tool), integration: toolIntegration(tool), label: toolLabel(tool),
       } as ProgressRow;
       row.state = event.type === "tool.failed" ? "failed" : "done";
       const summary = str(data.envelope?.userSummary ?? data.summary ?? data.preview);

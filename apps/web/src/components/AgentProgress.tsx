@@ -3,6 +3,7 @@ import { Icon } from "./Icons";
 import { progressRows, terminalRunStatus, type AgentProgressEvent, type ProgressRow } from "../lib/agentProgress";
 
 function rowIcon(row: ProgressRow) {
+  if (row.integration === "github") return <Icon.github />;
   if (row.state === "done") return <Icon.check size={15} />;
   if (row.state === "failed") return <Icon.x size={15} />;
   if (row.state === "waiting") return <Icon.clock size={15} />;

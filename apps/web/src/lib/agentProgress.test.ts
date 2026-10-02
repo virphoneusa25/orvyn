@@ -21,6 +21,14 @@ test("file edits and verification appear as distinct progress steps", () => {
   assert.deepEqual(rows.map((row) => [row.label, row.state]), [["Updated file", "done"], ["Reviewed changes", "done"]]);
 });
 
+test("GitHub MCP actions are identified for the branded progress icon", () => {
+  const [row] = progressRows([
+    { sequence: 1, type: "tool.started", data: { callId: "gh1", tool: "mcp.github.create_pull_request" } },
+  ]);
+  assert.equal(row?.integration, "github");
+  assert.equal(row?.label, "Using GitHub: create pull request");
+});
+
 test("only settled run statuses stop the live indicator", () => {
   assert.equal(terminalRunStatus("running"), false);
   assert.equal(terminalRunStatus("completed"), true);

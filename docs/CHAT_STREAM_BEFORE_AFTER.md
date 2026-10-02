@@ -62,3 +62,7 @@ approval and review events into readable steps. The timeline can be restored
 from the durable run event log when a conversation is reopened. Desktop
 already presents these run events in its Work Stream; its existing rendering
 is unchanged by the Cloud chat integration.
+
+GitHub MCP actions are recognized from their namespaced tool identity and use
+the GitHub Octocat mark in both progress timelines; other tools retain their
+action-specific icons.

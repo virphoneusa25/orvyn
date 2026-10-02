@@ -3,6 +3,7 @@ import type { GroupItem, ToolItem, ToolOp, WorkGroupItem } from "../presentation
 import { openArtifactInContext } from "../contextOpen";
 import { FileTypeIcon as BrandFileTypeIcon } from "./FileTypeIcon";
 import { IconFile, IconSearch, IconTerminal, IconGlobe, IconWrench } from "./Icons";
+import { IntegrationIcon } from "./IntegrationIcon";
 import "./ConversationActivity.css";
 
 // Quiet, one-line steps like a coding assistant's log: "Terminal  npm test",
@@ -26,7 +27,8 @@ const GROUP_NOUN: Record<ToolOp, [string, string]> = {
 export function FileTypeIcon({ name }: { name: string; ext?: string }) {
   return <BrandFileTypeIcon path={name} />;
 }
-function ActivityIcon({ op }: { op: ToolOp }) {
+function ActivityIcon({ op, toolName }: { op: ToolOp; toolName?: string }) {
+  if (/^mcp\.(?:[^.]*github[^.]*)\./i.test(toolName ?? "")) return <IntegrationIcon provider="github" size={17} />;
   return op === "terminal" || op === "test" ? <IconTerminal size={16} /> : op === "search" ? <IconSearch size={16} /> : op === "browser" || op === "web" ? <IconGlobe size={16} /> : op === "edit" || op === "create" ? <IconWrench size={16} /> : <IconFile size={16} />;
 }
 function ImageSketch({ name }: { name?: string }) {
@@ -135,7 +137,7 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
       onKeyDown={toggle ? (e) => { if (e.key === "Enter") toggle(); } : undefined}
       title={failed && item.error ? item.error : item.fileName ? `${item.path ?? ""}${item.fileName}` : target}
     >
-      <span className="tool-line__icon">{running ? <i className="tool-line__spin" aria-hidden="true" /> : item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} />}</span>
+      <span className="tool-line__icon">{item.fileName ? <FileTypeIcon name={item.fileName} ext={item.ext} /> : <ActivityIcon op={item.op} toolName={item.toolName} />}{running && !/^mcp\.(?:[^.]*github[^.]*)\./i.test(item.toolName ?? "") ? <i className="tool-line__spin" aria-hidden="true" /> : null}</span>
       <span className="tool-line__verb">{verb}</span>
       {item.verifier && <span className="tool-line__by" title="Independent read-only check, not ORION's own work">verifier</span>}
       {target && <code className="tool-line__target">{target}</code>}
