@@ -223,7 +223,12 @@ async function openSession(projectRoot: string): Promise<BrowserSession> {
     }
   }
   const browser = await launchBrowser(pw);
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 800 },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
+  });
   const session: BrowserSession = {
     browser,
     page,

@@ -1,0 +1,139 @@
+{
+  "id": "research",
+  "version": 2,
+  "description": "Read-only reference sites plus owner-approved public pages. Web search stays on the control plane. OpenShell never allows host * — extra sites are named hosts on 443 after approval.",
+  "parameters": [
+    "host"
+  ],
+  "policy": {
+    "version": 1,
+    "filesystem": {
+      "include_workdir": true,
+      "read_only": [
+        "/usr",
+        "/ms-playwright",
+        "/lib",
+        "/bin",
+        "/etc",
+        "/proc",
+        "/dev/urandom",
+        "/var/log"
+      ],
+      "read_write": [
+        "/workspace",
+        "/tmp",
+        "/dev/null"
+      ]
+    },
+    "landlock": {
+      "compatibility": "best_effort"
+    },
+    "process": {
+      "run_as_user": "sandbox",
+      "run_as_group": "sandbox"
+    },
+    "network_policies": {
+      "reference_docs": {
+        "name": "reference_docs",
+        "endpoints": [
+          {
+            "host": "developer.mozilla.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "nodejs.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "docs.python.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "docs.github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "en.wikipedia.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "export.arxiv.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "api.crossref.org",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          },
+          {
+            "host": "raw.githubusercontent.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python3.12"
+          },
+          {
+            "path": "/usr/local/bin/node"
+          },
+          {
+            "path": "/ms-playwright/chromium-1187/chrome-linux/chrome"
+          }
+        ]
+      },
+      "user_pages": {
+        "name": "user_pages",
+        "endpoints": [
+          {
+            "host": "{{host}}",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+            "access": "NETWORK_ACCESS_PRESET_READ_ONLY"
+          }
+        ],
+        "binaries": [
+          {
+            "path": "/usr/bin/curl"
+          },
+          {
+            "path": "/usr/bin/python3.12"
+          },
+          {
+            "path": "/usr/local/bin/node"
+          },
+          {
+            "path": "/ms-playwright/chromium-1187/chrome-linux/chrome"
+          }
+        ]
+      }
+    }
+  }
+}

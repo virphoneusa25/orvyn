@@ -25,7 +25,7 @@ export const TEMPLATE_CREDENTIALS: Partial<Record<PolicyTemplateId, Array<{ inte
 export const TEMPLATE_LABELS: Record<PolicyTemplateId, string> = {
   "code-basic": "No network",
   "web-development": "Package registries and CDNs",
-  research: "Reference documentation sites",
+  research: "Reference documentation and owner-approved public sites",
   github: "GitHub (clone, fetch, push)",
   deployment: "GitHub and deploy providers",
   "server-admin": "SSH to specific servers",
@@ -67,14 +67,14 @@ export function requestNetworkAccess(
     return { ok: false, code: "NOT_ON_PLAN", message: `The "${TEMPLATE_LABELS[template]}" access profile is not included in this account's plan.` };
   }
   const hosts = [...new Set((input.hosts ?? []).map((h) => String(h).trim().toLowerCase()).filter(Boolean))].slice(0, 5);
-  if (template === "server-admin") {
-    if (!hosts.length) return { ok: false, code: "BAD_REQUEST", message: "SSH access needs the server hostname(s)." };
+  if (template === "server-admin" || template === "research") {
+    if (template === "server-admin" && !hosts.length) return { ok: false, code: "BAD_REQUEST", message: "SSH access needs the server hostname(s)." };
     const bad = hosts.filter((h) => !publicHost(h));
     if (bad.length) return { ok: false, code: "BAD_REQUEST", message: `Not allowed: ${bad.join(", ")}. Only public hostnames or addresses.` };
   }
   const request = registry.requestPolicy({
     sandboxId: rec.id, runId: input.runId, organizationId: rec.organizationId, template,
-    params: template === "server-admin" ? { host: hosts } : {},
+    params: template === "server-admin" || template === "research" ? { host: hosts } : {},
     reason: input.reason, requestedBy: `model:${input.runId}`,
   });
   registry.audit("policy.expansion.requested", `model:${input.runId}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { requestId: request.id, template, hosts } });

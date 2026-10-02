@@ -109,6 +109,7 @@ test("network requests: the model asks, a person decides, credentials follow onl
   reg.plan({ ...base, id: "sbx_o", provider: "openshell", runId: "run-o" });
   assert.equal((requestNetworkAccess(reg, { runId: "run-o", template: "github", planId: "free" }) as any).code, "NOT_ON_PLAN");
   assert.equal((requestNetworkAccess(reg, { runId: "run-o", template: "server-admin", hosts: ["10.0.0.5"], planId: "business" }) as any).code, "BAD_REQUEST");
+  assert.equal((requestNetworkAccess(reg, { runId: "run-o", template: "research", hosts: ["10.0.0.5"], planId: "pro" }) as any).code, "BAD_REQUEST");
   assert.equal((requestNetworkAccess(reg, { runId: "run-o", template: "code-basic", planId: "pro" }) as any).code, "BAD_REQUEST");
 
   const out = requestNetworkAccess(reg, { runId: "run-o", template: "github", reason: "clone the repo", planId: "pro" });

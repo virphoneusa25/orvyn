@@ -45,6 +45,10 @@ test("server-admin renders only approved public hosts", () => {
   assert.deepEqual(renderPolicy("server-admin").policy.network_policies, {}, "no host → no rule (deny)");
   const r = renderPolicy("server-admin", { host: ["deploy.example.com"] }).policy;
   assert.deepEqual(allowedHosts(r), ["deploy.example.com:22"]);
+  const research = renderPolicy("research", { host: ["virphoneusa.com"] }).policy;
+  assert.ok(allowedHosts(research).includes("developer.mozilla.org:443"));
+  assert.ok(allowedHosts(research).includes("virphoneusa.com:443"));
+  assert.ok(!allowedHosts(renderPolicy("research").policy).includes("virphoneusa.com:443"));
   for (const h of ["localhost", "127.0.0.1", "10.1.2.3", "169.254.169.254", "192.168.1.5", "172.20.0.1", "db.internal", "x"]) {
     assert.equal(validatePublicHost(h), false, h);
     assert.throws(() => renderPolicy("server-admin", { host: [h] }), SandboxError);

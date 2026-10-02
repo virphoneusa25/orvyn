@@ -2211,7 +2211,7 @@ export class StreamingAgentRuntime {
         type: "object",
         properties: {
           access: { type: "string", enum: POLICY_TEMPLATES.filter((t) => t !== "code-basic"), description: Object.entries(TEMPLATE_LABELS).filter(([k]) => k !== "code-basic").map(([k, v]) => `${k}: ${v}`).join("; ") },
-          hosts: { type: "array", items: { type: "string" }, description: "Only for server-admin: the server hostnames." },
+          hosts: { type: "array", items: { type: "string" }, description: "Public hostnames. Required for server-admin (SSH). For research, the sites to read (for example virphoneusa.com)." },
           reason: { type: "string", description: "One sentence the owner will read: what needs the network and why." },
         },
         required: ["access", "reason"],
