@@ -11,6 +11,7 @@
 import type { Run, RunStore } from "../agent/events";
 import { finalAnswerOf } from "../agent/runThread";
 import type { SessionMessage, WorkSessionStore } from "./WorkSessionStore";
+import type { TurnDecision } from "@orvyn/ai-core";
 
 /** Stable ids, so a retry or a second writer updates instead of duplicating. */
 export const runAnswerMessageId = (runId: string) => `msg_answer_${runId}`;
@@ -20,7 +21,7 @@ export function recordRunInstruction(
   sessionId: string,
   runId: string,
   instruction: string,
-  opts: { messageId?: string; mode?: string } = {},
+  opts: { messageId?: string; mode?: string; turnDecision?: TurnDecision } = {},
 ): SessionMessage | undefined {
   if (!instruction.trim()) return undefined;
   return sessions.appendMessage(sessionId, {
@@ -29,6 +30,7 @@ export function recordRunInstruction(
     content: instruction,
     runId,
     mode: opts.mode ?? "agent",
+    ...(opts.turnDecision ? { meta: { turnDecision: opts.turnDecision } } : {}),
   });
 }
 
@@ -96,13 +98,13 @@ export class ChatTurnRecorder {
   constructor(
     private readonly sessions: WorkSessionStore,
     private readonly sessionId: string,
-    input: { userMessage: string; userMessageId?: string; assistantMessageId?: string; userCreatedAt?: number; mode?: string; attachments?: unknown[] },
+    input: { userMessage: string; userMessageId?: string; assistantMessageId?: string; userCreatedAt?: number; mode?: string; attachments?: unknown[]; turnDecision?: TurnDecision },
   ) {
     const mode = input.mode ?? "chat";
     sessions.appendMessage(sessionId, {
       messageId: input.userMessageId, role: "user", content: input.userMessage, mode, createdAt: input.userCreatedAt,
       // The files the user attached (their stored artifact ids), so reopening the chat shows them.
-      ...(input.attachments?.length ? { meta: { attachments: input.attachments } } : {}),
+      ...(input.attachments?.length || input.turnDecision ? { meta: { ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.turnDecision ? { turnDecision: input.turnDecision } : {}) } } : {}),
     });
     const reply = sessions.appendMessage(sessionId, { messageId: input.assistantMessageId, role: "assistant", content: "", mode, status: "streaming" });
     this.replyId = reply?.messageId ?? null;

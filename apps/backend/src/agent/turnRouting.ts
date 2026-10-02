@@ -4,11 +4,15 @@
 // The desktop classifier makes this call before submitting; this gate is the
 // same decision server-side for every caller of the run endpoints.
 
+import { decideTurn, type TurnDecisionContext } from "@orvyn/ai-core";
 import { inferTaskIntent } from "./taskIntent";
 
 export type TurnRoute = "chat" | "run";
 
-export function routeTurn(instruction: string, composerMode?: string): TurnRoute {
+export function routeTurn(instruction: string, composerMode?: string, context: TurnDecisionContext = {}): TurnRoute {
+  const decision = decideTurn(instruction, context);
+  if (!decision.requiresExecution) return "chat";
+  if (decision.disposition === "continue_execution") return "run";
   const intent = inferTaskIntent(instruction, composerMode);
   // Keep text-only requests on the normal chat stream. Phrases like “write an
   // email” contain an action verb, but do not need an agent run unless they
@@ -20,5 +24,6 @@ export function routeTurn(instruction: string, composerMode?: string): TurnRoute
     || intent.requiresDesktop
     || intent.requiresArtifact
     || intent.requiresExternalIntegration;
-  return intent.executionComplexity === "answer" || !needsAgent ? "chat" : "run";
+  const contextualWork = decision.requiresExecution && decision.capabilities.some((capability) => ["artifact", "code", "server", "browser", "github"].includes(capability));
+  return intent.executionComplexity === "answer" || (!needsAgent && !contextualWork) ? "chat" : "run";
 }

@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inferTaskIntent } from "./taskIntent";
 import { routeTurn } from "./turnRouting";
+import { decideTurn } from "@orvyn/ai-core";
 import { externalResourceRequired, resolveResources, type RegisteredResource } from "./resourceResolver";
 
 const SCOPE = { tenantId: "t1", organizationId: "o1", projectId: null as string | null };
@@ -142,4 +143,34 @@ test("action prompts are run turns", () => {
   for (const q of ["Check nginx on my server", "Build me a React login page", "Deploy this", "Fix the login page on my connected server"]) {
     assert.equal(routeTurn(q, "auto"), "run", q);
   }
+});
+
+test("a capability question about an active ad answers without image or agent work", () => {
+  const question = decideTurn("Can you use icons in the ad?", { activeArtifactId: "artifact-ad-1", hasPreviousExecution: true });
+  assert.equal(question.disposition, "answer");
+  assert.equal(question.requiresTool, false);
+  assert.equal(question.targetArtifactId, "artifact-ad-1");
+  assert.equal(question.responseOwner, "conversation");
+  assert.equal(routeTurn("Can you use icons in the ad?", "auto"), "chat");
+  assert.equal(decideTurn("Can you use this logo for VirPhone?", { hasAttachments: true }).requiresExecution, true);
+});
+
+test("an explicit artifact edit and a failed-task follow-up execute with continuity", () => {
+  const edit = decideTurn("Add recycling icons to the ad.", { activeArtifactId: "artifact-ad-1" });
+  assert.equal(edit.disposition, "edit_existing");
+  assert.equal(edit.targetArtifactId, "artifact-ad-1");
+  assert.equal(routeTurn("Add recycling icons to the ad."), "run");
+
+  const retry = decideTurn("That didn't fix it.", { activeProjectId: "project-1", activeMissionId: "run-1", hasPreviousExecution: true });
+  assert.equal(retry.disposition, "continue_execution");
+  assert.equal(retry.targetMissionId, "run-1");
+  assert.equal(retry.responseOwner, "single_agent");
+  assert.equal(routeTurn("That didn't fix it.", "auto", { activeProjectId: "project-1", activeMissionId: "run-1", hasPreviousExecution: true }), "run");
+});
+
+test("question and action forms of the same nginx request have different dispositions", () => {
+  assert.equal(decideTurn("How do I configure nginx?").disposition, "answer");
+  assert.equal(routeTurn("How do I configure nginx?"), "chat");
+  assert.equal(decideTurn("Configure nginx on my connected server.").disposition, "execute");
+  assert.equal(routeTurn("Configure nginx on my connected server."), "run");
 });

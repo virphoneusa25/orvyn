@@ -1,0 +1,126 @@
+/**
+ * The conversation/runtime boundary shared by the web, desktop and backend.
+ * This is deliberately deterministic and does not contain model reasoning.
+ */
+export type TurnDisposition = "answer" | "execute" | "inspect" | "edit_existing" | "continue_execution";
+export type ContinuationType = "new_topic" | "follow_up" | "correction" | "refinement" | "artifact_edit" | "task_continuation";
+export type ResponseOwner = "conversation" | "single_agent" | "multi_agent";
+
+export interface TurnReference {
+  kind: "artifact" | "image" | "file" | "project" | "mission" | "code" | "message";
+  id: string;
+  confidence: number;
+  sourceTurnId?: string;
+}
+
+export interface TurnDecision {
+  disposition: TurnDisposition;
+  continuation: ContinuationType;
+  requiresExecution: boolean;
+  requiresTool: boolean;
+  targetArtifactId?: string;
+  targetProjectId?: string;
+  targetMissionId?: string;
+  references: TurnReference[];
+  capabilities: string[];
+  confidence: number;
+  reasonCode: "answer_only" | "explicit_action" | "artifact_reference" | "project_action" | "mission_continuation" | "ambiguous";
+  responseOwner: ResponseOwner;
+}
+
+export interface TurnDecisionContext {
+  activeArtifactId?: string;
+  activeProjectId?: string;
+  activeMissionId?: string;
+  hasAttachments?: boolean;
+  hasPreviousExecution?: boolean;
+}
+
+const QUESTION = /\?\s*$/;
+const QUESTION_OPEN = /^(?:what|why|how|when|who|where|which|explain|describe|compare|tell me|can you|could you|would you)\b/i;
+const ACTION_VERB = /\b(?:create|build|fix|edit|update|implement|refactor|deploy|install|run|start|stop|write|inspect|verify|debug|modify|replace|add|remove|change|restyle|connect|configure|set up|setup|delete|rename|move|redesign|generate|export|convert|save|open|read|review|test|check|restart|launch|browse|diagnose|commit|screenshot|make|use|put|insert|research|login|log in|ssh)\b/i;
+const CORRECTION = /\b(?:no,? i meant|that's not what i meant|that is not what i meant|wrong (?:one|image|file)|the other (?:one|image|file)|not that one)\b/i;
+const CONTINUE = /\b(?:that didn't fix it|still broken|try again|continue|resume|keep going|go ahead|do it|fix the other error|same thing|make it (?:more|less|mobile|responsive))\b/i;
+const ARTIFACT = /\b(?:image|ad|logo|banner|document|report|chart|spreadsheet|file|design|artifact|page|website)\b/i;
+const PRONOUN = /\b(?:it|this|that|that one|the previous one|same one|same thing)\b/i;
+
+function capabilities(text: string): string[] {
+  const out = new Set<string>();
+  if (/\b(?:image|picture|photo|logo|ad|banner)\b/i.test(text)) out.add("artifact");
+  if (/\b(?:file|code|project|repo|repository|typescript|javascript|component|bug|test)\b/i.test(text)) out.add("code");
+  if (/\b(?:server|ssh|nginx|uptime|hostname)\b/i.test(text)) out.add("server");
+  if (/\b(?:website|webpage|browser|homepage|preview)\b/i.test(text)) out.add("browser");
+  if (/\b(?:search|research|latest|current|today|sources?)\b/i.test(text)) out.add("research");
+  if (/\b(?:github|pull request|issue)\b/i.test(text)) out.add("github");
+  return [...out];
+}
+
+/** Resolve the turn before selecting a model, resource, worker or tool. */
+export function decideTurn(text: string, context: TurnDecisionContext = {}): TurnDecision {
+  const prompt = String(text ?? "").trim();
+  const lower = prompt.toLowerCase();
+  const correction = CORRECTION.test(prompt);
+  const continuation = CONTINUE.test(prompt);
+  const explicitImperative = /^(?:please\s+)?(?:create|build|fix|edit|update|implement|refactor|deploy|install|run|start|stop|write|inspect|verify|debug|modify|replace|add|remove|change|restyle|connect|configure|set up|setup|delete|rename|move|redesign|generate|export|convert|save|open|read|review|test|check|restart|launch|browse|diagnose|commit|screenshot|use|put|insert|make|research|login|log in|ssh)\b/i.test(prompt);
+  const politeAction = /^(?:please\s+)?(?:can|could|would) you\s+(?:please\s+)?(?:create|build|fix|edit|update|implement|refactor|deploy|install|run|start|stop|write|inspect|verify|debug|modify|replace|add|remove|change|restyle|connect|configure|set up|setup|delete|rename|move|redesign|generate|export|convert|save|open|read|review|test|check|restart|launch|browse|diagnose|commit|screenshot|research|login|log in|ssh)\b/i.test(prompt);
+  const useQuestion = !context.hasAttachments && /^(?:can|could|would) you use\b/i.test(prompt) && QUESTION.test(prompt);
+  const question = QUESTION.test(prompt) || (QUESTION_OPEN.test(prompt) && !explicitImperative);
+  const textDraft = /^(?:please\s+)?(?:write|draft)\s+(?:an?\s+)?(?:email|note|letter|message|reply|post|paragraph|summary)\b/i.test(prompt);
+  const attachedAssetUse = Boolean(context.hasAttachments && /^(?:can|could|would) you use\b/i.test(prompt) && /\b(?:for|in|on|as|to)\b/i.test(prompt));
+  const isAction = !useQuestion && !textDraft && (attachedAssetUse || explicitImperative || politeAction || (!question && ACTION_VERB.test(prompt)));
+  const artifactReference = ARTIFACT.test(prompt) || PRONOUN.test(prompt);
+  const references: TurnReference[] = [];
+  if (artifactReference && context.activeArtifactId) {
+    references.push({ kind: /\b(?:image|picture|photo|ad|logo|banner)\b/i.test(prompt) ? "image" : "artifact", id: context.activeArtifactId, confidence: 0.92 });
+  }
+  if (context.activeProjectId && /\b(?:project|repo|repository|code|file|it|this|that)\b/i.test(prompt)) {
+    references.push({ kind: "project", id: context.activeProjectId, confidence: 0.82 });
+  }
+  if (context.activeMissionId && continuation) {
+    references.push({ kind: "mission", id: context.activeMissionId, confidence: 0.9 });
+  }
+
+  let disposition: TurnDisposition = "answer";
+  let continuationType: ContinuationType = "new_topic";
+  let reasonCode: TurnDecision["reasonCode"] = "answer_only";
+  if (correction) continuationType = "correction";
+  else if (continuation) continuationType = context.hasPreviousExecution ? "task_continuation" : "follow_up";
+  else if (artifactReference && context.activeArtifactId) continuationType = "follow_up";
+
+  if (isAction) {
+    disposition = context.activeArtifactId && artifactReference && /\b(?:edit|update|change|make|add|remove|replace|resize|redesign|restyle)\b/i.test(prompt)
+      ? "edit_existing"
+      : context.hasPreviousExecution && continuation
+        ? "continue_execution"
+        : /\b(?:why|how|what|which|where)\b/i.test(prompt) ? "inspect" : "execute";
+    continuationType = disposition === "edit_existing" ? "artifact_edit" : (context.hasPreviousExecution && continuation ? "task_continuation" : continuationType);
+    reasonCode = disposition === "edit_existing" ? "artifact_reference" : (context.activeProjectId ? "project_action" : "explicit_action");
+  }
+  if (continuation && context.hasPreviousExecution && !useQuestion) {
+    disposition = "continue_execution";
+    continuationType = correction ? "correction" : "task_continuation";
+    reasonCode = "mission_continuation";
+  }
+
+  // “Can you use icons in the ad?” asks for advice. “Use icons in the ad.” acts.
+  if (useQuestion) {
+    disposition = "answer";
+    continuationType = context.activeArtifactId ? "follow_up" : "new_topic";
+    reasonCode = context.activeArtifactId ? "artifact_reference" : "answer_only";
+  }
+  const requiresExecution = disposition !== "answer";
+  return {
+    disposition,
+    continuation: continuationType,
+    requiresExecution,
+    requiresTool: requiresExecution,
+    ...(references.find((r) => r.kind === "artifact" || r.kind === "image") ? { targetArtifactId: references.find((r) => r.kind === "artifact" || r.kind === "image")!.id } : {}),
+    ...(context.activeProjectId ? { targetProjectId: context.activeProjectId } : {}),
+    ...(context.activeMissionId && continuation ? { targetMissionId: context.activeMissionId } : {}),
+    references,
+    capabilities: capabilities(prompt),
+    confidence: useQuestion || question ? 0.9 : isAction ? 0.88 : 0.72,
+    reasonCode,
+    responseOwner: requiresExecution ? "single_agent" : "conversation",
+  };
+}

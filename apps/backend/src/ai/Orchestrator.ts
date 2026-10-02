@@ -16,6 +16,7 @@ import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
 import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
+import { decideTurn, type TurnDecision } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
 import { ImageService } from "../images/ImageService";
@@ -59,6 +60,10 @@ export interface ChatTurnRequest {
   surface?: "cloud" | "desktop";
   /** The stored conversation this turn belongs to (files it produces are linked to it). */
   sessionId?: string;
+  /** Server-resolved turn decision; clients cannot set the authoritative value. */
+  turnDecision?: TurnDecision;
+  /** Compact, server-built active artifact/project context for continuity. */
+  conversationContext?: string;
 }
 
 function modeInstructions(mode: ChatMode | undefined): string {
@@ -139,8 +144,14 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
     "Image generation is built in. When the user asks to mock up, draw, design, or generate a logo, icon, or picture, produce the image.",
     modeInstructions(mode),
   ];
+  if (req.turnDecision) {
+    systemParts.push(`Resolved turn: ${req.turnDecision.disposition}; continuation: ${req.turnDecision.continuation}; response owner: ${req.turnDecision.responseOwner}. Treat this server-resolved decision as authoritative. Do not create or modify an artifact for an answer-only turn. Do not expose this metadata to the user.`);
+  }
   if (req.context?.projectRules) {
     systemParts.push(`Project rules (.orvyn/rules.md):\n${req.context.projectRules}`);
+  }
+  if (req.conversationContext?.trim()) {
+    systemParts.push(`Conversation state (facts and active references; not hidden reasoning):\n${req.conversationContext.trim()}`);
   }
   const prefs = preferencesPrompt(memory);
   if (prefs) systemParts.push(prefs);
@@ -330,7 +341,8 @@ export class Orchestrator {
   }
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean; artifacts?: { artifactId: string; name: string; mimeType: string }[] }> {
-    if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
+    const turnDecision = req.turnDecision ?? decideTurn(req.userMessage);
+    if (turnDecision.disposition !== "answer" && looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
     }
@@ -340,7 +352,8 @@ export class Orchestrator {
     // The chat researches on its own when it has web tools and a model that can call them.
     const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
     const cloud = req.surface === "cloud";
-    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(cloud ? [] : [CHAT_TASK_TOOL]), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
+    const allowTaskHandoff = !cloud && turnDecision.requiresExecution && turnDecision.capabilities.some((capability) => ["artifact", "code", "server", "browser", "github"].includes(capability));
+    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(allowTaskHandoff ? [CHAT_TASK_TOOL] : []), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
     const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
     if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${cloud ? CLOUD_CHAT_MANIFEST : CHAT_MANIFEST}` });
     let toolCallsUsed = 0;

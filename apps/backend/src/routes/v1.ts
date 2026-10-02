@@ -797,6 +797,7 @@ import { loadSshHosts } from "../ai/tools/sshTools";
 import { listResolvedHosts, upsertSshHost } from "../ssh/sshHostStore";
 import { inferTaskIntent } from "../agent/taskIntent";
 import { routeTurn } from "../agent/turnRouting";
+import { decideTurn } from "@orvyn/ai-core";
 import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace, type WorkspaceResolved } from "../agent/workspacePreflight";
 import type { WorkSessionStore } from "../sessions/WorkSessionStore";
 
@@ -869,16 +870,20 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   // client answers it over /ws/chat like any other chat message.
   const instruction = String(req.body.instruction ?? req.body.goal ?? "");
   const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
-  if (routeTurn(instruction, composerMode) === "chat") {
-    return res.json({
-      routed: "chat",
-      sessionId: typeof req.body.sessionId === "string" ? req.body.sessionId : undefined,
-    });
-  }
   const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
   let requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (!requestedSession && previousById) requestedSession = t.sessions.sessionOfRun(previousById.id);
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0 };
+  const route = routeTurn(instruction, composerMode, decisionContext);
+  const turnDecision = { ...decideTurn(instruction, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "single_agent" as const };
+  if (route === "chat") {
+    return res.json({
+      routed: "chat",
+      sessionId: typeof req.body.sessionId === "string" ? req.body.sessionId : undefined,
+      turnDecision,
+    });
+  }
   if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
     return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
   }
@@ -1118,6 +1123,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const userMessage = recordRunInstruction(t.sessions, attached.sessionId, runId, String(req.body.instruction ?? ""), {
     messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
     mode: String(req.body.mode ?? "agent"),
+    turnDecision,
   });
   recordRunAnswer(t.sessions, t.runStore, attached.sessionId, runId);
   // What the user says about themselves or their work is remembered for next time.
@@ -1506,11 +1512,15 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   const t = requireTenant(req);
   // Same one-owner rule as /agent/stream/runs: answer-only text is a chat
   // turn, and a chat turn must never consume mission quota.
-  if (routeTurn(String(req.body.goal ?? ""), typeof req.body.composerMode === "string" ? req.body.composerMode : undefined) === "chat") {
-    return res.json({ routed: "chat" });
-  }
   const requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
+  const goal = String(req.body.goal ?? "");
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0 };
+  const route = routeTurn(goal, typeof req.body.composerMode === "string" ? req.body.composerMode : undefined, decisionContext);
+  const turnDecision = { ...decideTurn(goal, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "multi_agent" as const };
+  if (route === "chat") {
+    return res.json({ routed: "chat", turnDecision });
+  }
   if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
     return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
   }
@@ -1527,7 +1537,6 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  const goal = String(req.body.goal ?? "");
   const missionSession = (typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined)
     ?? t.sessions.create({ title: goal.split("\n")[0]!.slice(0, 80) || "Mission", userId: req.principal?.userId ?? "", projectRoot: null });
   const preflight = resolveRunWorkspace({
@@ -1607,7 +1616,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission" });
+  recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission", turnDecision });
   recordRunAnswer(t.sessions, t.runStore, joined.sessionId, runId);
   res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
 });

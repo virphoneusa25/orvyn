@@ -109,6 +109,13 @@ test("auto: questions go to chat (which researches on its own); research assignm
   assert.equal(classifyIntent("Build a landing page with the newest iPhone prices", "auto"), "code", "build work stays an agent run (it researches inside the run)");
 });
 
+test("artifact capability questions remain chat, while direct artifact commands become work", () => {
+  assert.equal(classifyIntent("Can you use icons in the ad?", "auto", { followsRun: true }), "chat");
+  assert.equal(classifyIntent("Use icons in the ad.", "auto"), "code");
+  assert.equal(classifyIntent("How do I fix this?", "auto"), "chat");
+  assert.equal(classifyIntent("Fix this.", "auto"), "code");
+});
+
 test("a question about the project in a chat that already built it goes to ORION (it can look), not plain chat", () => {
   for (const q of ["Where is the CSS to the preveiw?", "Did you create styles.css?", "Why is the hero section blank?", "What's in index.html?"]) {
     assert.equal(classifyIntent(q, "auto", { followsRun: true }), "code", q);

@@ -3,6 +3,7 @@
 // Pure intent classification — no DOM, no network — so the routing rules are
 // unit-testable and the canonical command pipeline stays thin. Intent FIRST,
 // mission creation second: nothing here talks to any backend.
+import { decideTurn } from "../../../../packages/ai-core/src/turnDecision.ts";
 
 export type CommandMode = "auto" | "code" | "server" | "research" | "deploy" | "automate";
 export type CommandIntent = "chat" | "code" | "research" | "automate";
@@ -97,12 +98,19 @@ export function classifyIntent(prompt: string, mode: CommandMode, ctx: { follows
   // "Can you use this logo for VirPhone?" + an attached file: work with THAT file.
   if (ctx.hasAttachments && mode !== "research" && (REFERS_TO_ATTACHMENT.test(trimmed) || ctx.followsRun)) return "code";
 
-  // Polite action requests still need tools, even when phrased as a question.
-  // "Can you log in to my server?" is work, not a capability question.
-  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add|use|put|replace|swap|insert|change|remove|log\s*in|login|ssh|connect|install|test|start|stop|restart|debug|verify|launch|browse|tail|diagnose|commit|screenshot)\b/i.test(trimmed)) return mode === "research" ? "research" : "code";
-
+  // These modes are explicit user choices. The shared classifier still
+  // resolves the answer/action boundary within the mode below.
   if (mode === "research") return "research";
   if (mode === "automate") return "automate";
+
+  // Shared backend/renderer turn boundary: capability questions about the
+  // active work stay conversational, even when they mention an artifact.
+  const turn = decideTurn(trimmed, { hasAttachments: ctx.hasAttachments, hasPreviousExecution: ctx.followsRun });
+  if (turn.disposition === "answer") return "chat";
+
+  // Polite action requests still need tools, even when phrased as a question.
+  // "Can you log in to my server?" is work, not a capability question.
+  if (/^(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:create|make|write|draft|build|edit|update|fix|generate|export|convert|save|open|read|review|inspect|run|deploy|add|use|put|replace|swap|insert|change|remove|log\s*in|login|ssh|connect|install|test|start|stop|restart|debug|verify|launch|browse|tail|diagnose|commit|screenshot)\b/i.test(trimmed)) return "code";
   // Auto: questions go to chat, which researches the web on its own when the
   // answer needs current facts (and shows what it searched and read). A
   // research ASSIGNMENT ("Research X and cite sources") runs as a research task.

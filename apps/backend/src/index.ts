@@ -7,6 +7,7 @@ import { marketplaceFor as chatMarketplaceFor } from "./mcp/marketplace/service"
 import { learnFromUserMessage, type MemoryStoreLike } from "./memory/userMemory";
 import { memoryModel } from "./memory/learnModel";
 import { ChatTurnRecorder } from "./sessions/sessionMessages";
+import { decideTurn } from "@orvyn/ai-core";
 import express from "express";
 import { cloudCors } from "./http/corsPolicy";
 import { createServer } from "http";
@@ -391,6 +392,28 @@ wss.on("connection", (socket, req) => {
         body.task = "chat";
         if (body.context && typeof body.context === "object") delete body.context.projectRoot;
       }
+      const priorMessages = session ? tenant.sessions.messages(session.sessionId) : [];
+      const latestArtifact = priorMessages.slice().reverse().flatMap((message) => {
+        const artifacts = message.meta?.artifacts;
+        return Array.isArray(artifacts) ? artifacts : [];
+      }).find((artifact: any) => typeof artifact?.artifactId === "string" && artifact.artifactId) as { artifactId: string; name?: string } | undefined;
+      const resolvedDecision = decideTurn(String(body?.userMessage ?? ""), {
+        activeArtifactId: typeof latestArtifact?.artifactId === "string" ? latestArtifact.artifactId : undefined,
+        activeProjectId: session?.projectId ?? undefined,
+        activeMissionId: session?.activeRunId ?? session?.runIds[session.runIds.length - 1],
+        hasPreviousExecution: Boolean(session?.runIds.length),
+        hasAttachments: (Array.isArray(body?.attachmentRefs) && body.attachmentRefs.length > 0) || (Array.isArray(body?.attachments) && body.attachments.length > 0),
+      });
+      const turnDecision = cloudSurface ? { ...resolvedDecision, responseOwner: "conversation" as const } : resolvedDecision;
+      // Never trust client-supplied decisions. The server's decision is also
+      // persisted with the turn so resumed conversations can inspect it.
+      body.turnDecision = turnDecision;
+      const contextLines = [
+        session?.projectId ? `Active project id: ${session.projectId}.` : "",
+        latestArtifact ? `Active artifact: ${String(latestArtifact.name ?? "untitled artifact")} (id ${latestArtifact.artifactId}). It belongs to this conversation.` : "",
+        latestArtifact ? "Answer questions about whether/how to change the active artifact without creating a new one. Only edit or generate when the user clearly asks for the change." : "",
+      ].filter(Boolean);
+      body.conversationContext = contextLines.join("\n");
       // Regenerate: the old reply is replaced by the one about to stream.
       if (session && typeof body?.replacesMessageId === "string") tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId);
       recorder = session && typeof body?.userMessage === "string"
@@ -399,6 +422,7 @@ wss.on("connection", (socket, req) => {
             userMessageId: typeof body.userMessageId === "string" ? body.userMessageId : undefined,
             assistantMessageId: typeof body.assistantMessageId === "string" ? body.assistantMessageId : undefined,
             userCreatedAt: Number(body.userCreatedAt) || undefined,
+            turnDecision,
             attachments: Array.isArray(body.attachmentRefs) ? body.attachmentRefs.slice(0, 20).map((a: any) => ({ artifactId: String(a?.artifactId ?? ""), name: String(a?.name ?? ""), mimeType: String(a?.mimeType ?? "") })).filter((a: any) => a.artifactId) : undefined,
           })
         : null;
