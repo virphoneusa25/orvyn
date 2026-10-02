@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, downloadArtifact } from "../lib/api";
+import { api, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
+import { AgentProgress } from "./AgentProgress";
+import { terminalRunStatus, type AgentProgressEvent } from "../lib/agentProgress";
 import { attachmentRole, fileKind } from "../lib/fileKinds";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
@@ -14,8 +16,8 @@ import { Orb } from "./Orb";
 import { usePreview } from "./Preview";
 
 // One ORVYN Cloud conversation: stored on the server (reopens anywhere),
-// streamed over the chat socket, metered against the account's credits.
-// It is a conversation — it never starts a Desktop mission.
+// streamed over the chat socket for chat turns and over SSE for agent runs,
+// metered against the account's credits.
 
 export interface FileRef { artifactId: string; name: string; mimeType: string }
 interface Msg {
@@ -29,6 +31,9 @@ interface Msg {
   error?: string;
   code?: string;
   activity?: string;
+  runId?: string;
+  runStatus?: string;
+  agentEvents?: AgentProgressEvent[];
   retry?: string;
 }
 interface Pending { id: string; file: File; url?: string }
@@ -51,6 +56,7 @@ function toMsg(m: any): Msg | null {
     content: m.content ?? "",
     createdAt: m.createdAt,
     streaming: m.status === "streaming",
+    runId: typeof m.runId === "string" ? m.runId : undefined,
     attachments: Array.isArray(m.meta?.attachments) ? m.meta.attachments : undefined,
     artifacts: Array.isArray(m.meta?.artifacts) ? m.meta.artifacts : undefined,
   };
@@ -141,12 +147,14 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const cancel = useRef<(() => void) | null>(null);
+  const stopRun = useRef<(() => void) | null>(null);
   const ownSession = useRef<string | null>(null);
   const stream = useRef<HTMLDivElement | null>(null);
   const stick = useRef(true);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const area = useRef<HTMLTextAreaElement | null>(null);
   const sentInitial = useRef(false);
+  const hydratedRuns = useRef(new Set<string>());
 
   // Load the stored conversation (unless this thread just created it).
   useEffect(() => {
@@ -162,6 +170,33 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [sessionId, toast]);
+
+  // Restore completed run timelines when a Cloud chat is reopened. The run
+  // event log is durable and also supplies a catch-up source for active runs.
+  useEffect(() => {
+    for (const message of messages) {
+      if (!message.runId || hydratedRuns.current.has(message.runId)) continue;
+      hydratedRuns.current.add(message.runId);
+      void api<{ status: string; events: AgentProgressEvent[] }>(`/agent/stream/runs/${encodeURIComponent(message.runId)}/events.json?after=0`)
+        .then((result) => {
+          const events = result.events ?? [];
+          let content = "";
+          for (const event of events) {
+            if (event.type === "message.retracted") content = "";
+            if (event.type === "message.delta") content += String(event.data?.content ?? "");
+          }
+          const assistantId = `cloud-run-${message.runId}`;
+          setMessages((all) => {
+            const exists = all.some((item) => item.runId === message.runId && item.role === "assistant");
+            const assistant: Msg = { id: assistantId, role: "assistant", content, createdAt: message.createdAt, runId: message.runId, runStatus: result.status, agentEvents: events, streaming: !terminalRunStatus(result.status) };
+            return exists
+              ? all.map((item) => item.runId === message.runId && item.role === "assistant" ? { ...item, runStatus: result.status, agentEvents: events, ...(content ? { content } : {}) } : item)
+              : [...all, assistant];
+          });
+        })
+        .catch(() => hydratedRuns.current.delete(message.runId!));
+    }
+  }, [messages]);
 
   // A reply still streaming when the page opened: follow the stored copy until it completes.
   useEffect(() => {
@@ -187,6 +222,11 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
   };
 
   const patch = (id: string, fn: (m: Msg) => Msg) => setMessages((all) => all.map((m) => (m.id === id ? fn(m) : m)));
+
+  const answerApproval = useCallback(async (callId: string, approved: boolean) => {
+    try { await api(`/agent/stream/approvals/${encodeURIComponent(callId)}`, { method: "POST", body: { approved, scope: "once" } }); }
+    catch (err: any) { toast(err.message); }
+  }, [toast]);
 
   const send = useCallback(async (raw?: string) => {
     const content = (raw ?? text).trim();
@@ -228,7 +268,61 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       files.forEach((p) => p.url && URL.revokeObjectURL(p.url));
       patch(userId, (m) => ({ ...m, attachments: refs }));
       if (refs.length) signal("files");
-      // 3. The reply.
+      // 3. Route action requests to the agent runtime. Answer-only prompts
+      // fall back to the existing chat socket, preserving live text chunks.
+      const routed = await api<{ routed?: string; runId?: string; sessionId?: string }>("/agent/stream/runs", {
+        method: "POST",
+        body: { sessionId: sid, projectId, instruction: userMessage, composerMode: "auto", mode: "agent", requestedModelId: model, messageId: userId, attachments: forModel },
+      });
+      if (routed.runId) {
+        const runId = routed.runId;
+        hydratedRuns.current.add(runId);
+        patch(replyId, (m) => ({ ...m, runId, runStatus: "running", agentEvents: [] }));
+        const controller = new AbortController();
+        cancel.current = () => controller.abort();
+        stopRun.current = () => { void api(`/agent/stream/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", body: {} }).catch((err: any) => toast(err.message)); };
+        const token = getToken();
+        const response = await fetch(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) throw new Error(`Could not follow agent progress (${response.status})`);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const onEvent = (event: AgentProgressEvent) => {
+          patch(replyId, (m) => {
+            const agentEvents = [...(m.agentEvents ?? []), event];
+            let content = m.content;
+            if (event.type === "message.retracted") content = "";
+            if (event.type === "message.delta") content += String(event.data?.content ?? "");
+            const status = event.type === "run.completed" ? "completed"
+              : event.type === "run.partial" ? "partial"
+              : event.type === "run.error" ? "error"
+              : event.type === "run.cancelled" ? "cancelled"
+              : event.type === "run.blocked" ? "blocked" : m.runStatus ?? "running";
+            const error = ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
+            return { ...m, content, agentEvents, runStatus: status, streaming: !["completed", "partial", "error", "cancelled", "blocked"].includes(status), error };
+          });
+        };
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value, { stream: !done });
+            const frames = buffer.split(/\r?\n\r?\n/);
+            buffer = frames.pop() ?? "";
+            for (const frame of frames) {
+              const data = frame.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
+              if (data) { try { onEvent(JSON.parse(data) as AgentProgressEvent); } catch { /* ignore malformed event */ } }
+            }
+            if (done) break;
+          }
+        } finally { reader.releaseLock(); }
+        const saved = await api<{ messages: any[] }>(`/sessions/${encodeURIComponent(sid!)}/messages`);
+        const answer = saved.messages.map(toMsg).find((m) => m?.runId === runId && m.role === "assistant");
+        if (answer?.content) patch(replyId, (m) => ({ ...m, content: answer.content }));
+      } else {
+      // 4. Ordinary answer: the established WebSocket token stream.
       const turn = streamTurn({ sessionId: sid, userMessage, userMessageId: userId, assistantMessageId: replyId, requestedModelId: model, attachments: forModel, attachmentRefs: refs }, (c: ChatChunk) => {
         if (c.retract) patch(replyId, (m) => ({ ...m, content: "" }));
         if (c.activity) patch(replyId, (m) => ({ ...m, activity: c.activity!.status === "done" ? undefined : c.activity!.kind === "search" ? `Searching the web${c.activity!.query ? ` for “${c.activity!.query}”` : ""}…` : "Reading a page…" }));
@@ -238,18 +332,21 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         if (c.done) patch(replyId, (m) => ({ ...m, streaming: false, activity: undefined }));
       });
       cancel.current = turn.cancel;
+      stopRun.current = turn.cancel;
       await turn.done;
+      }
     } catch (err: any) {
       patch(replyId, (m) => ({ ...m, error: err.message, code: err.code?.startsWith?.("CREDITS") ? err.code : undefined }));
     } finally {
-      patch(replyId, (m) => ({ ...m, streaming: false, activity: undefined }));
+      patch(replyId, (m) => ({ ...m, streaming: false, activity: undefined, runStatus: m.runStatus === "running" ? "error" : m.runStatus }));
       cancel.current = null;
+      stopRun.current = null;
       setBusy(false);
       void refreshBilling();
       signal("sessions"); signal("notifications");
       area.current?.focus();
     }
-  }, [text, pending, busy, sessionId, projectId, onSession, model, refreshBilling]);
+  }, [text, pending, busy, sessionId, projectId, onSession, model, refreshBilling, toast]);
 
   // Home and the search palette hand a first message to a new conversation.
   useEffect(() => {
@@ -295,6 +392,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                   {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}
                   {m.role === "assistant" ? <Markdown text={m.content} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
                 </div>
+                {m.role === "assistant" && m.runId ? <AgentProgress events={m.agentEvents ?? []} status={m.runStatus ?? (m.streaming ? "running" : "completed")} onApprove={answerApproval} /> : null}
                 {m.attachments?.length ? (
                   <div className="bubble__files">{m.attachments.map((f, i) => f.artifactId ? <FileChip key={f.artifactId} f={f} /> : <span key={i} className="pending-file"><span>{f.name} · uploading…</span></span>)}</div>
                 ) : null}
@@ -341,7 +439,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} data-testid="file-input" />
             {compact ? null : <ModelPicker small up />}
             {busy ? (
-              <button type="button" className="composer__send composer__send--stop" aria-label="Stop" title="Stop" onClick={() => cancel.current?.()} data-testid="stop"><Icon.stop size={14} /></button>
+              <button type="button" className="composer__send composer__send--stop" aria-label="Stop" title="Stop" onClick={() => (stopRun.current ?? cancel.current)?.()} data-testid="stop"><Icon.stop size={14} /></button>
             ) : (
               <button type="submit" className="composer__send" aria-label="Send" title="Send (Enter)" disabled={!text.trim() && !pending.length} data-testid="send"><Icon.arrowUp size={18} /></button>
             )}

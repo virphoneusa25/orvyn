@@ -51,3 +51,14 @@ to per-file/per-command rows; assistant text closes a phase naturally.
   (events are the source of truth; no legacy raw rendering exists)
 
 Raw diagnostics remain available to developers via the Run Inspector.
+
+## Cloud chat streaming
+
+Cloud keeps the same immediate, chunk-by-chunk rendering for answer-only chat
+turns over its authenticated chat socket. Actionable requests use the backend
+run event stream instead: text deltas render as they arrive, while the
+expandable **Agentic Progress Tracking** timeline groups tool, file, command,
+approval and review events into readable steps. The timeline can be restored
+from the durable run event log when a conversation is reopened. Desktop
+already presents these run events in its Work Stream; its existing rendering
+is unchanged by the Cloud chat integration.

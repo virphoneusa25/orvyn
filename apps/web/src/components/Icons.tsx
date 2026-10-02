@@ -41,6 +41,7 @@ export const Icon = {
   copy: (p: { size?: number }) => <I {...p} d="M9 9h11v11H9zM5 15H4V4h11v1" />,
   trash: (p: { size?: number }) => <I {...p} d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />,
   code: (p: { size?: number }) => <I {...p} d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14" />,
+  terminal: (p: { size?: number }) => <I {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></I>,
   chart: (p: { size?: number }) => <I {...p} d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />,
   monitor: (p: { size?: number }) => <I {...p} d="M3 4h18v12H3zM8 20h8M12 16v4" />,
   shield: (p: { size?: number }) => <I {...p} d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />,
