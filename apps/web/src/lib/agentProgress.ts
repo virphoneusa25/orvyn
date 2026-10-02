@@ -7,7 +7,7 @@ export interface AgentProgressEvent {
   data?: Record<string, any>;
 }
 
-export type ProgressState = "running" | "done" | "failed" | "waiting";
+export type ProgressState = "pending" | "running" | "done" | "failed" | "waiting";
 export interface ProgressRow {
   id: string;
   kind: "plan" | "file" | "command" | "search" | "review" | "approval" | "other";
@@ -16,6 +16,7 @@ export interface ProgressRow {
   detail?: string;
   state: ProgressState;
   approvalCallId?: string;
+  nested?: boolean;
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -63,14 +64,14 @@ function toolDetail(input: Record<string, unknown>): string | undefined {
 }
 
 /** Convert backend events to the concise, safe steps shown in Cloud chat. */
-export function progressRows(events: AgentProgressEvent[]): ProgressRow[] {
-  const rows: ProgressRow[] = [];
+export function progressRows(events: AgentProgressEvent[], status = "running"): ProgressRow[] {
+  const work: ProgressRow[] = [];
   const byCall = new Map<string, ProgressRow>();
   const inputs = new Map<string, Record<string, unknown>>();
   const byKey = new Map<string, ProgressRow>();
   const put = (row: ProgressRow) => {
-    const at = rows.findIndex((item) => item.id === row.id);
-    if (at < 0) rows.push(row); else rows[at] = row;
+    const at = work.findIndex((item) => item.id === row.id);
+    if (at < 0) work.push(row); else work[at] = row;
     byKey.set(row.id, row);
   };
 
@@ -93,6 +94,7 @@ export function progressRows(events: AgentProgressEvent[]): ProgressRow[] {
         label: toolLabel(tool),
         detail: args ? toolDetail(args) : undefined,
         state: "running",
+        nested: true,
       };
       byCall.set(callId, row);
       put(row);
@@ -101,54 +103,93 @@ export function progressRows(events: AgentProgressEvent[]): ProgressRow[] {
     if ((event.type === "tool.completed" || event.type === "tool.failed") && callId) {
       const tool = str(data.tool) || "tool";
       const row = byCall.get(callId) ?? {
-        id: `tool:${callId}`, kind: toolKind(tool), integration: toolIntegration(tool), label: toolLabel(tool),
+        id: `tool:${callId}`, kind: toolKind(tool), integration: toolIntegration(tool), label: toolLabel(tool), nested: true,
       } as ProgressRow;
       row.state = event.type === "tool.failed" ? "failed" : "done";
+      row.nested = true;
       const summary = str(data.envelope?.userSummary ?? data.summary ?? data.preview);
       if (summary) row.detail = summary.slice(0, 400);
       byCall.set(callId, row);
       put(row);
       continue;
     }
-    if (event.type === "run.phase.changed") {
-      const phase = str(data.phase ?? data.label);
-      if (phase) put({ id: `phase:${event.sequence ?? rows.length}`, kind: "plan", label: phaseLabel(phase), state: "done" });
-      continue;
-    }
     if (event.type === "file.edit" || event.type === "file.created") {
       const path = str(data.path);
-      if (path && !rows.some((r) => r.kind === "file" && r.detail === path)) {
-        put({ id: `file:${path}`, kind: "file", label: event.type === "file.created" ? "Created file" : "Updated file", detail: path.slice(0, 300), state: "done" });
+      if (path && !work.some((r) => r.kind === "file" && r.detail === path)) {
+        put({ id: `file:${path}`, kind: "file", label: event.type === "file.created" ? "Created file" : "Updated file", detail: path.slice(0, 300), state: "done", nested: true });
       }
       continue;
     }
     if (event.type === "terminal.started" || event.type === "terminal.completed") {
-      const key = `terminal:${str(data.callId) || String(event.sequence ?? rows.length)}`;
-      put({ id: key, kind: "command", label: event.type === "terminal.started" ? "Running command" : "Command finished", detail: str(data.command) ? `$ ${str(data.command)}`.slice(0, 400) : undefined, state: event.type === "terminal.started" ? "running" : "done" });
+      const key = `terminal:${str(data.callId) || String(event.sequence ?? work.length)}`;
+      put({ id: key, kind: "command", label: event.type === "terminal.started" ? "Running command" : "Command finished", detail: str(data.command) ? `$ ${str(data.command)}`.slice(0, 400) : undefined, state: event.type === "terminal.started" ? "running" : "done", nested: true });
       continue;
     }
     if (event.type === "verification.completed" || event.type === "review.passed" || event.type === "review.rejected") {
       const verdict = str(data.verdict).toUpperCase();
       const ok = event.type === "review.passed" || verdict === "PASS";
-      put({ id: `review:${event.sequence ?? rows.length}`, kind: "review", label: ok ? "Reviewed changes" : "Reviewing changes", detail: verdict || undefined, state: event.type === "review.rejected" || (verdict && verdict !== "PASS") ? "failed" : "done" });
+      put({ id: `review:${event.sequence ?? work.length}`, kind: "review", label: ok ? "Reviewed changes" : "Reviewing changes", detail: verdict || undefined, state: event.type === "review.rejected" || (verdict && verdict !== "PASS") ? "failed" : "done", nested: true });
       continue;
     }
     if (event.type === "approval.required") {
-      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined, state: "waiting", approvalCallId: callId || undefined });
+      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined, state: "waiting", approvalCallId: callId || undefined, nested: true });
     } else if (event.type === "approval.resolved" && callId) {
       const row = byKey.get(`approval:${callId}`);
       if (row) row.state = data.approved === true ? "done" : "failed";
     }
   }
-  return rows;
+
+  if (!events.length) return work;
+  const cursor = timelineCursor(events, status);
+  const intro: ProgressState = cursor === "introducing" ? "running" : "done";
+  const acting: ProgressState = cursor === "introducing" ? "pending" : cursor === "acting" ? "running" : cursor === "failed" ? "failed" : "done";
+  const checking: ProgressState = cursor === "checking" ? "running" : cursor === "done" ? "done" : cursor === "failed" ? "failed" : "pending";
+  return [
+    { id: "stage:introducing", kind: "plan", label: "Introducing", state: intro },
+    { id: "stage:acting", kind: "plan", label: "Acting", state: acting },
+    ...work,
+    { id: "stage:checking", kind: "plan", label: "Checking the result", state: checking },
+  ];
+}
+
+function timelineCursor(events: AgentProgressEvent[], status: string): "introducing" | "acting" | "checking" | "done" | "failed" {
+  if (status === "error" || status === "failed") return "failed";
+  if (terminalRunStatus(status) || events.some((e) => e.type === "run.completed" || e.type === "run.partial")) return "done";
+  let stage: "introducing" | "acting" | "checking" = "introducing";
+  for (const event of events) {
+    const phase = str(event.data?.phase ?? event.data?.note).toLowerCase();
+    if (event.type === "run.phase.changed" || event.type === "agent.phase") {
+      if (/introduc|plan|preflight|prepare/.test(phase)) stage = "introducing";
+      else if (/verif|repair|review|check/.test(phase)) stage = "checking";
+      else if (/act|observ|execut|wait/.test(phase)) stage = "acting";
+    }
+    if (event.type === "tool.started" && stage === "introducing") stage = "acting";
+    if (event.type === "verification.started" || event.type === "verification.completed" || event.type === "review.passed") stage = "checking";
+  }
+  return stage;
 }
 
 function phaseLabel(phase: string): string {
   const key = phase.toLowerCase();
+  if (key.includes("introduc")) return "Writing a reply";
   if (key.includes("plan")) return "Planning the work";
-  if (key.includes("review") || key.includes("verif")) return "Checking the result";
+  if (key === "acting" || key === "observing") return "Working on your request";
+  if (key.includes("review") || key.includes("verif") || key.includes("repair")) return "Checking the result";
   if (key.includes("complete") || key.includes("settle")) return "Finishing up";
+  if (key.includes("wait")) return "Waiting for you";
   return phase.replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Compact live label from the latest phase — never a completed-step checklist. */
+export function liveStatusLabel(events: AgentProgressEvent[], status: string): string | undefined {
+  if (terminalRunStatus(status)) return undefined;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!;
+    if (event.type !== "run.phase.changed" && event.type !== "agent.phase") continue;
+    const phase = str(event.data?.phase ?? event.data?.note ?? event.data?.label);
+    if (phase) return phaseLabel(phase);
+  }
+  return "Writing a reply";
 }
 
 export function terminalRunStatus(status: string): boolean {

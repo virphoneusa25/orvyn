@@ -27,6 +27,7 @@ import { IconSearch, IconFile, IconTerminal, IconCheck, IconClose } from "./Icon
 import { apiUrl, authHeaders } from "../connection";
 import { reducePresentation, fmtDuration, fileTypeLabel, type ApprovalItem, type CapabilityRequiredItem, type AttachmentItem } from "../presentationReducer";
 import { ToolActivityRow, ToolActivityGroup, ToolRunGroup, WorkGroupRow } from "./ToolActivityRow";
+import "./ConversationActivity.css";
 import { changeTotals, groupToolRuns } from "../streamRows";
 import { openArtifactInContext } from "../contextOpen";
 import { ArtifactVisualThumb } from "./ArtifactVisual";
@@ -227,6 +228,28 @@ export function ChangesPill({ events }: { events: AgentEvent[] }) {
   );
 }
 
+function isTrackedWork(item: { kind: string; thought?: unknown; label?: string; ephemeral?: boolean }): boolean {
+  if (item.kind === "assistant" || item.kind === "attachment" || item.kind === "capability") return false;
+  if (item.kind === "status" && (item.ephemeral || item.thought || String(item.label ?? "").startsWith("Preview updated"))) return false;
+  return item.kind === "tool" || item.kind === "toolrun" || item.kind === "group" || item.kind === "workgroup"
+    || item.kind === "research" || item.kind === "approval" || item.kind === "summary" || item.kind === "status";
+}
+
+function ProgressAccordion({ live, children }: { live: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(live);
+  React.useEffect(() => { setOpen(live); }, [live]);
+  return (
+    <section className={`agent-progress${open ? " is-open" : ""}`} aria-label="Agentic Progress Tracking" data-testid="agent-progress">
+      <button type="button" className="agent-progress__head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {live ? <i className="agent-progress__pulse" /> : <span className="agent-progress__done" aria-hidden="true">✓</span>}
+        <span className="agent-progress__summary">{live ? "Working on your request" : "Work completed"}</span>
+        <span className="agent-progress__chevron" aria-hidden="true">▾</span>
+      </button>
+      {open ? <div className="agent-progress__panel">{children}</div> : null}
+    </section>
+  );
+}
+
 export function AgentActivityList({
   events,
   status,
@@ -248,9 +271,18 @@ export function AgentActivityList({
   const motion = status === "awaiting_approval" ? "waiting" : toolLive || orbMotionForLabel(liveLabel) === "tool" ? "tool" : orbMotionForLabel(liveLabel);
   const slotMessage = motion === "thinking" ? ORION_THINKING_TEXT : motion === "tool" && (liveLabel === "Thinking…" || liveLabel === ORION_WORKING_TEXT || liveLabel.length === 0) ? ORION_WORKING_TEXT : liveLabel;
 
-  return (
-    <>
-      {items.map((item) => {
+  const segments: Array<{ kind: "item"; item: (typeof items)[number] } | { kind: "pack"; items: typeof items }> = [];
+  for (const item of items) {
+    if (isTrackedWork(item)) {
+      const last = segments[segments.length - 1];
+      if (last?.kind === "pack") last.items.push(item);
+      else segments.push({ kind: "pack", items: [item] });
+    } else {
+      segments.push({ kind: "item", item });
+    }
+  }
+
+  const renderItem = (item: (typeof items)[number]) => {
         switch (item.kind) {
           case "assistant":
             return (
@@ -350,7 +382,13 @@ export function AgentActivityList({
           default:
             return null;
         }
-      })}
+  };
+
+  return (
+    <>
+      {segments.map((segment, i) => segment.kind === "pack"
+        ? <ProgressAccordion key={`pack-${i}`} live={live}>{segment.items.map((item) => <React.Fragment key={item.key}>{renderItem(item)}</React.Fragment>)}</ProgressAccordion>
+        : <React.Fragment key={segment.item.key}>{renderItem(segment.item)}</React.Fragment>)}
       <OrbStatusSlot
         active={live && (Boolean(liveStatus) || toolLive)}
         failed={status === "error" || status === "failed"}

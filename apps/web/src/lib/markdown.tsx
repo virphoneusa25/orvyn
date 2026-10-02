@@ -37,7 +37,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 const BLOCK = /^(```|#{1,4}\s|\s*[-*+]\s+|\s*\d+[.)]\s+|>\s?|\|.*\||(-{3,}|\*{3,})\s*$)/;
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let i = 0; let n = 0;
@@ -89,5 +89,5 @@ export function Markdown({ text }: { text: string }) {
     if (!para.length) { para.push(lines[i++]!); }
     blocks.push(<p key={key}>{para.flatMap((p, j) => (j ? [<br key={`${key}br${j}`} />, ...inline(p, `${key}-${j}`)] : inline(p, `${key}-${j}`)))}</p>);
   }
-  return <>{blocks}</>;
+  return <>{blocks}{streaming ? <span className="orvyn-caret" aria-hidden>▍</span> : null}</>;
 }

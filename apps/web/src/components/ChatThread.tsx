@@ -6,6 +6,8 @@ import { terminalRunStatus, type AgentProgressEvent } from "../lib/agentProgress
 import { attachmentRole, fileKind } from "../lib/fileKinds";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
+import { useRevealedText } from "../lib/streamReveal";
+import { readSseStream } from "../lib/sse";
 import { navigate } from "../lib/router";
 import { useStore } from "../lib/store";
 import { signal } from "../lib/events";
@@ -69,6 +71,11 @@ function readBase64(file: File): Promise<string> {
     r.onerror = () => reject(new Error(`Couldn't read ${file.name}`));
     r.readAsDataURL(file);
   });
+}
+
+function StreamedMarkdown({ text, live }: { text: string; live: boolean }) {
+  const shown = useRevealedText(text, live);
+  return <Markdown text={shown} streaming={live} />;
 }
 
 export function FileChip({ f, big }: { f: FileRef; big?: boolean }) {
@@ -282,45 +289,43 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         cancel.current = () => controller.abort();
         stopRun.current = () => { void api(`/agent/stream/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST", body: {} }).catch((err: any) => toast(err.message)); };
         const token = getToken();
-        const response = await fetch(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          signal: controller.signal,
-        });
-        if (!response.ok || !response.body) throw new Error(`Could not follow agent progress (${response.status})`);
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
+        let after = 0;
+        let runStatus = "running";
         const onEvent = (event: AgentProgressEvent) => {
+          const seq = Number(event.sequence ?? 0);
+          if (Number.isFinite(seq)) after = Math.max(after, seq);
           patch(replyId, (m) => {
             const agentEvents = [...(m.agentEvents ?? []), event];
             let content = m.content;
             if (event.type === "message.retracted") content = "";
             if (event.type === "message.delta") content += String(event.data?.content ?? "");
-            const status = event.type === "run.completed" ? "completed"
+            const next = event.type === "run.completed" ? "completed"
               : event.type === "run.partial" ? "partial"
               : event.type === "run.error" ? "error"
               : event.type === "run.cancelled" ? "cancelled"
               : event.type === "run.blocked" ? "blocked" : m.runStatus ?? "running";
+            runStatus = next;
             const error = ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
-            return { ...m, content, agentEvents, runStatus: status, streaming: !["completed", "partial", "error", "cancelled", "blocked"].includes(status), error };
+            return { ...m, content, agentEvents, runStatus: next, streaming: !terminalRunStatus(next), error };
           });
         };
-        try {
-          while (true) {
-            const { value, done } = await reader.read();
-            buffer += decoder.decode(value, { stream: !done });
-            const frames = buffer.split(/\r?\n\r?\n/);
-            buffer = frames.pop() ?? "";
-            for (const frame of frames) {
-              const data = frame.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
-              if (data) { try { onEvent(JSON.parse(data) as AgentProgressEvent); } catch { /* ignore malformed event */ } }
-            }
-            if (done) break;
+        let round = 0;
+        while (!controller.signal.aborted && !terminalRunStatus(runStatus) && round < 24) {
+          const response = await fetch(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            signal: controller.signal,
+            cache: "no-store",
+          });
+          if (!response.ok || !response.body) throw new Error(`Could not follow agent progress (${response.status})`);
+          await readSseStream(response.body, (raw) => onEvent(raw as AgentProgressEvent));
+          round += 1;
+          if (!terminalRunStatus(runStatus) && !controller.signal.aborted) {
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
           }
-        } finally { reader.releaseLock(); }
+        }
         const saved = await api<{ messages: any[] }>(`/sessions/${encodeURIComponent(sid!)}/messages`);
         const answer = saved.messages.map(toMsg).find((m) => m?.runId === runId && m.role === "assistant");
-        if (answer?.content) patch(replyId, (m) => ({ ...m, content: answer.content }));
+        if (answer?.content) patch(replyId, (m) => ({ ...m, content: m.content.length >= answer.content.length ? m.content : answer.content }));
       } else {
       // 4. Ordinary answer: the established WebSocket token stream.
       const turn = streamTurn({ sessionId: sid, userMessage, userMessageId: userId, assistantMessageId: replyId, requestedModelId: model, attachments: forModel, attachmentRefs: refs }, (c: ChatChunk) => {
@@ -338,7 +343,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     } catch (err: any) {
       patch(replyId, (m) => ({ ...m, error: err.message, code: err.code?.startsWith?.("CREDITS") ? err.code : undefined }));
     } finally {
-      patch(replyId, (m) => ({ ...m, streaming: false, activity: undefined, runStatus: m.runStatus === "running" ? "error" : m.runStatus }));
+      patch(replyId, (m) => ({ ...m, streaming: false, activity: undefined, runStatus: m.runStatus === "running" && !cancel.current ? "error" : m.runStatus }));
       cancel.current = null;
       stopRun.current = null;
       setBusy(false);
@@ -389,10 +394,10 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
               <div className="msg__body">
                 <div className="bubble">
                   {m.activity ? <div className="activity"><Icon.search size={14} /> {m.activity}</div> : null}
+                  {m.role === "assistant" && m.runId ? <AgentProgress events={m.agentEvents ?? []} status={m.runStatus ?? (m.streaming ? "running" : "completed")} onApprove={answerApproval} /> : null}
                   {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}
-                  {m.role === "assistant" ? <Markdown text={m.content} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
+                  {m.role === "assistant" ? <StreamedMarkdown text={m.content} live={Boolean(m.streaming)} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
                 </div>
-                {m.role === "assistant" && m.runId ? <AgentProgress events={m.agentEvents ?? []} status={m.runStatus ?? (m.streaming ? "running" : "completed")} onApprove={answerApproval} /> : null}
                 {m.attachments?.length ? (
                   <div className="bubble__files">{m.attachments.map((f, i) => f.artifactId ? <FileChip key={f.artifactId} f={f} /> : <span key={i} className="pending-file"><span>{f.name} · uploading…</span></span>)}</div>
                 ) : null}

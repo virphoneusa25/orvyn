@@ -1173,9 +1173,15 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
     "X-Accel-Buffering": "no",
   });
 
+  const send = (payload: string) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(payload);
+    (res as { flush?: () => void }).flush?.();
+  };
+
   // Replay missed events first, in order, so the client's view is contiguous.
   for (const e of t.runStore.eventsAfter(req.params.id, after)) {
-    res.write(`data: ${JSON.stringify(e)}\n\n`);
+    send(`data: ${JSON.stringify(e)}\n\n`);
   }
 
   // If the run already finished, close rather than holding the socket open.
@@ -1188,18 +1194,12 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
   // connection out and lets the client distinguish "stream alive, no events
   // yet" from "connection dead" (EventSource auto-reconnects the latter).
   const heartbeat = setInterval(() => {
-    try {
-      res.write(": hb\n\n");
-    } catch {
-      /* socket already gone — cleaned up below */
-    }
+    try { send(": hb\n\n"); } catch { /* socket already gone */ }
   }, 15000);
 
-  // A write after the stream ended (events can follow run.completed, e.g. the
-  // session marker or a late verification row) must never crash the engine.
   const unsubscribe = t.runStore.subscribe(req.params.id, (e) => {
     if (res.writableEnded || res.destroyed) { unsubscribe(); return; }
-    res.write(`data: ${JSON.stringify(e)}\n\n`);
+    send(`data: ${JSON.stringify(e)}\n\n`);
     if (e.type === "run.completed" || e.type === "run.partial" || e.type === "run.error" || e.type === "run.cancelled" || e.type === "run.blocked") {
       clearInterval(heartbeat);
       res.end();
