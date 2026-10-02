@@ -34,6 +34,9 @@ export interface TurnDecisionContext {
   activeMissionId?: string;
   hasAttachments?: boolean;
   hasPreviousExecution?: boolean;
+  lastAssistantText?: string;
+  pendingProposal?: string;
+  constraints?: string[];
 }
 
 const QUESTION = /\?\s*$/;
@@ -58,6 +61,29 @@ function capabilities(text: string): string[] {
 /** Resolve the turn before selecting a model, resource, worker or tool. */
 export function decideTurn(text: string, context: TurnDecisionContext = {}): TurnDecision {
   const prompt = String(text ?? "").trim();
+  const pendingWork = Boolean(context.pendingProposal?.trim())
+    || /\b(do you want me to|would you like(?: me)? to|shall i|want me to|i can (?:update|fix|add|change|make|edit))\b/i.test(String(context.lastAssistantText ?? ""));
+  const affirmation = /^(yes|yeah|yep|yup|sure|ok|okay|please do|do it|go ahead|go for it|yeah do (?:that|it)|yes(?:,)? (?:please|do (?:that|it)))[.!]*$/i.test(prompt)
+    || /^(yes|yeah|yep)[,.]?\s+(do (?:that|it)|go ahead|add them|please do)\b/i.test(prompt);
+  if (affirmation && pendingWork) {
+    const references: TurnReference[] = [];
+    if (context.activeArtifactId) references.push({ kind: "artifact", id: context.activeArtifactId, confidence: 0.9 });
+    if (context.activeMissionId) references.push({ kind: "mission", id: context.activeMissionId, confidence: 0.9 });
+    return {
+      disposition: context.hasPreviousExecution ? "continue_execution" : (context.activeArtifactId ? "edit_existing" : "execute"),
+      continuation: context.hasPreviousExecution ? "task_continuation" : (context.activeArtifactId ? "artifact_edit" : "follow_up"),
+      requiresExecution: true,
+      requiresTool: true,
+      ...(context.activeArtifactId ? { targetArtifactId: context.activeArtifactId } : {}),
+      ...(context.activeProjectId ? { targetProjectId: context.activeProjectId } : {}),
+      ...(context.activeMissionId ? { targetMissionId: context.activeMissionId } : {}),
+      references,
+      capabilities: capabilities(context.pendingProposal || context.lastAssistantText || prompt),
+      confidence: 0.93,
+      reasonCode: context.hasPreviousExecution ? "mission_continuation" : "explicit_action",
+      responseOwner: "single_agent",
+    };
+  }
   const lower = prompt.toLowerCase();
   const correction = CORRECTION.test(prompt);
   const continuation = CONTINUE.test(prompt);

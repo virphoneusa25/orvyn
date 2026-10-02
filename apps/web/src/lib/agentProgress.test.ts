@@ -31,6 +31,19 @@ test("GitHub MCP actions are identified for the branded progress icon", () => {
   assert.equal(row?.label, "Using GitHub: create pull request");
 });
 
+test("duplicate failed reads on one host collapse to a single public error", () => {
+  const rows = progressRows([
+    { sequence: 1, type: "tool.started", data: { callId: "a", tool: "fetch_url", args: { url: "https://www.virphoneusa.com/" } } },
+    { sequence: 2, type: "tool.failed", data: { callId: "a", tool: "fetch_url", envelope: { userSummary: "Could not read https://www.virphoneusa.com/: HTTP 401 Forbidden. OpenShell will not allow host *." } } },
+    { sequence: 3, type: "tool.started", data: { callId: "b", tool: "fetch_url", args: { url: "https://www.virphoneusa.com/pricing" } } },
+    { sequence: 4, type: "tool.failed", data: { callId: "b", tool: "fetch_url", envelope: { userSummary: "Could not read https://www.virphoneusa.com/pricing: HTTP 401." } } },
+  ], "running");
+  const reads = rows.filter((row) => row.label === "Reading a page");
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0]?.state, "failed");
+  assert.doesNotMatch(String(reads[0]?.detail), /OpenShell|host \*/);
+});
+
 test("only settled run statuses stop the live indicator", () => {
   assert.equal(terminalRunStatus("running"), false);
   assert.equal(terminalRunStatus("completed"), true);

@@ -146,6 +146,7 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
   }
 
   if (!events.length) return work;
+  const collapsed = collapseSameHostFetchFailures(work);
   const cursor = timelineCursor(events, status);
   const intro: ProgressState = cursor === "introducing" ? "running" : "done";
   const checking: ProgressState = cursor === "checking" ? "running" : cursor === "done" ? "done" : cursor === "failed" ? "failed" : "pending";
@@ -153,9 +154,42 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
   // under an Acting accordion — they sit between Introducing and Checking.
   return [
     { id: "stage:introducing", kind: "plan", label: "Introducing", state: intro },
-    ...work,
+    ...collapsed,
     { id: "stage:checking", kind: "review", label: "Checking the result", state: checking },
   ];
+}
+
+function hostOfUrl(value?: string): string {
+  const raw = String(value ?? "");
+  try { return new URL(raw).hostname.replace(/^www\./i, ""); } catch { /* fall through */ }
+  const m = /https?:\/\/([^/\s]+)/i.exec(raw);
+  return (m?.[1] ?? raw).replace(/^www\./i, "").split("/")[0] ?? "";
+}
+
+function publicFetchDetail(detail?: string): string | undefined {
+  if (!detail) return undefined;
+  if (/OpenShell|host \*|request_network_access|fetch_url/i.test(detail)) {
+    const host = hostOfUrl(detail);
+    return host ? `Could not read ${host} — the site blocked automated access.` : "Could not read the page.";
+  }
+  return detail.slice(0, 180);
+}
+
+/** Four 401s on the same site collapse to one failed read in the conversation. */
+function collapseSameHostFetchFailures(work: ProgressRow[]): ProgressRow[] {
+  const out: ProgressRow[] = [];
+  const failedHosts = new Set<string>();
+  for (const row of work) {
+    if (row.kind === "search" && row.label === "Reading a page" && row.state === "failed") {
+      const host = hostOfUrl(row.detail);
+      if (host && failedHosts.has(host)) continue;
+      if (host) failedHosts.add(host);
+      out.push({ ...row, detail: publicFetchDetail(row.detail) });
+      continue;
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 function timelineCursor(events: AgentProgressEvent[], status: string): "introducing" | "acting" | "checking" | "done" | "failed" {

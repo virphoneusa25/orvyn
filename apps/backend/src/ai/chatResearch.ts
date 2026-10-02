@@ -79,7 +79,7 @@ export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   },
   {
     name: "fetch_url",
-    description: "Read a web page. Pass a full https URL when you have one; a bare domain is accepted. If it fails for a host, do not call it again for that host — use search snippets or a different URL.",
+    description: "Read a web page. Pass a full https URL or bare domain. After 401/403 for a host, do not retry that host or use r.jina.ai — use web_search snippets instead.",
     parameters: { type: "object", properties: { url: { type: "string", description: "https://… or example.com" } }, required: ["url"] },
   },
 ];
@@ -153,7 +153,7 @@ export const CLOUD_CHAT_TOOL_NAMES = new Set(CLOUD_CHAT_TOOLS.map((t) => t.name)
 export const CHAT_RESEARCH_PROMPT = [
   "You can search the web (web_search) and read pages (fetch_url) in this chat. Decide for yourself when to use them:",
   "- Research whenever the answer depends on facts you may not have or that change: prices and costs, plans and limits, versions and releases, companies, products and people, laws and policies, news, or anything you are not sure is still current. Questions about what something costs, whether it is worth it, or how it compares usually need this.",
-  "- Search with specific queries, then fetch_url the 1-3 best https links (not the same domain five times). If a read fails, stop retrying that host and answer from search snippets.",
+  "- Search with specific queries, then fetch_url at most one URL per host. If a read returns 401, 403, or a block, stop fetching that host (every path). Do not use r.jina.ai or any fetch proxy. Switch to web_search snippets or browser_open, then give one concise answer about what you could and could not verify.",
   "- Do not search for small talk, arithmetic, writing help, or things you know reliably.",
   "- After researching, answer the question itself (with your recommendation), use the numbers you found, and end with a short Sources list of the pages you used.",
 ].join("\n");
@@ -173,7 +173,16 @@ export function startActivity(id: string, name: string, args: Record<string, unk
 /** The same activity once its result is in. */
 export function finishActivity(a: ChatActivity, result: { ok: boolean; output?: string; error?: string }): ChatActivity {
   const out = String(result.output ?? "");
-  if (!result.ok) return { ...a, status: "failed", error: String(result.error ?? "failed").slice(0, 200), endedAt: Date.now() };
+  if (!result.ok) {
+    const raw = String(result.error ?? "failed");
+    const host = a.url ? a.url.replace(/^https?:\/\//, "").split("/")[0]!.replace(/^www\./, "") : "the page";
+    const safe = /401/.test(raw)
+      ? `Could not read ${host} — the server required a login (401).`
+      : /403|forbidden|blocked|BOT_BLOCKED|WAF/i.test(raw)
+        ? `Could not read ${host} — the site blocked automated access.`
+        : `Could not read ${host}.`;
+    return { ...a, status: "failed", error: safe, endedAt: Date.now() };
+  }
   if (a.kind === "search") {
     const found = parseSearchResults(out).map((r) => ({ url: r.url, title: r.title, snippet: r.snippet.slice(0, 240) }));
     return { ...a, status: "done", results: found.length, found, endedAt: Date.now() };

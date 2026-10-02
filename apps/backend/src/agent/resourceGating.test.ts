@@ -189,3 +189,14 @@ test("question and action forms of the same nginx request have different disposi
   assert.equal(decideTurn("Configure nginx on my connected server.").disposition, "execute");
   assert.equal(routeTurn("Configure nginx on my connected server."), "run");
 });
+
+test("yes continues a previously proposed action", () => {
+  const turn = decideTurn("Yes.", { lastAssistantText: "Do you want me to update the responsive header?", activeProjectId: "p1" });
+  assert.equal(turn.requiresExecution, true);
+  assert.equal(turn.continuation, "follow_up");
+});
+
+test("yes without a pending proposal stays a chat turn", () => {
+  assert.equal(decideTurn("Yes.").disposition, "answer");
+  assert.equal(routeTurn("Yes."), "chat");
+});

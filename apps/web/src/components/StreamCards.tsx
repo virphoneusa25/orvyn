@@ -1,18 +1,22 @@
 import { useState } from "react";
 import { Icon } from "./Icons";
-import { activityLabel, type ChatActivity, type FileEditCard } from "../lib/streamBlocks";
+import { activityLabel, collapseReadFailures, type ChatActivity, type FileEditCard } from "../lib/streamBlocks";
 
 export function EventLog({ items }: { items: ChatActivity[] }) {
-  if (!items.length) return null;
+  const rows = collapseReadFailures(items);
+  if (!rows.length) return null;
   return (
     <ol className="stream-log" data-testid="event-log">
-      {items.map((item) => {
+      {rows.map((item) => {
         const pending = item.status === "running" || item.status === "pending";
         const failed = item.status === "failed";
         return (
           <li key={item.id} className={`stream-log__row${pending ? " is-pending" : failed ? " is-failed" : " is-done"}`} data-testid="event-log-row">
             {pending ? <i className="agent-progress__spinner" aria-hidden="true" /> : failed ? <Icon.x size={14} /> : item.kind === "search" ? <Icon.search size={14} /> : item.kind === "read" ? <Icon.globe size={14} /> : <Icon.check size={14} />}
-            <span className="stream-log__label">{activityLabel(item)}</span>
+            <span className="stream-log__label">
+              {activityLabel(item)}
+              {failed && item.error ? <span className="stream-log__error">{item.error}</span> : null}
+            </span>
           </li>
         );
       })}

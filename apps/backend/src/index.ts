@@ -399,12 +399,14 @@ wss.on("connection", (socket, req) => {
         const artifacts = message.meta?.artifacts;
         return Array.isArray(artifacts) ? artifacts : [];
       }).find((artifact: any) => typeof artifact?.artifactId === "string" && artifact.artifactId) as { artifactId: string; name?: string } | undefined;
+      const lastAssistant = priorMessages.slice().reverse().find((m) => m.role === "assistant" && m.status === "complete" && m.content.trim());
       const resolvedDecision = decideTurn(String(body?.userMessage ?? ""), {
         activeArtifactId: typeof latestArtifact?.artifactId === "string" ? latestArtifact.artifactId : undefined,
         activeProjectId: session?.projectId ?? undefined,
         activeMissionId: session?.activeRunId ?? session?.runIds[session.runIds.length - 1],
         hasPreviousExecution: Boolean(session?.runIds.length),
         hasAttachments: (Array.isArray(body?.attachmentRefs) && body.attachmentRefs.length > 0) || (Array.isArray(body?.attachments) && body.attachments.length > 0),
+        lastAssistantText: lastAssistant?.content?.slice(0, 4000),
       });
       const turnDecision = cloudSurface ? { ...resolvedDecision, responseOwner: "conversation" as const } : resolvedDecision;
       // Never trust client-supplied decisions. The server's decision is also

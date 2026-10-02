@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activityLabel, fileEditsFromEvents, upsertActivity } from "./streamBlocks.ts";
+import { activityLabel, collapseReadFailures, fileEditsFromEvents, upsertActivity } from "./streamBlocks.ts";
 
 test("chat activities stay in the stream as a completed log", () => {
   const running = upsertActivity([], { id: "a1", kind: "read", status: "running", url: "https://kernelailabs.com/" });
@@ -23,4 +23,14 @@ test("file.edit events become expandable stream cards with the diff", () => {
   assert.equal(done[0]?.pending, false);
   assert.equal(done[0]?.additions, 1);
   assert.equal(done[0]?.diff.length, 2);
+});
+
+test("repeated failed page reads on one host collapse to one public error", () => {
+  const collapsed = collapseReadFailures([
+    { id: "1", kind: "read", status: "failed", url: "https://www.virphoneusa.com/", error: "Could not read https://www.virphoneusa.com/: HTTP 401 Forbidden. OpenShell will not allow host *." },
+    { id: "2", kind: "read", status: "failed", url: "https://www.virphoneusa.com/pricing", error: "HTTP 401" },
+    { id: "3", kind: "read", status: "failed", url: "https://r.jina.ai/https://www.virphoneusa.com/", error: "HTTP 403" },
+  ]);
+  assert.equal(collapsed.length, 2);
+  assert.doesNotMatch(String(collapsed[0]?.error), /OpenShell|host \*/);
 });

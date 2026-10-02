@@ -167,7 +167,7 @@ export function makeFetchUrlTool(): AITool {
   return {
     name: "fetch_url",
     description:
-      "Read a public web page. Interprets a bare domain (virphoneusa.com), www host, markdown link, or full https URL. Tries the public www host when needed. Do not retry the same host after a failure.",
+      "Read a public web page. Interprets a bare domain (virphoneusa.com), www host, markdown link, or full https URL. After a 401/403/block for a host, do not retry that host or any path on it, and never use r.jina.ai or other fetch proxies.",
     parameters: {
       type: "object",
       properties: {
@@ -178,7 +178,14 @@ export function makeFetchUrlTool(): AITool {
     defaultPermission: "ask",
     async execute(args): Promise<ToolResult> {
       const parsed = normalizePublicHttpUrl(args.url);
-      if (!parsed.ok) return { ok: false, error: parsed.error };
+      if (!parsed.ok) return { ok: false, error: parsed.error, errorType: "INVALID_ARGUMENTS" };
+      if (/(^|\.)(r\.jina\.ai|jina\.ai|12ft\.io)$/i.test(parsed.url.hostname)) {
+        return {
+          ok: false,
+          errorType: "POLICY_DENIED",
+          error: `HOST_POLICY_BLOCKED. Do not fetch ${parsed.url.hostname}. Use web_search or browser_open on the original site URL.`,
+        };
+      }
       const twin = siblingFetchUrl(parsed.url);
       const preferWww = Boolean(twin && !parsed.url.hostname.toLowerCase().startsWith("www."));
       const targets = twin ? (preferWww ? [twin.toString(), parsed.url.toString()] : [parsed.url.toString(), twin.toString()]) : [parsed.url.toString()];
@@ -206,10 +213,12 @@ export function makeFetchUrlTool(): AITool {
             output: `HTTP ${viaBrowser.status} ${viaBrowser.type} (Playwright)\n\n${clipBody(viaBrowser.text)}`,
           };
         }
-        const pwMissing = viaBrowser ? "" : "Playwright Chromium was not available on this host. ";
+        const status = viaBrowser?.status || lastStatus || 403;
+        const kind = status === 401 ? "AUTH_REQUIRED" : status === 404 ? "NOT_FOUND" : status === 429 ? "RATE_LIMITED" : "BOT_BLOCKED";
         return {
           ok: false,
-          error: `HTTP ${viaBrowser?.status || lastStatus || 403} Forbidden. ${pwMissing}Do not retry fetch_url for ${parsed.url.hostname}. Use a different https URL from search, or browser_open. OpenShell will not allow host *; in a sandbox, request_network_access with access=research and hosts=["${parsed.url.hostname}"].`,
+          errorType: status === 401 || status === 403 ? "PERMISSION_DENIED" : "EXECUTION_FAILED",
+          error: `HTTP ${status} ${kind}. Direct fetch cannot read ${parsed.url.hostname}. Do not retry fetch_url for this host. Do not use r.jina.ai or any fetch proxy. Use web_search snippets or browser_open on the original URL.`,
         };
       } catch (err: any) {
         return { ok: false, error: `Fetch failed: ${err.message}` };

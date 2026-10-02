@@ -123,4 +123,6 @@ test("web_search and fetch_url name the sites ORION used (url evidence)", () => 
   assert.deepEqual(read.evidence.map((e) => [e.type, e.value, e.label, (e.extra as any).kind]), [["url", "https://nvidia.com/blog", "NVIDIA Blog", "read"]]);
   const failed = buildToolResultEnvelope({ toolName: "fetch_url", args: { url: "https://x.test" }, result: { ok: false, error: "Fetch failed: timeout" } });
   assert.equal(failed.evidence.filter((e) => e.type === "url").length, 0);
+  assert.equal(failed.userSummary, "Could not read x.test.");
+  assert.doesNotMatch(failed.userSummary, /OpenShell|host \*|request_network_access/);
 });

@@ -185,7 +185,10 @@ export function classifyToolError(input: {
       break;
   }
 
-  if (POLICY_CODES.test(message)) return new PolicyToolError(message, opts);
+  if (POLICY_CODES.test(message) || /HOST_POLICY_BLOCKED|OpenShell will not allow host/i.test(message)) return new PolicyToolError(message, opts);
+  if (input.tool === "fetch_url" && /\b(401|403|AUTH_REQUIRED|BOT_BLOCKED)\b/i.test(message)) {
+    return new CapabilityUnavailableError(message, { ...opts, code: "AUTH_REQUIRED", query: "read the live page" });
+  }
   if (PERMISSION_CODES.test(message)) return new PermissionToolError(message, opts);
   if (WORKSPACE_CODES.test(message)) return new WorkspaceToolError(message, opts);
   if (CAPABILITY_CODES.test(message)) return new CapabilityUnavailableError(message, opts);

@@ -420,7 +420,8 @@ input, textarea, select { font: inherit; color: var(--text); }
 .stream-log__row.is-pending { border-left: 3px solid var(--violet-2); }
 .stream-log__row.is-done { border-left: 3px solid var(--green); }
 .stream-log__row.is-failed { border-left: 3px solid var(--red); }
-.stream-log__label { min-width: 0; overflow-wrap: anywhere; }
+.stream-log__label { min-width: 0; overflow-wrap: anywhere; display: grid; gap: 2px; }
+.stream-log__error { font-size: 12px; color: var(--text-3, var(--text-2)); }
 .file-edit-list { display: grid; gap: 8px; margin: 0 0 12px; }
 .file-edit { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface-2); }
 .file-edit.is-pending { border-style: dashed; border-color: color-mix(in srgb, var(--violet-2) 45%, var(--line)); }

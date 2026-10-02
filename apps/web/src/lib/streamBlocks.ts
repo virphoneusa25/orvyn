@@ -40,6 +40,25 @@ function hostOf(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url.replace(/^https?:\/\//, "").slice(0, 80); }
 }
 
+export function collapseReadFailures(items: ChatActivity[]): ChatActivity[] {
+  const out: ChatActivity[] = [];
+  const failedHosts = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "read" && item.status === "failed") {
+      const host = hostOf(item.url || item.error || "");
+      if (host && failedHosts.has(host)) continue;
+      if (host) failedHosts.add(host);
+      const error = item.error && /OpenShell|host \*|request_network_access/i.test(item.error)
+        ? `Could not read ${host || "the page"} — the site blocked automated access.`
+        : item.error;
+      out.push({ ...item, error });
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 export function activityLabel(a: ChatActivity): string {
   const running = a.status === "running" || a.status === "pending";
   if (a.kind === "search") {

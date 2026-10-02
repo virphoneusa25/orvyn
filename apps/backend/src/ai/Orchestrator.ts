@@ -8,6 +8,7 @@ import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, CLOUD_CHAT_TOOLS, CLOUD_CHAT_TOOL_NAMES, artifactsFromChatResult, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { fetchHostKey, normalizePublicHttpUrl } from "./tools/netTools";
+import { FetchAttemptMemory, firstFetchUrlPerHost, isFetchProxyUrl, modelFetchRecovery, sanitizeToolErrorForUser } from "../agent/webFetchRecovery";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -343,7 +344,7 @@ export class Orchestrator {
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean; artifacts?: { artifactId: string; name: string; mimeType: string }[] }> {
     const turnDecision = req.turnDecision ?? decideTurn(req.userMessage);
-    if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
+    if (turnDecision.requiresExecution && looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
     }
@@ -363,7 +364,8 @@ export class Orchestrator {
     let nudged = false;
     let capabilityNudged = false;
     const requested = new Map<string, string>();
-    const fetchFailedHosts = new Set<string>();
+    const fetchAttempts = new FetchAttemptMemory();
+    const hasBrowser = Boolean(web?.some((t) => t.name === "browser_open"));
     // A missing capability: find an MCP server, show the install card (as chat activity), tell the model.
     const requestCapability = async function* (this: Orchestrator, query: string): AsyncGenerator<AIChunk & { activity?: ChatActivity }, string> {
       const seen = requested.get(query);
@@ -524,6 +526,8 @@ export class Orchestrator {
         }
         const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || n === "start_project_task" || CLOUD_CHAT_TOOL_NAMES.has(n) || isInstalledTool(n);
         const turnCalls = unwrapParallelCalls(calls, known);
+        const { skip: skippedFetches } = firstFetchUrlPerHost(turnCalls);
+        const skipFetchIds = new Set(skippedFetches.map((c) => c.id));
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
           toolCallsUsed++;
@@ -531,13 +535,15 @@ export class Orchestrator {
             const args = (call.arguments ??= {}) as Record<string, unknown>;
             const n = normalizePublicHttpUrl(args.url);
             if (n.ok) args.url = n.url.toString();
-            const host = fetchHostKey(args.url);
-            if (host && fetchFailedHosts.has(host)) {
+            const blocked = fetchAttempts.shouldSkip(args.url);
+            if (blocked.skip || skipFetchIds.has(call.id)) {
+              const host = fetchHostKey(args.url);
+              const kind = blocked.kind ?? fetchAttempts.kindFor(args.url) ?? (isFetchProxyUrl(args.url) ? "HOST_POLICY_BLOCKED" : "ACCESS_DENIED");
               messages.push({
                 role: "tool",
                 toolCallId: call.id,
                 name: call.name,
-                content: `Error: fetch_url already failed for ${host} this turn. Do not call it again for that host. Answer from web_search snippets or fetch a different https URL.`,
+                content: `Error: ${sanitizeToolErrorForUser(kind, args.url)}\n\n${modelFetchRecovery(host, kind, hasBrowser)}`,
               });
               continue;
             }
@@ -575,10 +581,21 @@ export class Orchestrator {
           }
           let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
           yield { delta: "", activity, done: false };
-          const result: { ok: boolean; output?: string; error?: string; artifacts?: { artifactId: string; name: string; mimeType: string }[] } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
+          let result: { ok: boolean; output?: string; error?: string; artifacts?: { artifactId: string; name: string; mimeType: string }[] } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
           if (!result.ok && call.name === "fetch_url") {
-            const host = fetchHostKey((call.arguments as { url?: unknown } | undefined)?.url);
-            if (host) fetchFailedHosts.add(host);
+            const url = (call.arguments as { url?: unknown } | undefined)?.url;
+            const kind = fetchAttempts.remember(url, String(result.error ?? ""));
+            result = { ...result, error: sanitizeToolErrorForUser(String(result.error ?? ""), url) };
+            const host = fetchHostKey(url);
+            activity = finishActivity(activity, result);
+            yield { delta: "", activity, done: false };
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              name: call.name,
+              content: `${toolResultForModel(result)}\n\n${modelFetchRecovery(host, kind, hasBrowser)}`,
+            });
+            continue;
           }
           activity = finishActivity(activity, result);
           yield { delta: "", activity, done: false };

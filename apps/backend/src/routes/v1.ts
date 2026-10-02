@@ -874,7 +874,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   let requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (!requestedSession && previousById) requestedSession = t.sessions.sessionOfRun(previousById.id);
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
-  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0 };
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? t.sessions.messages(requestedSession.sessionId).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
   const route = routeTurn(instruction, composerMode, decisionContext);
   const turnDecision = { ...decideTurn(instruction, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "single_agent" as const };
   if (route === "chat") {
@@ -1515,7 +1515,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   const requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
   const goal = String(req.body.goal ?? "");
-  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0 };
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? t.sessions.messages(requestedSession.sessionId).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
   const route = routeTurn(goal, typeof req.body.composerMode === "string" ? req.body.composerMode : undefined, decisionContext);
   const turnDecision = { ...decideTurn(goal, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "multi_agent" as const };
   if (route === "chat") {

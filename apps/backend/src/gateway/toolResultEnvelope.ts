@@ -257,9 +257,20 @@ function webEnvelopeParts(p: BuildEnvelopeParams, ok: boolean) {
   const status = /^HTTP (\d{3})/.exec(output)?.[1];
   const title = /<title[^>]*>([^<]{1,200})<\/title>/i.exec(output)?.[1]?.trim();
   if (ok && url) evidence.push({ type: "url", label: title || url, value: url, extra: { kind: "read", title, status: status ? Number(status) : undefined } });
+  const host = url.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0] || url;
+  const rawErr = str(p.result.error);
+  const safeFail = !ok
+    ? /401/.test(rawErr)
+      ? `Could not read ${host} — the server required a login (401).`
+      : /403|BOT_BLOCKED|forbidden|blocked/i.test(rawErr)
+        ? `Could not read ${host} — the site blocked automated access.`
+        : /HOST_POLICY|jina/i.test(rawErr)
+          ? `Could not read ${host} through a fetch proxy.`
+          : `Could not read ${host}.`
+    : "";
   return {
-    data: { url, status: status ? Number(status) : undefined, title },
-    summary: ok ? `Read ${url.replace(/^https?:\/\//, "")}` : `Could not read ${url}`,
+    data: { url, status: status ? Number(status) : undefined, title, ...(ok ? {} : { error: rawErr }) },
+    summary: ok ? `Read ${host}` : safeFail,
     evidence,
   };
 }
@@ -288,9 +299,13 @@ export function buildToolResultEnvelope(p: BuildEnvelopeParams): ToolResultEnvel
 
   if (!ok) {
     const reason = firstLine(str(p.result.error)) || "no error text";
-    parts.summary = status === "blocked" ? `${parts.summary} · blocked: ${reason}` : status === "cancelled" ? `${parts.summary} · cancelled` : `${parts.summary}: ${reason}`;
+    if (p.toolName !== "fetch_url" && p.toolName !== "web_search") {
+      parts.summary = status === "blocked" ? `${parts.summary} · blocked: ${reason}` : status === "cancelled" ? `${parts.summary} · cancelled` : `${parts.summary}: ${reason}`;
+    } else if (status === "cancelled") {
+      parts.summary = `${parts.summary} · cancelled`;
+    }
     parts.data.error = str(p.result.error);
-    parts.evidence.push({ type: "runtime_log", label: status === "blocked" ? "Blocked" : "Error", value: reason });
+    parts.evidence.push({ type: "runtime_log", label: status === "blocked" ? "Blocked" : "Error", value: reason.slice(0, 180) });
   }
 
   return {

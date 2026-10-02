@@ -89,6 +89,7 @@ import {
   workspaceSnapshot,
 } from "./toolFailure";
 import { classifyToolError, recoveryGuidance } from "./toolErrors";
+import { firstFetchUrlPerHost, isFetchProxyUrl, modelFetchRecovery, sanitizeToolErrorForUser } from "./webFetchRecovery";
 import {
   REPORT_RESULT_TOOL,
   reportResultToolDefinition,
@@ -431,6 +432,7 @@ function runCap(name: string): number {
 const WORKSPACE_CHANGING_TOOLS = new Set(["write_file", "edit_file", "delete_file", "move_file", "apply_patch", "create_file", "rename_file"]);
 
 const SERIAL_ONLY_TOOLS = new Set([
+  "fetch_url",
   "browser_open",
   "browser_navigate",
   "browser_click",
@@ -3570,12 +3572,31 @@ export class StreamingAgentRuntime {
 
     if (state.cancelled) return "cancelled";
 
-    const parallel = runnable.filter((c) => this.isParallelSafe(c.name));
-    const serial = runnable.filter((c) => !this.isParallelSafe(c.name));
+    const fetchDeduped = firstFetchUrlPerHost(runnable);
+    const hasBrowser = this.isKnownTool(runId, "browser_open");
+    for (const call of fetchDeduped.skip) {
+      const url = (call.arguments as { url?: unknown } | undefined)?.url;
+      const host = fetchHostKey(url);
+      const kind = isFetchProxyUrl(url) ? "HOST_POLICY_BLOCKED" as const : "ACCESS_DENIED" as const;
+      replies.set(call.id, `Error: ${sanitizeToolErrorForUser(kind, url)}\n\n${modelFetchRecovery(host, kind, hasBrowser)}`);
+    }
+    const runnableFetches = fetchDeduped.execute;
+    const parallel = runnableFetches.filter((c) => this.isParallelSafe(c.name));
+    const serial = runnableFetches.filter((c) => !this.isParallelSafe(c.name));
     let anySucceeded = false;
 
     const runOne = async (call: ToolCall): Promise<void> => {
       const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
+      if (call.name === "fetch_url") {
+        const url = (call.arguments as { url?: unknown } | undefined)?.url;
+        const host = fetchHostKey(url);
+        const fingerprint = `fetch_url:${host}`;
+        if (isFetchProxyUrl(url) || (state.failedFingerprints.get(fingerprint) ?? 0) > 0) {
+          const kind = isFetchProxyUrl(url) ? "HOST_POLICY_BLOCKED" as const : "ACCESS_DENIED" as const;
+          replies.set(call.id, `Error: ${sanitizeToolErrorForUser(kind, url)}\n\n${modelFetchRecovery(host, kind, hasBrowser)}`);
+          return;
+        }
+      }
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
       if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
