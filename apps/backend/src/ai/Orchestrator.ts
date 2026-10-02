@@ -7,6 +7,7 @@ import { preferencesPrompt } from "../onboarding/preferences";
 import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, CLOUD_CHAT_TOOLS, CLOUD_CHAT_TOOL_NAMES, artifactsFromChatResult, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { fetchHostKey, normalizePublicHttpUrl } from "./tools/netTools";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -362,6 +363,7 @@ export class Orchestrator {
     let nudged = false;
     let capabilityNudged = false;
     const requested = new Map<string, string>();
+    const fetchFailedHosts = new Set<string>();
     // A missing capability: find an MCP server, show the install card (as chat activity), tell the model.
     const requestCapability = async function* (this: Orchestrator, query: string): AsyncGenerator<AIChunk & { activity?: ChatActivity }, string> {
       const seen = requested.get(query);
@@ -525,6 +527,21 @@ export class Orchestrator {
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
           toolCallsUsed++;
+          if (call.name === "fetch_url") {
+            const args = (call.arguments ??= {}) as Record<string, unknown>;
+            const n = normalizePublicHttpUrl(args.url);
+            if (n.ok) args.url = n.url.toString();
+            const host = fetchHostKey(args.url);
+            if (host && fetchFailedHosts.has(host)) {
+              messages.push({
+                role: "tool",
+                toolCallId: call.id,
+                name: call.name,
+                content: `Error: fetch_url already failed for ${host} this turn. Do not call it again for that host. Answer from web_search snippets or fetch a different https URL.`,
+              });
+              continue;
+            }
+          }
           if (call.name === "start_project_task") {
             const instruction = String((call.arguments as { instruction?: string })?.instruction ?? "").trim();
             if (!requested.has("task")) {
@@ -559,6 +576,10 @@ export class Orchestrator {
           let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
           yield { delta: "", activity, done: false };
           const result: { ok: boolean; output?: string; error?: string; artifacts?: { artifactId: string; name: string; mimeType: string }[] } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
+          if (!result.ok && call.name === "fetch_url") {
+            const host = fetchHostKey((call.arguments as { url?: unknown } | undefined)?.url);
+            if (host) fetchFailedHosts.add(host);
+          }
           activity = finishActivity(activity, result);
           yield { delta: "", activity, done: false };
           const files = artifactsFromChatResult(result);

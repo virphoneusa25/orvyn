@@ -64,11 +64,24 @@ test("stdio-only servers install on the local engine when Cloud is the control p
   assert.equal(shouldInstallOnLocalEngine(s, false), false);
 });
 
-test("GitHub on Cloud prefers the remote HTTP endpoint so the agent can use it", () => {
+test("GitHub stdio on Cloud installs on this desktop with a PAT", () => {
   const s = server({
     canonicalId: "io.github.github/github-mcp-server",
     name: "io.github.github/github-mcp-server",
     auth: [{ kind: "none", label: "No auth advertised" }],
+    transports: [{ kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] }],
+  });
+  const prepared = prepareMarketplaceInstall(s, true);
+  assert.equal(prepared.auth.some((a) => a.kind === "api_key"), true);
+  assert.equal(shouldInstallOnLocalEngine(prepared, true), true);
+});
+
+test("GitHub HTTP-only on Cloud stays on the control plane", () => {
+  const s = server({
+    canonicalId: "io.github.github/github-mcp-server",
+    name: "io.github.github/github-mcp-server",
+    auth: [{ kind: "none", label: "No auth advertised" }],
+    transports: [{ kind: "http", url: GITHUB_MCP_HTTP }],
   });
   const prepared = prepareMarketplaceInstall(s, true);
   assert.equal(prepared.transports.some((t) => t.kind === "http" && t.url === GITHUB_MCP_HTTP), true);

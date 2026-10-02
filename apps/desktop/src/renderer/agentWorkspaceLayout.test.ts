@@ -59,22 +59,22 @@ test("Changes → Review switches the same panel tab, never a second column", ()
   assert.equal(views.review, true);
 });
 
-test("Preview → Diff stays one panel; Preview can be selected again", () => {
+test("Preview → Files stays one panel; Preview can be selected again", () => {
   const afterEdit = nextWorkspaceLayout(
     { open: true, width: 520, activeTab: "preview", followOrion: true },
     routeEvent(ev("file.edit", { preview: { path: "App.tsx" } }))
   );
-  assert.equal(afterEdit.activeTab, "diff");
+  assert.equal(afterEdit.activeTab, "files");
   assert.equal(afterEdit.columns, 1);
   const views = simultaneousRightViews(afterEdit.activeTab);
   assert.equal(views.preview, false);
-  assert.equal(views.diff, true);
+  assert.equal(views.files, true);
   assert.equal(followActiveTab(null, "preview"), "preview");
 });
 
 test("file click and terminal / browser events only switch the active tab", () => {
   const fromChanges = { open: true, width: 520, activeTab: "changes" as const, followOrion: true };
-  assert.equal(nextWorkspaceLayout(fromChanges, routeEvent(ev("file.edit", { path: "App.tsx" }))).activeTab, "diff");
+  assert.equal(nextWorkspaceLayout(fromChanges, routeEvent(ev("file.edit", { path: "App.tsx" }))).activeTab, "files");
   assert.equal(nextWorkspaceLayout(fromChanges, routeEvent(ev("terminal.started", { command: "npm test" }))).activeTab, "terminal");
   assert.equal(
     nextWorkspaceLayout(fromChanges, routeEvent(ev("browser.action", { tool: "browser_click", url: "https://example.com" }))).activeTab,
@@ -84,7 +84,7 @@ test("file click and terminal / browser events only switch the active tab", () =
     nextWorkspaceLayout(fromChanges, routeEvent(ev("preview.available", { url: "http://127.0.0.1:5173" }))).activeTab,
     "preview"
   );
-  assert.equal(nextWorkspaceLayout(fromChanges, routeEvent(ev("file.read", { path: "readme.md" }))).activeTab, "changes");
+  assert.equal(nextWorkspaceLayout(fromChanges, routeEvent(ev("file.read", { path: "readme.md" }))).activeTab, "files");
 });
 
 test("awaiting approval does not switch to Review and does not add a column", () => {

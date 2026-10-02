@@ -194,6 +194,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
         secrets: req.body.secrets,
         connect: req.body.connect !== false,
         cwd: req.body.cwd,
+        preferStdio: req.body.preferStdio === true,
       });
       const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
       harden.appendAudit("install", { serverId: out.config.id, marketplaceId: req.body.server?.canonicalId, version: out.plan.version });

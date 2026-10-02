@@ -92,6 +92,8 @@ export interface McpServerStatus {
   authKind?: McpServerConfig["authKind"];
   blocked?: boolean;
   blockedReason?: string;
+  marketplaceId?: string;
+  packageIdentifier?: string;
 }
 
 /** Effective permission for a tool: tool override > server override > risk default. */

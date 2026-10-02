@@ -10,25 +10,74 @@
 import { AITool, ToolResult } from "../ToolTypes";
 
 const MAX_BODY = 60_000;
-const FETCH_TIMEOUT_MS = 20_000;
+const FETCH_TIMEOUT_MS = 30_000;
 
 export const BROWSER_USER_AGENT =
   process.env.ORVYN_FETCH_USER_AGENT?.trim() ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 export function browserFetchHeaders(): Record<string, string> {
+  // Chrome UA + Accept is enough. Fake Sec-Fetch-* on Node's TLS stack is a
+  // WAF fingerprint (403) more often than it helps.
   return {
     "User-Agent": BROWSER_USER_AGENT,
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
-    Pragma: "no-cache",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
   };
+}
+
+/** Pull a fetchable host/URL out of sloppy model args: "Read virphoneusa.com", site:, markdown, quotes. */
+export function interpretFetchTarget(raw: unknown): string {
+  let s = String(raw ?? "").trim();
+  if (!s) return "";
+  const md = /\[[^\]]*\]\((https?:\/\/[^)\s]+|\/\/[^)\s]+|(?:[\w-]+\.)+[A-Za-z]{2,}[^)\s]*)\)/.exec(s);
+  if (md) s = md[1] ?? s;
+  s = s.replace(/^<+|>+$/g, "").trim();
+  s = s.replace(/^["'`]+|["'`]+$/g, "").trim();
+  s = s.replace(/^(read|fetch|open|visit|browse|go\s*to|url)\s*:?\s+/i, "").trim();
+  s = s.replace(/^site:/i, "").trim();
+  const abs = /https?:\/\/[^\s<>"']+/i.exec(s);
+  if (abs) return abs[0].replace(/[),.;]+$/g, "");
+  const token = s.split(/\s+/).find((t) => /^(?:www\.)?(?:[\w-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:\/[^\s]*)?$/i.test(t.replace(/[),.;]+$/g, "")));
+  if (token) return token.replace(/[),.;]+$/g, "");
+  return s;
+}
+
+/** Bare hosts ("virphoneusa.com") become https:// — the chat often omits the scheme. */
+export function normalizePublicHttpUrl(raw: unknown): { ok: true; url: URL } | { ok: false; error: string } {
+  const input = interpretFetchTarget(raw);
+  if (!input) return { ok: false, error: "Invalid URL" };
+  let candidate = input;
+  if (candidate.startsWith("//")) candidate = `https:${candidate}`;
+  else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate)) candidate = `https://${candidate}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return { ok: false, error: "Invalid URL" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, error: "Only http/https URLs are allowed" };
+  }
+  if (isBlockedHost(parsed.hostname)) {
+    return { ok: false, error: "Refusing to fetch localhost/private network addresses" };
+  }
+  return { ok: true, url: parsed };
+}
+
+export function fetchHostKey(raw: unknown): string {
+  const n = normalizePublicHttpUrl(raw);
+  if (!n.ok) return String(raw ?? "").trim().toLowerCase();
+  return n.url.hostname.replace(/^www\./i, "").toLowerCase();
+}
+
+function siblingFetchUrl(parsed: URL): URL | null {
+  const host = parsed.hostname;
+  const next = host.toLowerCase().startsWith("www.") ? host.slice(4) : host.includes(".") && host.split(".").length === 2 ? `www.${host}` : null;
+  if (!next || next === host) return null;
+  const alt = new URL(parsed.toString());
+  alt.hostname = next;
+  return alt;
 }
 
 /** Refuses obviously private/loopback targets so agents can't probe the LAN. */
@@ -101,7 +150,7 @@ async function fetchWithPlaywright(url: string): Promise<{ status: number; type:
       viewport: { width: 1280, height: 800 },
     });
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: FETCH_TIMEOUT_MS });
-    await page.waitForTimeout(800).catch(() => undefined);
+    await page.waitForTimeout(400).catch(() => undefined);
     const status = response?.status() ?? 0;
     const type = response?.headers()?.["content-type"] ?? "text/html";
     const html = await page.content();
@@ -118,54 +167,49 @@ export function makeFetchUrlTool(): AITool {
   return {
     name: "fetch_url",
     description:
-      "Fetch an http(s) URL and return its text content (HTML is stripped to readable text). Uses a desktop Chrome identity; if a WAF returns 403, retries in Playwright Chromium. Cannot reach localhost or private networks. For JS-heavy pages, browser_open is still the live preview.",
+      "Read a public web page. Interprets a bare domain (virphoneusa.com), www host, markdown link, or full https URL. Tries the public www host when needed. Do not retry the same host after a failure.",
     parameters: {
       type: "object",
       properties: {
-        url: { type: "string", description: "Absolute http(s) URL" },
+        url: { type: "string", description: "http(s) URL or domain (e.g. https://www.example.com/ or example.com)" },
       },
       required: ["url"],
     },
     defaultPermission: "ask",
     async execute(args): Promise<ToolResult> {
-      let parsed: URL;
+      const parsed = normalizePublicHttpUrl(args.url);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      const twin = siblingFetchUrl(parsed.url);
+      const preferWww = Boolean(twin && !parsed.url.hostname.toLowerCase().startsWith("www."));
+      const targets = twin ? (preferWww ? [twin.toString(), parsed.url.toString()] : [parsed.url.toString(), twin.toString()]) : [parsed.url.toString()];
       try {
-        parsed = new URL(String(args.url ?? ""));
-      } catch {
-        return { ok: false, error: "Invalid URL" };
-      }
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return { ok: false, error: "Only http/https URLs are allowed" };
-      }
-      if (isBlockedHost(parsed.hostname)) {
-        return { ok: false, error: "Refusing to fetch localhost/private network addresses" };
-      }
-      const target = parsed.toString();
-      try {
-        const res = await fetch(target, {
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-          headers: browserFetchHeaders(),
-          redirect: "follow",
-        });
-        const type = res.headers.get("content-type") ?? "";
-        const body = await res.text();
-        const blocked = looksLikeWafBlock(res.status, body, type);
-        if (!blocked) {
+        let lastStatus = 0;
+        for (const target of targets) {
+          const res = await fetch(target, {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            headers: browserFetchHeaders(),
+            redirect: "follow",
+          });
+          const type = res.headers.get("content-type") ?? "";
+          const body = await res.text();
+          lastStatus = res.status;
+          if (looksLikeWafBlock(res.status, body, type)) continue;
           const text = /text\/html/.test(type) ? htmlToText(body) : body;
           const clipped = clipBody(text);
           if (!res.ok) return { ok: false, error: `HTTP ${res.status}`, output: `HTTP ${res.status} ${type}\n\n${clipped}` };
           return { ok: true, output: `HTTP ${res.status} ${type}\n\n${clipped}` };
         }
-        const viaBrowser = await fetchWithPlaywright(target);
+        const viaBrowser = await fetchWithPlaywright(targets[0]!);
         if (viaBrowser && !looksLikeWafBlock(viaBrowser.status, viaBrowser.text, viaBrowser.type)) {
           return {
             ok: viaBrowser.status >= 200 && viaBrowser.status < 400,
             output: `HTTP ${viaBrowser.status} ${viaBrowser.type} (Playwright)\n\n${clipBody(viaBrowser.text)}`,
           };
         }
+        const pwMissing = viaBrowser ? "" : "Playwright Chromium was not available on this host. ";
         return {
           ok: false,
-          error: `HTTP ${viaBrowser?.status || res.status} Forbidden. The host is blocking automated HTTP. Use browser_open on this URL so Chromium loads the page the way a person would. OpenShell will not allow a wildcard egress rule; if this run is in a sandbox, request_network_access with access=research and hosts=["${parsed.hostname}"].`,
+          error: `HTTP ${viaBrowser?.status || lastStatus || 403} Forbidden. ${pwMissing}Do not retry fetch_url for ${parsed.url.hostname}. Use a different https URL from search, or browser_open. OpenShell will not allow host *; in a sandbox, request_network_access with access=research and hosts=["${parsed.url.hostname}"].`,
         };
       } catch (err: any) {
         return { ok: false, error: `Fetch failed: ${err.message}` };

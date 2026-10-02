@@ -169,9 +169,9 @@ export class MarketplaceService {
     this.refreshProviders();
   }
 
-  async install(server: MarketplaceMcpServer, opts: { secrets?: Record<string, string>; connect?: boolean; cwd?: string }) {
+  async install(server: MarketplaceMcpServer, opts: { secrets?: Record<string, string>; connect?: boolean; cwd?: string; preferStdio?: boolean }) {
     if (this.blocklist().has(server.canonicalId)) throw new Error("This server is blocked by policy");
-    return installMarketplaceServer(this.manager, { server, secrets: opts.secrets, cwd: opts.cwd, connect: opts.connect });
+    return installMarketplaceServer(this.manager, { server, secrets: opts.secrets, cwd: opts.cwd, connect: opts.connect, preferStdio: opts.preferStdio });
   }
 
   async featured(opts?: { refresh?: boolean }) {

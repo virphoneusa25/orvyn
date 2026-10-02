@@ -8,6 +8,7 @@
 
 import type { ToolDefinition } from "@orvyn/ai-core";
 import { parseSearchResults } from "../gateway/toolResultEnvelope";
+import { normalizePublicHttpUrl } from "./tools/netTools";
 
 export interface ChatActivity {
   id: string;
@@ -78,8 +79,8 @@ export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   },
   {
     name: "fetch_url",
-    description: "Read a web page (http/https). Use it on the most relevant search results before answering from them.",
-    parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    description: "Read a web page. Pass a full https URL when you have one; a bare domain is accepted. If it fails for a host, do not call it again for that host — use search snippets or a different URL.",
+    parameters: { type: "object", properties: { url: { type: "string", description: "https://… or example.com" } }, required: ["url"] },
   },
 ];
 
@@ -152,7 +153,7 @@ export const CLOUD_CHAT_TOOL_NAMES = new Set(CLOUD_CHAT_TOOLS.map((t) => t.name)
 export const CHAT_RESEARCH_PROMPT = [
   "You can search the web (web_search) and read pages (fetch_url) in this chat. Decide for yourself when to use them:",
   "- Research whenever the answer depends on facts you may not have or that change: prices and costs, plans and limits, versions and releases, companies, products and people, laws and policies, news, or anything you are not sure is still current. Questions about what something costs, whether it is worth it, or how it compares usually need this.",
-  "- Search with specific queries, read the 2-5 most relevant pages with fetch_url, then answer from what they say. Several searches are fine when the question has several parts.",
+  "- Search with specific queries, then fetch_url the 1-3 best https links (not the same domain five times). If a read fails, stop retrying that host and answer from search snippets.",
   "- Do not search for small talk, arithmetic, writing help, or things you know reliably.",
   "- After researching, answer the question itself (with your recommendation), use the numbers you found, and end with a short Sources list of the pages you used.",
 ].join("\n");
@@ -163,7 +164,8 @@ export function startActivity(id: string, name: string, args: Record<string, unk
     return { id, kind: "search", status: "running", query: String(args.query ?? ""), startedAt: Date.now() };
   }
   if (name === "fetch_url") {
-    return { id, kind: "read", status: "running", url: String(args.url ?? ""), startedAt: Date.now() };
+    const n = normalizePublicHttpUrl(args.url);
+    return { id, kind: "read", status: "running", url: n.ok ? n.url.toString() : String(args.url ?? ""), startedAt: Date.now() };
   }
   return { id, kind: "search", status: "running", query: `${name} ${String(args.prompt ?? args.path ?? args.command ?? args.name ?? "").slice(0, 120)}`.trim(), startedAt: Date.now() };
 }

@@ -11,7 +11,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { apiUrl, authHeaders } from "../connection";
-import { fetchInstalledMcpStatuses, type McpStatusRow } from "../mcpPublicInstall";
+import { fetchInstalledMcpStatuses, mcpActionHost, runMcpServerAction, type McpStatusRow } from "../mcpPublicInstall";
 import { McpMarketplace } from "./McpMarketplace";
 
 interface NativeTool {
@@ -45,6 +45,7 @@ interface McpServerStatus {
   authKind?: string;
   blocked?: boolean;
   blockedReason?: string;
+  host?: "local" | "control";
 }
 
 interface HealthRow {
@@ -99,6 +100,7 @@ function asServerStatus(row: McpStatusRow): McpServerStatus {
     authKind: typeof row.authKind === "string" ? row.authKind : undefined,
     blocked: Boolean(row.blocked),
     blockedReason: typeof row.blockedReason === "string" ? row.blockedReason : undefined,
+    host: row.host === "control" ? "control" : row.host === "local" ? "local" : undefined,
   };
 }
 
@@ -169,7 +171,9 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
   async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect") {
     setBusy(id);
     try {
-      await fetch(apiUrl(`/mcp/servers/${id}/${action}`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
+      const row = servers.find((s) => s.id === id);
+      const out = await runMcpServerAction(id, action, mcpActionHost(null, { host: row?.host, executionLocation: row?.executionLocation, transport: row?.transport }));
+      if (!out.ok) throw new Error(out.error);
     } finally {
       setBusy(null);
       void refresh();
@@ -179,7 +183,9 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
   async function removeServer(id: string) {
     setBusy(id);
     try {
-      await fetch(apiUrl(`/mcp/servers/${id}`), { method: "DELETE", headers: authHeaders() });
+      const row = servers.find((s) => s.id === id);
+      const out = await runMcpServerAction(id, "delete", mcpActionHost(null, { host: row?.host, executionLocation: row?.executionLocation, transport: row?.transport }));
+      if (!out.ok) throw new Error(out.error);
     } finally {
       setBusy(null);
       void refresh();

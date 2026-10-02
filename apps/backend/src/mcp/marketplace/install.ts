@@ -11,9 +11,10 @@ export interface MarketplaceInstallInput {
   env?: Record<string, string>;
   cwd?: string;
   connect?: boolean;
+  preferStdio?: boolean;
 }
 
-export function installPlan(server: MarketplaceMcpServer): {
+export function installPlan(server: MarketplaceMcpServer, opts?: { preferStdio?: boolean }): {
   transport: "stdio" | "http";
   command?: string;
   args?: string[];
@@ -24,7 +25,7 @@ export function installPlan(server: MarketplaceMcpServer): {
 } {
   const http = server.transports.find((t) => t.kind === "http" && t.url);
   const stdio = server.transports.find((t) => t.kind === "stdio" && t.command);
-  if (http?.url) {
+  if (http?.url && !(opts?.preferStdio && stdio)) {
     const headers: Record<string, string> = {};
     for (const h of http.headers ?? []) {
       if (h.secret) headers[h.name] = `Bearer {{${h.name}}}`;
@@ -58,7 +59,7 @@ export function runtimeSecretValues(server: MarketplaceMcpServer, secrets?: Reco
 }
 
 export async function installMarketplaceServer(manager: McpManager, input: MarketplaceInstallInput) {
-  const plan = installPlan(input.server);
+  const plan = installPlan(input.server, { preferStdio: input.preferStdio });
   const secretValues = runtimeSecretValues(input.server, input.secrets);
   const headers = { ...plan.headers };
   const resolved = secretValues.GITHUB_PERSONAL_ACCESS_TOKEN ? "GITHUB_PERSONAL_ACCESS_TOKEN" : Object.keys(secretValues)[0];

@@ -254,3 +254,15 @@ test("connectionStatus reports live stdio/SSE instead of raw state text", () => 
   const http = sample({ name: "remote", transports: [{ kind: "http", url: "https://x" }], installed: { serverId: "2", enabled: true, state: "NEEDS_AUTH" } });
   assert.equal(connectionStatus(http).tone, "auth");
 });
+
+test("mergeInstalled matches GitHub and Fetch by title, marketplace id, and package", () => {
+  const github = sample({ canonicalId: "io.github.github/github-mcp-server", name: "io.github.github/github-mcp-server", title: "GitHub" });
+  const fetchTool = sample({ canonicalId: "io.modelcontextprotocol/fetch", name: "io.modelcontextprotocol/fetch", title: "Fetch", packages: [{ registry: "npm", identifier: "@modelcontextprotocol/server-fetch" }] });
+  const merged = mergeInstalled([github, fetchTool], [
+    { id: "mcp_gh", name: "GitHub", state: "DISCONNECTED", enabled: false, host: "local", marketplaceId: "io.github.github/github-mcp-server" },
+    { id: "mcp_fe", name: "Fetch", state: "DISABLED", enabled: false, host: "local", packageIdentifier: "@modelcontextprotocol/server-fetch" },
+  ]);
+  assert.equal(merged.find((s) => s.canonicalId === github.canonicalId)?.installed?.serverId, "mcp_gh");
+  assert.equal(merged.find((s) => s.canonicalId === fetchTool.canonicalId)?.installed?.state, "DISABLED");
+  assert.equal(primaryAction(merged.find((s) => s.canonicalId === fetchTool.canonicalId)!).kind, "enable");
+});

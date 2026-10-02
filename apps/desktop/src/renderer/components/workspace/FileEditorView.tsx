@@ -7,7 +7,7 @@ import { emptyBody, emptyTitle } from "./workspaceChrome";
 
 import { guessLanguage } from "./codeLanguage.ts";
 export { guessLanguage };
-export function FileEditorView({ path }: { path?: string | null }) {
+export function FileEditorView({ path, revision }: { path?: string | null; revision?: number }) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +35,7 @@ export function FileEditorView({ path }: { path?: string | null }) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, revision]);
 
   if (path && isFabricatedGeneratedPath(path)) {
     return <GeneratedArtifactPane path={path} />;

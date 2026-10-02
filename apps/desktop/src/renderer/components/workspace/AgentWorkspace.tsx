@@ -316,9 +316,7 @@ export function AgentWorkspace({
       browserId: native && native.kind === "browser" ? native.id : undefined,
       artifactId: activity.artifactId,
     });
-    if (nextKind === "files") {
-      // Follow ORION: select the file in the list, but never take over the
-      // center of the window while the user is reading the chat.
+    if (activity.file) {
       setFilesFocus({ path: activity.file, fileName: activity.file, artifactId: activity.artifactId, user: false });
     }
     const merged = reconcileWorkbenchTabs({
@@ -923,7 +921,14 @@ function WorkbenchBody({
       <DiffInspector diffs={surface.changes} selectedPath={tab.path ?? derived.activity?.file} onSelect={onOpenDiff} />
     );
   }
-  if (tab.kind === "file") return <FileEditorView path={tab.path} />;
+  if (tab.kind === "file") {
+    const revision = events.reduce((n, e) => {
+      if (e.type !== "file.edit" && e.type !== "file.created" && e.type !== "file.read") return n;
+      const p = String(e.data?.path ?? (e.data?.preview as { path?: string } | undefined)?.path ?? "").replace(/\\/g, "/");
+      return p && tab.path && p.replace(/^\.\//, "") === tab.path.replace(/\\/g, "/").replace(/^\.\//, "") ? Number(e.timestamp ?? n + 1) : n;
+    }, 0);
+    return <FileEditorView path={tab.path} revision={revision} />;
+  }
   if (tab.kind === "terminal") return <TerminalInspector events={events} environment={environment} environmentLabel={tab.title.startsWith("Terminal") ? tab.title : terminalTitle(environment)} />;
   if (tab.kind === "environment") {
     return <EnvironmentView environment={environment} projectRoot={projectRoot} runId={runId} ports={ports} />;

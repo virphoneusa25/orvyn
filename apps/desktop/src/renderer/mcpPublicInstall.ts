@@ -37,20 +37,36 @@ export function isStdioOnlyMcp(server: Pick<MarketServer, "transports">): boolea
   return transports.some((t) => t.kind === "stdio") && !transports.some((t) => t.kind === "http" && t.url);
 }
 
-/** Cloud cannot spawn npx stdio. GitHub on Cloud uses the official Streamable HTTP + OAuth endpoint. */
+/** Cloud cannot spawn npx stdio. Desktop stdio (Fetch, GitHub, Memory) still installs here. GitHub HTTP+OAuth is Cloud-only when there is no stdio package. */
 export function prepareMarketplaceInstall(server: MarketServer, backendIsCloud = currentBackendIsCloud()): MarketServer {
-  if (isOfficialGithubMcp(server) && backendIsCloud) {
+  if (isOfficialGithubMcp(server)) {
     const hasHttp = (server.transports ?? []).some((t) => t.kind === "http" && t.url);
+    const hasStdio = (server.transports ?? []).some((t) => t.kind === "stdio");
+    const auth = server.auth.some((a) => a.kind === "oauth" || a.kind === "api_key" || a.kind === "bearer")
+      ? server.auth
+      : backendIsCloud && !hasStdio
+        ? [{ kind: "oauth" as const, label: "GitHub" }]
+        : [{ kind: "api_key" as const, label: "GITHUB_PERSONAL_ACCESS_TOKEN" }];
     return {
       ...server,
-      transports: hasHttp ? server.transports : [{ kind: "http", url: GITHUB_MCP_HTTP }, ...server.transports],
-      auth: server.auth.some((a) => a.kind === "oauth") ? server.auth : [{ kind: "oauth", label: "GitHub" }, ...server.auth.filter((a) => a.kind !== "none")],
+      transports:
+        backendIsCloud && !hasHttp && !hasStdio ? [{ kind: "http", url: GITHUB_MCP_HTTP }, ...server.transports] : server.transports,
+      auth,
     };
   }
-  if (isOfficialGithubMcp(server) && !server.auth.some((a) => a.kind !== "none")) {
-    return { ...server, auth: [{ kind: "api_key", label: "GITHUB_PERSONAL_ACCESS_TOKEN" }] };
-  }
   return server;
+}
+
+export function shouldInstallOnLocalEngine(
+  server: Pick<MarketServer, "auth" | "transports" | "sources" | "name" | "packages">,
+  backendIsCloud: boolean
+): boolean {
+  if (!backendIsCloud) return false;
+  if ((server.transports ?? []).some((t) => t.kind === "stdio")) return true;
+  if (isOfficialGithubMcp(server) && (server.transports ?? []).some((t) => t.kind === "http" && t.url) && !(server.transports ?? []).some((t) => t.kind === "stdio")) {
+    return false;
+  }
+  return isPublicFreeMcp(server) || isStdioOnlyMcp(server);
 }
 
 export function marketplaceSecrets(server: Pick<MarketServer, "name" | "canonicalId" | "packages">, secrets?: Record<string, string>): Record<string, string> | undefined {
@@ -59,15 +75,6 @@ export function marketplaceSecrets(server: Pick<MarketServer, "name" | "canonica
   const token = out.GITHUB_PERSONAL_ACCESS_TOKEN || out.token || out.TOKEN;
   if (token && isOfficialGithubMcp(server)) out.GITHUB_PERSONAL_ACCESS_TOKEN = token;
   return out;
-}
-
-export function shouldInstallOnLocalEngine(
-  server: Pick<MarketServer, "auth" | "transports" | "sources" | "name" | "packages">,
-  backendIsCloud: boolean
-): boolean {
-  if (!backendIsCloud) return false;
-  if (isOfficialGithubMcp(server) && (server.transports ?? []).some((t) => t.kind === "http" && t.url)) return false;
-  return isPublicFreeMcp(server) || isStdioOnlyMcp(server);
 }
 
 export function shouldUseLocalPublicInstall(input: {
@@ -86,12 +93,38 @@ export function shouldUseLocalPublicInstall(input: {
 
 export type McpActionHost = "local" | "control";
 
-export function mcpActionHost(server?: Pick<MarketServer, "transports" | "installed"> | null): McpActionHost {
-  if (server?.installed && "host" in server.installed && (server.installed as { host?: string }).host === "local") return "local";
-  if (server && currentBackendIsCloud() && isStdioOnlyMcp(server) && !(server.installed && "host" in server.installed && (server.installed as { host?: string }).host === "control")) {
+export function mcpActionHost(server?: Pick<MarketServer, "transports" | "installed"> | null, extra?: { host?: McpActionHost; executionLocation?: string; transport?: string }): McpActionHost {
+  if (extra?.host === "local" || extra?.host === "control") return extra.host;
+  if (server?.installed?.host === "local") return "local";
+  if (server?.installed?.host === "control") return "control";
+  if (extra?.executionLocation === "local" || extra?.transport === "stdio") {
+    return currentBackendIsCloud() ? "local" : "control";
+  }
+  if (server && currentBackendIsCloud() && (isStdioOnlyMcp(server) || (server.transports ?? []).some((t) => t.kind === "stdio"))) {
     return "local";
   }
   return "control";
+}
+
+export async function runMcpServerAction(
+  id: string,
+  action: "connect" | "disconnect" | "reconnect" | "delete",
+  host: McpActionHost
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (host === "local") {
+    const ready = await ensureLocalMarketplaceEngine();
+    if (!ready) return { ok: false, error: "Local ORVYN engine is not running. Start it to install or enable desktop MCP tools." };
+  }
+  const path = action === "delete" ? `/mcp/servers/${id}` : `/mcp/servers/${id}/${action}`;
+  const req = mcpActionRequest(path, host);
+  try {
+    const res = await fetch(req.url, { method: action === "delete" ? "DELETE" : "POST", headers: req.headers });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: String(body.error || `MCP ${action} failed (HTTP ${res.status})`) };
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
 }
 
 export function mcpActionRequest(path: string, host: McpActionHost): { url: string; headers: Record<string, string> } {
@@ -134,10 +167,10 @@ export async function installPublicMcpOnLocalHost(
     const res = await fetch(localMarketplaceUrl("/mcp/marketplace/install"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ server, secrets: payloadSecrets, connect: true, cwd }),
+      body: JSON.stringify({ server, secrets: payloadSecrets, connect: true, cwd, preferStdio: true }),
     });
     const body = await res.json().catch(() => ({}));
-    if (res.ok || res.status === 201) return { ok: true, serverId: body.server };
+    if (res.ok || res.status === 201) return { ok: true, serverId: typeof body.server === "string" ? body.server : body.server?.id };
     if (res.status === 404 || /html/i.test(String(body.error ?? ""))) {
       const host = await fetch(localMarketplaceUrl("/mcp/servers"), {
         method: "POST",
@@ -168,6 +201,8 @@ export interface McpStatusRow {
   toolCount?: number;
   lastConnectedAt?: number;
   host?: McpActionHost;
+  marketplaceId?: string;
+  packageIdentifier?: string;
   [key: string]: unknown;
 }
 

@@ -225,7 +225,9 @@ export function primaryAction(server: MarketServer, hasUpdate = false): { kind: 
     return { kind: "connect", label: "Connect" };
   }
   if (server.installed.state === "CONNECTED") return { kind: "connected", label: "Connected" };
-  if (server.installed.enabled === false || server.installed.state === "DISABLED") return { kind: "enable", label: "Enable" };
+  if (server.installed.enabled === false || server.installed.state === "DISABLED" || server.installed.state === "DISCONNECTED" || server.installed.state === "ERROR") {
+    return { kind: "enable", label: "Enable" };
+  }
   return { kind: "disable", label: "Disable" };
 }
 
@@ -328,6 +330,40 @@ export function tabAvailable(tab: DetailTab, server: MarketServer, changelog?: s
   return true;
 }
 
+function matchKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export function listingMatchKeys(server: Pick<MarketServer, "canonicalId" | "name" | "title" | "packages">): string[] {
+  const raw = [server.canonicalId, server.name, server.title, server.name.split("/").pop(), server.packages?.[0]?.identifier].filter(Boolean).map(String);
+  const keys = new Set(raw.map((x) => x.toLowerCase()).concat(raw.map(matchKey)));
+  const blob = `${server.canonicalId} ${server.name} ${server.packages?.[0]?.identifier ?? ""}`.toLowerCase();
+  if (/github-mcp|io\.github\.github\/github/.test(blob)) {
+    for (const k of ["github", "githubmcp", "github-mcp-server", "io.github.github/github-mcp-server"]) keys.add(k);
+  }
+  if (/mcp-server-fetch|io\.modelcontextprotocol\/fetch/.test(blob) || matchKey(server.name) === "fetch") {
+    for (const k of ["fetch", "mcpserverfetch"]) keys.add(k);
+  }
+  return [...keys];
+}
+
+function statusMatchKeys(st: { id: string; name: string; marketplaceId?: string; packageIdentifier?: string }): string[] {
+  const raw = [st.id, st.name, st.marketplaceId, st.packageIdentifier, st.packageIdentifier?.replace(/^@[^/]+\//, "")].filter(Boolean).map(String);
+  return [...new Set(raw.map((x) => x.toLowerCase()).concat(raw.map(matchKey)))];
+}
+
+export function findInstalledStatus<T extends { id: string; name: string; marketplaceId?: string; packageIdentifier?: string }>(
+  server: Pick<MarketServer, "canonicalId" | "name" | "title" | "packages" | "installed">,
+  statuses: T[]
+): T | undefined {
+  if (server.installed?.serverId) {
+    const byId = statuses.find((x) => x.id === server.installed!.serverId);
+    if (byId) return byId;
+  }
+  const keys = new Set(listingMatchKeys(server));
+  return statuses.find((st) => statusMatchKeys(st).some((k) => keys.has(k)));
+}
+
 export function mergeInstalled(
   catalog: MarketServer[],
   statuses: {
@@ -343,11 +379,12 @@ export function mergeInstalled(
     lastConnectedAt?: number;
     transport?: "stdio" | "http";
     host?: "local" | "control";
+    marketplaceId?: string;
+    packageIdentifier?: string;
   }[]
 ): MarketServer[] {
-  const byName = new Map(statuses.map((s) => [s.name.toLowerCase(), s]));
   const merged = catalog.map((s) => {
-    const st = (s.installed && statuses.find((x) => x.id === s.installed!.serverId)) || byName.get(s.name.toLowerCase()) || byName.get(serverLabel(s).toLowerCase());
+    const st = findInstalledStatus(s, statuses);
     if (!st) return s;
     return {
       ...s,

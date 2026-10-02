@@ -59,6 +59,7 @@ import {
   mcpActionRequest,
   prepareMarketplaceInstall,
   publicInstallSteps,
+  runMcpServerAction,
   serverRequiresUserSecret,
   shouldInstallOnLocalEngine,
   shouldUseLocalPublicInstall,
@@ -211,7 +212,10 @@ export function McpMarketplace({
       const controlStatuses = statusParsed.ok ? (statusParsed.body.servers ?? []) : [];
       const statuses = await fetchInstalledMcpStatuses(controlStatuses);
       if (mine !== searchGen.current) return;
-      const mergedCatalog = mergeInstalled(resolved.catalog, statuses);
+      const mergedCatalog = mergeInstalled(resolved.catalog, statuses).map((s) => {
+        const prepared = prepareMarketplaceInstall(s);
+        return { ...prepared, installed: s.installed, toolCount: s.toolCount, tools: s.tools };
+      });
       const providerMap = healthToProviders(
         (resolved.parsed.ok && resolved.parsed.body?.health) || healthParsed.body.providers || []
       );
@@ -342,7 +346,7 @@ export function McpMarketplace({
         const res = await fetch(apiUrl("/mcp/marketplace/install"), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ server: listing, secrets: publicFree ? undefined : payloadSecrets, connect: true, cwd: projectRoot }),
+          body: JSON.stringify({ server: listing, secrets: publicFree ? undefined : payloadSecrets, connect: true, cwd: projectRoot, preferStdio: host === "local" }),
         });
         const text = await res.text();
         const parsed = parseApiJson(res.status, text, res.headers.get("content-type") ?? undefined);
@@ -378,7 +382,7 @@ export function McpMarketplace({
         } else if (!parsed.ok) {
           throw new Error(parsed.error || "Install failed");
         } else {
-          installedId = parsed.body?.server;
+          installedId = typeof parsed.body?.server === "string" ? parsed.body.server : parsed.body?.server?.id;
         }
       }
       onInstalled?.();
@@ -396,13 +400,14 @@ export function McpMarketplace({
 
   async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect", server?: MarketServer) {
     setBusy(true);
+    setError(null);
     try {
-      const host = mcpActionHost(server ?? selected);
-      if (host === "local") await ensureLocalMarketplaceEngine();
-      const req = mcpActionRequest(`/mcp/servers/${id}/${action}`, host);
-      await fetch(req.url, { method: "POST", headers: req.headers });
+      const out = await runMcpServerAction(id, action, mcpActionHost(server ?? selected));
+      if (!out.ok) throw new Error(out.error);
       await search(submittedQuery);
       onInstalled?.();
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -432,14 +437,15 @@ export function McpMarketplace({
 
   async function uninstall(id: string, server?: MarketServer) {
     setBusy(true);
+    setError(null);
     try {
-      const host = mcpActionHost(server ?? selected);
-      if (host === "local") await ensureLocalMarketplaceEngine();
-      const req = mcpActionRequest(`/mcp/servers/${id}`, host);
-      await fetch(req.url, { method: "DELETE", headers: req.headers });
+      const out = await runMcpServerAction(id, "delete", mcpActionHost(server ?? selected));
+      if (!out.ok) throw new Error(out.error);
       setConfirmUninstall(false);
       onInstalled?.();
       await search(submittedQuery);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -635,7 +641,7 @@ export function McpMarketplace({
               )}
             </div>
           )}
-          {error && catalogState === "auth-required" && (
+          {error && (
             <div style={{ fontSize: 11, color: "var(--orvyn-yellow, #E9B44C)", marginTop: 6 }}>{error}</div>
           )}
           {fromCache && (
@@ -1338,7 +1344,7 @@ function InstallDrawer({ server, busy, onClose, onInstall }: { server: MarketSer
           {step < confirmStep && <button style={primaryBtn} onClick={() => setStep(step + 1)}>Continue</button>}
           {confirm && (
           <button
-            disabled={busy}
+            disabled={busy || (needsSecret && !server.auth.some((a) => a.kind === "oauth") && !token.trim())}
             style={primaryBtn}
             onClick={() => onInstall(needsSecret && token ? { token } : undefined)}
           >

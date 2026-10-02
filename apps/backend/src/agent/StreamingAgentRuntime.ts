@@ -72,6 +72,7 @@ import { projectToolContext } from "../execution/workspaceBinding";
 import { normalizeKnownFile, workspaceModelNote } from "./workspacePreflight";
 import { evaluatePreflight } from "./runPreflight";
 import { prepareRunPreflight } from "./runPreflightResult";
+import { fetchHostKey, normalizePublicHttpUrl } from "../ai/tools/netTools";
 import { resolveResources, resourcesFromProject, externalResourceRequired, type RegisteredResource } from "./resourceResolver";
 import { internalPathRefusal, selectToolNames, shellServerRefusal, validateToolArguments, type ToolParameterSchema } from "./toolPolicy";
 import { defaultDataDir } from "../persistence/LocalStore";
@@ -3360,8 +3361,16 @@ export class StreamingAgentRuntime {
           if (next && next !== args[key]) args[key] = next;
         }
       }
+      if ((call.name === "fetch_url" || call.name === "browser_open" || call.name === "browser_navigate") && call.arguments && typeof call.arguments === "object") {
+        const args = call.arguments as Record<string, unknown>;
+        const n = normalizePublicHttpUrl(args.url);
+        if (n.ok) args.url = n.url.toString();
+      }
 
-      const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
+      const fingerprint =
+        call.name === "fetch_url"
+          ? `fetch_url:${fetchHostKey((call.arguments as { url?: unknown } | undefined)?.url)}`
+          : `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       state.lastActivityAt = Date.now();
       const priorFailures = state.failedFingerprints.get(fingerprint) ?? 0;
       const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
@@ -3692,7 +3701,10 @@ export class StreamingAgentRuntime {
         });
       }
 
-      const fingerprint = `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
+      const fingerprint =
+        call.name === "fetch_url"
+          ? `fetch_url:${fetchHostKey((call.arguments as { url?: unknown } | undefined)?.url)}`
+          : `${call.name}:${JSON.stringify(call.arguments ?? {})}`;
       result = requirePersistedArtifacts(call.name, result);
       // The desktop browser's machine target check (expected page vs what the
       // window actually shows) is recorded as evidence the answer is held to.

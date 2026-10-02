@@ -51,6 +51,8 @@ test("closing the active tab selects the adjacent tab, never a second pane", () 
 
 test("Follow ORION maps events onto one workbench tab", () => {
   assert.equal(followWorkbenchTab("diff", { path: "App.tsx" }).id, "diff:App.tsx");
+  assert.equal(followWorkbenchTab("files", { path: "StreamingAgentRuntime.ts" }).kind, "file");
+  assert.equal(followWorkbenchTab("files", { path: "StreamingAgentRuntime.ts" }).id, fileTabId("StreamingAgentRuntime.ts"));
   const preview = followWorkbenchTab("preview", { url: "http://127.0.0.1:5173" });
   assert.equal(preview.kind, "preview");
   assert.equal(preview.id, previewTabId("http://127.0.0.1:5173"));

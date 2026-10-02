@@ -435,6 +435,8 @@ export class McpManager {
       authKind: cfg.authKind,
       blocked: cfg.blocked,
       blockedReason: cfg.blockedReason,
+      marketplaceId: cfg.marketplaceId,
+      packageIdentifier: cfg.packageIdentifier,
       tools: (conn?.tools ?? []).map((t) => ({
         name: t.originalName,
         risk: t.risk,

@@ -496,8 +496,10 @@ export function followWorkbenchTab(kind: WorkbenchTabKind, extras?: { url?: stri
   if (kind === "preview") return parseWorkbenchTab("preview");
   if (kind === "browser" && extras?.browserId) return parseWorkbenchTab(`browser:${extras.browserId}`);
   if (kind === "diff" && extras?.path) return parseWorkbenchTab(diffTabId(extras.path));
+  if ((kind === "file" || kind === "files") && extras?.path && !extras.artifactId) return parseWorkbenchTab(fileTabId(extras.path));
   if (kind === "file" && extras?.path) return parseWorkbenchTab(fileTabId(extras.path));
   if (kind === "artifact" && extras?.name) return parseWorkbenchTab(artifactTabId(extras.name, extras.artifactId));
+  if (kind === "files" && extras?.artifactId) return parseWorkbenchTab(artifactTabId(extras.name ?? extras.path ?? "artifact", extras.artifactId));
   return parseWorkbenchTab(kind);
 }
 

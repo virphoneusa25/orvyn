@@ -60,14 +60,16 @@ test("preview labels prefer project name + port", () => {
 
 test("event routing maps file/browser/terminal/review onto one tab", () => {
   const edit = routeEvent(ev("file.edit", { preview: { path: "App.tsx" } }));
-  assert.equal(edit?.tab, "diff");
+  assert.equal(edit?.tab, "files");
+  assert.equal(edit?.switchTab, true);
   assert.equal(edit?.priority, 70);
   assert.match(edit?.line ?? "", /App\.tsx/);
 
   const read = routeEvent(ev("file.read", { path: "readme.md" }));
-  assert.equal(read?.priority, 20);
+  assert.equal(read?.priority, 55);
   assert.equal(read?.tab, "files");
-  assert.equal(read?.switchTab, false);
+  assert.equal(read?.switchTab, true);
+  assert.equal(read?.file, "readme.md");
 
   const localBrowse = routeEvent(ev("browser.action", { tool: "browser_click", url: "http://127.0.0.1:5173", target: "Sign In", x: 40, y: 80 }));
   assert.equal(localBrowse?.tab, "preview");

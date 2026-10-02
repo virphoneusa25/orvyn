@@ -237,11 +237,11 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   }
   if (type === "file.created") {
     const path = filePath(data);
-    return { line: path ? `Writing ${path}` : "Writing files", priority: 70, tab: "files", file: path || undefined };
+    return { line: path ? `Writing ${path}` : "Writing files", priority: 70, tab: "files", file: path || undefined, switchTab: true };
   }
   if (type === "file.edit") {
     const path = filePath(data);
-    return { line: path ? `Editing ${path}` : "Editing files", priority: 70, tab: "diff", file: path || undefined };
+    return { line: path ? `Editing ${path}` : "Editing files", priority: 70, tab: "files", file: path || undefined, switchTab: true };
   }
   if (type === "terminal.started" || type === "terminal.output" || tool === "terminal") {
     const cmd = String(data.command ?? data.preview ?? "command").split("\n")[0]!.slice(0, 80);
@@ -263,7 +263,7 @@ export function routeEvent(e: WorkspaceEvent): WorkspaceActivity | null {
   }
   if (type === "file.read") {
     const path = filePath(data);
-    return { line: path ? `Reading ${path}` : "Reading files", priority: 20, tab: "files", file: path || undefined, switchTab: false };
+    return { line: path ? `Reading ${path}` : "Reading files", priority: 55, tab: "files", file: path || undefined, switchTab: true };
   }
   if (type === "tool.completed" && tool === "create_document") {
     return { line: "Created artifact", priority: 65, tab: "docs" };
