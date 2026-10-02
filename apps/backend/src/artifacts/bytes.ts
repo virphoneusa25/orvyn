@@ -69,6 +69,51 @@ export function validateBytes(name: string, declaredMime: string, bytes: Buffer)
   return declaredMime || "application/octet-stream";
 }
 
+const RASTER_EXT = /\.(png|jpe?g|gif|webp)$/i;
+const RASTER_MIME = /^image\/(png|jpeg|gif|webp)$/i;
+
+export function looksLikeRasterName(name: string, mime = ""): boolean {
+  return RASTER_EXT.test(name) || RASTER_MIME.test(mime);
+}
+
+/**
+ * PNG/JPEG/GIF/WebP must be binary. Models often pass UTF-8 text or a base64
+ * string as `content`; decode that when it really is an image, otherwise fail
+ * with a generate_image instruction instead of saving a fake .png.
+ */
+export function coerceArtifactBytes(name: string, declaredMime: string, input: { bytes?: Buffer; content?: string }): Buffer {
+  if (input.bytes?.length) return input.bytes;
+  const text = String(input.content ?? "");
+  const utf = Buffer.from(text, "utf-8");
+  if (!looksLikeRasterName(name, declaredMime)) return utf;
+  try {
+    validateBytes(name, declaredMime, utf);
+    return utf;
+  } catch {
+    /* not raw PNG bytes */
+  }
+  let payload = text.trim();
+  if (payload.startsWith("data:")) {
+    const comma = payload.indexOf(",");
+    if (comma >= 0) payload = payload.slice(comma + 1);
+  }
+  const compact = payload.replace(/\s+/g, "");
+  if (compact.length >= 24 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
+    const decoded = Buffer.from(compact, "base64");
+    if (decoded.length >= 8) {
+      try {
+        validateBytes(name, declaredMime, decoded);
+        return decoded;
+      } catch {
+        /* decoded bytes still not an image */
+      }
+    }
+  }
+  throw new Error(
+    `Declared ${name.toLowerCase().replace(/^.*(\.[a-z0-9]+)$/, "$1") || "image"} is not a real image. Call generate_image with a prompt so ORVYN produces PNG bytes. Do not pass text, markdown, or invented data to artifact_create.`
+  );
+}
+
 export function isPreviewable(mime: string): boolean {
   return mime.startsWith("image/") || mime.startsWith("text/") || mime === "application/pdf" || mime === "application/json" || mime === "image/svg+xml";
 }

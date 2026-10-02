@@ -191,7 +191,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
   );
   const retry =
     failedGate === "artifact"
-      ? "COMPLETION GATE — ARTIFACT: Do not say the file exists. Call generate_image, create_document, or artifact_create and wait for a tool result that includes artifactId. Then tell the user the file is ready in Files → Generated (with its Preview and Download card). Never cite a sandbox path."
+      ? "COMPLETION GATE — ARTIFACT: Do not say the file exists. For a picture call generate_image (not artifact_create). For a PDF/DOCX/XLSX call create_document. For other text files call artifact_create. Wait for artifactId, then tell the user the file is ready in Files → Generated."
       : fileIncomplete
         ? workspaceWriteSucceeded(input.events)
           ? "COMPLETION GATE — FILE: write_file succeeded. Call read_file on that same path and report only the contents from the tool result. Do not finish before the read."

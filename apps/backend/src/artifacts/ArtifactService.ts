@@ -6,6 +6,7 @@ import { artifactStorageRoot, virtualWorkspaceRoot } from "../documents/workspac
 import {
   assertNonEmpty,
   assertSizeLimit,
+  coerceArtifactBytes,
   isPreviewable,
   sha256Hex,
   validateBytes,
@@ -276,10 +277,10 @@ export class ArtifactService {
     const name = input.keepName || input.overwrite ? requested : this.uniqueName(requested);
     const id = `art_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     const kind = asKind(input.kind ?? "file");
-    const raw = input.bytes ?? Buffer.from(input.content ?? "", "utf-8");
+    const declared = input.mimeType ?? input.mediaType ?? mediaTypeForName(name);
+    const raw = coerceArtifactBytes(name, declared, { bytes: input.bytes, content: input.content });
     assertNonEmpty(raw);
     assertSizeLimit(raw);
-    const declared = input.mimeType ?? input.mediaType ?? mediaTypeForName(name);
     const mimeType = validateBytes(name, declared, raw);
     const sha256 = sha256Hex(raw);
     const diskPath = this.diskFile(id, name);

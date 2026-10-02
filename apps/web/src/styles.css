@@ -438,29 +438,32 @@ input, textarea, select { font: inherit; color: var(--text); }
 .file-edit__line.is-add { color: var(--green); background: rgba(52, 211, 153, .08); }
 .file-edit__line.is-remove { color: var(--red); background: rgba(248, 113, 113, .08); }
 .file-edit__line.is-context { color: var(--muted); }
-.agent-progress { margin: 0 0 12px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: color-mix(in srgb, var(--raised) 82%, transparent); }
-.agent-progress__head { width: 100%; display: flex; align-items: center; gap: 9px; padding: 11px 14px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-.agent-progress__head:hover { background: color-mix(in srgb, var(--raised) 55%, transparent); }
-.agent-progress__head-icon { width: 18px; height: 18px; display: grid; place-items: center; color: var(--violet-2); flex: none; }
-.agent-progress__summary { min-width: 0; flex: 1; font-size: 13.5px; font-weight: 600; }
-.agent-progress__count { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.agent-progress__chevron { display: grid; place-items: center; color: var(--muted); transition: transform .18s ease; }
-.agent-progress.is-open .agent-progress__chevron { transform: rotate(180deg); }
-.agent-progress__steps { display: grid; gap: 0; margin: 0; padding: 0 14px 10px; list-style: none; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
-.agent-progress__step { display: flex; align-items: flex-start; gap: 9px; padding: 9px 0; color: var(--muted); font-size: 12.5px; position: relative; }
-.agent-progress__step + .agent-progress__step { border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
-.agent-progress__step.is-nested { padding-left: 22px; border-top-style: dashed; }
+.agent-progress { margin: 0 0 12px; }
+.agent-progress--flat { background: transparent; border: 0; overflow: visible; }
+.agent-progress__live { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); }
+.agent-progress__steps { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-progress__step { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; color: var(--muted); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
 .agent-progress__icon { display: grid; place-items: center; flex: none; width: 18px; height: 18px; color: var(--muted); }
 .agent-progress__dot { width: 7px; height: 7px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 55%, transparent); }
 .agent-progress__step.is-pending { opacity: 0.72; }
+.agent-progress__step.is-running { border-left: 3px solid var(--violet-2); }
 .agent-progress__step.is-running .agent-progress__icon { color: var(--violet-2); }
-.agent-progress__step.is-done .agent-progress__icon { color: var(--green); }
+.agent-progress__step.is-done { border-left: 3px solid color-mix(in srgb, var(--line) 80%, transparent); }
+.agent-progress__step.is-failed { border-left: 3px solid var(--red); }
 .agent-progress__step.is-failed .agent-progress__icon { color: var(--red); }
+.agent-progress__step.is-waiting { border-left: 3px solid var(--amber); }
 .agent-progress__step.is-waiting .agent-progress__icon { color: var(--amber); }
+.agent-progress__step[data-kind="search"] .agent-progress__icon { color: #60a5fa; }
+.agent-progress__step[data-kind="command"] .agent-progress__icon { color: #a78bfa; }
+.agent-progress__step[data-kind="file"] .agent-progress__icon { color: #fb923c; }
+.agent-progress__step[data-kind="image"] .agent-progress__icon { color: #f472b6; }
+.agent-progress__step[data-kind="review"] .agent-progress__icon { color: #2dd4bf; }
+.agent-progress__step[data-kind="plan"] .agent-progress__icon { color: #e879f9; }
 .agent-progress__body { display: grid; gap: 4px; min-width: 0; flex: 1; }
 .agent-progress__label { color: var(--text); }
 .agent-progress__detail { overflow-wrap: anywhere; color: var(--muted); font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; }
 .agent-progress__actions { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.agent-progress__done { display: grid; place-items: center; color: var(--green); flex: none; }
 .agent-progress__spinner, .agent-progress__pulse { display: block; width: 12px; height: 12px; flex: none; border: 2px solid color-mix(in srgb, var(--violet-2) 28%, transparent); border-top-color: var(--violet-2); border-radius: 50%; animation: agent-progress-spin .8s linear infinite; }
 .agent-progress__pulse { width: 8px; height: 8px; border: 0; background: var(--violet-2); box-shadow: 0 0 0 4px color-mix(in srgb, var(--violet-2) 16%, transparent); animation: agent-progress-pulse 1.5s ease-in-out infinite; }
 @keyframes agent-progress-spin { to { transform: rotate(360deg); } }

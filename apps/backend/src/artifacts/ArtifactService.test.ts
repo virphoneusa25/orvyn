@@ -192,6 +192,28 @@ test("claim validator blocks generated claims without artifactId", () => {
   assert.doesNotMatch(site.text, /No file was saved/);
 });
 
+test("PNG base64 content is decoded; invented PNG text is refused", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-art-"));
+  const store = new LocalStore("tenant-b", dir);
+  const svc = new ArtifactService("tenant-b", store, dir);
+  try {
+    const png = await svc.persistArtifact({
+      name: "from-b64.png",
+      kind: "generated",
+      content: MINIMAL_PNG.toString("base64"),
+      mediaType: "image/png",
+    });
+    assert.equal(png.sha256, sha256Hex(MINIMAL_PNG));
+    await assert.rejects(
+      () => svc.persistArtifact({ name: "fake.png", content: "not an image", mediaType: "image/png" }),
+      /generate_image/
+    );
+  } finally {
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
 test("file-producing tools cannot return ok without artifactId", () => {
   const fail = requirePersistedArtifacts("generate_image", { ok: true, output: JSON.stringify({ status: "success" }) });
   assert.equal(fail.ok, false);

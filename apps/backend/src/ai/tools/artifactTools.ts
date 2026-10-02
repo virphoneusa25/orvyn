@@ -10,7 +10,7 @@ export function makeArtifactCreateTool(artifacts: ArtifactService): AITool {
   return {
     name: "artifact_create",
     description:
-      "Create a downloadable file in ORVYN artifact storage. Use this for logos, PNGs, PDFs, text, HTML, JSON, and other deliverables when no local project folder is required. Success only after bytes are persisted. Files appear in Files → Generated and as a chat card.",
+      "Create a downloadable text file (HTML, JSON, CSV, Markdown, source). For photographs, logos, and PNG/JPEG artwork call generate_image — this tool cannot invent pixel images from text. Success only after bytes are persisted. Files appear in Files → Generated and as a chat card.",
     parameters: {
       type: "object",
       properties: {

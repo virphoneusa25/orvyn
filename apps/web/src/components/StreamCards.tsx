@@ -11,7 +11,7 @@ export function EventLog({ items }: { items: ChatActivity[] }) {
         const failed = item.status === "failed";
         return (
           <li key={item.id} className={`stream-log__row${pending ? " is-pending" : failed ? " is-failed" : " is-done"}`} data-testid="event-log-row">
-            {pending ? <i className="agent-progress__spinner" aria-hidden="true" /> : failed ? <Icon.x size={14} /> : <Icon.check size={14} />}
+            {pending ? <i className="agent-progress__spinner" aria-hidden="true" /> : failed ? <Icon.x size={14} /> : item.kind === "search" ? <Icon.search size={14} /> : item.kind === "read" ? <Icon.globe size={14} /> : <Icon.check size={14} />}
             <span className="stream-log__label">{activityLabel(item)}</span>
           </li>
         );

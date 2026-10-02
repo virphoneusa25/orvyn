@@ -8,20 +8,27 @@ export interface AgentProgressEvent {
 }
 
 export type ProgressState = "pending" | "running" | "done" | "failed" | "waiting";
+export type ProgressKind = "plan" | "file" | "command" | "search" | "review" | "approval" | "image" | "other";
 export interface ProgressRow {
   id: string;
-  kind: "plan" | "file" | "command" | "search" | "review" | "approval" | "other";
+  kind: ProgressKind;
   integration?: "github";
   label: string;
   detail?: string;
   state: ProgressState;
   approvalCallId?: string;
-  nested?: boolean;
 }
 
 const TOOL_LABELS: Record<string, string> = {
   list_directory: "Checking project files",
   search_files: "Searching the codebase",
+  search_capabilities: "Using search capabilities",
+  search_code: "Searching code",
+  web_search: "Searching the web",
+  fetch_url: "Reading a page",
+  generate_image: "Generating image",
+  create_document: "Creating document",
+  create_zip: "Creating archive",
   read_file: "Reading file",
   write_file: "Creating file",
   edit_file: "Editing file",
@@ -36,10 +43,11 @@ const TOOL_LABELS: Record<string, string> = {
 
 function str(value: unknown): string { return typeof value === "string" ? value : ""; }
 function toolKind(tool: string): ProgressRow["kind"] {
-  if (/^(write_file|edit_file|delete_file|move_file|read_file)$/.test(tool)) return "file";
-  if (/^(terminal|run_tests|ssh_exec|remote_exec|start_process)$/.test(tool)) return "command";
-  if (/^(web_search|fetch_url|search_files)$/.test(tool)) return "search";
-  if (/^(git_diff|git_status|browser_screenshot|verify|run_tests)$/.test(tool)) return "review";
+  if (/^(generate_image)$/.test(tool)) return "image";
+  if (/^(write_file|edit_file|delete_file|move_file|read_file|create_document|create_zip|artifact_create|artifact_write)$/.test(tool)) return "file";
+  if (/^(terminal|run_tests|ssh_exec|remote_exec|start_process|run_command)$/.test(tool)) return "command";
+  if (/^(web_search|fetch_url|search_files|search_code|search_capabilities)$/.test(tool)) return "search";
+  if (/^(git_diff|git_status|browser_screenshot|verify)$/.test(tool)) return "review";
   return "other";
 }
 
@@ -94,7 +102,6 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
         label: toolLabel(tool),
         detail: args ? toolDetail(args) : undefined,
         state: "running",
-        nested: true,
       };
       byCall.set(callId, row);
       put(row);
@@ -103,10 +110,9 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
     if ((event.type === "tool.completed" || event.type === "tool.failed") && callId) {
       const tool = str(data.tool) || "tool";
       const row = byCall.get(callId) ?? {
-        id: `tool:${callId}`, kind: toolKind(tool), integration: toolIntegration(tool), label: toolLabel(tool), nested: true,
+        id: `tool:${callId}`, kind: toolKind(tool), integration: toolIntegration(tool), label: toolLabel(tool),
       } as ProgressRow;
       row.state = event.type === "tool.failed" ? "failed" : "done";
-      row.nested = true;
       const summary = str(data.envelope?.userSummary ?? data.summary ?? data.preview);
       if (summary) row.detail = summary.slice(0, 400);
       byCall.set(callId, row);
@@ -116,23 +122,23 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
     if (event.type === "file.edit" || event.type === "file.created") {
       const path = str(data.path);
       if (path && !work.some((r) => r.kind === "file" && r.detail === path)) {
-        put({ id: `file:${path}`, kind: "file", label: event.type === "file.created" ? "Created file" : "Updated file", detail: path.slice(0, 300), state: "done", nested: true });
+        put({ id: `file:${path}`, kind: "file", label: event.type === "file.created" ? "Created file" : "Updated file", detail: path.slice(0, 300), state: "done" });
       }
       continue;
     }
     if (event.type === "terminal.started" || event.type === "terminal.completed") {
       const key = `terminal:${str(data.callId) || String(event.sequence ?? work.length)}`;
-      put({ id: key, kind: "command", label: event.type === "terminal.started" ? "Running command" : "Command finished", detail: str(data.command) ? `$ ${str(data.command)}`.slice(0, 400) : undefined, state: event.type === "terminal.started" ? "running" : "done", nested: true });
+      put({ id: key, kind: "command", label: event.type === "terminal.started" ? "Running command" : "Command finished", detail: str(data.command) ? `$ ${str(data.command)}`.slice(0, 400) : undefined, state: event.type === "terminal.started" ? "running" : "done" });
       continue;
     }
     if (event.type === "verification.completed" || event.type === "review.passed" || event.type === "review.rejected") {
       const verdict = str(data.verdict).toUpperCase();
       const ok = event.type === "review.passed" || verdict === "PASS";
-      put({ id: `review:${event.sequence ?? work.length}`, kind: "review", label: ok ? "Reviewed changes" : "Reviewing changes", detail: verdict || undefined, state: event.type === "review.rejected" || (verdict && verdict !== "PASS") ? "failed" : "done", nested: true });
+      put({ id: `review:${event.sequence ?? work.length}`, kind: "review", label: ok ? "Reviewed changes" : "Reviewing changes", detail: verdict || undefined, state: event.type === "review.rejected" || (verdict && verdict !== "PASS") ? "failed" : "done" });
       continue;
     }
     if (event.type === "approval.required") {
-      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined, state: "waiting", approvalCallId: callId || undefined, nested: true });
+      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined, state: "waiting", approvalCallId: callId || undefined });
     } else if (event.type === "approval.resolved" && callId) {
       const row = byKey.get(`approval:${callId}`);
       if (row) row.state = data.approved === true ? "done" : "failed";
@@ -142,13 +148,13 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
   if (!events.length) return work;
   const cursor = timelineCursor(events, status);
   const intro: ProgressState = cursor === "introducing" ? "running" : "done";
-  const acting: ProgressState = cursor === "introducing" ? "pending" : cursor === "acting" ? "running" : cursor === "failed" ? "failed" : "done";
   const checking: ProgressState = cursor === "checking" ? "running" : cursor === "done" ? "done" : cursor === "failed" ? "failed" : "pending";
+  // Flat ledger: each action is its own permanent row. Tools are not nested
+  // under an Acting accordion — they sit between Introducing and Checking.
   return [
     { id: "stage:introducing", kind: "plan", label: "Introducing", state: intro },
-    { id: "stage:acting", kind: "plan", label: "Acting", state: acting },
     ...work,
-    { id: "stage:checking", kind: "plan", label: "Checking the result", state: checking },
+    { id: "stage:checking", kind: "review", label: "Checking the result", state: checking },
   ];
 }
 
