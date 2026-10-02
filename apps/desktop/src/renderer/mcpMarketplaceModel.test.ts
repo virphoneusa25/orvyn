@@ -4,6 +4,7 @@ import {
   EMPTY_FILTERS,
   applyFilters,
   clampSidebar,
+  connectionStatus,
   executionLocation,
   filterActiveCount,
   formatRisk,
@@ -245,4 +246,11 @@ test("catalog cards do not pretend a missing tools[] payload means zero tools", 
   assert.equal(toolsAdvertisedLabel(listing), "tools listed after connect");
   const live = sample({ name: "GitHub", toolCount: 12, tools: [{ name: "create_pull_request", description: "PR", risk: "write" }] });
   assert.equal(toolsAdvertisedLabel(live), "12 tools");
+});
+
+test("connectionStatus reports live stdio/SSE instead of raw state text", () => {
+  const live = sample({ name: "gh", transports: [{ kind: "stdio" }], installed: { serverId: "1", enabled: true, state: "CONNECTED" } });
+  assert.equal(connectionStatus(live).label, "Connected via stdio");
+  const http = sample({ name: "remote", transports: [{ kind: "http", url: "https://x" }], installed: { serverId: "2", enabled: true, state: "NEEDS_AUTH" } });
+  assert.equal(connectionStatus(http).tone, "auth");
 });

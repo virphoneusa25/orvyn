@@ -14,8 +14,6 @@ import {
   filterActiveCount,
   formatRisk,
   groupMarketplace,
-  isConnected,
-  isNeedsAuth,
   mergeInstalled,
   overlaySidebar,
   permissionSummary,
@@ -33,6 +31,7 @@ import {
   toolsAdvertisedLabel,
   uninstallCopy,
   toolOriginLabel,
+  connectionStatus,
   type DetailTab,
   type MarketFilters,
   type MarketServer,
@@ -50,12 +49,18 @@ import {
 } from "../mcpOfficialCatalog";
 import {
   currentBackendIsCloud,
+  ensureLocalMarketplaceEngine,
   fetchInstalledMcpStatuses,
   hasPlatformKey,
   installPublicMcpOnLocalHost,
   isPublicFreeMcp,
+  marketplaceSecrets,
+  mcpActionHost,
+  mcpActionRequest,
+  prepareMarketplaceInstall,
   publicInstallSteps,
   serverRequiresUserSecret,
+  shouldInstallOnLocalEngine,
   shouldUseLocalPublicInstall,
 } from "../mcpPublicInstall";
 import {
@@ -318,17 +323,26 @@ export function McpMarketplace({
 
   async function install(server: MarketServer, secrets?: Record<string, string>) {
     setBusy(true);
+    setError(null);
     try {
-      const publicFree = isPublicFreeMcp(server);
-      const useLocal = publicFree && (currentBackendIsCloud() || !hasPlatformKey());
+      const listing = prepareMarketplaceInstall(server);
+      const payloadSecrets = marketplaceSecrets(listing, secrets);
+      const publicFree = isPublicFreeMcp(listing);
+      const useLocal =
+        shouldInstallOnLocalEngine(listing, currentBackendIsCloud()) ||
+        (publicFree && (currentBackendIsCloud() || !hasPlatformKey()));
+      let installedId: string | undefined;
+      let host = mcpActionHost(listing);
       if (useLocal) {
-        const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot ?? undefined);
+        const local = await installPublicMcpOnLocalHost(listing, payloadSecrets, projectRoot ?? undefined);
         if (!local.ok) throw new Error(local.error);
+        installedId = local.serverId;
+        host = "local";
       } else {
         const res = await fetch(apiUrl("/mcp/marketplace/install"), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ server, secrets: publicFree ? undefined : secrets, connect: true, cwd: projectRoot }),
+          body: JSON.stringify({ server: listing, secrets: publicFree ? undefined : payloadSecrets, connect: true, cwd: projectRoot }),
         });
         const text = await res.text();
         const parsed = parseApiJson(res.status, text, res.headers.get("content-type") ?? undefined);
@@ -337,36 +351,42 @@ export function McpMarketplace({
           shouldUseLocalPublicInstall({
             status: res.status,
             parsed,
-            server,
+            server: listing,
             hasPlatformKey: hasPlatformKey(),
             backendIsCloud: currentBackendIsCloud(),
           })
         ) {
-          const local = await installPublicMcpOnLocalHost(server, secrets, projectRoot ?? undefined);
+          const local = await installPublicMcpOnLocalHost(listing, payloadSecrets, projectRoot ?? undefined);
           if (!local.ok) throw new Error(local.error);
+          installedId = local.serverId;
+          host = "local";
         } else if (!parsed.ok && shouldUseHostInstall(parsed, res.status)) {
-          const host = await fetch(apiUrl("/mcp/servers"), {
+          const createdReq = mcpActionRequest("/mcp/servers", "control");
+          const created = await fetch(createdReq.url, {
             method: "POST",
-            headers: { "Content-Type": "application/json", ...authHeaders() },
-            body: JSON.stringify(installPayload(server, secrets)),
+            headers: createdReq.headers,
+            body: JSON.stringify(installPayload(listing, payloadSecrets)),
           });
-          const hostText = await host.text();
-          const hostParsed = parseApiJson(host.status, hostText, host.headers.get("content-type") ?? undefined);
+          const hostText = await created.text();
+          const hostParsed = parseApiJson(created.status, hostText, created.headers.get("content-type") ?? undefined);
           if (!hostParsed.ok) throw new Error(hostParsed.error || parsed.error || "Install failed");
-          const createdId = hostParsed.body?.server?.id;
-          if (createdId) {
-            await fetch(apiUrl(`/mcp/servers/${createdId}/connect`), {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...authHeaders() },
-            }).catch(() => undefined);
+          installedId = hostParsed.body?.server?.id;
+          if (installedId) {
+            const connectReq = mcpActionRequest(`/mcp/servers/${installedId}/connect`, "control");
+            await fetch(connectReq.url, { method: "POST", headers: connectReq.headers }).catch(() => undefined);
           }
         } else if (!parsed.ok) {
           throw new Error(parsed.error || "Install failed");
+        } else {
+          installedId = parsed.body?.server;
         }
       }
       onInstalled?.();
       await search(submittedQuery);
       setWizard(null);
+      if (listing.auth.some((a) => a.kind === "oauth") && installedId) {
+        await connectOAuth(installedId, host);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -374,10 +394,13 @@ export function McpMarketplace({
     }
   }
 
-  async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect") {
+  async function serverAction(id: string, action: "connect" | "disconnect" | "reconnect", server?: MarketServer) {
     setBusy(true);
     try {
-      await fetch(apiUrl(`/mcp/servers/${id}/${action}`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
+      const host = mcpActionHost(server ?? selected);
+      if (host === "local") await ensureLocalMarketplaceEngine();
+      const req = mcpActionRequest(`/mcp/servers/${id}/${action}`, host);
+      await fetch(req.url, { method: "POST", headers: req.headers });
       await search(submittedQuery);
       onInstalled?.();
     } finally {
@@ -385,12 +408,14 @@ export function McpMarketplace({
     }
   }
 
-  async function connectOAuth(id: string) {
+  async function connectOAuth(id: string, host = mcpActionHost(selected)) {
     setBusy(true);
     try {
-      const res = await fetch(apiUrl("/mcp/oauth/start"), {
+      if (host === "local") await ensureLocalMarketplaceEngine();
+      const req = mcpActionRequest("/mcp/oauth/start", host);
+      const res = await fetch(req.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
+        headers: req.headers,
         body: JSON.stringify({ serverId: id }),
       });
       const data = await res.json();
@@ -405,10 +430,13 @@ export function McpMarketplace({
     }
   }
 
-  async function uninstall(id: string) {
+  async function uninstall(id: string, server?: MarketServer) {
     setBusy(true);
     try {
-      await fetch(apiUrl(`/mcp/servers/${id}`), { method: "DELETE", headers: authHeaders() });
+      const host = mcpActionHost(server ?? selected);
+      if (host === "local") await ensureLocalMarketplaceEngine();
+      const req = mcpActionRequest(`/mcp/servers/${id}`, host);
+      await fetch(req.url, { method: "DELETE", headers: req.headers });
       setConfirmUninstall(false);
       onInstalled?.();
       await search(submittedQuery);
@@ -438,13 +466,13 @@ export function McpMarketplace({
   function runPrimary(server: MarketServer) {
     const hasUpdate = Boolean(server.installed && updateIds.has(server.installed.serverId));
     const action = primaryAction(server, hasUpdate);
-    if (action.kind === "install") setWizard(server);
+    if (action.kind === "install") setWizard(prepareMarketplaceInstall(server));
     else if (action.kind === "connect") {
-      if (server.auth.some((a) => a.kind === "oauth") && server.installed) void connectOAuth(server.installed.serverId);
-      else setWizard(server);
-    } else if (action.kind === "disable" && server.installed) void serverAction(server.installed.serverId, "disconnect");
-    else if (action.kind === "enable" && server.installed) void serverAction(server.installed.serverId, "connect");
-    else if (action.kind === "connected" && server.installed) void serverAction(server.installed.serverId, "reconnect");
+      if (server.auth.some((a) => a.kind === "oauth") && server.installed) void connectOAuth(server.installed.serverId, mcpActionHost(server));
+      else setWizard(prepareMarketplaceInstall(server));
+    } else if (action.kind === "disable" && server.installed) void serverAction(server.installed.serverId, "disconnect", server);
+    else if (action.kind === "enable" && server.installed) void serverAction(server.installed.serverId, "connect", server);
+    else if (action.kind === "connected" && server.installed) void serverAction(server.installed.serverId, "reconnect", server);
   }
 
   const overlay = overlaySidebar(viewport);
@@ -720,7 +748,7 @@ export function McpMarketplace({
           server={selected}
           onClose={() => setSettings(false)}
           onScope={selected.installed ? (scope) => void setScope(selected.installed!.serverId, scope) : undefined}
-          onConnect={() => selected.installed && void connectOAuth(selected.installed.serverId)}
+          onConnect={() => selected.installed && void connectOAuth(selected.installed.serverId, mcpActionHost(selected))}
         />
       )}
       {confirmUninstall && selected?.installed && (
@@ -729,7 +757,7 @@ export function McpMarketplace({
           body={uninstallCopy(selected)}
           confirm="Uninstall"
           onCancel={() => setConfirmUninstall(false)}
-          onConfirm={() => void uninstall(selected.installed!.serverId)}
+          onConfirm={() => void uninstall(selected.installed!.serverId, selected)}
         />
       )}
     </div>
@@ -811,9 +839,9 @@ function DetailPane({
               {server.sources.map((s) => SOURCE_LABEL[s]).join(" · ")}
               {server.sources.includes("private") ? " · Organization Approved" : ""}
             </div>
-            <div style={{ fontSize: 12.5, color: "var(--orvyn-text-secondary)", marginTop: 6, fontFamily: "var(--font-mono)" }}>
-              {toolsAdvertisedLabel(server)} · {transportLabel(server)} · {loc === "local" ? "Local Only" : "Remote"}
-              {server.installed ? ` · ${server.installed.state}` : ""}
+            <div style={{ fontSize: 12.5, color: "var(--orvyn-text-secondary)", marginTop: 6, fontFamily: "var(--font-mono)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{toolsAdvertisedLabel(server)} · {transportLabel(server)} · {loc === "local" ? "Local Only" : "Remote"}</span>
+              <StatusPill server={server} />
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
@@ -1065,6 +1093,30 @@ function SourceTab({ server }: { server: MarketServer }) {
   );
 }
 
+function StatusPill({ server }: { server: MarketServer }) {
+  const live = connectionStatus(server);
+  const color =
+    live.tone === "connected" ? "var(--orvyn-green, #20D89B)" :
+    live.tone === "auth" ? "var(--orvyn-yellow, #F5B942)" :
+    live.tone === "error" ? "var(--orvyn-red, #F25F75)" :
+    "var(--orvyn-text-muted)";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color, fontFamily: "var(--font-ui, inherit)" }}>
+      <span
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: live.tone === "available" ? "transparent" : color,
+          boxShadow: live.tone === "connected" ? `0 0 8px ${color}` : undefined,
+          border: live.tone === "available" ? "1px solid var(--orvyn-border)" : "none",
+        }}
+      />
+      {live.label}
+    </span>
+  );
+}
+
 function ServerRow({
   server,
   selected,
@@ -1081,11 +1133,12 @@ function ServerRow({
   reason?: string;
 }) {
   const action = primaryAction(server);
+  const live = connectionStatus(server);
   const dot =
-    !server.installed ? "transparent" :
-    isConnected(server) ? "var(--orvyn-green, #20D89B)" :
-    isNeedsAuth(server) ? "var(--orvyn-yellow, #F5B942)" :
-    server.installed.state === "ERROR" ? "var(--orvyn-red, #F25F75)" :
+    live.tone === "connected" ? "var(--orvyn-green, #20D89B)" :
+    live.tone === "auth" ? "var(--orvyn-yellow, #F5B942)" :
+    live.tone === "error" ? "var(--orvyn-red, #F25F75)" :
+    live.tone === "available" ? "transparent" :
     "var(--orvyn-text-muted)";
   return (
     <div
@@ -1112,6 +1165,7 @@ function ServerRow({
           {server.sources.map((s) => SOURCE_LABEL[s]).join(" · ")}
           {` · ${toolsAdvertisedLabel(server)}`}
           {` · ${server.trust.level}`}
+          {server.installed ? ` · ${live.label}` : ""}
         </div>
       </div>
       <button
@@ -1270,7 +1324,7 @@ function InstallDrawer({ server, busy, onClose, onInstall }: { server: MarketSer
           server.auth.some((a) => a.kind === "oauth") ? (
             <p style={body}>OAuth runs after install. Tokens stay in the secret store.</p>
           ) : (
-            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Server token (only if this MCP requires one)" style={searchInput} />
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={/github/i.test(server.name) ? "ghp_… personal access token" : "Server token (only if this MCP requires one)"} style={searchInput} />
           )
         )}
         {confirm && (
@@ -1282,7 +1336,15 @@ function InstallDrawer({ server, busy, onClose, onInstall }: { server: MarketSer
         <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
           <button style={ghostBtn} onClick={onClose}>Close</button>
           {step < confirmStep && <button style={primaryBtn} onClick={() => setStep(step + 1)}>Continue</button>}
-          {confirm && <button disabled={busy} style={primaryBtn} onClick={() => { onInstall(needsSecret && token ? { token } : undefined); setStep(doneStep); }}>{busy ? "Working…" : "Confirm"}</button>}
+          {confirm && (
+          <button
+            disabled={busy}
+            style={primaryBtn}
+            onClick={() => onInstall(needsSecret && token ? { token } : undefined)}
+          >
+            {busy ? "Working…" : "Confirm"}
+          </button>
+        )}
         </div>
       </aside>
     </div>

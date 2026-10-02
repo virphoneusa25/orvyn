@@ -240,7 +240,7 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 16px", flexShrink: 0, borderBottom: "1px solid var(--orvyn-border-soft)" }}>
         {([
           ["marketplace", "Marketplace"],
-          ["installed", "Installed"],
+          ["installed", servers.length ? `Installed (${servers.length})` : "Installed"],
           ["builtin", "Built-in tools"],
         ] as const).map(([id, label]) => (
           <button
@@ -269,7 +269,6 @@ export function ToolsMcpWorkspace({ projectRoot }: { projectRoot: string | null 
             capabilityBanner={capabilityBanner}
             onInstalled={() => {
               void refresh();
-              setPage("installed");
             }}
           />
         </div>

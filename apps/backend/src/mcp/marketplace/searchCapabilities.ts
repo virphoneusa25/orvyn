@@ -15,7 +15,7 @@ export function secretNamesFor(server: MarketplaceMcpServer): string[] {
   for (const a of server.auth ?? []) {
     if (a.kind !== "api_key" && a.kind !== "bearer" && a.kind !== "custom") continue;
     if (a.kind === "bearer" && hasAuthorization) continue;
-    names.add(String((a as { name?: string }).name ?? (a.kind === "api_key" ? "API_KEY" : "TOKEN")));
+    names.add(String(a.envVar ?? (a as { name?: string }).name ?? (a.kind === "api_key" ? "API_KEY" : "TOKEN")));
   }
   return [...names];
 }

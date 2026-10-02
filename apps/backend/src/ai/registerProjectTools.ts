@@ -236,6 +236,7 @@ export function registerWorkspaceFreeToolsFor(tenant: Tenant): void {
   add(makeMcpCallTool(tenant.mcpHub, key));
   add(makeSearchCapabilitiesTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
   add(makeInstallMcpServerTool(() => marketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id), { githubToken: () => githubToken(tenant.id) }));
+  tenant.mcpManager.reregisterConnectedTools();
 }
 
 /** Lets later-phase modules (diagnostics, browser, MCP…) plug into the same registration pass. */

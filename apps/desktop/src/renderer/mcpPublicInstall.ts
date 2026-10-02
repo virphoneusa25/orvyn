@@ -25,6 +25,51 @@ export function publicInstallSteps(server: Pick<MarketServer, "auth" | "transpor
     : ["Review", "Permissions", "Confirm", "Done"];
 }
 
+export const GITHUB_MCP_HTTP = "https://api.githubcopilot.com/mcp/";
+
+export function isOfficialGithubMcp(server: { name: string; canonicalId?: string; repository?: string; packages?: { identifier: string }[] }): boolean {
+  const blob = `${server.canonicalId ?? ""} ${server.name} ${server.repository ?? ""} ${(server.packages ?? []).map((p) => p.identifier).join(" ")}`;
+  return /io\.github\.github\/github-mcp|github\.com\/github\/github-mcp-server|@modelcontextprotocol\/server-github/i.test(blob);
+}
+
+export function isStdioOnlyMcp(server: Pick<MarketServer, "transports">): boolean {
+  const transports = server.transports ?? [];
+  return transports.some((t) => t.kind === "stdio") && !transports.some((t) => t.kind === "http" && t.url);
+}
+
+/** Cloud cannot spawn npx stdio. GitHub on Cloud uses the official Streamable HTTP + OAuth endpoint. */
+export function prepareMarketplaceInstall(server: MarketServer, backendIsCloud = currentBackendIsCloud()): MarketServer {
+  if (isOfficialGithubMcp(server) && backendIsCloud) {
+    const hasHttp = (server.transports ?? []).some((t) => t.kind === "http" && t.url);
+    return {
+      ...server,
+      transports: hasHttp ? server.transports : [{ kind: "http", url: GITHUB_MCP_HTTP }, ...server.transports],
+      auth: server.auth.some((a) => a.kind === "oauth") ? server.auth : [{ kind: "oauth", label: "GitHub" }, ...server.auth.filter((a) => a.kind !== "none")],
+    };
+  }
+  if (isOfficialGithubMcp(server) && !server.auth.some((a) => a.kind !== "none")) {
+    return { ...server, auth: [{ kind: "api_key", label: "GITHUB_PERSONAL_ACCESS_TOKEN" }] };
+  }
+  return server;
+}
+
+export function marketplaceSecrets(server: Pick<MarketServer, "name" | "canonicalId" | "packages">, secrets?: Record<string, string>): Record<string, string> | undefined {
+  if (!secrets || !Object.keys(secrets).length) return undefined;
+  const out = { ...secrets };
+  const token = out.GITHUB_PERSONAL_ACCESS_TOKEN || out.token || out.TOKEN;
+  if (token && isOfficialGithubMcp(server)) out.GITHUB_PERSONAL_ACCESS_TOKEN = token;
+  return out;
+}
+
+export function shouldInstallOnLocalEngine(
+  server: Pick<MarketServer, "auth" | "transports" | "sources" | "name" | "packages">,
+  backendIsCloud: boolean
+): boolean {
+  if (!backendIsCloud) return false;
+  if (isOfficialGithubMcp(server) && (server.transports ?? []).some((t) => t.kind === "http" && t.url)) return false;
+  return isPublicFreeMcp(server) || isStdioOnlyMcp(server);
+}
+
 export function shouldUseLocalPublicInstall(input: {
   status: number;
   parsed: Pick<ParsedApi, "marketplaceRouteUnsupported" | "ok">;
@@ -32,10 +77,28 @@ export function shouldUseLocalPublicInstall(input: {
   hasPlatformKey: boolean;
   backendIsCloud: boolean;
 }): boolean {
+  if (shouldInstallOnLocalEngine(input.server, input.backendIsCloud)) return true;
   if (isPublicFreeMcp(input.server) && (input.backendIsCloud || !input.hasPlatformKey || input.status === 401 || input.status === 403)) {
     return true;
   }
   return shouldUseHostInstall(input.parsed, input.status);
+}
+
+export type McpActionHost = "local" | "control";
+
+export function mcpActionHost(server?: Pick<MarketServer, "transports" | "installed"> | null): McpActionHost {
+  if (server?.installed && "host" in server.installed && (server.installed as { host?: string }).host === "local") return "local";
+  if (server && currentBackendIsCloud() && isStdioOnlyMcp(server) && !(server.installed && "host" in server.installed && (server.installed as { host?: string }).host === "control")) {
+    return "local";
+  }
+  return "control";
+}
+
+export function mcpActionRequest(path: string, host: McpActionHost): { url: string; headers: Record<string, string> } {
+  if (host === "local") {
+    return { url: localMarketplaceUrl(path), headers: { "Content-Type": "application/json" } };
+  }
+  return { url: apiUrl(path), headers: { "Content-Type": "application/json", ...authHeaders() } };
 }
 
 export function localMarketplaceUrl(path: string): string {
@@ -66,7 +129,7 @@ export async function installPublicMcpOnLocalHost(
   if (!ready) {
     return { ok: false, error: "Local ORVYN engine is not running. Public MCP tools install on this desktop — no API key is required." };
   }
-  const payloadSecrets = serverRequiresUserSecret(server) ? secrets : undefined;
+  const payloadSecrets = serverRequiresUserSecret(server) ? marketplaceSecrets(server, secrets) : undefined;
   try {
     const res = await fetch(localMarketplaceUrl("/mcp/marketplace/install"), {
       method: "POST",
@@ -104,6 +167,7 @@ export interface McpStatusRow {
   enabled?: boolean;
   toolCount?: number;
   lastConnectedAt?: number;
+  host?: McpActionHost;
   [key: string]: unknown;
 }
 
@@ -120,6 +184,10 @@ export function mergeMcpStatusLists(...lists: McpStatusRow[][]): McpStatusRow[] 
   return [...byId.values()];
 }
 
+function tagHost(rows: McpStatusRow[], host: McpActionHost): McpStatusRow[] {
+  return rows.map((row) => ({ ...row, host: row.host ?? host }));
+}
+
 async function readStatusList(url: string, headers?: Record<string, string>): Promise<McpStatusRow[]> {
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
@@ -132,10 +200,10 @@ async function readStatusList(url: string, headers?: Record<string, string>): Pr
 
 /** Cloud Mode installs public MCP on the local engine — Installed must read both. */
 export async function fetchInstalledMcpStatuses(controlPlane?: McpStatusRow[]): Promise<McpStatusRow[]> {
-  const control = controlPlane ?? (await readStatusList(apiUrl("/mcp/statuses"), authHeaders()));
+  const control = tagHost(controlPlane ?? (await readStatusList(apiUrl("/mcp/statuses"), authHeaders())), "control");
   if (!currentBackendIsCloud()) return control;
   await ensureLocalMarketplaceEngine();
-  const local = await readStatusList(localMarketplaceUrl("/mcp/statuses"));
+  const local = tagHost(await readStatusList(localMarketplaceUrl("/mcp/statuses")), "local");
   return mergeMcpStatusLists(control, local);
 }
 

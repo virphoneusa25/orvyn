@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { parseApiJson } from "./mcpMarketplaceIcons.ts";
 import { shouldUseHostInstall } from "./mcpOfficialCatalog.ts";
 import {
+  GITHUB_MCP_HTTP,
   isPublicFreeMcp,
+  marketplaceSecrets,
   mergeMcpStatusLists,
+  prepareMarketplaceInstall,
   publicInstallSteps,
   serverRequiresUserSecret,
+  shouldInstallOnLocalEngine,
   shouldUseLocalPublicInstall,
 } from "./mcpPublicInstall.ts";
 import type { MarketServer } from "./mcpMarketplaceModel.ts";
@@ -52,6 +56,29 @@ test("cloud 401 falls back to local public install instead of demanding a platfo
     shouldUseLocalPublicInstall({ status: 401, parsed, server: s, hasPlatformKey: false, backendIsCloud: true }),
     true
   );
+});
+
+test("stdio-only servers install on the local engine when Cloud is the control plane", () => {
+  const s = server({ name: "io.modelcontextprotocol/memory" });
+  assert.equal(shouldInstallOnLocalEngine(s, true), true);
+  assert.equal(shouldInstallOnLocalEngine(s, false), false);
+});
+
+test("GitHub on Cloud prefers the remote HTTP endpoint so the agent can use it", () => {
+  const s = server({
+    canonicalId: "io.github.github/github-mcp-server",
+    name: "io.github.github/github-mcp-server",
+    auth: [{ kind: "none", label: "No auth advertised" }],
+  });
+  const prepared = prepareMarketplaceInstall(s, true);
+  assert.equal(prepared.transports.some((t) => t.kind === "http" && t.url === GITHUB_MCP_HTTP), true);
+  assert.equal(prepared.auth.some((a) => a.kind === "oauth"), true);
+  assert.equal(shouldInstallOnLocalEngine(prepared, true), false);
+});
+
+test("GitHub token aliases map onto GITHUB_PERSONAL_ACCESS_TOKEN", () => {
+  const s = server({ canonicalId: "io.github.github/github-mcp-server", name: "io.github.github/github-mcp-server" });
+  assert.equal(marketplaceSecrets(s, { token: "ghp_abc" })?.GITHUB_PERSONAL_ACCESS_TOKEN, "ghp_abc");
 });
 
 test("Installed tab merges local desktop statuses with the cloud control plane", () => {

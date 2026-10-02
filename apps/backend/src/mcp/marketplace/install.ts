@@ -48,14 +48,21 @@ export function installPlan(server: MarketplaceMcpServer): {
   throw new Error("This server has no supported install transport (need stdio or Streamable HTTP).");
 }
 
+export function runtimeSecretValues(server: MarketplaceMcpServer, secrets?: Record<string, string>): Record<string, string> {
+  const secretValues: Record<string, string> = { ...(secrets ?? {}) };
+  const token = secretValues.GITHUB_PERSONAL_ACCESS_TOKEN || secretValues.token || secretValues.TOKEN;
+  if (token && /github/i.test(`${server.name} ${server.canonicalId}`)) {
+    secretValues.GITHUB_PERSONAL_ACCESS_TOKEN = token;
+  }
+  return secretValues;
+}
+
 export async function installMarketplaceServer(manager: McpManager, input: MarketplaceInstallInput) {
   const plan = installPlan(input.server);
-  const secretValues: Record<string, string> = {};
+  const secretValues = runtimeSecretValues(input.server, input.secrets);
   const headers = { ...plan.headers };
-  for (const [k, v] of Object.entries(input.secrets ?? {})) {
-    secretValues[k] = v;
-    if (!headers.Authorization) headers.Authorization = "Bearer {{" + k + "}}";
-  }
+  const resolved = secretValues.GITHUB_PERSONAL_ACCESS_TOKEN ? "GITHUB_PERSONAL_ACCESS_TOKEN" : Object.keys(secretValues)[0];
+  if (resolved && !headers.Authorization) headers.Authorization = "Bearer {{" + resolved + "}}";
   const runtimeDir = join(defaultDataDir(), "mcp-runtime", sanitizeId(input.server.name));
   try {
     mkdirSync(runtimeDir, { recursive: true });

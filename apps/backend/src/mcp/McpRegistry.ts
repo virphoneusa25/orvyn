@@ -137,4 +137,20 @@ export class McpRegistry {
     }
     return out;
   }
+
+  /** Injects stored secrets into the stdio process environment at connect time. */
+  resolveEnv(id: string, env: Record<string, string> | undefined): Record<string, string> {
+    const cfg = this.configs.get(id);
+    const out: Record<string, string> = { ...(env ?? {}) };
+    for (const name of cfg?.secretNames ?? []) {
+      const value = this.secrets.get(`${id}.${name}`);
+      if (!value) continue;
+      out[name] = value;
+      const github = /github/i.test(`${cfg?.name ?? ""} ${cfg?.marketplaceId ?? ""} ${cfg?.packageIdentifier ?? ""}`);
+      if (github && /^(token|TOKEN|authorization)$/i.test(name) && !out.GITHUB_PERSONAL_ACCESS_TOKEN) {
+        out.GITHUB_PERSONAL_ACCESS_TOKEN = value.replace(/^Bearer\s+/i, "");
+      }
+    }
+    return out;
+  }
 }

@@ -61,6 +61,10 @@ test("registry: secrets live in a separate namespace, config JSON never contains
   assert.equal(reg.secret("srv1", "token"), "ghp_supersecret123");
   const resolved = reg.resolveHeaders("srv1", { Authorization: "Bearer {{token}}" });
   assert.equal(resolved.Authorization, "Bearer ghp_supersecret123", "secret resolves at connect time");
+  const env = reg.resolveEnv("srv1", { PATH: "/usr/bin" });
+  assert.equal(env.token, "ghp_supersecret123");
+  assert.equal(env.GITHUB_PERSONAL_ACCESS_TOKEN, "ghp_supersecret123");
+  assert.equal(env.PATH, "/usr/bin");
 });
 
 // ---- Manager: search + permission flow against a fake connected server -------
@@ -183,6 +187,8 @@ test("6806dbc: registerProjectToolsFor re-registers connected MCP tools after re
   const rereg = src.indexOf("reregisterConnectedTools");
   assert.ok(clear >= 0, "registerProjectToolsFor still clears the tool registry at run start");
   assert.ok(rereg > clear, "reregisterConnectedTools must run after registry.clear");
+  const free = src.indexOf("registerWorkspaceFreeToolsFor");
+  assert.ok(src.lastIndexOf("reregisterConnectedTools") > free, "workspace-free chat still rebinds connected MCP tools");
 });
 
 test("failure isolation: a server that cannot start reports ERROR, never throws", async () => {

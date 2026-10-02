@@ -260,7 +260,9 @@ function toMarketplace(spec: OfficialReferenceSpec): MarketplaceMcpServer {
     remotes: [],
     transports: [{ kind: "stdio", command: npm ? "npx" : "uvx", args }],
     tools: [],
-    auth: [{ kind: "none", label: "No auth advertised" }],
+    auth: /github-mcp-server/i.test(spec.name)
+      ? [{ kind: "api_key", label: "GitHub personal access token", envVar: "GITHUB_PERSONAL_ACCESS_TOKEN" }]
+      : [{ kind: "none", label: "No auth advertised" }],
     trust: trustFor({
       sources: ["official"],
       publisher: spec.publisher ?? "io.modelcontextprotocol",

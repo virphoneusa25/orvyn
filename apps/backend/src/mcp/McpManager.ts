@@ -245,7 +245,7 @@ export class McpManager {
           transport: cfg.transport,
           command: cfg.command,
           args: cfg.args,
-          env: cfg.env,
+          env: this.registry.resolveEnv(id, cfg.env),
           cwd: cfg.cwd,
           url: cfg.url,
           headers,

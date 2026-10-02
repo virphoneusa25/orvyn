@@ -37,6 +37,7 @@ export interface MarketServer {
     authKind?: string;
     lastError?: string;
     lastConnectedAt?: number;
+    host?: "local" | "control";
   };
   compatibility: string;
   compatibilityReason?: string;
@@ -157,6 +158,16 @@ export function isNeedsAuth(server: MarketServer): boolean {
 
 export function isConnected(server: MarketServer): boolean {
   return server.installed?.state === "CONNECTED";
+}
+
+export function connectionStatus(server: MarketServer): { tone: "connected" | "auth" | "error" | "idle" | "available"; label: string } {
+  const via = server.transports.some((t) => t.kind === "http") ? "SSE" : "stdio";
+  if (!server.installed) return { tone: "available", label: `Available · ${via}` };
+  if (isConnected(server)) return { tone: "connected", label: `Connected via ${via}` };
+  if (isNeedsAuth(server)) return { tone: "auth", label: "Needs sign-in" };
+  if (server.installed.state === "ERROR") return { tone: "error", label: server.installed.lastError?.slice(0, 72) || "Errored" };
+  if (server.installed.enabled === false || server.installed.state === "DISABLED") return { tone: "idle", label: "Disabled" };
+  return { tone: "idle", label: server.installed.state.replace(/_/g, " ") };
 }
 
 export function applyFilters(servers: MarketServer[], filters: MarketFilters, updateIds: Set<string> = new Set()): MarketServer[] {
@@ -331,6 +342,7 @@ export function mergeInstalled(
     lastError?: string;
     lastConnectedAt?: number;
     transport?: "stdio" | "http";
+    host?: "local" | "control";
   }[]
 ): MarketServer[] {
   const byName = new Map(statuses.map((s) => [s.name.toLowerCase(), s]));
@@ -347,6 +359,7 @@ export function mergeInstalled(
         authKind: st.authKind,
         lastError: st.lastError,
         lastConnectedAt: st.lastConnectedAt,
+        host: st.host,
       },
       toolCount: st.toolCount ?? s.toolCount,
       tools: st.tools?.length
@@ -376,6 +389,7 @@ export function mergeInstalled(
         authKind: st.authKind,
         lastError: st.lastError,
         lastConnectedAt: st.lastConnectedAt,
+        host: st.host,
       },
       toolCount: st.toolCount,
       tools: st.tools,

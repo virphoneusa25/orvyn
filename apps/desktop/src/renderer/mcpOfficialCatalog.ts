@@ -215,7 +215,9 @@ export function officialReferenceMarketServers(query: string): MarketServer[] {
       packages: [{ registry: spec.registry, identifier: spec.identifier, version: spec.version }],
       transports: [{ kind: "stdio", command: npm ? "npx" : "uvx", args: npm ? ["-y", `${spec.identifier}@${spec.version}`] : [spec.identifier] }],
       tools: [],
-      auth: [{ kind: "none", label: "No auth advertised" }],
+      auth: spec.name.includes("github-mcp-server")
+        ? [{ kind: "api_key", label: "GITHUB_PERSONAL_ACCESS_TOKEN" }]
+        : [{ kind: "none", label: "No auth advertised" }],
       trust: { level: "verified", reasons: ["Official MCP reference server"] },
       compatibility: "compatible",
       version: spec.version,
