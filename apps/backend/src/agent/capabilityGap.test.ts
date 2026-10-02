@@ -51,3 +51,10 @@ test("work ORION's own tools cover is never sent to the marketplace", async () =
   assert.deepEqual(builtInToolsFor("search the web", known), []);
   assert.deepEqual(builtInToolsFor("work with GitHub", known), []);
 });
+
+test("image and document work maps to core tools when they are mounted", async () => {
+  const { builtInToolsFor } = await import("./StreamingAgentRuntime");
+  const known = (n: string) => ["generate_image", "create_document", "create_zip", "write_file", "terminal"].includes(n);
+  assert.deepEqual(builtInToolsFor("generate an image of mountains", known), ["generate_image"]);
+  assert.ok(builtInToolsFor("create a PDF invoice", known).includes("create_document"));
+});

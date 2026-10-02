@@ -30,6 +30,7 @@ import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPubli
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
+import { registerWorkspaceFreeToolsFor } from "./ai/registerProjectTools";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
 import { loadVaultKey } from "./secrets/vault";
@@ -346,6 +347,7 @@ wss.on("connection", (socket, req) => {
     }
 
     try {
+      registerWorkspaceFreeToolsFor(tenant);
       const orchestrator = new Orchestrator(tenant.modelService, tenant.indexService, tenant.artifactService, tenant.localStore as unknown as MemoryStoreLike, {
         // The chat researches on its own: web_search / fetch_url through the tool gateway.
         // Before a project is opened the gateway has no tools yet; the chat's own tools still work.

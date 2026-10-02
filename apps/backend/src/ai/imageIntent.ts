@@ -27,3 +27,8 @@ export function looksLikeImageRequest(text: string): boolean {
 export function stripImagePrefix(text: string): string {
   return text.replace(/^\/image\b\s*/i, "").trim();
 }
+
+/** Capability search: image generation is a core ORVYN tool, not an MCP server. */
+export function builtinImageGenerateHit(query: string): boolean {
+  return /\b(image|picture|photo|logo|illustration|artwork|mock-?up|dall-?e|text[- ]to[- ]image|generate_image)\b/i.test(query);
+}

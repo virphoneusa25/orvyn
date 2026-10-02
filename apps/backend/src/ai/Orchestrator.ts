@@ -6,7 +6,7 @@ import { builtInToolsFor } from "../agent/capabilityGap";
 import { preferencesPrompt } from "../onboarding/preferences";
 import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
-import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
+import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, CLOUD_CHAT_TOOLS, CLOUD_CHAT_TOOL_NAMES, artifactsFromChatResult, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
@@ -248,7 +248,7 @@ export function handoffPrompt(instruction: string, req: Pick<ChatTurnRequest, "u
   return instruction || req.userMessage;
 }
 
-const TASK_TOOLS = new Set(["read_file", "edit_file", "write_file", "list_directory", "search_code", "terminal", "run_command", "run_tests", "browser_open", "browser_screenshot"]);
+const TASK_TOOLS = new Set(["read_file", "edit_file", "write_file", "list_directory", "search_code", "search_files", "apply_patch", "terminal", "run_command", "run_tests", "browser_open", "browser_screenshot", "generate_image", "create_document", "create_zip", "artifact_create"]);
 
 /** "Use this logo" with an image attached: the user's image, not a new one. */
 function usesGivenImage(req: ChatTurnRequest): boolean {
@@ -342,7 +342,7 @@ export class Orchestrator {
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean; artifacts?: { artifactId: string; name: string; mimeType: string }[] }> {
     const turnDecision = req.turnDecision ?? decideTurn(req.userMessage);
-    if (turnDecision.disposition !== "answer" && looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
+    if (looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
     }
@@ -352,8 +352,10 @@ export class Orchestrator {
     // The chat researches on its own when it has web tools and a model that can call them.
     const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
     const cloud = req.surface === "cloud";
+    const maxRounds = cloud ? 10 : MAX_RESEARCH_ROUNDS;
+    const maxCalls = cloud ? 24 : MAX_RESEARCH_CALLS;
     const allowTaskHandoff = !cloud && turnDecision.requiresExecution && turnDecision.capabilities.some((capability) => ["artifact", "code", "server", "browser", "github"].includes(capability));
-    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(allowTaskHandoff ? [CHAT_TASK_TOOL] : []), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
+    const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(cloud ? CLOUD_CHAT_TOOLS : []), ...(allowTaskHandoff ? [CHAT_TASK_TOOL] : []), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
     const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
     if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${cloud ? CLOUD_CHAT_MANIFEST : CHAT_MANIFEST}` });
     let toolCallsUsed = 0;
@@ -373,6 +375,21 @@ export class Orchestrator {
         requested.set(query, note);
         return note;
       }
+      if (/\b(image|picture|photo|logo|illustration|dall-?e|generate_image|text[- ]to[- ]image)\b/i.test(query)) {
+        const note = "Use generate_image; it is already available in this chat. Do not install an MCP image server.";
+        requested.set(query, note);
+        return note;
+      }
+      if (/\b(pdf|docx|xlsx|pptx|spreadsheet|powerpoint|create_document|word document)\b/i.test(query)) {
+        const note = "Use create_document; it is already available in this chat. Do not install an MCP document server.";
+        requested.set(query, note);
+        return note;
+      }
+      if (/\b(python|code interpreter|run (this |the )?code|write_file|terminal|filesystem)\b/i.test(query)) {
+        const note = "Use write_file, edit_file, and terminal in this chat's sandbox. Do not install a filesystem or Python MCP server.";
+        requested.set(query, note);
+        return note;
+      }
       // A tool the user already installed can do it: use that instead of asking again.
       const ready = installedTools.filter((t) => /search/i.test(query) ? /search/i.test(t.name) : true);
       if (ready.length && /search/i.test(query)) {
@@ -388,10 +405,15 @@ export class Orchestrator {
         requested.set(query, note);
         return note;
       }
-      // Work ORVYN's core tools do (edit the site, add the attached logo, run
-      // a command) — anything that names no outside service — is never a
-      // Marketplace card: hand it to a real task run now.
-      if (!needsExternalTool(query) || builtInToolsFor(query, (n) => TASK_TOOLS.has(n)).length) {
+      // Work ORVYN's core tools do — Cloud already has them in this chat;
+      // desktop hands the task to a project run.
+      const covered = builtInToolsFor(query, (n) => TASK_TOOLS.has(n) || CLOUD_CHAT_TOOL_NAMES.has(n));
+      if (covered.length && cloud) {
+        const note = `Use ${covered.join(", ")} — those tools are already in this Cloud chat. Do not install MCP and do not say a tool is missing.`;
+        requested.set(query, note);
+        return note;
+      }
+      if (!cloud && (!needsExternalTool(query) || covered.length)) {
         const handoff: ChatActivity = { id: `handoff_${Date.now()}`, kind: "handoff", status: "done", query, prompt: handoffPrompt(query, req), startedAt: Date.now(), endedAt: Date.now() };
         yield { delta: "", activity: handoff, done: false };
         const note = `ORVYN is handing this to a task run in the user's project — its progress, or anything it still needs first, appears below. Do not ask for a tool or say one is missing. Tell the user in one short sentence that you are setting it up — then stop.`;
@@ -428,8 +450,8 @@ export class Orchestrator {
       return note;
     };
     try {
-      for (let round = 0; round < MAX_RESEARCH_ROUNDS + 1; round++) {
-        const offerTools = web && round < MAX_RESEARCH_ROUNDS && toolCallsUsed < MAX_RESEARCH_CALLS ? web : undefined;
+      for (let round = 0; round < maxRounds + 1; round++) {
+        const offerTools = web && round < maxRounds && toolCallsUsed < maxCalls ? web : undefined;
         let text = "";
         const calls: ToolCall[] = [];
         let buffered = "";
@@ -488,7 +510,7 @@ export class Orchestrator {
             continue;
           }
           // "Search isn't available": ask for the tool instead (once).
-          if (web && !capabilityNudged && round < MAX_RESEARCH_ROUNDS && claimsToolUnavailable(text)) {
+          if (web && !capabilityNudged && round < maxRounds && claimsToolUnavailable(text)) {
             capabilityNudged = true;
             if (text) yield { delta: "", retract: true, done: false };
             messages.push({ role: "assistant", content: text });
@@ -498,7 +520,7 @@ export class Orchestrator {
           yield { delta: "", done: true };
           return;
         }
-        const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || n === "start_project_task" || isInstalledTool(n);
+        const known = (n: string) => n === "web_search" || n === "fetch_url" || n === "search_capabilities" || n === "start_project_task" || CLOUD_CHAT_TOOL_NAMES.has(n) || isInstalledTool(n);
         const turnCalls = unwrapParallelCalls(calls, known);
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
@@ -528,7 +550,7 @@ export class Orchestrator {
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: toolResultForModel(result) });
             continue;
           }
-          const allowed = call.name === "web_search" || call.name === "fetch_url";
+          const allowed = call.name === "web_search" || call.name === "fetch_url" || (cloud && CLOUD_CHAT_TOOL_NAMES.has(call.name));
           if (!allowed) {
             const note = yield* requestCapability.call(this, capabilityForToolName(call.name));
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: `There is no tool named "${call.name}" in this chat.\n\n${note}` });
@@ -536,9 +558,11 @@ export class Orchestrator {
           }
           let activity = startActivity(call.id || `call_${toolCallsUsed}`, call.name, call.arguments ?? {});
           yield { delta: "", activity, done: false };
-          const result: { ok: boolean; output?: string; error?: string } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
+          const result: { ok: boolean; output?: string; error?: string; artifacts?: { artifactId: string; name: string; mimeType: string }[] } = await this.webTools!.execute(call.name, call.arguments ?? {}).catch((err: any) => ({ ok: false, error: String(err?.message ?? err) }));
           activity = finishActivity(activity, result);
           yield { delta: "", activity, done: false };
+          const files = artifactsFromChatResult(result);
+          if (files.length) yield { delta: "", artifacts: files, done: false };
           let content = toolResultForModel(result);
           const gap = result.ok ? (emptySearchResult(call.name, String(result.output ?? "")) ? "search the web" : null) : capabilityGapFor({ toolName: call.name, error: String(result.error ?? "") });
           if (gap) content = `${content}\n\n${yield* requestCapability.call(this, gap)}`;

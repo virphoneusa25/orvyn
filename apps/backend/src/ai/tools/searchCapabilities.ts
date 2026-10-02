@@ -2,6 +2,7 @@ import { AITool, ToolResult } from "../ToolTypes";
 import type { MarketplaceService } from "../../mcp/marketplace/service";
 import { secretNamesFor } from "../../mcp/marketplace/searchCapabilities";
 import { builtinComputerUseHit } from "../../computerUse/modelComputerCapabilities";
+import { builtinCoreHitLines, coreCapabilityCovers } from "../coreCapabilityHits";
 
 /**
  * Connections ORVYN already owns for this tenant (the signed-in user's GitHub
@@ -25,6 +26,7 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
     description:
       "Discover MCP tools and servers by capability without loading the catalog into context. " +
       "Use when you need GitHub, Postgres, Slack, email, DNS, JavaScript, Python, filesystem, etc. and do not already have a matching mcp.* tool. " +
+      "Do not search for generate_image, create_document, create_zip, web_search, fetch_url, write_file, edit_file, or terminal — those are core ORVYN tools already on this run. " +
       "Returns a small ranked list. When the server you need is not installed, ORVYN asks the user to approve installing it and installs it for you; then its tools are available in this run. " +
       "Never tell the user a tool is unavailable.",
     parameters: {
@@ -43,6 +45,8 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
       if (builtinComputerUseHit(query)) {
         lines.push("- [orvyn] computer_use · ORVYN — Desktop/Browser control via computer_screenshot, computer_click, computer_type. Independent of MCP and of provider-native computer-use APIs.");
       }
+      lines.push(...builtinCoreHitLines(query));
+      const covered = coreCapabilityCovers(query) || builtinComputerUseHit(query);
       if (activated.length) lines.push(`Activated for this run (schema budget ${diagnostics.maxServers} servers / ${diagnostics.maxTools} tools, ~${diagnostics.tokenFootprint} tokens): ${activated.slice(0, 12).join(", ")}`);
       for (const h of hits.slice(0, 10)) {
         lines.push(`- [${h.kind}${h.installed ? ", installed" : ""}] ${h.name} · ${h.server} — ${h.description.slice(0, 140)}`);
@@ -66,7 +70,7 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
           ...(provided.length ? { secretsProvided: provided } : {}),
         };
       });
-      if (askInstall.length) {
+      if (!covered && askInstall.length) {
         const primary = askInstall[0].name;
         const free = recommended[0]?.freeInstall;
         lines.push(
@@ -75,6 +79,8 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
             `. ORVYN asks the user to approve the install and then installs it. Options: ` +
             askInstall.map((h) => `${h.name} (id ${h.canonicalId})`).join(", ")
         );
+      } else if (covered) {
+        lines.push("Use the core ORVYN tool named above. Do not install an MCP server for this.");
       }
       return {
         ok: true,
@@ -82,7 +88,7 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
         meta: {
           activated,
           diagnostics,
-          ...(askInstall.length
+          ...(!covered && askInstall.length
             ? {
                 capabilityRequired: {
                   query,

@@ -145,6 +145,21 @@ test("action prompts are run turns", () => {
   }
 });
 
+test("a picture request without a project is a chat turn, not an MCP hunt", () => {
+  assert.equal(routeTurn("Generate an image of a sunrise over snowy mountains, cinematic light.", "auto"), "chat");
+  assert.equal(routeTurn("Create an image of a sunrise over mountains", "auto"), "chat");
+});
+
+test("ChatGPT-style cloud deliverables without a project stay in chat", () => {
+  for (const q of [
+    "Create a PDF report of Q1 sales",
+    "Make an Excel spreadsheet of expenses",
+    "Export a zip of these text files",
+  ]) {
+    assert.equal(routeTurn(q, "auto"), "chat", q);
+  }
+});
+
 test("a capability question about an active ad answers without image or agent work", () => {
   const question = decideTurn("Can you use icons in the ad?", { activeArtifactId: "artifact-ad-1", hasPreviousExecution: true });
   assert.equal(question.disposition, "answer");

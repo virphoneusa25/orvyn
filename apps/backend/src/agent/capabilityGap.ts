@@ -18,6 +18,7 @@ export const CAPABILITY_RULE = [
   "MISSING TOOLS: Never tell the user a tool is unavailable, missing, not working, or that you could not do something because of a tool.",
   "If you need an OUTSIDE service you have no tool for (email, GitHub, a database server, a calendar, a CRM…), call search_capabilities with what you need.",
   "web_search and fetch_url are native when listed in this run. Use them before looking for an MCP search server.",
+  "generate_image, create_document, create_zip, write_file, edit_file and terminal are ORVYN core tools — never search for or ask to install a tool for them.",
   "Reading, writing, creating or deleting project files, shell commands, git and the live preview are ORVYN core tools — never search for or ask to install a tool for them.",
   "When it finds an MCP server to install, ORVYN shows the user an install card. Tell the user in one or two sentences what you need, why, and that installing it from the card lets you finish; then stop and wait.",
   "Use a tool you already have first when one can do the job (for example fetch_url on a known site when web_search fails).",
@@ -70,7 +71,7 @@ export function capabilityForToolName(name: string): string {
   if (/postgres|mysql|sql|database|db_/i.test(n)) return "query the database";
   if (/calendar|meeting/i.test(n)) return "use your calendar";
   if (/slack|discord|teams|chat_post/i.test(n)) return "post to team chat";
-  if (/image|dalle|draw/i.test(n)) return "generate images";
+  if (/\b(image|dalle|draw|generate_image)\b/i.test(n)) return "generate images";
   if (SEARCH_NAME.test(n) || /search/i.test(n)) return "search the web";
   if (/browser|navigate|screenshot|page/i.test(n)) return "control a browser";
   return `use ${n.replace(/^mcp\./, "").replace(/[._-]+/g, " ").trim() || "this capability"}`;
@@ -90,7 +91,7 @@ export function capabilityGapFor(input: { toolName: string; error: string; unkno
   if (input.unknownTool || /^Unknown tool\b/i.test(error)) return capabilityForToolName(name);
   // A core tool (files, shell, git) that failed is a workspace, worker or
   // permission problem — never a missing Marketplace tool.
-  if (/^(read_file|write_file|edit_file|apply_edit|delete_file|move_file|rename_file|list_directory|list_files|search_code|search_files|terminal|run_command|run_tests|run_typecheck|run_linter|start_process|stop_process|git_[a-z]+)$/.test(name)) return null;
+  if (/^(read_file|write_file|edit_file|apply_edit|apply_patch|delete_file|move_file|rename_file|list_directory|list_files|search_code|search_files|terminal|run_command|run_tests|run_typecheck|run_linter|start_process|stop_process|git_[a-z]+|generate_image|create_document|create_zip|artifact_create|artifact_write)$/.test(name)) return null;
   if (name === "web_search" && (WEB_GAP.test(error) || MISSING.test(error))) return "search the web";
   if (name === "fetch_url" && MISSING.test(error)) return "browse the web";
   if (/^(browser_|computer[._]|desktop_)/.test(name) && MISSING.test(error)) return "control a browser";
@@ -140,8 +141,11 @@ export function builtInToolsFor(query: string, known: (name: string) => boolean)
   }
   if (/\b(email|gmail|github|slack|calendar|database|postgres|mysql|jira|notion|stripe|twilio|google)\b/.test(q)) return [];
   const groups: [RegExp, string[]][] = [
+    [/\b(generate|create|draw|paint).{0,48}\b(image|picture|photo|logo|illustration|artwork)\b|\bgenerate_image\b/, ["generate_image"]],
+    [/\b(pdf|docx|xlsx|pptx|spreadsheet|powerpoint|create_document)\b/, ["create_document"]],
+    [/\b(zip|create_zip)\b/, ["create_zip"]],
     [/\b(edit|write|create|update|change|modify|fix|add|remove|build|make)\b.*\b(file|site|website|web ?page|page|html|css|javascript|js|code|project|app|component|style|hero|section|logo|header|footer)\b|\b(website|web ?site|landing page|html|css)\b/, ["read_file", "edit_file", "write_file"]],
-    [/\b(run|execute|terminal|shell|command|npm|build|install packages?|tests?)\b/, ["terminal", "run_command", "run_tests"]],
+    [/\b(run|execute|terminal|shell|command|npm|build|install packages?|tests?|python)\b/, ["terminal", "run_command", "run_tests"]],
     [/\b(preview|screenshot|open the (?:page|site)|check the (?:page|site)|browser|render)\b/, ["browser_open", "browser_screenshot"]],
     [/\b(read|look at|inspect|list|find)\b.*\b(files?|folders?|project|code)\b/, ["read_file", "list_directory", "search_code"]],
   ];

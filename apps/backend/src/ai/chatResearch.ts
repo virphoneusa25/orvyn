@@ -36,7 +36,7 @@ export interface ChatActivity {
 }
 
 export interface WebToolRunner {
-  execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
+  execute(name: string, args: Record<string, unknown>): Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown>; artifacts?: { artifactId: string; name: string; mimeType: string }[] }>;
   /** Tools of MCP servers the user installed (mcp.<server>.<tool>), offered to the chat too. */
   mcpTools?(): ToolDefinition[];
 }
@@ -44,8 +44,8 @@ export interface WebToolRunner {
 /** Finding a tool ORION lacks (an MCP server the user can install from the card). */
 export const CHAT_CAPABILITY_TOOL: ToolDefinition = {
   name: "search_capabilities",
-  description: "Find an MCP tool that gives you a capability you do not have in this chat (email, GitHub, a database, a calendar, a browser, a better web search…). ORVYN shows the user a card to install it.",
-  parameters: { type: "object", properties: { query: { type: "string", description: "What you need to do, e.g. 'search the web', 'send email'" } }, required: ["query"] },
+  description: "Find an MCP tool for an outside service this chat does not have (email, Slack, a CRM, a calendar, GitHub). Do not use this for images, documents, zip files, web search, or running code — those are core ORVYN tools.",
+  parameters: { type: "object", properties: { query: { type: "string", description: "What you need to do, e.g. 'send email'" } }, required: ["query"] },
 };
 
 /** Project work from the chat: ORVYN starts a task that has the core file, shell, git and browser tools. */
@@ -62,11 +62,12 @@ export const CHAT_MANIFEST = [
   "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a database server, a calendar…). Never call it for project files, the website, the preview or the terminal.",
 ].join("\n");
 
-/** ORVYN Cloud's web chat: a conversation with web research, files and images — not project tasks. */
+/** ORVYN Cloud's web chat: ChatGPT-style conversation with research, files, images, and a code sandbox. */
 export const CLOUD_CHAT_MANIFEST = [
-  "CAPABILITIES (facts from ORVYN): this is ORVYN Cloud chat. You answer, research the web, read the files and images the user attaches, write and explain code, and draft documents. You do not run tasks on the user's computer or edit their project files from here.",
-  "If the user wants you to change files in a project, run commands or check a site in a browser, say that ORVYN Desktop does that work and offer to plan it or write the code here.",
-  "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a calendar…).",
+  "CAPABILITIES (facts from ORVYN): this is ORVYN Cloud chat. You answer, research the web (web_search, fetch_url), read attached files and images, generate images with generate_image, write downloadable PDF/DOCX/XLSX/PPTX/CSV with create_document, pack files with create_zip, write and run code in this chat's sandbox (list_directory, read_file, write_file, edit_file, apply_patch, search_files, terminal), and save extra downloadable files with artifact_create.",
+  "Call those tools. Do not say you cannot generate images, create files, or run code. Do not search MCP for them.",
+  "If the user wants work on a folder on their own computer, say ORVYN Desktop binds that folder. You can still write and run the code here and give them downloadable files.",
+  "search_capabilities is ONLY for outside services with no tool here (email, Slack, a CRM, a calendar…). Image generation is generate_image, documents are create_document, code is write_file + terminal — never MCP.",
 ].join("\n");
 
 export const CHAT_WEB_TOOLS: ToolDefinition[] = [
@@ -82,6 +83,72 @@ export const CHAT_WEB_TOOLS: ToolDefinition[] = [
   },
 ];
 
+/** ChatGPT-style Cloud tools: images, documents, archives, and a coding sandbox. */
+export const CLOUD_CHAT_TOOLS: ToolDefinition[] = [
+  {
+    name: "generate_image",
+    description: "Generate an image from a detailed prompt. The file is saved and shown as a Preview/Download card.",
+    parameters: { type: "object", properties: { prompt: { type: "string", description: "Subject, style, lighting, composition" }, filename: { type: "string" } }, required: ["prompt"] },
+  },
+  {
+    name: "create_document",
+    description: "Create a downloadable PDF, DOCX, XLSX, PPTX, CSV, Markdown or text file.",
+    parameters: { type: "object", properties: { name: { type: "string" }, title: { type: "string" }, content: { type: "string" }, rows: { type: "array" }, slides: { type: "array" } }, required: ["name"] },
+  },
+  {
+    name: "create_zip",
+    description: "Zip in-memory files into a downloadable archive (HTML sites, code, exports).",
+    parameters: { type: "object", properties: { name: { type: "string" }, files: { type: "array", items: { type: "object", properties: { name: { type: "string" }, content: { type: "string" } } } } }, required: ["name", "files"] },
+  },
+  {
+    name: "artifact_create",
+    description: "Save a downloadable text file (HTML, JSON, CSV, source code) into Files → Generated.",
+    parameters: { type: "object", properties: { name: { type: "string" }, content: { type: "string" } }, required: ["name", "content"] },
+  },
+  {
+    name: "list_directory",
+    description: "List files in this chat's code sandbox.",
+    parameters: { type: "object", properties: { path: { type: "string" } } },
+  },
+  {
+    name: "read_file",
+    description: "Read a file in this chat's code sandbox.",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "write_file",
+    description: "Create or overwrite a file in this chat's code sandbox.",
+    parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
+  },
+  {
+    name: "edit_file",
+    description: "Replace exact text in a sandbox file (search-and-replace).",
+    parameters: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" }, replace_all: { type: "boolean" } }, required: ["path", "old_string", "new_string"] },
+  },
+  {
+    name: "apply_patch",
+    description: "Replace a sandbox file with new contents.",
+    parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "search_files",
+    description: "Find files in the sandbox by filename substring.",
+    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "terminal",
+    description: "Run a shell command in the sandbox (python, node, tests, scripts).",
+    parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+  },
+  {
+    name: "read_document",
+    description: "Extract text from a DOCX, PDF, XLSX, PPTX, CSV or Markdown file in the sandbox.",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+];
+
+export const CLOUD_CHAT_TOOL_NAMES = new Set(CLOUD_CHAT_TOOLS.map((t) => t.name));
+
 export const CHAT_RESEARCH_PROMPT = [
   "You can search the web (web_search) and read pages (fetch_url) in this chat. Decide for yourself when to use them:",
   "- Research whenever the answer depends on facts you may not have or that change: prices and costs, plans and limits, versions and releases, companies, products and people, laws and policies, news, or anything you are not sure is still current. Questions about what something costs, whether it is worth it, or how it compares usually need this.",
@@ -92,9 +159,13 @@ export const CHAT_RESEARCH_PROMPT = [
 
 /** Activity for a tool call about to run. */
 export function startActivity(id: string, name: string, args: Record<string, unknown>): ChatActivity {
-  return name === "web_search"
-    ? { id, kind: "search", status: "running", query: String(args.query ?? ""), startedAt: Date.now() }
-    : { id, kind: "read", status: "running", url: String(args.url ?? ""), startedAt: Date.now() };
+  if (name === "web_search") {
+    return { id, kind: "search", status: "running", query: String(args.query ?? ""), startedAt: Date.now() };
+  }
+  if (name === "fetch_url") {
+    return { id, kind: "read", status: "running", url: String(args.url ?? ""), startedAt: Date.now() };
+  }
+  return { id, kind: "search", status: "running", query: `${name} ${String(args.prompt ?? args.path ?? args.command ?? args.name ?? "").slice(0, 120)}`.trim(), startedAt: Date.now() };
 }
 
 /** The same activity once its result is in. */
@@ -113,4 +184,24 @@ export function finishActivity(a: ChatActivity, result: { ok: boolean; output?: 
 export function toolResultForModel(result: { ok: boolean; output?: string; error?: string }): string {
   const text = result.ok ? String(result.output ?? "") : `Error: ${String(result.error ?? "failed")}`;
   return text.length > 24_000 ? `${text.slice(0, 24_000)}\n…(page truncated)` : text;
+}
+
+export function artifactsFromChatResult(result: { artifacts?: { artifactId?: string; name?: string; mimeType?: string }[]; output?: string }): { artifactId: string; name: string; mimeType: string }[] {
+  const fromField = (result.artifacts ?? []).filter((a) => a?.artifactId).map((a) => ({
+    artifactId: String(a.artifactId),
+    name: String(a.name ?? "file"),
+    mimeType: String(a.mimeType ?? ""),
+  }));
+  if (fromField.length) return fromField;
+  try {
+    const parsed = JSON.parse(String(result.output ?? ""));
+    const rows = Array.isArray(parsed?.artifacts) ? parsed.artifacts : parsed?.artifactId ? [parsed] : [];
+    return rows.filter((a: any) => a?.artifactId).map((a: any) => ({
+      artifactId: String(a.artifactId),
+      name: String(a.name ?? a.filename ?? "file"),
+      mimeType: String(a.mimeType ?? ""),
+    }));
+  } catch {
+    return [];
+  }
 }

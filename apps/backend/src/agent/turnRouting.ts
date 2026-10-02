@@ -6,6 +6,7 @@
 
 import { decideTurn, type TurnDecisionContext } from "@orvyn/ai-core";
 import { inferTaskIntent } from "./taskIntent";
+import { looksLikeCloudArtifactRequest } from "../ai/coreCapabilityHits";
 
 export type TurnRoute = "chat" | "run";
 
@@ -14,6 +15,11 @@ export function routeTurn(instruction: string, composerMode?: string, context: T
   if (!decision.requiresExecution) return "chat";
   if (decision.disposition === "continue_execution") return "run";
   const intent = inferTaskIntent(instruction, composerMode);
+  // Pictures, PDFs, spreadsheets, and zips on Cloud (no project) use chat
+  // tools — never an engineering run that hunts MCP for a missing generator.
+  if (looksLikeCloudArtifactRequest(instruction) && !intent.requiresWorkspace && !intent.requiresFrontend) {
+    return "chat";
+  }
   // Keep text-only requests on the normal chat stream. Phrases like “write an
   // email” contain an action verb, but do not need an agent run unless they
   // require a project, tool, external integration, or generated artifact.
