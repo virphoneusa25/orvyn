@@ -41,7 +41,7 @@ export interface RunView {
   events: AgentEvent[];
   status: string;
   runId: string | null;
-  approve: (callId: string, approved: boolean, scope?: "once" | "mission") => Promise<void>;
+  approve: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => Promise<void>;
   stop: () => Promise<void>;
   lastEventAt: number;
   usage?: {

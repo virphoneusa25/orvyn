@@ -9,5 +9,16 @@ import { inferTaskIntent } from "./taskIntent";
 export type TurnRoute = "chat" | "run";
 
 export function routeTurn(instruction: string, composerMode?: string): TurnRoute {
-  return inferTaskIntent(instruction, composerMode).executionComplexity === "answer" ? "chat" : "run";
+  const intent = inferTaskIntent(instruction, composerMode);
+  // Keep text-only requests on the normal chat stream. Phrases like “write an
+  // email” contain an action verb, but do not need an agent run unless they
+  // require a project, tool, external integration, or generated artifact.
+  const needsAgent = intent.requiresWorkspace
+    || intent.requiresRemoteResource
+    || intent.requiresTerminal
+    || intent.requiresBrowser
+    || intent.requiresDesktop
+    || intent.requiresArtifact
+    || intent.requiresExternalIntegration;
+  return intent.executionComplexity === "answer" || !needsAgent ? "chat" : "run";
 }

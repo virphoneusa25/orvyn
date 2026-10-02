@@ -17,7 +17,7 @@ function rowIcon(row: ProgressRow) {
 export function AgentProgress({ events, status, onApprove }: {
   events: AgentProgressEvent[];
   status: string;
-  onApprove?: (callId: string, approved: boolean) => void;
+  onApprove?: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const rows = progressRows(events);
@@ -45,7 +45,10 @@ export function AgentProgress({ events, status, onApprove }: {
                 {row.detail ? <span className="agent-progress__detail">{row.detail}</span> : null}
                 {row.state === "waiting" && row.approvalCallId && onApprove ? (
                   <span className="agent-progress__actions">
-                    <button className="btn btn--sm btn--primary" onClick={() => onApprove(row.approvalCallId!, true)}>Approve</button>
+                    <button className="btn btn--sm btn--primary" onClick={() => onApprove(row.approvalCallId!, true, "once")}>Allow Once</button>
+                    <button className="btn btn--sm" onClick={() => onApprove(row.approvalCallId!, true, "session")}>This Session</button>
+                    <button className="btn btn--sm" onClick={() => onApprove(row.approvalCallId!, true, "project")}>This Project</button>
+                    <button className="btn btn--sm" onClick={() => onApprove(row.approvalCallId!, true, "always")}>Always Allow</button>
                     <button className="btn btn--sm" onClick={() => onApprove(row.approvalCallId!, false)}>Deny</button>
                   </span>
                 ) : null}

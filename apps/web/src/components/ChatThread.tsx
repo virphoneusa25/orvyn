@@ -223,8 +223,8 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
 
   const patch = (id: string, fn: (m: Msg) => Msg) => setMessages((all) => all.map((m) => (m.id === id ? fn(m) : m)));
 
-  const answerApproval = useCallback(async (callId: string, approved: boolean) => {
-    try { await api(`/agent/stream/approvals/${encodeURIComponent(callId)}`, { method: "POST", body: { approved, scope: "once" } }); }
+  const answerApproval = useCallback(async (callId: string, approved: boolean, scope: "once" | "mission" | "session" | "project" | "always" = "once") => {
+    try { await api(`/agent/stream/approvals/${encodeURIComponent(callId)}`, { method: "POST", body: { approved, scope } }); }
     catch (err: any) { toast(err.message); }
   }, [toast]);
 

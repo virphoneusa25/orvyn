@@ -234,7 +234,7 @@ export function AgentActivityList({
 }: {
   events: AgentEvent[];
   status: string;
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission", secrets?: Record<string, string>) => void;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always", secrets?: Record<string, string>) => void;
 }) {
   // RAW EVENTS → presentation items → rows. Raw event names, timestamps,
   // task/mission/agent internals and reviewer text never render directly;
@@ -608,7 +608,7 @@ function ApprovalCard({
   onApprove,
 }: {
   item: ApprovalItem;
-  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission", secrets?: Record<string, string>) => void | Promise<void>;
+  onApprove: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always", secrets?: Record<string, string>) => void | Promise<void>;
 }) {
   const preview = item.preview as EditPreview | undefined;
   // PENDING → APPROVING → APPROVED/DENIED; a failed request re-enables the
@@ -619,7 +619,7 @@ function ApprovalCard({
   useEffect(() => {
     if (item.settled) setSecrets({});
   }, [item.settled]);
-  const act = (approved: boolean, scope?: "once" | "mission") => {
+  const act = (approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => {
     setBusy(true);
     const filled = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v.trim()));
     Promise.resolve(onApprove(item.key, approved, scope, approved && Object.keys(filled).length ? filled : undefined)).finally(() => {
@@ -707,11 +707,9 @@ function ApprovalCard({
           <button disabled={busy} onClick={() => act(true)} style={btn("var(--accent)")}>
             {busy ? "Approving…" : (<><IconCheck size={12} /> Allow Once</>)}
           </button>
-          {!item.destructive && (
-            <button disabled={busy} onClick={() => act(true, "mission")} style={btn("var(--border)")}>
-              Allow for Mission
-            </button>
-          )}
+          <button disabled={busy || item.destructive} title={item.destructive ? "Destructive actions always require approval." : undefined} onClick={() => act(true, "session")} style={btn("var(--border)")}>This Session</button>
+          <button disabled={busy || item.destructive} title={item.destructive ? "Destructive actions always require approval." : undefined} onClick={() => act(true, "project")} style={btn("var(--border)")}>This Project</button>
+          <button disabled={busy || item.destructive} title={item.destructive ? "Destructive actions always require approval." : undefined} onClick={() => act(true, "always")} style={btn("var(--border)")}>Always Allow</button>
           <button disabled={busy} onClick={() => act(false)} style={btn("var(--border)")}>
             Deny
           </button>

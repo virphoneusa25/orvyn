@@ -316,7 +316,7 @@ export function useAgentRun(
     } catch (err: any) { setError(err.message); return false; }
   }
 
-  async function approve(callId: string, approved: boolean, scope: "once" | "mission" = "once", secrets?: Record<string, string>) {
+  async function approve(callId: string, approved: boolean, scope: "once" | "mission" | "session" | "project" | "always" = "once", secrets?: Record<string, string>) {
     // The owning runtime is not always knowable client-side (attached runs
     // look identical). Try the expected endpoint, then the other — and never
     // fail silently: a dead Approve button is undebuggable from the UI.

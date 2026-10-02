@@ -48,6 +48,12 @@ test("capability questions are chat turns", () => {
   }
 });
 
+test("text-only requests stay in chat even when phrased as actions", () => {
+  for (const q of ["Write an email", "Draft a thank-you note", "?"]) {
+    assert.equal(routeTurn(q, "auto"), "chat", q);
+  }
+});
+
 test("an informational question naming a resource never blocks on it", () => {
   // "How do I query postgres?" classifies as database category, but it asks
   // for an answer — not a database connection.

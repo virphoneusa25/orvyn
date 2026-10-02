@@ -62,11 +62,10 @@ Layered, and every layer is enforced server-side:
 - Terminal executes on the host (per-approval, sandboxed to project paths,
   but not containerized). Cloud mode will run agents in isolated Docker
   workers instead
-- Approvals support two scopes: "Allow Once" (per-call) and "Allow for
-  Mission" (the tool is auto-approved for the rest of that run only).
-  Destructive shell commands are excluded — they always re-prompt, even
-  after a mission-scope approval. SAFE / BALANCED / AUTONOMOUS profiles are
-  implemented (Settings → Autonomy profile) and persist across restarts
+- Approvals support per-call, conversation, project, and user-wide remembered
+  grants. Each grant applies only to the approved tool. Destructive actions
+  always re-prompt. SAFE / BALANCED / AUTONOMOUS profiles are implemented
+  (Settings → Autonomy profile) and persist across restarts
 - Model configs persisted to the local SQLite store include provider API
   keys in plaintext (same trust level as `.env` on the same disk). The
   cloud tier must encrypt provider credentials at rest

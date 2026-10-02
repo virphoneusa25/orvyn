@@ -17,6 +17,7 @@ import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { portForwardingService } from "../ports/PortForwardingService";
+import { activeRunForSession } from "../agent/activeSessionRun";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { customerRedaction } from "../middleware/customerRedaction";
@@ -166,10 +167,6 @@ v1Router.use(async (req, res, next) => {
     // root here used to land every chat in one shared virtual folder.
     if (!runStart && !forcedRemote && !clientMachineRoot && req.body?.projectRoot !== undefined && req.body.projectRoot !== null) req.body.projectRoot = await resolveWorkspace(requireTenant(req), req.body.projectRoot);
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
-    if (runStart) {
-      const tenant = requireTenant(req);
-      if (tenant.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) return res.status(409).json({error:"A task is already active. Stop it or wait before starting another."});
-    }
     next();
   } catch (e: any) { res.status(400).json({error:e.message}); }
 });
@@ -661,6 +658,9 @@ v1Router.get("/tools", async (req, res) => {
 v1Router.post("/tools/:name/permission", (req, res) => {
   const t = requireTenant(req);
   t.toolRegistry.setPermission(req.params.name, req.body.permission);
+  // An explicit permission edit revokes remembered approval buttons for this
+  // tool so a user can switch back to being prompted.
+  t.localStore.clearToolApprovalGrants(req.principal?.userId ?? t.id, req.params.name);
   // Explicit user choice — persist per project so it survives restarts.
   if (t.currentProjectRoot) {
     t.localStore.setToolOverride(t.currentProjectRoot, req.params.name, req.body.permission);
@@ -875,6 +875,13 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       sessionId: typeof req.body.sessionId === "string" ? req.body.sessionId : undefined,
     });
   }
+  const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
+  let requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
+  if (!requestedSession && previousById) requestedSession = t.sessions.sessionOfRun(previousById.id);
+  if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
+  if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
+    return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
+  }
   // A run the wallet cannot pay for is refused up front, in plain words.
   const ownModel = t.modelService.isUserModel(String(t.modelService.effectiveRequest(req.body?.requestedModelId) ?? ""));
   if (creditsEnforced() && !ownModel) {
@@ -885,7 +892,6 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       throw err;
     }
   }
-  const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
   let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
   if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
   if (!session) {
@@ -1069,6 +1075,18 @@ v1Router.post("/agent/stream/runs", (req, res) => {
         : undefined,
       accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
+      approvedTools: t.localStore.getToolApprovalGrants(
+        req.principal?.userId ?? t.id,
+        session.sessionId,
+        session.projectId ? `project:${session.projectId}` : boundRoot ? `root:${boundRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
+      ),
+      onApprovalGrant: (scope, tool) => t.localStore.saveToolApprovalGrant(
+        scope,
+        req.principal?.userId ?? t.id,
+        tool,
+        session.sessionId,
+        session.projectId ? `project:${session.projectId}` : boundRoot ? `root:${boundRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
+      ),
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
@@ -1474,7 +1492,7 @@ v1Router.post("/agent/stream/runs/:id/undo", async (req, res) => {
 
 v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
-  const scope = req.body.scope === "mission" ? "mission" : "once";
+  const scope = ["once", "mission", "session", "project", "always"].includes(req.body.scope) ? req.body.scope : "once";
   // The pending call may live in either runtime (clients cannot always know
   // which one owns the run). Resolve across both — approving is idempotent.
   const ok =
@@ -1490,6 +1508,11 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   // turn, and a chat turn must never consume mission quota.
   if (routeTurn(String(req.body.goal ?? ""), typeof req.body.composerMode === "string" ? req.body.composerMode : undefined) === "chat") {
     return res.json({ routed: "chat" });
+  }
+  const requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
+  if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
+  if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
+    return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
   }
   // Monthly mission quota (0/unset = unlimited). Checked against the
   // persisted missions table so restarts don't reset the budget.
@@ -1548,6 +1571,18 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       reasoningEffort,
       accessMode,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
+      approvedTools: t.localStore.getToolApprovalGrants(
+        req.principal?.userId ?? t.id,
+        missionSession.sessionId,
+        missionSession.projectId ? `project:${missionSession.projectId}` : missionRoot ? `root:${missionRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
+      ),
+      onApprovalGrant: (scope, tool) => t.localStore.saveToolApprovalGrant(
+        scope,
+        req.principal?.userId ?? t.id,
+        tool,
+        missionSession.sessionId,
+        missionSession.projectId ? `project:${missionSession.projectId}` : missionRoot ? `root:${missionRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
+      ),
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
@@ -1579,7 +1614,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
 
 v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
-  const scope = req.body.scope === "mission" ? "mission" : "once";
+  const scope = ["once", "mission", "session", "project", "always"].includes(req.body.scope) ? req.body.scope : "once";
   // Same cross-runtime resolution as the stream endpoint.
   const ok =
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||

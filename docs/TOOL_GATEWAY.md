@@ -6,9 +6,9 @@ which enforces, in order:
 
 1. **User policy** per tool: `allowed | ask | denied`. `ask` pauses the run
    (`approval.required` event) until the user resolves it: **Allow Once**,
-   **Allow for Mission** (that tool is auto-approved for the rest of the
-   run; cleared when the run ends; never offered for destructive commands),
-   or **Deny**.
+   **This Session**, **This Project**, **Always Allow**, or **Deny**. Remembered
+   grants apply only to the named tool and selected scope. Destructive actions
+   always prompt again.
 2. **Capability check**: the calling role must hold every capability the
    tool requires (Permission Engine). A denied capability is a typed error,
    not a silent skip.

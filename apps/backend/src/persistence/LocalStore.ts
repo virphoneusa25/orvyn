@@ -398,6 +398,39 @@ export class LocalStore {
     this.setSetting(`toolOverrides:${projectRoot}`, JSON.stringify(all));
   }
 
+  /** Approval grants remembered at the user's requested scope. */
+  getToolApprovalGrants(subjectId: string, sessionId: string, projectKey: string): string[] {
+    const raw = this.getSetting(`toolApprovalGrants:${subjectId}`);
+    if (!raw) return [];
+    try {
+      const data = JSON.parse(raw) as { always?: string[]; sessions?: Record<string, string[]>; projects?: Record<string, string[]> };
+      return [...new Set([...(data.always ?? []), ...(data.sessions?.[sessionId] ?? []), ...(data.projects?.[projectKey] ?? [])])];
+    } catch { return []; }
+  }
+
+  saveToolApprovalGrant(scope: "session" | "project" | "always", subjectId: string, tool: string, sessionId: string, projectKey: string): void {
+    const settingKey = `toolApprovalGrants:${subjectId}`;
+    let data: { always: string[]; sessions: Record<string, string[]>; projects: Record<string, string[]> };
+    try {
+      const parsed = JSON.parse(this.getSetting(settingKey) ?? "{}");
+      data = { always: parsed.always ?? [], sessions: parsed.sessions ?? {}, projects: parsed.projects ?? {} };
+    } catch { data = { always: [], sessions: {}, projects: {} }; }
+    const target = scope === "always" ? data.always : scope === "session" ? (data.sessions[sessionId] ??= []) : (data.projects[projectKey] ??= []);
+    if (!target.includes(tool)) target.push(tool);
+    this.setSetting(settingKey, JSON.stringify(data));
+  }
+
+  clearToolApprovalGrants(subjectId: string, tool: string): void {
+    const settingKey = `toolApprovalGrants:${subjectId}`;
+    try {
+      const parsed = JSON.parse(this.getSetting(settingKey) ?? "{}");
+      const strip = (list: unknown) => Array.isArray(list) ? list.filter((name) => name !== tool) : [];
+      const sessions = Object.fromEntries(Object.entries(parsed.sessions ?? {}).map(([id, list]) => [id, strip(list)]));
+      const projects = Object.fromEntries(Object.entries(parsed.projects ?? {}).map(([id, list]) => [id, strip(list)]));
+      this.setSetting(settingKey, JSON.stringify({ always: strip(parsed.always), sessions, projects }));
+    } catch { /* malformed settings are already treated as no grants */ }
+  }
+
   // ---------- ORION memory + artifact library ----------
 
   saveMemory(input: { id: string; scope: "global" | "project"; projectRoot?: string | null; kind: string; title: string; content: string; source?: string | null; pinned?: boolean }): void {

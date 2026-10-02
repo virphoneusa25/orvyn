@@ -86,7 +86,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: "approve",
     title: "Approve tool actions",
     tags: ["permissions", "approval", "tools"],
-    body: "When a tool needs approval, the stream shows the command and a diff when files change. Approve once or for the mission. Deny stops that call. Remembered approvals stay scoped.",
+    body: "When a tool needs approval, the stream shows the action and a diff when files change. Choose Allow Once, This Session, This Project, or Always Allow; Deny stops that call. Remembered grants apply only to the selected tool and scope. Destructive actions always require approval.",
   },
   {
     id: "stop",
