@@ -54,7 +54,7 @@ interface PendingApproval {
   tool: string;
 }
 
-export type ApprovalScope = "once" | "mission";
+export type ApprovalScope = "once" | "mission" | "session" | "project" | "always";
 
 const MAX_TASKS = 12;
 
@@ -1461,7 +1461,7 @@ export class MultiAgentRuntime {
     const p = this.pending.get(callId);
     if (!p) return false;
     this.pending.delete(callId);
-    if (approved && scope === "mission") {
+    if (approved && scope !== "once") {
       // Future calls to this tool in this run skip the prompt (destructive
       // commands excepted — they always ask).
       const set = this.missionApproved.get(p.runId) ?? new Set<string>();
