@@ -75,7 +75,7 @@ export function AgentProgress({ events, status, onApprove }: {
       </button>
       {expanded ? (
         <ol id={panelId} className="agent-progress__steps">
-          {rows.map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
+          {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
         </ol>
       ) : null}
     </section>

@@ -67,6 +67,20 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
         : "");
     if (!answer) return;
     sessions.appendMessage(sessionId, { messageId: runAnswerMessageId(runId), role: "assistant", content: answer, runId, mode: "agent" });
+    const artifacts: { artifactId: string; name: string; mimeType: string }[] = [];
+    const seen = new Set<string>();
+    for (const e of run.events) {
+      if (e.type !== "artifact.created" && e.type !== "image.generated") continue;
+      const artifactId = String(e.data?.artifactId ?? e.data?.id ?? "");
+      if (!artifactId || seen.has(artifactId)) continue;
+      seen.add(artifactId);
+      artifacts.push({
+        artifactId,
+        name: String(e.data?.name ?? e.data?.filename ?? "file"),
+        mimeType: String(e.data?.mimeType ?? e.data?.mediaType ?? "application/octet-stream"),
+      });
+    }
+    if (artifacts.length) sessions.updateMessage(runAnswerMessageId(runId), { meta: { artifacts } });
   };
   const run = store.get(runId);
   if (!run) return;

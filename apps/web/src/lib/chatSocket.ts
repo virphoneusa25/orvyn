@@ -11,7 +11,7 @@ export interface ChatChunk {
   retract?: boolean;
   heartbeat?: boolean;
   type?: string;
-  activity?: { id: string; kind: string; status?: string; query?: string; url?: string; title?: string };
+  activity?: { id: string; kind: string; status?: string; query?: string; url?: string; title?: string; results?: number; error?: string };
   artifacts?: { artifactId: string; name: string; mimeType: string }[];
 }
 

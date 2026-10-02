@@ -182,7 +182,7 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
       .map((f) => {
         const att = textAttachments.find((a) => a.path === f.path);
         const purpose = att?.purpose ? ` [${att.purpose}]` : "";
-        return `--- ${f.path}${purpose} ---\n${f.content.slice(0, 8000)}`;
+        return `--- START FILE: ${f.path}${purpose} ---\n${f.content.slice(0, 8000)}\n--- END FILE: ${f.path} ---`;
       })
       .join("\n\n");
     messages.push({

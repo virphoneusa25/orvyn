@@ -53,7 +53,10 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
 
         const textParts: string[] = [];
         for (const f of files) {
-          textParts.push(`--- attached file: ${f.name} ---\n${f.content}`);
+          const wrapped = /--- START FILE: /.test(f.content) && /--- END FILE/.test(f.content)
+            ? f.content
+            : `--- START FILE: ${f.name} ---\n${f.content}\n--- END FILE: ${f.name} ---`;
+          textParts.push(wrapped);
         }
         textParts.push(m.content);
         const text = textParts.join("\n\n");
