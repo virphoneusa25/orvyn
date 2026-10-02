@@ -29,7 +29,7 @@
     "accept:chat-live": "npm run build -w @orvyn/backend && node --experimental-strip-types --no-warnings scripts/acceptance/chat-live.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "allowScripts": {
     "electron@31.7.7": true,

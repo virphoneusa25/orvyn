@@ -107,7 +107,7 @@ can cross-compile from Linux/macOS with Wine installed, but building
 natively on Windows is simpler and what most people do:
 
 ```bash
-# On a Windows machine, or CI runner with Node 18+:
+# On a Windows machine, or CI runner with Node.js 22.13+:
 git clone <this repo>
 cd orvyn
 npm install

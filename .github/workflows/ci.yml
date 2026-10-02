@@ -27,14 +27,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node.js 22
+      - name: Use minimum supported Node.js 22.13.0
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13.0
           cache: npm
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check minimum Node.js runtime
+        run: |
+          node apps/backend/scripts/check-node-version.cjs
+          node --test apps/backend/scripts/check-node-version.test.cjs
 
       - name: Build all workspaces
         run: npm run build

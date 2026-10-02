@@ -86,6 +86,9 @@ USER → ORVYN → ASTRA ORCHESTRATOR → MISSION → TASK GRAPH
 
 ## Running it
 
+ORVYN requires **Node.js 22.13.0 or newer**. The backend uses the built-in
+`node:sqlite` module, and `pdfjs-dist` 6 requires Node.js 22.13 or newer.
+
 ```bash
 npm install
 npm run backend:dev    # Express API on :4570
@@ -125,7 +128,7 @@ the mission completes with an approved review.
 
 - Run event logs are in-memory (missions, usage, profile, tool overrides,
   and user-added models persist to `~/.orvyn/data/<tenant>.db` via
-  node:sqlite; requires Node ≥ 22.5)
+  node:sqlite; requires Node ≥ 22.13.0)
 - Organizations/RBAC, email verification, OAuth, billing (per-user
   accounts with isolated tenants ARE implemented — Settings → Account)
 - Cloud tier: job queue, isolated Docker workers, WebSocket fanout
@@ -171,4 +174,3 @@ Kernel AI Labs proprietary license removes rights granted by those upstream
 licenses.
 
 **© 2026 Kernel AI Labs. All rights reserved.**
-

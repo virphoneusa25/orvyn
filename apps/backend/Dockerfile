@@ -2,8 +2,8 @@
 # Multi-stage build so the runtime image doesn't carry devDependencies or
 # the TypeScript compiler. Build context must be the monorepo root, e.g.:
 #   docker build -f apps/backend/Dockerfile -t orvyn-backend .
-# Node >= 22.13 required: LocalStore/AuthService use node:sqlite (unflagged
-# from 22.13; absent in Node 20 — the container would crash on boot).
+# Node >= 22.13 required: node:sqlite is unflagged from 22.13 and
+# pdfjs-dist 6 also requires Node >= 22.13.
 FROM node:22-slim AS build
 WORKDIR /repo
 
@@ -53,6 +53,7 @@ COPY --from=build /repo/node_modules ./node_modules
 COPY --from=build /repo/packages/ai-core ./packages/ai-core
 COPY --from=build /repo/apps/backend/dist ./dist
 COPY --from=build /repo/apps/backend/package.json ./package.json
+COPY --from=build /repo/apps/backend/scripts ./scripts
 COPY --from=build /repo/apps/backend/build-info.json ./build-info.json
 # The portal's static build (dist/index.js serves ../web).
 COPY --from=build /repo/apps/web/dist ./web
@@ -74,4 +75,4 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 4570
-CMD ["node", "dist/index.js"]
+CMD ["node", "scripts/start.cjs"]

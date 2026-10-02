@@ -166,7 +166,7 @@ Expected — that's the mock model
 Follow "Optional next step" above
 npm run dist:win fails
 Node version too old, or antivirus interfering
-Install Node 18+ LTS; temporarily disable antivirus real-time scan for the build folder
+Install Node.js 22.13+ LTS; temporarily disable antivirus real-time scan for the build folder
 SmartScreen blocks the installer
 Installer isn't code-signed
 Click "More info → Run anyway" — expected for an unsigned installer
