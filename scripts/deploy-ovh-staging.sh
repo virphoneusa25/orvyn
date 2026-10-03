@@ -74,7 +74,7 @@ fi
 # Cloud mode requires its own vault key. Keep it stable on the staging host so
 # encrypted staging credentials remain readable across container redeploys.
 if ! grep -q '^ORVYN_VAULT_KEY=' .env.staging; then
-  printf 'ORVYN_VAULT_KEY=%s\\n' "$(openssl rand -base64 32)" >> .env.staging
+  printf 'ORVYN_VAULT_KEY=%s\n' "$(openssl rand -base64 32)" >> .env.staging
   chmod 600 .env.staging
   echo 'Provisioned isolated staging vault key'
 fi
@@ -89,6 +89,9 @@ if ! ORVYN_BUILD_SHA='$BUILD_COMMIT' docker compose -p orvyn-staging -f infrastr
   docker logs backend-staging --tail 80 || true
   exit 1
 fi
+# Compose does not restart dependents when only their backend dependency changed.
+# Reconnect the staging worker to this freshly deployed backend.
+docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --force-recreate worker-staging
 docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml ps
 docker compose \\
   -f docker-compose.yml \\
