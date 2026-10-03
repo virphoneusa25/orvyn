@@ -29,6 +29,7 @@ import { ImageGenerationMessage } from "./ImageGenerationMessage";
 
 export type FileRef = StreamFileRef;
 interface Msg {
+  routing?: ChatChunk["routing"];
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -65,6 +66,7 @@ function toMsg(m: any): Msg | null {
     id: m.messageId,
     role: m.role,
     content: m.content ?? "",
+    routing: m.meta?.routing,
     createdAt: m.createdAt,
     streaming: m.status === "streaming",
     runId: typeof m.runId === "string" ? m.runId : undefined,
@@ -379,7 +381,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
             if (imageJob && ["run.completed", "run.partial", "run.error", "run.cancelled", "run.blocked"].includes(event.type) && ["queued", "generating"].includes(imageJob.status)) imageJob = { ...imageJob, status: "failed", error: event.type === "run.error" ? String(data.message ?? "The run ended before the image was ready.") : "The run finished without a completed image." };
             const error = m.imageJob ? m.error : ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
             const artifact = event.type === "artifact.created" && imageJob?.assets?.[0] ? imageJob.assets[0] : undefined;
-            return { ...m, content, imageJob, artifacts: artifact ? [...(m.artifacts ?? []).filter((a) => a.artifactId !== artifact.artifactId), artifact] : artifacts, agentEvents, runStatus: next, streaming: !terminalRunStatus(next), error };
+            return { ...m, content, imageJob, routing: data.routing as Msg["routing"] ?? m.routing, artifacts: artifact ? [...(m.artifacts ?? []).filter((a) => a.artifactId !== artifact.artifactId), artifact] : artifacts, agentEvents, runStatus: next, streaming: !terminalRunStatus(next), error };
           });
         };
         let round = 0;
@@ -408,6 +410,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       } else {
       // 4. Ordinary answer: the established WebSocket token stream.
       const turn = streamTurn({ sessionId: sid, userMessage, userMessageId: userId, assistantMessageId: replyId, requestedModelId: imageJob?.modelId ?? model, attachments: forModel, attachmentRefs: refs }, (c: ChatChunk) => {
+        if (c.routing) patch(replyId, (m) => ({ ...m, routing: c.routing }));
         if (c.retract) patch(replyId, (m) => ({ ...m, content: "" }));
         if (c.activity) patch(replyId, (m) => ({ ...m, activities: upsertActivity(m.activities ?? [], c.activity!) }));
         if (c.delta && !imageJob) patch(replyId, (m) => ({ ...m, content: m.content + c.delta }));
@@ -506,6 +509,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                 {m.error ? (m.code?.startsWith("CREDITS") ? <UpgradePrompt code={m.code} message={m.error} /> : (
                   <div className="msg-error" role="alert"><span>{m.error}</span>{m.retry && !busy ? <button className="btn btn--sm" onClick={() => void send(m.retry)}><Icon.retry size={14} /> Retry</button> : null}</div>
                 )) : null}
+                {m.routing ? <small title={m.routing.reason} data-testid="actual-model">{m.routing.provider} · {m.routing.modelId}</small> : null}
                 {!m.streaming ? (
                   <div className="msg__actions">
                     {m.content && !m.imageJob ? <CopyButton text={m.content} /> : null}

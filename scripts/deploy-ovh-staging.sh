@@ -1,130 +1,41 @@
 #!/usr/bin/env bash
-# Deploy the isolated staging control plane. Never touches production volumes,
-# production .env, or production postgres/redis data.
+# Deploy the production candidate to the existing isolated staging stack.
+# Sources live separately from production; existing staging secrets and volumes survive.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${OVH_HOST:-ubuntu@40.160.11.123}"
 KEY="${OVH_SSH_KEY:-$HOME/.ssh/github_virphone}"
-REMOTE="${OVH_REMOTE_DIR:-/home/ubuntu/orvyn}"
+REMOTE="${OVH_REMOTE_DIR:-/home/ubuntu/orvyn-staging-release}"
+PRODUCTION="/home/ubuntu/orvyn"
 STAGING_HEALTH="${STAGING_HEALTH_URL:-https://staging.orvyn.virphoneusa.com/api/v1/health}"
-
-if [[ ! -f "$KEY" ]]; then
-  echo "OVH SSH key not found at $KEY. Set OVH_SSH_KEY." >&2
-  exit 1
-fi
-
+[[ "$REMOTE" == /home/ubuntu/orvyn-staging-release ]] || { echo "Refusing an unverified staging source path" >&2; exit 1; }
+[[ -f "$KEY" ]] || { echo "OVH SSH key missing" >&2; exit 1; }
 SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 RSH="${SSH[*]}"
-
-echo "Syncing staging sources → $HOST:$REMOTE (production .env is not copied)"
-
-"${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/apps/backend' '$REMOTE/apps/web' '$REMOTE/apps/worker' '$REMOTE/packages' '$REMOTE/infrastructure' '$REMOTE/scripts'"
-
-rsync -az --delete -e "$RSH" \
-  --exclude node_modules/ --exclude dist/ --exclude '*.log' \
-  "$ROOT/apps/backend/" "$HOST:$REMOTE/apps/backend/"
-
-rsync -az --delete -e "$RSH" \
-  --exclude node_modules/ --exclude dist/ --exclude '*.log' \
-  "$ROOT/apps/web/" "$HOST:$REMOTE/apps/web/"
-
-rsync -az --delete -e "$RSH" \
-  --exclude node_modules/ --exclude dist/ --exclude '*.log' \
-  "$ROOT/apps/worker/" "$HOST:$REMOTE/apps/worker/"
-
-rsync -az --delete -e "$RSH" \
-  --exclude node_modules/ --exclude dist/ \
-  "$ROOT/packages/" "$HOST:$REMOTE/packages/"
-
-rsync -az --delete -e "$RSH" \
-  "$ROOT/infrastructure/" "$HOST:$REMOTE/infrastructure/"
-
-rsync -az -e "$RSH" \
-  "$ROOT/docker-compose.yml" \
-  "$ROOT/package.json" \
-  "$ROOT/package-lock.json" \
-  "$ROOT/.env.example" \
-  "$HOST:$REMOTE/"
-
-echo "Ensuring isolated staging secrets and reloading Caddy + staging stack"
-"${SSH[@]}" "$HOST" "set -euo pipefail
-cd '$REMOTE'
-if [[ ! -f .env.staging ]]; then
-  STAGING_KEY=\$(openssl rand -hex 32)
-  STAGING_PG=\$(openssl rand -hex 24)
-  umask 077
-  cat > .env.staging <<EOF
-ORVYN_ENV=staging
-ORVYN_CLOUD_MODE=true
-ORVYN_API_KEY=\${STAGING_KEY}
-STAGING_PG_PASSWORD=\${STAGING_PG}
-ORVYN_PUBLIC_URL=https://staging.orvyn.virphoneusa.com
-DOMAIN=orvyn.virphoneusa.com
-STAGING_DOMAIN=staging.orvyn.virphoneusa.com
-EOF
-  # Copy model keys from production .env without overwriting staging identity.
-  if [[ -f .env ]]; then
-    grep -E '^(CHEAPER_INFERENCE_|MODEL_API_KEY|OPENAI_|ORION_MODEL_ID|ASTRA_MODEL_ID|DEEPSEEK_|GEMINI_|FIREWORKS_)' .env >> .env.staging || true
-  fi
-  echo 'Created isolated .env.staging'
-fi
-# Production Caddy must know the staging hostname. Bring staging up first
-# so backend-staging is resolvable on orvyn_default before Caddy reloads.
-if ! grep -q STAGING_DOMAIN .env; then
-  echo 'STAGING_DOMAIN=staging.orvyn.virphoneusa.com' >> .env
-fi
-docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build
-docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml ps
-docker compose \\
-  -f docker-compose.yml \\
-  -f infrastructure/ovh/compose.prod.yml \\
-  -f infrastructure/ovh/compose.control-plane.yml \\
-  restart caddy
-docker compose \\
-  -f docker-compose.yml \\
-  -f infrastructure/ovh/compose.prod.yml \\
-  -f infrastructure/ovh/compose.control-plane.yml \\
-  ps caddy backend
-"
-
-INTERNAL_HEALTH="http://127.0.0.1:4570/api/v1/health"
-echo "Waiting for staging backend (internal, then public)"
-ok=0
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+printf '{"commit":"%s","builtAt":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ROOT/apps/backend/build-info.json"
+"${SSH[@]}" "$HOST" "set -eu; mkdir -p '$REMOTE'; chmod 700 '$REMOTE'; if [ ! -f '$REMOTE/.env.staging' ]; then test -f '$PRODUCTION/.env.staging'; cp '$PRODUCTION/.env.staging' '$REMOTE/.env.staging'; chmod 600 '$REMOTE/.env.staging'; fi"
+for folder in apps/backend apps/web apps/worker packages infrastructure resources scripts; do
+  "${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/$folder'"
+  rsync -az --delete -e "$RSH" --exclude node_modules/ --exclude dist/ --exclude '*.log' --exclude .env --exclude .env.staging "$ROOT/$folder/" "$HOST:$REMOTE/$folder/"
+done
+rsync -az -e "$RSH" "$ROOT/docker-compose.yml" "$ROOT/package.json" "$ROOT/package-lock.json" "$ROOT/.dockerignore" "$HOST:$REMOTE/"
+# Only configured HF settings change. Identity, database passwords and all other
+# staging environment values are preserved. Secrets travel over SSH stdin.
+for name in HUGGINGFACE_API_KEY HF_TOKEN HUGGINGFACE_BASE_URL HUGGINGFACE_MODELS HUGGINGFACE_ROUTING_ENABLED NEBIUS_API_KEY; do
+  value="${!name:-}"
+  [[ -n "$value" ]] || continue
+  printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; value=\$(cat); { grep -v '^$name=' .env.staging || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .env.staging.tmp; chmod 600 .env.staging.tmp; mv .env.staging.tmp .env.staging"
+done
+"${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; current=\$(docker inspect backend-staging --format '{{.Image}}'); docker image tag \"\$current\" orvyn-staging-backend-staging:rollback-before-shared-hf; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build"
 for _ in $(seq 1 40); do
-  if "${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(t=>process.exit(t.includes('\\\"status\\\":\\\"ok\\\"')?0:1)).catch(()=>process.exit(1))\""; then
-    ok=1
-    break
+  if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
+    curl -fsS -m 8 "$STAGING_HEALTH"; echo
+    cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
+    echo "Staging commit and HF coding/tool provider evidence verified"
+    exit 0
   fi
   sleep 3
 done
-if [[ "$ok" -ne 1 ]]; then
-  echo "Staging backend did not become healthy" >&2
-  "${SSH[@]}" "$HOST" "docker logs backend-staging --tail 80" || true
-  exit 1
-fi
-echo "Staging backend healthy (internal)"
-"${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(console.log)\""
-echo
-echo "Waiting for canonical TLS $STAGING_HEALTH"
-ok=0
-for _ in $(seq 1 40); do
-  if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q '"status":"ok"'; then
-    ok=1
-    break
-  fi
-  sleep 3
-done
-if [[ "$ok" -ne 1 ]]; then
-  echo "Canonical staging TLS failed: $STAGING_HEALTH" >&2
-  curl -sS -m 8 -v "$STAGING_HEALTH" || true
-  echo
-  echo "sslip.io fallback:" >&2
-  curl -sS -m 8 "https://staging.orvyn.40.160.11.123.sslip.io/api/v1/health" || true
-  echo
-  exit 1
-fi
-echo "Canonical staging hostname healthy: $STAGING_HEALTH"
-curl -sS -m 8 "$STAGING_HEALTH"; echo
-curl -sS -m 12 "https://staging.orvyn.virphoneusa.com/api/v1/health/detailed" || true
-echo
+echo "Staging did not report the candidate commit; production was not deployed" >&2
+exit 1

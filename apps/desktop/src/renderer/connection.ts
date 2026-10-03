@@ -22,7 +22,7 @@ export interface ConnectionConfig {
   apiKey: string;
 }
 
-let current: ConnectionConfig = { backendUrl: LOCAL_BACKEND_URL, apiKey: "" };
+let current: ConnectionConfig = { backendUrl: ORVYN_CLOUD_URL, apiKey: "" };
 const listeners = new Set<(c: ConnectionConfig) => void>();
 
 export async function loadConnectionConfig(): Promise<ConnectionConfig> {

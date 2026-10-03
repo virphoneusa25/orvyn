@@ -148,6 +148,12 @@ export function redactForCustomer<T>(value: T, platformIds: ReadonlySet<string>)
     }
     if (Array.isArray(v)) return v.map((x) => walk(x, key, depth + 1));
     if (v && typeof v === "object") {
+      // Serving telemetry is an explicit, bounded public contract; credentials
+      // and adapter configuration remain redacted everywhere, including here.
+      if (key === "routing") {
+        const r = v as Record<string, unknown>;
+        return { provider: String(r.provider ?? "").slice(0, 80), modelId: String(r.modelId ?? "").slice(0, 240), reason: String(r.reason ?? "").slice(0, 600) };
+      }
       // A customer's own model is shown to them as they entered it (never its key).
       if ((v as { kind?: unknown }).kind === "user" && isUserModelId((v as { id?: string }).id)) {
         const { apiKey: _k, ...own } = v as Record<string, unknown>;

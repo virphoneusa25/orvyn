@@ -84,6 +84,7 @@ export interface AIResponse {
 }
 
 export interface AIChunk {
+  routing?: { provider: string; modelId: string; reason: string };
   delta: string;
   toolCall?: ToolCall;
   /** Image job facts are separate from assistant prose; clients own presentation. */
@@ -129,6 +130,10 @@ export interface ModelCapabilities {
 }
 
 export interface ModelConfig {
+  /** Serving vendor, separate from the adapter wire format. Never contains credentials. */
+  providerName?: string;
+  rate?: { input: number; output: number; cachedInput?: number; source: string; verifiedAt: number; expiresAt: number };
+  routingVerification?: { status: "pending" | "verified" | "failed"; reason: string };
   id: string;
   name: string;
   provider: string; // "ollama" | "vllm" | "llamacpp" | "openai-compatible" | "custom-http"

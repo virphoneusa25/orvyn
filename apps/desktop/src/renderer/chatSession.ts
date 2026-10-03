@@ -27,6 +27,7 @@ export interface ChatActivity {
 }
 
 export interface ChatMessage {
+  routing?: { provider: string; modelId: string; reason: string };
   /** Durable id, shared with the backend session's copy of this message. */
   id?: string;
   role: "user" | "assistant";
@@ -655,6 +656,15 @@ export function appendAssistantDelta(delta: string): void {
   persist();
 }
 
+export function setAssistantRouting(routing: NonNullable<ChatMessage["routing"]>): void {
+  const session = sessions.find((s) => s.id === streamingChatId) ?? active();
+  const last = session?.messages[session.messages.length - 1];
+  if (!last || last.role !== "assistant") return;
+  last.routing = routing;
+  emit();
+  persist();
+}
+
 export function finishAssistantTurn(): void {
   streaming = false;
   const session = sessions.find((s) => s.id === streamingChatId) ?? active();
@@ -744,6 +754,7 @@ export function applyBackendMessages(sessionId: string, list: BackendMessageLike
     id: m.messageId,
     role: m.role === "user" ? "user" : "assistant",
     content: m.content,
+    routing: m.meta?.routing as ChatMessage["routing"],
     runId: m.runId ?? undefined,
     sequence: m.sequence,
     mode: m.mode ?? undefined,

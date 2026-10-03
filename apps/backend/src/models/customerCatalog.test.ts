@@ -85,3 +85,12 @@ test("usage keyed by model or provider is re-keyed under ORVYN names and merged"
   assert.deepEqual(Object.keys(out.days[0].models).sort(), ["ORVYN Auto", "ORVYN Fast", "my:mine"]);
   assert.doesNotMatch(JSON.stringify(out), /fireworks|nebius|gpt-5/i);
 });
+
+test("actual serving telemetry survives the Cloud edge without exposing adapter secrets", () => {
+  const routing = { provider: "huggingface", modelId: "hf:zai-org/GLM-5.3:deepinfra", reason: "Verified cheaper equivalent", apiKey: "fixture-private", endpoint: "https://private.test" };
+  const redacted = redactForCustomer({ routing, apiKey: "fixture-private" }, IDS);
+  assert.equal(redacted.routing.provider, "huggingface");
+  assert.equal(redacted.routing.modelId, routing.modelId);
+  assert.ok(!JSON.stringify(redacted).includes("fixture-private"));
+  assert.ok(!JSON.stringify(redacted).includes("private.test"));
+});

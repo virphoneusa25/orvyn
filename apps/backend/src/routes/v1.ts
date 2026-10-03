@@ -470,13 +470,15 @@ v1Router.post("/routing", (req, res) => {
   ms2.modelService.router.setOverride(task, modelId);
   // Persist so a restart keeps the user's choices instead of reverting to
   // env defaults (which may point at a dead-credits provider).
-  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getOverrides()));
+  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getExplicitOverrides()));
   res.json({ overrides: ms2.modelService.router.getOverrides() });
 });
 
 v1Router.delete("/routing/:task", (req, res) => {
-  const ms3 = requireTenant(req).modelService;
+  const tenant = requireTenant(req);
+  const ms3 = tenant.modelService;
   ms3.router.clearOverride(req.params.task as any);
+  tenant.localStore.setSetting("routing", JSON.stringify(ms3.router.getExplicitOverrides()));
   res.json({ overrides: ms3.router.getOverrides() });
 });
 
@@ -754,6 +756,7 @@ v1Router.post("/chat/completions", async (req, res) => {
         return res.status(409).json({ error: "This task needs a workspace before file tools can run.", code: "WORKSPACE_REQUIRED" });
       }
       _regTools(tc, preflight.projectRoot);
+      await tc.modelService.huggingFaceReady;
       const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
         composerMode: chip,
         workspaceId: preflight.workspaceId,
@@ -863,7 +866,9 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
 // aborts the run itself.
-v1Router.post("/agent/stream/runs", (req, res) => {
+v1Router.post("/agent/stream/runs", async (req, _res, next) => {
+  try { await requireTenant(req).modelService.huggingFaceReady; next(); } catch (error) { next(error); }
+}, (req, res) => {
   const t = requireTenant(req);
   // One owner per turn: an answer-only prompt is a chat turn — no run, no
   // workspace preflight, no resource resolution, no worker scheduling. The

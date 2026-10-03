@@ -1,3 +1,4 @@
+import { incompatibility } from "@orvyn/ai-core";
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { budgetFinalNote, budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
@@ -179,6 +180,7 @@ export type ApprovalScope = "once" | "mission" | "session" | "project" | "always
  * runs in different modes silently shared one another's settings.
  */
 interface RunState {
+  requireVision?: boolean;
   controller: AbortController;
   toolsEnabled: boolean;
   projectRoot: string;
@@ -1031,7 +1033,7 @@ export class StreamingAgentRuntime {
    */
   private escalateRoute(runId: string, state: RunState, reason: string): boolean {
     if (state.modelPinned || !state.route || state.creditWarned) return false;
-    const next = escalateStep(state.route, this.modelService.registry.list().map((p) => p.config.id), [], reason);
+    const next = escalateStep(state.route, this.routingProviders(state).map((p) => p.config.id), [], reason);
     if (!next?.registryId) return false;
     const provider = this.modelService.registry.get(next.registryId);
     if (!provider?.config.capabilities.agent || !provider.supportsTools()) return false;
@@ -1076,9 +1078,9 @@ export class StreamingAgentRuntime {
     if (kind === "model") markModelUnavailable(current.config.id, reason);
     else markProviderFailure(current.config.id, kind, reason);
     const registry = this.modelService.registry;
-    const ids = registry.list().map((p) => p.config.id);
+    const ids = this.routingProviders(state).map((p) => p.config.id);
     const usable = (p: AIModelProvider | undefined): p is AIModelProvider =>
-      Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isRouteBlocked(p.config.id));
+      Boolean(p && p.config.id !== current.config.id && ids.includes(p.config.id));
     let next: AIModelProvider | undefined;
     let how: "same-model" | "same-tier" | "next-tier" | "emergency" | "last-resort" = "same-model";
     // Level 1: the same model on another provider.
@@ -1111,15 +1113,7 @@ export class StreamingAgentRuntime {
     // registered model was considered. Route blocks are heuristic cooldowns
     // (a 404 six hours ago, a provider blip minutes ago) — a dying run may
     // retry past them rather than give up. Never a customer's own model.
-    if (!next) {
-      next = registry.list().find((p) =>
-        p.config.id !== current.config.id &&
-        p.config.capabilities.agent &&
-        p.supportsTools() &&
-        !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id)
-      );
-      if (next) how = "last-resort";
-    }
+    // Exhaustion is preferable to bypassing verified capabilities or disabled routing.
     if (!next) return null;
     if (state.billAtWeight === undefined) state.billAtWeight = state.route?.weight ?? weightFor(current.config.id);
     state.failoverReason = `${kind}: ${current.config.id} → ${next.config.id}`;
@@ -1128,6 +1122,14 @@ export class StreamingAgentRuntime {
     this.store.emit(runId, kind === "model" ? "model.unavailable" : "model.failover", detail);
     console.warn(JSON.stringify({ event: "model.failover", runId, ...detail }));
     return next;
+  }
+
+  private routingProviders(state?: RunState): AIModelProvider[] {
+    return this.modelService.registry.list().filter((p) =>
+      !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: state?.requireVision }) &&
+      !isRouteBlocked(p.config.id) &&
+      (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "")) &&
+      !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id));
   }
 
   /** The capability manifest from the tools this run really has (remote tools included). */
@@ -1279,7 +1281,7 @@ export class StreamingAgentRuntime {
   private async tryHelperStep(runId: string, state: RunState, provider: AIModelProvider, messages: AIMessage[], tools: any): Promise<{ content: string; calls: ToolCall[]; reasoning: string; streamedText: boolean } | null> {
     const currentId = provider.config.id;
     if (!shouldUseHelper({ route: state.route, readOnlyStreak: state.readOnlyStreak, helperRejects: state.helperRejects, currentModelId: currentId, pinned: state.modelPinned })) return null;
-    const helperId = helperFor(state.route, currentId, this.modelService.registry.list().map((p) => p.config.id));
+    const helperId = helperFor(state.route, currentId, this.routingProviders(state).map((p) => p.config.id));
     const helper = helperId ? this.modelService.registry.get(helperId) : undefined;
     if (!helper || !helper.supportsTools() || !helper.config.capabilities.agent) return null;
     let reply: any;
@@ -1517,9 +1519,11 @@ export class StreamingAgentRuntime {
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     // "Auto" with the customer's own model set as default: their model runs the task.
-    requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId);
+    requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId, "agent");
     const registered = this.modelService.registry.list();
     const choice = selectAgentModel({
+      providers: registered,
+      requirements: { vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) },
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
@@ -1532,13 +1536,14 @@ export class StreamingAgentRuntime {
       ? (() => {
           const p = this.modelService.registry.get(choice.registryId ?? "");
           if (!p) throw new Error(`Requested model "${choice.registryId}" is not configured.`);
-          if (!p.config.capabilities.agent) throw new Error(`Requested model "${choice.registryId}" does not support agent runs.`);
+          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
+          if (unsupported) throw new Error(`Requested model "${choice.registryId}": ${unsupported}.`);
           return p;
         })()
       : (() => {
           const picked = choice.registryId ? this.modelService.registry.get(choice.registryId) : undefined;
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
-          return this.modelService.router.resolve("agent");
+          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
         })();
     if (!recovering) this.store.create(runId, projectRoot);
     else {
@@ -1552,7 +1557,8 @@ export class StreamingAgentRuntime {
     // card stays vendor-free ("ORION switched to a compatible vision model").
     const hasImageAttachment = (attachments ?? []).some((a) => a.kind === "image" && a.b64);
     if (hasImageAttachment && !provider.supportsVision()) {
-      const visionProvider = pickVisionFallback(registered, provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
+      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot process image attachments.`);
+      const visionProvider = pickVisionFallback(registered.filter((p) => !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: true }) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))), provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
       if (visionProvider) {
         const previousModel = provider.config.id;
         provider = visionProvider;
@@ -1653,6 +1659,7 @@ export class StreamingAgentRuntime {
 
     this.runs.set(runId, {
       controller: new AbortController(),
+      requireVision: hasImageAttachment,
       toolsEnabled: def.toolsEnabled,
       projectRoot,
       ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
@@ -2519,7 +2526,7 @@ export class StreamingAgentRuntime {
       requiresFrontend: state.intent.requiresFrontend,
       requestedModelId: state.requestedModelId ?? "auto",
       actualModelId: provider.config.id,
-      provider: provider.config.provider,
+      provider: provider.config.providerName ?? provider.config.provider,
       reasoningEffortRequested: state.reasoningEffort,
       reasoningEffortApplied: reasoningApplied,
       ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode } : {}),
@@ -3156,10 +3163,11 @@ export class StreamingAgentRuntime {
         state.gateRetries += 1;
         if (!state.modelPinned) {
           const escalated = selectAgentModel({
+            providers: this.routingProviders(state),
             intent: state.intent,
             composerMode: state.composerMode,
             requestedModelId: state.requestedModelId,
-            availableIds: this.modelService.registry.list().map((p) => p.config.id),
+            availableIds: this.routingProviders(state).map((p) => p.config.id),
             escalate: Math.min(state.gateRetries, 2),
           });
           const next = escalated.registryId ? this.modelService.registry.get(escalated.registryId) : undefined;
@@ -3264,7 +3272,7 @@ export class StreamingAgentRuntime {
       },
 
       onTurn: (record) => {
-        this.store.emit(runId, "agent.turn", { ...record, modelId: provider.config.id });
+        this.store.emit(runId, "agent.turn", { ...record, modelId: provider.config.id, routing: { provider: provider.config.providerName ?? provider.config.id.split(":")[0], modelId: provider.config.id, reason: state.failoverReason ?? state.route?.reason ?? "Explicit model selection" } });
       },
     };
 
@@ -4177,10 +4185,11 @@ export class StreamingAgentRuntime {
     }
     if (decision.escalate > 0 && !state.modelPinned) {
       const escalated = selectAgentModel({
+      providers: this.routingProviders(state),
         intent: state.intent,
         composerMode: state.composerMode,
         requestedModelId: state.requestedModelId,
-        availableIds: this.modelService.registry.list().map((p) => p.config.id),
+        availableIds: this.routingProviders(state).map((p) => p.config.id),
         escalate: decision.escalate,
       });
       if (escalated.registryId) state.handoffModelId = escalated.registryId;

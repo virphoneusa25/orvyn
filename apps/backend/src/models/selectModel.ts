@@ -2,6 +2,8 @@
 // A model that is not registered is skipped; the caller keeps its previous route.
 
 import type { TaskIntent } from "../agent/taskIntent";
+import { preferHuggingFace, incompatibility, routeFamily, type AIModelProvider, type RoutingRequirements } from "@orvyn/ai-core";
+import { isRouteBlocked } from "./modelAvailability";
 import { CERTIFIED_MODELS, laneModel, type LaneModel } from "./certifiedModels";
 import { escalate, LADDERS, profileFor, startRoute, stepFrom, TIERS, type RouteProfile, type RouteStep, type Tier } from "./routingPolicy";
 
@@ -41,12 +43,19 @@ export function selectAgentModel(input: {
   deep?: boolean;
   /** Registered models that understand images (for the Vision lane). */
   visionIds?: string[];
+  providers?: AIModelProvider[];
+  requirements?: Partial<RoutingRequirements>;
 }): AgentModelChoice {
   const requested = (input.requestedModelId ?? "auto").trim() || "auto";
   const laneRequest: ModelLaneRequest = LANE_REQUESTS.has(requested) ? (requested as ModelLaneRequest) : "auto";
   const pinned = Boolean(requested && requested !== "auto" && !LANE_REQUESTS.has(requested));
   if (pinned) {
     return { registryId: requested, lane: "pinned", reason: "User pinned this model.", pinned: true };
+  }
+  const needs: RoutingRequirements = { capability: "agent", tools: true, streaming: true, ...input.requirements };
+  if (input.providers) {
+    const eligible = new Set(input.providers.filter((p) => !incompatibility(p.config, needs) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))).map((p) => p.config.id));
+    input = { ...input, availableIds: input.availableIds.filter((id) => eligible.has(id)) };
   }
   const health = input.health ?? [];
   const mode = (input.composerMode ?? "").toLowerCase();
@@ -57,9 +66,9 @@ export function selectAgentModel(input: {
   if (laneRequest === "reasoning" || laneRequest === "research" || laneRequest === "vision") {
     // ORVYN's named models (customer catalog): a fixed ladder per model.
     const tiers: Tier[] = laneRequest === "reasoning" ? ["deep"] : laneRequest === "research" ? ["research", "deep"] : ["vision", "server", "auto"];
-    const pool = laneRequest === "vision" ? (input.visionIds ?? []) : input.availableIds;
+    const pool = laneRequest === "vision" ? (input.visionIds ?? []).filter((id) => input.availableIds.includes(id)) : input.availableIds;
     const hit = stepFrom(tiers, 0, pool, health);
-    const fallbackVision = laneRequest === "vision" && !hit ? (input.visionIds ?? [])[0] ?? null : null;
+    const fallbackVision = laneRequest === "vision" && !hit ? pool[0] ?? null : null;
     route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? tiers[0]!, registryId: hit?.registryId ?? fallbackVision, weight: TIERS[hit?.tier ?? tiers[0]!].weight, reason: `${laneRequest[0]!.toUpperCase()}${laneRequest.slice(1)} (requested).` };
   } else if (laneRequest === "premium") {
     // Premium long-horizon work starts on Kimi K3. Ultra remains a separate,
@@ -78,6 +87,12 @@ export function selectAgentModel(input: {
     const next = escalate(route, input.availableIds, health, "Escalated after repairs did not work.");
     if (!next) break;
     route = next;
+  }
+  if (input.providers && laneRequest === "auto" && steps === 0) {
+    const family = input.intent.informational && !input.deep && !input.intent.requiresFrontend ? "flash" : routeFamily(route.registryId ?? "") ?? (route.tier === "code" ? "code" : route.tier === "agent" || route.tier === "heavy" ? "advanced" : route.tier === "auto" ? "flash" : undefined);
+    const preferred = preferHuggingFace(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""), isRouteBlocked, family);
+    if (preferred.provider) route = { ...route, registryId: preferred.provider.config.id, reason: preferred.reason };
+    else route = { ...route, reason: `${route.reason} ${preferred.reason}` };
   }
   return {
     registryId: route.registryId,

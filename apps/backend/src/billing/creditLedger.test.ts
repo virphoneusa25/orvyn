@@ -307,3 +307,21 @@ test("v1 balances migrate once into attributed opening entries", () => {
   assert.equal(again.snapshot("old").purchasedBalance, 500, "not migrated twice");
   again.close();
 });
+
+test("exact HF quotes remain versioned when calls finish after a price refresh", () => {
+  const { db, dir } = ledger();
+  try {
+    const t0 = Date.now();
+    const card = { provider: "huggingface", modelId: "hf:zai-org/GLM-5.3:deepinfra", inputUsdPerMillion: 0.9, cachedInputUsdPerMillion: 0.9, outputUsdPerMillion: 4 };
+    db.setRateCard({ ...card, effectiveFrom: t0 });
+    db.setRateCard({ ...card, inputUsdPerMillion: 1.4, effectiveFrom: t0 + 1000 });
+    const oldCall = db.charge({ userId: "fixture", type: "model", provider: card.provider, model: card.modelId, inputTokens: 1_000_000, outputTokens: 0, now: t0 + 2000, rateAt: t0 });
+    assert.equal(oldCall.providerCostUsd, 0.9);
+    const nextCall = db.charge({ userId: "fixture", type: "model", provider: card.provider, model: card.modelId, inputTokens: 1_000_000, outputTokens: 0, now: t0 + 2001 });
+    assert.equal(nextCall.providerCostUsd, 1.4);
+    // A late quote must not close the later version or reprice historical usage.
+    db.setRateCard({ ...card, inputUsdPerMillion: 1, effectiveFrom: t0 + 500 });
+    assert.equal(db.rateCardAt(card.provider, card.modelId, t0 + 1500)?.inputUsdPerMillion, 1.4);
+    assert.equal(db.rateCardAt(card.provider, card.modelId, t0 + 750)?.inputUsdPerMillion, 1);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

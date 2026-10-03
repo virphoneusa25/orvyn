@@ -4,6 +4,7 @@ import { api } from "./api";
 // one-minute single-use ticket (the session token never rides a URL).
 
 export interface ChatChunk {
+  routing?: { provider: string; modelId: string; reason: string };
   delta?: string;
   done?: boolean;
   error?: string;

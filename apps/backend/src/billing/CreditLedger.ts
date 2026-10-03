@@ -93,6 +93,8 @@ interface RateCard {
 }
 
 export interface UsageChargeInput {
+  /** The rate quoted when inference began; late completions keep that version. */
+  rateAt?: number;
   userId: string;
   organizationId?: string;
   sessionId?: string;
@@ -260,15 +262,17 @@ export class CreditLedger {
 
   setRateCard(card: Omit<RateCard, "id" | "effectiveTo"> & { effectiveFrom?: number }): RateCard {
     const from = card.effectiveFrom ?? Date.now();
+    if (![card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion].every((n) => Number.isFinite(n) && n >= 0)) throw new Error("Invalid provider rates");
+    const future = this.db.prepare(`SELECT MIN(effective_from) AS next FROM rate_cards WHERE model_id = ? AND provider = ? AND effective_from > ?`).get(card.modelId, card.provider, from) as { next: number | null };
     this.db.prepare(
-      `UPDATE rate_cards SET effective_to = ? WHERE model_id = ? AND provider = ? AND effective_to IS NULL AND effective_from < ?`,
-    ).run(from, card.modelId, card.provider, from);
+      `UPDATE rate_cards SET effective_to = ? WHERE model_id = ? AND provider = ? AND (effective_to IS NULL OR effective_to > ?) AND effective_from < ?`,
+    ).run(from, card.modelId, card.provider, from, from);
     const id = `rc_${randomUUID().slice(0, 8)}`;
     this.db.prepare(
       `INSERT INTO rate_cards (id, provider, model_id, input_usd_per_million, cached_input_usd_per_million, output_usd_per_million, effective_from, effective_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-    ).run(id, card.provider, card.modelId, card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion, from);
-    return { ...card, id, effectiveFrom: from, effectiveTo: null };
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, card.provider, card.modelId, card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion, from, future.next);
+    return { ...card, id, effectiveFrom: from, effectiveTo: future.next };
   }
 
   rateCardAt(provider: string, modelId: string, at: number): RateCard | null {
@@ -522,7 +526,7 @@ export class CreditLedger {
     const prior = this.db.prepare(`SELECT credits_charged, provider_cost_micros FROM usage_events WHERE id = ?`).get(eventId) as { credits_charged: number; provider_cost_micros: number } | undefined;
     if (prior) return { creditsCharged: 0, providerCostUsd: prior.provider_cost_micros / 1_000_000, eventId };
     const lane: Lane = input.lane ?? "auto";
-    const card = this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", now);
+    const card = this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", input.rateAt ?? now);
     const cost = input.providerCostUsd ?? (card
       ? providerCostUsd({
           inputTokens: input.inputTokens,

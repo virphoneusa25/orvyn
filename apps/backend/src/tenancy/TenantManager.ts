@@ -154,13 +154,22 @@ export class TenantManager {
     // After it: settle exactly once per call (the usage event id is the key).
     modelService.usage.onRecord((event) => {
       const own = modelService.isUserModel(event.modelId);
+      if (!own && event.rate) {
+        const r = event.rate;
+        const previous = creditLedger.rateCardAt(event.provider, event.modelId, r.verifiedAt);
+        const cached = r.cachedInput ?? r.input;
+        if (!previous || previous.modelId !== event.modelId || previous.provider !== event.provider || previous.inputUsdPerMillion !== r.input || previous.outputUsdPerMillion !== r.output || previous.cachedInputUsdPerMillion !== cached) {
+          creditLedger.setRateCard({ provider: event.provider, modelId: event.modelId, inputUsdPerMillion: r.input, cachedInputUsdPerMillion: cached, outputUsdPerMillion: r.output, effectiveFrom: r.verifiedAt });
+        }
+      }
       creditLedger.charge({
         eventId: event.id,
+        rateAt: event.rate?.verifiedAt,
         ...(own ? { providerCostUsd: 0 } : {}),
         userId: id, runId: event.missionId, sessionId: event.missionId,
         type: event.method === "image" ? "image" : "model",
         provider: event.provider, model: event.modelId, lane: laneForUsage(event),
-        inputTokens: event.promptTokens, outputTokens: event.completionTokens, ok: event.ok,
+        inputTokens: event.promptTokens, cachedInputTokens: event.cachedTokens, outputTokens: event.completionTokens, ok: event.ok, now: event.timestamp,
       });
     });
     // Restore the user's routing choices, the same way the autonomy profile is
@@ -172,7 +181,7 @@ export class TenantManager {
         for (const [task, modelId] of Object.entries(JSON.parse(savedRouting))) {
           const provider = modelService.registry.get(String(modelId));
           if (!provider) continue; // model was removed; env default stands
-          if (!provider.config.capabilities[requiredCapability(task as TaskType)]) continue;
+          if (!provider.config.capabilities[requiredCapability(task as TaskType)] && provider.config.routingVerification?.status !== "pending") continue;
           modelService.router.setOverride(task as TaskType, String(modelId));
         }
       } catch {

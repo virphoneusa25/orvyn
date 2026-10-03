@@ -175,7 +175,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
       }),
       finishReason: choice?.finish_reason === "tool_calls" ? "tool_call" : (choice?.finish_reason ?? "stop"),
       usage: data.usage
-        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens, ...cachedTokensOf(data.usage) }
         : undefined,
     };
   }
@@ -284,6 +284,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
             usage = {
               promptTokens: json.usage.prompt_tokens ?? 0,
               completionTokens: json.usage.completion_tokens ?? 0,
+              ...cachedTokensOf(json.usage),
             };
           }
           const fr = json.choices?.[0]?.finish_reason;

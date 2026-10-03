@@ -17,7 +17,7 @@ import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, Attachment, TaskType, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
+import { AIMessage, AIChunk, Attachment, TaskType, incompatibility, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
 import { decideTurn, type TurnDecision } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -47,6 +47,7 @@ export interface ChatContext {
 }
 
 export interface ChatTurnRequest {
+  signal?: AbortSignal;
   task: TaskType;
   history: AIMessage[];
   userMessage: string;
@@ -270,29 +271,34 @@ export class Orchestrator {
   ) {}
 
   private resolveProvider(req: ChatTurnRequest) {
-    const requested = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(req.requestedModelId)?.trim();
+    const requested = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(req.requestedModelId, req.task)?.trim();
     // ORVYN's named models (Fast, Reasoning, Code, Research, Vision): resolved server-side.
     if (requested && isCustomerModelId(requested) && requested !== "auto") {
-      const view = this.modelService.registry.list().map((p) => ({ id: p.config.id, vision: p.supportsVision(), chat: (p.config.capabilities as any).chat !== false, mock: p.config.provider === "mock" }))
+      const view = this.modelService.registry.list().filter((p) => !incompatibility(p.config, this.chatRequirements(req))).map((p) => ({ id: p.config.id, vision: p.supportsVision(), chat: (p.config.capabilities as any).chat !== false, mock: p.config.provider === "mock" }))
         .filter((r) => !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(r.id));
       const id = resolveCustomerModel(requested, view);
       const provider = id ? this.modelService.registry.get(id) : undefined;
       if (provider && !isRouteBlocked(provider.config.id)) return provider;
-      if (provider) return this.chatAlternative(provider) ?? provider;
+      if (provider) return this.chatAlternative(provider, req) ?? provider;
     }
     if (requested && requested !== "auto" && !isCustomerModelId(requested)) {
       const provider = this.modelService.registry.get(requested);
       if (!provider) throw new Error(`Requested model "${requested}" is not configured.`);
       const capability = req.task === "chat" ? "chat" : req.task;
       if (!(provider.config.capabilities as any)[capability]) throw new Error(`Requested model "${requested}" cannot handle "${req.task}".`);
+      const unsupported = incompatibility(provider.config, this.chatRequirements(req));
+      if (unsupported) throw new Error(`Requested model "${requested}": ${unsupported}.`);
       return provider;
     }
     const hasImages =
       (req.attachments ?? []).some((a) => a.kind === "image") ||
       (req.context?.attachments ?? []).some((a) => a.kind === "image");
+    if (this.modelService.router.getExplicitOverrides()[req.task]) return this.modelService.router.resolve(req.task, this.chatRequirements(req));
+    const preferred = this.modelService.router.preferred(req.task, this.chatRequirements(req), isDeepQuestion(req.userMessage, req.reasoningEffort) ? "advanced" : undefined);
+    if (preferred.provider) return preferred.provider;
     if (hasImages) {
       try {
-        const vision = this.modelService.router.resolve("vision");
+        const vision = this.modelService.router.resolve("vision", this.chatRequirements(req));
         if (vision.supportsVision()) return vision;
       } catch {
         // Fall through to the requested task.
@@ -302,26 +308,32 @@ export class Orchestrator {
     if (req.task === "chat" && isDeepQuestion(req.userMessage, req.reasoningEffort)) {
       const route = startRoute({ profile: "deep", instruction: req.userMessage, availableIds: this.modelService.registry.list().map((p) => p.config.id) });
       const deep = route.registryId ? this.modelService.registry.get(route.registryId) : undefined;
-      if (deep && (deep.config.capabilities as any).chat !== false) return deep;
+      if (deep && !incompatibility(deep.config, this.chatRequirements(req)) && !isRouteBlocked(deep.config.id)) return deep;
     }
     // A normal answer-only chat starts on the utility lane. This avoids the
     // agent runtime entirely and keeps provider/model names behind ORION.
     if (req.task === "chat") {
       const hit = stepFrom(["utility", "auto", "agent"], 0, this.modelService.registry.list().map((p) => p.config.id));
       const fast = hit ? this.modelService.registry.get(hit.registryId) : undefined;
-      if (fast && (fast.config.capabilities as any).chat !== false && !isRouteBlocked(fast.config.id)) return fast;
+      if (fast && !incompatibility(fast.config, this.chatRequirements(req)) && (!fast.config.id.startsWith("hf:") || /^(1|true)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "")) && !isRouteBlocked(fast.config.id)) return fast;
     }
-    const routed = this.modelService.router.resolve(req.task);
+    const routed = this.modelService.router.resolve(req.task, this.chatRequirements(req));
     if (!isRouteBlocked(routed.config.id)) return routed;
     // The routed model is missing, or its provider is cooling down: the same model elsewhere, else another chat model.
-    return this.chatAlternative(routed) ?? routed;
+    return this.chatAlternative(routed, req) ?? routed;
+  }
+
+  private chatRequirements(req: ChatTurnRequest) {
+    return { capability: req.task === "embedding" ? "embeddings" as const : req.task === "planner" || req.task === "executor" ? "agent" as const : req.task === "reviewer" ? "chat" as const : req.task,
+      tools: Boolean(this.webTools), streaming: true,
+      vision: (req.attachments ?? []).some((a) => a.kind === "image") || (req.context?.attachments ?? []).some((a) => a.kind === "image") };
   }
 
   /** Same model on another provider first, then same/stronger lanes, then any capable chat model. */
-  private chatAlternative(current: AIModelProvider): AIModelProvider | undefined {
+  private chatAlternative(current: AIModelProvider, req?: ChatTurnRequest): AIModelProvider | undefined {
     const registry = this.modelService.registry;
     const ok = (p: AIModelProvider | undefined): p is AIModelProvider =>
-      Boolean(p && p.config.id !== current.config.id && p.config.id !== "orvyn-mock" && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && (p.config.capabilities as any).chat !== false && p.supportsTools() && !isRouteBlocked(p.config.id));
+      Boolean(p && p.config.id !== current.config.id && p.config.id !== "orvyn-mock" && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id) && !incompatibility(p.config, req ? this.chatRequirements(req) : { capability: "chat", tools: true, streaming: true }) && (!p.config.id.startsWith("hf:") || /^(1|true)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "")) && !isRouteBlocked(p.config.id));
     for (const id of sameModelElsewhere(current.config.id, (x) => Boolean(registry.get(x)))) {
       const p = registry.get(id);
       if (ok(p)) return p;
@@ -333,22 +345,27 @@ export class Orchestrator {
   }
 
   /** A chat model call failed before anything was shown: mark it and pick where to retry. */
-  private chatFailover(current: AIModelProvider, kind: FailureClass, err: unknown): AIModelProvider | undefined {
+  private chatFailover(current: AIModelProvider, kind: FailureClass, err: unknown, req: ChatTurnRequest): AIModelProvider | undefined {
     const reason = String((err as Error)?.message ?? err);
     if (kind === "model") markModelUnavailable(current.config.id, reason);
     else markProviderFailure(current.config.id, kind, reason);
-    const next = this.chatAlternative(current);
+    const next = this.chatAlternative(current, req);
     console.warn(JSON.stringify({ event: "model.failover", surface: "chat", modelId: current.config.id, fallback: next?.config.id ?? null, failure: kind, reason: reason.slice(0, 200) }));
     return next;
   }
 
   async *streamChat(req: ChatTurnRequest): AsyncIterable<AIChunk & { activity?: ChatActivity; retract?: boolean; artifacts?: { artifactId: string; name: string; mimeType: string }[] }> {
+    await this.modelService.huggingFaceReady;
+    if (req.signal?.aborted) return;
     const turnDecision = req.turnDecision ?? decideTurn(req.userMessage);
     if (turnDecision.requiresExecution && looksLikeImageRequest(req.userMessage) && !usesGivenImage(req)) {
       yield* this.streamGeneratedImage(req);
       return;
     }
     let provider = this.resolveProvider(req);
+    const routingReason = this.modelService.router.preferred(req.task, this.chatRequirements(req), isDeepQuestion(req.userMessage, req.reasoningEffort) ? "advanced" : undefined).reason;
+    let usedReported = false;
+    let actualReason = req.requestedModelId && req.requestedModelId !== "auto" ? "Explicit model selection" : routingReason;
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
@@ -465,7 +482,11 @@ export class Orchestrator {
         let received = false;
         for (let attempt = 0; ; attempt++) {
         try {
-        for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools })) {
+        for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools, signal: req.signal })) {
+          if (!usedReported && (chunk.delta || chunk.toolCall || chunk.done)) {
+            usedReported = true;
+            yield { delta: "", done: false, routing: { provider: provider.config.providerName ?? provider.config.id.split(":")[0], modelId: provider.config.id, reason: actualReason } };
+          }
           if (chunk.toolCall || chunk.delta) received = true;
           if (chunk.toolCall) { calls.push(chunk.toolCall); continue; }
           if (chunk.done) break;
@@ -478,7 +499,7 @@ export class Orchestrator {
             if (buffered.trim().length < 8) continue;
             decided = true;
             if (isMostlyChinese(buffered)) {
-              const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature });
+              const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature, signal: req.signal });
               const english = String(retry?.content ?? "");
               for (const piece of english.match(/[\s\S]{1,24}/g) ?? []) {
                 yield { delta: piece, done: false };
@@ -496,9 +517,11 @@ export class Orchestrator {
         break;
         } catch (err) {
           const kind = classifyModelFailure(err);
-          const next = !received && kind && attempt < 3 ? this.chatFailover(provider, kind, err) : undefined;
+          const next = !req.signal?.aborted && !received && kind && attempt < 3 ? this.chatFailover(provider, kind, err, req) : undefined;
           if (!next) throw err;
           provider = next;
+          usedReported = false;
+          actualReason = `Provider failure: ${kind}; compatible fallback`;
           buffered = "";
         }
         }
@@ -631,9 +654,10 @@ export class Orchestrator {
       }
       return { content, finishReason: "stop" as const };
     }
+    await this.modelService.huggingFaceReady;
     const provider = this.resolveProvider(req);
     const messages = await buildMessages(req, this.indexService, this.memory);
-    return provider.generate({ messages, temperature: req.context?.mode === "ask" ? 0.7 : 0.3 });
+    return provider.generate({ messages, temperature: req.context?.mode === "ask" ? 0.7 : 0.3, signal: req.signal });
   }
 
   private async *streamGeneratedImage(req: ChatTurnRequest): AsyncIterable<AIChunk> {

@@ -53,3 +53,18 @@ test("a preflight refusal stops the call before the provider is reached", async 
   await assert.rejects(async () => { for await (const _ of wrapped.stream({ messages: [] } as any)) { /* */ } }, /out of credits/);
   assert.equal(reached, false);
 });
+
+test("reported zero output and cached tokens are kept with the actual provider and quote", async () => {
+  const usage = new UsageService();
+  const provider = fakeProvider([{ delta: "", done: true, usage: { promptTokens: 20, completionTokens: 0, cachedTokens: 5 } } as any]);
+  provider.config.providerName = "huggingface";
+  provider.config.rate = { input: 0.9, output: 4, verifiedAt: 100, expiresAt: Date.now() + 1000, source: "fixture" };
+  const wrapped = usage.wrap(provider);
+  for await (const _ of wrapped.stream({ messages: [{ role: "user", content: "hello" }] } as any)) { /* drain */ }
+  const event = usage.recent()[0];
+  assert.equal(event.provider, "huggingface");
+  assert.equal(event.completionTokens, 0);
+  assert.equal(event.cachedTokens, 5);
+  assert.equal(event.estimated, undefined);
+  assert.equal(event.rate?.input, 0.9);
+});

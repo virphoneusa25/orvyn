@@ -13,7 +13,7 @@ import { isRouteBlocked } from "./modelAvailability";
 export const SAME_MODEL: { key: string; ids: string[] }[] = [
   { key: "glm-5.3", ids: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "hf:zai-org/GLM-5.3:deepinfra"] },
   { key: "glm-5.3-flash", ids: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash", "hf:zai-org/GLM-5.3-Flash:deepinfra"] },
-  { key: "kimi-k2.7-code", ids: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
+  { key: "kimi-k2.7-code", ids: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code", "hf:moonshotai/Kimi-K2.7-Code:deepinfra"] },
   { key: "kimi-k3", ids: ["nebius:moonshotai/Kimi-K3", "ci:kimi-k3"] },
   { key: "deepseek-v4-pro", ids: ["nebius:deepseek-ai/DeepSeek-V4-Pro", "ci:deepseek-v4-pro", "deepseek-v4-pro"] },
 ];

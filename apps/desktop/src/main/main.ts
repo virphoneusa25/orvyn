@@ -14,6 +14,8 @@ import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
 import { sampleHostStats } from "./systemStats";
 import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
+import { captureProviderCredentials } from "./providerEnvironment";
+const backendProviderCredentials = captureProviderCredentials(process.env);
 
 let browserManager: WorkbenchBrowserManager | null = null;
 let browserSessions: BrowserSessionManager | null = null;
@@ -49,7 +51,7 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
     await fs.access(entry);
     const executable = app.isPackaged ? path.join(backend, "node.exe") : "node";
     const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
-    const env = { ...process.env, PORT: "4570" };
+    const env = { ...process.env, ...backendProviderCredentials, PORT: "4570" };
     delete (env as { ORVYN_CLOUD_MODE?: string }).ORVYN_CLOUD_MODE;
     localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env});
     localEngine.stdout?.pipe(log, {end: false});
@@ -525,7 +527,7 @@ ipcMain.handle("project:readBinary", async (_evt, relativePath: string) => {
 });
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "orvyn-connection.json");
-const DEFAULT_CONFIG = { backendUrl: "http://localhost:4570", apiKey: "" };
+const DEFAULT_CONFIG = { backendUrl: process.env.ORVYN_CLOUD_URL?.trim() || "https://orvyn.virphoneusa.com", apiKey: "" };
 
 interface PersistedConfig {
   backendUrl?: string;

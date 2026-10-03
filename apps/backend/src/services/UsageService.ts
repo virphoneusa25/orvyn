@@ -15,7 +15,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { AIChunk, AIModelProvider, AIRequest, AIResponse } from "@orvyn/ai-core";
+import { AIChunk, AIModelProvider, AIRequest, AIResponse, type ModelConfig } from "@orvyn/ai-core";
 import { isTransientError, withModelRetries } from "./modelRetries";
 
 export interface UsageContext {
@@ -27,6 +27,8 @@ export interface UsageContext {
 }
 
 export interface UsageEvent {
+  rate?: ModelConfig["rate"];
+  cachedTokens?: number;
   id: string;
   timestamp: number;
   modelId: string;
@@ -290,6 +292,7 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
+        const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
         usage.checkQuota();
         usage.checkMissionBudget();
         usage.runPreflight(inner.config);
@@ -301,10 +304,12 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          const reported = Boolean(res.usage?.promptTokens || res.usage?.completionTokens);
+          const reported = Boolean(res.usage);
           usage.record({
+            rate,
+            cachedTokens: res.usage?.cachedTokens,
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: true,
@@ -318,7 +323,7 @@ export class UsageService {
         } catch (err: any) {
           usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: false,
@@ -335,7 +340,8 @@ export class UsageService {
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
-        let reportedUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+        const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
+        let reportedUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number } | undefined;
         let settled = false;
         let yieldedAny = false;
         const recordOk = () => {
@@ -343,13 +349,15 @@ export class UsageService {
           settled = true;
           usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
             durationMs: Date.now() - start,
             ok: true,
-            promptTokens: reportedUsage?.promptTokens || estimateTokens(requestChars(request)),
-            completionTokens: reportedUsage?.completionTokens || estimateTokens(chars),
-            estimated: reportedUsage?.promptTokens || reportedUsage?.completionTokens ? undefined : true,
+            rate,
+            cachedTokens: reportedUsage?.cachedTokens,
+            promptTokens: reportedUsage?.promptTokens ?? estimateTokens(requestChars(request)),
+            completionTokens: reportedUsage?.completionTokens ?? estimateTokens(chars),
+            estimated: reportedUsage ? undefined : true,
             outputChars: chars,
             toolCalls: toolCalls || undefined,
           });
@@ -387,7 +395,7 @@ export class UsageService {
           settled = true;
           usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
             durationMs: Date.now() - start,
             ok: false,
@@ -420,7 +428,7 @@ export class UsageService {
           const res = await inner.generateImage!(request);
           usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "image",
             durationMs: Date.now() - start,
             ok: true,
@@ -429,7 +437,7 @@ export class UsageService {
         } catch (err: any) {
           usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "image",
             durationMs: Date.now() - start,
             ok: false,
