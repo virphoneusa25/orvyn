@@ -83,7 +83,7 @@ fi
 if ! grep -q STAGING_DOMAIN .env; then
   echo 'STAGING_DOMAIN=staging.orvyn.virphoneusa.com' >> .env
 fi
-if ! docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build; then
+if ! ORVYN_BUILD_SHA='$BUILD_COMMIT' docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build; then
   echo 'Staging compose startup failed; backend container diagnostics follow' >&2
   docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging ps backend-staging || true
   docker logs backend-staging --tail 80 || true
