@@ -22,30 +22,28 @@ export function ImageGenerationMessage({ job, onRetry, onReady }: {
 
   useEffect(() => {
     if (!asset || !canLoad) return;
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, 45_000);
-    let objectUrl: string | null = null;
     setSrc(null);
     setLoadError(null);
-    void fetch(apiUrl(`/artifacts/${encodeURIComponent(asset.artifactId)}/preview`), { headers: authHeaders(), signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Image preview returned HTTP ${response.status}.`);
-        objectUrl = URL.createObjectURL(await response.blob());
-        return decodeImageSource(objectUrl);
-      })
-      .then(() => {
-        if (timedOut) throw new Error("The image preview took too long to load.");
-        if (controller.signal.aborted || !objectUrl) return;
-        setSrc(objectUrl);
-        callbacks.current.onReady?.();
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted && !timedOut) return;
-        const message = timedOut ? "The image preview took too long to load." : error instanceof Error ? error.message : "The generated image could not be loaded.";
-        setLoadError(message);
+    let alive = true;
+    void (async () => {
+      const response = await fetch(apiUrl(`/artifacts/${encodeURIComponent(asset.artifactId)}/preview-link`), {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: "{}",
       });
-    return () => { window.clearTimeout(timer); controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+      if (!response.ok) throw new Error(`Image preview link returned HTTP ${response.status}.`);
+      const payload = await response.json() as { url?: string };
+      if (!payload.url) throw new Error("The image preview link was missing.");
+      // Let the browser stream the image directly instead of buffering the whole file as a Blob.
+      const url = new URL(payload.url, apiUrl("")).toString();
+      await decodeImageSource(url);
+      if (!alive) return;
+      setSrc(url);
+      callbacks.current.onReady?.();
+    })().catch((error: unknown) => {
+      if (alive) setLoadError(error instanceof Error ? error.message : "The generated image could not be loaded.");
+    });
+    return () => { alive = false; };
   }, [asset?.artifactId, canLoad, loadAttempt]);
 
   const download = async () => {

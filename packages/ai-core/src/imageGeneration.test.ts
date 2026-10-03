@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeImageSource, imageAssetFailurePresentation, imageGenerationPresentation, imageGenerationView, markImageGenerationFailed, markImageGenerationReady, retryImageGeneration, type ImageElementLike, type ImageGenerationJob } from "./imageGeneration";
+import { decodeImageSource, ImageDecodeTimeoutError, imageAssetFailurePresentation, imageGenerationPresentation, imageGenerationView, markImageGenerationFailed, markImageGenerationReady, retryImageGeneration, type ImageElementLike, type ImageGenerationJob } from "./imageGeneration";
 
 const asset = { artifactId: "art_1", name: "moon.png", mimeType: "image/png" };
 const job = (status: ImageGenerationJob["status"], assets?: ImageGenerationJob["assets"]): ImageGenerationJob => ({ id: "img_1", prompt: "moon over mountains", status, assets });
@@ -93,5 +93,5 @@ test("broken URLs and decode failures reject instead of marking ready", async ()
 
 test("image decoding has a finite timeout when the browser never fires load or error", async () => {
   const image: ImageElementLike = { src: "", naturalWidth: 0, naturalHeight: 0, onload: null, onerror: null };
-  await assert.rejects(decodeImageSource("stalled:", () => image, 5), /could not be loaded or decoded/i);
+  await assert.rejects(decodeImageSource("stalled:", () => image, 5), ImageDecodeTimeoutError);
 });

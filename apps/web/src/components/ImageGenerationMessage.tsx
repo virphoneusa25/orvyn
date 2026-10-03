@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { decodeImageSource, imageAssetFailurePresentation, imageGenerationPresentation, imageGenerationView, retryImageGeneration, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
+import { decodeImageSource, ImageDecodeTimeoutError, imageAssetFailurePresentation, imageGenerationPresentation, imageGenerationView, retryImageGeneration, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
 import { blobUrl, downloadArtifact, imageLink } from "../lib/api";
 import { usePreview } from "./Preview";
 import { Orb } from "./Orb";
@@ -36,15 +36,25 @@ export function ImageGenerationMessage({ job, onRetry, onReady }: {
     void (async () => {
       try {
         const directUrl = await imageLink(asset.artifactId, { refresh: loadAttempt > 0 });
-        try { await setReady(directUrl); return; } catch { /* the capability link may be stale or routed to another cloud worker */ }
+        try { await setReady(directUrl); return; } catch (error) {
+          // A slow but valid image must not be discarded and downloaded again from byte zero.
+          if (error instanceof ImageDecodeTimeoutError) throw error;
+          /* the capability link may be stale or routed to another cloud worker */
+        }
         try {
           const refreshedUrl = await imageLink(asset.artifactId, { refresh: true });
           await setReady(refreshedUrl);
           return;
-        } catch { /* fall back to the authenticated artifact endpoint */ }
-      } catch { /* get a fresh authenticated blob URL below */ }
+        } catch (error) {
+          if (error instanceof ImageDecodeTimeoutError) throw error;
+          /* fall back to the authenticated artifact endpoint */
+        }
+      } catch (error) {
+        if (error instanceof ImageDecodeTimeoutError) throw error;
+        /* get a fresh authenticated blob URL below */
+      }
       if (!alive) return;
-      const blob = await blobUrl(`/artifacts/${encodeURIComponent(asset.artifactId)}/preview`);
+      const blob = await blobUrl(`/artifacts/${encodeURIComponent(asset.artifactId)}/preview`, 120_000);
       objectUrl = blob.url;
       await setReady(objectUrl);
     })().catch((error: unknown) => {

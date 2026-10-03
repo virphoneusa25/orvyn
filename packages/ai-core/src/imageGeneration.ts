@@ -80,8 +80,15 @@ export interface ImageElementLike {
   decode?: () => Promise<void>;
 }
 
+export class ImageDecodeTimeoutError extends Error {
+  constructor() {
+    super("Image loading is taking longer than expected. Try loading it again.");
+    this.name = "ImageDecodeTimeoutError";
+  }
+}
+
 /** Resolve only after load and decode both confirm that the image is displayable. */
-export function decodeImageSource(source: string, createImage: () => ImageElementLike = () => new Image() as unknown as ImageElementLike, timeoutMs = 30_000): Promise<ImageElementLike> {
+export function decodeImageSource(source: string, createImage: () => ImageElementLike = () => new Image() as unknown as ImageElementLike, timeoutMs = 120_000): Promise<ImageElementLike> {
   return new Promise((resolve, reject) => {
     const image = createImage();
     let settled = false;
@@ -93,7 +100,12 @@ export function decodeImageSource(source: string, createImage: () => ImageElemen
       cleanup();
       reject(new Error("The generated image could not be loaded or decoded."));
     };
-    timer = setTimeout(() => fail(), timeoutMs);
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new ImageDecodeTimeoutError());
+    }, timeoutMs);
     image.onload = () => {
       if (settled) return;
       const decoded = typeof image.decode === "function" ? image.decode() : Promise.resolve();
