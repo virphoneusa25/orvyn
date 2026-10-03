@@ -71,12 +71,24 @@ EOF
   fi
   echo 'Created isolated .env.staging'
 fi
+# Cloud mode requires its own vault key. Keep it stable on the staging host so
+# encrypted staging credentials remain readable across container redeploys.
+if ! grep -q '^ORVYN_VAULT_KEY=' .env.staging; then
+  printf 'ORVYN_VAULT_KEY=%s\\n' "$(openssl rand -base64 32)" >> .env.staging
+  chmod 600 .env.staging
+  echo 'Provisioned isolated staging vault key'
+fi
 # Production Caddy must know the staging hostname. Bring staging up first
 # so backend-staging is resolvable on orvyn_default before Caddy reloads.
 if ! grep -q STAGING_DOMAIN .env; then
   echo 'STAGING_DOMAIN=staging.orvyn.virphoneusa.com' >> .env
 fi
-docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build
+if ! docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build; then
+  echo 'Staging compose startup failed; backend container diagnostics follow' >&2
+  docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging ps backend-staging || true
+  docker logs backend-staging --tail 80 || true
+  exit 1
+fi
 docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml ps
 docker compose \\
   -f docker-compose.yml \\
