@@ -11,8 +11,8 @@ import { isRouteBlocked } from "./modelAvailability";
 
 /** One open model, by the registry ids that serve it (in order of preference). */
 export const SAME_MODEL: { key: string; ids: string[] }[] = [
-  { key: "glm-5.3", ids: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3"] },
-  { key: "glm-5.3-flash", ids: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash"] },
+  { key: "glm-5.3", ids: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "hf:zai-org/GLM-5.3:deepinfra"] },
+  { key: "glm-5.3-flash", ids: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash", "hf:zai-org/GLM-5.3-Flash:deepinfra"] },
   { key: "kimi-k2.7-code", ids: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
   { key: "kimi-k3", ids: ["nebius:moonshotai/Kimi-K3", "ci:kimi-k3"] },
   { key: "deepseek-v4-pro", ids: ["nebius:deepseek-ai/DeepSeek-V4-Pro", "ci:deepseek-v4-pro", "deepseek-v4-pro"] },
@@ -42,5 +42,6 @@ export const NEBIUS_EMBED_DIMS = 4096;
 export function sameModelElsewhere(registryId: string, registered: (id: string) => boolean): string[] {
   const group = SAME_MODEL.find((g) => g.ids.includes(registryId));
   if (!group) return [];
-  return group.ids.filter((id) => id !== registryId && registered(id) && !isRouteBlocked(id));
+  const huggingFaceRoutingEnabled = /^(1|true)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "");
+  return group.ids.filter((id) => id !== registryId && (huggingFaceRoutingEnabled || !id.startsWith("hf:")) && registered(id) && !isRouteBlocked(id));
 }

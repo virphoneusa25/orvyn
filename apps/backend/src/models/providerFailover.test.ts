@@ -11,6 +11,7 @@ const FW_GLM = "fw:accounts/fireworks/models/glm-5p3";
 const NB_GLM = "nebius:zai-org/GLM-5.3";
 const FW_KIMI = "fw:accounts/fireworks/models/kimi-k2p7-code";
 const NB_KIMI = "nebius:moonshotai/Kimi-K2.7-Code";
+const HF_GLM = "hf:zai-org/GLM-5.3:deepinfra";
 
 test("failures are classified: model vs provider vs auth vs the request itself", () => {
   assert.equal(classifyModelFailure(new Error('Model "x" stream failed: HTTP 404: Model not found, inaccessible, and/or not deployed')), "model");
@@ -48,6 +49,16 @@ test("same model on the other provider first; then the tier's next model", () =>
   clearModelAvailability();
   const all = new Set([FW_GLM, NB_GLM, FW_KIMI, NB_KIMI, "mistral:zai-glm-5-3"]);
   assert.deepEqual(sameModelElsewhere(FW_GLM, (id) => all.has(id)), [NB_GLM, "mistral:zai-glm-5-3"]);
+  const oldHfRouting = process.env.HUGGINGFACE_ROUTING_ENABLED;
+  try {
+    process.env.HUGGINGFACE_ROUTING_ENABLED = "1";
+    assert.deepEqual(sameModelElsewhere(FW_GLM, (id) => id === HF_GLM), [HF_GLM], "Hugging Face can serve as an opt-in same-model fallback");
+    delete process.env.HUGGINGFACE_ROUTING_ENABLED;
+    assert.deepEqual(sameModelElsewhere(FW_GLM, (id) => id === HF_GLM), [], "the HF key alone does not enable provider failover");
+  } finally {
+    if (oldHfRouting === undefined) delete process.env.HUGGINGFACE_ROUTING_ENABLED;
+    else process.env.HUGGINGFACE_ROUTING_ENABLED = oldHfRouting;
+  }
   assert.deepEqual(sameModelElsewhere(NB_KIMI, (id) => all.has(id)), [FW_KIMI]);
   assert.deepEqual(sameModelElsewhere("fw:unknown", (id) => all.has(id)), []);
 

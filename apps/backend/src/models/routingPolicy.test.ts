@@ -22,6 +22,27 @@ test("with every provider: the cheap model for the job serves first", () => {
   assert.equal(startRoute({ profile: "deep", instruction: "naming", availableIds: full }).registryId, "nebius:deepseek-ai/DeepSeek-V4-Pro");
 });
 
+test("Hugging Face routing is an explicit opt-in and prefers its registered GLM route only when enabled", () => {
+  const hf = "hf:zai-org/GLM-5.3-Flash:deepinfra";
+  const ids = [...full, hf, "hf:zai-org/GLM-5.3:deepinfra"];
+  const old = process.env.HUGGINGFACE_ROUTING_ENABLED;
+  const oldDefault = process.env.ORVYN_DEFAULT_MODEL_PROVIDER;
+  try {
+    delete process.env.HUGGINGFACE_ROUTING_ENABLED;
+    assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3-Flash");
+    assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: [hf] }).registryId, null, "a registered key alone does not silently change auto routing");
+    process.env.HUGGINGFACE_ROUTING_ENABLED = "1";
+    process.env.ORVYN_DEFAULT_MODEL_PROVIDER = "cheaper_inference";
+    assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: ids }).registryId, hf);
+    assert.equal(startRoute({ profile: "auto", instruction: "Implement a feature", availableIds: ["nebius:zai-org/GLM-5.3", "hf:zai-org/GLM-5.3:deepinfra"] }).registryId, "hf:zai-org/GLM-5.3:deepinfra");
+    assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: ["fw:accounts/fireworks/models/glm-5p3-flash", hf] }).registryId, hf);
+    assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: ["fw:accounts/fireworks/models/glm-5p3-flash"] }).registryId, "fw:accounts/fireworks/models/glm-5p3-flash");
+  } finally {
+    if (old === undefined) delete process.env.HUGGINGFACE_ROUTING_ENABLED; else process.env.HUGGINGFACE_ROUTING_ENABLED = old;
+    if (oldDefault === undefined) delete process.env.ORVYN_DEFAULT_MODEL_PROVIDER; else process.env.ORVYN_DEFAULT_MODEL_PROVIDER = oldDefault;
+  }
+});
+
 test("with today's providers: nothing breaks (each tier falls back)", () => {
   assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: today }).registryId, "ci:glm-5.3-flash");
   assert.equal(startRoute({ profile: "code", instruction: "Fix the typo in the header", availableIds: today }).registryId, "fw:accounts/fireworks/models/kimi-k2p7-code");

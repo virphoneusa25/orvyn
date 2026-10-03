@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - fix/core-agent-runtime
+      - codex/production-signup-hf
   pull_request:
     branches:
       - main
@@ -58,6 +59,19 @@ jobs:
 
       - name: Worker sandbox tests (policy templates, provider selection, fallback, reconcile)
         run: node --test apps/worker/dist/sandbox/*.test.js
+
+      - name: Signup legal compatibility
+        run: |
+          npm test -w @orvyn/web
+          node --test apps/backend/dist/routes/signupLegal.test.js
+
+      - name: Verify production backend image builds
+        if: github.ref == 'refs/heads/codex/production-signup-hf'
+        run: docker build -f apps/backend/Dockerfile -t orvyn-backend:${{ github.sha }} .
+
+      - name: Verify signup UI in the production image
+        if: github.ref == 'refs/heads/codex/production-signup-hf'
+        run: docker run --rm -i --entrypoint node orvyn-backend:${{ github.sha }} < scripts/acceptance/signup-legal-ui.cjs
 
   windows-installer:
     name: Windows installer artifact
@@ -125,17 +139,24 @@ jobs:
     needs: build-and-test
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Deploy to OVH
         env:
+          OVH_HOST: ubuntu@40.160.11.123
+          OVH_REMOTE_DIR: /home/ubuntu/orvyn
+          OVH_HEALTH_URL: https://orvyn.virphoneusa.com/api/v1/health
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
+          HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
+          HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
+          HUGGINGFACE_ROUTING_ENABLED: ${{ vars.HUGGINGFACE_ROUTING_ENABLED || '0' }}
           # Account email (verification links), sign-in and billing: same path.
           SMTP_HOST: ${{ secrets.SMTP_HOST || secrets.SMTP_SERVER || vars.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}
@@ -161,6 +182,15 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_S3_SECRET_ACCESS_KEY }}
         run: |
+          if [ "$GITHUB_REF" = "refs/heads/codex/production-signup-hf" ]; then
+            [ -n "$HUGGINGFACE_API_KEY" ] || { echo "::error::Hugging Face secret missing; refusing production promotion."; exit 1; }
+            [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::Set HUGGINGFACE_ROUTING_ENABLED=1 before promotion."; exit 1; }
+            live_commit=$(curl -fsS "$OVH_HEALTH_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
+            if [ "$live_commit" != "d4748df5a61a40868f49e798031d9a18b8bc3f8c" ] && [ "$live_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Production changed since this targeted promotion was prepared; refusing to overwrite it."
+              exit 1
+            fi
+          fi
           if [ -z "$OVH_SSH_PRIVATE_KEY" ]; then
             # Fail loudly: a green job that deployed nothing hid for days that
             # the server was still running old code.
