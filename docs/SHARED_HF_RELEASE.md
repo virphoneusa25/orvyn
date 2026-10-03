@@ -21,6 +21,7 @@ Rollback: tag the previous production image `orvyn-backend:rollback-7f5e129` bef
 | `apps/backend/src/ai/Orchestrator.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
 | `apps/backend/src/billing/CreditLedger.ts` | Accurate provider telemetry, captured rate versions, cached tokens and settlement |
 | `apps/backend/src/billing/creditLedger.test.ts` | Focused regression coverage for the changed behavior |
+| `apps/backend/src/billing/plans.ts` | Distinguish ordinary and explicitly premium per-image billing lanes |
 | `apps/backend/src/composer/ComposerService.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
 | `apps/backend/src/edit/CompleteService.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
 | `apps/backend/src/edit/InlineEditService.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
@@ -52,6 +53,7 @@ Rollback: tag the previous production image `orvyn-backend:rollback-7f5e129` bef
 | `packages/ai-core/src/router.ts` | Shared compatible, price-qualified Auto policy and explicit overrides |
 | `packages/ai-core/src/types.ts` | Shared cached-token, rate and actual-route metadata contracts |
 | `scripts/deploy-ovh-staging.sh` | Build, isolated staging, hosted Desktop and guarded OVH production release gates |
+| `scripts/deploy-ovh.sh` | Pass provider model/base URL settings through the existing secret/variable mechanism while preserving nonempty unrelated settings |
 | `apps/backend/src/models/huggingFaceVerification.ts` | Verify live HF catalog, tools, streaming, vision, context and prices |
 | `apps/backend/src/models/providerRates.test.ts` | Focused regression coverage for the changed behavior |
 | `apps/backend/src/models/providerRates.ts` | Refresh exact published provider/model billing and comparison rates |
@@ -103,3 +105,5 @@ Previously listed shared routing, metering, billing, policy, CI and deployment f
 CI 37148661824 passed the real Desktop Docker matrix (3/3) and Windows packaging. The newly required Cloud worker acceptance exposed host/container ownership mismatch with capabilities dropped: 10/12 passed, worker edits could not be appended by the container. The container now uses the workspace owner's UID/GID; isolation stays intact. The exact Fireworks page also explicitly confirms serverless retirement beginning September 25, 2026, recommending DeepSeek V4.1 Flash. A replacement remains subject to the user's selected model and staging verification.
 
 CI 37148957057 passed the full suite, Desktop Docker 3/3, Cloud worker 12/12, Windows packaging, production Docker build and signup browser regression. It deployed only isolated staging at `31897eb79d39a2b072f12ad65c414fc81b7ccadd`; HF Auto coding passed with actual provider/model and three tools. Fireworks failed because its credential/model was absent. Production remained `7f5e129`. The Fireworks verification is now a separate mandatory production gate so packaged Desktop HF verification can proceed independently. Merge-back also rejects files changed by Cursor/users while a sandbox runs; an isolated OVH-host test passed the real Docker matrix including that conflict guard (3/3).
+
+CI 37150314810 passed build, Docker/signup checks, both sandbox matrices, Windows packaging and isolated staging at `c835a94`. The actual packaged Windows Desktop test passed Auto HF Kimi Code, explicit HF GLM-5.3, inline edit, streaming, cancellation and recorded usage; no inference credential entered the app. Its dedicated account was cleaned up. The job then failed deleting its temporary SSH key because the restricted owner ACL granted read only. The ACL now grants full control to the same sole owner so deletion succeeds without exposing it to other users. Fireworks still failed its separate mandatory gate; production stayed `7f5e129`.
