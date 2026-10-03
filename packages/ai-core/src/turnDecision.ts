@@ -46,6 +46,19 @@ const CORRECTION = /\b(?:no,? i meant|that's not what i meant|that is not what i
 const CONTINUE = /\b(?:that didn't fix it|still broken|try again|continue|resume|keep going|go ahead|do it|fix the other error|same thing|make it (?:more|less|mobile|responsive))\b/i;
 const ARTIFACT = /\b(?:image|ad|logo|banner|document|report|chart|spreadsheet|file|design|artifact|page|website)\b/i;
 const PRONOUN = /\b(?:it|this|that|that one|the previous one|same one|same thing)\b/i;
+const EXACT_REPLY = /^(?:[^:\n]{1,80}:\s*)?(?:please\s+)?(?:reply|respond|answer|say)\s+(?:with\s+)?exactly\s*:?\s*(?:"([^"\n]+)"|'([^'\n]+)'|(.+?))(?:\s+and\s+nothing\s+else)?[.!]?$/i;
+
+/** A literal echo request is conversation, even when its label/output contains words like "check" or "test". */
+export function exactReplyText(text: string): string | null {
+  const match = String(text ?? "").trim().match(EXACT_REPLY);
+  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  return value?.trim() || null;
+}
+
+export function isExactReplyRequest(text: string): boolean {
+  return exactReplyText(text) !== null;
+}
+
 
 function capabilities(text: string): string[] {
   const out = new Set<string>();
@@ -82,6 +95,19 @@ export function decideTurn(text: string, context: TurnDecisionContext = {}): Tur
       confidence: 0.93,
       reasonCode: context.hasPreviousExecution ? "mission_continuation" : "explicit_action",
       responseOwner: "single_agent",
+    };
+  }
+  if (isExactReplyRequest(prompt)) {
+    return {
+      disposition: "answer",
+      continuation: "new_topic",
+      requiresExecution: false,
+      requiresTool: false,
+      references: [],
+      capabilities: [],
+      confidence: 0.98,
+      reasonCode: "answer_only",
+      responseOwner: "conversation",
     };
   }
   const lower = prompt.toLowerCase();

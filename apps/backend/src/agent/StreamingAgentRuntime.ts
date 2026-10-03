@@ -3180,7 +3180,7 @@ export class StreamingAgentRuntime {
         const recovered = !String(reply.content ?? "").trim() && Boolean(state.lastAnswer);
         const content = recovered ? state.lastAnswer! : reply.content;
         const streamedText = recovered ? false : reply.streamedText;
-        const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? []);
+        const claimCheck = groundSuccessClaims(content, this.store.get(runId)?.events ?? [], state.instruction);
         const grounded = groundAssistantClaims(claimCheck.text, state.createdArtifacts, this.store.get(runId)?.events ?? [], state.projectFileEvidence);
         if (claimCheck.blocked) grounded.blocked = true;
         const wantedFile = looksLikeFileDeliverableRequest(state.instruction);
@@ -3188,14 +3188,17 @@ export class StreamingAgentRuntime {
           const rewrite = grounded.blocked
             ? grounded.text
             : "No file was saved. Generation or persistence failed, so there is nothing to download and nothing in Files → Generated.";
+          this.store.emit(runId, "message.retracted", { reason: "final answer replaced with verified status" });
           this.store.emit(runId, "message.grounded", { content: rewrite, blocked: true });
           this.emitNarration(runId, rewrite, false);
         } else if (grounded.blocked) {
+          this.store.emit(runId, "message.retracted", { reason: "final answer replaced with verified status" });
           this.store.emit(runId, "message.grounded", { content: grounded.text, blocked: true });
           this.emitNarration(runId, grounded.text, false);
         } else if (state.createdArtifacts.length > 0 && !/files\s*→\s*generated/i.test(content)) {
           const copy = filesGeneratedCopy(state.createdArtifacts);
           const answer = `${grounded.text.trim()} ${copy}`.trim();
+          this.store.emit(runId, "message.retracted", { reason: "final answer replaced with artifact status" });
           this.store.emit(runId, "message.grounded", { content: answer, blocked: true });
           this.emitNarration(runId, answer, false);
         } else {

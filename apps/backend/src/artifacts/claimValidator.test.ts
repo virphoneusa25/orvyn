@@ -9,6 +9,12 @@ test("a test-pass sentence is removed when no test event exists", () => {
   assert.doesNotMatch(result.text, /tests passed/i);
 });
 
+test("a requested literal reply containing test-pass words is not treated as a test claim", () => {
+  const instruction = "Hugging Face staging check: Reply with exactly HF staging test passed and nothing else.";
+  const result = groundSuccessClaims("HF staging test passed", [], instruction);
+  assert.deepEqual(result, { text: "HF staging test passed", blocked: false });
+});
+
 test("a test-pass sentence stays when a test command succeeded", () => {
   const result = groundSuccessClaims("All tests passed.", [
     { type: "test.completed", data: { ok: true } },

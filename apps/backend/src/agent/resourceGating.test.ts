@@ -55,6 +55,14 @@ test("text-only requests stay in chat even when phrased as actions", () => {
   }
 });
 
+test("an exact-reply model check stays conversational even when its label and output mention checks or tests", () => {
+  const prompt = "Hugging Face staging check: Reply with exactly HF staging test passed and nothing else.";
+  assert.equal(decideTurn(prompt).disposition, "answer");
+  assert.equal(inferTaskIntent(prompt, "auto").informational, true);
+  assert.equal(routeTurn(prompt, "auto"), "chat");
+  assert.equal(routeTurn("Run the test suite and reply with exactly HF staging test passed.", "auto"), "run");
+});
+
 test("an informational question naming a resource never blocks on it", () => {
   // "How do I query postgres?" classifies as database category, but it asks
   // for an answer — not a database connection.

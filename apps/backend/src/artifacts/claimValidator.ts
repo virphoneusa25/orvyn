@@ -1,3 +1,5 @@
+import { exactReplyText } from "@orvyn/ai-core";
+
 export interface GroundedArtifact {
   artifactId: string;
   name: string;
@@ -137,7 +139,11 @@ function desktopTargetMatched(events: ClaimEvent[]): boolean {
   return lastDesktopTarget(events)?.matched === true;
 }
 
-export function groundSuccessClaims(text: string, events: ClaimEvent[]): { text: string; blocked: boolean } {
+export function groundSuccessClaims(text: string, events: ClaimEvent[], instruction = ""): { text: string; blocked: boolean } {
+  const requestedExactText = exactReplyText(instruction);
+  if (requestedExactText !== null && String(text ?? "").trim() === requestedExactText) {
+    return { text, blocked: false };
+  }
   const sentences = String(text || "").split(/(?<=[.!?])\s+/).filter(Boolean);
   const kept: string[] = [];
   let blocked = false;

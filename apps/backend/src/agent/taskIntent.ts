@@ -1,6 +1,8 @@
 // Structured intent for one user instruction. Customer products and hostnames
 // are resources, not categories — this module must stay tenant-neutral.
 
+import { isExactReplyRequest } from "@orvyn/ai-core";
+
 export type TaskCategory =
   | "general"
   | "code"
@@ -123,7 +125,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const howTo = /^how\s+(do|can|should|would|to)\b/i.test(goal);
   // Informational intent is independent of the domain: "What is PostgreSQL?"
   // is a question even though it touches the database category.
-  const informational = greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo));
+  const informational = greeting || isExactReplyRequest(goal) || (goal.length > 0 && INFO.test(goal) && (!action || howTo));
 
   // The action outranks the resource: "deploy to my server" is a deploy task
   // that happens to use a server, not server administration.
