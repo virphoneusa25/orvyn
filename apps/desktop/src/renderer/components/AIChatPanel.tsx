@@ -22,7 +22,7 @@ import {
 import { WorkspaceState } from "../orvyn-bridge";
 import { MessageContent } from "./MessageContent";
 import { ImageGenerationMessage } from "./ImageGenerationMessage";
-import { markImageGenerationFailed, markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
+import { markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
 import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 import { AgentComposer, Attachment } from "./AgentComposer";
@@ -362,7 +362,6 @@ export function AIChatPanel({
                   {m.role === "assistant" && m.imageGeneration ? <ImageGenerationMessage
                     job={m.imageGeneration}
                     onReady={() => updateAssistantImageGeneration(m.id!, markImageGenerationReady(m.imageGeneration!))}
-                    onFailed={(error) => updateAssistantImageGeneration(m.id!, markImageGenerationFailed(m.imageGeneration!, error))}
                     onRetry={(request) => {
                       const retryJob = { ...m.imageGeneration!, ...request, status: "queued" as const, assets: undefined, error: undefined };
                       if (prepareImageRetry(m.id!, retryJob)) void generateImage(request.prompt, m.id!, retryJob);

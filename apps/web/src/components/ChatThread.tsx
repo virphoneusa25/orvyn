@@ -20,7 +20,7 @@ import { ModelPicker } from "./ModelPicker";
 import { Orb } from "./Orb";
 import { usePreview } from "./Preview";
 import { looksLikeImageRequest } from "../../../../packages/ai-core/src/imageIntent";
-import { markImageGenerationFailed, markImageGenerationReady, type GeneratedImageAsset, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
+import { markImageGenerationReady, type GeneratedImageAsset, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
 import { ImageGenerationMessage } from "./ImageGenerationMessage";
 
 // One ORVYN Cloud conversation: stored on the server (reopens anywhere),
@@ -483,7 +483,6 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                   {m.role === "assistant" && m.imageJob ? <ImageGenerationMessage
                     job={m.imageJob}
                     onReady={() => patch(m.id, (current) => current.imageJob ? { ...current, imageJob: markImageGenerationReady(current.imageJob) } : current)}
-                    onFailed={(error) => patch(m.id, (current) => current.imageJob ? { ...current, imageJob: markImageGenerationFailed(current.imageJob, error) } : current)}
                     onRetry={(request) => void send(request.prompt, { userMessageId: m.imageJob!.userMessageId ?? m.id, modelId: request.modelId })}
                   /> : <>
                     {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}

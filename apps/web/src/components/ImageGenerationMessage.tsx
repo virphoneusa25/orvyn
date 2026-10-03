@@ -1,26 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { decodeImageSource, imageGenerationPresentation, imageGenerationView, retryImageGeneration, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
+import { decodeImageSource, imageAssetFailurePresentation, imageGenerationPresentation, imageGenerationView, retryImageGeneration, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
 import { blobUrl, downloadArtifact, imageLink } from "../lib/api";
 import { usePreview } from "./Preview";
 import { Orb } from "./Orb";
 import { Icon } from "./Icons";
 import "./ImageGenerationMessage.css";
 
-export function ImageGenerationMessage({ job, onRetry, onReady, onFailed }: {
+export function ImageGenerationMessage({ job, onRetry, onReady }: {
   job: ImageGenerationJob;
   onRetry?: (request: ReturnType<typeof retryImageGeneration>) => void;
   onReady?: () => void;
-  onFailed?: (message: string) => void;
 }) {
   const preview = usePreview();
   const [src, setSrc] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const callbacks = useRef({ onReady, onFailed });
-  callbacks.current = { onReady, onFailed };
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const callbacks = useRef({ onReady });
+  callbacks.current = { onReady };
   const asset = job.assets?.[0];
   const canLoad = Boolean(asset && ["provider-completed", "completed"].includes(job.status));
   const lifecycleView = imageGenerationView(job);
-  const view = loadError ? "failed" : lifecycleView === "completed" && !src ? "finalizing" : lifecycleView;
+  const view = job.status === "failed" ? "failed" : loadError ? "asset-error" : lifecycleView === "completed" && !src ? "finalizing" : lifecycleView;
 
   useEffect(() => {
     if (!asset || !canLoad) return;
@@ -35,8 +35,13 @@ export function ImageGenerationMessage({ job, onRetry, onReady, onFailed }: {
     });
     void (async () => {
       try {
-        const directUrl = await imageLink(asset.artifactId);
-        try { await setReady(directUrl); return; } catch { /* stale direct link: retry authenticated blob */ }
+        const directUrl = await imageLink(asset.artifactId, { refresh: loadAttempt > 0 });
+        try { await setReady(directUrl); return; } catch { /* the capability link may be stale or routed to another cloud worker */ }
+        try {
+          const refreshedUrl = await imageLink(asset.artifactId, { refresh: true });
+          await setReady(refreshedUrl);
+          return;
+        } catch { /* fall back to the authenticated artifact endpoint */ }
       } catch { /* get a fresh authenticated blob URL below */ }
       if (!alive) return;
       const blob = await blobUrl(`/artifacts/${encodeURIComponent(asset.artifactId)}/preview`);
@@ -46,10 +51,9 @@ export function ImageGenerationMessage({ job, onRetry, onReady, onFailed }: {
         if (!alive) return;
         const message = error instanceof Error ? error.message : "The generated image could not be loaded.";
         setLoadError(message);
-        callbacks.current.onFailed?.(message);
     });
     return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [asset?.artifactId, canLoad]);
+  }, [asset?.artifactId, canLoad, loadAttempt]);
 
   if (view === "completed" && src && asset) return <div className="image-generation" data-testid="image-generation-completed">
     <p className="image-generation__message">Here's your image.</p>
@@ -69,6 +73,18 @@ export function ImageGenerationMessage({ job, onRetry, onReady, onFailed }: {
       {onRetry ? <button type="button" className="btn btn--sm" onClick={() => onRetry(retryImageGeneration(job))}><Icon.retry size={14} /> Retry</button> : null}
     </div>
   </div>;
+
+  if (view === "asset-error" && loadError) {
+    const copy = imageAssetFailurePresentation(loadError);
+    return <div className="image-generation" data-testid="image-generation-asset-error">
+      <p className="image-generation__message">{copy.message}</p>
+      <div className="image-generation__failure" role="alert">
+        {copy.statusTitle}
+        <button type="button" className="btn btn--sm" onClick={() => { setLoadError(null); setSrc(null); setLoadAttempt((attempt) => attempt + 1); }}>Try loading image again</button>
+        {onRetry ? <button type="button" className="btn btn--sm" onClick={() => onRetry(retryImageGeneration(job))}>Generate a new image</button> : null}
+      </div>
+    </div>;
+  }
 
   const copy = imageGenerationPresentation(view === "finalizing" ? { ...job, status: "provider-completed" } : job);
   const title = view === "finalizing" ? copy.statusTitle : view === "queued" ? copy.statusTitle : "Creating image…";

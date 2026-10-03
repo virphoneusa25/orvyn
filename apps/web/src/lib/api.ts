@@ -76,9 +76,9 @@ const imageLinks = new Map<string, { url: string; exp: number }>();
  * the browser loads and caches it itself — no script-side download, so a big
  * generated image shows as soon as its bytes arrive.
  */
-export async function imageLink(artifactId: string): Promise<string> {
+export async function imageLink(artifactId: string, options: { refresh?: boolean } = {}): Promise<string> {
   const hit = imageLinks.get(artifactId);
-  if (hit && hit.exp > Date.now()) return hit.url;
+  if (!options.refresh && hit && hit.exp > Date.now()) return hit.url;
   const r = await api<{ url: string }>(`/artifacts/${encodeURIComponent(artifactId)}/preview-link`, { method: "POST", body: {} });
   imageLinks.set(artifactId, { url: r.url, exp: Date.now() + 4 * 60_000 });
   return r.url;

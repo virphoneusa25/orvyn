@@ -16,7 +16,7 @@ export interface ImageGenerationJob {
   userMessageId?: string;
 }
 
-export type ImageGenerationView = "queued" | "generating" | "finalizing" | "completed" | "failed";
+export type ImageGenerationView = "queued" | "generating" | "finalizing" | "completed" | "failed" | "asset-error";
 
 export interface ImageGenerationPresentation {
   view: ImageGenerationView;
@@ -42,6 +42,17 @@ export function imageGenerationPresentation(job: ImageGenerationJob): ImageGener
   if (view === "finalizing") return { view, message: "Finalizing your image…", statusTitle: "Finalizing image…", showActions: false, showRetry: false };
   if (view === "completed") return { view, message: "Here's your image.", showActions: true, showRetry: false };
   return { view, message: "I couldn't finish generating that image.", showActions: false, showRetry: true };
+}
+
+/** The provider succeeded; only fetching the saved media failed. */
+export function imageAssetFailurePresentation(error: string): ImageGenerationPresentation {
+  return {
+    view: "asset-error",
+    message: "Your image was generated, but I couldn't load it.",
+    statusTitle: error || "The saved image could not be loaded.",
+    showActions: false,
+    showRetry: true,
+  };
 }
 
 export function retryImageGeneration(job: ImageGenerationJob): Pick<ImageGenerationJob, "prompt" | "modelId"> {
@@ -70,17 +81,19 @@ export interface ImageElementLike {
 }
 
 /** Resolve only after load and decode both confirm that the image is displayable. */
-export function decodeImageSource(source: string, createImage: () => ImageElementLike = () => new Image() as unknown as ImageElementLike): Promise<ImageElementLike> {
+export function decodeImageSource(source: string, createImage: () => ImageElementLike = () => new Image() as unknown as ImageElementLike, timeoutMs = 30_000): Promise<ImageElementLike> {
   return new Promise((resolve, reject) => {
     const image = createImage();
     let settled = false;
-    const cleanup = () => { image.onload = null; image.onerror = null; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => { if (timer) clearTimeout(timer); image.onload = null; image.onerror = null; };
     const fail = () => {
       if (settled) return;
       settled = true;
       cleanup();
       reject(new Error("The generated image could not be loaded or decoded."));
     };
+    timer = setTimeout(() => fail(), timeoutMs);
     image.onload = () => {
       if (settled) return;
       const decoded = typeof image.decode === "function" ? image.decode() : Promise.resolve();

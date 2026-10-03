@@ -8,7 +8,7 @@ import { apiUrl, authHeaders } from "../connection";
 import appIcon from "../assets/icon.png";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
 import { ImageGenerationMessage } from "./ImageGenerationMessage";
-import { markImageGenerationFailed, markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
+import { markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
 
 export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: string | null; attachRunId?: string | null }) {
   const [mode, setMode] = useState<string>("agent");
@@ -89,7 +89,6 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
         {imageJob && <div style={{ marginBottom: 12 }}><ImageGenerationMessage
           job={imageJob}
           onReady={() => setImageJob((current) => current ? markImageGenerationReady(current) : current)}
-          onFailed={(error) => setImageJob((current) => current ? markImageGenerationFailed(current, error) : current)}
           onRetry={(request) => void generateImage(request.prompt, { ...imageJob, ...request, status: "queued", assets: undefined, error: undefined })}
         /></div>}
         {run.events.length === 0 && run.status === "idle" && !imageJob && (
