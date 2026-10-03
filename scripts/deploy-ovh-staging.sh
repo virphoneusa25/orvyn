@@ -91,7 +91,7 @@ if ! ORVYN_BUILD_SHA='$BUILD_COMMIT' docker compose -p orvyn-staging -f infrastr
 fi
 # Compose does not restart dependents when only their backend dependency changed.
 # Reconnect the staging worker to this freshly deployed backend.
-docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --force-recreate worker-staging
+docker restart worker-staging
 docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml ps
 docker compose \\
   -f docker-compose.yml \\
