@@ -43,6 +43,9 @@ openssl rand -hex 32        # → ORVYN_API_KEY in .env
 # set DOMAIN=orvyn.yourdomain.com
 # set at least one model provider (MODEL_API_KEY / DEEPSEEK_API_KEY /
 #   CHEAPER_INFERENCE_API_KEY) and optionally ASTRA_MODEL_ID
+# Hugging Face is optional: set HUGGINGFACE_API_KEY to register its pinned
+# DeepInfra GLM routes. Keep HUGGINGFACE_ROUTING_ENABLED=0 until staging checks
+# pass; set it to 1 only when you want Auto/Advanced Auto to prefer those routes.
 ```
 
 Never commit `.env`. On OVH you can alternatively inject env vars via

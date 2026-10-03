@@ -57,7 +57,7 @@ const model = createServer((req, res) => {
 
 let failures = 0;
 const ok = (c, label, detail = "") => { console.log(`${c ? "  PASS" : "  FAIL"}  ${label}${!c && detail ? `\n        ${detail}` : ""}`); if (!c) failures++; };
-const neutral = ["ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
+const neutral = ["ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
 const { reducePresentation } = await import(pathToFileURL(join(repoRoot, "apps", "desktop", "src", "renderer", "presentationReducer.ts")).href);
 
 async function main() {

@@ -33,6 +33,7 @@ execSync("git init -q", { cwd: projectDir });
 // (MODEL_API_KEY, not OPENAI_API_KEY, is what activates the OpenAI seed.)
 const keyVars = [
   "ORVYN_API_KEY", "MODEL_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY",
+  "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED",
   "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
   "OLLAMA_MODEL", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL",
 ].reduce((acc, k) => ({ ...acc, [k]: "" }), {});

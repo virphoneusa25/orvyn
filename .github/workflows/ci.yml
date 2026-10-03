@@ -136,6 +136,12 @@ jobs:
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          # Optional Hugging Face key registers models; routing remains off unless
+          # HUGGINGFACE_ROUTING_ENABLED is explicitly set on the server.
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+          HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
+          HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
+          HUGGINGFACE_ROUTING_ENABLED: ${{ vars.HUGGINGFACE_ROUTING_ENABLED || '0' }}
           # Account email (verification links), sign-in and billing: same path.
           SMTP_HOST: ${{ secrets.SMTP_HOST || secrets.SMTP_SERVER || vars.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT || vars.SMTP_PORT }}

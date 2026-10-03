@@ -31,6 +31,7 @@ writeFileSync(join(projectDir, "hello.txt"), "hello stream\n");
 
 const keyVars = [
   "ORVYN_API_KEY", "MODEL_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY",
+  "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED",
   "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY",
   "OLLAMA_MODEL", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL",
 ].reduce((acc, k) => ({ ...acc, [k]: "" }), {});

@@ -10,6 +10,11 @@ Full walkthrough: **`docs/OVH_DEPLOYMENT.md`**.
 | `../../apps/backend/Dockerfile` | Multi-stage backend image (Node 20 slim, no dev deps) |
 | `../../.env.example` | Environment template — copy to `.env`, never commit the real one |
 
+Hugging Face Inference Providers can be enabled by setting `HUGGINGFACE_API_KEY`.
+This registers pinned DeepInfra GLM-5.3 routes for manual selection. Leave
+`HUGGINGFACE_ROUTING_ENABLED=0` during staging; set it to `1` only after the
+tool-call and streaming checks pass.
+
 Staging (isolated control plane, does not share DB/Redis/volumes with production):
 
 ```bash

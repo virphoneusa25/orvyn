@@ -153,6 +153,10 @@ function nebiusEndpoint(): string {
   return (process.env.NEBIUS_BASE_URL?.trim() || "https://api.tokenfactory.nebius.com").replace(/\/v1\/?$/, "");
 }
 
+function huggingFaceEndpoint(): string {
+  return (process.env.HUGGINGFACE_BASE_URL?.trim() || "https://router.huggingface.co/v1").replace(/\/v1\/?$/, "");
+}
+
 /** Extra Nebius models to show in the model menu (NEBIUS_MODELS), besides the curated set. */
 function nebiusModelList(): string[] {
   return (process.env.NEBIUS_MODELS ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -338,6 +342,19 @@ export class ModelService {
         this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane ?? visionLane));
       }
       void this.hideUndeployedFireworksImages(fireworksKey);
+    }
+
+    // Hugging Face Inference Providers uses an OpenAI-compatible router.
+    // Register only known chat models with an explicitly selected provider;
+    // the key is server-side and these routes remain unavailable when unset.
+    const huggingFaceKey = process.env.HUGGINGFACE_API_KEY?.trim() || process.env.HF_TOKEN?.trim();
+    if (huggingFaceKey) {
+      const ids = (process.env.HUGGINGFACE_MODELS ?? "zai-org/GLM-5.3:deepinfra,zai-org/GLM-5.3-Flash:deepinfra")
+        .split(",").map((id) => id.trim()).filter(Boolean);
+      for (const id of [...new Set(ids)]) {
+        const contextWindow = id.includes("GLM-5.3-Flash") ? 131072 : 1048576;
+        this.addModel(openAiCompatibleConfig("hf", "Hugging Face", huggingFaceEndpoint(), id, huggingFaceKey, 0.2, contextWindow));
+      }
     }
 
     // Mistral (Small 4 utility, Codestral, Medium/Large, GLM 5.3) and OpenRouter

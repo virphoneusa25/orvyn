@@ -106,7 +106,7 @@ async function main() {
     MODEL_API_KEY: "k", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "nebius:zai-org/GLM-5.3-Flash", OPENAI_CODE_MODEL: "nebius:zai-org/GLM-5.3-Flash",
   };
   delete env.ORVYN_API_KEY; delete env.NODE_ENV;
-  for (const k of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "FIREWORKS_API_KEY", "OPENROUTER_API_KEY", "CHEAPER_INFERENCE_API_KEY", "NEBIUS_API_KEY", "GOOGLE_CLIENT_ID", "GITHUB_CLIENT_ID"]) env[k] = "";
+  for (const k of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "FIREWORKS_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED", "OPENROUTER_API_KEY", "CHEAPER_INFERENCE_API_KEY", "NEBIUS_API_KEY", "GOOGLE_CLIENT_ID", "GITHUB_CLIENT_ID"]) env[k] = "";
   const server = spawn(process.execPath, ["dist/index.js"], { cwd: backendCwd, env, stdio: ["ignore", "pipe", "pipe"] });
   const log = []; server.stdout.on("data", (d) => log.push(String(d))); server.stderr.on("data", (d) => log.push(String(d)));
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM || (existsSync("/opt/pw-browsers/chromium") ? "/opt/pw-browsers/chromium" : undefined) });
