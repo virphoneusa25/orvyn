@@ -216,6 +216,7 @@ function TopBar({ onSearch, onMenu }: { onSearch: () => void; onMenu: () => void
             <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/billing"); }}><Icon.billing size={16} /> Billing</button>
             <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); navigate("/help"); }}><Icon.help size={16} /> Help</button>
             {me?.staff ? <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); const u = adminUrl(); if (u.startsWith("/")) navigate(u); else location.href = u; }} data-testid="open-admin"><Icon.shield size={16} /> Admin Portal</button> : null}
+            {me?.staff ? <a className="menu__item" role="menuitem" href="https://staging.orvyn.virphoneusa.com" target="_blank" rel="noopener noreferrer" onClick={() => setMenu(false)} data-testid="open-staging"><Icon.globe size={16} /> Staging Portal</a> : null}
             <div className="menu__sep" />
             <button className="menu__item" role="menuitem" onClick={() => { setMenu(false); void signOut(); }} data-testid="sign-out"><Icon.logout size={16} /> Sign out</button>
           </div>
