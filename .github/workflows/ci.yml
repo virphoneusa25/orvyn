@@ -313,6 +313,8 @@ jobs:
         run: |
           $keyPath = Join-Path $env:RUNNER_TEMP 'orvyn-fixture-ssh'
           [IO.File]::WriteAllText($keyPath, ($env:OVH_SSH_PRIVATE_KEY -replace "`r", '') + "`n", [Text.UTF8Encoding]::new($false))
+          icacls $keyPath /inheritance:r /grant:r "$([Security.Principal.WindowsIdentity]::GetCurrent().Name):(R)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict temporary deployment key permissions' }
           $env:OVH_SSH_KEY = $keyPath
           Remove-Item Env:OVH_SSH_PRIVATE_KEY
           try { node scripts/acceptance/hf-desktop-runtime.mjs; if ($LASTEXITCODE -ne 0) { throw 'Hosted Desktop verification failed' } } finally { Remove-Item -LiteralPath $keyPath -Force }
@@ -347,6 +349,8 @@ jobs:
         run: |
           $keyPath = Join-Path $env:RUNNER_TEMP 'orvyn-fixture-ssh'
           [IO.File]::WriteAllText($keyPath, ($env:OVH_SSH_PRIVATE_KEY -replace "`r", '') + "`n", [Text.UTF8Encoding]::new($false))
+          icacls $keyPath /inheritance:r /grant:r "$([Security.Principal.WindowsIdentity]::GetCurrent().Name):(R)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict temporary deployment key permissions' }
           $env:OVH_SSH_KEY = $keyPath
           Remove-Item Env:OVH_SSH_PRIVATE_KEY
           try { node scripts/acceptance/hf-desktop-runtime.mjs; if ($LASTEXITCODE -ne 0) { throw 'Production Desktop verification failed' } } finally { Remove-Item -LiteralPath $keyPath -Force }

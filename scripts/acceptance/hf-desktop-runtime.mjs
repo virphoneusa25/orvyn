@@ -9,11 +9,16 @@ const root=process.cwd();const base=process.env.ORVYN_CLOUD_URL||'https://stagin
 assert.match(base,/^https:\/\/(staging\.orvyn\.virphoneusa\.com|orvyn\.virphoneusa\.com)$/);
 const container=base.includes('staging.')?'backend-staging':'orvyn-backend-1';
 const fixtureScript=await readFile(path.join(root,'scripts/acceptance/hosted-release-fixture.cjs'),'utf8');
+const sshExecutable=process.platform==='win32'?path.join(process.env.WINDIR||'C:/Windows','System32/OpenSSH/ssh.exe'):'ssh';
 async function remote(action,id=''){
  return new Promise((resolve,reject)=>{
- const child=spawn('ssh',['-i',process.env.OVH_SSH_KEY,'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','StrictHostKeyChecking=accept-new','ubuntu@40.160.11.123',`docker exec -i ${container} node - ${action} ${id}`],{windowsHide:true,stdio:['pipe','pipe','pipe']});
- let output='';child.stdout.on('data',b=>output+=b);child.stderr.resume();child.stdin.end(fixtureScript);
- child.on('error',()=>reject(new Error('Hosted fixture SSH failed')));child.on('exit',code=>{if(code!==0)return reject(new Error('Hosted fixture action failed'));try{resolve(JSON.parse(output.trim()));}catch{reject(new Error('Hosted fixture returned invalid evidence'));}});
+ const child=spawn(sshExecutable,['-i',process.env.OVH_SSH_KEY,'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','StrictHostKeyChecking=accept-new','ubuntu@40.160.11.123',`docker exec -i ${container} node - ${action} ${id}`],{windowsHide:true,stdio:['pipe','pipe','pipe']});
+ let output='',diagnostic='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>{diagnostic=(diagnostic+b).slice(-16384);});child.stdin.end(fixtureScript);
+ child.on('error',()=>reject(new Error('Hosted fixture SSH failed')));child.on('exit',code=>{if(code!==0){
+ // Report only fixed categories: remote errors must never leak session/key values.
+ const category=/UNPROTECTED|bad permissions|invalid format|Load key/i.test(diagnostic)?'SSH key format/permissions':/Permission denied.*publickey/i.test(diagnostic)?'SSH authentication':/timed out|refused|resolve hostname/i.test(diagnostic)?'SSH connectivity':/Cannot find module/i.test(diagnostic)?'fixture module unavailable':/SQLITE|database is locked/i.test(diagnostic)?'fixture database':/guard|Invalid fixture/i.test(diagnostic)?'fixture ownership guard':'remote fixture execution';
+ return reject(new Error(`Hosted fixture ${action} failed (${category}; exit ${code})`));
+ }try{resolve(JSON.parse(output.trim()));}catch{reject(new Error('Hosted fixture returned invalid evidence'));}});
  });
 }
 const fixture=await remote('create');
