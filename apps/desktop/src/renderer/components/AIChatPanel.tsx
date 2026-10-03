@@ -15,10 +15,14 @@ import {
   newChat,
   openChatSession,
   startUserTurn,
+  updateAssistantImageGeneration,
+  prepareImageRetry,
   subscribeChat,
 } from "../chatSession";
 import { WorkspaceState } from "../orvyn-bridge";
 import { MessageContent } from "./MessageContent";
+import { ImageGenerationMessage } from "./ImageGenerationMessage";
+import { markImageGenerationFailed, markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
 import { AgentActivityList, liveActivityLabel, RunFooter } from "./AgentActivityList";
 import { ORION_THINKING_TEXT, ORION_WORKING_TEXT, OrbStatusSlot, orbMotionForLabel } from "./OrionThinkingIndicator";
 import { AgentComposer, Attachment } from "./AgentComposer";
@@ -142,8 +146,13 @@ export function AIChatPanel({
     setAttachments([]);
 
     if (wantImage) {
-      appendAssistantDelta("Generating image…\n\n");
-      await generateImage(userMessage, true);
+      const turns = getChatMessages();
+      const user = turns.at(-2);
+      const assistant = turns.at(-1);
+      if (!assistant?.id || assistant.role !== "assistant") return;
+      const job: ImageGenerationJob = { id: assistant.id, prompt: userMessage, status: "queued", ...(user?.id ? { userMessageId: user.id } : {}) };
+      updateAssistantImageGeneration(assistant.id, job);
+      void generateImage(userMessage, assistant.id, job);
       return;
     }
 
@@ -202,19 +211,18 @@ export function AIChatPanel({
     };
   }
 
-  async function generateImage(prompt: string, turnStarted = false) {
+  async function generateImage(prompt: string, assistantId: string, job: ImageGenerationJob) {
     const trimmed = stripImagePrefix(prompt);
-    if (!trimmed) return;
-    if (!turnStarted) {
-      if (streaming) return;
-      startUserTurn(trimmed, { mode: "image" });
-      setInput("");
-    }
+    if (!trimmed) { finishAssistantTurn(); return; }
+    const activeJob = { ...job, prompt: trimmed, status: "generating" as const };
+    updateAssistantImageGeneration(assistantId, activeJob);
     try {
-      const markdown = await requestGeneratedImages(trimmed, workspace?.root, apiUrl, authHeaders);
-      appendAssistantDelta(markdown);
+      const result = await requestGeneratedImages(trimmed, workspace?.root, apiUrl, authHeaders);
+      const assets = (result.images ?? []).filter((image) => image.artifactId && image.filename).map((image) => ({ artifactId: image.artifactId!, name: image.filename!, mimeType: image.mimeType || "image/png" }));
+      if (!assets.length) throw new Error("The provider finished without a persisted image.");
+      updateAssistantImageGeneration(assistantId, { ...activeJob, status: "provider-completed", assets });
     } catch (err: any) {
-      appendAssistantDelta(`Image generation failed: ${err.message}`);
+      updateAssistantImageGeneration(assistantId, { ...activeJob, status: "failed", error: err.message || "Image generation failed." });
     } finally {
       finishAssistantTurn();
     }
@@ -351,11 +359,19 @@ export function AIChatPanel({
                   {m.role === "user" ? "YOU" : "ORVYN"}
                 </div>
                 <div style={{ color: "var(--text)", lineHeight: 1.55 }}>
-                  <MessageContent
+                  {m.role === "assistant" && m.imageGeneration ? <ImageGenerationMessage
+                    job={m.imageGeneration}
+                    onReady={() => updateAssistantImageGeneration(m.id!, markImageGenerationReady(m.imageGeneration!))}
+                    onFailed={(error) => updateAssistantImageGeneration(m.id!, markImageGenerationFailed(m.imageGeneration!, error))}
+                    onRetry={(request) => {
+                      const retryJob = { ...m.imageGeneration!, ...request, status: "queued" as const, assets: undefined, error: undefined };
+                      if (prepareImageRetry(m.id!, retryJob)) void generateImage(request.prompt, m.id!, retryJob);
+                    }}
+                  /> : <MessageContent
                     content={m.content}
                     streaming={isLiveAssistant}
                     onApply={!isLiveAssistant && m.role === "assistant" ? onApplyCode : undefined}
-                  />
+                  />}
                 </div>
               </div>
             );

@@ -7,14 +7,15 @@ import { isRunFinished, RunUsage, useAgentRun } from "../useAgentRun";
 import { apiUrl, authHeaders } from "../connection";
 import appIcon from "../assets/icon.png";
 import { looksLikeImageRequest, stripImagePrefix, requestGeneratedImages } from "../imageIntent";
-import { MessageContent } from "./MessageContent";
+import { ImageGenerationMessage } from "./ImageGenerationMessage";
+import { markImageGenerationFailed, markImageGenerationReady, type ImageGenerationJob } from "../../../../../packages/ai-core/src/imageGeneration";
 
 export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: string | null; attachRunId?: string | null }) {
   const [mode, setMode] = useState<string>("agent");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [instruction, setInstruction] = useState("");
   const [forceImage, setForceImage] = useState(false);
-  const [imageNote, setImageNote] = useState<string | null>(null);
+  const [imageJob, setImageJob] = useState<ImageGenerationJob | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -27,7 +28,23 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [run.events.length, imageNote]);
+  }, [run.events.length, imageJob]);
+
+  async function generateImage(prompt: string, job: ImageGenerationJob) {
+    setImageBusy(true);
+    setImageJob({ ...job, status: "generating", assets: undefined, error: undefined });
+    try {
+      const result = await requestGeneratedImages(stripImagePrefix(prompt), projectRoot, apiUrl, authHeaders);
+      const assets = (result.images ?? []).filter((image) => image.artifactId && image.filename).map((image) => ({ artifactId: image.artifactId!, name: image.filename!, mimeType: image.mimeType || "image/png" }));
+      if (!assets.length) throw new Error("The provider finished without a persisted image.");
+      setImageJob({ ...job, status: "provider-completed", assets });
+      setInstruction("");
+    } catch (err: any) {
+      setImageJob({ ...job, status: "failed", error: err.message || "Image generation failed." });
+    } finally {
+      setImageBusy(false);
+    }
+  }
 
   async function start(opts?: { forceImage?: boolean }) {
     const text = instruction.trim();
@@ -35,16 +52,10 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
     const slash = text.match(/^\/image\b/i);
     if (opts?.forceImage || forceImage || slash || looksLikeImageRequest(text)) {
       setForceImage(false);
-      setImageBusy(true);
-      try {
-        const markdown = await requestGeneratedImages(stripImagePrefix(text), projectRoot, apiUrl, authHeaders);
-        setImageNote(markdown);
-        setInstruction("");
-      } catch (err: any) {
-        setImageNote(`Image generation failed: ${err.message}`);
-      } finally {
-        setImageBusy(false);
-      }
+      const prompt = stripImagePrefix(text);
+      const job: ImageGenerationJob = { id: `image_${Date.now()}`, prompt, status: "queued" };
+      setImageJob(job);
+      void generateImage(prompt, job);
       return;
     }
     const ok = await run.start({ instruction: text, mode, attachments });
@@ -75,12 +86,13 @@ export function AgentEventStream({ projectRoot, attachRunId }: { projectRoot: st
             {run.error}
           </div>
         )}
-        {imageNote && (
-          <div style={{ marginBottom: 12 }}>
-            <MessageContent content={imageNote} />
-          </div>
-        )}
-        {run.events.length === 0 && run.status === "idle" && !imageNote && (
+        {imageJob && <div style={{ marginBottom: 12 }}><ImageGenerationMessage
+          job={imageJob}
+          onReady={() => setImageJob((current) => current ? markImageGenerationReady(current) : current)}
+          onFailed={(error) => setImageJob((current) => current ? markImageGenerationFailed(current, error) : current)}
+          onRetry={(request) => void generateImage(request.prompt, { ...imageJob, ...request, status: "queued", assets: undefined, error: undefined })}
+        /></div>}
+        {run.events.length === 0 && run.status === "idle" && !imageJob && (
           <div
             style={{
               display: "flex",

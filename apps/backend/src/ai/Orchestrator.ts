@@ -637,7 +637,7 @@ export class Orchestrator {
   }
 
   private async *streamGeneratedImage(req: ChatTurnRequest): AsyncIterable<AIChunk> {
-    yield { delta: "Generating image…\n\n", done: false };
+    yield { delta: "", done: false, imageGeneration: { status: "generating" } };
     try {
       if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
       const prompt = stripImagePrefix(req.userMessage) || req.userMessage;
@@ -647,23 +647,14 @@ export class Orchestrator {
         size: "1024x1024",
         ...(req.sessionId ? { chatId: req.sessionId } : {}),
       });
-      const blocks = result.images
-        .map((img) => {
-          const cap = img.filename;
-          const src = img.previewUrl ? `${img.previewUrl}` : "";
-          return src
-            ? `Persisted \`${cap}\` (artifact ${img.artifactId}). Preview and download from the card or Files → Generated.`
-            : `Persisted \`${cap}\` as artifact ${img.artifactId}.`;
-        })
-        .join("\n\n");
       const files = result.images.map((img) => ({ artifactId: img.artifactId, name: img.filename, mimeType: (img as { mimeType?: string }).mimeType ?? "image/png" }));
-      yield { delta: req.surface === "cloud" ? `Here's your image.` : `Generated with ${result.model}:\n\n${blocks}`, done: true, artifacts: files } as AIChunk & { artifacts: typeof files };
+      yield { delta: "", done: true, artifacts: files, imageGeneration: { status: "provider-completed" } };
     } catch (err: any) {
       yield {
-        delta:
-          `Image generation failed: ${err.message}\n\n` +
-          "Add or enable an image model in AI Models (the image task), then try again. I can generate logos and mockups once that model is configured.",
+        delta: "",
         done: true,
+        error: err.message || "Image generation failed.",
+        imageGeneration: { status: "failed", error: err.message || "Image generation failed." },
       };
     }
   }

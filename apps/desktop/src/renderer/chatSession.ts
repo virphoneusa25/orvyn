@@ -40,6 +40,7 @@ export interface ChatMessage {
   mode?: string;
   attachments?: { path: string; kind: string; purpose?: string }[];
   createdAt?: number;
+  imageGeneration?: import("../../../../packages/ai-core/src/imageGeneration").ImageGenerationJob;
 }
 
 export interface ChatSession {
@@ -142,6 +143,11 @@ export async function initChatHistory(): Promise<void> {
     const data = await window.orvyn?.chats?.load();
     const restored = Array.isArray(data?.sessions) ? (data.sessions as ChatSession[]) : [];
     const disk = restored.filter((s) => s && Array.isArray(s.messages));
+    for (const session of disk) for (const message of session.messages) {
+      if (message.imageGeneration && ["queued", "generating"].includes(message.imageGeneration.status)) {
+        message.imageGeneration = { ...message.imageGeneration, status: "failed", error: "Image generation was interrupted. Retry to start it again." };
+      }
+    }
     const byId = new Map(disk.map((s) => [s.id, s]));
     for (const live of sessions) {
       const prev = byId.get(live.id);
@@ -562,6 +568,34 @@ export function startUserTurn(
   emit();
   persist(); // crash-safe: the user's message is on disk before the model call
   return history;
+}
+
+/** Attach or advance the single image job owned by the active assistant turn. */
+export function updateAssistantImageGeneration(messageId: string, imageGeneration: NonNullable<ChatMessage["imageGeneration"]>): void {
+  const session = active();
+  const message = session?.messages.find((item) => item.id === messageId && item.role === "assistant");
+  if (!session || !message) return;
+  message.content = "";
+  message.imageGeneration = imageGeneration;
+  session.updatedAt = Date.now();
+  emit();
+  persist();
+}
+
+/** Retry the existing image assistant message without inserting another user turn. */
+export function prepareImageRetry(messageId: string, imageGeneration: NonNullable<ChatMessage["imageGeneration"]>): boolean {
+  const session = active();
+  const message = session?.messages.find((item) => item.id === messageId && item.role === "assistant");
+  if (!session || !message || streaming) return false;
+  message.content = "";
+  message.imageGeneration = { ...imageGeneration, status: "queued", error: undefined, assets: undefined };
+  session.updatedAt = Date.now();
+  session.status = "active";
+  streaming = true;
+  streamingChatId = session.id;
+  emit();
+  persist();
+  return true;
 }
 
 /**

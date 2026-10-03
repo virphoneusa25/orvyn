@@ -86,6 +86,10 @@ export interface AIResponse {
 export interface AIChunk {
   delta: string;
   toolCall?: ToolCall;
+  /** Image job facts are separate from assistant prose; clients own presentation. */
+  imageGeneration?: { status: "queued" | "generating" | "provider-completed" | "failed"; error?: string };
+  artifacts?: { artifactId: string; name: string; mimeType: string }[];
+  error?: string;
   /** Accumulated thinking-model reasoning, set once on the final chunk. */
   reasoning?: string;
   /**

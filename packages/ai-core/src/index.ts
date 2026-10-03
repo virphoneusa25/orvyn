@@ -7,3 +7,5 @@ export * from "./adapters/ollamaAdapter";
 export * from "./adapters/mockAdapter";
 export * from "./adapters/pendingAdapter";
 export * from "./turnDecision";
+export * from "./imageGeneration";
+export * from "./imageIntent";
