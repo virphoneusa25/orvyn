@@ -5,6 +5,7 @@ import * as os from "os";
 import { request } from "http";
 import { request as httpsRequest } from "https";
 import { executeLocalTool } from "./LocalToolExecutor";
+import { LocalSandboxExecutor } from "./LocalSandboxExecutor";
 import { detectLocalEnvironment } from "./environmentDetect";
 import { serviceManager } from "../services/ServiceManager";
 
@@ -53,7 +54,7 @@ async function register(): Promise<void> {
     workerId: WORKER_ID,
     hostname: os.hostname(),
     projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
-    capabilities: ["local_host", "local_sandbox", "stdio-mcp", ...(typeof process.send === "function" ? ["workbench-browser"] : [])],
+    capabilities: ["local_host", ...(environment.docker ? ["local_sandbox"] : []), "stdio-mcp", ...(typeof process.send === "function" ? ["workbench-browser"] : [])],
     environment,
     services: serviceManager.list(),
     hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
@@ -95,6 +96,15 @@ async function heartbeat(): Promise<void> {
 
 async function serveJob(job: { runId: string; projectRoot: string; role?: string; tenantId?: string }): Promise<void> {
   const projectRoot = job.projectRoot || process.env.ORVYN_PROJECT_ROOT || process.cwd();
+  const isolated = job.role === "local_sandbox" ? new LocalSandboxExecutor() : undefined;
+  let cancellationPoll: NodeJS.Timeout | undefined;
+  try {
+  if (isolated) await isolated.start(job.runId, projectRoot);
+  if (isolated) cancellationPoll = setInterval(() => {
+    void cp(`/api/v1/local-worker/tools/${job.runId}/state`).then((state) => {
+      if (state.cancelled) void isolated.finish(projectRoot, false);
+    }).catch(() => undefined);
+  }, 1000);
   await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {
     type: "sandbox.ready",
     data: { projectRoot, role: job.role ?? "local_host", workerId: WORKER_ID },
@@ -102,6 +112,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
   while (true) {
     const next = await cp(`/api/v1/local-worker/tools/${job.runId}/next`);
     if (next.finished) {
+      if (isolated) await isolated.finish(projectRoot, !next.cancelled);
       // Services belong to the project, not the run: a dev server ORION
       // started keeps running after the run ends, until someone stops it.
       const kept = serviceManager.list({ runId: job.runId, active: true });
@@ -121,7 +132,8 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
         data: { command: req.arguments?.command ?? req.tool },
       });
     }
-    const result = await executeLocalTool({
+    const invoke = isolated ? isolated.execute.bind(isolated) : executeLocalTool;
+    const result = await invoke({
       tool: req.tool,
       arguments: req.arguments ?? {},
       runId: job.runId,
@@ -161,6 +173,9 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       durationMs: Date.now() - started,
     });
   }
+  } catch {
+    await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", { type: "sandbox.stopped", data: { reason: "Project sandbox unavailable or failed; no tools ran on the host. Start Docker or explicitly select Host." } }).catch(() => undefined);
+  } finally { if (cancellationPoll) clearInterval(cancellationPoll); await isolated?.finish(projectRoot, false).catch(() => undefined); }
 }
 
 // ── Workbench Browser relay ─────────────────────────────────────────────

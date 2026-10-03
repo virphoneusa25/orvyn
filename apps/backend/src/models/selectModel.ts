@@ -2,7 +2,7 @@
 // A model that is not registered is skipped; the caller keeps its previous route.
 
 import type { TaskIntent } from "../agent/taskIntent";
-import { preferHuggingFace, incompatibility, routeFamily, type AIModelProvider, type RoutingRequirements } from "@orvyn/ai-core";
+import { preferHuggingFace, incompatibility, routeFamily, isRoutineWriting, writingProvider, type AIModelProvider, type RoutingRequirements } from "@orvyn/ai-core";
 import { isRouteBlocked } from "./modelAvailability";
 import { CERTIFIED_MODELS, laneModel, type LaneModel } from "./certifiedModels";
 import { escalate, LADDERS, profileFor, startRoute, stepFrom, TIERS, type RouteProfile, type RouteStep, type Tier } from "./routingPolicy";
@@ -89,6 +89,10 @@ export function selectAgentModel(input: {
     route = next;
   }
   if (input.providers && laneRequest === "auto" && steps === 0) {
+    const writing = !input.deep && profile === "auto" && isRoutineWriting(input.intent.goal ?? "")
+      ? writingProvider(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, isRouteBlocked) : undefined;
+    if (writing) return { registryId: writing.config.id, lane: "auto", pinned: false,
+      reason: "Routine writing: exact Fireworks DeepSeek Flash route passed streaming/tool verification", route: { ...route, registryId: writing.config.id } };
     const family = input.intent.informational && !input.deep && !input.intent.requiresFrontend ? "flash" : routeFamily(route.registryId ?? "") ?? (route.tier === "code" ? "code" : route.tier === "agent" || route.tier === "heavy" ? "advanced" : route.tier === "auto" ? "flash" : undefined);
     const preferred = preferHuggingFace(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""), isRouteBlocked, family);
     if (preferred.provider) route = { ...route, registryId: preferred.provider.config.id, reason: preferred.reason };
@@ -133,8 +137,8 @@ export function selectImageModel(input: {
     if (available.has(requested)) return { registryId: requested, reason: "User selected this image model." };
     return { registryId: null, reason: `${requested} is not registered.` };
   }
-  const premium = input.quality === "high" || input.quality === "premium";
-  const lanes: LaneModel["lane"][] = premium ? ["image-quality", "image"] : ["image", "image-quality"];
+  const premium = input.quality === "premium";
+  const lanes: LaneModel["lane"][] = premium ? ["image-quality", "image"] : ["image"];
   for (const lane of lanes) {
     const model = laneModel(lane);
     if (!available.has(model.registryId)) continue;
@@ -147,6 +151,7 @@ export function selectImageModel(input: {
   const preferred = /gpt-image|nano-banana|grok-imagine/i;
   const rows = [...(input.catalog ?? [])].sort((a, b) => Number(preferred.test(b.registryId)) - Number(preferred.test(a.registryId)));
   for (const row of rows) {
+    if (!premium && /flux-kontext-max$/.test(row.registryId)) continue;
     if (!available.has(row.registryId) || !row.generation) continue;
     if (input.editing && !row.editing) continue;
     return { registryId: row.registryId, reason: "Cheaper Inference image lane from the live catalog." };

@@ -974,6 +974,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
     isLocalCoding: hints.isLocalCoding,
     isSite: hints.isSite,
     cloudControlPlane: cloudHost,
+    desktopProject: Boolean(desktopProjectRoot),
   });
 
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
@@ -987,29 +988,21 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
   const controlPlaneVirtual =
     requestedTarget === "auto" &&
     !desktopProjectRoot &&
+    !hints.isLocalCoding && !hints.isSite && !hints.requiresRemote &&
     (virtualWorkspace || noWorkspaceTask || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     if (!hasOnlineWorker()) {
-      if (routed.requested === "auto") {
-        routed.actual = "local_host";
-        routed.fallbackReason = "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
-      } else {
         return res.status(409).json({
           error: "ORVYN Cloud has no worker available right now — the Cloud run was not started. It is never moved to your computer silently.",
           executionTargetRequested: routed.requested,
           executionTargetActual: routed.actual,
         });
-      }
     }
   } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
-      // Auto never strands the user: when the desktop Local Worker is offline
-      // (a fresh sign-in, the worker hasn't registered yet, a restart), the
-      // run falls back to the ORVYN Cloud worker — the mirror image of the
-      // cloud→local fallback above. An EXPLICITLY requested local target
-      // still 409s: the user asked for their computer, not a silent switch.
-      if (routed.requested === "auto" && hasOnlineWorker()) {
+      // A Desktop-owned project and sandbox never move to another machine.
+      if (routed.requested === "auto" && !desktopProjectRoot && routed.actual !== "local_sandbox" && hasOnlineWorker()) {
         routed.actual = "ovh_worker";
         routed.fallbackReason = "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
       } else {

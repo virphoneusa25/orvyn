@@ -24,6 +24,7 @@ import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
 import type { SandboxExecRequest, SandboxExecResult, SandboxProcess } from "../ai/tools/sandboxTools";
+import { resolveSafeRealpath } from "../execution/pathSafety";
 
 const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:22-slim";
 /** Whole-mission wall clock, minutes. A wedged mission must not hold a box. */
@@ -34,7 +35,7 @@ const COMMAND_TIMEOUT_S = Number(process.env.ORVYN_SANDBOX_COMMAND_TIMEOUT_S) ||
 const MAX_RETAINED_OUTPUT = Number(process.env.ORVYN_SANDBOX_MAX_OUTPUT_BYTES) || 2 * 1024 * 1024;
 
 /** Directories never copied into (or back out of) the sandbox. */
-const SYNC_EXCLUDE = new Set(["node_modules", ".git", ".orvyn", "dist", "release", ".cache"]);
+const SYNC_EXCLUDE = new Set(["node_modules", ".git", ".orvyn", "dist", "release", ".cache", ".env", ".env.*", ".ssh", ".aws", ".npmrc", "*.pem", "*.key", "id_rsa", "id_ed25519"]);
 
 function docker(args: string[], opts: { timeoutMs?: number; maxBuffer?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -86,6 +87,11 @@ export class DockerSandbox {
   static async available(): Promise<boolean> {
     const res = await docker(["version", "--format", "{{.Server.Version}}"], { timeoutMs: 8000 });
     return res.code === 0 && res.stdout.trim().length > 0;
+  }
+
+  async copyRuntimeFile(source: string, destination: string): Promise<void> {
+    const result = await docker(["cp", source, `${this.containerId}:${destination}`]);
+    if (result.code !== 0) throw new Error("Could not copy the project tool runtime into its sandbox");
   }
 
   /**
@@ -323,9 +329,9 @@ export class DockerSandbox {
     const walk = async (src: string, dest: string) => {
       const entries = await fs.readdir(src, { withFileTypes: true });
       for (const e of entries) {
-        if (SYNC_EXCLUDE.has(e.name)) continue;
+        if (SYNC_EXCLUDE.has(e.name) || /^\.env(?:\.|$)|\.(?:pem|key)$/i.test(e.name)) continue;
         const from = path.join(src, e.name);
-        const to = path.join(dest, e.name);
+        const to = await resolveSafeRealpath(projectRoot, path.relative(projectRoot, path.join(dest, e.name)));
         if (e.isDirectory()) {
           await fs.mkdir(to, { recursive: true });
           await walk(from, to);

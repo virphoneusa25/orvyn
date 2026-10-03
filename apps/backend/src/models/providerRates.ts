@@ -1,5 +1,19 @@
 import type { AIModelProvider } from "@orvyn/ai-core";
 const pagesCache = new Map<string, { until: number; body: Promise<string>; at: number }>();
+export async function refreshFireworksImageRates(providers: AIModelProvider[]): Promise<void> {
+  const url = "https://fireworks.ai/models?modelTypes=Image%2CAudio%2CEmbedding%2CVision%2CServerless&provider=fireworks-ai";
+  try {
+    const page = publicPage(url);
+    const html = (await page.body).replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    for (const p of providers) {
+      const kind = /flux-kontext-(pro|max)$/.exec(p.config.id)?.[1];
+      if (!kind || !p.config.id.startsWith("fw:")) continue;
+      const price = html.match(new RegExp(`FLUX\\.1\\s+Kontext\\s+${kind}\\s*\\$(\\d+(?:\\.\\d+)?)\\s*\\/\\s*Image`, "i"));
+      if (!price || Number(price[1]) <= 0) continue;
+      p.config.imageRate = { usdPerImage: Number(price[1]), premium: kind === "max", source: url, verifiedAt: page.at, expiresAt: page.at + 60 * 60_000 };
+    }
+  } catch { /* Cloud image preflight rejects missing/expired prices. */ }
+}
 function publicPage(url: string) {
   let cached = pagesCache.get(url);
   if (!cached || cached.until <= Date.now()) {

@@ -74,18 +74,14 @@ export class ExecutionRouter {
       if (ovhHealth.healthy) {
         return { provider: this.ovh, location: "OVH_WORKER", reason: "task marked for remote execution" };
       }
-      const dockerHealth = await this.docker.health();
-      if (opts.isIsolated && dockerHealth.healthy) {
-        return { provider: this.docker, location: "DOCKER_LOCAL", reason: "remote preferred but ORVYN Cloud unavailable — Docker sandbox for isolation" };
-      }
-      return { provider: this.local, location: "LOCAL", reason: `remote preferred but ORVYN Cloud unavailable (${ovhHealth.detail}) and isolation${opts.isIsolated ? "" : " not"} needed` };
+      throw new Error(`ORVYN Cloud worker unavailable (${ovhHealth.detail ?? "not configured"}); no local execution fallback.`);
     }
     if (opts.isIsolated) {
       const dockerHealth = await this.docker.health();
       if (dockerHealth.healthy) {
         return { provider: this.docker, location: "DOCKER_LOCAL", reason: "code-modifying task — Docker sandbox for isolation" };
       }
-      return { provider: this.local, location: "LOCAL", reason: `code-modifying task but Docker unavailable (${dockerHealth.detail}) — local execution with approvals` };
+      throw new Error(`Project sandbox unavailable (${dockerHealth.detail ?? "Docker is not running"}); select Host explicitly to run on this machine.`);
     }
     return { provider: this.local, location: "LOCAL", reason: "simple task — local execution" };
   }

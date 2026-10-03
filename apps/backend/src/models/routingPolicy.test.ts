@@ -18,7 +18,7 @@ test("with every provider: the cheap model for the job serves first", () => {
   assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: full }).registryId, "nebius:zai-org/GLM-5.3-Flash");
   assert.equal(startRoute({ profile: "code", instruction: "Build the settings page", availableIds: full }).registryId, "fw:accounts/fireworks/models/kimi-k2p7-code");
   assert.equal(startRoute({ profile: "code", instruction: "Fix the typo in the header", availableIds: full }).registryId, "mistral:codestral-25-08");
-  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: full }).registryId, "ci:google/gemini-3.5-flash-lite");
+  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: full }).registryId, "nebius:zai-org/GLM-5.3-Flash");
   assert.equal(startRoute({ profile: "deep", instruction: "naming", availableIds: full }).registryId, "nebius:deepseek-ai/DeepSeek-V4-Pro");
 });
 
@@ -46,7 +46,7 @@ test("Hugging Face opt-in does not imply a price or reliability advantage in leg
 test("with today's providers: nothing breaks (each tier falls back)", () => {
   assert.equal(startRoute({ profile: "auto", instruction: "x", availableIds: today }).registryId, "ci:glm-5.3-flash");
   assert.equal(startRoute({ profile: "code", instruction: "Fix the typo in the header", availableIds: today }).registryId, "fw:accounts/fireworks/models/kimi-k2p7-code");
-  assert.equal(startRoute({ profile: "server", instruction: "nginx", availableIds: today }).registryId, "ci:google/gemini-3.5-flash-lite");
+  assert.equal(startRoute({ profile: "server", instruction: "nginx", availableIds: today }).registryId, "ci:glm-5.3-flash");
 });
 
 test("the production provider preference avoids the slow GLM Flash route without changing stronger lanes", () => {

@@ -5,14 +5,26 @@ const { ModelService } = require(path.resolve(process.argv[2] || '/app/dist', 's
 const { selectAgentModel } = require(path.resolve(process.argv[2] || '/app/dist', 'models/selectModel.js'));
 const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist', 'agent/taskIntent.js'));
 (async () => {
+  const direct = process.argv[3] === 'fireworks';
+  const expectedProvider = direct ? 'fireworks' : 'huggingface';
   const service = new ModelService();
   await service.huggingFaceReady;
   const providers = service.registry.list();
   const capabilities = providers.filter(p => p.config.id.startsWith('hf:')).map(p => ({modelId:p.config.id,verification:p.config.routingVerification,context:p.config.contextWindow,tools:p.config.capabilities.tools,vision:p.config.capabilities.vision,streaming:p.config.streaming,rate:p.config.rate}));
   const choice = selectAgentModel({intent:inferTaskIntent('Fix the subtraction bug in math.js and run the unit tests'),requestedModelId:'auto',availableIds:providers.filter(p=>p.config.id!=='orvyn-mock').map(p=>p.config.id),providers});
-  const provider = choice.registryId ? service.registry.get(choice.registryId) : null;
+  const provider = direct ? service.registry.get('fw:accounts/fireworks/models/deepseek-v4-flash-0731') : choice.registryId ? service.registry.get(choice.registryId) : null;
+  if (direct && provider && provider.config.routingVerification?.status !== 'verified') {
+    // A bounded staging-only diagnostic proves account availability even when the public catalog disagrees.
+    try {
+      const res = await provider.generate({messages:[{role:'user',content:'Reply with OK.'}],maxOutputTokens:16,signal:AbortSignal.timeout(15000)});
+      console.log(JSON.stringify({event:'fireworks.account-availability',modelId:provider.config.id,provider:provider.config.providerName,responded:!!res.content,usage:res.usage}));
+    } catch(error) {
+      const status=String(error?.message||'').match(/(?:HTTP|status|error)\s*[:=]?\s*(\d{3})/i)?.[1];
+      console.log(JSON.stringify({event:'fireworks.account-availability',modelId:provider.config.id,provider:provider.config.providerName,responded:false,status:status||'unavailable',reason:'Pinned route failed; no fallback was attempted'}));
+    }
+  }
   console.log(JSON.stringify({event:'hf.preflight.capabilities',capabilities,choice}));
-  if (!provider || provider.config.providerName !== 'huggingface' || !/Kimi-K2.7-Code/.test(provider.config.id)) { console.log(JSON.stringify({event:'hf.preflight.failed',reason:'Auto coding did not select verified HF Kimi; fallback is not a pass'})); process.exitCode=1; return; }
+  if (!provider || provider.config.providerName !== expectedProvider || provider.config.routingVerification?.status !== 'verified' || (!direct && !/Kimi-K2.7-Code/.test(provider.config.id))) { console.log(JSON.stringify({event:'provider.preflight.failed',provider:expectedProvider,reason:provider?.config.routingVerification?.reason || 'Required provider/model unavailable; fallback is not a pass'})); process.exitCode=1; return; }
   let content = 'export function add(a, b) { return a - b; }';
   let wrote=false, tested=false, passed=false, called=0;
   const messages=[{role:'user',content:'Fix the subtraction bug in math.js. Read it first, use write_file to replace it with a correct exported add(a, b) function, then call run_tests. Use the provided tools. No other files or commands are allowed.'}];
@@ -34,7 +46,7 @@ const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist',
     }
   }
   const usage=service.usage.recent().map(e=>({modelId:e.modelId,provider:e.provider,method:e.method,ok:e.ok,promptTokens:e.promptTokens,completionTokens:e.completionTokens,cachedTokens:e.cachedTokens,estimated:e.estimated,toolCalls:e.toolCalls,rate:e.rate}));
-  const evidence={event:'hf.preflight.result',passed:passed&&tested&&called>=2&&usage.length>0&&usage.every(e=>e.provider==='huggingface'&&e.ok),modelId:provider.config.id,provider:provider.config.providerName,called,wrote,tested,usage};
+  const evidence={event:'provider.preflight.result',passed:passed&&tested&&called>=2&&usage.length>0&&usage.every(e=>e.provider===expectedProvider&&e.ok),modelId:provider.config.id,provider:provider.config.providerName,called,wrote,tested,usage};
   console.log(JSON.stringify(evidence));
   if(!evidence.passed) process.exitCode=1;
 })().catch(()=>{console.log(JSON.stringify({event:'hf.preflight.failed',reason:'Capability or bounded coding/tool smoke failed; raw provider errors withheld'}));process.exitCode=1;});

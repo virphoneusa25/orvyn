@@ -93,6 +93,7 @@ interface RateCard {
 }
 
 export interface UsageChargeInput {
+  imageCount?: number;
   /** The rate quoted when inference began; late completions keep that version. */
   rateAt?: number;
   userId: string;
@@ -241,6 +242,11 @@ export class CreditLedger {
         extra_usd REAL NOT NULL DEFAULT 0
       );
     `);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS image_usage_counts (event_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS image_rate_cards (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+        usd_per_image REAL NOT NULL, source TEXT NOT NULL, verified_at INTEGER NOT NULL, UNIQUE(provider,model,verified_at));
+      CREATE TABLE IF NOT EXISTS image_reservations (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, lane TEXT NOT NULL,
+        n INTEGER NOT NULL, credits INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.seedDefaultRateCard();
     this.migrateV1();
   }
@@ -494,7 +500,8 @@ export class CreditLedger {
     this.ensureAccount(accountId, DEFAULT_PLAN, now);
     if (use.lane || use.type) this.assertEntitlement(accountId, use.lane ?? "auto", use.type ?? "model", now);
     if (runId) this.assertRunCap(accountId, runId, 0, now);
-    const available = this.available(accountId) + (runId ? this.holdRemaining(runId) : 0);
+    const pending = this.pendingImages(accountId, now).credits;
+    const available = this.available(accountId) + (runId ? this.holdRemaining(runId) : 0) - pending;
     if (available <= 0) {
       throw new BillingLimitError("BALANCE", "You're out of credits. Add credits or upgrade your plan to continue.");
     }
@@ -505,13 +512,47 @@ export class CreditLedger {
     const plan = planById(w.plan_id);
     const limit5h = this.bucketSum(accountId, "purchased") > 0 ? plan.burst5h : plan.rolling5h;
     const used5h = this.windowCredits(accountId, now - 5 * HOUR, now);
-    if (used5h >= limit5h) {
+    if (used5h + pending >= limit5h) {
       throw new BillingLimitError("WINDOW_5H", `You've used this 5-hour window's ${limit5h.toLocaleString("en-US")} credits. It frees up as earlier usage ages out.`);
     }
     const used7d = this.windowCredits(accountId, now - 7 * DAY, now);
-    if (used7d >= plan.rolling7d) {
+    if (used7d + pending >= plan.rolling7d) {
       throw new BillingLimitError("WINDOW_7D", `You've used this week's ${plan.rolling7d.toLocaleString("en-US")} credits. It frees up as earlier usage ages out.`);
     }
+  }
+
+  setImageRateCard(provider: string, model: string, quote: { usdPerImage: number; source: string; verifiedAt: number }): void {
+    if (!Number.isFinite(quote.usdPerImage) || quote.usdPerImage <= 0 || !Number.isSafeInteger(quote.verifiedAt)) throw new Error("Invalid per-image rate");
+    this.db.prepare("INSERT OR IGNORE INTO image_rate_cards VALUES (?, ?, ?, ?, ?, ?)").run(`image_rate_${randomUUID()}`, provider, model, quote.usdPerImage, quote.source, quote.verifiedAt);
+  }
+
+  /** Persisted leases prevent parallel image calls from bypassing burst/wallet checks. */
+  reserveImage(accountId: string, count: number, lane: "image" | "image_pro", costUsd: number, now = Date.now()): () => void {
+    if (!Number.isInteger(count) || count < 1 || count > 4 || !Number.isFinite(costUsd) || costUsd <= 0) throw new Error("Invalid image quote");
+    const id = `image_${randomUUID()}`;
+    this.tx(() => {
+      this.assertCanSpend(accountId, undefined, now, { lane, type: "image" });
+      const plan = planById(this.wallet(accountId)!.plan_id);
+      const premium = lane === "image_pro";
+      const pending = this.pendingImages(accountId, now, lane);
+      if (this.countImages(accountId, premium, now - 5 * HOUR, now) + pending.n + count > (premium ? plan.proImages5h : plan.images5h) ||
+          this.countImages(accountId, premium, now - 7 * DAY, now) + pending.n + count > (premium ? plan.proImages7d : plan.images7d)) {
+        throw new BillingLimitError("IMAGE_BURST", "This image request exceeds your remaining image allowance.");
+      }
+      const credits = customerCreditsFor(costUsd, LANE_FACTORS[lane]).customerCredits;
+      const totalPending = this.pendingImages(accountId, now).credits;
+      const limit5 = this.bucketSum(accountId, "purchased") > 0 ? plan.burst5h : plan.rolling5h;
+      if (this.available(accountId) - totalPending < credits) throw new BillingLimitError("BALANCE", "Not enough credits for this image request.");
+      if (this.windowCredits(accountId, now - 5 * HOUR, now) + totalPending + credits > limit5) throw new BillingLimitError("WINDOW_5H", "This image request exceeds your 5-hour credit allowance.");
+      if (this.windowCredits(accountId, now - 7 * DAY, now) + totalPending + credits > plan.rolling7d) throw new BillingLimitError("WINDOW_7D", "This image request exceeds your weekly credit allowance.");
+      this.db.prepare("INSERT INTO image_reservations VALUES (?, ?, ?, ?, ?, ?)").run(id, accountId, lane, count, credits, now + HOUR);
+    });
+    return () => { this.db.prepare("DELETE FROM image_reservations WHERE id = ? AND account_id = ?").run(id, accountId); };
+  }
+
+  private pendingImages(accountId: string, now: number, lane?: string): { n: number; credits: number } {
+    return this.db.prepare(`SELECT COALESCE(SUM(n),0) AS n, COALESCE(SUM(credits),0) AS credits FROM image_reservations
+      WHERE account_id = ? AND expires_at > ? ${lane ? "AND lane = ?" : ""}`).get(...(lane ? [accountId, now, lane] : [accountId, now])) as { n: number; credits: number };
   }
 
   /**
@@ -526,7 +567,9 @@ export class CreditLedger {
     const prior = this.db.prepare(`SELECT credits_charged, provider_cost_micros FROM usage_events WHERE id = ?`).get(eventId) as { credits_charged: number; provider_cost_micros: number } | undefined;
     if (prior) return { creditsCharged: 0, providerCostUsd: prior.provider_cost_micros / 1_000_000, eventId };
     const lane: Lane = input.lane ?? "auto";
-    const card = this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", input.rateAt ?? now);
+    if (input.type === "image" && input.ok !== false && input.providerCostUsd === undefined) throw new Error("Successful image usage requires an exact provider cost");
+    const card = input.type === "image" ? undefined : this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", input.rateAt ?? now);
+    const imageCard = input.type === "image" ? this.db.prepare("SELECT id FROM image_rate_cards WHERE provider = ? AND model = ? AND verified_at <= ? ORDER BY verified_at DESC LIMIT 1").get(input.provider ?? "", input.model ?? "", input.rateAt ?? now) as { id: string } | undefined : undefined;
     const cost = input.providerCostUsd ?? (card
       ? providerCostUsd({
           inputTokens: input.inputTokens,
@@ -551,8 +594,9 @@ export class CreditLedger {
         eventId, input.userId, input.organizationId ?? null, input.sessionId ?? null, input.runId ?? null, input.type,
         input.provider ?? null, input.model ?? null, lane,
         input.inputTokens ?? null, input.cachedInputTokens ?? null, input.outputTokens ?? null,
-        Math.round(cost * 1_000_000), charged, card?.id ?? null, input.ok === false ? 0 : 1, now,
+        Math.round(cost * 1_000_000), charged, imageCard?.id ?? card?.id ?? null, input.ok === false ? 0 : 1, now,
       );
+      if (input.type === "image") this.db.prepare("INSERT INTO image_usage_counts VALUES (?, ?)").run(eventId, input.ok === false ? 0 : input.imageCount ?? 1);
     });
     if (charged > 0) this.maybeAutoRecharge(input.userId, now);
     return { creditsCharged: charged, providerCostUsd: cost, eventId };
@@ -861,7 +905,7 @@ export class CreditLedger {
 
   private countImages(accountId: string, pro: boolean, from: number, to: number): number {
     const row = this.db.prepare(
-      `SELECT COUNT(*) AS n FROM usage_events WHERE user_id = ? AND type = 'image' AND ok = 1 AND created_at > ? AND created_at <= ? AND lane ${pro ? "=" : "!="} 'image_pro'`,
+      `SELECT COALESCE(SUM(COALESCE(c.n,1)),0) AS n FROM usage_events u LEFT JOIN image_usage_counts c ON c.event_id=u.id WHERE user_id = ? AND type = 'image' AND ok = 1 AND created_at > ? AND created_at <= ? AND lane ${pro ? "=" : "!="} 'image_pro'`,
     ).get(accountId, from, to) as { n: number };
     return row.n;
   }

@@ -184,12 +184,22 @@ export function localWorkerRouter(
     if (job && job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
     const request = toolRpc.poll(req.params.runId);
     let finished = false;
+    let cancelled = false;
     try {
       const run = getRunStore(t.id).get(req.params.runId);
       finished = !!run && isRunSettled(run.status);
+      cancelled = run?.status === "cancelled";
     } catch { /* keep serving */ }
     if (finished) toolRpc.cleanup(req.params.runId);
-    res.json({ request, finished, projectRoot: job?.projectRoot });
+    res.json({ request, finished, cancelled, projectRoot: job?.projectRoot });
+  });
+
+  r.get("/tools/:runId/state", (req, res) => {
+    const t = requireTenant(req);
+    const job = jobs.find((j) => j.runId === req.params.runId);
+    if (!job || job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
+    const run = getRunStore(t.id).get(req.params.runId);
+    res.json({ cancelled: run?.status === "cancelled", finished: Boolean(run && isRunSettled(run.status)) });
   });
 
   r.post("/tools/:runId/result", (req, res) => {

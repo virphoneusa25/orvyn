@@ -133,6 +133,7 @@ export interface ModelConfig {
   /** Serving vendor, separate from the adapter wire format. Never contains credentials. */
   providerName?: string;
   rate?: { input: number; output: number; cachedInput?: number; source: string; verifiedAt: number; expiresAt: number };
+  imageRate?: { usdPerImage: number; premium: boolean; source: string; verifiedAt: number; expiresAt: number };
   routingVerification?: { status: "pending" | "verified" | "failed"; reason: string };
   id: string;
   name: string;

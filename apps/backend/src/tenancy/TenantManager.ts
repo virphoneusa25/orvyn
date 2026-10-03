@@ -148,12 +148,20 @@ export class TenantManager {
     modelService.usage.onPreflight((ctx, model) => {
       if (!creditsEnforced()) return;
       // The customer's own model runs on their provider account, not ORVYN credits.
-      if (model && modelService.isUserModel(model.id)) return;
+        if (model && modelService.isUserModel(model.id)) return;
+        if (model?.method === "image") {
+          const rate = model.imageRate;
+          if (!rate || rate.expiresAt <= Date.now() || !Number.isFinite(rate.usdPerImage) || rate.usdPerImage <= 0) {
+            throw new Error("Image generation is unavailable until a current per-image price is configured.");
+          }
+          return creditLedger.reserveImage(id, model.imageCount ?? 1, rate.premium ? "image_pro" : "image", model.providerCostUsd!);
+        }
       creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
     });
     // After it: settle exactly once per call (the usage event id is the key).
-    modelService.usage.onRecord((event) => {
-      const own = modelService.isUserModel(event.modelId);
+      modelService.usage.onRecord((event) => {
+        const own = modelService.isUserModel(event.modelId);
+        if (!own && event.imageRate) creditLedger.setImageRateCard(event.provider, event.modelId, event.imageRate);
       if (!own && event.rate) {
         const r = event.rate;
         const previous = creditLedger.rateCardAt(event.provider, event.modelId, r.verifiedAt);
@@ -164,8 +172,9 @@ export class TenantManager {
       }
       creditLedger.charge({
         eventId: event.id,
-        rateAt: event.rate?.verifiedAt,
-        ...(own ? { providerCostUsd: 0 } : {}),
+          rateAt: event.imageRate?.verifiedAt ?? event.rate?.verifiedAt,
+          ...(own ? { providerCostUsd: 0 } : {}),
+          ...(!own && event.method === "image" ? { providerCostUsd: event.providerCostUsd, imageCount: event.imageCount } : {}),
         userId: id, runId: event.missionId, sessionId: event.missionId,
         type: event.method === "image" ? "image" : "model",
         provider: event.provider, model: event.modelId, lane: laneForUsage(event),

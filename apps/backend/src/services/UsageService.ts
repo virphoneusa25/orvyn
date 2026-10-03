@@ -27,6 +27,10 @@ export interface UsageContext {
 }
 
 export interface UsageEvent {
+  imageRate?: ModelConfig["imageRate"];
+  imageCount?: number;
+  providerCostUsd?: number;
+  imagePremium?: boolean;
   rate?: ModelConfig["rate"];
   cachedTokens?: number;
   id: string;
@@ -98,7 +102,7 @@ export class UsageService {
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
   private sinks: Array<(event: UsageEvent) => void> = [];
-  private preflights: Array<(ctx: UsageContext, model?: { id: string }) => void> = [];
+  private preflights: Array<(ctx: UsageContext, model?: UsagePreflight) => void | (() => void)> = [];
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -123,13 +127,40 @@ export class UsageService {
    * with LocalStore.
    */
   /** A check run before every provider call (the credit wallet): throwing stops the call. */
-  onPreflight(fn: (ctx: UsageContext, model?: { id: string }) => void): void {
+  onPreflight(fn: (ctx: UsageContext, model?: UsagePreflight) => void | (() => void)): void {
     this.preflights.push(fn);
   }
 
-  private runPreflight(model?: { id: string }): void {
+  private runPreflight(model?: UsagePreflight): () => void {
     const ctx = this.als.getStore() ?? {};
-    for (const fn of this.preflights) fn(ctx, model);
+    const releases: Array<() => void> = [];
+    try {
+      for (const fn of this.preflights) { const release = fn(ctx, model); if (release) releases.push(release); }
+    } catch (err) { for (const release of releases.reverse()) release(); throw err; }
+    return () => { for (const release of releases.reverse()) release(); };
+  }
+
+  /** Covers adapters and the direct Fireworks Kontext wire with the same billing boundary. */
+  async imageCall<T>(config: Pick<ModelConfig, "id" | "provider" | "providerName" | "imageRate">, count: number,
+    call: () => Promise<T>, produced: (result: T) => number): Promise<T> {
+    this.checkQuota();
+    this.checkMissionBudget();
+    const rate = config.imageRate ? { ...config.imageRate } : undefined;
+    const release = this.runPreflight({ id: config.id, method: "image", imageCount: count,
+      imageRate: rate, providerCostUsd: rate ? count * rate.usdPerImage : undefined });
+    const start = Date.now();
+    try {
+      const result = await call();
+      const actual = produced(result);
+      if (!Number.isInteger(actual) || actual < 1 || actual > count) throw new Error("Image provider returned an invalid image count");
+      this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: true,
+        imageCount: actual, imageRate: rate, imagePremium: rate?.premium, providerCostUsd: rate ? actual * rate.usdPerImage : undefined, durationMs: Date.now() - start });
+      return result;
+    } catch (err: any) {
+      this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: false,
+        imageCount: 0, providerCostUsd: 0, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
+      throw err;
+    } finally { release(); }
   }
 
   onRecord(fn: (event: UsageEvent) => void): void {
@@ -421,35 +452,20 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
-        usage.runPreflight(inner.config);
-        const start = Date.now();
-        try {
-          const res = await inner.generateImage!(request);
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.providerName ?? inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: true,
-          });
-          return res;
-        } catch (err: any) {
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.providerName ?? inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
-          throw err;
-        }
+        return usage.imageCall(inner.config, request.n ?? 1, () => inner.generateImage!(request), (res) => res.length);
       };
     }
 
     return wrapper;
   }
+}
+
+export interface UsagePreflight {
+  id: string;
+  method?: "image";
+  imageCount?: number;
+  imageRate?: ModelConfig["imageRate"];
+  providerCostUsd?: number;
 }
 
 /** ~4 characters per token: a conservative estimate used only when the provider reports nothing. */

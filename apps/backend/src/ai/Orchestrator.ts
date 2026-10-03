@@ -17,7 +17,7 @@ import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, Attachment, TaskType, incompatibility, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
+import { AIMessage, AIChunk, Attachment, TaskType, incompatibility, isRoutineWriting, writingProvider, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
 import { decideTurn, type TurnDecision } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -294,6 +294,10 @@ export class Orchestrator {
       (req.attachments ?? []).some((a) => a.kind === "image") ||
       (req.context?.attachments ?? []).some((a) => a.kind === "image");
     if (this.modelService.router.getExplicitOverrides()[req.task]) return this.modelService.router.resolve(req.task, this.chatRequirements(req));
+    if (isRoutineWriting(req.userMessage) && !isDeepQuestion(req.userMessage, req.reasoningEffort)) {
+      const writing = writingProvider(this.modelService.registry.list(), this.chatRequirements(req), isRouteBlocked);
+      if (writing) return writing;
+    }
     const preferred = this.modelService.router.preferred(req.task, this.chatRequirements(req), isDeepQuestion(req.userMessage, req.reasoningEffort) ? "advanced" : undefined);
     if (preferred.provider) return preferred.provider;
     if (hasImages) {

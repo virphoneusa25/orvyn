@@ -40,11 +40,9 @@ test("routing: explicit OVH_WORKER does not silently become LOCAL", async () => 
   await assert.rejects(() => router.select({ preference: "OVH_WORKER" }), /no silent Local fallback/i);
 });
 
-test("routing: Auto + remote-flagged task is honest when OVH is down", async () => {
-  const router = new ExecutionRouter();
-  const d = await router.select({ isRemote: true });
-  assert.notEqual(d.location, "OVH_WORKER", "must not claim OVH");
-  assert.ok(d.reason.includes("ORVYN Cloud unavailable"), `reason says the cloud is unavailable: ${d.reason}`);
+  test("routing: Auto + remote-flagged task is honest when OVH is down", async () => {
+    const router = new ExecutionRouter();
+    await assert.rejects(() => router.select({ isRemote: true }), /Cloud worker unavailable.*no local execution fallback/i);
 });
 
 // ---- Local provider --------------------------------------------------------

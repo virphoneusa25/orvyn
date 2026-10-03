@@ -10,6 +10,16 @@ export interface RoutingRequirements {
 }
 
 export type RouteFamily = "flash" | "advanced" | "code" | "premium";
+export function isRoutineWriting(text: string): boolean {
+  return /\b(marketing|copywriting|social media|ad copy|product description|newsletter|promotional|campaign copy)\b/i.test(text)
+    && !/\b(complex|important|critical|premium|strategy|comprehensive|advanced)\b/i.test(text);
+}
+
+export function writingProvider(providers: AIModelProvider[], needs: RoutingRequirements, unavailable: (id: string) => boolean): AIModelProvider | undefined {
+  return providers.find((p) => p.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731"
+    && p.config.routingVerification?.status === "verified" && p.config.rate && p.config.rate.expiresAt > Date.now()
+    && !unavailable(p.config.id) && !incompatibility(p.config, needs));
+}
 export function routeFamily(id: string): RouteFamily | undefined {
   if (/glm[-/]?5[.p]3[-/]?flash/i.test(id)) return "flash";
   if (/glm[-/]?5[.p]3/i.test(id)) return "advanced";

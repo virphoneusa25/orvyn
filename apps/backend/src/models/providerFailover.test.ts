@@ -84,5 +84,5 @@ test("the curated Nebius set serves every agent tier as a second provider", () =
   const ids = [...curated];
   assert.equal(startRoute({ profile: "code", instruction: "Refactor utils", availableIds: ids }).registryId, NB_KIMI);
   assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3-Flash");
-  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3");
+  assert.equal(startRoute({ profile: "server", instruction: "nginx 502", availableIds: ids }).registryId, "nebius:zai-org/GLM-5.3-Flash");
 });

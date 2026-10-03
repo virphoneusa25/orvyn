@@ -22,7 +22,7 @@ done
 rsync -az -e "$RSH" "$ROOT/docker-compose.yml" "$ROOT/package.json" "$ROOT/package-lock.json" "$ROOT/.dockerignore" "$HOST:$REMOTE/"
 # Only configured HF settings change. Identity, database passwords and all other
 # staging environment values are preserved. Secrets travel over SSH stdin.
-for name in HUGGINGFACE_API_KEY HF_TOKEN HUGGINGFACE_BASE_URL HUGGINGFACE_MODELS HUGGINGFACE_ROUTING_ENABLED NEBIUS_API_KEY; do
+for name in HUGGINGFACE_API_KEY HF_TOKEN HUGGINGFACE_BASE_URL HUGGINGFACE_MODELS HUGGINGFACE_ROUTING_ENABLED NEBIUS_API_KEY FIREWORKS_API_KEY FIREWORKS_MODELS FIREWORKS_BASE_URL; do
   value="${!name:-}"
   [[ -n "$value" ]] || continue
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; value=\$(cat); { grep -v '^$name=' .env.staging || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .env.staging.tmp; chmod 600 .env.staging.tmp; mv .env.staging.tmp .env.staging"
@@ -32,6 +32,7 @@ for _ in $(seq 1 40); do
   if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
     curl -fsS -m 8 "$STAGING_HEALTH"; echo
     cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
+    cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist fireworks"
     echo "Staging commit and HF coding/tool provider evidence verified"
     exit 0
   fi

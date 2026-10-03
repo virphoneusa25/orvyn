@@ -17,7 +17,8 @@ import { CERTIFIED_MODELS } from "../models/certifiedModels";
 import { markModelUnavailable } from "../models/modelAvailability";
 import { isRouteBlocked } from "../models/modelAvailability";
 import { verifyHuggingFace } from "../models/huggingFaceVerification";
-import { refreshNebiusRates, refreshFireworksRates } from "../models/providerRates";
+import { FIREWORKS_WRITING_MODEL, verifyFireworksWriting } from "../models/fireworksVerification";
+import { refreshNebiusRates, refreshFireworksRates, refreshFireworksImageRates } from "../models/providerRates";
 import { NEBIUS_CURATED, NEBIUS_EMBED_DIMS, NEBIUS_EMBED_MODEL } from "../models/modelEquivalents";
 
 function openaiDisplayName(id: string): string {
@@ -259,6 +260,7 @@ export class ModelService {
   }
   public router = new ModelRouter(this.registry);
   public huggingFaceReady: Promise<void> = Promise.resolve();
+  public imageReady: Promise<void> = Promise.resolve();
   /** Server-side usage metering — every provider registered here is wrapped. */
   public usage = new UsageService();
   /** Registered, callable, but kept out of the model menu (a provider's long tail). */
@@ -336,8 +338,8 @@ export class ModelService {
 
     const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
     if (fireworksKey) {
-      const certified = CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId);
-      const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
+      const certified = [...CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId), FIREWORKS_WRITING_MODEL];
+      const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "accounts/fireworks/models/deepseek-v4-flash-0731")
         .split(",").map((s) => s.trim()).filter(Boolean);
       // Qwen3-VL on Fireworks is Deploy on Demand. Register only explicit
       // account deployments, avoiding a guaranteed 404 on serverless plans.
@@ -350,7 +352,7 @@ export class ModelService {
           : undefined;
         this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane ?? visionLane));
       }
-      void this.hideUndeployedFireworksImages(fireworksKey);
+      this.imageReady = Promise.all([this.hideUndeployedFireworksImages(fireworksKey), refreshFireworksImageRates(this.registry.list())]).then(() => undefined);
     }
 
     // Hugging Face Inference Providers uses an OpenAI-compatible router.
@@ -565,13 +567,20 @@ export class ModelService {
     }
     const nebius = this.registry.list().filter((p) => p.config.id.startsWith("nebius:"));
     const fireworks = this.registry.list().filter((p) => p.config.providerName === "fireworks");
+    const writing = this.registry.get(`fw:${FIREWORKS_WRITING_MODEL}`);
+    if (writing) {
+      writing.config.routingVerification = { status: "pending", reason: "Fireworks writing route awaiting live verification" };
+      this.huggingFaceReady = Promise.all([this.huggingFaceReady, verifyFireworksWriting(writing.config)]).then(() => undefined);
+    }
     this.huggingFaceReady = Promise.all([this.huggingFaceReady, ...(nebius.length ? [refreshNebiusRates(nebius)] : []), ...(fireworks.length ? [refreshFireworksRates(fireworks)] : [])]).then(() => undefined);
     if (huggingFaceKey || nebius.length || fireworks.length) {
       const refresh = setInterval(() => {
+        this.imageReady = refreshFireworksImageRates(this.registry.list());
         this.huggingFaceReady = Promise.all([
           ...this.registry.list().filter((p) => p.config.providerName === "huggingface").map((p) => verifyHuggingFace(p.config)),
           ...(nebius.length ? [refreshNebiusRates(nebius)] : []),
           ...(fireworks.length ? [refreshFireworksRates(fireworks)] : []),
+          ...(writing ? [verifyFireworksWriting(writing.config)] : []),
         ]).then(() => undefined);
       }, 5 * 60_000);
       refresh.unref();

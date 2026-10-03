@@ -64,3 +64,37 @@ Rollback: tag the previous production image `orvyn-backend:rollback-7f5e129` bef
 | `docs/SHARED_HF_RELEASE.md` | Promotion scope, verification gates and rollback record |
 
 CI attempt 37145988788 passed Windows packaging, Docker build and signup browser checks; staging stopped before rebuilding because .dockerignore was missing. Added the tracked Docker exclusions and completed the guarded smoke account onboarding fixture before retry.
+
+## Added release scope requested during verification
+
+Server diagnosis starts with compatible GLM-5.3-Flash and escalates through the existing server ladder. Routine writing uses the exact direct Fireworks `accounts/fireworks/models/deepseek-v4-flash-0731` only after public context/prices and actual streaming tools verify. The proposed HF/DeepInfra DeepSeek route is not registered. Explicit selections remain authoritative. On October 3 the exact Fireworks model's official DeepSeek page says **Serverless Not supported**; it must not be enabled merely because its state says Ready. Staging includes a bounded direct account-availability probe and rejects fallback as a pass.
+
+Kontext Pro remains the default; Max requires explicit premium quality or model selection. Image calls, including the direct Kontext HTTP path, pass through a shared metering boundary. Current per-image quotes are captured and audited separately from token cards. Cloud refuses unpriced images. Persisted pre-call leases account for image batches, simultaneous requests, credit balance and rolling windows; failures release leases and charge zero. Historical ledger entries and settings remain intact.
+
+Desktop-owned Auto coding uses Docker with the existing project tools bundled inside its container, rather than the host executor. Cloud coding uses its worker; missing workers/sandboxes stop the run. Host remains explicit. Project secrets are excluded from container copies and SDK calls never receive provider credentials. Existing MCP connection/authentication indicators and Local Only labels remain authoritative; Cloud's MCP gateway already refuses local stdio calls. Existing approval scopes and audit storage remain shared. Docker acceptance gates exercise file editing, real tests, credential exclusion, cancellation and merging; the Cloud worker RPC acceptance also gates releases. Actual SSH/MCP setup still requires configured resources; synthetic fixtures do not prove a customer's connection works.
+
+| Additional file | Why required |
+| --- | --- |
+| `apps/backend/package.json` | Build the shared project-tool sandbox bundle; declare its build dependency |
+| `package-lock.json` | Pin the bundle compiler dependency |
+| `apps/backend/scripts/build-sandbox-tools.cjs` | Package existing tools for execution inside Docker |
+| `apps/backend/src/localWorker/sandboxToolsEntry.ts` | Execute the existing file, terminal and diagnostic tools inside the container |
+| `apps/backend/src/localWorker/LocalSandboxExecutor.ts` | Connect the Desktop worker to the existing Docker sandbox lifecycle |
+| `apps/backend/src/localWorker/entry.ts` | Dispatch sandbox jobs truthfully and stop their containers on cancellation |
+| `apps/backend/src/routes/localWorker.ts` | Tenant-scoped cancellation status without consuming tool requests |
+| `apps/backend/src/sandbox/DockerSandbox.ts` | Copy the SDK, exclude secret files and guard merge-back paths |
+| `apps/backend/src/execution/ExecutionTarget.ts` | Distinguish Desktop projects from Cloud projects and default coding to the correct isolated target |
+| `apps/backend/src/execution/ExecutionRouter.ts` | Stop unavailable isolation/remote targets rather than running on the host |
+| `apps/backend/src/execution/ExecutionTarget.test.ts` | Target/default/explicit-selection regressions |
+| `apps/backend/src/execution/execution.test.ts` | Unavailable remote target regressions |
+| `apps/backend/src/execution/acceptanceMatrix.test.ts` | Product target, gateway denial and actual Desktop Docker acceptance |
+| `apps/backend/src/agent/runPreflightResult.test.ts` | Keep preflight consistent with the new Desktop default |
+| `apps/backend/src/billing/imageBilling.test.ts` | Per-image charging, batch counts, concurrent allowances, failures and replay protection |
+| `apps/backend/src/images/ImageService.ts` | Meter direct Kontext calls and keep premium fallback explicit |
+| `apps/backend/src/models/fireworksVerification.ts` | Verify the exact writing route, current prices/context and real streaming tools |
+| `apps/backend/src/models/fireworksWriting.test.ts` | Exact route, missing availability, explicit models and premium image regressions |
+| `apps/backend/src/models/providerFailover.test.ts` | Server Flash default with Nebius-only configuration |
+| `apps/backend/src/models/routingPolicy.test.ts` | Server Flash tier ordering |
+| `apps/backend/src/models/selectModel.test.ts` | Server Flash selection with other models available |
+
+Previously listed shared routing, metering, billing, policy, CI and deployment files also receive these narrowly related changes. The candidate remains **staging-only** until all mandatory gates pass; a commit without `[release-production]` cannot trigger the production promotion.
