@@ -2,7 +2,7 @@
 // A model that is not registered is skipped; the caller keeps its previous route.
 
 import type { TaskIntent } from "../agent/taskIntent";
-import { preferHuggingFace, incompatibility, routeFamily, isRoutineWriting, writingProvider, type AIModelProvider, type RoutingRequirements } from "@orvyn/ai-core";
+import { preferHuggingFace, incompatibility, routeFamily, isRoutineWriting, writingProvider, writingFallbackReason, type AIModelProvider, type RoutingRequirements } from "@orvyn/ai-core";
 import { isRouteBlocked } from "./modelAvailability";
 import { CERTIFIED_MODELS, laneModel, type LaneModel } from "./certifiedModels";
 import { escalate, LADDERS, profileFor, startRoute, stepFrom, TIERS, type RouteProfile, type RouteStep, type Tier } from "./routingPolicy";
@@ -93,10 +93,12 @@ export function selectAgentModel(input: {
       ? writingProvider(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, isRouteBlocked) : undefined;
     if (writing) return { registryId: writing.config.id, lane: "auto", pinned: false,
       reason: "Routine writing: exact Fireworks DeepSeek Flash route passed streaming/tool verification", route: { ...route, registryId: writing.config.id } };
+    const writingFailure = !input.deep && profile === "auto" && isRoutineWriting(input.intent.goal ?? "") ? writingFallbackReason(input.providers) : "";
     const family = input.intent.informational && !input.deep && !input.intent.requiresFrontend ? "flash" : routeFamily(route.registryId ?? "") ?? (route.tier === "code" ? "code" : route.tier === "agent" || route.tier === "heavy" ? "advanced" : route.tier === "auto" ? "flash" : undefined);
     const preferred = preferHuggingFace(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""), isRouteBlocked, family);
     if (preferred.provider) route = { ...route, registryId: preferred.provider.config.id, reason: preferred.reason };
     else route = { ...route, reason: `${route.reason} ${preferred.reason}` };
+    if (writingFailure) route = { ...route, reason: `${writingFailure}; ${route.reason}` };
   }
   return {
     registryId: route.registryId,

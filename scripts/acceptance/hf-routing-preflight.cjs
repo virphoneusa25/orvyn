@@ -7,6 +7,7 @@ const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist',
 (async () => {
   const direct = process.argv[3] === 'fireworks';
   const expectedProvider = direct ? 'fireworks' : 'huggingface';
+  if (direct) console.log(JSON.stringify({event:'fireworks.staging-config',credentialsConfigured:!!process.env.FIREWORKS_API_KEY?.trim()}));
   const service = new ModelService();
   await service.huggingFaceReady;
   const providers = service.registry.list();

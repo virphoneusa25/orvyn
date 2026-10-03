@@ -159,10 +159,10 @@ jobs:
 
   deploy-ovh:
     name: Deploy OVH control plane
-    needs: [build-and-test, desktop-hosted]
+    needs: [build-and-test, desktop-hosted, fireworks-staging]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: always() && needs.build-and-test.result == 'success' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')) || (github.ref == 'refs/heads/codex/shared-hf-auto' && needs.desktop-hosted.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))))
+    if: always() && needs.build-and-test.result == 'success' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')) || (github.ref == 'refs/heads/codex/shared-hf-auto' && needs.desktop-hosted.result == 'success' && needs.fireworks-staging.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -271,6 +271,23 @@ jobs:
           trap 'rm -f "$HOME/.ssh/ovh_deploy"' EXIT
           export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
           bash scripts/deploy-ovh-staging.sh
+
+  fireworks-staging:
+    name: Verify pinned Fireworks route in staging
+    needs: [deploy-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify actual Fireworks provider without fallback
+        env:
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+        run: |
+          key="$RUNNER_TEMP/orvyn-fireworks-staging-ssh"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$key"
+          chmod 600 "$key"
+          trap 'rm -f "$key"' EXIT
+          cat scripts/acceptance/hf-routing-preflight.cjs | ssh -i "$key" -o StrictHostKeyChecking=accept-new ubuntu@40.160.11.123 'docker exec -i backend-staging node - /app/dist fireworks'
 
   desktop-hosted:
     name: Windows Desktop against staging

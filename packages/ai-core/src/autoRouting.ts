@@ -20,6 +20,10 @@ export function writingProvider(providers: AIModelProvider[], needs: RoutingRequ
     && p.config.routingVerification?.status === "verified" && p.config.rate && p.config.rate.expiresAt > Date.now()
     && !unavailable(p.config.id) && !incompatibility(p.config, needs));
 }
+export function writingFallbackReason(providers: AIModelProvider[]): string {
+  const route = providers.find((p) => p.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731");
+  return `Fireworks writing fallback: ${route?.config.routingVerification?.reason ?? "credentials/model unavailable or requirements unsupported"}`;
+}
 export function routeFamily(id: string): RouteFamily | undefined {
   if (/glm[-/]?5[.p]3[-/]?flash/i.test(id)) return "flash";
   if (/glm[-/]?5[.p]3/i.test(id)) return "advanced";

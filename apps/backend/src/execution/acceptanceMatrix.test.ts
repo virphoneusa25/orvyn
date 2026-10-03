@@ -53,6 +53,11 @@ test("real Desktop sandbox edits, tests, excludes credentials, merges results an
     await executor.finish(root, true);
     assert.match(readFileSync(join(root, "math.js"), "utf8"), /a\+b/);
     assert.match(readFileSync(join(root, ".env"), "utf8"), /fixture-must-stay-out/);
+    await executor.start(`conflict${Date.now()}`, root);
+    assert.equal((await req("write_file", { path: "math.js", content: "module.exports.add=(a,b)=>a+b+1;\n" })).ok, true);
+    writeFileSync(join(root, "math.js"), "// Cursor edit must remain\nmodule.exports.add=(a,b)=>a+b;\n");
+    await assert.rejects(executor.finish(root, true), /changed outside the sandbox/);
+    assert.match(readFileSync(join(root, "math.js"), "utf8"), /Cursor edit must remain/);
     await executor.start(`cancel${Date.now()}`, root);
     const pending = req("terminal", { command: "sleep 30" });
     await new Promise((r) => setTimeout(r, 300));

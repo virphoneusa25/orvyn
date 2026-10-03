@@ -32,6 +32,9 @@ test("parallel image preflights reserve allowance, failures release it and no to
     let releases: Array<() => void> = [];
     for (let n = 0; n < PLANS.starter.images5h; n++) releases.push(db.reserveImage("customer", 1, "image", .04));
     assert.throws(() => db.reserveImage("customer", 1, "image", .04), /image allowance/);
+    const reopened = new CreditLedger(join(dir, "billing.sqlite"));
+    try { assert.throws(() => reopened.reserveImage("customer", 1, "image", .04), /image allowance/); }
+    finally { reopened.close(); }
     for (const release of releases) release();
     const release = db.reserveImage("customer", 1, "image", .04); release();
     db.ensureAccount("free-customer");

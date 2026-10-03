@@ -17,7 +17,7 @@ import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
 // apps/backend/src/ai/Orchestrator.ts
-import { AIMessage, AIChunk, Attachment, TaskType, incompatibility, isRoutineWriting, writingProvider, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
+import { AIMessage, AIChunk, Attachment, TaskType, incompatibility, isRoutineWriting, writingProvider, writingFallbackReason, type ToolCall, type AIModelProvider } from "@orvyn/ai-core";
 import { decideTurn, type TurnDecision } from "@orvyn/ai-core";
 import { ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -369,7 +369,9 @@ export class Orchestrator {
     let provider = this.resolveProvider(req);
     const routingReason = this.modelService.router.preferred(req.task, this.chatRequirements(req), isDeepQuestion(req.userMessage, req.reasoningEffort) ? "advanced" : undefined).reason;
     let usedReported = false;
-    let actualReason = req.requestedModelId && req.requestedModelId !== "auto" ? "Explicit model selection" : routingReason;
+    let actualReason = (req.requestedModelId && req.requestedModelId !== "auto") || this.modelService.router.getExplicitOverrides()[req.task] ? "Explicit model selection"
+      : isRoutineWriting(req.userMessage) ? provider.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731"
+        ? "Routine writing: exact Fireworks route verified" : `${writingFallbackReason(this.modelService.registry.list())}; ${routingReason}` : routingReason;
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.

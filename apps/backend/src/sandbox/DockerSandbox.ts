@@ -25,6 +25,7 @@ import * as os from "os";
 import * as path from "path";
 import type { SandboxExecRequest, SandboxExecResult, SandboxProcess } from "../ai/tools/sandboxTools";
 import { resolveSafeRealpath } from "../execution/pathSafety";
+import { createHash } from "node:crypto";
 
 const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:22-slim";
 /** Whole-mission wall clock, minutes. A wedged mission must not hold a box. */
@@ -36,6 +37,13 @@ const MAX_RETAINED_OUTPUT = Number(process.env.ORVYN_SANDBOX_MAX_OUTPUT_BYTES) |
 
 /** Directories never copied into (or back out of) the sandbox. */
 const SYNC_EXCLUDE = new Set(["node_modules", ".git", ".orvyn", "dist", "release", ".cache", ".env", ".env.*", ".ssh", ".aws", ".npmrc", "*.pem", "*.key", "id_rsa", "id_ed25519"]);
+function excludeSyncName(name: string): boolean {
+  return SYNC_EXCLUDE.has(name) || /^\.env(?:\.|$)|\.(?:pem|key)$/i.test(name);
+}
+async function contentHash(file: string): Promise<string | undefined> {
+  try { return createHash("sha256").update(await fs.readFile(file)).digest("hex"); }
+  catch (error: any) { if (error.code === "ENOENT") return undefined; throw error; }
+}
 
 function docker(args: string[], opts: { timeoutMs?: number; maxBuffer?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -76,6 +84,7 @@ interface ProcMeta {
 export class DockerSandbox {
   readonly containerId: string;
   private stopped = false;
+  private initialFiles = new Map<string, string>();
   private wallClock?: NodeJS.Timeout;
   private processes = new Map<string, ProcMeta>();
 
@@ -151,6 +160,16 @@ export class DockerSandbox {
 
   /** Streams the host project tree into /workspace inside the container. */
   private async copyIn(projectRoot: string): Promise<void> {
+    const snapshot = async (dir: string) => {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        if (excludeSyncName(entry.name)) continue;
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) await snapshot(file);
+        else if (entry.isFile()) this.initialFiles.set(path.relative(projectRoot, file), (await contentHash(file))!);
+      }
+    };
+    this.initialFiles.clear();
+    await snapshot(projectRoot);
     await new Promise<void>((resolve, reject) => {
       const excludes = [...SYNC_EXCLUDE].flatMap((d) => ["--exclude", d]);
       const tar = spawn("tar", ["cf", "-", ...excludes, "-C", projectRoot, "."], { windowsHide: true });
@@ -326,24 +345,34 @@ export class DockerSandbox {
     const outDir = await this.syncOut();
     if (!outDir) return { mergedFiles: 0 };
     let merged = 0;
+    const changes: Array<{ from: string; to: string; prior: string | undefined }> = [];
     const walk = async (src: string, dest: string) => {
       const entries = await fs.readdir(src, { withFileTypes: true });
       for (const e of entries) {
-        if (SYNC_EXCLUDE.has(e.name) || /^\.env(?:\.|$)|\.(?:pem|key)$/i.test(e.name)) continue;
+        if (excludeSyncName(e.name)) continue;
         const from = path.join(src, e.name);
         const to = await resolveSafeRealpath(projectRoot, path.relative(projectRoot, path.join(dest, e.name)));
         if (e.isDirectory()) {
-          await fs.mkdir(to, { recursive: true });
           await walk(from, to);
         } else if (e.isFile()) {
-          await fs.mkdir(path.dirname(to), { recursive: true });
-          await fs.copyFile(from, to);
-          merged++;
+          const relative = path.relative(projectRoot, to);
+          const initial = this.initialFiles.get(relative);
+          const result = await contentHash(from);
+          const current = await contentHash(to);
+          if (result === initial || result === current) continue;
+          if (current !== initial) throw new Error(`Project file ${relative} changed outside the sandbox; merge refused. Existing edits were preserved.`);
+          changes.push({ from, to, prior: current });
         }
       }
     };
     try {
       await walk(outDir, projectRoot);
+      for (const change of changes) {
+        if (await contentHash(change.to) !== change.prior) throw new Error("Project changed during sandbox merge; existing edits were preserved.");
+        await fs.mkdir(path.dirname(change.to), { recursive: true });
+        await fs.copyFile(change.from, change.to);
+        merged++;
+      }
     } finally {
       await fs.rm(outDir, { recursive: true, force: true }).catch(() => {});
     }

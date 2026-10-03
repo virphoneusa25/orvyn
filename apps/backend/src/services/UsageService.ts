@@ -215,7 +215,7 @@ export class UsageService {
 
   record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
     const ctx = this.als.getStore() ?? {};
-    const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+    const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...ctx, ...e };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     this.rollMonth();

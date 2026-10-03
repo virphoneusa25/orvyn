@@ -32,7 +32,6 @@ for _ in $(seq 1 40); do
   if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
     curl -fsS -m 8 "$STAGING_HEALTH"; echo
     cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
-    cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist fireworks"
     echo "Staging commit and HF coding/tool provider evidence verified"
     exit 0
   fi
