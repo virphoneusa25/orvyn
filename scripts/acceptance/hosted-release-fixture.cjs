@@ -7,12 +7,14 @@ const root=process.env.ORVYN_RELEASE_DIST||'/app/dist';
 const {AuthService}=require(root+'/auth/AuthService.js');
 const {defaultDataDir}=require(root+'/persistence/LocalStore.js');
 const {LEGAL_VERSION}=require(root+'/legal/documents.js');
+const {onboardingStore}=require(root+'/onboarding/OnboardingStore.js');
 const {creditLedger}=require(root+'/billing/creditLedgerInstance.js');
 const data=defaultDataDir();const action=process.argv[2]||'create';
 if(action==='create'){
  const auth=new AuthService();const tag=randomUUID();
  const account=auth.register('release-smoke-'+tag+'@example.invalid',randomBytes(32).toString('hex'),'Release Verification','isolated Windows release verification');
  auth.markEmailVerified(account.user.id);auth.acceptLegal(account.user.id,LEGAL_VERSION,'release-verification');
+ onboardingStore().ensure(account.user.id,'complete');onboardingStore().update(account.user.id,{step:'complete'});
  const tenantId=account.organization.tenantId;
  creditLedger.setPlan(tenantId,'starter',Date.now(),'release-verification');
  fs.writeFileSync(path.join(data,'release-smoke-'+account.user.id+'.json'),JSON.stringify({userId:account.user.id,tenantId,organizationId:account.organization.id,createdAt:Date.now()}),{mode:0o600});

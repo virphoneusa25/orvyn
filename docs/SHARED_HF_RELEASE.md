@@ -14,6 +14,7 @@ Rollback: tag the previous production image `orvyn-backend:rollback-7f5e129` bef
 
 | File | Why required |
 | --- | --- |
+| `.dockerignore` | Exclude credentials and generated artifacts from both Docker build contexts |
 | `.github/workflows/ci.yml` | Build, isolated staging, hosted Desktop and guarded OVH production release gates |
 | `apps/backend/src/agent/AgentService.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
 | `apps/backend/src/agent/StreamingAgentRuntime.ts` | Apply shared verified routing, cancellation and telemetry to existing request paths |
@@ -61,3 +62,5 @@ Rollback: tag the previous production image `orvyn-backend:rollback-7f5e129` bef
 | `scripts/acceptance/hf-routing-preflight.cjs` | Bounded real HF coding/tool/provider smoke evidence |
 | `scripts/acceptance/hosted-release-fixture.cjs` | Packaged Desktop checks against hosted inference using an isolated account |
 | `docs/SHARED_HF_RELEASE.md` | Promotion scope, verification gates and rollback record |
+
+CI attempt 37145988788 passed Windows packaging, Docker build and signup browser checks; staging stopped before rebuilding because .dockerignore was missing. Added the tracked Docker exclusions and completed the guarded smoke account onboarding fixture before retry.
