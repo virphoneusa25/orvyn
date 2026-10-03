@@ -96,5 +96,8 @@ Desktop-owned Auto coding uses Docker with the existing project tools bundled in
 | `apps/backend/src/models/providerFailover.test.ts` | Server Flash default with Nebius-only configuration |
 | `apps/backend/src/models/routingPolicy.test.ts` | Server Flash tier ordering |
 | `apps/backend/src/models/selectModel.test.ts` | Server Flash selection with other models available |
+| `apps/worker/src/sandbox/docker.ts` | Run the isolated Cloud container as its workspace owner so worker edits remain writable without adding capabilities |
 
 Previously listed shared routing, metering, billing, policy, CI and deployment files also receive these narrowly related changes. The candidate remains **staging-only** until all mandatory gates pass; a commit without `[release-production]` cannot trigger the production promotion.
+
+CI 37148661824 passed the real Desktop Docker matrix (3/3) and Windows packaging. The newly required Cloud worker acceptance exposed host/container ownership mismatch with capabilities dropped: 10/12 passed, worker edits could not be appended by the container. The container now uses the workspace owner's UID/GID; isolation stays intact. The exact Fireworks page also explicitly confirms serverless retirement beginning September 25, 2026, recommending DeepSeek V4.1 Flash. A replacement remains subject to the user's selected model and staging verification.

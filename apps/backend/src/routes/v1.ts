@@ -1067,7 +1067,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       targetActual: routed.actual,
       executionLabel,
       // Local runs execute on the user's computer: tell the model its shell.
-      hostPlatform: location === "LOCAL_HOST" || location === "LOCAL_SANDBOX"
+      hostPlatform: location === "LOCAL_SANDBOX" ? "linux" : location === "LOCAL_HOST"
         ? (localWorkerHealth(t.id).environment?.os ?? undefined)
         : location === "OVH_WORKER" ? "linux" : process.platform,
       fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),
