@@ -159,10 +159,10 @@ jobs:
 
   deploy-ovh:
     name: Deploy OVH control plane
-    needs: [build-and-test, desktop-hosted, fireworks-staging]
+    needs: [build-and-test, desktop-hosted]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: always() && needs.build-and-test.result == 'success' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')) || (github.ref == 'refs/heads/codex/shared-hf-auto' && needs.desktop-hosted.result == 'success' && needs.fireworks-staging.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))))
+    if: always() && needs.build-and-test.result == 'success' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')) || (github.ref == 'refs/heads/codex/shared-hf-auto' && needs.desktop-hosted.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -275,6 +275,8 @@ jobs:
   fireworks-staging:
     name: Verify pinned Fireworks route in staging
     needs: [deploy-staging]
+    # Deferred by the release owner; enable this diagnostic when configuring Fireworks.
+    if: vars.FIREWORKS_WRITING_VERIFY_ENABLED == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
