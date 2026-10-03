@@ -8,6 +8,8 @@ HOST="${OVH_HOST:-ubuntu@40.160.11.123}"
 KEY="${OVH_SSH_KEY:-$HOME/.ssh/github_virphone}"
 REMOTE="${OVH_REMOTE_DIR:-/home/ubuntu/orvyn}"
 STAGING_HEALTH="${STAGING_HEALTH_URL:-https://staging.orvyn.virphoneusa.com/api/v1/health}"
+BUILD_COMMIT="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}"
+export ORVYN_BUILD_SHA="$BUILD_COMMIT"
 
 if [[ ! -f "$KEY" ]]; then
   echo "OVH SSH key not found at $KEY. Set OVH_SSH_KEY." >&2
@@ -92,14 +94,14 @@ INTERNAL_HEALTH="http://127.0.0.1:4570/api/v1/health"
 echo "Waiting for staging backend (internal, then public)"
 ok=0
 for _ in $(seq 1 40); do
-  if "${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(t=>process.exit(t.includes('\\\"status\\\":\\\"ok\\\"')?0:1)).catch(()=>process.exit(1))\""; then
+  if "${SSH[@]}" "$HOST" "docker exec backend-staging node -e \"fetch('$INTERNAL_HEALTH').then(r=>r.text()).then(t=>process.exit(t.includes('\\\"status\\\":\\\"ok\\\"')&&t.includes('\\\"commit\\\":\\\"$BUILD_COMMIT\\\"')?0:1)).catch(()=>process.exit(1))\""; then
     ok=1
     break
   fi
   sleep 3
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "Staging backend did not become healthy" >&2
+  echo "Staging backend did not become healthy at commit $BUILD_COMMIT" >&2
   "${SSH[@]}" "$HOST" "docker logs backend-staging --tail 80" || true
   exit 1
 fi
@@ -109,14 +111,14 @@ echo
 echo "Waiting for canonical TLS $STAGING_HEALTH"
 ok=0
 for _ in $(seq 1 40); do
-  if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q '"status":"ok"'; then
+  if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q '"status":"ok"' && curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$BUILD_COMMIT\""; then
     ok=1
     break
   fi
   sleep 3
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "Canonical staging TLS failed: $STAGING_HEALTH" >&2
+  echo "Canonical staging TLS failed to report commit $BUILD_COMMIT: $STAGING_HEALTH" >&2
   curl -sS -m 8 -v "$STAGING_HEALTH" || true
   echo
   echo "sslip.io fallback:" >&2
@@ -124,7 +126,7 @@ if [[ "$ok" -ne 1 ]]; then
   echo
   exit 1
 fi
-echo "Canonical staging hostname healthy: $STAGING_HEALTH"
+echo "Canonical staging hostname healthy at commit $BUILD_COMMIT: $STAGING_HEALTH"
 curl -sS -m 8 "$STAGING_HEALTH"; echo
 curl -sS -m 12 "https://staging.orvyn.virphoneusa.com/api/v1/health/detailed" || true
 echo

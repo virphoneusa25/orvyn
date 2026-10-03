@@ -22,6 +22,7 @@ services:
       PORT: "4570"
       ORVYN_ENV: staging
       ORVYN_CLOUD_MODE: "true"
+      ORVYN_BUILD_SHA: ${ORVYN_BUILD_SHA:-unknown}
       ORVYN_PUBLIC_URL: "https://staging.orvyn.virphoneusa.com"
       ORVYN_STAGING_URL: "https://staging.orvyn.virphoneusa.com"
       # Durable sessions and provisioned workspaces. Not the mission sandbox.
