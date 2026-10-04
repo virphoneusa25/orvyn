@@ -23,6 +23,8 @@ export class RedisRunEventBridge {
   }
 
   async run(): Promise<void> {
+    this.cursor = await this.transport.loadConsumerCursor(this.runId);
+
     while (!this.stopped) {
       const run = this.store.get(this.runId);
       if (!run || isTerminal(run.status)) return;
@@ -31,11 +33,12 @@ export class RedisRunEventBridge {
       if (!records.length) continue;
 
       for (const record of records) {
-        this.cursor = record.redisId;
         const event = record.event;
         if (event.runId !== this.runId) continue;
 
         this.store.emit(this.runId, event.type, event.data);
+        this.cursor = record.redisId;
+        await this.transport.saveConsumerCursor(this.runId, this.cursor);
 
         if (event.type === "run.queued") this.store.setStatus(this.runId, "queued");
         if (event.type === "run.started") this.store.setStatus(this.runId, "running");
