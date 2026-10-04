@@ -35,16 +35,29 @@ const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 102
 wss.on("connection", async (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = await resolveTenantFromToken(token);
 
-  // If API keys are registered, a valid token is mandatory on the socket too —
-  // otherwise the WS would be an unauthenticated bypass around the REST auth.
-  if (tenantManager.hasRegisteredKeys() && !tenant) {
-    socket.send(JSON.stringify({ delta: "", done: true, error: "Unauthorized — missing or invalid token" }));
+  let tenant;
+  try {
+    tenant = await resolveTenantFromToken(token);
+
+    // If API keys are registered, a valid token is mandatory on the socket too —
+    // otherwise the WS would be an unauthenticated bypass around the REST auth.
+    if (tenantManager.hasRegisteredKeys() && !tenant) {
+      socket.send(JSON.stringify({ delta: "", done: true, error: "Unauthorized — missing or invalid token" }));
+      socket.close();
+      return;
+    }
+    if (!tenant) tenant = await tenantManager.ensureLocalDefault();
+  } catch (err: any) {
+    console.error(`[ws] tenant hydration failed: ${err?.message ?? err}`);
+    socket.send(JSON.stringify({
+      delta: "",
+      done: true,
+      error: "Tenant storage is temporarily unavailable.",
+    }));
     socket.close();
     return;
   }
-  if (!tenant) tenant = await tenantManager.ensureLocalDefault();
 
   socket.on("message", async (raw) => {
     let body;
