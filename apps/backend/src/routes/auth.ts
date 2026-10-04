@@ -16,9 +16,9 @@ function bearerToken(req: Request): string | null {
   return null;
 }
 
-authRouter.post("/register", (req, res) => {
+authRouter.post("/register", async (req, res) => {
   try {
-    const { user, token, legalAcceptance } = authService.register(
+    const { user, token, legalAcceptance } = await authService.registerAsync(
       String(req.body.email ?? ""),
       String(req.body.password ?? ""),
       req.body.name ? String(req.body.name) : undefined,
@@ -33,10 +33,10 @@ authRouter.post("/register", (req, res) => {
   }
 });
 
-authRouter.post("/login", (req, res) => {
+authRouter.post("/login", async (req, res) => {
   try {
-    const { user, token } = authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""));
-    res.json({ user, token, legalAcceptance: authService.getLegalAcceptance(user.id) });
+    const { user, token } = await authService.loginAsync(String(req.body.email ?? ""), String(req.body.password ?? ""));
+    res.json({ user, token, legalAcceptance: await authService.getLegalAcceptanceAsync(user.id) });
   } catch (err: any) {
     // 429 for lockout, 401 for bad credentials.
     const status = err.message.startsWith("Too many") ? 429 : 401;
@@ -44,36 +44,36 @@ authRouter.post("/login", (req, res) => {
   }
 });
 
-authRouter.post("/logout", (req, res) => {
+authRouter.post("/logout", async (req, res) => {
   const token = bearerToken(req);
-  if (token) authService.logout(token);
+  if (token) await authService.logoutAsync(token);
   res.json({ ok: true });
 });
 
-authRouter.get("/me", (req, res) => {
+authRouter.get("/me", async (req, res) => {
   const token = bearerToken(req);
-  const user = token ? authService.verify(token) : null;
+  const user = token ? await authService.verifyAsync(token) : null;
   if (!user) return res.status(401).json({ error: "Not signed in" });
-  res.json({ user, legalAcceptance: authService.getLegalAcceptance(user.id) });
+  res.json({ user, legalAcceptance: await authService.getLegalAcceptanceAsync(user.id) });
 });
 
-authRouter.get("/legal", (req, res) => {
+authRouter.get("/legal", async (req, res) => {
   const token = bearerToken(req);
-  const user = token ? authService.verify(token) : null;
+  const user = token ? await authService.verifyAsync(token) : null;
   res.json({
     version: LEGAL_VERSION,
     requiredDocuments: REQUIRED_LEGAL_DOCUMENTS,
-    acceptance: user ? authService.getLegalAcceptance(user.id) : null,
+    acceptance: user ? await authService.getLegalAcceptanceAsync(user.id) : null,
   });
 });
 
-authRouter.post("/legal/accept", (req, res) => {
+authRouter.post("/legal/accept", async (req, res) => {
   const token = bearerToken(req);
-  const user = token ? authService.verify(token) : null;
+  const user = token ? await authService.verifyAsync(token) : null;
   if (!user) return res.status(401).json({ error: "Not signed in" });
   try {
     const version = String(req.body.version ?? "");
-    const acceptance = authService.recordLegalAcceptance(user.id, version);
+    const acceptance = await authService.recordLegalAcceptanceAsync(user.id, version);
     res.json({ acceptance });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
