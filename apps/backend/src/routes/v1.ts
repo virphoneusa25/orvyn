@@ -49,6 +49,8 @@ v1Router.get("/storage/status", async (req, res) => {
   if (!postgres.enabled) {
     return res.json({
       mode: "sqlite-primary",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       sqlite: {
         tenant: t.localStore.parityCounts(),
@@ -74,7 +76,13 @@ v1Router.get("/storage/status", async (req, res) => {
     return res.status(
       postgres.status === "ready" && tenantParity && authParity ? 200 : 503
     ).json({
-      mode: "sqlite-primary-postgres-mirror",
+      mode: postgresMirror.isPrimaryReadsEnabled()
+        ? (postgresMirror.isPrimaryWritesEnabled()
+            ? "postgres-primary-reads-acknowledged-mission-writes"
+            : "postgres-primary-reads")
+        : "sqlite-primary-postgres-mirror",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       parity: {
         ok: tenantParity && authParity,
@@ -86,7 +94,13 @@ v1Router.get("/storage/status", async (req, res) => {
     });
   } catch (err: any) {
     return res.status(503).json({
-      mode: "sqlite-primary-postgres-mirror",
+      mode: postgresMirror.isPrimaryReadsEnabled()
+        ? (postgresMirror.isPrimaryWritesEnabled()
+            ? "postgres-primary-reads-acknowledged-mission-writes"
+            : "postgres-primary-reads")
+        : "sqlite-primary-postgres-mirror",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       parity: { ok: false },
       error: err.message,
