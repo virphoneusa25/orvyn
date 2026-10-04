@@ -1,0 +1,110 @@
+name: PostgreSQL Mirror Validation
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/backend/**"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/postgres-mirror.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: orvyn
+          POSTGRES_PASSWORD: test-postgres-password
+          POSTGRES_DB: orvyn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orvyn -d orvyn_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Temporary during this migration branch: regenerate the lock for pg.
+      # After the bot commits it once, this workflow is tightened to npm ci.
+      - name: Install dependencies and regenerate lock
+        run: npm install --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Commit regenerated lockfile
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already synchronized"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "deps: regenerate lockfile for PostgreSQL mirror"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Build ai-core
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        run: npm run build -w @orvyn/backend
+
+      - name: PostgreSQL mirror tests
+        env:
+          DATABASE_URL: postgresql://orvyn:test-postgres-password@127.0.0.1:5432/orvyn_test
+          ORVYN_POSTGRES_MIRROR: "1"
+          ORVYN_POSTGRES_SSL: disable
+        run: node --test apps/backend/dist/persistence/*.test.js
+
+      - name: Distributed Redis tests
+        env:
+          ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
+        run: node --test apps/backend/dist/queue/*.test.js
+
+      - name: Existing test suite
+        env:
+          ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
+        run: npm test
+
+      - name: Prepare Compose env file
+        run: cp .env.example .env
+
+      - name: Validate Compose
+        env:
+          ORVYN_API_KEY: test
+          DOMAIN: example.invalid
+          POSTGRES_PASSWORD: test-postgres-password
+          ORVYN_REDIS_PASSWORD: test-orvyn-redis
+          LITELLM_REDIS_PASSWORD: test-litellm-redis
+          LITELLM_MASTER_KEY: sk-test-master
+          LITELLM_SALT_KEY: test-salt
+        run: docker compose config >/dev/null
