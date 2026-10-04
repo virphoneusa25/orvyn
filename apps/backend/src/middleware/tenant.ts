@@ -43,7 +43,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
     // Each user gets an isolated tenant — own models, tools, missions, store.
     const user = await authService.verifyAsync(key);
     if (user) {
-      const tenant = tenantManager.ensureUserTenant(user.id, user.email);
+      const tenant = await tenantManager.ensureUserTenantAsync(user.id, user.email);
       tenant.usage.requests++;
       req.tenant = tenant;
       next();
@@ -80,6 +80,6 @@ export function requireTenant(req: Request): Tenant {
 export async function resolveTenantFromToken(token: string | null): Promise<Tenant | undefined> {
   if (!token) return undefined;
   const user = await authService.verifyAsync(token);
-  if (user) return tenantManager.ensureUserTenant(user.id, user.email);
+  if (user) return tenantManager.ensureUserTenantAsync(user.id, user.email);
   return tenantManager.resolveByApiKey(token);
 }
