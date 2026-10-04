@@ -24,7 +24,7 @@ function extractKey(req: Request): string | undefined {
 // Resolves the caller's tenant and attaches it to req.tenant. Every route then
 // reads its services off req.tenant instead of module globals, which is what
 // actually enforces isolation.
-export function resolveTenant(req: Request, res: Response, next: NextFunction): void {
+export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   const key = extractKey(req);
 
   if (!key) {
@@ -33,7 +33,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
       res.status(401).json({ error: "Unauthorized — missing API key" });
       return;
     }
-    req.tenant = tenantManager.ensureLocalDefault();
+    req.tenant = await tenantManager.ensureLocalDefault();
     next();
     return;
   }
@@ -42,7 +42,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
   // Each user gets an isolated tenant — own models, tools, missions, store.
   const user = authService.verify(key);
   if (user) {
-    const tenant = tenantManager.ensureUserTenant(user.id, user.email);
+    const tenant = await tenantManager.ensureUserTenant(user.id, user.email);
     tenant.usage.requests++;
     req.tenant = tenant;
     next();
@@ -70,7 +70,7 @@ export function requireTenant(req: Request): Tenant {
   return req.tenant;
 }
 
-export function resolveTenantFromToken(token: string | null): Tenant | undefined {
+export async function resolveTenantFromToken(token: string | null): Promise<Tenant | undefined> {
   if (!token) return undefined;
   const user = authService.verify(token);
   if (user) return tenantManager.ensureUserTenant(user.id, user.email);
