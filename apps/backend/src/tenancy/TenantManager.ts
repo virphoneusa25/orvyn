@@ -30,7 +30,7 @@ import { MultiAgentRuntime } from "../agent/MultiAgentRuntime";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import { McpHub } from "../mcp/McpHub";
 import { ContextEngine } from "../context/ContextEngine";
-import { LocalStore } from "../persistence/LocalStore";
+import { createTenantStore, type TenantStore } from "../persistence/TenantStore";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 import {
   getDistributedMissionCoordinator,
@@ -61,8 +61,8 @@ export interface Tenant {
   /** Project root most recently used, so tools can be (re)registered per tenant. */
   currentProjectRoot: string | null;
   usage: { requests: number; agentRuns: number; indexBuilds: number };
-  /** Durable local storage (missions, usage, settings, models). */
-  localStore: LocalStore;
+  /** Durable tenant storage (SQLite locally, PostgreSQL in cloud-primary mode). */
+  localStore: TenantStore;
 }
 
 function embedderFor(ms: ModelService) {
@@ -91,10 +91,11 @@ function safeEqual(a: string, b: string): boolean {
 
 export class TenantManager {
   private tenants = new Map<string, Tenant>();
+  private creating = new Map<string, Promise<Tenant>>();
   /** sha256(apiKey) -> tenantId. Raw keys are never stored. */
   private keyIndex = new Map<string, string>();
 
-  create(
+  async create(
     name: string,
     apiKey: string,
     id: string = randomUUID(),
@@ -103,12 +104,44 @@ export class TenantManager {
       recoverDistributedRuns?: boolean;
       distributedWorker?: boolean;
     } = {}
-  ): Tenant {
-    const localStore = new LocalStore(id);
+  ): Promise<Tenant> {
+    const existing = this.tenants.get(id);
+    if (existing) {
+      if (apiKey) this.keyIndex.set(hashKey(apiKey), id);
+      return existing;
+    }
+
+    const inFlight = this.creating.get(id);
+    if (inFlight) {
+      const tenant = await inFlight;
+      if (apiKey) this.keyIndex.set(hashKey(apiKey), id);
+      return tenant;
+    }
+
+    const creation = this.createInternal(name, apiKey, id, options);
+    this.creating.set(id, creation);
+    try {
+      return await creation;
+    } finally {
+      this.creating.delete(id);
+    }
+  }
+
+  private async createInternal(
+    name: string,
+    apiKey: string,
+    id: string,
+    options: {
+      runStore?: RunStore;
+      recoverDistributedRuns?: boolean;
+      distributedWorker?: boolean;
+    }
+  ): Promise<Tenant> {
+    const localStore = await createTenantStore(id);
     const modelService = new ModelService();
-    // Restore user-added/edited models. removeModel first so a persisted edit
-    // of an env-seeded model id replaces the seed instead of colliding.
-    for (const cfg of localStore.loadModels()) {
+
+    // Restore user-added/edited models before resolving persisted routing.
+    for (const cfg of await localStore.loadModels()) {
       try {
         modelService.removeModel(cfg.id);
         modelService.addModel(cfg);
@@ -116,17 +149,16 @@ export class TenantManager {
         console.warn(`Skipping persisted model "${cfg.id}": ${err.message}`);
       }
     }
-    // Every provider is metered; from here they're also durably recorded.
-    modelService.usage.attachStore(localStore);
-    // Restore the user's routing choices, the same way the autonomy profile is
-    // restored. Without this, every restart silently reverted routing to the
-    // env-seeded defaults — which may point at a provider with dead credits.
-    const savedRouting = localStore.getSetting("routing");
+
+    // Every provider is metered; hydrate usage before this tenant is exposed.
+    await modelService.usage.attachStore(localStore);
+
+    const savedRouting = await localStore.getSetting("routing");
     if (savedRouting) {
       try {
         for (const [task, modelId] of Object.entries(JSON.parse(savedRouting))) {
           const provider = modelService.registry.get(String(modelId));
-          if (!provider) continue; // model was removed; env default stands
+          if (!provider) continue;
           if (!provider.config.capabilities[requiredCapability(task as TaskType)]) continue;
           modelService.router.setOverride(task as TaskType, String(modelId));
         }
@@ -134,6 +166,7 @@ export class TenantManager {
         // Corrupt setting — ignore and keep env defaults.
       }
     }
+
     const { embedder, label } = embedderFor(modelService);
     const toolRegistry = new ToolRegistry();
     const permissionEngine = new PermissionEngine();
@@ -160,17 +193,14 @@ export class TenantManager {
       usage: { requests: 0, agentRuns: 0, indexBuilds: 0 },
       localStore,
     };
-    // Restore the autonomy profile the user last selected.
-    const savedProfile = localStore.getSetting("profile") as PermissionProfile | null;
+
+    const savedProfile = await localStore.getSetting("profile") as PermissionProfile | null;
     if (savedProfile && PROFILES[savedProfile]) tenant.toolGateway.profile = savedProfile;
-    // Streaming runtime is per-tenant too, so runs and their event logs are
-    // never visible across customers. The store gets a per-tenant directory:
-    // events append to disk as they stream and replay after a restart.
+
+    // Run event logs remain the replay/SSE substrate in this phase. The
+    // durable mission/business state itself is selected by TenantStore.
     tenant.runStore = options.runStore ?? new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
 
-    // Reattach Redis event bridges for BullMQ-owned runs after an API restart.
-    // Worker-created tenants explicitly disable this so workers never become
-    // competing event consumers.
     if (
       options.recoverDistributedRuns !== false &&
       distributedRuntimeReady()
@@ -185,8 +215,8 @@ export class TenantManager {
 
     tenant.eventBus = new EventBus(tenant.runStore);
     tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore, {
-      // A worker must NEVER mark other workers' persisted in-flight missions
-      // failed merely because it constructed its own per-job TenantManager.
+      // A worker must never fail another worker's active persisted mission
+      // merely because it constructed a per-job TenantManager.
       shouldFailRecoveredMission: options.distributedWorker
         ? () => false
         : (mission) => {
@@ -198,11 +228,9 @@ export class TenantManager {
               !isTerminal(run.status)
             );
           },
-      // Worker writes land in the shared SQLite store today. Refreshing on API
-      // reads keeps Mission Control current until PostgreSQL replaces SQLite.
-      refreshFromStoreOnRead:
-        !options.distributedWorker && distributedRuntimeReady(),
     });
+    await tenant.taskEngine.hydrate();
+
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);
     tenant.agentRuntime = new StreamingAgentRuntime(
       tenant.modelService,
@@ -246,17 +274,17 @@ export class TenantManager {
   }
 
   /** Local unauthenticated mode: one tenant so routes still have req.tenant. */
-  ensureLocalDefault(): Tenant {
-    return this.get("default") ?? this.create("default", "", "default");
+  async ensureLocalDefault(): Promise<Tenant> {
+    return this.get("default") ?? await this.create("default", "", "default");
   }
 
   /**
    * Per-user tenant: each signed-in account gets its own isolated services
    * and its own SQLite store (user_<id>.db). Created lazily on first request.
    */
-  ensureUserTenant(userId: string, label: string): Tenant {
+  async ensureUserTenant(userId: string, label: string): Promise<Tenant> {
     const id = `user_${userId}`;
-    return this.get(id) ?? this.create(label, "", id);
+    return this.get(id) ?? await this.create(label, "", id);
   }
 
   revokeKey(apiKey: string): void {
@@ -274,7 +302,7 @@ export const tenantManager = new TenantManager();
 // Single-tenant convenience: when ORVYN_API_KEY is set (the existing
 // deployment shape), seed one "default" tenant with that key so nothing
 // breaks for current installs. Multi-tenant setups create tenants explicitly.
-export function bootstrapDefaultTenant(): Tenant | null {
+export async function bootstrapDefaultTenant(): Promise<Tenant> {
   const key = process.env.ORVYN_API_KEY?.trim();
   if (key) return tenantManager.create("default", key, "default");
   return tenantManager.ensureLocalDefault();
