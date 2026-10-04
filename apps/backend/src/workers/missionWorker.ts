@@ -35,6 +35,7 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
   const tenant = manager.create(payload.tenantName, "", payload.tenantId, {
     runStore,
     recoverDistributedRuns: false,
+    distributedWorker: true,
   });
 
   runStore.create(payload.runId, payload.projectRoot, "queued");
