@@ -122,6 +122,16 @@ export async function createTenantStore(
   let store: TenantStore;
 
   if (persistenceDriver() === "postgres") {
+    if (process.env.ORVYN_POSTGRES_CUTOVER_CONFIRMED?.trim() !== "1") {
+      throw new Error(
+        "ORVYN_PERSISTENCE_DRIVER=postgres requires ORVYN_POSTGRES_CUTOVER_CONFIRMED=1 after successful backfill/parity verification"
+      );
+    }
+    if (process.env.ORVYN_POSTGRES_SHADOW?.trim() === "1") {
+      throw new Error(
+        "PostgreSQL authoritative mode cannot run with ORVYN_POSTGRES_SHADOW=1"
+      );
+    }
     const url = process.env.DATABASE_URL?.trim();
     if (!url) {
       throw new Error(
