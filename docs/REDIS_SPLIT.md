@@ -64,3 +64,66 @@ docker compose exec litellm-redis redis-cli -a "$LITELLM_REDIS_PASSWORD" ping
 ```
 
 Both Redis commands must return `PONG`.
+
+
+## Phase 2 scaffold: BullMQ + Redis Streams
+
+The branch now also contains the distributed runtime substrate:
+
+- `apps/backend/src/queue/types.ts`
+  - serializable `MissionJobPayload`
+  - queue/stream naming contracts
+- `apps/backend/src/queue/redisConnection.ts`
+  - request-path producer connection policy
+  - durable worker connection policy
+- `apps/backend/src/queue/RedisMissionQueue.ts`
+  - BullMQ queue transport
+  - idempotent job ids based on `runId`
+- `apps/backend/src/queue/RedisRunEventTransport.ts`
+  - Redis Streams publish/replay transport
+  - capped approximate stream length to bound event storage
+- `apps/backend/src/workers/missionWorker.ts`
+  - scalable worker process entry point
+
+### Safety gate
+
+Distributed execution is intentionally fail-closed until the control plane is
+also distributed. Two flags must eventually be enabled together:
+
+```
+ORVYN_DISTRIBUTED_MISSIONS=1
+ORVYN_DISTRIBUTED_CONTROLS=1
+```
+
+Today both default to `0`.
+
+This prevents a worker from running a mission while approvals, steering, or
+cancellation still live only in the API process memory.
+
+### Compose worker profile
+
+The worker is opt-in:
+
+```bash
+docker compose --profile distributed up -d
+```
+
+Later, after the control channel cutover:
+
+```bash
+docker compose --profile distributed up -d --scale orvyn-worker=5
+```
+
+No worker has a fixed `container_name`, so Compose can scale it horizontally.
+
+### Remaining cutover work
+
+Before setting the feature flags to `1`:
+
+1. Move approval/steer/cancel commands to the Redis control stream.
+2. Project worker-emitted Redis Stream events into the API `RunStore`.
+3. Re-host the existing `MultiAgentRuntime` in the worker harness.
+4. Ensure worker and API share durable mission/task state.
+5. Move the Docker socket off the API container.
+6. Shadow-run the distributed path and compare event parity.
+7. Only then switch `/agent/orchestrate` to BullMQ.
