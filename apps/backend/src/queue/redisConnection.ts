@@ -37,3 +37,21 @@ export function distributedControlsEnabled(): boolean {
 export function distributedRuntimeReady(): boolean {
   return distributedMissionsEnabled() && distributedControlsEnabled();
 }
+
+
+/**
+ * Distributed workers can only execute projects that exist on their shared
+ * filesystem. This prevents a cloud backend from accepting a desktop-local
+ * path (for example C:\\Users\\... or /Users/...) that the worker cannot
+ * actually see.
+ */
+export function distributedProjectRootEligible(projectRoot: string): boolean {
+  if (!distributedRuntimeReady()) return false;
+  const root = process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT?.trim() || "/projects";
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/$/, "");
+  const normalizedProject = String(projectRoot || "").replace(/\\/g, "/");
+  return (
+    normalizedProject === normalizedRoot ||
+    normalizedProject.startsWith(`${normalizedRoot}/`)
+  );
+}
