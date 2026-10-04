@@ -37,6 +37,11 @@ export class RedisRunEventBridge {
 
         this.store.emit(this.runId, event.type, event.data);
 
+        if (event.type === "run.queued") this.store.setStatus(this.runId, "queued");
+        if (event.type === "run.started") this.store.setStatus(this.runId, "running");
+        if (event.type === "approval.required") this.store.setStatus(this.runId, "awaiting_approval");
+        if (event.type === "approval.resolved") this.store.setStatus(this.runId, "running");
+
         if (event.type === "run.completed") {
           this.store.setStatus(this.runId, "completed");
           return;
