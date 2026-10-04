@@ -23,6 +23,7 @@ import { Router } from "express";
 import { customerRedaction } from "../middleware/customerRedaction";
 import { requirePrincipal, requireTenant } from "../middleware/tenant";
 import { authService } from "../auth/AuthService";
+import { tenantPostgresMirror } from "../persistence/TenantPostgresMirror";
 import { tenantManager } from "../tenancy/TenantManager";
 import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
@@ -36,6 +37,23 @@ import { promises as fsp } from "fs";
 import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
 
 export const v1Router = Router();
+
+// Only this tenant's mirrored families are checked; identity/ledger parity
+// is deliberately not inferred from these counts.
+v1Router.get("/storage/status", async (req, res) => {
+  const tenant = requireTenant(req);
+  const postgres = await tenantPostgresMirror.status(tenant.id);
+  const sqlite = tenant.localStore.tenantMirrorCounts();
+  const parity = postgres.enabled && postgres.counts !== undefined &&
+    Object.entries(sqlite).every(([key, count]) => postgres.counts![key] === count);
+  res.status(!postgres.enabled || (postgres.ready && parity) ? 200 : 503).json({
+    mode: postgres.enabled ? "sqlite-primary-postgres-mirror" : "sqlite-primary",
+    primaryReads: false, primaryWrites: false,
+    coverage: ["missions", "usage", "settings", "models"],
+    excluded: ["identity", "credits", "subscriptions", "work-sessions", "artifacts", "memory"],
+    parity: { counts: parity, completeCloudCutover: false }, postgres, sqlite,
+  });
+});
 
 // Customer portal account area: profile, password, team, API keys, notifications.
 v1Router.use("/account", accountRouter);
