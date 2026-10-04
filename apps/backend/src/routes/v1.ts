@@ -48,36 +48,52 @@ v1Router.get("/models", (req, res) => {
   res.json({ models: requireTenant(req).modelService.list() });
 });
 
-v1Router.post("/models", (req, res) => {
+v1Router.post("/models", async (req, res) => {
+  const t = requireTenant(req);
+  let addedId: string | undefined;
   try {
-    const t = requireTenant(req);
     const provider = t.modelService.addModel(req.body);
-    t.localStore.saveModel(req.body);
+    addedId = provider.config.id;
+    await t.localStore.saveModel(provider.config);
     res.status(201).json({ model: provider.config });
   } catch (err: any) {
+    if (addedId) t.modelService.removeModel(addedId);
     res.status(400).json({ error: err.message });
   }
 });
 
-v1Router.put("/models/:id", (req, res) => {
+v1Router.put("/models/:id", async (req, res) => {
+  const t = requireTenant(req);
+  const ms = t.modelService;
+  const previous = ms.registry.get(req.params.id)?.config;
   try {
-    const t = requireTenant(req);
-    const ms = t.modelService;
     ms.removeModel(req.params.id);
     const config = { ...req.body, id: req.params.id };
     const provider = ms.addModel(config);
-    t.localStore.saveModel(config);
+    await t.localStore.saveModel(provider.config);
     res.json({ model: provider.config });
   } catch (err: any) {
+    ms.removeModel(req.params.id);
+    if (previous) {
+      try { ms.addModel(previous); } catch {}
+    }
     res.status(400).json({ error: err.message });
   }
 });
 
-v1Router.delete("/models/:id", (req, res) => {
+v1Router.delete("/models/:id", async (req, res) => {
   const t = requireTenant(req);
-  t.modelService.removeModel(req.params.id);
-  t.localStore.deleteModel(req.params.id);
-  res.status(204).end();
+  const previous = t.modelService.registry.get(req.params.id)?.config;
+  try {
+    await t.localStore.deleteModel(req.params.id);
+    t.modelService.removeModel(req.params.id);
+    res.status(204).end();
+  } catch (err: any) {
+    if (previous && !t.modelService.registry.get(req.params.id)) {
+      try { t.modelService.addModel(previous); } catch {}
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 v1Router.get("/models/health", async (req, res) => {
@@ -131,7 +147,7 @@ v1Router.get("/routing", (req, res) => {
   res.json({ overrides: requireTenant(req).modelService.router.getOverrides() });
 });
 
-v1Router.post("/routing", (req, res) => {
+v1Router.post("/routing", async (req, res) => {
   const { task, modelId } = req.body;
   const ms2 = requireTenant(req);
   const provider = ms2.modelService.registry.get(modelId);
@@ -146,11 +162,22 @@ v1Router.post("/routing", (req, res) => {
       error: `"${modelId}" cannot handle task "${task}" — it lacks the "${capability}" capability.`,
     });
   }
+  const previousOverrides = ms2.modelService.router.getOverrides();
   ms2.modelService.router.setOverride(task, modelId);
-  // Persist so a restart keeps the user's choices instead of reverting to
-  // env defaults (which may point at a dead-credits provider).
-  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getOverrides()));
-  res.json({ overrides: ms2.modelService.router.getOverrides() });
+  try {
+    // Persist so a restart keeps the user's choices instead of reverting.
+    await ms2.localStore.setSetting(
+      "routing",
+      JSON.stringify(ms2.modelService.router.getOverrides())
+    );
+    res.json({ overrides: ms2.modelService.router.getOverrides() });
+  } catch (err: any) {
+    ms2.modelService.router.clearOverride(task);
+    for (const [previousTask, previousModel] of Object.entries(previousOverrides)) {
+      ms2.modelService.router.setOverride(previousTask as any, String(previousModel));
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 v1Router.delete("/routing/:task", (req, res) => {
@@ -231,7 +258,7 @@ function serializeSession(session: import("../agent/AgentService").AgentSession)
 v1Router.post("/agent/runs", async (req, res) => {
   try {
     const ta = requireTenant(req);
-    registerProjectToolsFor(ta, req.body.projectRoot);
+    await registerProjectToolsFor(ta, req.body.projectRoot);
     ta.usage.agentRuns++;
     const session = await new AgentService(ta.modelService, ta.toolRegistry, ta.agentSessions).start(req.body.projectRoot, req.body.instruction, req.body.rules);
     res.status(201).json({ session: serializeSession(session) });
@@ -265,7 +292,7 @@ v1Router.get("/tools", async (req, res) => {
   // permission overrides (handled inside registerProjectToolsFor), so listing
   // tools never resets what the user configured.
   if (root && !tt.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) {
-    registerProjectToolsFor(tt, root);
+    await registerProjectToolsFor(tt, root);
   }
   res.json({
     tools: tt.toolGateway.list().map((t) => ({
@@ -279,12 +306,16 @@ v1Router.get("/tools", async (req, res) => {
   } catch(e:any) { res.status(400).json({error:e.message}); }
 });
 
-v1Router.post("/tools/:name/permission", (req, res) => {
+v1Router.post("/tools/:name/permission", async (req, res) => {
   const t = requireTenant(req);
   t.toolRegistry.setPermission(req.params.name, req.body.permission);
   // Explicit user choice — persist per project so it survives restarts.
   if (t.currentProjectRoot) {
-    t.localStore.setToolOverride(t.currentProjectRoot, req.params.name, req.body.permission);
+    await t.localStore.setToolOverride(
+      t.currentProjectRoot,
+      req.params.name,
+      req.body.permission
+    );
   }
   res.json({ ok: true });
 });
@@ -353,9 +384,9 @@ import { loadSshHosts } from "../ai/tools/sshTools";
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
 // aborts the run itself.
-v1Router.post("/agent/stream/runs", (req, res) => {
+v1Router.post("/agent/stream/runs", async (req, res) => {
   const t = requireTenant(req);
-  _regTools(t, req.body.projectRoot);
+  await _regTools(t, req.body.projectRoot);
   t.usage.agentRuns++;
   const previous = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
   const history: {role: "user" | "assistant";content:string}[] = previous ? [{role:"user",content:String(previous.events.find(e=>e.type === "run.started")?.data.instruction ?? "").slice(0,4000)}, {role:"assistant",content:previous.events.filter(e=>e.type === "message.delta").map(e=>String(e.data.content ?? "")).join("").slice(-16000)}] : [];
@@ -567,7 +598,7 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   if (missionQuota > 0) {
     const d = new Date();
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-    const used = t.localStore.countMissionsSince(monthStart);
+    const used = await t.localStore.countMissionsSince(monthStart);
     if (used >= missionQuota) {
       return res.status(429).json({
         error: `Monthly mission quota exceeded (${used}/${missionQuota}). Resets at the start of next month (UTC).`,
@@ -635,7 +666,7 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
     }
   }
 
-  _regTools(t, req.body.projectRoot);
+  await _regTools(t, req.body.projectRoot);
   const runId = t.multiAgentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
@@ -679,7 +710,7 @@ v1Router.post("/agent/orchestrate/approvals/:callId", async (req, res) => {
 // --- Run feedback (thumbs up/down on a finished run) ---
 // Appended to a per-tenant log in the local store: enough to review later,
 // and the natural place to mine training signal from when that day comes.
-v1Router.post("/agent/stream/runs/:id/feedback", (req, res) => {
+v1Router.post("/agent/stream/runs/:id/feedback", async (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
@@ -689,13 +720,13 @@ v1Router.post("/agent/stream/runs/:id/feedback", (req, res) => {
   const key = "feedback";
   let log: unknown[] = [];
   try {
-    log = JSON.parse(t.localStore.getSetting(key) ?? "[]");
+    log = JSON.parse((await t.localStore.getSetting(key)) ?? "[]");
     if (!Array.isArray(log)) log = [];
   } catch {
     log = [];
   }
   log.push({ runId: req.params.id, kind, at: new Date().toISOString() });
-  t.localStore.setSetting(key, JSON.stringify(log.slice(-500)));
+  await t.localStore.setSetting(key, JSON.stringify(log.slice(-500)));
   res.json({ ok: true });
 });
 
@@ -759,13 +790,15 @@ v1Router.delete("/checkpoints/:id", async (req, res) => {
 });
 
 // --- Missions (Task Engine state for Mission Control) ---
-v1Router.get("/missions", (req, res) => {
+v1Router.get("/missions", async (req, res) => {
   const t = requireTenant(req);
+  await t.taskEngine.refresh();
   res.json({ missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)) });
 });
 
-v1Router.get("/missions/:id", (req, res) => {
+v1Router.get("/missions/:id", async (req, res) => {
   const t = requireTenant(req);
+  await t.taskEngine.refresh();
   const m = t.taskEngine.getMission(req.params.id);
   if (!m) return res.status(404).json({ error: "Unknown mission" });
   res.json({ mission: t.taskEngine.serialize(m) });
@@ -976,11 +1009,17 @@ v1Router.get("/usage", async (req, res) => {
     }
   }
 
+  const [totals, quota, events] = await Promise.all([
+    t.modelService.usage.totals(),
+    t.modelService.usage.quota(),
+    t.modelService.usage.recent(limit),
+  ]);
+
   res.json({
-    totals: t.modelService.usage.totals(),
-    quota: t.modelService.usage.quota(),
+    totals,
+    quota,
     queue,
-    events: t.modelService.usage.recent(limit),
+    events,
   });
 });
 
@@ -995,13 +1034,19 @@ v1Router.get("/profile", (req, res) => {
   });
 });
 
-v1Router.post("/profile", (req, res) => {
+v1Router.post("/profile", async (req, res) => {
   const t = requireTenant(req);
   const profile = String(req.body.profile ?? "").toUpperCase() as PermissionProfile;
   if (!PROFILES[profile]) {
     return res.status(400).json({ error: `Unknown profile "${req.body.profile}". Valid: ${Object.keys(PROFILES).join(", ")}` });
   }
+  const previous = t.toolGateway.profile;
   t.toolGateway.profile = profile;
-  t.localStore.setSetting("profile", profile);
-  res.json({ ok: true, profile });
+  try {
+    await t.localStore.setSetting("profile", profile);
+    res.json({ ok: true, profile });
+  } catch (err: any) {
+    t.toolGateway.profile = previous;
+    res.status(500).json({ error: err.message });
+  }
 });
