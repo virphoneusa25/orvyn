@@ -231,6 +231,70 @@ export class AuthService {
     return row ? { version: String(row.version), acceptedAt: Number(row.accepted_at) } : null;
   }
 
+  async registerAsync(
+    email: string,
+    password: string,
+    name?: string,
+    legal?: { accepted: boolean; version: string }
+  ): Promise<{ user: User; token: string; legalAcceptance: LegalAcceptance }> {
+    const result = this.register(email, password, name, legal);
+    if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+    return result;
+  }
+
+  async loginAsync(email: string, password: string): Promise<{ user: User; token: string }> {
+    const result = this.login(email, password);
+    if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+    return result;
+  }
+
+  async verifyAsync(token: string): Promise<User | null> {
+    if (!postgresMirror.isPrimaryReadsEnabled()) return this.verify(token);
+    if (!token.startsWith("orvsess_")) return null;
+
+    try {
+      return await postgresMirror.verifySession(hashToken(token));
+    } catch (err) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") throw err;
+      console.warn(
+        `[postgres-primary-reads] session read failed; falling back to SQLite: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return this.verify(token);
+    }
+  }
+
+  async logoutAsync(token: string): Promise<void> {
+    this.logout(token);
+    if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+  }
+
+  async getLegalAcceptanceAsync(
+    userId: string,
+    version: string = LEGAL_VERSION
+  ): Promise<LegalAcceptance | null> {
+    if (!postgresMirror.isPrimaryReadsEnabled()) {
+      return this.getLegalAcceptance(userId, version);
+    }
+    try {
+      return await postgresMirror.getLegalAcceptance(userId, version);
+    } catch (err) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") throw err;
+      console.warn(
+        `[postgres-primary-reads] legal read failed; falling back to SQLite: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return this.getLegalAcceptance(userId, version);
+    }
+  }
+
+  async recordLegalAcceptanceAsync(
+    userId: string,
+    version: string = LEGAL_VERSION
+  ): Promise<LegalAcceptance> {
+    const acceptance = this.recordLegalAcceptance(userId, version);
+    if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+    return acceptance;
+  }
+
   userCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as any;
     return Number(row?.n ?? 0);
