@@ -191,7 +191,7 @@ test(
         `primary-${suffix}@example.com`,
         "CorrectHorseBatteryStaple!",
         "Primary Read",
-        { accepted: true, version: "2026-09-23" }
+        { accepted: true, version: "2026-10-01" }
       );
 
       const verified = await auth.verifyAsync(result.token);
@@ -200,14 +200,14 @@ test(
 
       const legal = await auth.getLegalAcceptanceAsync(
         result.user.id,
-        "2026-09-23"
+        "2026-10-01"
       );
-      assert.equal(legal?.version, "2026-09-23");
+      assert.equal(legal?.version, "2026-10-01");
 
       await auth.logoutAsync(result.token);
       assert.equal(await auth.verifyAsync(result.token), null);
     } finally {
-      (auth as any).close?.();
+      auth.close();
       rmSync(dir, { recursive: true, force: true });
       if (savedPrimary === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
       else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedPrimary;
