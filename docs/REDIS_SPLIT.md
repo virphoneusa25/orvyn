@@ -127,3 +127,47 @@ Before setting the feature flags to `1`:
 5. Move the Docker socket off the API container.
 6. Shadow-run the distributed path and compare event parity.
 7. Only then switch `/agent/orchestrate` to BullMQ.
+
+
+## Distributed control and API event bridge
+
+The transport layer now includes:
+
+- `RedisRunControlTransport`
+  - approve/deny
+  - allow-once / allow-for-mission scope
+  - steer
+  - cancel
+- `RunControlPublisher`
+  - API-facing command publisher
+  - authorization remains at the existing HTTP boundary
+- `RedisRunEventBridge`
+  - consumes worker event envelopes
+  - forwards them into the existing `RunStore`
+  - preserves current SSE/UI behavior
+  - API `RunStore` remains the canonical event sequence allocator
+
+### Why worker events do not carry SSE sequence numbers
+
+The API and worker are separate processes. If both generated
+`AgentEvent.sequence` independently, reconnect cursors could collide.
+
+Workers therefore publish:
+
+```text
+runId
+type
+timestamp
+data
+```
+
+The API bridge then calls the existing `RunStore.emit()`, which assigns the
+single canonical sequence used by Desktop/Web/Mobile SSE clients.
+
+### PostgreSQL
+
+PostgreSQL is intentionally not added in this infrastructure PR. ORVYN's
+existing SQLite persistence remains the production state store until
+distributed execution parity is verified. Persistence migration will be a
+separate phase so execution-topology defects are not mixed with database
+migration defects.
