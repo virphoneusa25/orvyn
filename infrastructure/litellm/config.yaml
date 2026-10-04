@@ -1,0 +1,38 @@
+# infrastructure/litellm/config.yaml
+#
+# LiteLLM is the operational provider/deployment layer beneath ORVYN's
+# ModelGateway. This file intentionally mirrors the model defaults already
+# present in ModelService; enabling LiteLLM must not silently change the
+# product's model strategy.
+#
+# ORVYN_LITELLM_ENABLED defaults to 0. Direct providers remain registered for
+# rollback/manual routing even after the proxy path is enabled.
+
+model_list:
+  # Mirrors OPENAI_MODEL default in ModelService.
+  - model_name: fast-tier
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/MODEL_API_KEY
+
+  # Mirrors DEEPSEEK_CODE_MODEL default in ModelService.
+  - model_name: code-tier
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # Mirrors OPENAI_CODE_MODEL/default planner path in ModelService.
+  - model_name: premium-tier
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/MODEL_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+litellm_settings:
+  # Agent trajectories are stateful; exact/semantic response caching stays off.
+  cache: false

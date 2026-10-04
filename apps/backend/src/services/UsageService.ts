@@ -127,9 +127,24 @@ export class UsageService {
     this.monthCount = store.countUsageSince?.(this.monthStart) ?? this.monthCount;
   }
 
+  private refreshPersistedUsage(): void {
+    if (!this.store) return;
+    // Worker and API processes share the durable tenant store during the
+    // SQLite transition phase. Re-read the bounded window so Reports includes
+    // usage written by other processes instead of freezing at startup state.
+    this.events = this.store.loadRecentUsage(MAX_EVENTS).slice(-MAX_EVENTS);
+  }
+
+  private refreshMonthCount(): void {
+    if (this.store?.countUsageSince) {
+      this.monthCount = this.store.countUsageSince(this.monthStart);
+    }
+  }
+
   /** Current quota state; surfaced on /usage so clients can warn early. */
   quota(): { limit: number; used: number; remaining: number | null; resetsAt: number } {
     this.rollMonth();
+    this.refreshMonthCount();
     return {
       limit: this.quotaLimit,
       used: this.monthCount,
@@ -150,6 +165,9 @@ export class UsageService {
   checkQuota(): void {
     if (this.quotaLimit <= 0) return;
     this.rollMonth();
+    // Cross-process workers may have recorded usage since this instance was
+    // created. Recount from durable storage before every billable model call.
+    this.refreshMonthCount();
     if (this.monthCount >= this.quotaLimit) {
       throw new QuotaExceededError(this.monthCount, this.quotaLimit);
     }
@@ -212,10 +230,12 @@ export class UsageService {
   }
 
   recent(limit = 200): UsageEvent[] {
+    this.refreshPersistedUsage();
     return this.events.slice(-limit).reverse();
   }
 
   totals() {
+    this.refreshPersistedUsage();
     const byModel = new Map<string, { requests: number; errors: number; promptTokens: number; completionTokens: number; durationMs: number }>();
     const byMission = new Map<string, { requests: number; promptTokens: number; completionTokens: number }>();
     let requests = 0, errors = 0, promptTokens = 0, completionTokens = 0, tokensReportedFor = 0;

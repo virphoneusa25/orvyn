@@ -77,7 +77,13 @@ export class LocalStore {
   constructor(tenantId: string, dataDir: string = defaultDataDir()) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
+    // WAL permits concurrent readers + one writer across API/worker processes.
+    // busy_timeout prevents a short writer collision from being treated as a
+    // storage failure (which would otherwise drop mission/usage persistence
+    // because guard() intentionally degrades instead of crashing the runtime).
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA synchronous = NORMAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
   }
 

@@ -1,0 +1,73 @@
+name: Distributed Runtime Validation
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/backend/**"
+      - "packages/ai-core/**"
+      - "docker-compose.yml"
+      - "infrastructure/litellm/**"
+      - "package.json"
+      - "package-lock.json"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      # Node 22 matches the production backend image and node:sqlite runtime.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Build ai-core
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        run: npm run build -w @orvyn/backend
+
+      - name: Queue/runtime tests
+        env:
+          ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
+        run: node --test apps/backend/dist/queue/*.test.js
+
+      - name: Existing backend tests
+        env:
+          ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
+        run: npm test
+
+      - name: Prepare Compose env file
+        run: cp .env.example .env
+
+      - name: Validate Compose
+        env:
+          ORVYN_API_KEY: test
+          DOMAIN: example.invalid
+          ORVYN_REDIS_PASSWORD: test-orvyn-redis
+          LITELLM_REDIS_PASSWORD: test-litellm-redis
+          LITELLM_MASTER_KEY: sk-test-master
+          LITELLM_SALT_KEY: test-salt
+        run: docker compose config >/dev/null

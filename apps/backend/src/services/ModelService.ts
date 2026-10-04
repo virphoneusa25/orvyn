@@ -128,6 +128,43 @@ function openaiConfig(id: string, apiKey: string, temperature: number): ModelCon
   };
 }
 
+
+function liteLLMTierConfig(
+  tier: "fast-tier" | "code-tier" | "premium-tier",
+  endpoint: string,
+  apiKey: string,
+  temperature: number
+): ModelConfig {
+  const root = endpoint.replace(/\/v1\/?$/, "").replace(/\/$/, "");
+  return {
+    id: `litellm:${tier}`,
+    apiModelId: tier,
+    name: `ORVYN ${tier} (LiteLLM)`,
+    provider: "openai-compatible",
+    endpoint: root,
+    apiKey,
+    contextWindow: 128000,
+    maxOutputTokens: tier === "premium-tier" ? 8192 : 4096,
+    defaultTemperature: temperature,
+    defaultTopP: 1,
+    streaming: true,
+    capabilities: {
+      chat: true,
+      code: true,
+      agent: true,
+      tools: true,
+      vision: false,
+      embeddings: false,
+      completion: true,
+      image: false,
+    },
+  };
+}
+
+function liteLLMEnabled(): boolean {
+  return process.env.ORVYN_LITELLM_ENABLED?.trim() === "1";
+}
+
 // NOTE: Phase 1 persists model configs in memory only.
 // Phase 7 (production) should move this to Postgres via Prisma (see docs/architecture.md).
 export class ModelService {
@@ -307,6 +344,42 @@ export class ModelService {
         console.warn(
           `ASTRA_MODEL_ID/ORCHESTRATOR_MODEL="${orchestratorModel}" does not match any registered model id; keeping default planner/reviewer routing.`
         );
+      }
+    }
+
+    // --- LiteLLM operational routing layer ---
+    //
+    // ORION/ModelGateway still decides semantic task roles. When enabled,
+    // those roles resolve to abstract LiteLLM tiers; LiteLLM then chooses the
+    // actual upstream deployment/provider. Existing direct providers remain
+    // registered for manual routing and immediate rollback.
+    if (liteLLMEnabled()) {
+      const endpoint = process.env.MODEL_ROUTER_URL?.trim();
+      const key = process.env.MODEL_ROUTER_KEY?.trim() || process.env.LITELLM_MASTER_KEY?.trim();
+
+      if (!endpoint || !key) {
+        console.warn(
+          "ORVYN_LITELLM_ENABLED=1 but MODEL_ROUTER_URL or MODEL_ROUTER_KEY/LITELLM_MASTER_KEY is missing; keeping direct-provider routing."
+        );
+      } else {
+        const fast = "litellm:fast-tier";
+        const code = "litellm:code-tier";
+        const premium = "litellm:premium-tier";
+
+        this.addModel(liteLLMTierConfig("fast-tier", endpoint, key, 0.5));
+        this.addModel(liteLLMTierConfig("code-tier", endpoint, key, 0.2));
+        this.addModel(liteLLMTierConfig("premium-tier", endpoint, key, 0.2));
+
+        this.router.setOverride("chat", fast);
+        this.router.setOverride("completion", fast);
+        this.router.setOverride("code", code);
+        this.router.setOverride("agent", code);
+        this.router.setOverride("executor", code);
+        this.router.setOverride("planner", premium);
+        this.router.setOverride("reviewer", premium);
+
+        // Vision, image generation, and embeddings intentionally keep their
+        // existing direct routes until dedicated LiteLLM groups are defined.
       }
     }
   }

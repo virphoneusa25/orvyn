@@ -49,6 +49,7 @@ export function raceApprovalTimeout(
       cleanup();
       resolve({ approved: false, timedOut: true, seconds });
     }, seconds * 1000);
-    timer.unref?.();
+    // Keep the timer referenced: this Promise is part of an active mission and
+    // must actually settle even when no other event-loop handles remain.
   });
 }

@@ -22,7 +22,7 @@ import { ToolGateway } from "../gateway/ToolGateway";
 import { PermissionEngine } from "../gateway/PermissionEngine";
 import { ModelGateway } from "../gateway/ModelGateway";
 import type { AgentSession } from "../agent/AgentService";
-import { RunStore } from "../agent/events";
+import { RunStore, isTerminal } from "../agent/events";
 import { EventBus } from "../agent/EventBus";
 import { TaskEngine } from "../agent/TaskEngine";
 import { StreamingAgentRuntime } from "../agent/StreamingAgentRuntime";
@@ -32,6 +32,11 @@ import { McpHub } from "../mcp/McpHub";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
+import {
+  getDistributedMissionCoordinator,
+  isDistributedRun,
+} from "../queue/DistributedMissionCoordinator";
+import { distributedRuntimeReady } from "../queue/redisConnection";
 
 export interface Tenant {
   id: string;
@@ -89,7 +94,16 @@ export class TenantManager {
   /** sha256(apiKey) -> tenantId. Raw keys are never stored. */
   private keyIndex = new Map<string, string>();
 
-  create(name: string, apiKey: string, id: string = randomUUID()): Tenant {
+  create(
+    name: string,
+    apiKey: string,
+    id: string = randomUUID(),
+    options: {
+      runStore?: RunStore;
+      recoverDistributedRuns?: boolean;
+      distributedWorker?: boolean;
+    } = {}
+  ): Tenant {
     const localStore = new LocalStore(id);
     const modelService = new ModelService();
     // Restore user-added/edited models. removeModel first so a persisted edit
@@ -152,9 +166,43 @@ export class TenantManager {
     // Streaming runtime is per-tenant too, so runs and their event logs are
     // never visible across customers. The store gets a per-tenant directory:
     // events append to disk as they stream and replay after a restart.
-    tenant.runStore = new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
+    tenant.runStore = options.runStore ?? new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
+
+    // Reattach Redis event bridges for BullMQ-owned runs after an API restart.
+    // Worker-created tenants explicitly disable this so workers never become
+    // competing event consumers.
+    if (
+      options.recoverDistributedRuns !== false &&
+      distributedRuntimeReady()
+    ) {
+      const coordinator = getDistributedMissionCoordinator();
+      for (const run of tenant.runStore.list()) {
+        if (!isTerminal(run.status) && isDistributedRun(run)) {
+          coordinator.ensureBridge(run.id, tenant.runStore);
+        }
+      }
+    }
+
     tenant.eventBus = new EventBus(tenant.runStore);
-    tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
+    tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore, {
+      // A worker must NEVER mark other workers' persisted in-flight missions
+      // failed merely because it constructed its own per-job TenantManager.
+      shouldFailRecoveredMission: options.distributedWorker
+        ? () => false
+        : (mission) => {
+            const run = tenant.runStore.get(mission.runId);
+            return !(
+              distributedRuntimeReady() &&
+              run &&
+              isDistributedRun(run) &&
+              !isTerminal(run.status)
+            );
+          },
+      // Worker writes land in the shared SQLite store today. Refreshing on API
+      // reads keeps Mission Control current until PostgreSQL replaces SQLite.
+      refreshFromStoreOnRead:
+        !options.distributedWorker && distributedRuntimeReady(),
+    });
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);
     tenant.agentRuntime = new StreamingAgentRuntime(
       tenant.modelService,
