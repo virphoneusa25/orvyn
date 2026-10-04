@@ -20,6 +20,8 @@ function cursorKey(runId: string): string {
 
 export interface DistributedRunEvent {
   runId: string;
+  /** Stable worker-side event id used for idempotent replay after API restarts. */
+  sourceEventId: string;
   type: AgentEventType;
   timestamp: number;
   data: Record<string, unknown>;
@@ -65,7 +67,7 @@ export class RedisRunEventTransport {
         if (fields[i] !== "event") continue;
         try {
           const parsed = JSON.parse(fields[i + 1]) as DistributedRunEvent;
-          if (!parsed?.runId || !parsed?.type || typeof parsed.timestamp !== "number") continue;
+          if (!parsed?.runId || !parsed?.sourceEventId || !parsed?.type || typeof parsed.timestamp !== "number") continue;
           out.push({ redisId, event: parsed });
         } catch {
           // One malformed transport record must not poison a reconnecting stream.
