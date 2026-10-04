@@ -32,10 +32,10 @@ app.use("/api/v1", resolveTenant, tenantRateLimit(), v1Router);
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
-wss.on("connection", (socket, req) => {
+wss.on("connection", async (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = resolveTenantFromToken(token);
+  let tenant = await resolveTenantFromToken(token);
 
   // If API keys are registered, a valid token is mandatory on the socket too —
   // otherwise the WS would be an unauthenticated bypass around the REST auth.
@@ -44,7 +44,7 @@ wss.on("connection", (socket, req) => {
     socket.close();
     return;
   }
-  if (!tenant) tenant = tenantManager.ensureLocalDefault();
+  if (!tenant) tenant = await tenantManager.ensureLocalDefault();
 
   socket.on("message", async (raw) => {
     let body;
@@ -78,19 +78,29 @@ wss.on("connection", (socket, req) => {
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
-bootstrapDefaultTenant();
 
-server.listen(PORT, () => {
-  console.log(`ORVYN backend listening on http://localhost:${PORT}`);
-  console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
-  console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
-  if (tenantManager.hasRegisteredKeys()) {
-    console.log(`  Tenant "default" seeded from ORVYN_API_KEY.`);
-  } else {
-    console.warn(
-      "\n⚠️  ORVYN_API_KEY is not set — the API is UNAUTHENTICATED and running\n" +
-        "   single-tenant. Fine for local development only. Set ORVYN_API_KEY\n" +
-        "   before exposing this to any network.\n"
-    );
-  }
+async function main(): Promise<void> {
+  // Do not open the network listener until the default tenant's configured
+  // persistence driver has initialized and hydrated durable state.
+  await bootstrapDefaultTenant();
+
+  server.listen(PORT, () => {
+    console.log(`ORVYN backend listening on http://localhost:${PORT}`);
+    console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
+    console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
+    if (tenantManager.hasRegisteredKeys()) {
+      console.log(`  Tenant "default" seeded from ORVYN_API_KEY.`);
+    } else {
+      console.warn(
+        "\n⚠️  ORVYN_API_KEY is not set — the API is UNAUTHENTICATED and running\n" +
+          "   single-tenant. Fine for local development only. Set ORVYN_API_KEY\n" +
+          "   before exposing this to any network.\n"
+      );
+    }
+  });
+}
+
+void main().catch((err) => {
+  console.error(`ORVYN backend failed to initialize: ${err?.message ?? err}`);
+  process.exitCode = 1;
 });
