@@ -8,6 +8,7 @@ import { RunStore } from "../agent/events";
 import { DistributedRunStore } from "./DistributedRunStore";
 import { RedisRunEventBridge } from "./RedisRunEventBridge";
 import { findDistributedApprovalRun, isDistributedRun } from "./DistributedMissionCoordinator";
+import { distributedProjectRootEligible } from "./redisConnection";
 
 test("DistributedRunStore forwards raw event envelopes without owning SSE sequence", async () => {
   const published: any[] = [];
@@ -179,4 +180,40 @@ test("RedisRunEventBridge resumes from persisted transport cursor", async () => 
   assert.deepEqual(saved, ["8-0"]);
   assert.equal(store.get("run-resume")?.status, "completed");
   assert.deepEqual(store.get("run-resume")?.events.map((event) => event.type), ["run.completed"]);
+});
+
+
+test("distributedProjectRootEligible only accepts shared worker project roots", () => {
+  const saved = {
+    missions: process.env.ORVYN_DISTRIBUTED_MISSIONS,
+    controls: process.env.ORVYN_DISTRIBUTED_CONTROLS,
+    root: process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT,
+  };
+  try {
+    process.env.ORVYN_DISTRIBUTED_MISSIONS = "1";
+    process.env.ORVYN_DISTRIBUTED_CONTROLS = "1";
+    process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT = "/projects";
+
+    assert.equal(distributedProjectRootEligible("/projects"), true);
+    assert.equal(distributedProjectRootEligible("/projects/acme"), true);
+    assert.equal(distributedProjectRootEligible("/projects/acme/web"), true);
+
+    assert.equal(distributedProjectRootEligible("/project/acme"), false);
+    assert.equal(distributedProjectRootEligible("/Users/royce/project"), false);
+    assert.equal(distributedProjectRootEligible("C:\\Users\\Royce\\project"), false);
+
+    process.env.ORVYN_DISTRIBUTED_CONTROLS = "0";
+    assert.equal(
+      distributedProjectRootEligible("/projects/acme"),
+      false,
+      "feature flags still fail closed"
+    );
+  } finally {
+    if (saved.missions === undefined) delete process.env.ORVYN_DISTRIBUTED_MISSIONS;
+    else process.env.ORVYN_DISTRIBUTED_MISSIONS = saved.missions;
+    if (saved.controls === undefined) delete process.env.ORVYN_DISTRIBUTED_CONTROLS;
+    else process.env.ORVYN_DISTRIBUTED_CONTROLS = saved.controls;
+    if (saved.root === undefined) delete process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT;
+    else process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT = saved.root;
+  }
 });
