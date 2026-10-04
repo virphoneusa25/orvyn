@@ -23,8 +23,8 @@
     "pdfjs-dist": "^6.3.289",
     "pptxgenjs": "^4.0.1",
     "ws": "^8.17.0",
-    "bullmq": "^5.58.5",
-    "ioredis": "^5.7.0"
+    "bullmq": "^5.81.5",
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
