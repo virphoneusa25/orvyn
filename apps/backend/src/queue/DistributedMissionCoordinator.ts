@@ -18,6 +18,7 @@ import { RedisRunEventBridge } from "./RedisRunEventBridge";
 import { RedisRunControlTransport } from "./RedisRunControlTransport";
 import { RunControlPublisher } from "./RunControlPublisher";
 import { RedisMissionStateStore } from "./RedisMissionStateStore";
+import { WorkerHeartbeatRegistry } from "./WorkerHeartbeat";
 import { MISSION_QUEUE_NAME, type MissionJobPayload } from "./types";
 import type { ApprovalScope } from "./controlTypes";
 
@@ -33,6 +34,7 @@ export class DistributedMissionCoordinator {
   private readonly controlRedis = createProducerRedis();
   private readonly queue = new RedisMissionQueue(this.producerRedis);
   private readonly state = new RedisMissionStateStore(this.producerRedis);
+  private readonly workers = new WorkerHeartbeatRegistry(this.producerRedis);
   private readonly controls = new RunControlPublisher(
     new RedisRunControlTransport(this.controlRedis)
   );
@@ -133,6 +135,18 @@ export class DistributedMissionCoordinator {
 
   async missionState(runId: string) {
     return this.state.get(runId);
+  }
+
+  async health() {
+    const [queue, activeWorkers] = await Promise.all([
+      this.queue.stats(),
+      this.workers.activeCount(),
+    ]);
+    return {
+      redis: "ok" as const,
+      queue,
+      activeWorkers,
+    };
   }
 }
 
