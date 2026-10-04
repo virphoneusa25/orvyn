@@ -24,7 +24,7 @@ function extractKey(req: Request): string | undefined {
 // Resolves the caller's tenant and attaches it to req.tenant. Every route then
 // reads its services off req.tenant instead of module globals, which is what
 // actually enforces isolation.
-export function resolveTenant(req: Request, res: Response, next: NextFunction): void {
+export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   const key = extractKey(req);
 
   if (!key) {
@@ -40,7 +40,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
 
   // Session tokens (per-user accounts) take precedence over shared API keys.
   // Each user gets an isolated tenant — own models, tools, missions, store.
-  const user = authService.verify(key);
+  const user = await authService.verifyAsync(key);
   if (user) {
     const tenant = tenantManager.ensureUserTenant(user.id, user.email);
     tenant.usage.requests++;
@@ -70,9 +70,9 @@ export function requireTenant(req: Request): Tenant {
   return req.tenant;
 }
 
-export function resolveTenantFromToken(token: string | null): Tenant | undefined {
+export async function resolveTenantFromToken(token: string | null): Promise<Tenant | undefined> {
   if (!token) return undefined;
-  const user = authService.verify(token);
+  const user = await authService.verifyAsync(token);
   if (user) return tenantManager.ensureUserTenant(user.id, user.email);
   return tenantManager.resolveByApiKey(token);
 }
