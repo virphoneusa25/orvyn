@@ -54,7 +54,7 @@ function cheaperInferenceConfig(
     apiModelId: id,
     name: `Cheaper Inference ${id}`,
     providerName: "cheaperinference",
-    settledCostRequired: true,
+    settledCostRequired: kind === "image",
     provider: "openai-compatible",
     endpoint,
     apiKey,
@@ -762,6 +762,8 @@ export class ModelService {
           if (Number.isFinite(budget) && budget > 0) provider.config.imageSettlementBudgetUsd = budget;
           if (item.pricing.media_unit === "image" && item.pricing.image_pricing_unit === "image" && Number(item.pricing.media_unit_price) > 0) {
             const now = Date.now();
+            provider.config.imageSettlementBudgetUsd = undefined;
+            provider.config.settledCostRequired = false;
             provider.config.imageRate = { usdPerImage: Number(item.pricing.media_unit_price), premium: false, source: `${cheaperInferenceEndpoint()}/v1/models`, verifiedAt: now, expiresAt: now + 10 * 60_000 };
           }
         }

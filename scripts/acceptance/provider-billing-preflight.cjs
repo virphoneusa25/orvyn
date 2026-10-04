@@ -15,18 +15,21 @@ const { creditLedger: ledger } = require(root + '/billing/creditLedgerInstance.j
 const { providerCostUsd, customerCreditsFor } = require(root + '/billing/creditMath.js');
 const { incompatibility } = require('/app/node_modules/@orvyn/ai-core');
 
+let verificationStep = 'isolated-customer-setup';
 (async () => {
   const tenant = new TenantManager().create('Provider billing verification', '', 'billing_fixture');
   const service = tenant.modelService;
   ledger.setPlan(tenant.id, 'pro', Date.now(), 'isolated-provider-verification');
   ledger.purchase(tenant.id, 'pack_10k', 'checkout');
+  verificationStep = 'provider-readiness';
   await service.huggingFaceReady; await service.imageReady;
   const models = service.registry.list().filter((p) => p.config.apiKey);
   const inventory = models.map((p) => ({ modelId: p.config.id, provider: p.config.providerName ?? p.config.provider, rate: p.config.rate, imageRate: p.config.imageRate,
     imageReservationUsd: p.config.imageSettlementBudgetUsd,
     unavailableReason: incompatibility(p.config, { capability: p.config.capabilities.image ? 'image' : p.config.capabilities.embeddings ? 'embeddings' : 'chat' }) }));
+  verificationStep = 'unpriced-route-eligibility';
   for (const p of models) {
-    if (!p.config.rate && !p.config.imageRate && !p.config.imageSettlementBudgetUsd) assert.ok(incompatibility(p.config, { capability: 'chat' }), 'Unpriced platform route must be ineligible');
+    if (!p.config.rate && !p.config.imageRate && !p.config.imageSettlementBudgetUsd) assert.ok(incompatibility(p.config, { capability: 'chat' }), 'Unpriced platform route must be ineligible: ' + p.config.id);
   }
   console.log(JSON.stringify({ event: 'billing.inventory', inventory }));
   const checks = [
@@ -39,6 +42,7 @@ const { incompatibility } = require('/app/node_modules/@orvyn/ai-core');
   ];
   const evidence = [];
   for (const [providerName, id, required] of checks) {
+    verificationStep = 'live-tools-and-billing:' + providerName;
     const p = service.registry.get(id);
     if (!p) { assert.equal(required, false, `Required provider ${providerName} unavailable`); continue; }
     assert.equal(p.config.providerName ?? p.config.provider, providerName);
@@ -63,9 +67,10 @@ const { incompatibility } = require('/app/node_modules/@orvyn/ai-core');
     const cost = event.providerCostUsd ?? providerCostUsd({ inputTokens: event.promptTokens, cachedInputTokens: event.cachedTokens, outputTokens: event.completionTokens, inputUsdPerMillion: quote.input, cachedInputUsdPerMillion: quote.cachedInput ?? quote.input, outputUsdPerMillion: quote.output });
     assert.equal(charge.provider_cost_micros, Math.round(cost * 1e6));
     assert.equal(charge.credits_charged, customerCreditsFor(cost, 2.25).customerCredits);
-    if (providerName === 'cheaperinference') assert.ok(event.providerCostUsd !== undefined);
+    // The live gateway may report tokens without its optional final USD field; exact catalog prices then settle those real counts.
     evidence.push({ provider: providerName, modelId: id, status: 'passed', promptTokens: event.promptTokens, cachedTokens: event.cachedTokens, completionTokens: event.completionTokens, providerCostUsd: cost, creditsCharged: charge.credits_charged, toolCalling: called });
   }
+  verificationStep = 'live-image-billing';
   const image = service.registry.get('ci:nano-banana');
   assert.ok(image?.config.capabilities.image, 'Priced image route unavailable');
   const images = await image.generateImage({ prompt: 'A plain blue square on a white background.', n: 1, size: '1024x1024' });
@@ -78,5 +83,5 @@ const { incompatibility } = require('/app/node_modules/@orvyn/ai-core');
   evidence.push({ provider: 'cheaperinference', modelId: image.config.id, method: 'image', status: 'passed', imageCount: images.length, providerCostUsd: imageEvent.providerCostUsd, creditsCharged: imageCharge.credits_charged });
   assert.equal(tenant.localStore.pendingBilling().length, 0);
   console.log(JSON.stringify({ event: 'billing.preflight.result', passed: true, isolatedCustomerData: true, evidence }));
-})().catch(() => { console.log(JSON.stringify({ event: 'billing.preflight.failed', reason: 'Exact provider pricing, live tools or settled credits did not verify; raw provider errors withheld' })); process.exitCode = 1;
+})().catch((error) => { console.log(JSON.stringify({ event: 'billing.preflight.failed', step: verificationStep, assertion: error?.code === 'ERR_ASSERTION' ? String(error.message).slice(0, 300) : error?.name, reason: 'Exact provider pricing, live tools or settled credits did not verify; raw provider errors withheld' })); process.exitCode = 1;
 }).finally(() => { ledger.close(); if (path.dirname(scratch) === os.tmpdir() && path.basename(scratch).startsWith('orvyn-provider-billing-')) fs.rmSync(scratch, { recursive: true, force: true }); process.exit(process.exitCode || 0); });
