@@ -618,7 +618,18 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   if (missionQuota > 0) {
     const d = new Date();
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-    const used = t.localStore.countMissionsSince(monthStart);
+    let used = t.localStore.countMissionsSince(monthStart);
+    if (postgresMirror.isPrimaryReadsEnabled()) {
+      try {
+        used = await postgresMirror.countMissionsSince(t.id, monthStart);
+      } catch (err) {
+        if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+          return res.status(503).json({
+            error: `PostgreSQL quota read failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+    }
     if (used >= missionQuota) {
       return res.status(429).json({
         error: `Monthly mission quota exceeded (${used}/${missionQuota}). Resets at the start of next month (UTC).`,
