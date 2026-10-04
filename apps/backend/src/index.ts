@@ -32,10 +32,10 @@ app.use("/api/v1", resolveTenant, tenantRateLimit(), v1Router);
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
-wss.on("connection", (socket, req) => {
+wss.on("connection", async (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = resolveTenantFromToken(token);
+  let tenant = await resolveTenantFromToken(token);
 
   // If API keys are registered, a valid token is mandatory on the socket too —
   // otherwise the WS would be an unauthenticated bypass around the REST auth.
