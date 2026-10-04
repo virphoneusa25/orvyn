@@ -25,39 +25,46 @@ function extractKey(req: Request): string | undefined {
 // reads its services off req.tenant instead of module globals, which is what
 // actually enforces isolation.
 export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const key = extractKey(req);
+  try {
+    const key = extractKey(req);
 
-  if (!key) {
-    // No key: only allowed when no API keys are registered (pure local dev).
-    if (tenantManager.hasRegisteredKeys()) {
-      res.status(401).json({ error: "Unauthorized — missing API key" });
+    if (!key) {
+      // No key: only allowed when no API keys are registered (pure local dev).
+      if (tenantManager.hasRegisteredKeys()) {
+        res.status(401).json({ error: "Unauthorized — missing API key" });
+        return;
+      }
+      req.tenant = tenantManager.ensureLocalDefault();
+      next();
       return;
     }
-    req.tenant = tenantManager.ensureLocalDefault();
-    next();
-    return;
-  }
 
-  // Session tokens (per-user accounts) take precedence over shared API keys.
-  // Each user gets an isolated tenant — own models, tools, missions, store.
-  const user = await authService.verifyAsync(key);
-  if (user) {
-    const tenant = tenantManager.ensureUserTenant(user.id, user.email);
+    // Session tokens (per-user accounts) take precedence over shared API keys.
+    // Each user gets an isolated tenant — own models, tools, missions, store.
+    const user = await authService.verifyAsync(key);
+    if (user) {
+      const tenant = tenantManager.ensureUserTenant(user.id, user.email);
+      tenant.usage.requests++;
+      req.tenant = tenant;
+      next();
+      return;
+    }
+
+    const tenant = tenantManager.resolveByApiKey(key);
+    if (!tenant) {
+      res.status(401).json({ error: "Unauthorized — invalid API key or session" });
+      return;
+    }
+
     tenant.usage.requests++;
     req.tenant = tenant;
     next();
-    return;
+  } catch (err: any) {
+    res.status(503).json({
+      error: "Authentication storage is unavailable",
+      detail: err?.message ?? String(err),
+    });
   }
-
-  const tenant = tenantManager.resolveByApiKey(key);
-  if (!tenant) {
-    res.status(401).json({ error: "Unauthorized — invalid API key or session" });
-    return;
-  }
-
-  tenant.usage.requests++;
-  req.tenant = tenant;
-  next();
 }
 
 // Routes call this instead of reaching for a global. Throws rather than
