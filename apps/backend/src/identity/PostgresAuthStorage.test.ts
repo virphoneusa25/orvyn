@@ -189,6 +189,7 @@ test("real Postgres: complete auth import is atomic, concurrent, exact and resto
       assert.equal((await storage.verify(source)).matches, true);
       await assert.rejects(audit.query("UPDATE orvyn_auth.admin_audit SET detail='{}'"), /append-only/);
       await assert.rejects(audit.query("DELETE FROM orvyn_auth.admin_audit"), /append-only/);
+      await assert.rejects(audit.query("TRUNCATE orvyn_auth.admin_audit"), /append-only/);
       const highWater = Number(source.__sequences[0].seq);
       const inserted = await audit.query("INSERT INTO orvyn_auth.admin_audit(id,at,actor_id,actor_email,action) VALUES ($1,$2,$3,$4,$5) RETURNING seq", ["new-audit",Date.now(),account.user.id,account.user.email,"test.audit"]);
       assert.equal(Number(inserted.rows[0].seq), highWater + 1);

@@ -19,7 +19,8 @@ cannot represent null characters; an affected export fails without altering data
 Do not scrub source authentication records to bypass this check.
 
 The source reader opens SQLite read-only and uses one consistent read transaction.
-Audit update/delete protection is recreated in PostgreSQL. The SQLite AUTOINCREMENT
+Audit update/delete protection is recreated in PostgreSQL, and TRUNCATE is blocked.
+The SQLite AUTOINCREMENT
 high-water mark is preserved, including gaps above the current maximum row; the
 PostgreSQL identity sequence is restarted transactionally so retries remain safe.
 The destination migration/import uses transactions, a shared advisory lock,

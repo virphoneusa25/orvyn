@@ -47,7 +47,9 @@ export class PostgresAuthStorage {
       await client.query(`CREATE FUNCTION orvyn_auth.reject_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS
         $$ BEGIN RAISE EXCEPTION 'admin_audit is append-only'; END; $$;
         CREATE TRIGGER admin_audit_append_only BEFORE UPDATE OR DELETE ON orvyn_auth.admin_audit
-        FOR EACH ROW EXECUTE FUNCTION orvyn_auth.reject_audit_mutation()`);
+        FOR EACH ROW EXECUTE FUNCTION orvyn_auth.reject_audit_mutation();
+        CREATE TRIGGER admin_audit_no_truncate BEFORE TRUNCATE ON orvyn_auth.admin_audit
+        FOR EACH STATEMENT EXECUTE FUNCTION orvyn_auth.reject_audit_mutation()`);
       await client.query("INSERT INTO orvyn_auth.migrations(version) VALUES (1)");
     });
   }
@@ -76,8 +78,8 @@ export class PostgresAuthStorage {
       }
     }
     const trigger = await client.query(`SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='orvyn_auth' AND c.relname='admin_audit' AND t.tgname='admin_audit_append_only' AND t.tgenabled='O'`);
-    if (trigger.rowCount !== 1) throw new Error("PostgreSQL authentication audit protections differ");
+      WHERE n.nspname='orvyn_auth' AND c.relname='admin_audit' AND t.tgname IN ('admin_audit_append_only','admin_audit_no_truncate') AND t.tgenabled='O'`);
+    if (trigger.rowCount !== 2) throw new Error("PostgreSQL authentication audit protections differ");
     const snapshot: AuthSnapshot = {};
     for (const table of AUTH_TABLES) {
       const result = await client.query(`SELECT * FROM orvyn_auth."${table.name}"`);
