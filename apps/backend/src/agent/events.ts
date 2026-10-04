@@ -186,10 +186,16 @@ export class RunStore {
         }
       }
       if (run) {
-        // A run that was mid-flight when the process died can never progress
-        // again — its runtime state is gone. Mark it honestly instead of
-        // leaving a permanent "running"/"awaiting_approval" ghost.
-        if (!isTerminal(run.status)) {
+        const distributed = run.events.some(
+          (event) => event.type === "run.queued" && event.data.distributed === true
+        );
+
+        // Local in-process runs cannot survive a backend restart because their
+        // runtime state lived in this process. Distributed runs are different:
+        // BullMQ owns their lifecycle in a worker, so the API must preserve
+        // their nonterminal state and reattach the Redis event bridge instead
+        // of falsely converting a healthy mission into an error.
+        if (!isTerminal(run.status) && !distributed) {
           const seq = run.nextSequence++;
           const ghost: AgentEvent = {
             id: `evt_${run.id.slice(0, 6)}_${seq}`,
