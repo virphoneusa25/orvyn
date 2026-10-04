@@ -102,6 +102,18 @@ test(
       });
       assert.equal(await postgresMirror.countMissionsSince(tenantId, 0), 1);
       assert.equal(await postgresMirror.countUsageSince(tenantId, 0), 1);
+
+      const totals = await postgresMirror.usageTotals(tenantId);
+      assert.equal(totals.requests, 1);
+      assert.equal(totals.promptTokens, 10);
+      assert.equal(totals.completionTokens, 5);
+      assert.equal(totals.errors, 0);
+      assert.equal(totals.byModel["test-model"]?.requests, 1);
+
+      const recentUsage = await postgresMirror.loadRecentUsage(tenantId, 10);
+      assert.equal(recentUsage.length, 1);
+      assert.equal(recentUsage[0]?.id, usage.id);
+      assert.equal(recentUsage[0]?.modelId, usage.modelId);
       const pgMissions = await postgresMirror.loadMissions(tenantId);
       assert.equal(pgMissions.length, 1);
       assert.equal(pgMissions[0]?.id, mission.id);
