@@ -92,7 +92,7 @@ export function selectAgentModel(input: {
     const writing = !input.deep && profile === "auto" && isRoutineWriting(input.intent.goal ?? "")
       ? writingProvider(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, isRouteBlocked) : undefined;
     if (writing) return { registryId: writing.config.id, lane: "auto", pinned: false,
-      reason: "Routine writing: exact Fireworks DeepSeek Flash route passed streaming/tool verification", route: { ...route, registryId: writing.config.id } };
+      reason: "Routine writing: direct DeepSeek Flash passed current pricing and streaming/tool verification", route: { ...route, registryId: writing.config.id } };
     const writingFailure = !input.deep && profile === "auto" && isRoutineWriting(input.intent.goal ?? "") ? writingFallbackReason(input.providers) : "";
     const family = input.intent.informational && !input.deep && !input.intent.requiresFrontend ? "flash" : routeFamily(route.registryId ?? "") ?? (route.tier === "code" ? "code" : route.tier === "agent" || route.tier === "heavy" ? "advanced" : route.tier === "auto" ? "flash" : undefined);
     const preferred = preferHuggingFace(input.providers.filter((p) => input.availableIds.includes(p.config.id)), needs, /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""), isRouteBlocked, family);

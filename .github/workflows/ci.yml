@@ -80,6 +80,9 @@ jobs:
           npm test -w @orvyn/web
           node --test apps/backend/dist/routes/signupLegal.test.js
 
+      - name: Exact provider billing and payment acceptance
+        run: node scripts/acceptance/billing-e2e.mjs
+
       - name: Verify production backend image builds
         if: github.ref == 'refs/heads/codex/production-signup-hf' || github.ref == 'refs/heads/codex/shared-hf-auto'
         run: docker build -f apps/backend/Dockerfile -t orvyn-backend:${{ github.sha }} .
@@ -174,6 +177,13 @@ jobs:
           OVH_HEALTH_URL: https://orvyn.virphoneusa.com/api/v1/health
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          CHEAPER_INFERENCE_API_KEY: ${{ secrets.CHEAPER_INFERENCE_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ORVYN_PROVIDER_RATES_JSON: ${{ vars.ORVYN_PROVIDER_RATES_JSON }}
+          ORVYN_IMAGE_SETTLEMENT_BUDGET_USD: ${{ vars.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD }}
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
           DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
@@ -237,14 +247,15 @@ jobs:
             [ -n "$HUGGINGFACE_API_KEY" ] && [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::HF configuration missing"; exit 1; }
             live_commit=$(curl -fsS "$OVH_HEALTH_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
             echo "Production before: $live_commit"
-            [ "$live_commit" = "5a657a5178b8adde364a9a9ba06d589b2beec2f7" ] || [ "$live_commit" = "$GITHUB_SHA" ] || { echo "::error::Production changed; refusing overwrite"; exit 1; }
+            [ "$live_commit" = "40fdc92e683b99a752a8cf0dba0895211c89df6b" ] || [ "$live_commit" = "$GITHUB_SHA" ] || { echo "::error::Production changed; refusing overwrite"; exit 1; }
             staging_commit=$(curl -fsS https://staging.orvyn.virphoneusa.com/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
             [ "$staging_commit" = "$GITHUB_SHA" ] || { echo "::error::Staging SHA mismatch"; exit 1; }
-            ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker image tag "$(docker inspect orvyn-backend-1 --format "{{.Image}}")" orvyn-backend:rollback-5a657a5'
+            ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker image tag "$(docker inspect orvyn-backend-1 --format "{{.Image}}")" orvyn-backend:rollback-40fdc92'
           fi
           bash scripts/deploy-ovh.sh
           if [ "$GITHUB_REF" = "refs/heads/codex/shared-hf-auto" ]; then
             cat scripts/acceptance/hf-routing-preflight.cjs | ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker exec -i orvyn-backend-1 node'
+            cat scripts/acceptance/provider-billing-preflight.cjs | ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker exec -i orvyn-backend-1 node'
             curl -fsS "$OVH_HEALTH_URL"; echo
           fi
           shred -u "$HOME/.ssh/ovh_deploy" 2>/dev/null || rm -f "$HOME/.ssh/ovh_deploy"
@@ -264,6 +275,13 @@ jobs:
           HUGGINGFACE_ROUTING_ENABLED: ${{ vars.HUGGINGFACE_ROUTING_ENABLED || '0' }}
           HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
           HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          CHEAPER_INFERENCE_API_KEY: ${{ secrets.CHEAPER_INFERENCE_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ORVYN_PROVIDER_RATES_JSON: ${{ vars.ORVYN_PROVIDER_RATES_JSON }}
+          ORVYN_IMAGE_SETTLEMENT_BUDGET_USD: ${{ vars.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD }}
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
           DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
@@ -281,25 +299,6 @@ jobs:
           trap 'rm -f "$HOME/.ssh/ovh_deploy"' EXIT
           export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
           bash scripts/deploy-ovh-staging.sh
-
-  fireworks-staging:
-    name: Verify pinned Fireworks route in staging
-    needs: [deploy-staging]
-    # Deferred by the release owner; enable this diagnostic when configuring Fireworks.
-    if: vars.FIREWORKS_WRITING_VERIFY_ENABLED == '1'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify actual Fireworks provider without fallback
-        env:
-          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
-        run: |
-          key="$RUNNER_TEMP/orvyn-fireworks-staging-ssh"
-          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$key"
-          chmod 600 "$key"
-          trap 'rm -f "$key"' EXIT
-          cat scripts/acceptance/hf-routing-preflight.cjs | ssh -i "$key" -o StrictHostKeyChecking=accept-new ubuntu@40.160.11.123 'docker exec -i backend-staging node - /app/dist fireworks'
 
   desktop-hosted:
     name: Windows Desktop against staging

@@ -18,9 +18,9 @@ test("Fireworks exact writing route requires live context/price and a real strea
   assert.equal(config.contextWindow, 131072); assert.equal(config.capabilities.vision, false);
   const provider = { config } as any;
   assert.ok(isRoutineWriting("Write marketing copy for a newsletter")); assert.equal(isRoutineWriting("Plan a critical marketing strategy"), false);
-  assert.equal(writingProvider([provider], { capability: "agent", tools: true, streaming: true }, () => false), provider);
+  assert.equal(writingProvider([provider], { capability: "agent", tools: true, streaming: true }, () => false), undefined);
   const input = { intent: inferTaskIntent("Write routine marketing copy for a newsletter"), availableIds: [config.id], providers: [provider] };
-  assert.equal(selectAgentModel(input).registryId, config.id);
+  assert.notEqual(selectAgentModel(input).reason, "Routine writing: verified Fireworks route");
   assert.equal(selectAgentModel({ ...input, requestedModelId: "explicit-user-model" }).registryId, "explicit-user-model");
   config.routingVerification = { status: "failed", reason: "model absent" };
   assert.equal(writingProvider([provider], { capability: "chat" }, () => false), undefined);

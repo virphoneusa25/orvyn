@@ -29,7 +29,7 @@ if(action==='create'){
  if(!org||org.tenant_id!==fixture.tenantId||auth.prepare('SELECT count(*) AS n FROM organization_members WHERE organization_id=?').get(fixture.organizationId).n!==1)throw new Error('Fixture organization guard failed');
  if(action==='telemetry'){
   const usage=new DatabaseSync(path.join(data,fixture.tenantId+'.db'),{readOnly:true});usage.exec('PRAGMA busy_timeout=5000');
-  const events=usage.prepare('SELECT provider,model_id AS modelId,method,ok,prompt_tokens AS promptTokens,completion_tokens AS completionTokens FROM usage_events WHERE ts>=? ORDER BY ts ASC').all(fixture.createdAt);
+  const events=usage.prepare('SELECT id,provider,model_id AS modelId,method,ok,prompt_tokens AS promptTokens,completion_tokens AS completionTokens FROM usage_events WHERE ts>=? ORDER BY ts ASC').all(fixture.createdAt).map(event=>{const charge=creditLedger.usageEvent(event.id);return {...event,billingRecorded:Boolean(charge),creditsCharged:charge?.credits_charged,providerCostUsd:charge?charge.provider_cost_micros/1e6:undefined};});
   console.log(JSON.stringify({events}));usage.close();auth.close();creditLedger.close();
  }else{
  const clean=(db,keys)=>{

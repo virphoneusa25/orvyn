@@ -786,6 +786,7 @@ v1Router.post("/chat/completions", async (req, res) => {
     });
     res.json(response);
   } catch (err: any) {
+    if (err instanceof BillingLimitError) return res.status(402).json({ error: err.message, code: `CREDITS_${err.code}` });
     res.status(500).json({ error: err.message });
   }
 });

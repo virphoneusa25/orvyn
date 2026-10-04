@@ -15,6 +15,7 @@ import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { releaseSandboxControlForRun } from "../desktop/sandboxDesktop";
 import { creditLedger } from "../billing/creditLedgerInstance";
+import { settleProviderUsage, recordProviderQuote } from "../billing/providerSettlement";
 import { customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
 import { openModelConfig } from "../models/userModels";
 import { LANE_FACTORS, laneForUsage, planById } from "../billing/plans";
@@ -142,44 +143,49 @@ export class TenantManager {
     if (preferred && modelService.isUserModel(preferred)) modelService.preferredModel = preferred;
     // Every provider is metered; from here they're also durably recorded.
     modelService.usage.attachStore(localStore);
+    const recoverBilling = () => {
+      for (const pending of localStore.pendingBilling()) {
+        settleProviderUsage(creditLedger, id, pending.event, pending.own, creditsEnforced());
+        localStore.completeBilling(pending.event.id);
+      }
+      if (localStore.pendingBilling().length) throw new Error("Billing recovery is still pending.");
+    };
+    void modelService.huggingFaceReady.then(() => {
+      for (const p of modelService.registry.list()) {
+        if (modelService.isUserModel(p.config.id)) continue;
+        const rate = p.config.rate, imageRate = p.config.imageRate;
+        if (rate && rate.expiresAt > Date.now()) recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, rate });
+        if (imageRate && imageRate.expiresAt > Date.now()) recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, imageRate });
+      }
+    }).catch(() => console.warn("Provider billing price initialization failed; paid calls remain guarded."));
     // Before every model call: the wallet (balance, rolling windows, the run's
     // budget) must be able to pay for it. Enforced on ORVYN Cloud; a local
     // engine running on the user's own keys only records.
     modelService.usage.onPreflight((ctx, model) => {
       if (!creditsEnforced()) return;
+      recoverBilling();
       // The customer's own model runs on their provider account, not ORVYN credits.
         if (model && modelService.isUserModel(model.id)) return;
         if (model?.method === "image") {
           const rate = model.imageRate;
+          if (Number.isFinite(model.imageSettlementBudgetUsd) && model.imageSettlementBudgetUsd! > 0 && model.rate && model.rate.expiresAt > Date.now()) return creditLedger.reserveImage(id, model.imageCount ?? 1, "image", model.providerCostUsd!);
           if (!rate || rate.expiresAt <= Date.now() || !Number.isFinite(rate.usdPerImage) || rate.usdPerImage <= 0) {
             throw new Error("Image generation is unavailable until a current per-image price is configured.");
           }
           return creditLedger.reserveImage(id, model.imageCount ?? 1, rate.premium ? "image_pro" : "image", model.providerCostUsd!);
         }
+      if (!model?.rate || model.rate.expiresAt <= Date.now() || ![model.rate.input, model.rate.output, model.rate.cachedInput ?? model.rate.input].every((n) => Number.isFinite(n) && n >= 0)) {
+        throw new Error("This model is unavailable until a current exact billing price is configured.");
+      }
+      recordProviderQuote(creditLedger, { provider: model.providerName ?? model.provider ?? "", modelId: model.id, rate: model.rate });
       creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
     });
     // After it: settle exactly once per call (the usage event id is the key).
       modelService.usage.onRecord((event) => {
         const own = modelService.isUserModel(event.modelId);
-        if (!own && event.imageRate) creditLedger.setImageRateCard(event.provider, event.modelId, event.imageRate);
-      if (!own && event.rate) {
-        const r = event.rate;
-        const previous = creditLedger.rateCardAt(event.provider, event.modelId, r.verifiedAt);
-        const cached = r.cachedInput ?? r.input;
-        if (!previous || previous.modelId !== event.modelId || previous.provider !== event.provider || previous.inputUsdPerMillion !== r.input || previous.outputUsdPerMillion !== r.output || previous.cachedInputUsdPerMillion !== cached) {
-          creditLedger.setRateCard({ provider: event.provider, modelId: event.modelId, inputUsdPerMillion: r.input, cachedInputUsdPerMillion: cached, outputUsdPerMillion: r.output, effectiveFrom: r.verifiedAt });
-        }
-      }
-      creditLedger.charge({
-        eventId: event.id,
-          rateAt: event.imageRate?.verifiedAt ?? event.rate?.verifiedAt,
-          ...(own ? { providerCostUsd: 0 } : {}),
-          ...(!own && event.method === "image" ? { providerCostUsd: event.providerCostUsd, imageCount: event.imageCount } : {}),
-        userId: id, runId: event.missionId, sessionId: event.missionId,
-        type: event.method === "image" ? "image" : "model",
-        provider: event.provider, model: event.modelId, lane: laneForUsage(event),
-        inputTokens: event.promptTokens, cachedInputTokens: event.cachedTokens, outputTokens: event.completionTokens, ok: event.ok, now: event.timestamp,
-      });
+        localStore.enqueueBilling(event, own);
+        settleProviderUsage(creditLedger, id, event, own, creditsEnforced());
+        localStore.completeBilling(event.id);
     });
     // Restore the user's routing choices, the same way the autonomy profile is
     // restored. Without this, every restart silently reverted routing to the

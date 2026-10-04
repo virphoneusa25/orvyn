@@ -93,6 +93,7 @@ interface RateCard {
 }
 
 export interface UsageChargeInput {
+  requireExactRate?: boolean;
   imageCount?: number;
   /** The rate quoted when inference began; late completions keep that version. */
   rateAt?: number;
@@ -569,6 +570,8 @@ export class CreditLedger {
     const lane: Lane = input.lane ?? "auto";
     if (input.type === "image" && input.ok !== false && input.providerCostUsd === undefined) throw new Error("Successful image usage requires an exact provider cost");
     const card = input.type === "image" ? undefined : this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", input.rateAt ?? now);
+    if (input.requireExactRate && input.type === "model" && input.ok !== false && input.providerCostUsd === undefined && (!card || card.provider !== input.provider || card.modelId !== input.model)) throw new Error("Exact provider/model billing rate required");
+    if (input.providerCostUsd !== undefined && (!Number.isFinite(input.providerCostUsd) || input.providerCostUsd < 0)) throw new Error("Invalid provider settlement cost");
     const imageCard = input.type === "image" ? this.db.prepare("SELECT id FROM image_rate_cards WHERE provider = ? AND model = ? AND verified_at <= ? ORDER BY verified_at DESC LIMIT 1").get(input.provider ?? "", input.model ?? "", input.rateAt ?? now) as { id: string } | undefined : undefined;
     const cost = input.providerCostUsd ?? (card
       ? providerCostUsd({

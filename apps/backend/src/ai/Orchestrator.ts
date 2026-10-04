@@ -371,24 +371,26 @@ export class Orchestrator {
     const routingReason = this.modelService.router.preferred(req.task, this.chatRequirements(req), isDeepQuestion(req.userMessage, req.reasoningEffort) ? "advanced" : undefined).reason;
     let usedReported = false;
     let actualReason = (req.requestedModelId && req.requestedModelId !== "auto") || this.modelService.router.getExplicitOverrides()[req.task] ? "Explicit model selection"
-      : isRoutineWriting(req.userMessage) ? provider.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731"
-        ? "Routine writing: exact Fireworks route verified" : `${writingFallbackReason(this.modelService.registry.list())}; ${routingReason}` : routingReason;
+      : isRoutineWriting(req.userMessage) ? provider.config.providerName === "deepseek"
+        ? "Routine writing: direct route verified" : `${writingFallbackReason(this.modelService.registry.list())}; ${routingReason}` : routingReason;
     const messages = await buildMessages(req, this.indexService, this.memory);
     const temperature = req.context?.mode === "ask" ? 0.7 : 0.3;
     // The chat researches on its own when it has web tools and a model that can call them.
     const installedTools = (this.webTools?.mcpTools?.() ?? []).slice(0, 24);
     const cloud = req.surface === "cloud";
-    const maxRounds = cloud ? 10 : MAX_RESEARCH_ROUNDS;
-    const maxCalls = cloud ? 24 : MAX_RESEARCH_CALLS;
+    const maxRounds = MAX_RESEARCH_ROUNDS;
+    const maxCalls = MAX_RESEARCH_CALLS;
     const allowTaskHandoff = !cloud && turnDecision.requiresExecution && turnDecision.capabilities.some((capability) => ["artifact", "code", "server", "browser", "github"].includes(capability));
     const web = this.webTools && provider.supportsTools() ? [...CHAT_WEB_TOOLS, ...(cloud ? CLOUD_CHAT_TOOLS : []), ...(allowTaskHandoff ? [CHAT_TASK_TOOL] : []), CHAT_CAPABILITY_TOOL, ...installedTools] : undefined;
     const isInstalledTool = (n: string) => installedTools.some((t) => t.name === n);
     if (web) messages.splice(1, 0, { role: "system", content: `${CHAT_RESEARCH_PROMPT}\n${CAPABILITY_RULE}\n${cloud ? CLOUD_CHAT_MANIFEST : CHAT_MANIFEST}` });
+    if (web) messages.push({ role: "system", content: `Answer the latest user request: ${req.userMessage}\nKeep searches focused on that request. Earlier conversation and saved context must not substitute a different topic or company. Once the results support an answer, answer; do not search repeatedly for minor variants of the same query.` });
     let toolCallsUsed = 0;
     let nudged = false;
     let capabilityNudged = false;
     const requested = new Map<string, string>();
     const fetchAttempts = new FetchAttemptMemory();
+    const searchedQueries = new Set<string>();
     const hasBrowser = Boolean(web?.some((t) => t.name === "browser_open"));
     // A missing capability: find an MCP server, show the install card (as chat activity), tell the model.
     const requestCapability = async function* (this: Orchestrator, query: string): AsyncGenerator<AIChunk & { activity?: ChatActivity }, string> {
@@ -496,7 +498,7 @@ export class Orchestrator {
           }
           if (chunk.toolCall || chunk.delta) received = true;
           if (chunk.toolCall) { calls.push(chunk.toolCall); continue; }
-          if (chunk.done) break;
+          if (chunk.done && !chunk.delta) break;
           if (!chunk.delta) continue;
           text += chunk.delta;
           // Output-language guard (first words only): Chinese-first models can
@@ -569,7 +571,19 @@ export class Orchestrator {
         const skipFetchIds = new Set(skippedFetches.map((c) => c.id));
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
+          if (toolCallsUsed >= maxCalls) {
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "Tool budget reached. Answer using the results already obtained and state any unresolved uncertainty." });
+            continue;
+          }
           toolCallsUsed++;
+          if (call.name === "web_search") {
+            const query = String((call.arguments as any)?.query ?? (call.arguments as any)?.q ?? "").toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
+            if (searchedQueries.has(query)) {
+              messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "This search was already performed. Use its results to answer the latest user request." });
+              continue;
+            }
+            searchedQueries.add(query);
+          }
           if (call.name === "fetch_url") {
             const args = (call.arguments ??= {}) as Record<string, unknown>;
             const n = normalizePublicHttpUrl(args.url);

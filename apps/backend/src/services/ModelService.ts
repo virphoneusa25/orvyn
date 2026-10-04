@@ -18,7 +18,9 @@ import { markModelUnavailable } from "../models/modelAvailability";
 import { isRouteBlocked } from "../models/modelAvailability";
 import { verifyHuggingFace } from "../models/huggingFaceVerification";
 import { FIREWORKS_WRITING_MODEL, verifyFireworksWriting } from "../models/fireworksVerification";
-import { refreshNebiusRates, refreshFireworksRates, refreshFireworksImageRates } from "../models/providerRates";
+import { refreshNebiusRates, refreshFireworksRates, refreshFireworksImageRates, refreshOpenAIRates, refreshOpenRouterRates } from "../models/providerRates";
+import { refreshDeepSeekRates } from "../models/deepseekRates";
+import { applyConfiguredRate, cheaperInferenceRate } from "../models/configuredRates";
 import { NEBIUS_CURATED, NEBIUS_EMBED_DIMS, NEBIUS_EMBED_MODEL } from "../models/modelEquivalents";
 
 function openaiDisplayName(id: string): string {
@@ -51,6 +53,8 @@ function cheaperInferenceConfig(
     id: `ci:${id}`,
     apiModelId: id,
     name: `Cheaper Inference ${id}`,
+    providerName: "cheaperinference",
+    settledCostRequired: true,
     provider: "openai-compatible",
     endpoint,
     apiKey,
@@ -335,13 +339,13 @@ export class ModelService {
       for (const id of ciModels) {
         this.addModel(cheaperInferenceConfig(id, ciKey, id === codeId && id !== chatId ? 0.2 : 0.7, ciEndpoint, "text"));
       }
-      void this.refreshCheaperInferenceCatalog();
+      this.huggingFaceReady = this.refreshCheaperInferenceCatalog();
     }
 
     const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
     if (fireworksKey) {
-      const certified = [...CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId), FIREWORKS_WRITING_MODEL];
-      const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "accounts/fireworks/models/deepseek-v4-flash-0731")
+      const certified = CERTIFIED_MODELS.filter((m) => m.provider === "fireworks").map((m) => m.apiModelId);
+      const extra = (process.env.FIREWORKS_MODELS ?? process.env.FIREWORKS_MODEL ?? "")
         .split(",").map((s) => s.trim()).filter(Boolean);
       // Qwen3-VL on Fireworks is Deploy on Demand. Register only explicit
       // account deployments, avoiding a guaranteed 404 on serverless plans.
@@ -374,7 +378,7 @@ export class ModelService {
         this.addModel(config);
         verification.push(verifyHuggingFace(config));
       }
-      this.huggingFaceReady = Promise.all(verification).then(() => undefined);
+      this.huggingFaceReady = Promise.all([this.huggingFaceReady, ...verification]).then(() => undefined);
     }
 
     // Mistral (Small 4 utility, Codestral, Medium/Large, GLM 5.3) and OpenRouter
@@ -518,7 +522,7 @@ export class ModelService {
     const dsKey = process.env.DEEPSEEK_API_KEY?.trim();
     if (dsKey) {
       const dsEndpoint = process.env.DEEPSEEK_BASE_URL?.trim() || "https://api.deepseek.com";
-      const flash = process.env.DEEPSEEK_CODE_MODEL?.trim() || "deepseek-v4-flash";
+      const flash = process.env.DEEPSEEK_CODE_MODEL?.trim() || "deepseek-flash";
       const pro = process.env.DEEPSEEK_PRO_MODEL?.trim() || "deepseek-v4-pro";
       this.addModel(deepseekConfig(flash, dsKey, dsEndpoint, 0.2));
       if (pro !== flash) this.addModel(deepseekConfig(pro, dsKey, dsEndpoint, 0.2));
@@ -574,11 +578,15 @@ export class ModelService {
       writing.config.routingVerification = { status: "pending", reason: "Fireworks writing route awaiting live verification" };
       this.huggingFaceReady = Promise.all([this.huggingFaceReady, verifyFireworksWriting(writing.config)]).then(() => undefined);
     }
-    this.huggingFaceReady = Promise.all([this.huggingFaceReady, ...(nebius.length ? [refreshNebiusRates(nebius)] : []), ...(fireworks.length ? [refreshFireworksRates(fireworks)] : [])]).then(() => undefined);
-    if (huggingFaceKey || nebius.length || fireworks.length) {
+    const deepseek = this.registry.list().filter((p) => p.config.providerName === "deepseek");
+    this.huggingFaceReady = Promise.all([this.huggingFaceReady, refreshOpenAIRates(this.registry.list()), refreshOpenRouterRates(this.registry.list()), ...deepseek.map((p) => refreshDeepSeekRates(p.config)), ...(nebius.length ? [refreshNebiusRates(nebius)] : []), ...(fireworks.length ? [refreshFireworksRates(fireworks)] : [])]).then(() => undefined);
+    if (this.registry.list().some((p) => p.config.apiKey)) {
       const refresh = setInterval(() => {
         this.imageReady = refreshFireworksImageRates(this.registry.list());
         this.huggingFaceReady = Promise.all([
+          refreshOpenAIRates(this.registry.list()), refreshOpenRouterRates(this.registry.list()),
+          this.refreshCheaperInferenceCatalog(),
+          ...deepseek.map((p) => refreshDeepSeekRates(p.config)),
           ...this.registry.list().filter((p) => p.config.providerName === "huggingface").map((p) => verifyHuggingFace(p.config)),
           ...(nebius.length ? [refreshNebiusRates(nebius)] : []),
           ...(fireworks.length ? [refreshFireworksRates(fireworks)] : []),
@@ -592,6 +600,8 @@ export class ModelService {
   }
 
   addModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
+    config.billingRequired = source === "platform" && process.env.ORVYN_ENFORCE_CREDITS !== "false" && (process.env.ORVYN_ENFORCE_CREDITS === "true" || process.env.ORVYN_CLOUD_MODE === "true");
+    if (source === "platform") applyConfiguredRate(config);
     let provider: AIModelProvider;
     switch (config.provider) {
       case "ollama":
@@ -734,16 +744,27 @@ export class ModelService {
       if (!res.ok) return;
       const data = await res.json();
       const items = Array.isArray(data.data) ? data.data : [];
+      const checked = Date.parse(data.pricing_checked_at);
+      if (!Number.isFinite(checked) || checked > Date.now() + 60_000 || Date.now() - checked > 60 * 60_000) return;
       for (const item of items) {
         const id = typeof item.id === "string" ? item.id : "";
         if (!id) continue;
         const caps = item.capabilities ?? {};
-        const isImage = item.type === "image" || Boolean(caps.image_generation);
+        const isImage = item.type === "image" && Array.isArray(item.supported_endpoints) && item.supported_endpoints.includes("/v1/images/generations");
         let provider = this.registry.get(`ci:${id}`);
         if (!provider && isImage) {
           provider = this.addModel(cheaperInferenceConfig(id, key, 0.7, cheaperInferenceEndpoint(), "image"));
         }
         if (!provider) continue;
+        provider.config.rate = cheaperInferenceRate(item, `${cheaperInferenceEndpoint()}/v1/models`);
+        if (isImage && item.pricing?.currency === "USD") {
+          const budget = Number(process.env.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD ?? "0.50");
+          if (Number.isFinite(budget) && budget > 0) provider.config.imageSettlementBudgetUsd = budget;
+          if (item.pricing.media_unit === "image" && item.pricing.image_pricing_unit === "image" && Number(item.pricing.media_unit_price) > 0) {
+            const now = Date.now();
+            provider.config.imageRate = { usdPerImage: Number(item.pricing.media_unit_price), premium: false, source: `${cheaperInferenceEndpoint()}/v1/models`, verifiedAt: now, expiresAt: now + 10 * 60_000 };
+          }
+        }
         const isText = item.type === "text" || (!isImage && item.type !== "video");
         provider.config.capabilities.chat = isText;
         provider.config.capabilities.code = isText;

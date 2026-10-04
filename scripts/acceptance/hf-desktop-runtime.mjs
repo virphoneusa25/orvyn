@@ -40,23 +40,30 @@ try{
  const health=await(await fetch(base+'/api/v1/health')).json();
  const editRes=await fetch(base+'/api/v1/edit/inline',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({selection:'function add(a, b) { return a - b; }',instruction:'Fix subtraction to addition. Return only the corrected function.',filePath:'math.js',language:'JavaScript'})});
  const edit=await editRes.json();if(!editRes.ok)throw new Error('Hosted inline edit failed');
- async function turn(model='auto',cancel=false){return new Promise((resolve,reject)=>{
+ async function turn(model='auto',cancel=false,prompt='',surface='desktop'){return new Promise((resolve,reject)=>{
  const ws=new WebSocket(base.replace(/^http/,'ws')+'/ws/chat?token='+encodeURIComponent(token));let route,text='';const timer=setTimeout(()=>{ws.close();reject(new Error('Hosted Desktop stream timed out'));},55000);
- ws.onmessage=ev=>{const c=JSON.parse(ev.data);if(c.type==='connection.ready')ws.send(JSON.stringify({task:'code',surface:'desktop',history:[],userMessage:cancel?'List the first 10000 positive integers, one per line.':'Reply with a short greeting.',requestedModelId:model}));if(c.routing)route=c.routing;if(c.delta){text+=c.delta;if(cancel){clearTimeout(timer);ws.close();resolve({route,cancelled:true});}}if(c.done){clearTimeout(timer);ws.close();if(c.error)reject(new Error('Hosted Desktop stream failed'));else resolve({route,hasText:Boolean(text)});}};ws.onerror=()=>{clearTimeout(timer);reject(new Error('Hosted Desktop websocket failed'));};
+ ws.onmessage=ev=>{const c=JSON.parse(ev.data);if(c.type==='connection.ready')ws.send(JSON.stringify({task:prompt?'chat':'code',surface,history:prompt.includes('Asterisk')?[{role:'user',content:'Tell me about VirPhone.'}]:[],userMessage:prompt||(cancel?'List the first 10000 positive integers, one per line.':'Reply with a short greeting.'),requestedModelId:model}));if(c.routing)route=c.routing;if(c.delta){text+=c.delta;if(cancel){clearTimeout(timer);ws.close();resolve({route,cancelled:true});}}if(c.done){clearTimeout(timer);ws.close();if(c.error)reject(new Error('Hosted Desktop stream failed'));else resolve({route,hasText:Boolean(text),text});}};ws.onerror=()=>{clearTimeout(timer);reject(new Error('Hosted Desktop websocket failed'));};
  });}
- const auto=await turn();const pinned=await turn('hf:zai-org/GLM-5.3:deepinfra');const cancelled=await turn('auto',true);
+ async function trackedTurn(prompt,surface){const usageUrl=base+'/api/v1/usage';const headers={Authorization:'Bearer '+token};const before=await(await fetch(usageUrl,{headers})).json();const ids=new Set((before.events||[]).map(e=>e.id));const result=await turn('auto',false,prompt,surface);await new Promise(r=>setTimeout(r,150));const after=await(await fetch(usageUrl,{headers})).json();return {...result,surface,usageIds:(after.events||[]).filter(e=>!ids.has(e.id)).map(e=>e.id)};}
+ const auto=await turn();const pinned=await turn('hf:zai-org/GLM-5.3:deepinfra');
+ const writing=[];const research=[];
+ for(const surface of ['desktop','cloud']){writing.push(await trackedTurn('Write a two-sentence marketing caption for an ORVYN coding assistant. No browsing is needed.',surface));research.push(await trackedTurn('Explain Asterisk VoIP briefly, focusing on Asterisk itself.',surface));}
+ const cancelled=await turn('auto',true);
  await new Promise(r=>setTimeout(r,2000));const response=await fetch(base+'/api/v1/usage',{headers:{Authorization:'Bearer '+token}});const usage=await response.json();
- return {health,edit:auto&&edit.edited,auto,pinned,cancelled,usage:usage.events};
+ return {health,edit:auto&&edit.edited,auto,pinned,writing,research,cancelled,usage:usage.events};
  },{base,token:fixture.token});
  assert.match(turns.edit,/return\s+(a\s*\+\s*b|b\s*\+\s*a)/);
  assert.equal(turns.auto.route?.provider,'ORVYN');assert.match(turns.auto.route?.modelId,/^ORVYN/);assert.equal(turns.auto.hasText,true);
  assert.equal(turns.pinned.route?.reason,'Explicit model selection');assert.equal(turns.cancelled.cancelled,true);
- assert.doesNotMatch(JSON.stringify([turns.auto.route,turns.pinned.route,turns.cancelled.route,turns.usage]),/huggingface|nebius|fireworks|deepinfra|zai-org|moonshotai/i);
+ assert.doesNotMatch(JSON.stringify([turns.auto.route,turns.pinned.route,turns.writing.map(t=>t.route),turns.research.map(t=>t.route),turns.cancelled.route,turns.usage]),/huggingface|nebius|fireworks|deepinfra|deepseek|cheaperinference|zai-org|moonshotai/i);
+ assert.ok(turns.writing.every(t=>t.hasText));assert.ok(turns.research.every(t=>/asterisk/i.test(t.text)&&!/virphone/i.test(t.text)));
  // Actual identity is verified over the existing operator SSH path, never
  // returned through the customer API or injected into the renderer.
  const telemetry=await remote('telemetry',fixture.userId);const streams=telemetry.events.filter(e=>e.ok&&e.method==='stream');
- assert.equal(streams.length,2);assert.equal(streams[0].provider,'huggingface');assert.equal(streams[0].modelId,'hf:moonshotai/Kimi-K2.7-Code:deepinfra');
+ assert.ok(streams.length>=6);assert.equal(streams[0].provider,'huggingface');assert.equal(streams[0].modelId,'hf:moonshotai/Kimi-K2.7-Code:deepinfra');
  assert.equal(streams[1].provider,'huggingface');assert.equal(streams[1].modelId,'hf:zai-org/GLM-5.3:deepinfra');
+ for(const writing of turns.writing){const events=streams.filter(e=>writing.usageIds.includes(e.id));assert.ok(events.length>0);assert.ok(events.every(e=>e.provider==='deepseek'));}
+ assert.ok(streams.every(e=>e.billingRecorded&&e.creditsCharged>0&&e.providerCostUsd>0));
  assert.ok(turns.usage.some(e=>e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>!e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>e.ok&&e.method==='generate'));
  await window.screenshot({path:path.join(root,'desktop-hf-runtime.png')});
  console.log(JSON.stringify({environment:'packaged Windows Desktop with hosted backend',host:base,commit:turns.health.commit,passed:true,customerProviderIdentityHidden:true,auto:streams[0],pinned:streams[1],cancellation:true,inferenceSecretsInApp:false,usage:telemetry.events}));

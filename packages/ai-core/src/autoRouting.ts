@@ -16,13 +16,13 @@ export function isRoutineWriting(text: string): boolean {
 }
 
 export function writingProvider(providers: AIModelProvider[], needs: RoutingRequirements, unavailable: (id: string) => boolean): AIModelProvider | undefined {
-  return providers.find((p) => p.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731"
+  return providers.find((p) => p.config.providerName === "deepseek" && (p.config.apiModelId ?? p.config.id) === "deepseek-flash"
     && p.config.routingVerification?.status === "verified" && p.config.rate && p.config.rate.expiresAt > Date.now()
     && !unavailable(p.config.id) && !incompatibility(p.config, needs));
 }
 export function writingFallbackReason(providers: AIModelProvider[]): string {
-  const route = providers.find((p) => p.config.id === "fw:accounts/fireworks/models/deepseek-v4-flash-0731");
-  return `Fireworks writing fallback: ${route?.config.routingVerification?.reason ?? "credentials/model unavailable or requirements unsupported"}`;
+  const route = providers.find((p) => p.config.providerName === "deepseek" && (p.config.apiModelId ?? p.config.id) === "deepseek-flash");
+  return `Writing fallback: ${route?.config.routingVerification?.reason ?? "credentials/model unavailable or requirements unsupported"}`;
 }
 export function routeFamily(id: string): RouteFamily | undefined {
   if (/glm[-/]?5[.p]3[-/]?flash/i.test(id)) return "flash";
@@ -34,6 +34,8 @@ export function routeFamily(id: string): RouteFamily | undefined {
 
 export function incompatibility(config: ModelConfig, needs: RoutingRequirements): string | undefined {
   if (config.routingVerification && config.routingVerification.status !== "verified") return config.routingVerification.reason;
+  if (config.billingRequired && needs.capability !== "image" && (!config.rate || config.rate.expiresAt <= Date.now())) return "exact current billing rate unavailable";
+  if (config.billingRequired && needs.capability === "image" && !(config.imageRate && config.imageRate.expiresAt > Date.now()) && !(config.imageSettlementBudgetUsd && config.rate && config.rate.expiresAt > Date.now())) return "exact current image billing unavailable";
   if (config.providerName === "huggingface" && (!config.rate || config.rate.expiresAt <= Date.now())) return "verified provider price expired or unavailable";
   if (!config.capabilities[needs.capability]) return `missing ${needs.capability} capability`;
   if (needs.tools && !config.capabilities.tools) return "tool calling unsupported";

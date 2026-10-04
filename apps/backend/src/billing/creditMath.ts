@@ -28,5 +28,7 @@ export function providerCostUsd(input: {
     (fresh / 1_000_000) * input.inputUsdPerMillion +
     (cached / 1_000_000) * input.cachedInputUsdPerMillion +
     (output / 1_000_000) * input.outputUsdPerMillion;
-  return Math.round(usd * 1_000_000) / 1_000_000;
+  // Preserve sub-microdollar costs until credit rounding. Rounding here made
+  // very small embedding/cache calls appear free before credits were computed.
+  return usd;
 }

@@ -80,7 +80,7 @@ export interface AIResponse {
   /** Thinking-model chain-of-thought; callers must echo it back (see AIMessage). */
   reasoningContent?: string;
   finishReason: "stop" | "length" | "tool_call" | "error";
-  usage?: { promptTokens: number; completionTokens: number; cachedTokens?: number };
+  usage?: TokenUsage;
 }
 
 export interface AIChunk {
@@ -103,6 +103,8 @@ export interface AIChunk {
 }
 
 export interface TokenUsage {
+  /** Final provider settlement, not a catalog estimate. Never accepted from clients. */
+  providerCostUsd?: number;
   promptTokens: number;
   completionTokens: number;
   /** Provider-reported cached/reused prompt tokens, when the API exposes
@@ -132,6 +134,11 @@ export interface ModelCapabilities {
 export interface ModelConfig {
   /** Serving vendor, separate from the adapter wire format. Never contains credentials. */
   providerName?: string;
+  billingRequired?: boolean;
+  /** A gateway with provider-dependent prices must return final settled cost. */
+  settledCostRequired?: boolean;
+  /** A reservation ceiling, never a price used for final image billing. */
+  imageSettlementBudgetUsd?: number;
   rate?: { input: number; output: number; cachedInput?: number; source: string; verifiedAt: number; expiresAt: number };
   imageRate?: { usdPerImage: number; premium: boolean; source: string; verifiedAt: number; expiresAt: number };
   routingVerification?: { status: "pending" | "verified" | "failed"; reason: string };
@@ -172,6 +179,7 @@ export interface AIModelProvider {
   stream(request: AIRequest): AsyncIterable<AIChunk>;
   embed?(input: string): Promise<number[]>;
   embedMany?(inputs: string[]): Promise<number[][]>;
+  embedWithUsage?(inputs: string[]): Promise<{ embeddings: number[][]; usage?: TokenUsage }>;
   generateImage?(request: {
     prompt: string;
     size?: string;
@@ -180,8 +188,10 @@ export interface AIModelProvider {
     quality?: string;
     /** Base64 or URL of an image to edit. Ignored by text-to-image-only adapters. */
     inputImage?: string;
-  }): Promise<{ b64?: string; url?: string; revisedPrompt?: string }[]>;
+  }): Promise<AIImageResult>;
   healthCheck(): Promise<{ status: ModelStatus; latencyMs?: number; error?: string }>;
   supportsTools(): boolean;
   supportsVision(): boolean;
 }
+
+export type AIImageResult = { b64?: string; url?: string; revisedPrompt?: string }[] & { usage?: TokenUsage };
