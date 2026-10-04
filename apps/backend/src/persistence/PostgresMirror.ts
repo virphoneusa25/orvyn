@@ -132,6 +132,7 @@ function sslConfig(): false | { rejectUnauthorized: boolean } {
 export class PostgresMirror {
   private pool: Pool | null = null;
   private initPromise: Promise<void> | null = null;
+  private writeChain: Promise<void> = Promise.resolve();
   private warned = false;
 
   isEnabled(): boolean {
@@ -203,7 +204,17 @@ export class PostgresMirror {
 
   mirror(operation: string, fn: () => Promise<void>): void {
     if (!enabled()) return;
-    void fn().catch((err) => this.report(operation, err));
+    // Preserve source-store write ordering (important for users -> sessions /
+    // legal_acceptances foreign keys) without blocking synchronous callers.
+    this.writeChain = this.writeChain
+      .then(fn)
+      .catch((err) => {
+        this.report(operation, err);
+      });
+  }
+
+  async flush(): Promise<void> {
+    await this.writeChain;
   }
 
   async health(): Promise<{
