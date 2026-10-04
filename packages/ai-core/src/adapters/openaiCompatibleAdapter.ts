@@ -12,6 +12,8 @@ import {
   ModelConfig,
   ModelStatus,
   ToolCall,
+  TokenUsage,
+  AIImageResult,
 } from "../types";
 
 /**
@@ -27,6 +29,14 @@ function cachedTokensOf(usage: any): { cachedTokens?: number } {
     usage?.cached_input_tokens,                  // misc gateways
   ].filter((v) => typeof v === "number" && v >= 0);
   return candidates.length ? { cachedTokens: Math.max(...candidates) } : {};
+}
+
+export function settledProviderCost(data: any, providerName?: string): { providerCostUsd?: number } {
+  if (providerName !== "cheaperinference") return {};
+  const bill = data?.cheaper_inference?.billing;
+  if (bill?.status !== "settled" || bill.currency !== "USD" || !/^(?:\d+)(?:\.\d+)?$/.test(String(bill.billed_cost_usd))) return {};
+  const cost = Number(bill.billed_cost_usd);
+  return Number.isFinite(cost) && cost >= 0 ? { providerCostUsd: cost } : {};
 }
 
 export class OpenAICompatibleAdapter implements AIModelProvider {
@@ -174,8 +184,8 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
         return { id: tc.id, name: fromWireToolName(tc.function?.name ?? tc.name, request), arguments: parsed.args, ...(parsed.error ? { argumentsError: parsed.error } : {}) };
       }),
       finishReason: choice?.finish_reason === "tool_calls" ? "tool_call" : (choice?.finish_reason ?? "stop"),
-      usage: data.usage
-        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens }
+      usage: Number.isFinite(data.usage?.prompt_tokens) && data.usage.prompt_tokens >= 0 && Number.isFinite(data.usage?.completion_tokens) && data.usage.completion_tokens >= 0
+        ? { promptTokens: data.usage.prompt_tokens, completionTokens: data.usage.completion_tokens, ...cachedTokensOf(data.usage), ...settledProviderCost(data, this.config.providerName) }
         : undefined,
     };
   }
@@ -229,7 +239,7 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     const toolAcc: { id: string; name: string; args: string }[] = [];
     let streamedText = "";
     let reasoningAcc = "";
-    let usage: { promptTokens: number; completionTokens: number } | undefined;
+    let usage: TokenUsage | undefined;
 
     let finishReason: string | undefined;
     const flushTools = function* () {
@@ -280,10 +290,12 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
           const json = JSON.parse(payload);
           // The usage-bearing chunk carries an empty `choices` array, so this
           // has to be read before the choices are dereferenced below.
-          if (json.usage) {
+          if (Number.isFinite(json.usage?.prompt_tokens) && json.usage.prompt_tokens >= 0 && Number.isFinite(json.usage?.completion_tokens) && json.usage.completion_tokens >= 0) {
             usage = {
               promptTokens: json.usage.prompt_tokens ?? 0,
               completionTokens: json.usage.completion_tokens ?? 0,
+              ...cachedTokensOf(json.usage),
+              ...settledProviderCost(json, this.config.providerName),
             };
           }
           const fr = json.choices?.[0]?.finish_reason;
@@ -373,11 +385,14 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     }
     const data = await res.json();
     const rows = Array.isArray(data.data) ? data.data : [];
-    return rows.map((row: { b64_json?: string; url?: string; revised_prompt?: string }) => ({
+    const result: AIImageResult = rows.map((row: { b64_json?: string; url?: string; revised_prompt?: string }) => ({
       b64: row.b64_json,
       url: row.url,
       revisedPrompt: row.revised_prompt,
     }));
+    const settlement = settledProviderCost(data, this.config.providerName);
+    if (settlement.providerCostUsd !== undefined) result.usage = { promptTokens: data.usage?.prompt_tokens ?? 0, completionTokens: data.usage?.completion_tokens ?? 0, ...settlement };
+    return result;
   }
 
   async embed(input: string): Promise<number[]> {
@@ -386,7 +401,11 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
   }
 
   async embedMany(inputs: string[]): Promise<number[][]> {
-    if (inputs.length === 0) return [];
+    return (await this.embedWithUsage(inputs)).embeddings;
+  }
+
+  async embedWithUsage(inputs: string[]): Promise<{ embeddings: number[][]; usage?: TokenUsage }> {
+    if (inputs.length === 0) return { embeddings: [], usage: { promptTokens: 0, completionTokens: 0 } };
     const res = await fetch(`${this.config.endpoint}/v1/embeddings`, {
       method: "POST",
       headers: this.headers(),
@@ -401,7 +420,9 @@ export class OpenAICompatibleAdapter implements AIModelProvider {
     const data = await res.json();
     const rows = Array.isArray(data.data) ? [...data.data] : [];
     rows.sort((a: { index?: number }, b: { index?: number }) => (a.index ?? 0) - (b.index ?? 0));
-    return rows.map((row: { embedding?: number[] }) => row.embedding ?? []);
+    const prompt = data.usage?.prompt_tokens ?? data.usage?.total_tokens;
+    return { embeddings: rows.map((row: { embedding?: number[] }) => row.embedding ?? []),
+      ...(Number.isFinite(prompt) && prompt >= 0 ? { usage: { promptTokens: prompt, completionTokens: 0, ...cachedTokensOf(data.usage), ...settledProviderCost(data, this.config.providerName) } } : {}) };
   }
 }
 

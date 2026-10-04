@@ -25,10 +25,10 @@ test("explicit Sandbox stays Sandbox", () => {
   assert.equal(d.actual, "local_sandbox");
 });
 
-test("Auto + local project + Code → local_host", () => {
+test("Auto + Desktop local project + Code → local_sandbox", () => {
   const d = routeExecutionTarget({ requested: "auto", mode: "code", hasLocalProject: true });
-  assert.equal(d.actual, "local_host");
-  assert.equal(executionLabel(d.actual), "Local");
+  assert.equal(d.actual, "local_sandbox");
+  assert.equal(executionLabel(d.actual), "Local Sandbox");
 });
 
 test("Auto + Server / Deploy → ovh_worker", () => {
@@ -72,9 +72,9 @@ test("Auto website with no local project on Cloud uses the worker", () => {
   assert.equal(d.actual, "ovh_worker");
 });
 
-test("Auto without a local project stays Local (virtual workspace / artifacts)", () => {
+test("Auto coding without a local project requires a sandbox", () => {
   const d = routeExecutionTarget({ requested: "auto", mode: "code", hasLocalProject: false });
-  assert.equal(d.actual, "local_host");
+  assert.equal(d.actual, "local_sandbox");
 });
 
 test("Auto + artifact request without a project stays Local", () => {
@@ -96,7 +96,7 @@ test("Auto + artifact on Cloud control plane stays on the control plane", () => 
 test("invalid requested value is treated as Auto", () => {
   const d = routeExecutionTarget({ requested: "wherever", hasLocalProject: true });
   assert.equal(d.requested, "auto");
-  assert.equal(d.actual, "local_host");
+  assert.equal(d.actual, "local_sandbox");
 });
 
 test("runtime location: in-process local backend stays LOCAL, cloud uses LOCAL_HOST", () => {
@@ -109,11 +109,11 @@ test("runtime location: in-process local backend stays LOCAL, cloud uses LOCAL_H
 test("Auto routing examples from prompt classification", () => {
   const tests = classifyExecutionHints("Fix the failing tests locally. Do not use Cloud.", "auto");
   assert.equal(tests.isLocalCoding, true);
-  assert.equal(routeExecutionTarget({ requested: "auto", hasLocalProject: true, ...tests }).actual, "local_host");
+  assert.equal(routeExecutionTarget({ requested: "auto", hasLocalProject: true, ...tests }).actual, "local_sandbox");
 
   const visual = classifyExecutionHints("Start this dashboard locally, fix the visible issue, and verify it.");
   assert.equal(visual.isVisual, true);
-  assert.equal(routeExecutionTarget({ requested: "auto", hasLocalProject: true, ...visual }).actual, "local_host");
+  assert.equal(routeExecutionTarget({ requested: "auto", hasLocalProject: true, ...visual }).actual, "local_sandbox");
 
   const sandbox = classifyExecutionHints("Run this untrusted project and tell me why it crashes.");
   assert.equal(sandbox.isRisky, true);

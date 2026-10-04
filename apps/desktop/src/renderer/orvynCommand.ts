@@ -13,7 +13,7 @@
 import { apiUrl, authHeaders, getConnectionConfig, isCloudBackend } from "./connection";
 import { requiredUpdateBlocksCloudSubmit } from "./update/updateGate";
 import { noteActiveRunId } from "./connectionRuntime";
-import { startUserTurn, appendAssistantDelta, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, upsertAssistantActivity, retractAssistantText, agentRunRestoreError, followUpRunBinding, type ChatMessage } from "./chatSession";
+import { startUserTurn, appendAssistantDelta, setAssistantRouting, finishAssistantTurn, ensureActiveChat, bindChatToRun, getActiveChat, newMessageId, beginRegenerate, upsertAssistantActivity, retractAssistantText, agentRunRestoreError, followUpRunBinding, type ChatMessage } from "./chatSession";
 import { createSession } from "./sessionsApi";
 import { wsUrl } from "./connection";
 import { backendModeForIntent, belongsInCloudStorage, classifyIntent, CommandMode, looksLikeGeneratedFileRequest } from "./orvynIntent";
@@ -137,6 +137,7 @@ function streamChatTurn(
       let chunk;
       try { chunk = JSON.parse(event.data); } catch { appendAssistantDelta("Could not read the server response. Please retry."); finishAssistantTurn(); ws.close(); return; }
       if (chunk.heartbeat) return;
+      if (chunk.routing) setAssistantRouting(chunk.routing);
       if (chunk.activity) upsertAssistantActivity(chunk.activity);
       if (chunk.retract) retractAssistantText();
       if (chunk.error) appendAssistantDelta(chunk.error);

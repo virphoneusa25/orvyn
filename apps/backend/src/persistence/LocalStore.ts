@@ -202,6 +202,7 @@ export class LocalStore {
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    this.db.exec("CREATE TABLE IF NOT EXISTS billing_outbox (id TEXT PRIMARY KEY, event_json TEXT NOT NULL)");
     this.migrateArtifacts();
     this.migrateLearning();
   }
@@ -372,6 +373,14 @@ export class LocalStore {
       }) ?? null
     );
   }
+
+  enqueueBilling(event: UsageEvent, own: boolean): void {
+    this.db.prepare("INSERT OR IGNORE INTO billing_outbox (id, event_json) VALUES (?, ?)").run(event.id, JSON.stringify({ event, own }));
+  }
+  pendingBilling(): Array<{ event: UsageEvent; own: boolean }> {
+    return (this.db.prepare("SELECT event_json FROM billing_outbox ORDER BY rowid LIMIT 1000").all() as { event_json: string }[]).map((row) => JSON.parse(row.event_json));
+  }
+  completeBilling(id: string): void { this.db.prepare("DELETE FROM billing_outbox WHERE id = ?").run(id); }
 
   setSetting(key: string, value: string): void {
     this.guard("setSetting", () =>

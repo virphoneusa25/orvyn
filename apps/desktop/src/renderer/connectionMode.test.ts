@@ -13,6 +13,7 @@ import {
 } from "./connection.ts";
 
 test("cloud URL defaults to the OVH host and local stays localhost", () => {
+  assert.equal(getConnectionConfig().backendUrl, ORVYN_CLOUD_URL);
   assert.equal(ORVYN_CLOUD_URL, "https://orvyn.virphoneusa.com");
   assert.equal(connectionMode(LOCAL_BACKEND_URL), "local");
   assert.equal(connectionMode(ORVYN_CLOUD_URL), "cloud");

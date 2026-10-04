@@ -1,0 +1,11 @@
+**/node_modules
+apps/*/dist
+packages/*/dist
+**/release
+**/.env
+**/.env.*
+.git
+.cursor
+.cowork
+**/*.log
+**/__pycache__

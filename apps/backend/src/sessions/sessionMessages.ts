@@ -139,6 +139,9 @@ export class ChatTurnRecorder {
     if (!this.replyId || !list.length) return;
     this.sessions.updateMessage(this.replyId, { meta: { artifacts: list } });
   }
+  routing(routing: { provider: string; modelId: string; reason: string }): void {
+    if (this.replyId) this.sessions.updateMessage(this.replyId, { meta: { routing } });
+  }
 
   /** The reply so far was withdrawn (ORION researches first). The persisted
    *  copy is cleared too — an autosave may already have written the retracted

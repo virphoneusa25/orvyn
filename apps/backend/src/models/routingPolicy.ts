@@ -44,8 +44,8 @@ export const TIERS: Record<Tier, TierDef> = {
   "code-helper": { tier: "code-helper", weight: 1, label: "Code helper", candidates: ["mistral:codestral-25-08", "nebius:Qwen/Qwen3-30B-A3B-Instruct-2507"] },
   auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash", "hf:zai-org/GLM-5.3-Flash:deepinfra"] },
   agent: { tier: "agent", weight: 3, label: "Advanced Auto", candidates: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "openrouter:minimax/minimax-m2.5", "nebius:Qwen/Qwen3.5-397B-A17B", "hf:zai-org/GLM-5.3:deepinfra"] },
-  code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
-  server: { tier: "server", weight: 2, label: "Server diagnosis", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
+  code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code", "hf:moonshotai/Kimi-K2.7-Code:deepinfra"] },
+  server: { tier: "server", weight: 2, label: "Server diagnosis", candidates: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "hf:zai-org/GLM-5.3-Flash:deepinfra", "ci:glm-5.3-flash", "ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
   research: { tier: "research", weight: 3, label: "Research", candidates: ["nebius:Qwen/Qwen3.5-397B-A17B", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
   vision: { tier: "vision", weight: 2, label: "Vision", candidates: ["fw:accounts/fireworks/models/qwen3-vl-30b-a3b-instruct", "fw:accounts/fireworks/models/qwen3-vl-32b-instruct", "fw:accounts/fireworks/models/qwen3-vl-8b-instruct", "ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash", "nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash"] },
   premium: { tier: "premium", weight: 8, label: "Premium agent", candidates: ["nebius:moonshotai/Kimi-K3", "ci:kimi-k3"] },
@@ -148,7 +148,7 @@ function firstRegistered(tier: Tier, available: Set<string>, health: ModelHealth
   const preferHuggingFace = /^(1|true)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "");
   const candidates = TIERS[tier].candidates.filter((id) => preferHuggingFace || !id.startsWith("hf:"));
   const ranked = candidates
-    .map((id, i) => ({ id, i, degraded: providerHealthScore(id) < 0.5, preferred: preferHuggingFace && id.startsWith("hf:") ? 2 : preferred && id.startsWith(preferred) ? 1 : 0 }))
+    .map((id, i) => ({ id, i, degraded: providerHealthScore(id) < 0.5, preferred: preferred && id.startsWith(preferred) ? 1 : 0 }))
     .sort((a, b) => Number(a.degraded) - Number(b.degraded) || Number(b.preferred) - Number(a.preferred) || a.i - b.i);
   for (const { id } of ranked) if (usable(id)) return id;
   const family = FAMILY[tier];

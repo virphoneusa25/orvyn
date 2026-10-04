@@ -470,13 +470,15 @@ v1Router.post("/routing", (req, res) => {
   ms2.modelService.router.setOverride(task, modelId);
   // Persist so a restart keeps the user's choices instead of reverting to
   // env defaults (which may point at a dead-credits provider).
-  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getOverrides()));
+  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getExplicitOverrides()));
   res.json({ overrides: ms2.modelService.router.getOverrides() });
 });
 
 v1Router.delete("/routing/:task", (req, res) => {
-  const ms3 = requireTenant(req).modelService;
+  const tenant = requireTenant(req);
+  const ms3 = tenant.modelService;
   ms3.router.clearOverride(req.params.task as any);
+  tenant.localStore.setSetting("routing", JSON.stringify(ms3.router.getExplicitOverrides()));
   res.json({ overrides: ms3.router.getOverrides() });
 });
 
@@ -754,6 +756,7 @@ v1Router.post("/chat/completions", async (req, res) => {
         return res.status(409).json({ error: "This task needs a workspace before file tools can run.", code: "WORKSPACE_REQUIRED" });
       }
       _regTools(tc, preflight.projectRoot);
+      await tc.modelService.huggingFaceReady;
       const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
         composerMode: chip,
         workspaceId: preflight.workspaceId,
@@ -783,6 +786,7 @@ v1Router.post("/chat/completions", async (req, res) => {
     });
     res.json(response);
   } catch (err: any) {
+    if (err instanceof BillingLimitError) return res.status(402).json({ error: err.message, code: `CREDITS_${err.code}` });
     res.status(500).json({ error: err.message });
   }
 });
@@ -863,7 +867,9 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
 // aborts the run itself.
-v1Router.post("/agent/stream/runs", (req, res) => {
+v1Router.post("/agent/stream/runs", async (req, _res, next) => {
+  try { await requireTenant(req).modelService.huggingFaceReady; next(); } catch (error) { next(error); }
+}, (req, res) => {
   const t = requireTenant(req);
   // One owner per turn: an answer-only prompt is a chat turn — no run, no
   // workspace preflight, no resource resolution, no worker scheduling. The
@@ -969,6 +975,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     isLocalCoding: hints.isLocalCoding,
     isSite: hints.isSite,
     cloudControlPlane: cloudHost,
+    desktopProject: Boolean(desktopProjectRoot),
   });
 
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
@@ -982,29 +989,21 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const controlPlaneVirtual =
     requestedTarget === "auto" &&
     !desktopProjectRoot &&
+    !hints.isLocalCoding && !hints.isSite && !hints.requiresRemote &&
     (virtualWorkspace || noWorkspaceTask || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     if (!hasOnlineWorker()) {
-      if (routed.requested === "auto") {
-        routed.actual = "local_host";
-        routed.fallbackReason = "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
-      } else {
         return res.status(409).json({
           error: "ORVYN Cloud has no worker available right now — the Cloud run was not started. It is never moved to your computer silently.",
           executionTargetRequested: routed.requested,
           executionTargetActual: routed.actual,
         });
-      }
     }
   } else if (!controlPlaneVirtual && (routed.actual === "local_host" || routed.actual === "local_sandbox")) {
     if (cloudHost && !localWorkerOnline && !inProcessLocal) {
-      // Auto never strands the user: when the desktop Local Worker is offline
-      // (a fresh sign-in, the worker hasn't registered yet, a restart), the
-      // run falls back to the ORVYN Cloud worker — the mirror image of the
-      // cloud→local fallback above. An EXPLICITLY requested local target
-      // still 409s: the user asked for their computer, not a silent switch.
-      if (routed.requested === "auto" && hasOnlineWorker()) {
+      // A Desktop-owned project and sandbox never move to another machine.
+      if (routed.requested === "auto" && !desktopProjectRoot && routed.actual !== "local_sandbox" && hasOnlineWorker()) {
         routed.actual = "ovh_worker";
         routed.fallbackReason = "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
       } else {
@@ -1069,7 +1068,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       targetActual: routed.actual,
       executionLabel,
       // Local runs execute on the user's computer: tell the model its shell.
-      hostPlatform: location === "LOCAL_HOST" || location === "LOCAL_SANDBOX"
+      hostPlatform: location === "LOCAL_SANDBOX" ? "linux" : location === "LOCAL_HOST"
         ? (localWorkerHealth(t.id).environment?.os ?? undefined)
         : location === "OVH_WORKER" ? "linux" : process.platform,
       fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),

@@ -40,12 +40,12 @@ test("a website build uses Kimi K2.7 Code", () => {
   assert.equal(choice.registryId, laneModel("frontend").registryId);
 });
 
-test("server work uses the server profile; without Gemini registered it starts on GLM-5.3", () => {
+test("server diagnosis starts on GLM Flash even when Gemini is registered", () => {
   const choice = selectAgentModel({ intent: inferTaskIntent("Why is nginx returning 502 on my server?"), composerMode: "server", requestedModelId: "auto", availableIds: ids });
   assert.equal(choice.route?.profile, "server");
-  assert.equal(choice.registryId, laneModel("engineering").registryId);
+  assert.equal(choice.registryId, laneModel("auto").registryId);
   const gemini = selectAgentModel({ intent: inferTaskIntent("Why is nginx returning 502 on my server?"), composerMode: "server", requestedModelId: "auto", availableIds: [...ids, "gemini:gemini-3.8-flash"] });
-  assert.equal(gemini.registryId, "gemini:gemini-3.8-flash");
+  assert.equal(gemini.registryId, laneModel("auto").registryId);
 });
 
 test("a pinned model is not replaced", () => {

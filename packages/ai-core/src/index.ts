@@ -2,6 +2,7 @@
 export * from "./types";
 export * from "./registry";
 export * from "./router";
+export * from "./autoRouting";
 export * from "./adapters/openaiCompatibleAdapter";
 export * from "./adapters/ollamaAdapter";
 export * from "./adapters/mockAdapter";

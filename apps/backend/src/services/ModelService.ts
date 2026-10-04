@@ -10,10 +10,17 @@ import {
   AnthropicAdapter,
   GoogleAdapter,
   AIModelProvider,
+  TaskType,
 } from "@orvyn/ai-core";
 import { UsageService } from "./UsageService";
 import { CERTIFIED_MODELS } from "../models/certifiedModels";
 import { markModelUnavailable } from "../models/modelAvailability";
+import { isRouteBlocked } from "../models/modelAvailability";
+import { verifyHuggingFace } from "../models/huggingFaceVerification";
+import { FIREWORKS_WRITING_MODEL, verifyFireworksWriting } from "../models/fireworksVerification";
+import { refreshNebiusRates, refreshFireworksRates, refreshFireworksImageRates, refreshOpenAIRates, refreshOpenRouterRates } from "../models/providerRates";
+import { refreshDeepSeekRates } from "../models/deepseekRates";
+import { applyConfiguredRate, cheaperInferenceRate } from "../models/configuredRates";
 import { NEBIUS_CURATED, NEBIUS_EMBED_DIMS, NEBIUS_EMBED_MODEL } from "../models/modelEquivalents";
 
 function openaiDisplayName(id: string): string {
@@ -46,6 +53,8 @@ function cheaperInferenceConfig(
     id: `ci:${id}`,
     apiModelId: id,
     name: `Cheaper Inference ${id}`,
+    providerName: "cheaperinference",
+    settledCostRequired: kind === "image",
     provider: "openai-compatible",
     endpoint,
     apiKey,
@@ -100,6 +109,7 @@ function fireworksConfig(
     apiModelId: id,
     name: `Fireworks ${id.split("/").pop() ?? id}`,
     provider: "openai-compatible",
+    providerName: "fireworks",
     endpoint: (process.env.FIREWORKS_BASE_URL?.trim() || "https://api.fireworks.ai/inference").replace(/\/v1\/?$/, ""),
     apiKey,
     contextWindow: lane?.contextWindow ?? 128000,
@@ -124,6 +134,7 @@ function fireworksConfig(
 /** An OpenAI-compatible provider model (Mistral, OpenRouter): same streaming and tool-call path. */
 function openAiCompatibleConfig(prefix: string, label: string, endpoint: string, id: string, apiKey: string, temperature: number, contextWindow: number): ModelConfig {
   return {
+    providerName: prefix === "hf" ? "huggingface" : prefix,
     id: `${prefix}:${id}`, apiModelId: id, name: `${label} ${id.split("/").pop() ?? id}`, provider: "openai-compatible",
     endpoint: endpoint.replace(/\/v1\/?$/, ""),
     apiKey, contextWindow, maxOutputTokens: agentOutputTokens(contextWindow), defaultTemperature: temperature, defaultTopP: 1, streaming: true,
@@ -186,6 +197,8 @@ function deepseekConfig(id: string, apiKey: string, endpoint: string, temperatur
     id,
     name: `DeepSeek ${id.replace(/^deepseek-/, "")}`,
     provider: "openai-compatible",
+    providerName: "deepseek",
+    routingVerification: { status: "failed", reason: "Direct DeepSeek requires an exact, refreshable billing rate card before customer routing" },
     endpoint,
     apiKey,
     contextWindow: 128000,
@@ -245,18 +258,22 @@ export class ModelService {
   }
 
   /** The model a run/chat should use when the customer chose Auto (their default, if set and registered). */
-  effectiveRequest(requested: string | undefined): string | undefined {
+  effectiveRequest(requested: string | undefined, task?: TaskType): string | undefined {
     const r = requested?.trim();
     if ((!r || r === "auto") && this.preferredModel && this.registry.get(this.preferredModel)) return this.preferredModel;
+    if ((!r || r === "auto") && task) return this.router.getExplicitOverrides()[task] ?? requested;
     return requested;
   }
   public router = new ModelRouter(this.registry);
+  public huggingFaceReady: Promise<void> = Promise.resolve();
+  public imageReady: Promise<void> = Promise.resolve();
   /** Server-side usage metering — every provider registered here is wrapped. */
   public usage = new UsageService();
   /** Registered, callable, but kept out of the model menu (a provider's long tail). */
   private moreModels = new Set<string>();
 
   constructor() {
+    this.router.setAutoPolicy({ enabled: () => /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED?.trim() ?? ""), unavailable: isRouteBlocked });
     // Seed with a mock model so the IDE is runnable with zero config.
     this.addModel({
       id: "orvyn-mock",
@@ -322,7 +339,7 @@ export class ModelService {
       for (const id of ciModels) {
         this.addModel(cheaperInferenceConfig(id, ciKey, id === codeId && id !== chatId ? 0.2 : 0.7, ciEndpoint, "text"));
       }
-      void this.refreshCheaperInferenceCatalog();
+      this.huggingFaceReady = this.refreshCheaperInferenceCatalog();
     }
 
     const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
@@ -341,7 +358,7 @@ export class ModelService {
           : undefined;
         this.addModel(fireworksConfig(id, fireworksKey, lane?.image ? 0.7 : 0.2, lane ?? visionLane));
       }
-      void this.hideUndeployedFireworksImages(fireworksKey);
+      this.imageReady = Promise.all([this.hideUndeployedFireworksImages(fireworksKey), refreshFireworksImageRates(this.registry.list())]).then(() => undefined);
     }
 
     // Hugging Face Inference Providers uses an OpenAI-compatible router.
@@ -349,12 +366,19 @@ export class ModelService {
     // the key is server-side and these routes remain unavailable when unset.
     const huggingFaceKey = process.env.HUGGINGFACE_API_KEY?.trim() || process.env.HF_TOKEN?.trim();
     if (huggingFaceKey) {
-      const ids = (process.env.HUGGINGFACE_MODELS ?? "zai-org/GLM-5.3:deepinfra,zai-org/GLM-5.3-Flash:deepinfra")
+      const ids = (process.env.HUGGINGFACE_MODELS ?? "zai-org/GLM-5.3:deepinfra,zai-org/GLM-5.3-Flash:deepinfra,moonshotai/Kimi-K2.7-Code:deepinfra")
         .split(",").map((id) => id.trim()).filter(Boolean);
+      const verification: Promise<void>[] = [];
       for (const id of [...new Set(ids)]) {
-        const contextWindow = id.includes("GLM-5.3-Flash") ? 131072 : 1048576;
-        this.addModel(openAiCompatibleConfig("hf", "Hugging Face", huggingFaceEndpoint(), id, huggingFaceKey, 0.2, contextWindow));
+        const config = openAiCompatibleConfig("hf", "Hugging Face", huggingFaceEndpoint(), id, huggingFaceKey, 0.2, 8192);
+        config.providerName = "huggingface";
+        config.routingVerification = { status: "pending", reason: "Hugging Face capability verification pending" };
+        config.streaming = false;
+        config.capabilities = { chat: false, code: false, agent: false, tools: false, vision: false, embeddings: false, completion: false, image: false };
+        this.addModel(config);
+        verification.push(verifyHuggingFace(config));
       }
+      this.huggingFaceReady = Promise.all([this.huggingFaceReady, ...verification]).then(() => undefined);
     }
 
     // Mistral (Small 4 utility, Codestral, Medium/Large, GLM 5.3) and OpenRouter
@@ -436,58 +460,58 @@ export class ModelService {
     // adding a failed request before every answer. Embeddings can still stay
     // on OpenAI while chat and agent roles use Cheaper Inference.
     if (preferCi) {
-      this.router.setOverride("chat", ciChat);
-      this.router.setOverride("code", ciCode || ciChat);
-      this.router.setOverride("completion", ciChat);
-      this.router.setOverride("agent", ciCode || ciChat);
-      this.router.setOverride("planner", ciCode || ciChat);
-      this.router.setOverride("reviewer", ciCode || ciChat);
-      this.router.setOverride("executor", ciChat);
-      this.router.setOverride("vision", ciChat);
-      if (ciImage) this.router.setOverride("image", ciImage);
-      if (openaiKey) this.router.setOverride("embedding", process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small");
+      this.router.setDefaultOverride("chat", ciChat);
+      this.router.setDefaultOverride("code", ciCode || ciChat);
+      this.router.setDefaultOverride("completion", ciChat);
+      this.router.setDefaultOverride("agent", ciCode || ciChat);
+      this.router.setDefaultOverride("planner", ciCode || ciChat);
+      this.router.setDefaultOverride("reviewer", ciCode || ciChat);
+      this.router.setDefaultOverride("executor", ciChat);
+      this.router.setDefaultOverride("vision", ciChat);
+      if (ciImage) this.router.setDefaultOverride("image", ciImage);
+      if (openaiKey) this.router.setDefaultOverride("embedding", process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small");
     } else if (openaiKey) {
-      this.router.setOverride("chat", chatId);
-      this.router.setOverride("code", codeId);
-      this.router.setOverride("agent", codeId);
-      this.router.setOverride("planner", codeId);
-      this.router.setOverride("reviewer", codeId);
-      this.router.setOverride("executor", ciChat || chatId);
-      this.router.setOverride("completion", ciChat || chatId);
-      this.router.setOverride("embedding", process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small");
-      this.router.setOverride("vision", codeId);
-      if (ciImage) this.router.setOverride("image", ciImage);
+      this.router.setDefaultOverride("chat", chatId);
+      this.router.setDefaultOverride("code", codeId);
+      this.router.setDefaultOverride("agent", codeId);
+      this.router.setDefaultOverride("planner", codeId);
+      this.router.setDefaultOverride("reviewer", codeId);
+      this.router.setDefaultOverride("executor", ciChat || chatId);
+      this.router.setDefaultOverride("completion", ciChat || chatId);
+      this.router.setDefaultOverride("embedding", process.env.OPENAI_EMBED_MODEL?.trim() || "text-embedding-3-small");
+      this.router.setDefaultOverride("vision", codeId);
+      if (ciImage) this.router.setDefaultOverride("image", ciImage);
     } else if (ciKey) {
-      this.router.setOverride("chat", ciChat);
-      this.router.setOverride("code", ciCode || ciChat);
-      this.router.setOverride("completion", ciChat);
-      this.router.setOverride("agent", ciCode || ciChat);
-      this.router.setOverride("planner", ciCode || ciChat);
-      this.router.setOverride("reviewer", ciCode || ciChat);
-      this.router.setOverride("executor", ciChat);
-      this.router.setOverride("vision", ciChat);
-      if (ciImage) this.router.setOverride("image", ciImage);
+      this.router.setDefaultOverride("chat", ciChat);
+      this.router.setDefaultOverride("code", ciCode || ciChat);
+      this.router.setDefaultOverride("completion", ciChat);
+      this.router.setDefaultOverride("agent", ciCode || ciChat);
+      this.router.setDefaultOverride("planner", ciCode || ciChat);
+      this.router.setDefaultOverride("reviewer", ciCode || ciChat);
+      this.router.setDefaultOverride("executor", ciChat);
+      this.router.setDefaultOverride("vision", ciChat);
+      if (ciImage) this.router.setDefaultOverride("image", ciImage);
     } else if (ollamaId) {
-      this.router.setOverride("chat", ollamaId);
-      this.router.setOverride("code", ollamaId);
-      this.router.setOverride("completion", ollamaId);
-      this.router.setOverride("agent", ollamaId);
-      this.router.setOverride("planner", ollamaId);
-      this.router.setOverride("reviewer", ollamaId);
-      this.router.setOverride("executor", ollamaId);
+      this.router.setDefaultOverride("chat", ollamaId);
+      this.router.setDefaultOverride("code", ollamaId);
+      this.router.setDefaultOverride("completion", ollamaId);
+      this.router.setDefaultOverride("agent", ollamaId);
+      this.router.setDefaultOverride("planner", ollamaId);
+      this.router.setDefaultOverride("reviewer", ollamaId);
+      this.router.setDefaultOverride("executor", ollamaId);
     } else if (nebiusKey) {
       const fast = "nebius:zai-org/GLM-5.3-Flash";
       const coder = "nebius:moonshotai/Kimi-K2.7-Code";
-      for (const task of ["chat", "completion", "executor"] as const) this.router.setOverride(task, fast);
-      for (const task of ["code", "agent", "planner", "reviewer"] as const) this.router.setOverride(task, coder);
+      for (const task of ["chat", "completion", "executor"] as const) this.router.setDefaultOverride(task, fast);
+      for (const task of ["code", "agent", "planner", "reviewer"] as const) this.router.setDefaultOverride(task, coder);
     } else {
-      this.router.setOverride("chat", "orvyn-mock");
-      this.router.setOverride("code", "orvyn-mock");
-      this.router.setOverride("completion", "orvyn-mock");
-      this.router.setOverride("agent", "orvyn-mock");
-      this.router.setOverride("planner", "orvyn-mock");
-      this.router.setOverride("reviewer", "orvyn-mock");
-      this.router.setOverride("executor", "orvyn-mock");
+      this.router.setDefaultOverride("chat", "orvyn-mock");
+      this.router.setDefaultOverride("code", "orvyn-mock");
+      this.router.setDefaultOverride("completion", "orvyn-mock");
+      this.router.setDefaultOverride("agent", "orvyn-mock");
+      this.router.setDefaultOverride("planner", "orvyn-mock");
+      this.router.setDefaultOverride("reviewer", "orvyn-mock");
+      this.router.setDefaultOverride("executor", "orvyn-mock");
     }
 
     // --- ORVYN Intelligence model gateway presets (applied LAST so they win) ---
@@ -498,11 +522,11 @@ export class ModelService {
     const dsKey = process.env.DEEPSEEK_API_KEY?.trim();
     if (dsKey) {
       const dsEndpoint = process.env.DEEPSEEK_BASE_URL?.trim() || "https://api.deepseek.com";
-      const flash = process.env.DEEPSEEK_CODE_MODEL?.trim() || "deepseek-v4-flash";
+      const flash = process.env.DEEPSEEK_CODE_MODEL?.trim() || "deepseek-flash";
       const pro = process.env.DEEPSEEK_PRO_MODEL?.trim() || "deepseek-v4-pro";
       this.addModel(deepseekConfig(flash, dsKey, dsEndpoint, 0.2));
       if (pro !== flash) this.addModel(deepseekConfig(pro, dsKey, dsEndpoint, 0.2));
-      this.router.setOverride("executor", flash);
+      if (process.env.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED !== "0") this.router.setDefaultOverride("executor", flash);
     }
 
     // ORION is an agent identity, not a model. ORION_MODEL_ID (with legacy ASTRA_MODEL_ID alias),
@@ -531,7 +555,7 @@ export class ModelService {
     // index for the new model is kept separately and rebuilt.
     const embedChoice = embedModelChoice();
     if (embedChoice && this.registry.get(embedChoice.id)?.config.capabilities.embeddings) {
-      this.router.setOverride("embedding", embedChoice.id);
+      this.router.setDefaultOverride("embedding", embedChoice.id);
     }
 
     const effortDeclared = (process.env.ORVYN_REASONING_EFFORT_MODELS ?? "")
@@ -547,9 +571,37 @@ export class ModelService {
           : { fast: "low", standard: "medium", deep: "high" },
       };
     }
+    const nebius = this.registry.list().filter((p) => p.config.id.startsWith("nebius:"));
+    const fireworks = this.registry.list().filter((p) => p.config.providerName === "fireworks");
+    const writing = this.registry.get(`fw:${FIREWORKS_WRITING_MODEL}`);
+    if (writing) {
+      writing.config.routingVerification = { status: "pending", reason: "Fireworks writing route awaiting live verification" };
+      this.huggingFaceReady = Promise.all([this.huggingFaceReady, verifyFireworksWriting(writing.config)]).then(() => undefined);
+    }
+    const deepseek = this.registry.list().filter((p) => p.config.providerName === "deepseek");
+    this.huggingFaceReady = Promise.all([this.huggingFaceReady, refreshOpenAIRates(this.registry.list()), refreshOpenRouterRates(this.registry.list()), ...deepseek.map((p) => refreshDeepSeekRates(p.config)), ...(nebius.length ? [refreshNebiusRates(nebius)] : []), ...(fireworks.length ? [refreshFireworksRates(fireworks)] : [])]).then(() => undefined);
+    if (this.registry.list().some((p) => p.config.apiKey)) {
+      const refresh = setInterval(() => {
+        this.imageReady = refreshFireworksImageRates(this.registry.list());
+        this.huggingFaceReady = Promise.all([
+          refreshOpenAIRates(this.registry.list()), refreshOpenRouterRates(this.registry.list()),
+          this.refreshCheaperInferenceCatalog(),
+          ...deepseek.map((p) => refreshDeepSeekRates(p.config)),
+          ...this.registry.list().filter((p) => p.config.providerName === "huggingface").map((p) => verifyHuggingFace(p.config)),
+          ...(nebius.length ? [refreshNebiusRates(nebius)] : []),
+          ...(fireworks.length ? [refreshFireworksRates(fireworks)] : []),
+          ...(writing ? [verifyFireworksWriting(writing.config)] : []),
+        ]).then(() => undefined);
+      }, 5 * 60_000);
+      refresh.unref();
+    }
+    const retired = this.registry.get("fw:accounts/fireworks/models/kimi-k2p7-code");
+    if (retired) retired.config.routingVerification = { status: "failed", reason: "Fireworks Kimi K2.7 Code serverless retired 2026-09-25; configure an explicit on-demand deployment instead" };
   }
 
   addModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
+    config.billingRequired = source === "platform" && process.env.ORVYN_ENFORCE_CREDITS !== "false" && (process.env.ORVYN_ENFORCE_CREDITS === "true" || process.env.ORVYN_CLOUD_MODE === "true");
+    if (source === "platform") applyConfiguredRate(config);
     let provider: AIModelProvider;
     switch (config.provider) {
       case "ollama":
@@ -692,16 +744,29 @@ export class ModelService {
       if (!res.ok) return;
       const data = await res.json();
       const items = Array.isArray(data.data) ? data.data : [];
+      const checked = Date.parse(data.pricing_checked_at);
+      if (!Number.isFinite(checked) || checked > Date.now() + 60_000 || Date.now() - checked > 60 * 60_000) return;
       for (const item of items) {
         const id = typeof item.id === "string" ? item.id : "";
         if (!id) continue;
         const caps = item.capabilities ?? {};
-        const isImage = item.type === "image" || Boolean(caps.image_generation);
+        const isImage = item.type === "image" && Array.isArray(item.supported_endpoints) && item.supported_endpoints.includes("/v1/images/generations");
         let provider = this.registry.get(`ci:${id}`);
         if (!provider && isImage) {
           provider = this.addModel(cheaperInferenceConfig(id, key, 0.7, cheaperInferenceEndpoint(), "image"));
         }
         if (!provider) continue;
+        provider.config.rate = cheaperInferenceRate(item, `${cheaperInferenceEndpoint()}/v1/models`);
+        if (isImage && item.pricing?.currency === "USD") {
+          const budget = Number(process.env.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD ?? "0.50");
+          if (Number.isFinite(budget) && budget > 0) provider.config.imageSettlementBudgetUsd = budget;
+          if (item.pricing.media_unit === "image" && item.pricing.image_pricing_unit === "image" && Number(item.pricing.media_unit_price) > 0) {
+            const now = Date.now();
+            provider.config.imageSettlementBudgetUsd = undefined;
+            provider.config.settledCostRequired = false;
+            provider.config.imageRate = { usdPerImage: Number(item.pricing.media_unit_price), premium: false, source: `${cheaperInferenceEndpoint()}/v1/models`, verifiedAt: now, expiresAt: now + 10 * 60_000 };
+          }
+        }
         const isText = item.type === "text" || (!isImage && item.type !== "video");
         provider.config.capabilities.chat = isText;
         provider.config.capabilities.code = isText;

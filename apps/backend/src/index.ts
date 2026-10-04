@@ -328,6 +328,7 @@ wss.on("connection", (socket, req) => {
   }));
 
   let recorder: ChatTurnRecorder | null = null;
+  const chatControllers = new Set<AbortController>();
   socket.on("message", async (raw) => {
     let body;
     try {
@@ -438,7 +439,9 @@ wss.on("connection", (socket, req) => {
       const beat = setInterval(() => { if (socket.readyState === 1) socket.send(JSON.stringify({ delta: "", heartbeat: true, done: false })); }, 10_000);
       beat.unref?.();
       let stalled = false;
-      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt })[Symbol.asyncIterator]();
+      const controller = new AbortController();
+      chatControllers.add(controller);
+      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt, signal: controller.signal })[Symbol.asyncIterator]();
       const guarded = {
         [Symbol.asyncIterator]() { return this; },
         async next(): Promise<IteratorResult<any>> {
@@ -452,6 +455,7 @@ wss.on("connection", (socket, req) => {
         socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
+        if (chunk.routing) recorder?.routing(chunk.routing);
         if (Array.isArray((chunk as { artifacts?: unknown[] }).artifacts)) recorder?.artifacts((chunk as { artifacts: unknown[] }).artifacts);
         if (chunk.retract) recorder?.retract();
         if (chunkError) recorder?.finish(String(chunkError));
@@ -462,6 +466,8 @@ wss.on("connection", (socket, req) => {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       } finally {
+        controller.abort();
+        chatControllers.delete(controller);
         clearInterval(beat);
         if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
@@ -474,7 +480,7 @@ wss.on("connection", (socket, req) => {
     }
   });
   // The app closed mid-reply: keep what arrived.
-  socket.on("close", () => recorder?.finish());
+  socket.on("close", () => { for (const controller of chatControllers) controller.abort(); recorder?.finish(); });
 });
 
 // Liveness heartbeat for desktop/cloud clients. A half-open socket must not

@@ -6,10 +6,17 @@ on:
       - main
       - fix/core-agent-runtime
       - codex/production-signup-hf
+      - codex/shared-hf-auto
   pull_request:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      deployment:
+        description: Release target
+        type: choice
+        options: [verify, staging, production]
+        default: verify
 
 permissions:
   contents: read
@@ -60,24 +67,35 @@ jobs:
       - name: Worker sandbox tests (policy templates, provider selection, fallback, reconcile)
         run: node --test apps/worker/dist/sandbox/*.test.js
 
+      - name: Desktop project sandbox acceptance gate
+        env:
+          ORVYN_REQUIRE_SANDBOX_TEST: "1"
+        run: |
+          docker pull node:22-slim
+          node --test apps/backend/dist/execution/acceptanceMatrix.test.js
+          ORVYN_SANDBOX_IMAGE=node:22-slim node scripts/acceptance/worker-sandbox-e2e.mjs
+
       - name: Signup legal compatibility
         run: |
           npm test -w @orvyn/web
           node --test apps/backend/dist/routes/signupLegal.test.js
 
+      - name: Exact provider billing and payment acceptance
+        run: node scripts/acceptance/billing-e2e.mjs
+
       - name: Verify production backend image builds
-        if: github.ref == 'refs/heads/codex/production-signup-hf'
+        if: github.ref == 'refs/heads/codex/production-signup-hf' || github.ref == 'refs/heads/codex/shared-hf-auto'
         run: docker build -f apps/backend/Dockerfile -t orvyn-backend:${{ github.sha }} .
 
       - name: Verify signup UI in the production image
-        if: github.ref == 'refs/heads/codex/production-signup-hf'
+        if: github.ref == 'refs/heads/codex/production-signup-hf' || github.ref == 'refs/heads/codex/shared-hf-auto'
         run: docker run --rm -i --entrypoint node orvyn-backend:${{ github.sha }} < scripts/acceptance/signup-legal-ui.cjs
 
   windows-installer:
     name: Windows installer artifact
     runs-on: windows-latest
     timeout-minutes: 60
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,12 +152,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload packaged Desktop runtime
+        if: github.ref == 'refs/heads/codex/shared-hf-auto'
+        uses: actions/upload-artifact@v4
+        with:
+          name: orvyn-packaged-desktop
+          path: apps/desktop/release/win-unpacked/
+          retention-days: 7
+
   deploy-ovh:
     name: Deploy OVH control plane
-    needs: build-and-test
+    needs: [build-and-test, desktop-hosted]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')
+    if: always() && needs.build-and-test.result == 'success' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/production-signup-hf')) || (github.ref == 'refs/heads/codex/shared-hf-auto' && needs.desktop-hosted.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -151,8 +177,20 @@ jobs:
           OVH_HEALTH_URL: https://orvyn.virphoneusa.com/api/v1/health
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          CHEAPER_INFERENCE_API_KEY: ${{ secrets.CHEAPER_INFERENCE_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ORVYN_PROVIDER_RATES_JSON: ${{ vars.ORVYN_PROVIDER_RATES_JSON }}
+          ORVYN_IMAGE_SETTLEMENT_BUDGET_USD: ${{ vars.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD }}
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
-          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
+          DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
+          DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED: ${{ vars.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED || '0' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_CODE_MODEL: ${{ vars.DEEPSEEK_CODE_MODEL }}
+          DEEPSEEK_PRO_MODEL: ${{ vars.DEEPSEEK_PRO_MODEL }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
           HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
           HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
@@ -205,5 +243,130 @@ jobs:
           chmod 600 "$HOME/.ssh/ovh_deploy"
           ssh-keygen -y -f "$HOME/.ssh/ovh_deploy" > /dev/null || { echo "::error title=OVH deploy key::OVH_SSH_PRIVATE_KEY is not a valid private key. Paste the whole file, including the BEGIN and END lines."; exit 1; }
           export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
+          if [ "$GITHUB_REF" = "refs/heads/codex/shared-hf-auto" ]; then
+            [ -n "$HUGGINGFACE_API_KEY" ] && [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::HF configuration missing"; exit 1; }
+            live_commit=$(curl -fsS "$OVH_HEALTH_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
+            echo "Production before: $live_commit"
+            [ "$live_commit" = "40fdc92e683b99a752a8cf0dba0895211c89df6b" ] || [ "$live_commit" = "$GITHUB_SHA" ] || { echo "::error::Production changed; refusing overwrite"; exit 1; }
+            staging_commit=$(curl -fsS https://staging.orvyn.virphoneusa.com/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
+            [ "$staging_commit" = "$GITHUB_SHA" ] || { echo "::error::Staging SHA mismatch"; exit 1; }
+            ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker image tag "$(docker inspect orvyn-backend-1 --format "{{.Image}}")" orvyn-backend:rollback-40fdc92'
+          fi
           bash scripts/deploy-ovh.sh
+          if [ "$GITHUB_REF" = "refs/heads/codex/shared-hf-auto" ]; then
+            cat scripts/acceptance/hf-routing-preflight.cjs | ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker exec -i orvyn-backend-1 node'
+            cat scripts/acceptance/provider-billing-preflight.cjs | ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker exec -i orvyn-backend-1 node'
+            curl -fsS "$OVH_HEALTH_URL"; echo
+          fi
           shred -u "$HOME/.ssh/ovh_deploy" 2>/dev/null || rm -f "$HOME/.ssh/ovh_deploy"
+
+  deploy-staging:
+    name: Verify isolated OVH staging
+    needs: [build-and-test, windows-installer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.ref == 'refs/heads/codex/shared-hf-auto' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy candidate to isolated staging
+        env:
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
+          HUGGINGFACE_ROUTING_ENABLED: ${{ vars.HUGGINGFACE_ROUTING_ENABLED || '0' }}
+          HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
+          HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          CHEAPER_INFERENCE_API_KEY: ${{ secrets.CHEAPER_INFERENCE_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ORVYN_PROVIDER_RATES_JSON: ${{ vars.ORVYN_PROVIDER_RATES_JSON }}
+          ORVYN_IMAGE_SETTLEMENT_BUDGET_USD: ${{ vars.ORVYN_IMAGE_SETTLEMENT_BUDGET_USD }}
+          NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
+          DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
+          DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED: ${{ vars.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED || '0' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_CODE_MODEL: ${{ vars.DEEPSEEK_CODE_MODEL }}
+          DEEPSEEK_PRO_MODEL: ${{ vars.DEEPSEEK_PRO_MODEL }}
+          FIREWORKS_MODELS: ${{ vars.FIREWORKS_MODELS }}
+          FIREWORKS_BASE_URL: ${{ vars.FIREWORKS_BASE_URL }}
+        run: |
+          [ -n "$OVH_SSH_PRIVATE_KEY" ] && [ -n "$HUGGINGFACE_API_KEY" ] && [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::Staging configuration missing"; exit 1; }
+          mkdir -p -m 700 "$HOME/.ssh"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/ovh_deploy"
+          chmod 600 "$HOME/.ssh/ovh_deploy"
+          trap 'rm -f "$HOME/.ssh/ovh_deploy"' EXIT
+          export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
+          bash scripts/deploy-ovh-staging.sh
+
+  desktop-hosted:
+    name: Windows Desktop against staging
+    needs: [deploy-staging, windows-installer]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: orvyn-packaged-desktop
+          path: apps/desktop/release/win-unpacked/
+      - name: Verify hosted Desktop and cleanup isolated account
+        env:
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          ORVYN_CLOUD_URL: https://staging.orvyn.virphoneusa.com
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'orvyn-fixture-ssh'
+          [IO.File]::WriteAllText($keyPath, ($env:OVH_SSH_PRIVATE_KEY -replace "`r", '') + "`n", [Text.UTF8Encoding]::new($false))
+          icacls $keyPath /inheritance:r /grant:r "$([Security.Principal.WindowsIdentity]::GetCurrent().Name):(F)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict temporary deployment key permissions' }
+          $env:OVH_SSH_KEY = $keyPath
+          Remove-Item Env:OVH_SSH_PRIVATE_KEY
+          try { node scripts/acceptance/hf-desktop-runtime.mjs; if ($LASTEXITCODE -ne 0) { throw 'Hosted Desktop verification failed' } } finally { Remove-Item -LiteralPath $keyPath -Force }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-staging-evidence
+          path: desktop-hf-runtime.png
+
+  desktop-production:
+    name: Windows Desktop against production
+    needs: [deploy-ovh, windows-installer]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    if: github.ref == 'refs/heads/codex/shared-hf-auto' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'production') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release-production]')))
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: orvyn-packaged-desktop
+          path: apps/desktop/release/win-unpacked/
+      - name: Verify actual production provider through packaged Desktop
+        env:
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          ORVYN_CLOUD_URL: https://orvyn.virphoneusa.com
+        shell: pwsh
+        run: |
+          $keyPath = Join-Path $env:RUNNER_TEMP 'orvyn-fixture-ssh'
+          [IO.File]::WriteAllText($keyPath, ($env:OVH_SSH_PRIVATE_KEY -replace "`r", '') + "`n", [Text.UTF8Encoding]::new($false))
+          icacls $keyPath /inheritance:r /grant:r "$([Security.Principal.WindowsIdentity]::GetCurrent().Name):(F)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict temporary deployment key permissions' }
+          $env:OVH_SSH_KEY = $keyPath
+          Remove-Item Env:OVH_SSH_PRIVATE_KEY
+          try { node scripts/acceptance/hf-desktop-runtime.mjs; if ($LASTEXITCODE -ne 0) { throw 'Production Desktop verification failed' } } finally { Remove-Item -LiteralPath $keyPath -Force }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-production-evidence
+          path: desktop-hf-runtime.png

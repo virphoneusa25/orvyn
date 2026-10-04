@@ -71,6 +71,7 @@ export class InlineEditService {
     if (!req.selection?.trim()) throw new Error("Nothing selected to edit.");
     if (!req.instruction?.trim()) throw new Error("No instruction provided.");
 
+    await this.modelService.huggingFaceReady;
     const provider = this.modelService.router.resolve("code");
     const response = await provider.generate({
       messages: [{ role: "user", content: buildPrompt(req) }],
