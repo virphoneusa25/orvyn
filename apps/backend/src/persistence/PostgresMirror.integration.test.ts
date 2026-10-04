@@ -7,6 +7,7 @@ import { join } from "path";
 import type { ModelConfig } from "@orvyn/ai-core";
 import { LocalStore } from "./LocalStore";
 import { postgresMirror } from "./PostgresMirror";
+import { AuthService } from "../auth/AuthService";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
 
@@ -98,6 +99,8 @@ test(
         settings: 1,
         models: 1,
       });
+      assert.equal(await postgresMirror.countMissionsSince(tenantId, 0), 1);
+      assert.equal(await postgresMirror.countUsageSince(tenantId, 0), 1);
 
       mission.status = "COMPLETED";
       mission.updatedAt = Date.now() + 1;
@@ -168,3 +171,48 @@ test(
 after(async () => {
   await postgresMirror.close();
 });
+
+
+test(
+  "real Postgres: staged primary session and legal reads work after async auth flush",
+  { skip: !enabled },
+  async () => {
+    const savedPrimary = process.env.ORVYN_POSTGRES_PRIMARY_READS;
+    const savedFallback = process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
+    process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = "0";
+
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-auth-pg-primary-"));
+    const auth = new AuthService(dir);
+
+    try {
+      const suffix = Date.now().toString(36);
+      const result = await auth.registerAsync(
+        `primary-${suffix}@example.com`,
+        "CorrectHorseBatteryStaple!",
+        "Primary Read",
+        { accepted: true, version: "2026-09-23" }
+      );
+
+      const verified = await auth.verifyAsync(result.token);
+      assert.equal(verified?.id, result.user.id);
+      assert.equal(verified?.email, result.user.email);
+
+      const legal = await auth.getLegalAcceptanceAsync(
+        result.user.id,
+        "2026-09-23"
+      );
+      assert.equal(legal?.version, "2026-09-23");
+
+      await auth.logoutAsync(result.token);
+      assert.equal(await auth.verifyAsync(result.token), null);
+    } finally {
+      (auth as any).close?.();
+      rmSync(dir, { recursive: true, force: true });
+      if (savedPrimary === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedPrimary;
+      if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+      else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+    }
+  }
+);
