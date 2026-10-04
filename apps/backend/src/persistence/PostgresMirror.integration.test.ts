@@ -2,6 +2,8 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "fs";
+import { DatabaseSync } from "node:sqlite";
+import { Pool } from "pg";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { ModelConfig } from "@orvyn/ai-core";
@@ -595,6 +597,69 @@ test(
       else process.env.ORVYN_POSTGRES_PRIMARY_WRITES = savedWrites;
       if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
       else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+    }
+  }
+);
+
+
+test(
+  "real Postgres: tenant model API keys are encrypted at rest in SQLite and PostgreSQL",
+  { skip: !enabled },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-model-secret-"));
+    const tenantId = `tenant_secret_${Date.now()}`;
+    const store = new LocalStore(tenantId, dir);
+    const secret = "sk-orvyn-super-secret-provider-key";
+    const config = model(`secret-model-${Date.now()}`);
+    config.apiKey = secret;
+
+    try {
+      await postgresMirror.upsertTenant(tenantId, "Secret Test");
+      store.saveModel(config);
+      await postgresMirror.flushStrict();
+
+      const localReader = new DatabaseSync(join(dir, `${tenantId}.db`), {
+        readOnly: true,
+      });
+      try {
+        const row = localReader
+          .prepare(`SELECT config_json FROM models WHERE id = ?`)
+          .get(config.id) as any;
+        const raw = JSON.parse(String(row?.config_json ?? "{}"));
+        assert.notEqual(raw.apiKey, secret);
+        assert.match(String(raw.apiKey ?? ""), /^orvynenc:v1:/);
+      } finally {
+        localReader.close();
+      }
+
+      const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+      try {
+        const result = await pool.query<{ api_key: string }>(
+          `SELECT config_json->>'apiKey' AS api_key
+           FROM tenant_models
+           WHERE tenant_id=$1 AND id=$2`,
+          [tenantId, config.id]
+        );
+        const rawPg = result.rows[0]?.api_key ?? "";
+        assert.notEqual(rawPg, secret);
+        assert.match(rawPg, /^orvynenc:v1:/);
+      } finally {
+        await pool.end();
+      }
+
+      assert.equal(
+        store.loadModels().find((item) => item.id === config.id)?.apiKey,
+        secret
+      );
+      assert.equal(
+        (await postgresMirror.loadTenantModels(tenantId)).find(
+          (item) => item.id === config.id
+        )?.apiKey,
+        secret
+      );
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 );
