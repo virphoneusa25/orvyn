@@ -112,6 +112,28 @@ export class DistributedMissionCoordinator {
   }
 
   async cancel(runId: string, tenantId: string): Promise<void> {
+    const removed = await this.queue.cancelPending(runId);
+
+    if (removed) {
+      const active = this.bridges.get(runId);
+      const store = active?.store;
+      const run = store?.get(runId);
+      if (store && run && !["completed", "error", "cancelled"].includes(run.status)) {
+        store.emit(runId, "run.cancelled", {
+          distributed: true,
+          beforeStart: true,
+        });
+        store.setStatus(runId, "cancelled");
+      }
+      await this.state.setStatus(runId, "cancelled", {
+        completedAt: new Date().toISOString(),
+      });
+      active?.bridge.stop();
+      return;
+    }
+
+    // Already active (or racing into active): deliver cancellation to the
+    // worker-owned MultiAgentRuntime through the distributed control stream.
     await this.controls.cancel(runId, tenantId);
   }
 
