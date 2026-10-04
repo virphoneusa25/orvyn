@@ -111,6 +111,7 @@ export class TenantManager {
     postgresMirror.mirror("upsertTenant", () =>
       postgresMirror.upsertTenant(id, name, tenantCreatedAt)
     );
+    postgresMirror.backfillTenant(id, localStore.exportForPostgresMigration());
     // Restore user-added/edited models. removeModel first so a persisted edit
     // of an env-seeded model id replaces the seed instead of colliding.
     for (const cfg of localStore.loadModels()) {
