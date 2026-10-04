@@ -1,25 +1,36 @@
-name: Distributed Runtime Validation
-
-permissions:
-  contents: write
+name: PostgreSQL Mirror Validation
 
 on:
   workflow_dispatch:
   pull_request:
     paths:
       - "apps/backend/**"
-      - "packages/ai-core/**"
       - "docker-compose.yml"
-      - "infrastructure/litellm/**"
+      - ".env.example"
       - "package.json"
       - "package-lock.json"
+      - ".github/workflows/postgres-mirror.yml"
 
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: orvyn
+          POSTGRES_PASSWORD: test-postgres-password
+          POSTGRES_DB: orvyn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orvyn -d orvyn_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
       redis:
         image: redis:7-alpine
         ports:
@@ -32,10 +43,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
-      # Node 22 matches the production backend image and node:sqlite runtime.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -49,12 +57,19 @@ jobs:
       - name: Build backend
         run: npm run build -w @orvyn/backend
 
-      - name: Queue/runtime tests
+      - name: PostgreSQL mirror tests
+        env:
+          DATABASE_URL: postgresql://orvyn:test-postgres-password@127.0.0.1:5432/orvyn_test
+          ORVYN_POSTGRES_MIRROR: "1"
+          ORVYN_POSTGRES_SSL: disable
+        run: node --test apps/backend/dist/persistence/*.test.js
+
+      - name: Distributed Redis tests
         env:
           ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
         run: node --test apps/backend/dist/queue/*.test.js
 
-      - name: Existing backend tests
+      - name: Existing test suite
         env:
           ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
         run: npm test

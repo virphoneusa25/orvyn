@@ -31,6 +31,7 @@ import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import { McpHub } from "../mcp/McpHub";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
+import { postgresMirror } from "../persistence/PostgresMirror";
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 import {
   getDistributedMissionCoordinator,
@@ -106,6 +107,11 @@ export class TenantManager {
   ): Tenant {
     const localStore = new LocalStore(id);
     const modelService = new ModelService();
+    const tenantCreatedAt = Date.now();
+    postgresMirror.mirror("upsertTenant", () =>
+      postgresMirror.upsertTenant(id, name, tenantCreatedAt)
+    );
+    postgresMirror.backfillTenant(id, localStore.exportForPostgresMigration());
     // Restore user-added/edited models. removeModel first so a persisted edit
     // of an env-seeded model id replaces the seed instead of colliding.
     for (const cfg of localStore.loadModels()) {
@@ -140,7 +146,7 @@ export class TenantManager {
     const tenant: Tenant = {
       id,
       name,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(tenantCreatedAt).toISOString(),
       modelService,
       indexService: new IndexService(embedder, new InMemoryVectorStore(), label),
       toolRegistry,

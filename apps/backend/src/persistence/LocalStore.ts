@@ -23,6 +23,7 @@ import * as os from "os";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import { postgresMirror } from "./PostgresMirror";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -74,7 +75,10 @@ export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
 
-  constructor(tenantId: string, dataDir: string = defaultDataDir()) {
+  constructor(
+    private readonly tenantId: string,
+    dataDir: string = defaultDataDir()
+  ) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     // WAL permits concurrent readers + one writer across API/worker processes.
@@ -114,6 +118,9 @@ export class LocalStore {
              tasks_json = excluded.tasks_json`
         )
         .run(m.id, m.runId, m.projectRoot, m.goal, m.status, m.reviewCycles, m.createdAt, m.updatedAt, JSON.stringify(m.tasks))
+    );
+    postgresMirror.mirror("saveMission", () =>
+      postgresMirror.saveMission(this.tenantId, m)
     );
   }
 
@@ -166,6 +173,9 @@ export class LocalStore {
           e.agent ?? null,
           e.source ?? null
         )
+    );
+    postgresMirror.mirror("saveUsageEvent", () =>
+      postgresMirror.saveUsageEvent(this.tenantId, e)
     );
   }
 
@@ -237,6 +247,9 @@ export class LocalStore {
         .prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
         .run(key, value)
     );
+    postgresMirror.mirror("setSetting", () =>
+      postgresMirror.setSetting(this.tenantId, key, value)
+    );
   }
 
   /** Per-project explicit tool permission overrides (the user's last word). */
@@ -264,10 +277,16 @@ export class LocalStore {
         .prepare(`INSERT INTO models (id, config_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`)
         .run(config.id, JSON.stringify(config))
     );
+    postgresMirror.mirror("saveModel", () =>
+      postgresMirror.saveModel(this.tenantId, config)
+    );
   }
 
   deleteModel(id: string): void {
     this.guard("deleteModel", () => this.db.prepare(`DELETE FROM models WHERE id = ?`).run(id));
+    postgresMirror.mirror("deleteModel", () =>
+      postgresMirror.deleteModel(this.tenantId, id)
+    );
   }
 
   loadModels(): ModelConfig[] {
@@ -277,6 +296,92 @@ export class LocalStore {
         return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
       }) ?? []
     );
+  }
+
+  exportForPostgresMigration(): {
+    missions: Mission[];
+    usageEvents: UsageEvent[];
+    settings: Array<{ key: string; value: string }>;
+    models: ModelConfig[];
+  } {
+    const missions =
+      this.guard("export missions", () => {
+        const rows = this.db.prepare(`SELECT * FROM missions ORDER BY created_at ASC`).all() as any[];
+        return rows.map((r) => ({
+          id: String(r.id),
+          runId: String(r.run_id),
+          projectRoot: String(r.project_root),
+          goal: String(r.goal),
+          status: r.status,
+          reviewCycles: Number(r.review_cycles),
+          createdAt: Number(r.created_at),
+          updatedAt: Number(r.updated_at),
+          tasks: JSON.parse(String(r.tasks_json)),
+        })) as Mission[];
+      }) ?? [];
+
+    const usageEvents =
+      this.guard("export usage", () => {
+        const rows = this.db.prepare(`SELECT * FROM usage_events ORDER BY ts ASC`).all() as any[];
+        return rows.map((r) => {
+          const e: UsageEvent = {
+            id: String(r.id),
+            timestamp: Number(r.ts),
+            modelId: String(r.model_id),
+            provider: String(r.provider),
+            method: r.method,
+            durationMs: Number(r.duration_ms),
+            ok: r.ok === 1,
+          };
+          if (r.error != null) e.error = String(r.error);
+          if (r.prompt_tokens != null) e.promptTokens = Number(r.prompt_tokens);
+          if (r.completion_tokens != null) e.completionTokens = Number(r.completion_tokens);
+          if (r.output_chars != null) e.outputChars = Number(r.output_chars);
+          if (r.tool_calls != null) e.toolCalls = Number(r.tool_calls);
+          if (r.mission_id != null) e.missionId = String(r.mission_id);
+          if (r.task_id != null) e.taskId = String(r.task_id);
+          if (r.agent != null) e.agent = String(r.agent);
+          if (r.source != null) e.source = String(r.source);
+          return e;
+        });
+      }) ?? [];
+
+    const settings =
+      this.guard("export settings", () => {
+        const rows = this.db.prepare(`SELECT key, value FROM settings ORDER BY key`).all() as any[];
+        return rows.map((r) => ({ key: String(r.key), value: String(r.value) }));
+      }) ?? [];
+
+    const models =
+      this.guard("export models", () => {
+        const rows = this.db.prepare(`SELECT config_json FROM models ORDER BY id`).all() as any[];
+        return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
+      }) ?? [];
+
+    return { missions, usageEvents, settings, models };
+  }
+
+  parityCounts(): {
+    missions: number;
+    usageEvents: number;
+    settings: number;
+    models: number;
+  } {
+    const row = this.guard("parityCounts", () =>
+      this.db.prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM missions) AS missions,
+          (SELECT COUNT(*) FROM usage_events) AS usage_events,
+          (SELECT COUNT(*) FROM settings) AS settings,
+          (SELECT COUNT(*) FROM models) AS models`
+      ).get() as any
+    );
+    return {
+      missions: Number(row?.missions ?? 0),
+      usageEvents: Number(row?.usage_events ?? 0),
+      settings: Number(row?.settings ?? 0),
+      models: Number(row?.models ?? 0),
+    };
   }
 
   close(): void {
