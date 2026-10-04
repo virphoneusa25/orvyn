@@ -69,10 +69,16 @@ export function encryptSecret(value: string, key = requireModelSecretKey()): str
 export function decryptSecret(value: string, key = requireModelSecretKey()): string {
   if (!value?.startsWith(`${PREFIX}:`)) return value;
   const parts = value.split(":");
-  if (parts.length !== 6) throw new Error("Invalid encrypted model secret format");
-  const iv = Buffer.from(parts[3], "base64");
-  const tag = Buffer.from(parts[4], "base64");
-  const encrypted = Buffer.from(parts[5], "base64");
+  if (
+    parts.length !== 5 ||
+    parts[0] !== "orvynenc" ||
+    parts[1] !== "v1"
+  ) {
+    throw new Error("Invalid encrypted model secret format");
+  }
+  const iv = Buffer.from(parts[2], "base64");
+  const tag = Buffer.from(parts[3], "base64");
+  const encrypted = Buffer.from(parts[4], "base64");
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([
