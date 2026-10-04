@@ -615,6 +615,138 @@ export class PostgresMirror {
       : null;
   }
 
+  async loadRecentUsage(tenantId: string, limit = 200): Promise<UsageEvent[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      ts: string;
+      model_id: string;
+      provider: string;
+      method: UsageEvent["method"];
+      duration_ms: number;
+      ok: boolean;
+      error: string | null;
+      prompt_tokens: string | null;
+      completion_tokens: string | null;
+      output_chars: string | null;
+      tool_calls: number | null;
+      mission_id: string | null;
+      task_id: string | null;
+      agent: string | null;
+      source: string | null;
+    }>(
+      `SELECT id, ts::text, model_id, provider, method, duration_ms, ok, error,
+              prompt_tokens::text, completion_tokens::text, output_chars::text,
+              tool_calls, mission_id, task_id, agent, source
+       FROM usage_events
+       WHERE tenant_id=$1
+       ORDER BY ts DESC
+       LIMIT $2`,
+      [tenantId, Math.max(1, Math.min(limit, 5000))]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      timestamp: Number(row.ts),
+      modelId: row.model_id,
+      provider: row.provider,
+      method: row.method,
+      durationMs: Number(row.duration_ms),
+      ok: row.ok,
+      ...(row.error != null ? { error: row.error } : {}),
+      ...(row.prompt_tokens != null ? { promptTokens: Number(row.prompt_tokens) } : {}),
+      ...(row.completion_tokens != null ? { completionTokens: Number(row.completion_tokens) } : {}),
+      ...(row.output_chars != null ? { outputChars: Number(row.output_chars) } : {}),
+      ...(row.tool_calls != null ? { toolCalls: Number(row.tool_calls) } : {}),
+      ...(row.mission_id != null ? { missionId: row.mission_id } : {}),
+      ...(row.task_id != null ? { taskId: row.task_id } : {}),
+      ...(row.agent != null ? { agent: row.agent } : {}),
+      ...(row.source != null ? { source: row.source } : {}),
+    }));
+  }
+
+  async usageTotals(tenantId: string): Promise<{
+    requests: number;
+    promptTokens: number;
+    completionTokens: number;
+    outputChars: number;
+    toolCalls: number;
+    errors: number;
+    byModel: Record<string, {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+      errors: number;
+    }>;
+  }> {
+    const pool = await this.ready();
+    const [totalsResult, modelResult] = await Promise.all([
+      pool.query<{
+        requests: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+        output_chars: string;
+        tool_calls: string;
+        errors: string;
+      }>(
+        `SELECT
+          COUNT(*)::text AS requests,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
+          COALESCE(SUM(output_chars),0)::text AS output_chars,
+          COALESCE(SUM(tool_calls),0)::text AS tool_calls,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors
+         FROM usage_events
+         WHERE tenant_id=$1`,
+        [tenantId]
+      ),
+      pool.query<{
+        model_id: string;
+        requests: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+        errors: string;
+      }>(
+        `SELECT
+          model_id,
+          COUNT(*)::text AS requests,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors
+         FROM usage_events
+         WHERE tenant_id=$1
+         GROUP BY model_id`,
+        [tenantId]
+      ),
+    ]);
+
+    const row = totalsResult.rows[0];
+    const byModel: Record<string, {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+      errors: number;
+    }> = {};
+    for (const model of modelResult.rows) {
+      byModel[model.model_id] = {
+        requests: Number(model.requests),
+        promptTokens: Number(model.prompt_tokens),
+        completionTokens: Number(model.completion_tokens),
+        errors: Number(model.errors),
+      };
+    }
+
+    return {
+      requests: Number(row?.requests ?? 0),
+      promptTokens: Number(row?.prompt_tokens ?? 0),
+      completionTokens: Number(row?.completion_tokens ?? 0),
+      outputChars: Number(row?.output_chars ?? 0),
+      toolCalls: Number(row?.tool_calls ?? 0),
+      errors: Number(row?.errors ?? 0),
+      byModel,
+    };
+  }
+
   async countUsageSince(tenantId: string, ts: number): Promise<number> {
     const pool = await this.ready();
     const result = await pool.query<{ n: string }>(
