@@ -1,25 +1,35 @@
 // apps/backend/src/queue/RedisRunEventTransport.ts
 //
-// Cross-process event fabric for distributed missions. Redis Stream IDs are
-// transport cursors; AgentEvent.sequence remains the UI's stable per-run order.
+// Cross-process event fabric for distributed missions.
+//
+// Workers publish event envelopes WITHOUT AgentEvent.sequence. The API remains
+// the sole canonical sequence allocator by feeding envelopes into RunStore.emit().
+// This prevents two processes from generating conflicting SSE resume cursors.
 
 import type { Redis } from "ioredis";
-import type { AgentEvent } from "../agent/events";
+import type { AgentEventType } from "../agent/events";
 import { MISSION_EVENT_STREAM_PREFIX } from "./types";
 
 function streamKey(runId: string): string {
   return `${MISSION_EVENT_STREAM_PREFIX}${runId}`;
 }
 
+export interface DistributedRunEvent {
+  runId: string;
+  type: AgentEventType;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
 export interface StreamRecord {
   redisId: string;
-  event: AgentEvent;
+  event: DistributedRunEvent;
 }
 
 export class RedisRunEventTransport {
   constructor(private readonly redis: Redis) {}
 
-  async publish(event: AgentEvent): Promise<string> {
+  async publish(event: DistributedRunEvent): Promise<string> {
     const id = await this.redis.xadd(
       streamKey(event.runId),
       "MAXLEN",
@@ -50,10 +60,11 @@ export class RedisRunEventTransport {
       for (let i = 0; i < fields.length - 1; i += 2) {
         if (fields[i] !== "event") continue;
         try {
-          out.push({ redisId, event: JSON.parse(fields[i + 1]) as AgentEvent });
+          const parsed = JSON.parse(fields[i + 1]) as DistributedRunEvent;
+          if (!parsed?.runId || !parsed?.type || typeof parsed.timestamp !== "number") continue;
+          out.push({ redisId, event: parsed });
         } catch {
-          // Bad transport records are skipped; one malformed event must not
-          // poison a reconnecting stream.
+          // One malformed transport record must not poison a reconnecting stream.
         }
       }
     }
