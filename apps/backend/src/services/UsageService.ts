@@ -353,6 +353,7 @@ export class UsageService {
         await usage.checkQuotaAsync();
         usage.checkMissionBudget();
         const start = Date.now();
+        let recording = false;
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
           // the final outcome, not one per attempt.
@@ -360,6 +361,7 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -373,6 +375,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
+          if (recording) throw err;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -391,6 +394,7 @@ export class UsageService {
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
+        let recording = false;
         try {
           // A stream may only be retried before the first chunk reaches the
           // consumer — after that, replaying would duplicate output.
@@ -413,6 +417,7 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -423,6 +428,7 @@ export class UsageService {
             toolCalls: toolCalls || undefined,
           });
         } catch (err: any) {
+          if (recording) throw err;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -449,8 +455,10 @@ export class UsageService {
       wrapper.generateImage = async (request) => {
         await usage.checkQuotaAsync();
         const start = Date.now();
+        let recording = false;
         try {
           const res = await inner.generateImage!(request);
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -460,6 +468,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
+          if (recording) throw err;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
