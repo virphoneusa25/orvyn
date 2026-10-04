@@ -23,6 +23,7 @@ import * as os from "os";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import { postgresMirror } from "./PostgresMirror";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -74,7 +75,10 @@ export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
 
-  constructor(tenantId: string, dataDir: string = defaultDataDir()) {
+  constructor(
+    private readonly tenantId: string,
+    dataDir: string = defaultDataDir()
+  ) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     // WAL permits concurrent readers + one writer across API/worker processes.
@@ -114,6 +118,9 @@ export class LocalStore {
              tasks_json = excluded.tasks_json`
         )
         .run(m.id, m.runId, m.projectRoot, m.goal, m.status, m.reviewCycles, m.createdAt, m.updatedAt, JSON.stringify(m.tasks))
+    );
+    postgresMirror.mirror("saveMission", () =>
+      postgresMirror.saveMission(this.tenantId, m)
     );
   }
 
@@ -166,6 +173,9 @@ export class LocalStore {
           e.agent ?? null,
           e.source ?? null
         )
+    );
+    postgresMirror.mirror("saveUsageEvent", () =>
+      postgresMirror.saveUsageEvent(this.tenantId, e)
     );
   }
 
@@ -237,6 +247,9 @@ export class LocalStore {
         .prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
         .run(key, value)
     );
+    postgresMirror.mirror("setSetting", () =>
+      postgresMirror.setSetting(this.tenantId, key, value)
+    );
   }
 
   /** Per-project explicit tool permission overrides (the user's last word). */
@@ -264,10 +277,16 @@ export class LocalStore {
         .prepare(`INSERT INTO models (id, config_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`)
         .run(config.id, JSON.stringify(config))
     );
+    postgresMirror.mirror("saveModel", () =>
+      postgresMirror.saveModel(this.tenantId, config)
+    );
   }
 
   deleteModel(id: string): void {
     this.guard("deleteModel", () => this.db.prepare(`DELETE FROM models WHERE id = ?`).run(id));
+    postgresMirror.mirror("deleteModel", () =>
+      postgresMirror.deleteModel(this.tenantId, id)
+    );
   }
 
   loadModels(): ModelConfig[] {
@@ -277,6 +296,29 @@ export class LocalStore {
         return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
       }) ?? []
     );
+  }
+
+  parityCounts(): {
+    missions: number;
+    usageEvents: number;
+    settings: number;
+    models: number;
+  } {
+    const row = this.guard("parityCounts", () =>
+      this.db.prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM missions) AS missions,
+          (SELECT COUNT(*) FROM usage_events) AS usage_events,
+          (SELECT COUNT(*) FROM settings) AS settings,
+          (SELECT COUNT(*) FROM models) AS models`
+      ).get() as any
+    );
+    return {
+      missions: Number(row?.missions ?? 0),
+      usageEvents: Number(row?.usage_events ?? 0),
+      settings: Number(row?.settings ?? 0),
+      models: Number(row?.models ?? 0),
+    };
   }
 
   close(): void {
