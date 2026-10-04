@@ -106,7 +106,7 @@ await check("enforces the monthly limit at the provider boundary", async () => {
   await p.generate({ messages: [] });
   await p.generate({ messages: [] });
   await assert.rejects(() => p.generate({ messages: [] }), QuotaExceededError);
-  const q = usage.quota();
+  const q = await usage.quota();
   assert.equal(q.limit, 2);
   assert.equal(q.used, 2);
   assert.equal(q.remaining, 0);
@@ -114,10 +114,10 @@ await check("enforces the monthly limit at the provider boundary", async () => {
 await check("hydrates the month count from the store (restart-proof)", async () => {
   process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = "5";
   const usage = new UsageService();
-  usage.attachStore({
-    saveUsageEvent: () => {},
-    loadRecentUsage: () => [],
-    countUsageSince: () => 5, // pretend 5 requests already persisted this month
+  await usage.attachStore({
+    saveUsageEvent: async () => {},
+    loadRecentUsage: async () => [],
+    countUsageSince: async () => 5, // pretend 5 requests already persisted this month
   });
   const p = usage.wrap(fakeProvider());
   await assert.rejects(() => p.generate({ messages: [] }), QuotaExceededError);
