@@ -126,6 +126,37 @@ services:
       litellm:
         condition: service_started
 
+  # Distributed mission worker. Opt-in until the Redis control channel
+  # (approve/steer/cancel) is enabled. Scale with:
+  #   docker compose --profile distributed up -d --scale orvyn-worker=5
+  orvyn-worker:
+    profiles: ["distributed"]
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    command: ["node", "dist/workers/missionWorker.js"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - ORVYN_REDIS_URL=redis://:${ORVYN_REDIS_PASSWORD}@orvyn-redis:6379/0
+      - ORVYN_DISTRIBUTED_MISSIONS=${ORVYN_DISTRIBUTED_MISSIONS:-0}
+      - ORVYN_DISTRIBUTED_CONTROLS=${ORVYN_DISTRIBUTED_CONTROLS:-0}
+      - ORVYN_WORKER_CONCURRENCY=${ORVYN_WORKER_CONCURRENCY:-1}
+      - ORVYN_MISSION_EXECUTION=sandbox
+      - MODEL_ROUTER_URL=http://litellm:4000/v1
+      - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
+    volumes:
+      # Only workers will retain this mount after distributed cutover.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - orvyn-projects:/projects
+      - orvyn-data:/data
+    depends_on:
+      orvyn-redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+
   # Optional self-hosted model server. Comment out when unused.
   ollama:
     image: ollama/ollama:latest
