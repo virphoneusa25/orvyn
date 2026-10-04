@@ -1022,7 +1022,7 @@ v1Router.get("/usage", async (req, res) => {
 
   res.json({
     totals: t.modelService.usage.totals(),
-    quota: t.modelService.usage.quota(),
+    quota: await t.modelService.usage.quotaAsync(),
     queue,
     events: t.modelService.usage.recent(limit),
   });
