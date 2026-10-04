@@ -1,0 +1,67 @@
+// apps/backend/src/queue/DistributedRedis.integration.test.ts
+import test from "node:test";
+import assert from "node:assert/strict";
+import IORedis from "ioredis";
+import { TenantMissionSemaphore } from "./TenantMissionSemaphore";
+import { RedisMissionQueue } from "./RedisMissionQueue";
+
+const url = process.env.ORVYN_REDIS_TEST_URL;
+
+test(
+  "real Redis: tenant leases enforce limits, release, and crash expiry",
+  { skip: !url },
+  async () => {
+    const redis = new IORedis(url!, { maxRetriesPerRequest: 1 });
+    try {
+      await redis.flushdb();
+      const semaphore = new TenantMissionSemaphore(redis, 2, 150);
+
+      assert.equal(await semaphore.acquire("tenant-a", "run-1"), true);
+      assert.equal(await semaphore.acquire("tenant-a", "run-2"), true);
+      assert.equal(await semaphore.acquire("tenant-a", "run-3"), false);
+
+      // A different tenant has an independent capacity pool.
+      assert.equal(await semaphore.acquire("tenant-b", "run-b1"), true);
+
+      await semaphore.release("tenant-a", "run-1");
+      assert.equal(await semaphore.acquire("tenant-a", "run-3"), true);
+
+      // Expired leases are pruned on the next acquire, simulating a worker
+      // crash that never reached release().
+      const oneSlot = new TenantMissionSemaphore(redis, 1, 80);
+      assert.equal(await oneSlot.acquire("tenant-expiry", "dead-worker"), true);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assert.equal(await oneSlot.acquire("tenant-expiry", "replacement-worker"), true);
+    } finally {
+      await redis.quit();
+    }
+  }
+);
+
+test(
+  "real Redis: BullMQ mission queue accepts serializable run payloads and reports waiting state",
+  { skip: !url },
+  async () => {
+    const redis = new IORedis(url!, { maxRetriesPerRequest: 1 });
+    const queue = new RedisMissionQueue(redis);
+    try {
+      await redis.flushdb();
+      const jobId = await queue.enqueue({
+        runId: "run-integration-1",
+        tenantId: "tenant-integration",
+        tenantName: "Integration",
+        projectRoot: "/projects/integration",
+        goal: "validate queue",
+        requestedAt: new Date().toISOString(),
+      });
+
+      assert.equal(jobId, "run-integration-1");
+      const stats = await queue.stats();
+      assert.equal(stats.waiting, 1);
+      assert.equal(stats.active, 0);
+    } finally {
+      await queue.close();
+      await redis.quit();
+    }
+  }
+);
