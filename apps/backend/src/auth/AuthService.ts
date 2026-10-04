@@ -94,6 +94,42 @@ export class AuthService {
     this.db.exec("PRAGMA synchronous = NORMAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    this.backfillPostgresMirror();
+  }
+
+  private backfillPostgresMirror(): void {
+    if (!postgresMirror.isEnabled()) return;
+
+    const users = this.db.prepare(`SELECT * FROM users ORDER BY created_at ASC`).all() as any[];
+    const sessions = this.db.prepare(`SELECT * FROM sessions ORDER BY created_at ASC`).all() as any[];
+    const legal = this.db.prepare(`SELECT * FROM legal_acceptances ORDER BY accepted_at ASC`).all() as any[];
+
+    postgresMirror.mirror("backfillAuth", async () => {
+      for (const row of users) {
+        await postgresMirror.upsertUser({
+          id: String(row.id),
+          email: String(row.email),
+          name: row.name != null ? String(row.name) : null,
+          passwordHash: String(row.password_hash),
+          createdAt: Number(row.created_at),
+        });
+      }
+      for (const row of legal) {
+        await postgresMirror.saveLegalAcceptance(
+          String(row.user_id),
+          String(row.version),
+          Number(row.accepted_at)
+        );
+      }
+      for (const row of sessions) {
+        await postgresMirror.upsertSession({
+          tokenHash: String(row.token_hash),
+          userId: String(row.user_id),
+          createdAt: Number(row.created_at),
+          expiresAt: Number(row.expires_at),
+        });
+      }
+    });
   }
 
   register(
@@ -198,6 +234,20 @@ export class AuthService {
   userCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as any;
     return Number(row?.n ?? 0);
+  }
+
+  parityCounts(): { users: number; sessions: number; legalAcceptances: number } {
+    const row = this.db.prepare(
+      `SELECT
+        (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM sessions) AS sessions,
+        (SELECT COUNT(*) FROM legal_acceptances) AS legal_acceptances`
+    ).get() as any;
+    return {
+      users: Number(row?.users ?? 0),
+      sessions: Number(row?.sessions ?? 0),
+      legalAcceptances: Number(row?.legal_acceptances ?? 0),
+    };
   }
 
   private createSession(userId: string): string {
