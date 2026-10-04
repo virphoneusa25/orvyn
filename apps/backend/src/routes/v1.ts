@@ -18,6 +18,8 @@ import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
+import { postgresMirror } from "../persistence/PostgresMirror";
+import { authService } from "../auth/AuthService";
 
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
@@ -38,6 +40,59 @@ v1Router.use(async (req, res, next) => {
 
 // Note: GET /api/v1/health is registered unauthenticated directly on the
 // Express app in index.ts (before apiKeyAuth), not here.
+
+// --- Durable storage migration / parity ---
+v1Router.get("/storage/status", async (req, res) => {
+  const t = requireTenant(req);
+  const postgres = await postgresMirror.health();
+
+  if (!postgres.enabled) {
+    return res.json({
+      mode: "sqlite-primary",
+      postgres,
+      sqlite: {
+        tenant: t.localStore.parityCounts(),
+        auth: authService.parityCounts(),
+      },
+    });
+  }
+
+  try {
+    // Wait for already-queued dual writes/backfill before measuring parity.
+    await postgresMirror.flush();
+    const [pgTenant, pgAuth] = await Promise.all([
+      postgresMirror.parityCounts(t.id),
+      postgresMirror.authParityCounts(),
+    ]);
+    const sqliteTenant = t.localStore.parityCounts();
+    const sqliteAuth = authService.parityCounts();
+    const tenantParity =
+      JSON.stringify(sqliteTenant) === JSON.stringify(pgTenant);
+    const authParity =
+      JSON.stringify(sqliteAuth) === JSON.stringify(pgAuth);
+
+    return res.status(
+      postgres.status === "ready" && tenantParity && authParity ? 200 : 503
+    ).json({
+      mode: "sqlite-primary-postgres-mirror",
+      postgres,
+      parity: {
+        ok: tenantParity && authParity,
+        tenant: tenantParity,
+        auth: authParity,
+      },
+      sqlite: { tenant: sqliteTenant, auth: sqliteAuth },
+      postgresql: { tenant: pgTenant, auth: pgAuth },
+    });
+  } catch (err: any) {
+    return res.status(503).json({
+      mode: "sqlite-primary-postgres-mirror",
+      postgres,
+      parity: { ok: false },
+      error: err.message,
+    });
+  }
+});
 
 // --- Models ---
 v1Router.get("/models", (req, res) => {
