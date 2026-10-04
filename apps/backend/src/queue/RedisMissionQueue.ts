@@ -45,6 +45,16 @@ export class RedisMissionQueue {
     }
   }
 
+  async inspect(runId: string): Promise<{ state: string; failedReason?: string } | null> {
+    const job = await this.queue.getJob(runId);
+    if (!job) return null;
+    const state = await job.getState();
+    return {
+      state,
+      ...(job.failedReason ? { failedReason: job.failedReason } : {}),
+    };
+  }
+
   async stats(): Promise<MissionQueueStats> {
     const counts = await this.queue.getJobCounts("waiting", "active", "completed", "failed", "delayed");
     return {
