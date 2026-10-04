@@ -28,3 +28,12 @@ export function createWorkerRedis(): Redis {
 export function distributedMissionsEnabled(): boolean {
   return process.env.ORVYN_DISTRIBUTED_MISSIONS?.trim() === "1";
 }
+
+
+export function distributedControlsEnabled(): boolean {
+  return process.env.ORVYN_DISTRIBUTED_CONTROLS?.trim() === "1";
+}
+
+export function distributedRuntimeReady(): boolean {
+  return distributedMissionsEnabled() && distributedControlsEnabled();
+}
