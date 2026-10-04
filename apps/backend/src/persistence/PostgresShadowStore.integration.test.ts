@@ -239,6 +239,23 @@ test(
 
       assert.equal(parity.matches, true);
       assert.deepEqual(parity.sqlite, parity.postgres);
+      assert.deepEqual(parity.content, {
+        missions: true,
+        usage: true,
+        settings: true,
+        models: true,
+      });
+
+      // Count-only parity would miss this corruption because the row still
+      // exists. Content fingerprints must catch it.
+      await sql.query(
+        "UPDATE orvyn_settings SET value=$1 WHERE tenant_id=$2 AND key=$3",
+        ["CORRUPTED", tenantId, "profile"]
+      );
+      const corrupted = await compareTenantParity(sql, snapshot);
+      assert.equal(corrupted.sqlite.settings, corrupted.postgres.settings);
+      assert.equal(corrupted.content.settings, false);
+      assert.equal(corrupted.matches, false);
     } finally {
       try { local.close(); } catch {}
       await shadow.close();
