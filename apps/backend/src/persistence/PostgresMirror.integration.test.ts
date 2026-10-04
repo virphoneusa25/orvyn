@@ -1,5 +1,5 @@
 // apps/backend/src/persistence/PostgresMirror.integration.test.ts
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -163,3 +163,8 @@ test(
     assert.equal(deleted.sessions, before.sessions);
   }
 );
+
+
+after(async () => {
+  await postgresMirror.close();
+});
