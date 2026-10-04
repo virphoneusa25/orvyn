@@ -302,3 +302,28 @@ export async function backfillAllTenants(options: {
     await pool.end();
   }
 }
+
+
+/**
+ * Read-only parity check. Unlike backfillAllTenants(), this never writes to
+ * PostgreSQL; use it immediately before authoritative cutover.
+ */
+export async function verifyAllTenants(options: {
+  connectionString: string;
+  dataDir?: string;
+}): Promise<TenantParity[]> {
+  const dataDir = options.dataDir ?? defaultDataDir();
+  const tenantIds = listSQLiteTenantIds(dataDir);
+  const pool = new Pool({ connectionString: options.connectionString });
+
+  try {
+    const results: TenantParity[] = [];
+    for (const tenantId of tenantIds) {
+      const snapshot = readSQLiteTenantSnapshot(tenantId, dataDir);
+      results.push(await compareTenantParity(pool, snapshot));
+    }
+    return results;
+  } finally {
+    await pool.end();
+  }
+}
