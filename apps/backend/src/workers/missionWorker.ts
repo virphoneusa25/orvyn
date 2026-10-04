@@ -27,7 +27,10 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
   // A private TenantManager per job prevents horizontally scaled jobs from
   // sharing mutable ToolRegistry/project-root state inside one Node process.
   const manager = new TenantManager();
-  const tenant = manager.create(payload.tenantName, "", payload.tenantId, { runStore });
+  const tenant = manager.create(payload.tenantName, "", payload.tenantId, {
+    runStore,
+    recoverDistributedRuns: false,
+  });
 
   runStore.create(payload.runId, payload.projectRoot, "queued");
   registerProjectToolsFor(tenant, payload.projectRoot);
