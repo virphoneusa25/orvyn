@@ -54,6 +54,7 @@ export class InsufficientCreditsError extends Error {
 }
 
 const SCHEMA_V2: string[] = [
+  "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
   "CREATE TABLE IF NOT EXISTS credit_wallets (tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS credit_buckets (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES credit_wallets(tenant_id) ON DELETE CASCADE, source TEXT NOT NULL, granted_credits BIGINT NOT NULL CHECK (granted_credits > 0), balance_credits BIGINT NOT NULL CHECK (balance_credits >= 0), reserved_credits BIGINT NOT NULL DEFAULT 0 CHECK (reserved_credits >= 0), expires_at BIGINT, created_at BIGINT NOT NULL, CHECK (reserved_credits <= balance_credits))",
   "CREATE INDEX IF NOT EXISTS idx_credit_buckets_spend ON credit_buckets (tenant_id, expires_at, created_at, id)",
