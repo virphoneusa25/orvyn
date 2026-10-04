@@ -110,8 +110,9 @@ services:
 
       # Internal LiteLLM endpoint. ModelGateway migration is feature-gated and
       # will switch to this URL in a later phase without changing ORION roles.
-      - MODEL_ROUTER_URL=http://litellm:4000/v1
+      - MODEL_ROUTER_URL=http://litellm:4000
       - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
+      - ORVYN_LITELLM_ENABLED=${ORVYN_LITELLM_ENABLED:-0}
     volumes:
       - orvyn-data:/data
       # TEMPORARY: backend still owns sandbox execution today.
@@ -144,8 +145,9 @@ services:
       - ORVYN_DISTRIBUTED_CONTROLS=${ORVYN_DISTRIBUTED_CONTROLS:-0}
       - ORVYN_WORKER_CONCURRENCY=${ORVYN_WORKER_CONCURRENCY:-1}
       - ORVYN_MISSION_EXECUTION=sandbox
-      - MODEL_ROUTER_URL=http://litellm:4000/v1
+      - MODEL_ROUTER_URL=http://litellm:4000
       - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
+      - ORVYN_LITELLM_ENABLED=${ORVYN_LITELLM_ENABLED:-0}
     volumes:
       # Only workers will retain this mount after distributed cutover.
       - /var/run/docker.sock:/var/run/docker.sock
