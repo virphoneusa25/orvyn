@@ -33,14 +33,30 @@ cannot evict or interfere with mission queue/event state.
 
 ## Current migration status
 
-This infrastructure phase **does not yet move missions to BullMQ**.
+The distributed runtime path is implemented behind feature flags and remains
+OFF by default.
 
-The existing in-process `MissionQueue` remains active. The backend receives
-`ORVYN_REDIS_URL` and `MODEL_ROUTER_URL` now so the next phases can replace
-the queue and provider transport without changing the container contract again.
+When both distributed flags are enabled, cloud workspaces beneath
+`ORVYN_DISTRIBUTED_PROJECT_ROOT` are dispatched through BullMQ and executed
+by the dedicated worker service using the existing `MultiAgentRuntime`.
+Desktop/local project roots remain on the existing local execution path.
 
-The backend temporarily retains the Docker socket mount. It will move to the
-dedicated worker service when BullMQ workers are introduced.
+Implemented distributed pieces:
+
+- BullMQ mission dispatch
+- Redis Streams worker → API events
+- Redis Streams approve/deny/steer/cancel controls
+- API-authoritative SSE sequencing
+- idempotent event replay after API restart
+- durable Redis event cursors
+- worker-side re-hosting of the existing `MultiAgentRuntime`
+- crash-safe per-tenant mission concurrency leases
+- shared cloud-workspace eligibility guard
+- feature-gated LiteLLM model tiers beneath `ModelGateway`
+
+The backend still temporarily retains the Docker socket because the local
+fallback path remains available. Removing that mount is a final deployment
+cutover step after distributed cloud execution is enabled in production.
 
 ## Required secrets
 
@@ -116,17 +132,20 @@ docker compose --profile distributed up -d --scale orvyn-worker=5
 
 No worker has a fixed `container_name`, so Compose can scale it horizontally.
 
-### Remaining cutover work
+### Remaining production cutover work
 
-Before setting the feature flags to `1`:
+Before enabling the feature flags on the live cloud deployment:
 
-1. Move approval/steer/cancel commands to the Redis control stream.
-2. Project worker-emitted Redis Stream events into the API `RunStore`.
-3. Re-host the existing `MultiAgentRuntime` in the worker harness.
-4. Ensure worker and API share durable mission/task state.
-5. Move the Docker socket off the API container.
-6. Shadow-run the distributed path and compare event parity.
-7. Only then switch `/agent/orchestrate` to BullMQ.
+1. Deploy both Redis services and LiteLLM with production secrets.
+2. Start one worker first and run shadow/smoke missions under `/projects`.
+3. Verify approval, steer, cancel, restart recovery, sandbox cleanup, and event
+   parity against the current in-process path.
+4. Observe SQLite write contention under the real workload; keep worker scale
+   conservative until the planned PostgreSQL migration is complete.
+5. Enable distributed cloud missions gradually.
+6. Remove the Docker socket from the public API container once no cloud mission
+   still depends on API-owned sandbox execution.
+7. Migrate durable SaaS state from SQLite to PostgreSQL as a separate change.
 
 
 ## Distributed control and API event bridge
@@ -200,3 +219,24 @@ Vision, image generation, and embeddings remain on their existing routes until
 dedicated LiteLLM groups are defined.
 
 Direct providers remain registered and available for manual routing/rollback.
+
+
+## Distributed workspace boundary
+
+Workers only accept mission project roots underneath:
+
+```env
+ORVYN_DISTRIBUTED_PROJECT_ROOT=/projects
+```
+
+This prevents a cloud backend from accepting a desktop-local path such as
+`C:\\Users\\...\project` or `/Users/.../project` that the worker cannot see.
+Local desktop projects continue using the existing local runtime.
+
+## Distributed tenant concurrency
+
+`ORVYN_MAX_CONCURRENT_MISSIONS` remains a per-tenant limit in distributed
+mode. Workers acquire renewable Redis leases before executing a mission. If a
+tenant has filled its slots, BullMQ moves the job back to the delayed set
+instead of consuming an idle worker while waiting. Leases expire automatically
+after a worker crash and are renewed while a mission remains active.
