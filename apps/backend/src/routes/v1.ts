@@ -922,24 +922,46 @@ async function liteLLMGatewayStatus(): Promise<{
   }
 }
 
-v1Router.get("/runtime/status", async (_req, res) => {
+v1Router.get("/runtime/status", async (req, res) => {
   const modelGateway = await liteLLMGatewayStatus();
   const modelGatewayReady =
     !modelGateway.enabled || modelGateway.status === "ready";
 
-  const postgres = getPostgresShadowStore();
-  const storage = postgresShadowEnabled()
-    ? {
-        mode: "sqlite-authoritative/postgres-shadow",
-        postgres: (await postgres!.ping()) ? "ready" : "unavailable",
-        ...postgres!.status(),
-      }
-    : {
-        mode: "sqlite",
-        postgres: "disabled",
-        enabled: false,
-      };
-  const storageReady = !postgresShadowEnabled() || storage.postgres === "ready";
+  const tenant = requireTenant(req);
+  const primaryDriver = tenant.localStore.driver;
+  const primaryHealthy = await tenant.localStore.health();
+  const shadowEnabled = postgresShadowEnabled();
+  const invalidDualMode = primaryDriver === "postgres" && shadowEnabled;
+
+  let storage: Record<string, unknown>;
+  let storageReady = primaryHealthy && !invalidDualMode;
+
+  if (primaryDriver === "postgres") {
+    storage = {
+      mode: invalidDualMode ? "misconfigured" : "postgres-authoritative",
+      primary: "postgres",
+      postgres: primaryHealthy ? "ready" : "unavailable",
+      shadow: shadowEnabled ? "must-be-disabled" : "disabled",
+    };
+  } else if (shadowEnabled) {
+    const postgres = getPostgresShadowStore();
+    const shadowHealthy = Boolean(postgres && await postgres.ping());
+    storageReady = primaryHealthy && shadowHealthy;
+    storage = {
+      mode: "sqlite-authoritative/postgres-shadow",
+      primary: "sqlite",
+      sqlite: primaryHealthy ? "ready" : "unavailable",
+      postgres: shadowHealthy ? "ready" : "unavailable",
+      ...postgres?.status(),
+    };
+  } else {
+    storage = {
+      mode: "sqlite",
+      primary: "sqlite",
+      sqlite: primaryHealthy ? "ready" : "unavailable",
+      postgres: "disabled",
+    };
+  }
 
   if (!distributedRuntimeReady()) {
     const ready = modelGatewayReady && storageReady;
