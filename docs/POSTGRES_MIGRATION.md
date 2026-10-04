@@ -189,3 +189,28 @@ Full primary-store conversion still requires:
 - backup/restore drills
 - explicit DB outage/failover testing
 - final removal of cloud SQLite authority/cache dependencies
+
+
+## Backup / restore cutover gate
+
+CI now performs a real PostgreSQL 16 disaster-recovery drill:
+
+1. `pg_dump -Fc` the live integration database.
+2. Create a second empty database.
+3. Restore with `pg_restore`.
+4. Compare row counts for every current durable table:
+   - schema_migrations
+   - tenants
+   - missions
+   - usage_events
+   - tenant_settings
+   - tenant_models
+   - users
+   - sessions
+   - legal_acceptances
+
+The PostgreSQL cutover is not considered ready if backup/restore parity fails.
+
+Production should use the same principle with encrypted off-host backups,
+retention policies, and a scheduled restore drill. A backup that has never been
+restored successfully should not be treated as a recovery plan.
