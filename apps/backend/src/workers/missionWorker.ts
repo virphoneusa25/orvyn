@@ -105,6 +105,13 @@ async function main(): Promise<void> {
   const heartbeatRedis = createWorkerRedis();
   const concurrency = Math.max(1, Number(process.env.ORVYN_WORKER_CONCURRENCY) || 1);
   const maxPerTenant = Math.max(1, Number(process.env.ORVYN_MAX_CONCURRENT_MISSIONS) || 2);
+  // Autonomous missions are not guaranteed idempotent. BullMQ normally
+  // re-processes a stalled job once; default ORVYN to fail-first-stall so a
+  // crashed deployment/edit mission is never silently executed twice.
+  const maxStalledCount = Math.max(
+    0,
+    Number(process.env.ORVYN_WORKER_MAX_STALLED_COUNT ?? "0")
+  );
   const semaphore = new TenantMissionSemaphore(semaphoreRedis, maxPerTenant);
   const workerId = `worker-${randomUUID()}`;
   const heartbeat = new WorkerHeartbeatRegistry(heartbeatRedis);
@@ -134,11 +141,13 @@ async function main(): Promise<void> {
         });
       }
     },
-    { connection, concurrency }
+    { connection, concurrency, maxStalledCount }
   );
 
   worker.on("ready", () => {
-    console.log(`[mission-worker] ready; id=${workerId}; concurrency=${concurrency}`);
+    console.log(
+      `[mission-worker] ready; id=${workerId}; concurrency=${concurrency}; maxStalledCount=${maxStalledCount}`
+    );
   });
   worker.on("completed", (job) => {
     console.log(`[mission-worker] job ${job.id} completed`);
