@@ -22,6 +22,29 @@ export class RedisMissionQueue {
     return String(job.id);
   }
 
+  /**
+   * Remove a mission that has not started yet. Returns false if the job is
+   * already active/terminal (the live worker control channel handles active
+   * cancellation).
+   */
+  async cancelPending(runId: string): Promise<boolean> {
+    const job = await this.queue.getJob(runId);
+    if (!job) return false;
+
+    const state = await job.getState();
+    if (!["waiting", "delayed", "prioritized", "paused", "waiting-children"].includes(state)) {
+      return false;
+    }
+
+    try {
+      await job.remove();
+      return true;
+    } catch {
+      // The job may have transitioned to active between getState() and remove.
+      return false;
+    }
+  }
+
   async stats(): Promise<MissionQueueStats> {
     const counts = await this.queue.getJobCounts("waiting", "active", "completed", "failed", "delayed");
     return {
