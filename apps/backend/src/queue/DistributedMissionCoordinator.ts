@@ -9,6 +9,7 @@
 //
 // It deliberately does NOT contain ORION logic or execute tools.
 
+import { QueueEvents } from "bullmq";
 import type { RunStore, Run } from "../agent/events";
 import { createProducerRedis, createWorkerRedis } from "./redisConnection";
 import { RedisMissionQueue } from "./RedisMissionQueue";
@@ -23,6 +24,7 @@ interface ActiveBridge {
   bridge: RedisRunEventBridge;
   redis: ReturnType<typeof createWorkerRedis>;
   task: Promise<void>;
+  store: RunStore;
 }
 
 export class DistributedMissionCoordinator {
@@ -33,6 +35,34 @@ export class DistributedMissionCoordinator {
     new RedisRunControlTransport(this.controlRedis)
   );
   private readonly bridges = new Map<string, ActiveBridge>();
+  private readonly queueEventsRedis = createWorkerRedis();
+  private readonly queueEvents = new QueueEvents(MISSION_QUEUE_NAME, {
+    connection: this.queueEventsRedis,
+  });
+
+  constructor() {
+    // MultiAgentRuntime normally emits the terminal event itself. This listener
+    // covers failures outside that runtime (worker crash, process kill, BullMQ
+    // stalled-job exhaustion) so the API never leaves a dead mission "running".
+    this.queueEvents.on("failed", ({ jobId, failedReason }) => {
+      if (!jobId) return;
+      const active = this.bridges.get(String(jobId));
+      const store = active?.store;
+      const run = store?.get(String(jobId));
+      if (!store || !run || ["completed", "error", "cancelled"].includes(run.status)) return;
+
+      store.emit(String(jobId), "run.error", {
+        message: `Distributed worker job failed: ${failedReason || "unknown worker failure"}`,
+        distributed: true,
+      });
+      store.setStatus(String(jobId), "error");
+      active?.bridge.stop();
+    });
+
+    this.queueEvents.on("error", (err) => {
+      console.error("[distributed-mission-coordinator] BullMQ QueueEvents error", err);
+    });
+  }
 
   async enqueue(payload: MissionJobPayload, store: RunStore): Promise<void> {
     this.ensureBridge(payload.runId, store);
@@ -62,7 +92,7 @@ export class DistributedMissionCoordinator {
         this.bridges.delete(runId);
       });
 
-    this.bridges.set(runId, { bridge, redis, task });
+    this.bridges.set(runId, { bridge, redis, task, store });
   }
 
   async cancel(runId: string, tenantId: string): Promise<void> {
