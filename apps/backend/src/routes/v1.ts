@@ -804,13 +804,39 @@ v1Router.get("/agent/modes", (_req, res) => {
 });
 
 // --- Usage metering (server-side records; the basis for billing later) ---
-v1Router.get("/usage", (req, res) => {
+v1Router.get("/usage", async (req, res) => {
   const t = requireTenant(req);
   const limit = req.query.limit ? Math.min(Number(req.query.limit), 1000) : 200;
+
+  let queue: Record<string, unknown> = t.multiAgentRuntime.queueStats();
+  if (distributedRuntimeReady()) {
+    try {
+      const distributed = await getDistributedMissionCoordinator().stats();
+      queue = {
+        running: distributed.active,
+        waiting: distributed.waiting + distributed.delayed,
+        active: distributed.active,
+        delayed: distributed.delayed,
+        completed: distributed.completed,
+        failed: distributed.failed,
+        distributed: true,
+      };
+    } catch (err: any) {
+      // Usage reporting should remain available during a Redis outage; expose
+      // the degraded state instead of turning the whole Reports panel into 503.
+      queue = {
+        ...t.multiAgentRuntime.queueStats(),
+        distributed: true,
+        degraded: true,
+        error: err.message,
+      };
+    }
+  }
+
   res.json({
     totals: t.modelService.usage.totals(),
     quota: t.modelService.usage.quota(),
-    queue: t.multiAgentRuntime.queueStats(),
+    queue,
     events: t.modelService.usage.recent(limit),
   });
 });
