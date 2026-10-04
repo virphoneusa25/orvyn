@@ -173,7 +173,15 @@ test(
       let inspected: Awaited<ReturnType<RedisMissionQueue["inspect"]>> = null;
       while (Date.now() < deadline) {
         inspected = await queue.inspect("run-failed-inspect");
-        if (inspected?.state === "failed") break;
+        // BullMQ can expose state=failed just before failedReason becomes
+        // observable through getJob(); wait for the complete reconciliation
+        // record rather than asserting in that tiny race window.
+        if (
+          inspected?.state === "failed" &&
+          /integration worker boom/.test(inspected.failedReason ?? "")
+        ) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
