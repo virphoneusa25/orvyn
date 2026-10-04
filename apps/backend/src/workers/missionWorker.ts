@@ -4,7 +4,7 @@
 // ORION planning/review/tool behavior is unchanged; only process ownership
 // moves from the HTTP API to this worker.
 
-import { Worker } from "bullmq";
+import { DelayedError, Worker } from "bullmq";
 import { TenantManager } from "../tenancy/TenantManager";
 import { registerProjectToolsFor } from "../ai/registerProjectTools";
 import { createWorkerRedis } from "../queue/redisConnection";
@@ -13,6 +13,7 @@ import { RedisRunEventTransport } from "../queue/RedisRunEventTransport";
 import { RedisRunControlTransport } from "../queue/RedisRunControlTransport";
 import { DistributedRunStore } from "../queue/DistributedRunStore";
 import { DistributedRunController } from "../queue/DistributedRunController";
+import { TenantMissionSemaphore } from "../queue/TenantMissionSemaphore";
 
 async function executeMission(payload: MissionJobPayload): Promise<void> {
   // Blocking reads and event publishing use dedicated Redis connections so
@@ -79,11 +80,35 @@ async function main(): Promise<void> {
   }
 
   const connection = createWorkerRedis();
+  const semaphoreRedis = createWorkerRedis();
   const concurrency = Math.max(1, Number(process.env.ORVYN_WORKER_CONCURRENCY) || 1);
+  const maxPerTenant = Math.max(1, Number(process.env.ORVYN_MAX_CONCURRENT_MISSIONS) || 2);
+  const semaphore = new TenantMissionSemaphore(semaphoreRedis, maxPerTenant);
 
   const worker = new Worker<MissionJobPayload>(
     MISSION_QUEUE_NAME,
-    async (job) => executeMission(job.data),
+    async (job, token) => {
+      const leaseId = job.data.runId;
+      const acquired = await semaphore.acquire(job.data.tenantId, leaseId);
+
+      if (!acquired) {
+        if (!token) throw new Error("BullMQ worker token unavailable while delaying tenant-limited mission");
+        await job.moveToDelayed(Date.now() + 1000, token);
+        throw new DelayedError();
+      }
+
+      const stopHeartbeat = semaphore.startHeartbeat(job.data.tenantId, leaseId);
+      try {
+        await executeMission(job.data);
+      } finally {
+        stopHeartbeat();
+        await semaphore.release(job.data.tenantId, leaseId).catch((err) => {
+          console.error(
+            `[mission-worker] failed to release tenant mission slot for ${leaseId}: ${err?.message ?? err}`
+          );
+        });
+      }
+    },
     { connection, concurrency }
   );
 
@@ -103,6 +128,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     await worker.close();
     await connection.quit();
+    await semaphoreRedis.quit();
   };
   process.once("SIGTERM", () => void shutdown());
   process.once("SIGINT", () => void shutdown());
