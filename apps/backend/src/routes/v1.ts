@@ -19,6 +19,7 @@ import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
 import { postgresMirror } from "../persistence/PostgresMirror";
+import { creditLedger } from "../billing/CreditLedgerService";
 import { authService } from "../auth/AuthService";
 
 export const v1Router = Router();
@@ -1040,6 +1041,76 @@ v1Router.get("/runtime/status", async (_req, res) => {
       redis: "error",
       modelGateway,
       error: err.message,
+    });
+  }
+});
+
+// --- Commercial credits (server-authoritative, read-only API in this phase) ---
+v1Router.get("/credits", async (req, res) => {
+  const t = requireTenant(req);
+  if (!creditLedger.isEnabled()) {
+    return res.json({
+      enabled: false,
+      currency: "credits",
+      note: "Commercial credit ledger is disabled.",
+    });
+  }
+
+  try {
+    const [balance, buckets] = await Promise.all([
+      creditLedger.balance(t.id),
+      creditLedger.listBuckets(t.id),
+    ]);
+    return res.json({
+      enabled: true,
+      currency: "credits",
+      balance: {
+        available: balance.available.toString(),
+        reserved: balance.reserved.toString(),
+        total: balance.total.toString(),
+      },
+      buckets: buckets.map((bucket) => ({
+        id: bucket.id,
+        source: bucket.source,
+        grantedCredits: bucket.grantedCredits.toString(),
+        balanceCredits: bucket.balanceCredits.toString(),
+        reservedCredits: bucket.reservedCredits.toString(),
+        expiresAt: bucket.expiresAt,
+        createdAt: bucket.createdAt,
+      })),
+    });
+  } catch (err: any) {
+    return res.status(503).json({
+      enabled: true,
+      error: "Credit ledger is unavailable",
+      detail: err?.message ?? String(err),
+    });
+  }
+});
+
+v1Router.get("/credits/ledger", async (req, res) => {
+  const t = requireTenant(req);
+  if (!creditLedger.isEnabled()) {
+    return res.json({ enabled: false, entries: [] });
+  }
+
+  try {
+    const limit = req.query.limit
+      ? Math.max(1, Math.min(Number(req.query.limit) || 100, 1000))
+      : 100;
+    const entries = await creditLedger.listLedger(t.id, limit);
+    return res.json({
+      enabled: true,
+      entries: entries.map((entry) => ({
+        ...entry,
+        credits: entry.credits.toString(),
+      })),
+    });
+  } catch (err: any) {
+    return res.status(503).json({
+      enabled: true,
+      error: "Credit ledger is unavailable",
+      detail: err?.message ?? String(err),
     });
   }
 });
