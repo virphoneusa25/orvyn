@@ -56,6 +56,11 @@ jobs:
           ORVYN_POSTGRES_MIRROR: "1"
           ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
         run: node --test --test-concurrency=1 apps/backend/dist/persistence/TenantPostgresMirror.test.js
+      - name: Complete authentication migration and restored security behavior
+        env:
+          ORVYN_AUTH_STORAGE_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
+        run: node --test apps/backend/dist/identity/PostgresAuthStorage.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         env:
           PGPASSWORD: test-password
@@ -68,6 +73,7 @@ jobs:
           pgclient psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mirror_restore'
           pgclient pg_restore -h 127.0.0.1 -U orvyn -d mirror_restore --no-owner --no-privileges /backup/mirror.dump
           tables=(orvyn_storage.migrations orvyn_storage.missions orvyn_storage.usage_events orvyn_storage.settings orvyn_storage.models public.identity_migrations public.identity_users public.identity_organizations public.identity_organization_members public.identity_sessions public.identity_projects public.identity_chats)
+          tables+=(orvyn_auth.migrations orvyn_auth.imports orvyn_auth.api_keys orvyn_auth.chat_shares orvyn_auth.desktop_handoffs orvyn_auth.email_verifications orvyn_auth.github_links orvyn_auth.legal_acceptances orvyn_auth.login_failures orvyn_auth.oauth_identities orvyn_auth.oauth_states orvyn_auth.org_invites orvyn_auth.organization_members orvyn_auth.organizations orvyn_auth.password_resets orvyn_auth.session_rotations orvyn_auth.sessions orvyn_auth.tenant_chats orvyn_auth.tenant_projects orvyn_auth.users)
           for table in "${tables[@]}"; do
             query="SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM $table t"
             original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
