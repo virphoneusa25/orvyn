@@ -18,6 +18,10 @@ import { InlineEditService } from "../edit/InlineEditService";
 import { CompleteService } from "../edit/CompleteService";
 import { ImageService } from "../images/ImageService";
 import { MODES } from "../agent/modes";
+import {
+  getPostgresShadowStore,
+  postgresShadowEnabled,
+} from "../persistence/PostgresShadowStore";
 
 export const v1Router = Router();
 v1Router.use("/documents", documentRouter);
@@ -890,19 +894,35 @@ v1Router.get("/runtime/status", async (_req, res) => {
   const modelGatewayReady =
     !modelGateway.enabled || modelGateway.status === "ready";
 
+  const postgres = getPostgresShadowStore();
+  const storage = postgresShadowEnabled()
+    ? {
+        mode: "sqlite-authoritative/postgres-shadow",
+        postgres: (await postgres!.ping()) ? "ready" : "unavailable",
+        ...postgres!.status(),
+      }
+    : {
+        mode: "sqlite",
+        postgres: "disabled",
+        enabled: false,
+      };
+  const storageReady = !postgresShadowEnabled() || storage.postgres === "ready";
+
   if (!distributedRuntimeReady()) {
-    return res.status(modelGatewayReady ? 200 : 503).json({
+    const ready = modelGatewayReady && storageReady;
+    return res.status(ready ? 200 : 503).json({
       distributed: false,
-      status: modelGatewayReady ? "local" : "degraded",
+      status: ready ? "local" : "degraded",
       workers: 0,
       modelGateway,
+      storage,
     });
   }
 
   try {
     const health = await getDistributedMissionCoordinator().health();
     const workersReady = health.activeWorkers > 0;
-    const ready = workersReady && modelGatewayReady;
+    const ready = workersReady && modelGatewayReady && storageReady;
 
     return res.status(ready ? 200 : 503).json({
       distributed: true,
@@ -911,6 +931,7 @@ v1Router.get("/runtime/status", async (_req, res) => {
       redis: health.redis,
       queue: health.queue,
       modelGateway,
+      storage,
     });
   } catch (err: any) {
     return res.status(503).json({
@@ -919,6 +940,7 @@ v1Router.get("/runtime/status", async (_req, res) => {
       workers: 0,
       redis: "error",
       modelGateway,
+      storage,
       error: err.message,
     });
   }
