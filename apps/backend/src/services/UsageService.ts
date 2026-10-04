@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { AIChunk, AIModelProvider, AIRequest, AIResponse } from "@orvyn/ai-core";
 import { isTransientError, withModelRetries } from "./modelRetries";
+import { postgresMirror } from "../persistence/PostgresMirror";
 
 export interface UsageContext {
   missionId?: string;
@@ -84,6 +85,7 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
+  readonly tenantId?: string;
   saveUsageEvent(e: UsageEvent): void;
   loadRecentUsage(limit?: number): UsageEvent[];
   countUsageSince?(ts: number): number;
@@ -141,7 +143,7 @@ export class UsageService {
     }
   }
 
-  /** Current quota state; surfaced on /usage so clients can warn early. */
+  /** Current synchronous quota state retained for local/backward-compatible callers. */
   quota(): { limit: number; used: number; remaining: number | null; resetsAt: number } {
     this.rollMonth();
     this.refreshMonthCount();
@@ -150,6 +152,46 @@ export class UsageService {
       used: this.monthCount,
       remaining: this.quotaLimit > 0 ? Math.max(0, this.quotaLimit - this.monthCount) : null,
       resetsAt: utcMonthStart(new Date(this.monthStart).setUTCMonth(new Date(this.monthStart).getUTCMonth() + 1)),
+    };
+  }
+
+  async quotaAsync(): Promise<{ limit: number; used: number; remaining: number | null; resetsAt: number }> {
+    this.rollMonth();
+    let used = this.monthCount;
+
+    if (
+      postgresMirror.isPrimaryReadsEnabled() &&
+      this.store?.tenantId
+    ) {
+      try {
+        used = await (postgresMirror.isPrimaryWritesEnabled()
+          ? postgresMirror.countReservedUsageSince.bind(postgresMirror)
+          : postgresMirror.countUsageSince.bind(postgresMirror))(
+          this.store.tenantId,
+          this.monthStart
+        );
+        this.monthCount = used;
+      } catch (err) {
+        if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+          throw err;
+        }
+        this.refreshMonthCount();
+        used = this.monthCount;
+      }
+    } else {
+      this.refreshMonthCount();
+      used = this.monthCount;
+    }
+
+    return {
+      limit: this.quotaLimit,
+      used,
+      remaining: this.quotaLimit > 0 ? Math.max(0, this.quotaLimit - used) : null,
+      resetsAt: utcMonthStart(
+        new Date(this.monthStart).setUTCMonth(
+          new Date(this.monthStart).getUTCMonth() + 1
+        )
+      ),
     };
   }
 
@@ -173,6 +215,31 @@ export class UsageService {
     }
   }
 
+  async checkQuotaAsync(): Promise<void> {
+    if (this.quotaLimit <= 0) return;
+    const state = await this.quotaAsync();
+    if (state.used >= this.quotaLimit) {
+      throw new QuotaExceededError(state.used, this.quotaLimit);
+    }
+  }
+
+  private async beginRequest(): Promise<{ id: string; timestamp: number } | undefined> {
+    this.checkMissionBudget();
+    if (postgresMirror.isPrimaryWritesEnabled() && this.quotaLimit > 0) {
+      if (!this.store?.tenantId) throw new Error("PostgreSQL quota enforcement requires tenant storage");
+      const reservation = { id: `use_${randomUUID()}`, timestamp: Date.now() };
+      // Never fall back to SQLite for admission: another node may already own
+      // the final slot, and an unavailable database cannot prove otherwise.
+      await postgresMirror.flushStrict();
+      if (!await postgresMirror.reserveUsage(this.store.tenantId, reservation.id, reservation.timestamp, this.quotaLimit)) {
+        throw new QuotaExceededError(this.quotaLimit, this.quotaLimit);
+      }
+      return reservation;
+    }
+    await this.checkQuotaAsync();
+    return undefined;
+  }
+
   /** Run `fn` with mission/task/agent attribution attached to every model call inside it. */
   with<T>(ctx: UsageContext, fn: () => Promise<T>): Promise<T> {
     // Merge with any outer context so a task-level wrap inherits the missionId.
@@ -180,9 +247,9 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>, reservation?: { id: string; timestamp: number }): void {
     const ctx = this.als.getStore() ?? {};
-    const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+    const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...reservation, ...ctx, ...e };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     this.rollMonth();
@@ -195,6 +262,22 @@ export class UsageService {
       m.promptTokens += e.promptTokens ?? 0;
       m.completionTokens += e.completionTokens ?? 0;
       this.missions.set(ctx.missionId, m);
+    }
+  }
+
+  /**
+   * Record usage and, when staged Postgres primary writes are enabled, wait
+   * for the durable write before returning. This closes the quota race where
+   * a second model call could read Postgres before the first call's usage
+   * event had arrived.
+   */
+  async recordAsync(
+    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>,
+    reservation?: { id: string; timestamp: number }
+  ): Promise<void> {
+    this.record(e, reservation);
+    if (postgresMirror.isPrimaryWritesEnabled()) {
+      await postgresMirror.flushStrict();
     }
   }
 
@@ -287,9 +370,9 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        usage.checkQuota();
-        usage.checkMissionBudget();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
+        let recording = false;
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
           // the final outcome, not one per attempt.
@@ -297,7 +380,8 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          usage.record({
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
@@ -307,27 +391,29 @@ export class UsageService {
             completionTokens: res.usage?.completionTokens,
             outputChars: res.content?.length ?? 0,
             toolCalls: res.toolCalls?.length || undefined,
-          });
+          }, reservation);
           return res;
         } catch (err: any) {
-          usage.record({
+          if (recording) throw err;
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: false,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
         }
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        usage.checkQuota();
-        usage.checkMissionBudget();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
+        let recording = false;
         try {
           // A stream may only be retried before the first chunk reaches the
           // consumer — after that, replaying would duplicate output.
@@ -350,7 +436,8 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          usage.record({
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -358,9 +445,11 @@ export class UsageService {
             ok: true,
             outputChars: chars,
             toolCalls: toolCalls || undefined,
-          });
+          }, reservation);
         } catch (err: any) {
-          usage.record({
+          if (recording) throw err;
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -368,8 +457,21 @@ export class UsageService {
             ok: false,
             outputChars: chars,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
+        } finally {
+          if (!recording) {
+            recording = true;
+            await usage.recordAsync({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "stream",
+              durationMs: Date.now() - start,
+              ok: false,
+              outputChars: chars,
+              error: "Stream closed before completion",
+            }, reservation);
+          }
         }
       },
 
@@ -384,27 +486,31 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
+        let recording = false;
         try {
           const res = await inner.generateImage!(request);
-          usage.record({
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
             durationMs: Date.now() - start,
             ok: true,
-          });
+          }, reservation);
           return res;
         } catch (err: any) {
-          usage.record({
+          if (recording) throw err;
+          recording = true;
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
             durationMs: Date.now() - start,
             ok: false,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
         }
       };

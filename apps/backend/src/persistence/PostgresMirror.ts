@@ -17,8 +17,13 @@ import { Pool } from "pg";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import {
+  decryptModelConfig,
+  encryptModelConfig,
+  modelSecretKeyConfigured,
+} from "./modelSecret";
 
-const MIGRATION_VERSION = 1;
+const MIGRATION_VERSION = 2;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -75,6 +80,24 @@ CREATE INDEX IF NOT EXISTS idx_usage_tenant_ts
 CREATE INDEX IF NOT EXISTS idx_usage_tenant_mission
   ON usage_events (tenant_id, mission_id);
 
+CREATE TABLE IF NOT EXISTS usage_reservations (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ts BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_reservations_tenant_ts
+  ON usage_reservations (tenant_id, ts);
+
+CREATE TABLE IF NOT EXISTS mission_reservations (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ts BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_mission_reservations_tenant_ts
+  ON mission_reservations (tenant_id, ts);
+
 CREATE TABLE IF NOT EXISTS tenant_settings (
   tenant_id TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -123,6 +146,20 @@ function enabled(): boolean {
   );
 }
 
+function primaryReadsEnabled(): boolean {
+  return (
+    process.env.ORVYN_POSTGRES_PRIMARY_READS?.trim() === "1" &&
+    enabled()
+  );
+}
+
+function primaryWritesEnabled(): boolean {
+  return (
+    process.env.ORVYN_POSTGRES_PRIMARY_WRITES?.trim() === "1" &&
+    primaryReadsEnabled()
+  );
+}
+
 function sslConfig(): false | { rejectUnauthorized: boolean } {
   const mode = process.env.ORVYN_POSTGRES_SSL?.trim().toLowerCase();
   if (!mode || mode === "0" || mode === "false" || mode === "disable") return false;
@@ -133,10 +170,19 @@ export class PostgresMirror {
   private pool: Pool | null = null;
   private initPromise: Promise<void> | null = null;
   private writeChain: Promise<void> = Promise.resolve();
+  private writeFailures: Array<{ operation: string; error: unknown }> = [];
   private warned = false;
 
   isEnabled(): boolean {
     return enabled();
+  }
+
+  isPrimaryReadsEnabled(): boolean {
+    return primaryReadsEnabled();
+  }
+
+  isPrimaryWritesEnabled(): boolean {
+    return primaryWritesEnabled();
   }
 
   private getPool(): Pool {
@@ -147,6 +193,8 @@ export class PostgresMirror {
         max: Math.max(1, Number(process.env.ORVYN_POSTGRES_POOL_MAX) || 10),
         idleTimeoutMillis: 30_000,
         connectionTimeoutMillis: 5_000,
+        statement_timeout: 10_000,
+        lock_timeout: 5_000,
         ssl: sslConfig(),
         application_name: process.env.ORVYN_POSTGRES_APPLICATION_NAME?.trim() || "orvyn",
       });
@@ -209,6 +257,7 @@ export class PostgresMirror {
     this.writeChain = this.writeChain
       .then(fn)
       .catch((err) => {
+        this.writeFailures.push({ operation, error: err });
         this.report(operation, err);
       });
   }
@@ -217,12 +266,33 @@ export class PostgresMirror {
     await this.writeChain;
   }
 
+  /**
+   * Wait for all writes queued by this process and fail if any mirror write
+   * failed. Used only by the staged Postgres-primary mission write path.
+   */
+  async flushStrict(): Promise<void> {
+    await this.writeChain;
+    if (this.writeFailures.length === 0) return;
+
+    const failures = this.writeFailures.splice(0);
+    const first = failures[0];
+    const detail =
+      first?.error instanceof Error
+        ? first.error.message
+        : String(first?.error ?? "unknown PostgreSQL write failure");
+    throw new Error(
+      `PostgreSQL durable write failed during ${first?.operation ?? "unknown operation"}: ${detail}` +
+        (failures.length > 1 ? ` (+${failures.length - 1} additional write failure(s))` : "")
+    );
+  }
+
   async health(): Promise<{
     enabled: boolean;
     status: "disabled" | "ready" | "unavailable";
     latencyMs?: number;
     error?: string;
     migrationVersion?: number;
+    modelSecretEncryption?: "configured" | "missing";
   }> {
     if (!enabled()) return { enabled: false, status: "disabled" };
 
@@ -237,6 +307,7 @@ export class PostgresMirror {
         status: "ready",
         latencyMs: Date.now() - started,
         migrationVersion: Number(result.rows[0]?.version ?? 0),
+        modelSecretEncryption: modelSecretKeyConfigured() ? "configured" : "missing",
       };
     } catch (err) {
       return {
@@ -261,9 +332,9 @@ export class PostgresMirror {
   async saveMission(tenantId: string, m: Mission): Promise<void> {
     const pool = await this.ready();
     await pool.query(
-      `INSERT INTO missions
+      `WITH recorded AS (INSERT INTO missions
        (tenant_id, id, run_id, project_root, goal, status, review_cycles, created_at, updated_at, tasks_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE((SELECT ts FROM mission_reservations WHERE tenant_id=$1 AND id=$3), $8),$9,$10::jsonb)
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          run_id=EXCLUDED.run_id,
          project_root=EXCLUDED.project_root,
@@ -271,7 +342,8 @@ export class PostgresMirror {
          status=EXCLUDED.status,
          review_cycles=EXCLUDED.review_cycles,
          updated_at=EXCLUDED.updated_at,
-         tasks_json=EXCLUDED.tasks_json`,
+         tasks_json=EXCLUDED.tasks_json RETURNING id)
+       DELETE FROM mission_reservations WHERE tenant_id=$1 AND id=$3`,
       [
         tenantId,
         m.id,
@@ -290,11 +362,12 @@ export class PostgresMirror {
   async saveUsageEvent(tenantId: string, e: UsageEvent): Promise<void> {
     const pool = await this.ready();
     await pool.query(
-      `INSERT INTO usage_events
+      `WITH recorded AS (INSERT INTO usage_events
        (tenant_id,id,ts,model_id,provider,method,duration_ms,ok,error,prompt_tokens,
         completion_tokens,output_chars,tool_calls,mission_id,task_id,agent,source)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       ON CONFLICT(tenant_id,id) DO NOTHING`,
+       ON CONFLICT(tenant_id,id) DO NOTHING RETURNING id)
+       DELETE FROM usage_reservations WHERE tenant_id=$1 AND id=$2`,
       [
         tenantId,
         e.id,
@@ -330,12 +403,13 @@ export class PostgresMirror {
 
   async saveModel(tenantId: string, config: ModelConfig): Promise<void> {
     const pool = await this.ready();
+    const persisted = encryptModelConfig(config);
     await pool.query(
       `INSERT INTO tenant_models(tenant_id,id,config_json)
        VALUES ($1,$2,$3::jsonb)
        ON CONFLICT(tenant_id,id) DO UPDATE
        SET config_json=EXCLUDED.config_json, updated_at=now()`,
-      [tenantId, config.id, JSON.stringify(config)]
+      [tenantId, config.id, JSON.stringify(persisted)]
     );
   }
 
@@ -345,6 +419,101 @@ export class PostgresMirror {
       "DELETE FROM tenant_models WHERE tenant_id=$1 AND id=$2",
       [tenantId, id]
     );
+  }
+
+  async registerAccount(input: {
+    user: {
+      id: string;
+      email: string;
+      name: string | null;
+      passwordHash: string;
+      createdAt: number;
+    };
+    legal: {
+      version: string;
+      acceptedAt: number;
+    };
+    session: {
+      tokenHash: string;
+      createdAt: number;
+      expiresAt: number;
+    };
+  }): Promise<void> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO users(id,email,name,password_hash,created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [
+          input.user.id,
+          input.user.email,
+          input.user.name,
+          input.user.passwordHash,
+          input.user.createdAt,
+        ]
+      );
+      await client.query(
+        `INSERT INTO legal_acceptances(user_id,version,accepted_at)
+         VALUES ($1,$2,$3)`,
+        [
+          input.user.id,
+          input.legal.version,
+          input.legal.acceptedAt,
+        ]
+      );
+      await client.query(
+        "DELETE FROM sessions WHERE expires_at <= $1",
+        [Date.now()]
+      );
+      await client.query(
+        `INSERT INTO sessions(token_hash,user_id,created_at,expires_at)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          input.session.tokenHash,
+          input.user.id,
+          input.session.createdAt,
+          input.session.expiresAt,
+        ]
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createPrimarySession(session: {
+    tokenHash: string;
+    userId: string;
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<void> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
+      await client.query(
+        `INSERT INTO sessions(token_hash,user_id,created_at,expires_at)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          session.tokenHash,
+          session.userId,
+          session.createdAt,
+          session.expiresAt,
+        ]
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async upsertUser(user: {
@@ -423,6 +592,428 @@ export class PostgresMirror {
         await this.saveModel(tenantId, model);
       }
     });
+  }
+
+  async loadMissions(tenantId: string): Promise<Mission[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      run_id: string;
+      project_root: string;
+      goal: string;
+      status: Mission["status"];
+      review_cycles: number;
+      created_at: string;
+      updated_at: string;
+      tasks_json: Mission["tasks"];
+    }>(
+      `SELECT id, run_id, project_root, goal, status, review_cycles,
+              created_at::text, updated_at::text, tasks_json
+       FROM missions
+       WHERE tenant_id=$1
+       ORDER BY created_at DESC`,
+      [tenantId]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      projectRoot: row.project_root,
+      goal: row.goal,
+      status: row.status,
+      reviewCycles: Number(row.review_cycles),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      tasks: Array.isArray(row.tasks_json) ? row.tasks_json : [],
+    }));
+  }
+
+  async getMission(tenantId: string, missionId: string): Promise<Mission | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      run_id: string;
+      project_root: string;
+      goal: string;
+      status: Mission["status"];
+      review_cycles: number;
+      created_at: string;
+      updated_at: string;
+      tasks_json: Mission["tasks"];
+    }>(
+      `SELECT id, run_id, project_root, goal, status, review_cycles,
+              created_at::text, updated_at::text, tasks_json
+       FROM missions
+       WHERE tenant_id=$1 AND id=$2
+       LIMIT 1`,
+      [tenantId, missionId]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          runId: row.run_id,
+          projectRoot: row.project_root,
+          goal: row.goal,
+          status: row.status,
+          reviewCycles: Number(row.review_cycles),
+          createdAt: Number(row.created_at),
+          updatedAt: Number(row.updated_at),
+          tasks: Array.isArray(row.tasks_json) ? row.tasks_json : [],
+        }
+      : null;
+  }
+
+  async loadTenantSettings(tenantId: string): Promise<Array<{ key: string; value: string }>> {
+    const pool = await this.ready();
+    const result = await pool.query<{ key: string; value: string }>(
+      `SELECT key, value
+       FROM tenant_settings
+       WHERE tenant_id=$1
+       ORDER BY key`,
+      [tenantId]
+    );
+    return result.rows.map((row) => ({ key: row.key, value: row.value }));
+  }
+
+  async loadTenantModels(tenantId: string): Promise<ModelConfig[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{ config_json: ModelConfig }>(
+      `SELECT config_json
+       FROM tenant_models
+       WHERE tenant_id=$1
+       ORDER BY id`,
+      [tenantId]
+    );
+    return result.rows.map((row) =>
+      decryptModelConfig(row.config_json as ModelConfig)
+    );
+  }
+
+  async getUserAuthByEmail(email: string): Promise<{
+    id: string;
+    email: string;
+    name: string | null;
+    passwordHash: string;
+    createdAt: number;
+  } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      email: string;
+      name: string | null;
+      password_hash: string;
+      created_at: string;
+    }>(
+      `SELECT id, email, name, password_hash, created_at::text
+       FROM users
+       WHERE email=$1
+       LIMIT 1`,
+      [email.trim().toLowerCase()]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          passwordHash: row.password_hash,
+          createdAt: Number(row.created_at),
+        }
+      : null;
+  }
+
+  async verifySession(tokenHash: string): Promise<{
+    id: string;
+    email: string;
+    name: string | null;
+    createdAt: number;
+  } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      email: string;
+      name: string | null;
+      created_at: string;
+    }>(
+      `SELECT u.id, u.email, u.name, u.created_at::text
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = $1
+         AND s.expires_at > $2
+       LIMIT 1`,
+      [tokenHash, Date.now()]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          createdAt: Number(row.created_at),
+        }
+      : null;
+  }
+
+  async getLegalAcceptance(
+    userId: string,
+    version: string
+  ): Promise<{ version: string; acceptedAt: number } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      version: string;
+      accepted_at: string;
+    }>(
+      `SELECT version, accepted_at::text
+       FROM legal_acceptances
+       WHERE user_id=$1 AND version=$2
+       LIMIT 1`,
+      [userId, version]
+    );
+    const row = result.rows[0];
+    return row
+      ? { version: row.version, acceptedAt: Number(row.accepted_at) }
+      : null;
+  }
+
+  async loadRecentUsage(tenantId: string, limit = 200): Promise<UsageEvent[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      ts: string;
+      model_id: string;
+      provider: string;
+      method: UsageEvent["method"];
+      duration_ms: number;
+      ok: boolean;
+      error: string | null;
+      prompt_tokens: string | null;
+      completion_tokens: string | null;
+      output_chars: string | null;
+      tool_calls: number | null;
+      mission_id: string | null;
+      task_id: string | null;
+      agent: string | null;
+      source: string | null;
+    }>(
+      `SELECT id, ts::text, model_id, provider, method, duration_ms, ok, error,
+              prompt_tokens::text, completion_tokens::text, output_chars::text,
+              tool_calls, mission_id, task_id, agent, source
+       FROM usage_events
+       WHERE tenant_id=$1
+       ORDER BY ts DESC
+       LIMIT $2`,
+      [tenantId, Math.max(1, Math.min(limit, 5000))]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      timestamp: Number(row.ts),
+      modelId: row.model_id,
+      provider: row.provider,
+      method: row.method,
+      durationMs: Number(row.duration_ms),
+      ok: row.ok,
+      ...(row.error != null ? { error: row.error } : {}),
+      ...(row.prompt_tokens != null ? { promptTokens: Number(row.prompt_tokens) } : {}),
+      ...(row.completion_tokens != null ? { completionTokens: Number(row.completion_tokens) } : {}),
+      ...(row.output_chars != null ? { outputChars: Number(row.output_chars) } : {}),
+      ...(row.tool_calls != null ? { toolCalls: Number(row.tool_calls) } : {}),
+      ...(row.mission_id != null ? { missionId: row.mission_id } : {}),
+      ...(row.task_id != null ? { taskId: row.task_id } : {}),
+      ...(row.agent != null ? { agent: row.agent } : {}),
+      ...(row.source != null ? { source: row.source } : {}),
+    }));
+  }
+
+  async usageTotals(tenantId: string): Promise<{
+    requests: number;
+    errors: number;
+    promptTokens: number;
+    completionTokens: number;
+    tokensReportedFor: number;
+    byModel: Record<string, {
+      requests: number;
+      errors: number;
+      promptTokens: number;
+      completionTokens: number;
+      durationMs: number;
+    }>;
+    byMission: Record<string, {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+    }>;
+  }> {
+    const pool = await this.ready();
+    const [totalsResult, modelResult, missionResult] = await Promise.all([
+      pool.query<{
+        requests: string;
+        errors: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+        tokens_reported_for: string;
+      }>(
+        `SELECT
+          COUNT(*)::text AS requests,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
+          COUNT(*) FILTER (WHERE prompt_tokens IS NOT NULL)::text AS tokens_reported_for
+         FROM usage_events
+         WHERE tenant_id=$1`,
+        [tenantId]
+      ),
+      pool.query<{
+        model_id: string;
+        requests: string;
+        errors: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+        duration_ms: string;
+      }>(
+        `SELECT
+          model_id,
+          COUNT(*)::text AS requests,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
+          COALESCE(SUM(duration_ms),0)::text AS duration_ms
+         FROM usage_events
+         WHERE tenant_id=$1
+         GROUP BY model_id`,
+        [tenantId]
+      ),
+      pool.query<{
+        mission_id: string;
+        requests: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+      }>(
+        `SELECT
+          mission_id,
+          COUNT(*)::text AS requests,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens
+         FROM usage_events
+         WHERE tenant_id=$1 AND mission_id IS NOT NULL
+         GROUP BY mission_id`,
+        [tenantId]
+      ),
+    ]);
+
+    const row = totalsResult.rows[0];
+    const byModel: Record<string, {
+      requests: number;
+      errors: number;
+      promptTokens: number;
+      completionTokens: number;
+      durationMs: number;
+    }> = {};
+    for (const model of modelResult.rows) {
+      byModel[model.model_id] = {
+        requests: Number(model.requests),
+        errors: Number(model.errors),
+        promptTokens: Number(model.prompt_tokens),
+        completionTokens: Number(model.completion_tokens),
+        durationMs: Number(model.duration_ms),
+      };
+    }
+
+    const byMission: Record<string, {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+    }> = {};
+    for (const mission of missionResult.rows) {
+      byMission[mission.mission_id] = {
+        requests: Number(mission.requests),
+        promptTokens: Number(mission.prompt_tokens),
+        completionTokens: Number(mission.completion_tokens),
+      };
+    }
+
+    return {
+      requests: Number(row?.requests ?? 0),
+      errors: Number(row?.errors ?? 0),
+      promptTokens: Number(row?.prompt_tokens ?? 0),
+      completionTokens: Number(row?.completion_tokens ?? 0),
+      tokensReportedFor: Number(row?.tokens_reported_for ?? 0),
+      byModel,
+      byMission,
+    };
+  }
+
+  async countUsageSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+       FROM usage_events
+       WHERE tenant_id=$1 AND ts >= $2`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0]?.n ?? 0);
+  }
+
+  /** Reserve before executing a provider call. Crashed/uncertain calls retain
+   * their slot until the monthly reset; never expire a potentially paid call. */
+  async reserveUsage(tenantId: string, id: string, timestamp: number, limit: number): Promise<boolean> {
+    return this.reserveQuota(tenantId, id, timestamp, limit, "usage");
+  }
+
+  async reserveMission(tenantId: string, runId: string, timestamp: number, limit: number): Promise<boolean> {
+    return this.reserveQuota(tenantId, runId, timestamp, limit, "mission");
+  }
+
+  private async reserveQuota(tenantId: string, id: string, timestamp: number, limit: number, kind: "usage" | "mission"): Promise<boolean> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    const events = kind === "usage" ? "usage_events" : "missions";
+    const reservations = kind === "usage" ? "usage_reservations" : "mission_reservations";
+    const timestampColumn = kind === "usage" ? "ts" : "created_at";
+    const date = new Date(timestamp);
+    const month = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${kind}-quota:${tenantId}`]);
+      const result = await client.query<{ n: string }>(
+        `SELECT ((SELECT COUNT(*) FROM ${events} WHERE tenant_id=$1 AND ${timestampColumn} >= $2)
+          + (SELECT COUNT(*) FROM ${reservations} WHERE tenant_id=$1 AND ts >= $2))::text AS n`,
+        [tenantId, month]
+      );
+      if (Number(result.rows[0].n) >= limit) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query(`INSERT INTO ${reservations}(tenant_id,id,ts) VALUES ($1,$2,$3)`, [tenantId, id, timestamp]);
+      await client.query("COMMIT");
+      return true;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async countReservedUsageSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT ((SELECT COUNT(*) FROM usage_events WHERE tenant_id=$1 AND ts >= $2)
+        + (SELECT COUNT(*) FROM usage_reservations WHERE tenant_id=$1 AND ts >= $2))::text AS n`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0].n);
+  }
+
+  async countMissionsSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+       FROM missions
+       WHERE tenant_id=$1 AND created_at >= $2`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0]?.n ?? 0);
   }
 
   async parityCounts(tenantId: string): Promise<{

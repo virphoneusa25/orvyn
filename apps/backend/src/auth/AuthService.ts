@@ -231,6 +231,318 @@ export class AuthService {
     return row ? { version: String(row.version), acceptedAt: Number(row.accepted_at) } : null;
   }
 
+  private newSessionMaterial(): {
+    token: string;
+    tokenHash: string;
+    createdAt: number;
+    expiresAt: number;
+  } {
+    const token = `orvsess_${randomBytes(32).toString("hex")}`;
+    const createdAt = Date.now();
+    return {
+      token,
+      tokenHash: hashToken(token),
+      createdAt,
+      expiresAt: createdAt + SESSION_TTL_MS,
+    };
+  }
+
+  private cachePrimaryUser(user: User, passwordHash: string): void {
+    try {
+      // PostgreSQL is authoritative in this mode. Remove any stale local row
+      // for the same email but a different id before upserting the cache.
+      this.db
+        .prepare(`DELETE FROM users WHERE email = ? AND id <> ?`)
+        .run(user.email, user.id);
+      this.db
+        .prepare(
+          `INSERT INTO users (id, email, name, password_hash, created_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             email=excluded.email,
+             name=excluded.name,
+             password_hash=excluded.password_hash,
+             created_at=excluded.created_at`
+        )
+        .run(user.id, user.email, user.name, passwordHash, user.createdAt);
+    } catch (err) {
+      console.warn(
+        `[postgres-primary-writes] local user cache update failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  private cachePrimarySession(session: {
+    tokenHash: string;
+    userId: string;
+    createdAt: number;
+    expiresAt: number;
+  }): void {
+    try {
+      this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(Date.now());
+      this.db
+        .prepare(
+          `INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(token_hash) DO UPDATE SET
+             user_id=excluded.user_id,
+             created_at=excluded.created_at,
+             expires_at=excluded.expires_at`
+        )
+        .run(
+          session.tokenHash,
+          session.userId,
+          session.createdAt,
+          session.expiresAt
+        );
+    } catch (err) {
+      console.warn(
+        `[postgres-primary-writes] local session cache update failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  private cachePrimaryLegalAcceptance(
+    userId: string,
+    version: string,
+    acceptedAt: number
+  ): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO legal_acceptances (user_id, version, accepted_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id, version) DO UPDATE SET accepted_at=excluded.accepted_at`
+        )
+        .run(userId, version, acceptedAt);
+    } catch (err) {
+      console.warn(
+        `[postgres-primary-writes] local legal cache update failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  async registerAsync(
+    email: string,
+    password: string,
+    name?: string,
+    legal?: { accepted: boolean; version: string }
+  ): Promise<{ user: User; token: string; legalAcceptance: LegalAcceptance }> {
+    if (!postgresMirror.isPrimaryWritesEnabled()) {
+      const result = this.register(email, password, name, legal);
+      if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+      return result;
+    }
+
+    const normalized = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      throw new Error("Invalid email address");
+    }
+    if (password.length < 8) {
+      throw new Error("Password must be at least 8 characters");
+    }
+    if (!legal?.accepted || legal.version !== LEGAL_VERSION) {
+      throw new Error(
+        "You must accept the current ORVYN legal terms before creating an account"
+      );
+    }
+
+    const user: User = {
+      id: randomUUID(),
+      email: normalized,
+      name: name?.trim() || null,
+      createdAt: Date.now(),
+    };
+    const passwordHash = hashPassword(password);
+    const acceptedAt = Date.now();
+    const session = this.newSessionMaterial();
+
+    try {
+      await postgresMirror.registerAccount({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          passwordHash,
+          createdAt: user.createdAt,
+        },
+        legal: {
+          version: LEGAL_VERSION,
+          acceptedAt,
+        },
+        session: {
+          tokenHash: session.tokenHash,
+          createdAt: session.createdAt,
+          expiresAt: session.expiresAt,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === "23505" || /duplicate key|unique/i.test(String(err?.message ?? ""))) {
+        throw new Error("An account with this email already exists");
+      }
+      throw err;
+    }
+
+    // PostgreSQL commit succeeded. Populate the node-local cache without
+    // re-mirroring the same writes.
+    this.cachePrimaryUser(user, passwordHash);
+    this.cachePrimaryLegalAcceptance(user.id, LEGAL_VERSION, acceptedAt);
+    this.cachePrimarySession({
+      tokenHash: session.tokenHash,
+      userId: user.id,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+    });
+
+    return {
+      user,
+      token: session.token,
+      legalAcceptance: { version: LEGAL_VERSION, acceptedAt },
+    };
+  }
+
+  async loginAsync(email: string, password: string): Promise<{ user: User; token: string }> {
+    if (!postgresMirror.isPrimaryReadsEnabled()) {
+      return this.login(email, password);
+    }
+
+    const normalized = email.trim().toLowerCase();
+    const f = this.failures.get(normalized);
+    if (f && f.count >= MAX_LOGIN_FAILURES && Date.now() - f.firstAt < LOCKOUT_WINDOW_MS) {
+      throw new Error("Too many failed attempts — try again later");
+    }
+    if (f && Date.now() - f.firstAt >= LOCKOUT_WINDOW_MS) {
+      this.failures.delete(normalized);
+    }
+
+    try {
+      const row = await postgresMirror.getUserAuthByEmail(normalized);
+      if (!row || !verifyPassword(password, row.passwordHash)) {
+        const cur = this.failures.get(normalized) ?? {
+          count: 0,
+          firstAt: Date.now(),
+        };
+        this.failures.set(normalized, {
+          count: cur.count + 1,
+          firstAt: cur.firstAt,
+        });
+        throw new Error("Invalid email or password");
+      }
+
+      this.failures.delete(normalized);
+      const user: User = {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        createdAt: row.createdAt,
+      };
+
+      if (postgresMirror.isPrimaryWritesEnabled()) {
+        const session = this.newSessionMaterial();
+        await postgresMirror.createPrimarySession({
+          tokenHash: session.tokenHash,
+          userId: user.id,
+          createdAt: session.createdAt,
+          expiresAt: session.expiresAt,
+        });
+        this.cachePrimaryUser(user, row.passwordHash);
+        this.cachePrimarySession({
+          tokenHash: session.tokenHash,
+          userId: user.id,
+          createdAt: session.createdAt,
+          expiresAt: session.expiresAt,
+        });
+        return { user, token: session.token };
+      }
+
+      const token = this.createSession(user.id);
+      await postgresMirror.flush();
+      return { user, token };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        message === "Invalid email or password" ||
+        postgresMirror.isPrimaryWritesEnabled() ||
+        process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0"
+      ) {
+        throw err;
+      }
+
+      console.warn(
+        `[postgres-primary-reads] credential read failed; falling back to SQLite: ${message}`
+      );
+      return this.login(email, password);
+    }
+  }
+
+  async verifyAsync(token: string): Promise<User | null> {
+    if (!postgresMirror.isPrimaryReadsEnabled()) return this.verify(token);
+    if (!token.startsWith("orvsess_")) return null;
+
+    try {
+      return await postgresMirror.verifySession(hashToken(token));
+    } catch (err) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") throw err;
+      console.warn(
+        `[postgres-primary-reads] session read failed; falling back to SQLite: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return this.verify(token);
+    }
+  }
+
+  async logoutAsync(token: string): Promise<void> {
+    if (!postgresMirror.isPrimaryWritesEnabled()) {
+      this.logout(token);
+      if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+      return;
+    }
+
+    const tokenHash = hashToken(token);
+    await postgresMirror.deleteSession(tokenHash);
+    this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(tokenHash);
+  }
+
+  async getLegalAcceptanceAsync(
+    userId: string,
+    version: string = LEGAL_VERSION
+  ): Promise<LegalAcceptance | null> {
+    if (!postgresMirror.isPrimaryReadsEnabled()) {
+      return this.getLegalAcceptance(userId, version);
+    }
+    try {
+      return await postgresMirror.getLegalAcceptance(userId, version);
+    } catch (err) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") throw err;
+      console.warn(
+        `[postgres-primary-reads] legal read failed; falling back to SQLite: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return this.getLegalAcceptance(userId, version);
+    }
+  }
+
+  async recordLegalAcceptanceAsync(
+    userId: string,
+    version: string = LEGAL_VERSION
+  ): Promise<LegalAcceptance> {
+    if (!postgresMirror.isPrimaryWritesEnabled()) {
+      const acceptance = this.recordLegalAcceptance(userId, version);
+      if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
+      return acceptance;
+    }
+
+    if (version !== LEGAL_VERSION) {
+      throw new Error("The legal version is not current");
+    }
+    const acceptedAt = Date.now();
+    await postgresMirror.saveLegalAcceptance(userId, version, acceptedAt);
+    this.cachePrimaryLegalAcceptance(userId, version, acceptedAt);
+    return { version, acceptedAt };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
   userCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as any;
     return Number(row?.n ?? 0);

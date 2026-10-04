@@ -194,9 +194,9 @@ export class MultiAgentRuntime {
     return c.signal;
   }
 
-  private finishCancelled(runId: string, missionId?: string): void {
+  private async finishCancelled(runId: string, missionId?: string): Promise<void> {
     this.store.emit(runId, "run.cancelled", { reason: "Stopped by user" });
-    if (missionId) this.taskEngine.setMissionStatus(missionId, "BLOCKED");
+    if (missionId) await this.taskEngine.setMissionStatusDurable(missionId, "BLOCKED");
     this.store.setStatus(runId, "cancelled");
     this.missionApproved.delete(runId);
     this.controllers.delete(runId);
@@ -209,8 +209,7 @@ export class MultiAgentRuntime {
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
-  start(projectRoot: string, goal: string, rules?: string, attachments?: Attachment[]): string {
-    const runId = randomUUID();
+  start(projectRoot: string, goal: string, rules?: string, attachments?: Attachment[], runId = randomUUID()): string {
     this.store.create(runId, projectRoot);
     applyMode(this.tools.registry, "multitask");
     this.tools.applyProfile();
@@ -260,13 +259,13 @@ export class MultiAgentRuntime {
     // Stopped while queued: cancel() already marked the run terminal; do not
     // burn a planner call — or a slot — on work nobody asked for anymore.
     if (this.isCancelled(runId)) {
-      if (this.store.get(runId)?.status !== "cancelled") this.finishCancelled(runId);
+      if (this.store.get(runId)?.status !== "cancelled") await this.finishCancelled(runId);
       return;
     }
     // The queue slot is ours — flip from queued to genuinely running.
     if (this.store.get(runId)?.status === "queued") this.store.setStatus(runId, "running");
     this.store.emit(runId, "run.started", { instruction: goal, mode: "multitask" });
-    const mission = this.taskEngine.createMission(runId, projectRoot, goal);
+    const mission = await this.taskEngine.createMissionDurable(runId, projectRoot, goal);
 
     // Sandbox mode: command-class tools execute inside a per-mission Docker
     // container, never on the API host (master spec §31). Enabled per
@@ -295,7 +294,7 @@ export class MultiAgentRuntime {
 
     try {
       // ---------- ASTRA: PLAN ----------
-      this.taskEngine.setMissionStatus(mission.id, "PLANNING");
+      await this.taskEngine.setMissionStatusDurable(mission.id, "PLANNING");
       const astra = this.models.resolveRole("orchestrator");
       this.store.emit(runId, "thinking", { role: "astra", model: astra.config.id });
 
@@ -341,13 +340,13 @@ export class MultiAgentRuntime {
         const allowed = delegatable();
         for (const t of raw) {
           const agent = allowed.includes(t.agent) ? (t.agent as AgentRole) : "coder";
-          this.taskEngine.addTask(mission.id, String(t.description ?? t), agent);
+          await this.taskEngine.addTaskDurable(mission.id, String(t.description ?? t), agent);
         }
       } catch (err: any) {
         this.store.emit(runId, "run.error", {
           message: `Astra did not return valid JSON: ${err.message}. Raw: ${planResponse.content.slice(0, 200)}`,
         });
-        this.taskEngine.setMissionStatus(mission.id, "FAILED");
+        await this.taskEngine.setMissionStatusDurable(mission.id, "FAILED");
         this.store.setStatus(runId, "error");
         return;
       }
@@ -366,7 +365,7 @@ export class MultiAgentRuntime {
         }
         this.store.emit(runId, "message.completed", {});
         this.store.emit(runId, "run.completed", { tasksTotal: 0, tasksCompleted: 0, tasksFailed: 0, missionStatus: "COMPLETED" });
-        this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
+        await this.taskEngine.setMissionStatusDurable(mission.id, "COMPLETED");
         this.store.setStatus(runId, "completed");
         return;
       }
@@ -376,7 +375,7 @@ export class MultiAgentRuntime {
         missionId: mission.id,
         tasks: mission.tasks.map((t) => ({ id: t.id, description: t.description, agent: t.agent })),
       });
-      this.taskEngine.setMissionStatus(mission.id, "RUNNING");
+      await this.taskEngine.setMissionStatusDurable(mission.id, "RUNNING");
 
       // Snapshot dirty files before any worker writes, so the user can roll
       // the mission back from the SCM panel.
@@ -396,15 +395,15 @@ export class MultiAgentRuntime {
       const reviewer = this.models.resolveTask("reviewer");
 
       for (const task of mission.tasks.slice()) {
-        if (this.isCancelled(runId)) return this.finishCancelled(runId, mission.id);
+        if (this.isCancelled(runId)) return await this.finishCancelled(runId, mission.id);
         await this.processTask(runId, mission, task, goal, reviewer, rules);
       }
-      if (this.isCancelled(runId)) return this.finishCancelled(runId, mission.id);
+      if (this.isCancelled(runId)) return await this.finishCancelled(runId, mission.id);
 
       // ---------- MANDATORY FINAL MISSION REVIEW (Review Engine) ----------
       let blocked = false;
       for (;;) {
-        this.taskEngine.setMissionStatus(mission.id, "REVIEW");
+        await this.taskEngine.setMissionStatusDurable(mission.id, "REVIEW");
         this.store.emit(runId, "review.started", {
           missionId: mission.id,
           scope: "mission",
@@ -424,7 +423,7 @@ export class MultiAgentRuntime {
           break;
         }
 
-        const cycle = this.taskEngine.incrementReviewCycles(mission.id);
+        const cycle = await this.taskEngine.incrementReviewCyclesDurable(mission.id);
         this.store.emit(runId, "review.rejected", {
           missionId: mission.id,
           scope: "mission",
@@ -437,13 +436,13 @@ export class MultiAgentRuntime {
         if (cycle >= ReviewEngine.MAX_CYCLES || verdict.requiredChanges.length === 0) {
           // Do not loop forever — hand the decision to the human.
           blocked = true;
-          this.taskEngine.setMissionStatus(mission.id, "BLOCKED");
+          await this.taskEngine.setMissionStatusDurable(mission.id, "BLOCKED");
           break;
         }
 
         // Rejected with concrete corrections: Astra assigns rework to the coder.
         for (const change of verdict.requiredChanges.slice(0, 4)) {
-          const correction = this.taskEngine.addTask(mission.id, `[review correction] ${change}`, "coder");
+          const correction = await this.taskEngine.addTaskDurable(mission.id, `[review correction] ${change}`, "coder");
           if (correction) await this.processTask(runId, mission, correction, goal, reviewer, rules);
         }
       }
@@ -453,19 +452,19 @@ export class MultiAgentRuntime {
       // An abort arrives here as a rejected fetch; a stopped mission is not a
       // failed one and must not be reported as an error.
       if (this.isCancelled(runId) || err?.name === "AbortError") {
-        return this.finishCancelled(runId, mission.id);
+        return await this.finishCancelled(runId, mission.id);
       }
       // A blown runaway-guard budget is BLOCKED (needs a human decision, e.g.
       // raising the cap), not FAILED — the work may be nearly done.
       if (err instanceof MissionBudgetExceededError) {
         this.store.emit(runId, "run.error", { message: err.message });
         this.store.emit(runId, "mission.blocked", { missionId: mission.id, reason: err.message });
-        this.taskEngine.setMissionStatus(mission.id, "BLOCKED");
+        await this.taskEngine.setMissionStatusDurable(mission.id, "BLOCKED");
         this.store.setStatus(runId, "error");
         return;
       }
       this.store.emit(runId, "run.error", { message: err.message });
-      this.taskEngine.setMissionStatus(mission.id, "FAILED");
+      await this.taskEngine.setMissionStatusDurable(mission.id, "FAILED");
       this.missionApproved.delete(runId);
       this.store.setStatus(runId, "error");
     } finally {
@@ -507,7 +506,7 @@ export class MultiAgentRuntime {
 
     while (task.attempts <= MAX_REVISIONS && !accepted) {
       task.attempts++;
-      this.taskEngine.transition(mission.id, task.id, "RUNNING");
+      await this.taskEngine.transitionDurable(mission.id, task.id, "RUNNING");
 
       const worker = this.workerModelFor(task.agent);
       this.bus.agentStarted(runId, task.agent, task.id, worker.config.id);
@@ -525,7 +524,7 @@ export class MultiAgentRuntime {
       );
       task.result = result;
 
-      this.taskEngine.transition(mission.id, task.id, "REVIEW");
+      await this.taskEngine.transitionDurable(mission.id, task.id, "REVIEW");
       this.store.emit(runId, "review.started", { taskId: task.id, reviewerModel: reviewer.config.id });
 
       const verdict = await this.modelService.usage.with(
@@ -535,7 +534,7 @@ export class MultiAgentRuntime {
 
       if (verdict.approved) {
         accepted = true;
-        this.taskEngine.transition(mission.id, task.id, "COMPLETED");
+        await this.taskEngine.transitionDurable(mission.id, task.id, "COMPLETED");
         this.store.emit(runId, "review.passed", { taskId: task.id, notes: verdict.notes });
         this.bus.agentCompleted(runId, task.agent, task.id, true);
       } else {
@@ -546,11 +545,11 @@ export class MultiAgentRuntime {
           willRetry: task.attempts <= MAX_REVISIONS,
         });
         if (task.attempts > MAX_REVISIONS) {
-          this.taskEngine.transition(mission.id, task.id, "FAILED");
+          await this.taskEngine.transitionDurable(mission.id, task.id, "FAILED");
           this.store.emit(runId, "task.failed", { taskId: task.id, reason: verdict.notes });
           this.bus.agentCompleted(runId, task.agent, task.id, false);
         } else {
-          this.taskEngine.transition(mission.id, task.id, "REWORK");
+          await this.taskEngine.transitionDurable(mission.id, task.id, "REWORK");
         }
       }
     }
@@ -609,7 +608,7 @@ export class MultiAgentRuntime {
       missionStatus,
     });
     if (!blocked) {
-      this.taskEngine.setMissionStatus(mission.id, "COMPLETED");
+      await this.taskEngine.setMissionStatusDurable(mission.id, "COMPLETED");
     }
     this.missionApproved.delete(runId);
     this.store.setStatus(runId, "completed");

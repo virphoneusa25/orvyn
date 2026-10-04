@@ -49,6 +49,8 @@ v1Router.get("/storage/status", async (req, res) => {
   if (!postgres.enabled) {
     return res.json({
       mode: "sqlite-primary",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       sqlite: {
         tenant: t.localStore.parityCounts(),
@@ -74,7 +76,13 @@ v1Router.get("/storage/status", async (req, res) => {
     return res.status(
       postgres.status === "ready" && tenantParity && authParity ? 200 : 503
     ).json({
-      mode: "sqlite-primary-postgres-mirror",
+      mode: postgresMirror.isPrimaryReadsEnabled()
+        ? (postgresMirror.isPrimaryWritesEnabled()
+            ? "postgres-primary-reads-acknowledged-mission-writes"
+            : "postgres-primary-reads")
+        : "sqlite-primary-postgres-mirror",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       parity: {
         ok: tenantParity && authParity,
@@ -86,7 +94,13 @@ v1Router.get("/storage/status", async (req, res) => {
     });
   } catch (err: any) {
     return res.status(503).json({
-      mode: "sqlite-primary-postgres-mirror",
+      mode: postgresMirror.isPrimaryReadsEnabled()
+        ? (postgresMirror.isPrimaryWritesEnabled()
+            ? "postgres-primary-reads-acknowledged-mission-writes"
+            : "postgres-primary-reads")
+        : "sqlite-primary-postgres-mirror",
+      primaryReads: postgresMirror.isPrimaryReadsEnabled(),
+      primaryWrites: postgresMirror.isPrimaryWritesEnabled(),
       postgres,
       parity: { ok: false },
       error: err.message,
@@ -615,10 +629,21 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   // Monthly mission quota (0/unset = unlimited). Checked against the
   // persisted missions table so restarts don't reset the budget.
   const missionQuota = Number(process.env.ORVYN_QUOTA_MISSIONS_MONTH) || 0;
-  if (missionQuota > 0) {
+  if (missionQuota > 0 && !postgresMirror.isPrimaryWritesEnabled()) {
     const d = new Date();
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-    const used = t.localStore.countMissionsSince(monthStart);
+    let used = t.localStore.countMissionsSince(monthStart);
+    if (postgresMirror.isPrimaryReadsEnabled()) {
+      try {
+        used = await postgresMirror.countMissionsSince(t.id, monthStart);
+      } catch (err) {
+        if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+          return res.status(503).json({
+            error: `PostgreSQL quota read failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+    }
     if (used >= missionQuota) {
       return res.status(429).json({
         error: `Monthly mission quota exceeded (${used}/${missionQuota}). Resets at the start of next month (UTC).`,
@@ -626,7 +651,18 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
     }
   }
 
-  t.usage.agentRuns++;
+  const runId = randomUUID();
+  const admitMission = async (): Promise<boolean> => {
+    if (!postgresMirror.isPrimaryWritesEnabled() || missionQuota <= 0) return true;
+    try {
+      await postgresMirror.flushStrict();
+      if (await postgresMirror.reserveMission(t.id, runId, Date.now(), missionQuota)) return true;
+      res.status(429).json({ error: `Monthly mission quota exceeded (${missionQuota}/${missionQuota}). Resets at the start of next month (UTC).` });
+    } catch (err) {
+      res.status(503).json({ error: `PostgreSQL mission admission failed: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    return false;
+  };
 
   if (distributedProjectRootEligible(String(req.body.projectRoot ?? ""))) {
     const coordinator = getDistributedMissionCoordinator();
@@ -651,7 +687,8 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
       });
     }
 
-    const runId = randomUUID();
+    if (!await admitMission()) return;
+    t.usage.agentRuns++;
     t.runStore.create(runId, req.body.projectRoot, "queued");
     t.runStore.emit(runId, "run.queued", {
       distributed: true,
@@ -687,11 +724,14 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   }
 
   _regTools(t, req.body.projectRoot);
-  const runId = t.multiAgentRuntime.start(
+  if (!await admitMission()) return;
+  t.usage.agentRuns++;
+  t.multiAgentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
     req.body.rules,
-    req.body.attachments
+    req.body.attachments,
+    runId
   );
   res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats() });
 });
@@ -810,16 +850,56 @@ v1Router.delete("/checkpoints/:id", async (req, res) => {
 });
 
 // --- Missions (Task Engine state for Mission Control) ---
-v1Router.get("/missions", (req, res) => {
+v1Router.get("/missions", async (req, res) => {
   const t = requireTenant(req);
-  res.json({ missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)) });
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      const missions = await postgresMirror.loadMissions(t.id);
+      return res.json({
+        missions: missions.map((m) => t.taskEngine.serialize(m)),
+        source: "postgresql",
+      });
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL mission storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
+  res.json({
+    missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)),
+    source: "sqlite",
+  });
 });
 
-v1Router.get("/missions/:id", (req, res) => {
+v1Router.get("/missions/:id", async (req, res) => {
   const t = requireTenant(req);
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      const m = await postgresMirror.getMission(t.id, req.params.id);
+      if (!m) return res.status(404).json({ error: "Unknown mission" });
+      return res.json({
+        mission: t.taskEngine.serialize(m),
+        source: "postgresql",
+      });
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL mission storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
   const m = t.taskEngine.getMission(req.params.id);
   if (!m) return res.status(404).json({ error: "Unknown mission" });
-  res.json({ mission: t.taskEngine.serialize(m) });
+  res.json({ mission: t.taskEngine.serialize(m), source: "sqlite" });
 });
 
 // --- Servers (SSH connections from the project's .orvyn/ssh.json) ---
@@ -1009,11 +1089,33 @@ v1Router.get("/usage", async (req, res) => {
     }
   }
 
+  let totals = t.modelService.usage.totals();
+  let events = t.modelService.usage.recent(limit);
+  let source = "sqlite";
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      [totals, events] = await Promise.all([
+        postgresMirror.usageTotals(t.id),
+        postgresMirror.loadRecentUsage(t.id, limit),
+      ]);
+      source = "postgresql";
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL usage storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
   res.json({
-    totals: t.modelService.usage.totals(),
-    quota: t.modelService.usage.quota(),
+    totals,
+    quota: await t.modelService.usage.quotaAsync(),
     queue,
-    events: t.modelService.usage.recent(limit),
+    events,
+    source,
   });
 });
 

@@ -24,6 +24,11 @@ import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
 import { postgresMirror } from "./PostgresMirror";
+import {
+  decryptModelConfig,
+  encryptModelConfig,
+  modelSecretKeyConfigured,
+} from "./modelSecret";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -76,7 +81,7 @@ export class LocalStore {
   private warned = false;
 
   constructor(
-    private readonly tenantId: string,
+    public readonly tenantId: string,
     dataDir: string = defaultDataDir()
   ) {
     fs.mkdirSync(dataDir, { recursive: true });
@@ -272,10 +277,13 @@ export class LocalStore {
   // ---------- models ----------
 
   saveModel(config: ModelConfig): void {
+    const persisted = modelSecretKeyConfigured()
+      ? encryptModelConfig(config)
+      : config;
     this.guard("saveModel", () =>
       this.db
         .prepare(`INSERT INTO models (id, config_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`)
-        .run(config.id, JSON.stringify(config))
+        .run(config.id, JSON.stringify(persisted))
     );
     postgresMirror.mirror("saveModel", () =>
       postgresMirror.saveModel(this.tenantId, config)
@@ -293,9 +301,54 @@ export class LocalStore {
     return (
       this.guard("loadModels", () => {
         const rows = this.db.prepare(`SELECT config_json FROM models`).all() as any[];
-        return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
+        return rows.map((r) => {
+          const parsed = JSON.parse(String(r.config_json)) as ModelConfig;
+          return parsed.apiKey?.startsWith("orvynenc:v1:")
+            ? decryptModelConfig(parsed)
+            : parsed;
+        });
       }) ?? []
     );
+  }
+
+  /**
+   * Replace the local tenant configuration cache from an authoritative
+   * PostgreSQL snapshot. This intentionally bypasses mirror writes to avoid
+   * echoing the same data back to Postgres during fresh-node bootstrap.
+   */
+  hydrateConfigurationFromPrimary(
+    settings: Array<{ key: string; value: string }>,
+    models: ModelConfig[]
+  ): void {
+    this.guard("hydrate primary configuration", () => {
+      this.db.exec("BEGIN IMMEDIATE;");
+      try {
+        this.db.exec("DELETE FROM settings;");
+        this.db.exec("DELETE FROM models;");
+
+        const insertSetting = this.db.prepare(
+          `INSERT INTO settings (key, value) VALUES (?, ?)`
+        );
+        for (const setting of settings) {
+          insertSetting.run(setting.key, setting.value);
+        }
+
+        const insertModel = this.db.prepare(
+          `INSERT INTO models (id, config_json) VALUES (?, ?)`
+        );
+        for (const config of models) {
+          const persisted = modelSecretKeyConfigured()
+            ? encryptModelConfig(config)
+            : config;
+          insertModel.run(config.id, JSON.stringify(persisted));
+        }
+
+        this.db.exec("COMMIT;");
+      } catch (err) {
+        this.db.exec("ROLLBACK;");
+        throw err;
+      }
+    });
   }
 
   exportForPostgresMigration(): {

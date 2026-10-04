@@ -67,6 +67,7 @@ jobs:
           ORVYN_API_KEY: test
           DOMAIN: example.invalid
           POSTGRES_PASSWORD: test-postgres-password
+          ORVYN_MODEL_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           ORVYN_REDIS_PASSWORD: test-orvyn-redis
           LITELLM_REDIS_PASSWORD: test-litellm-redis
           LITELLM_MASTER_KEY: sk-test-master
