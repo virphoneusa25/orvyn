@@ -246,6 +246,21 @@ export class UsageService {
     }
   }
 
+  /**
+   * Record usage and, when staged Postgres primary writes are enabled, wait
+   * for the durable write before returning. This closes the quota race where
+   * a second model call could read Postgres before the first call's usage
+   * event had arrived.
+   */
+  async recordAsync(
+    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>
+  ): Promise<void> {
+    this.record(e);
+    if (postgresMirror.isPrimaryWritesEnabled()) {
+      await postgresMirror.flushStrict();
+    }
+  }
+
   /** Per-mission counters, for the usage endpoint and reports. */
   missionCounters(missionId: string): MissionCounters {
     return { ...(this.missions.get(missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 }) };
@@ -345,7 +360,7 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
@@ -358,7 +373,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
@@ -398,7 +413,7 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -408,7 +423,7 @@ export class UsageService {
             toolCalls: toolCalls || undefined,
           });
         } catch (err: any) {
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -436,7 +451,7 @@ export class UsageService {
         const start = Date.now();
         try {
           const res = await inner.generateImage!(request);
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
@@ -445,7 +460,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
