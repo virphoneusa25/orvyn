@@ -2,6 +2,13 @@ import { documentRouter } from "./documents";
 import { resolveWorkspace } from "../documents/workspace";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
+import { randomUUID } from "crypto";
+import {
+  findDistributedApprovalRun,
+  getDistributedMissionCoordinator,
+  isDistributedRun,
+} from "../queue/DistributedMissionCoordinator";
+import { distributedRuntimeReady } from "../queue/redisConnection";
 import { requireTenant } from "../middleware/tenant";
 import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
@@ -436,9 +443,24 @@ v1Router.get("/agent/stream/runs/:id/events.json", (req, res) => {
 
 // Steer a live run: the instruction reaches the agent at the next safe model
 // boundary. Both runtimes are tried — ownership is not always client-knowable.
-v1Router.post("/agent/stream/runs/:id/steer", (req, res) => {
+v1Router.post("/agent/stream/runs/:id/steer", async (req, res) => {
   const t = requireTenant(req);
+  const run = t.runStore.get(req.params.id);
+  if (!run) return res.status(404).json({ error: "Unknown run" });
   const text = String(req.body.text ?? "");
+
+  if (isDistributedRun(run)) {
+    if (!distributedRuntimeReady()) {
+      return res.status(503).json({ error: "Distributed mission controls are not enabled." });
+    }
+    try {
+      await getDistributedMissionCoordinator().steer(run.id, t.id, text);
+      return res.status(202).json({ ok: true, distributed: true });
+    } catch (err: any) {
+      return res.status(503).json({ error: err.message });
+    }
+  }
+
   const ok = t.runStore.steer(req.params.id, text);
   if (!ok) return res.status(409).json({ error: "Run is not active — queue the instruction instead." });
   res.json({ ok: true });
@@ -446,12 +468,24 @@ v1Router.post("/agent/stream/runs/:id/steer", (req, res) => {
 
 // Stop a run. Both runtimes are tried because the client does not always know
 // which one owns the id, and cancelling is idempotent either way.
-v1Router.post("/agent/stream/runs/:id/cancel", (req, res) => {
+v1Router.post("/agent/stream/runs/:id/cancel", async (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
   if (isTerminal(run.status)) {
     return res.json({ ok: true, status: run.status, alreadyFinished: true });
+  }
+
+  if (isDistributedRun(run)) {
+    if (!distributedRuntimeReady()) {
+      return res.status(503).json({ error: "Distributed mission controls are not enabled." });
+    }
+    try {
+      await getDistributedMissionCoordinator().cancel(run.id, t.id);
+      return res.status(202).json({ ok: true, status: run.status, distributed: true });
+    } catch (err: any) {
+      return res.status(503).json({ error: err.message });
+    }
   }
 
   const stopped = t.agentRuntime.cancel(req.params.id) || t.multiAgentRuntime.cancel(req.params.id);
@@ -487,11 +521,30 @@ v1Router.post("/agent/stream/runs/:id/undo", async (req, res) => {
   }
 });
 
-v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
+v1Router.post("/agent/stream/approvals/:callId", async (req, res) => {
   const t = requireTenant(req);
   const scope = req.body.scope === "mission" ? "mission" : "once";
-  // The pending call may live in either runtime (clients cannot always know
-  // which one owns the run). Resolve across both — approving is idempotent.
+  const distributed = findDistributedApprovalRun(t.runStore.list(), req.params.callId);
+
+  if (distributed) {
+    if (!distributedRuntimeReady()) {
+      return res.status(503).json({ error: "Distributed mission controls are not enabled." });
+    }
+    try {
+      await getDistributedMissionCoordinator().approval(
+        distributed.id,
+        t.id,
+        req.params.callId,
+        req.body.approved === true,
+        scope
+      );
+      return res.status(202).json({ ok: true, distributed: true });
+    } catch (err: any) {
+      return res.status(503).json({ error: err.message });
+    }
+  }
+
+  // The pending call may live in either local runtime.
   const ok =
     t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
@@ -499,7 +552,7 @@ v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   res.json({ ok: true });
 });
 
-v1Router.post("/agent/orchestrate", (req, res) => {
+v1Router.post("/agent/orchestrate", async (req, res) => {
   const t = requireTenant(req);
   // Monthly mission quota (0/unset = unlimited). Checked against the
   // persisted missions table so restarts don't reset the budget.
@@ -514,8 +567,47 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  _regTools(t, req.body.projectRoot);
+
   t.usage.agentRuns++;
+
+  if (distributedRuntimeReady()) {
+    const runId = randomUUID();
+    t.runStore.create(runId, req.body.projectRoot, "queued");
+    t.runStore.emit(runId, "run.queued", {
+      distributed: true,
+      note: "Mission accepted by the distributed ORVYN worker queue.",
+    });
+
+    try {
+      const coordinator = getDistributedMissionCoordinator();
+      await coordinator.enqueue(
+        {
+          runId,
+          tenantId: t.id,
+          tenantName: t.name,
+          projectRoot: req.body.projectRoot,
+          goal: req.body.goal,
+          rules: req.body.rules,
+          attachments: req.body.attachments,
+          requestedAt: new Date().toISOString(),
+        },
+        t.runStore
+      );
+      return res.status(202).json({
+        runId,
+        distributed: true,
+        queue: await coordinator.stats(),
+      });
+    } catch (err: any) {
+      t.runStore.emit(runId, "run.error", {
+        message: `Could not enqueue distributed mission: ${err.message}`,
+      });
+      t.runStore.setStatus(runId, "error");
+      return res.status(503).json({ runId, error: err.message });
+    }
+  }
+
+  _regTools(t, req.body.projectRoot);
   const runId = t.multiAgentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
@@ -525,10 +617,30 @@ v1Router.post("/agent/orchestrate", (req, res) => {
   res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats() });
 });
 
-v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {
+v1Router.post("/agent/orchestrate/approvals/:callId", async (req, res) => {
   const t = requireTenant(req);
   const scope = req.body.scope === "mission" ? "mission" : "once";
-  // Same cross-runtime resolution as the stream endpoint.
+  const distributed = findDistributedApprovalRun(t.runStore.list(), req.params.callId);
+
+  if (distributed) {
+    if (!distributedRuntimeReady()) {
+      return res.status(503).json({ error: "Distributed mission controls are not enabled." });
+    }
+    try {
+      await getDistributedMissionCoordinator().approval(
+        distributed.id,
+        t.id,
+        req.params.callId,
+        req.body.approved === true,
+        scope
+      );
+      return res.status(202).json({ ok: true, distributed: true });
+    } catch (err: any) {
+      return res.status(503).json({ error: err.message });
+    }
+  }
+
+  // Same cross-runtime resolution as the stream endpoint for local runs.
   const ok =
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
     t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
