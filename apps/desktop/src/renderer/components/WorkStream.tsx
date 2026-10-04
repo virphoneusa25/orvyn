@@ -646,7 +646,6 @@ export function WorkStream({
             conversation: assistant text, compact tool rows, approvals. */}
         {(run.events.length > 0 || runActive) && (
           <div style={{ margin: "8px 0 4px", minWidth: 0 }}>
-            {(() => { const route = [...run.events].reverse().find((e) => e.type === "agent.turn" && e.data.routing)?.data.routing as ChatMessage["routing"]; return route ? <small title={route.reason} data-testid="actual-model">{route.provider} · {route.modelId}</small> : null; })()}
             <AgentActivityList events={run.events} status={run.status} onApprove={run.approve} />
             <RunFooter events={run.events} runId={run.runId} finished={run.status === "completed" || run.status === "partial" || run.status === "blocked" || run.status === "error" || run.status === "cancelled"}
               onRegenerate={retryInstruction ? () => { void send(retryInstruction, true); } : undefined} />
@@ -1196,7 +1195,6 @@ function ChatTurn({ message, live, question, onRegenerate }: { message: ChatMess
             <MessageContent content={message.content} streaming={live} />
           )}
         </div>
-        {message.routing && <small title={message.routing.reason} data-testid="actual-model">{message.routing.provider} · {message.routing.modelId}</small>}
         {/* Work that needs the project's tools: the chat hands it to a real task run. */}
         {(message.activity ?? []).filter((a) => a.kind === "handoff").map((a) => (
           <HandoffRow key={a.id} id={a.id} prompt={a.prompt || question || ""} />

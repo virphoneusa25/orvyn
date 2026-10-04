@@ -49,10 +49,15 @@ try{
  return {health,edit:auto&&edit.edited,auto,pinned,cancelled,usage:usage.events};
  },{base,token:fixture.token});
  assert.match(turns.edit,/return\s+(a\s*\+\s*b|b\s*\+\s*a)/);
- assert.equal(turns.auto.route?.provider,'huggingface');assert.equal(turns.auto.route?.modelId,'hf:moonshotai/Kimi-K2.7-Code:deepinfra');assert.equal(turns.auto.hasText,true);
- assert.equal(turns.pinned.route?.modelId,'hf:zai-org/GLM-5.3:deepinfra');assert.equal(turns.cancelled.cancelled,true);
- // Customer usage may redact model names; actual routing evidence comes from the responding stream.
+ assert.equal(turns.auto.route?.provider,'ORVYN');assert.match(turns.auto.route?.modelId,/^ORVYN/);assert.equal(turns.auto.hasText,true);
+ assert.equal(turns.pinned.route?.reason,'Explicit model selection');assert.equal(turns.cancelled.cancelled,true);
+ assert.doesNotMatch(JSON.stringify([turns.auto.route,turns.pinned.route,turns.cancelled.route,turns.usage]),/huggingface|nebius|fireworks|deepinfra|zai-org|moonshotai/i);
+ // Actual identity is verified over the existing operator SSH path, never
+ // returned through the customer API or injected into the renderer.
+ const telemetry=await remote('telemetry',fixture.userId);const streams=telemetry.events.filter(e=>e.ok&&e.method==='stream');
+ assert.equal(streams.length,2);assert.equal(streams[0].provider,'huggingface');assert.equal(streams[0].modelId,'hf:moonshotai/Kimi-K2.7-Code:deepinfra');
+ assert.equal(streams[1].provider,'huggingface');assert.equal(streams[1].modelId,'hf:zai-org/GLM-5.3:deepinfra');
  assert.ok(turns.usage.some(e=>e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>!e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>e.ok&&e.method==='generate'));
  await window.screenshot({path:path.join(root,'desktop-hf-runtime.png')});
- console.log(JSON.stringify({environment:'packaged Windows Desktop with hosted backend',host:base,commit:turns.health.commit,passed:true,auto:turns.auto.route,pinned:turns.pinned.route,cancellation:true,inferenceSecretsInApp:false,usage:turns.usage.map(e=>({provider:e.provider,modelId:e.modelId,method:e.method,ok:e.ok,promptTokens:e.promptTokens,completionTokens:e.completionTokens,estimated:e.estimated}))}));
+ console.log(JSON.stringify({environment:'packaged Windows Desktop with hosted backend',host:base,commit:turns.health.commit,passed:true,customerProviderIdentityHidden:true,auto:streams[0],pinned:streams[1],cancellation:true,inferenceSecretsInApp:false,usage:telemetry.events}));
 }finally{if(app)await app.close();const result=await remote('cleanup',fixture.userId);assert.equal(result.fixtureCleaned,true);console.log(JSON.stringify(result));}

@@ -40,8 +40,12 @@ async function check(config: ModelConfig): Promise<Evidence> {
     if (!finished || (tools ? !called : !text.trim())) throw new Error("stream/tool probe did not verify advertised capabilities");
     if (vision) {
       try {
-      const result = await adapter.generate({ messages: [{ role: "user", content: "Describe the image briefly.", images: [{ url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=" }] }], maxOutputTokens: 2048, signal: controller.signal });
-      if (!result.content.trim() || result.finishReason === "error") throw new Error("vision probe failed");
+      let imageText = "", imageFinished = false;
+      for await (const chunk of adapter.stream({ messages: [{ role: "user", content: "Describe the image briefly.", images: [{ url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=" }] }], maxOutputTokens: 2048, stream: true, signal: controller.signal })) {
+        if (chunk.error) throw new Error("vision probe failed");
+        imageText += chunk.delta; imageFinished ||= chunk.done;
+      }
+      if (!imageFinished || !imageText.trim()) throw new Error("vision probe failed");
       } catch { vision = false; visionFailed = true; }
     }
     if (!Number.isFinite(provider.pricing?.input) || !Number.isFinite(provider.pricing?.output) || provider.pricing.input < 0 || provider.pricing.output < 0) throw new Error("exact provider pricing unavailable");

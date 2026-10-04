@@ -509,7 +509,6 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                 {m.error ? (m.code?.startsWith("CREDITS") ? <UpgradePrompt code={m.code} message={m.error} /> : (
                   <div className="msg-error" role="alert"><span>{m.error}</span>{m.retry && !busy ? <button className="btn btn--sm" onClick={() => void send(m.retry)}><Icon.retry size={14} /> Retry</button> : null}</div>
                 )) : null}
-                {m.routing ? <small title={m.routing.reason} data-testid="actual-model">{m.routing.provider} · {m.routing.modelId}</small> : null}
                 {!m.streaming ? (
                   <div className="msg__actions">
                     {m.content && !m.imageJob ? <CopyButton text={m.content} /> : null}

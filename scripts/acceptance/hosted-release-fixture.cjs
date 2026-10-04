@@ -19,7 +19,7 @@ if(action==='create'){
  creditLedger.setPlan(tenantId,'starter',Date.now(),'release-verification');
  fs.writeFileSync(path.join(data,'release-smoke-'+account.user.id+'.json'),JSON.stringify({userId:account.user.id,tenantId,organizationId:account.organization.id,createdAt:Date.now()}),{mode:0o600});
  console.log(JSON.stringify({token:account.token,userId:account.user.id,tenantId,organizationId:account.organization.id}));auth.close();creditLedger.close();
-}else if(action==='cleanup'){
+}else if(action==='cleanup'||action==='telemetry'){
  const id=process.argv[3];if(!/^[a-f0-9-]{36}$/.test(id||''))throw new Error('Invalid fixture id');
  const marker=path.join(data,'release-smoke-'+id+'.json');const fixture=JSON.parse(fs.readFileSync(marker,'utf8'));
  const auth=new DatabaseSync(path.join(data,'auth.db'));auth.exec('PRAGMA busy_timeout=5000');
@@ -27,6 +27,11 @@ if(action==='create'){
  if(!user||!/^release-smoke-[a-f0-9-]{36}@example\.invalid$/.test(user.email)||fixture.userId!==id)throw new Error('Fixture ownership guard failed');
  const org=auth.prepare('SELECT tenant_id FROM organizations WHERE id=? AND kind=?').get(fixture.organizationId,'personal');
  if(!org||org.tenant_id!==fixture.tenantId||auth.prepare('SELECT count(*) AS n FROM organization_members WHERE organization_id=?').get(fixture.organizationId).n!==1)throw new Error('Fixture organization guard failed');
+ if(action==='telemetry'){
+  const usage=new DatabaseSync(path.join(data,fixture.tenantId+'.db'),{readOnly:true});usage.exec('PRAGMA busy_timeout=5000');
+  const events=usage.prepare('SELECT provider,model_id AS modelId,method,ok,prompt_tokens AS promptTokens,completion_tokens AS completionTokens FROM usage_events WHERE ts>=? ORDER BY ts ASC').all(fixture.createdAt);
+  console.log(JSON.stringify({events}));usage.close();auth.close();creditLedger.close();return;
+ }
  const clean=(db,keys)=>{
  db.exec('BEGIN IMMEDIATE');try{for(const {name} of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){
  const columns=new Set(db.prepare('PRAGMA table_info("'+name+'")').all().map(c=>c.name));

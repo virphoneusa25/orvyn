@@ -1,4 +1,5 @@
 import { CONVERSATION_STYLE } from "../agent/conversationStyle";
+import { normalizeVisionAttachments } from "./visionAttachments";
 import { isCustomerModelId, resolveCustomerModel } from "../models/customerCatalog";
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
@@ -216,7 +217,7 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
     }
     return { kind: "file" as const, name: a.path, content: a.content };
   });
-  const merged: Attachment[] = [...fromBar, ...fromContext];
+  const merged: Attachment[] = await normalizeVisionAttachments([...fromBar, ...fromContext]);
   const images = (req.context?.attachments ?? [])
     .filter((a) => a.kind === "image" && a.dataUrl)
     .slice(0, 4)
@@ -522,12 +523,21 @@ export class Orchestrator {
         markProviderSuccess(provider.config.id);
         break;
         } catch (err) {
+          const visionRejected = this.chatRequirements(req).vision && /HTTP (400|422)\b/.test(String((err as Error)?.message)) && /image|multimodal|messages\.\d+\..*content|content\.str|valid string/i.test(String((err as Error)?.message));
           const kind = classifyModelFailure(err);
-          const next = !req.signal?.aborted && !received && kind && attempt < 3 ? this.chatFailover(provider, kind, err, req) : undefined;
+          let next: AIModelProvider | undefined;
+          const explicitlySelected = Boolean((req.requestedModelId && req.requestedModelId !== "auto" && !isCustomerModelId(req.requestedModelId)) || this.modelService.router.getExplicitOverrides()[req.task]);
+          if (!req.signal?.aborted && !received && attempt < 3 && !explicitlySelected) {
+            if (visionRejected) {
+              provider.config.capabilities.vision = false;
+              next = this.chatAlternative(provider, req);
+              console.warn(JSON.stringify({event:"model.vision_fallback",modelId:provider.config.id,fallback:next?.config.id,reason:"Streaming image format rejected"}));
+            } else if (kind) next = this.chatFailover(provider, kind, err, req);
+          }
           if (!next) throw err;
           provider = next;
           usedReported = false;
-          actualReason = `Provider failure: ${kind}; compatible fallback`;
+          actualReason = visionRejected ? "Streaming vision unsupported; compatible vision fallback" : `Provider failure: ${kind}; compatible fallback`;
           buffered = "";
         }
         }
@@ -640,7 +650,9 @@ export class Orchestrator {
       yield { delta: "", done: true };
     } catch (err: any) {
       // The model does not exist for this account: skip it and answer with another one.
-      if (isModelNotFound(err) && !(req as any).__modelFallback) {
+      if (isModelNotFound(err) && !(req as any).__modelFallback
+        && !(req.requestedModelId && req.requestedModelId !== "auto" && !isCustomerModelId(req.requestedModelId))
+        && !this.modelService.router.getExplicitOverrides()[req.task]) {
         markModelUnavailable(provider.config.id, String(err?.message ?? err));
         yield* this.streamChat({ ...req, requestedModelId: undefined, __modelFallback: true } as ChatTurnRequest);
         return;
@@ -648,7 +660,8 @@ export class Orchestrator {
       // A wallet/plan stop is not a model failure: it goes to the caller, which
       // sends it with its code (the client offers Buy credits / Upgrade).
       if (err?.billing) throw err;
-      yield { delta: `\n\n[Error: ${err.message}]`, done: true };
+      console.warn(JSON.stringify({event:"chat.model_error",modelId:provider.config.id,reason:classifyModelFailure(err)??"request"}));
+      yield { delta: "", done: true, error: this.chatRequirements(req).vision ? "I couldn't read that image. Try uploading it as PNG, JPEG or WebP, then retry." : "I couldn't complete that reply. Please retry." };
     }
   }
 

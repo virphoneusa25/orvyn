@@ -193,6 +193,7 @@ function deepseekConfig(id: string, apiKey: string, endpoint: string, temperatur
     id,
     name: `DeepSeek ${id.replace(/^deepseek-/, "")}`,
     provider: "openai-compatible",
+    providerName: "deepseek",
     endpoint,
     apiKey,
     contextWindow: 128000,
@@ -520,7 +521,7 @@ export class ModelService {
       const pro = process.env.DEEPSEEK_PRO_MODEL?.trim() || "deepseek-v4-pro";
       this.addModel(deepseekConfig(flash, dsKey, dsEndpoint, 0.2));
       if (pro !== flash) this.addModel(deepseekConfig(pro, dsKey, dsEndpoint, 0.2));
-      this.router.setDefaultOverride("executor", flash);
+      if (process.env.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED !== "0") this.router.setDefaultOverride("executor", flash);
     }
 
     // ORION is an agent identity, not a model. ORION_MODEL_ID (with legacy ASTRA_MODEL_ID alias),

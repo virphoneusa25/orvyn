@@ -6,14 +6,16 @@ const { selectAgentModel } = require(path.resolve(process.argv[2] || '/app/dist'
 const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist', 'agent/taskIntent.js'));
 (async () => {
   const direct = process.argv[3] === 'fireworks';
-  const expectedProvider = direct ? 'fireworks' : 'huggingface';
+  const deepseek = process.argv[3] === 'deepseek';
+  const expectedProvider = deepseek ? 'deepseek' : direct ? 'fireworks' : 'huggingface';
+  if (deepseek) console.log(JSON.stringify({event:'deepseek.staging-config',credentialsConfigured:!!process.env.DEEPSEEK_API_KEY?.trim()}));
   if (direct) console.log(JSON.stringify({event:'fireworks.staging-config',credentialsConfigured:!!process.env.FIREWORKS_API_KEY?.trim()}));
   const service = new ModelService();
   await service.huggingFaceReady;
   const providers = service.registry.list();
   const capabilities = providers.filter(p => p.config.id.startsWith('hf:')).map(p => ({modelId:p.config.id,verification:p.config.routingVerification,context:p.config.contextWindow,tools:p.config.capabilities.tools,vision:p.config.capabilities.vision,streaming:p.config.streaming,rate:p.config.rate}));
   const choice = selectAgentModel({intent:inferTaskIntent('Fix the subtraction bug in math.js and run the unit tests'),requestedModelId:'auto',availableIds:providers.filter(p=>p.config.id!=='orvyn-mock').map(p=>p.config.id),providers});
-  const provider = direct ? service.registry.get('fw:accounts/fireworks/models/deepseek-v4-flash-0731') : choice.registryId ? service.registry.get(choice.registryId) : null;
+  const provider = deepseek ? service.registry.get(process.env.DEEPSEEK_CODE_MODEL?.trim() || 'deepseek-v4-flash') : direct ? service.registry.get('fw:accounts/fireworks/models/deepseek-v4-flash-0731') : choice.registryId ? service.registry.get(choice.registryId) : null;
   if (direct && provider && provider.config.routingVerification?.status !== 'verified') {
     // A bounded staging-only diagnostic proves account availability even when the public catalog disagrees.
     try {
@@ -25,7 +27,7 @@ const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist',
     }
   }
   console.log(JSON.stringify({event:'hf.preflight.capabilities',capabilities,choice}));
-  if (!provider || provider.config.providerName !== expectedProvider || provider.config.routingVerification?.status !== 'verified' || (!direct && !/Kimi-K2.7-Code/.test(provider.config.id))) { console.log(JSON.stringify({event:'provider.preflight.failed',provider:expectedProvider,reason:provider?.config.routingVerification?.reason || 'Required provider/model unavailable; fallback is not a pass'})); process.exitCode=1; return; }
+  if (!provider || provider.config.providerName !== expectedProvider || (!deepseek && provider.config.routingVerification?.status !== 'verified') || (!deepseek && !direct && !/Kimi-K2.7-Code/.test(provider.config.id))) { console.log(JSON.stringify({event:'provider.preflight.failed',provider:expectedProvider,reason:provider?.config.routingVerification?.reason || 'Required provider/model unavailable; fallback is not a pass'})); process.exitCode=1; return; }
   let content = 'export function add(a, b) { return a - b; }';
   let wrote=false, tested=false, passed=false, called=0;
   const messages=[{role:'user',content:'Fix the subtraction bug in math.js. Read it first, use write_file to replace it with a correct exported add(a, b) function, then call run_tests. Use the provided tools. No other files or commands are allowed.'}];

@@ -175,7 +175,12 @@ jobs:
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           # Model provider keys: written into the server's .env on deploy (never into the image or git).
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
-          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
+          DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
+          DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED: ${{ vars.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED || '0' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_CODE_MODEL: ${{ vars.DEEPSEEK_CODE_MODEL }}
+          DEEPSEEK_PRO_MODEL: ${{ vars.DEEPSEEK_PRO_MODEL }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
           HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
           HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
@@ -232,10 +237,10 @@ jobs:
             [ -n "$HUGGINGFACE_API_KEY" ] && [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::HF configuration missing"; exit 1; }
             live_commit=$(curl -fsS "$OVH_HEALTH_URL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
             echo "Production before: $live_commit"
-            [ "$live_commit" = "7f5e129c992f02c4133145141d23119dde25eebb" ] || [ "$live_commit" = "$GITHUB_SHA" ] || { echo "::error::Production changed; refusing overwrite"; exit 1; }
+            [ "$live_commit" = "5a657a5178b8adde364a9a9ba06d589b2beec2f7" ] || [ "$live_commit" = "$GITHUB_SHA" ] || { echo "::error::Production changed; refusing overwrite"; exit 1; }
             staging_commit=$(curl -fsS https://staging.orvyn.virphoneusa.com/api/v1/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])')
             [ "$staging_commit" = "$GITHUB_SHA" ] || { echo "::error::Staging SHA mismatch"; exit 1; }
-            ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker image tag "$(docker inspect orvyn-backend-1 --format "{{.Image}}")" orvyn-backend:rollback-7f5e129'
+            ssh -i "$OVH_SSH_KEY" -o StrictHostKeyChecking=accept-new "$OVH_HOST" 'docker image tag "$(docker inspect orvyn-backend-1 --format "{{.Image}}")" orvyn-backend:rollback-5a657a5'
           fi
           bash scripts/deploy-ovh.sh
           if [ "$GITHUB_REF" = "refs/heads/codex/shared-hf-auto" ]; then
@@ -260,7 +265,12 @@ jobs:
           HUGGINGFACE_MODELS: ${{ vars.HUGGINGFACE_MODELS }}
           HUGGINGFACE_BASE_URL: ${{ vars.HUGGINGFACE_BASE_URL }}
           NEBIUS_API_KEY: ${{ secrets.NEBIUS_API_KEY }}
-          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY || secrets.Fireworks_API }}
+          DEEPSEEK_API_KEY: ${{ secrets.ORVYN_Platform_Cloud }}
+          DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED: ${{ vars.DEEPSEEK_EXECUTOR_OVERRIDE_ENABLED || '0' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL }}
+          DEEPSEEK_CODE_MODEL: ${{ vars.DEEPSEEK_CODE_MODEL }}
+          DEEPSEEK_PRO_MODEL: ${{ vars.DEEPSEEK_PRO_MODEL }}
           FIREWORKS_MODELS: ${{ vars.FIREWORKS_MODELS }}
           FIREWORKS_BASE_URL: ${{ vars.FIREWORKS_BASE_URL }}
         run: |

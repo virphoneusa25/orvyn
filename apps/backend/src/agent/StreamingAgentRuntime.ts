@@ -1919,6 +1919,8 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
+        const userMessage = messages.find((message) => message.role === "user" && message.attachments);
+        if (userMessage) userMessage.attachments = await (await import("../ai/visionAttachments")).normalizeVisionAttachments(userMessage.attachments ?? []);
             const toolNames = this.toolDefinitions(runId, state?.exposedTools ?? null).map((t) => t.name);
         // §17: the capability registry learns this run's real tool surface.
         seedCapabilities(toolNames);

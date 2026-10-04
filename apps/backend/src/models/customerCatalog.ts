@@ -103,9 +103,9 @@ export function customerNameFor(registryId: string): string {
   }
 }
 
-const VENDOR_WORDS = /\b(nebius|fireworks(?:\.ai)?|cheaper ?inference|cheaperinference|openrouter|mistral|gemini|deepseek|kimi|moonshot(?:ai)?|qwen|glm|zai-org|minimax|nemotron|claude|anthropic|openai|gpt-[\w.-]+|llama|flux)\b/gi;
-const VENDOR_URL = /https?:\/\/[^\s"']*(nebius|fireworks|cheaperinference|openrouter|mistral|googleapis|generativelanguage)[^\s"']*/gi;
-const VENDOR_KEY = /^(nebius|fireworks|fw|ci|cheaperinference|cheaper-inference|openrouter|mistral|gemini|google|openai|openai-compatible|anthropic|deepseek)$/i;
+const VENDOR_WORDS = /\b(nebius|hugging ?face|deepinfra|fireworks(?:\.ai)?|cheaper ?inference|cheaperinference|openrouter|mistral|gemini|deepseek|kimi|moonshot(?:ai)?|qwen|glm|zai-org|minimax|nemotron|claude|anthropic|openai|gpt-[\w.-]+|llama|flux)\b/gi;
+const VENDOR_URL = /https?:\/\/[^\s"']*(nebius|huggingface|deepinfra|fireworks|cheaperinference|openrouter|mistral|googleapis|generativelanguage)[^\s"']*/gi;
+const VENDOR_KEY = /^(nebius|huggingface|hf|deepinfra|fireworks|fw|ci|cheaperinference|cheaper-inference|openrouter|mistral|gemini|google|openai|openai-compatible|anthropic|deepseek)$/i;
 
 function merge(a: unknown, b: unknown): unknown {
   if (typeof a === "number" && typeof b === "number") return a + b;
@@ -148,11 +148,12 @@ export function redactForCustomer<T>(value: T, platformIds: ReadonlySet<string>)
     }
     if (Array.isArray(v)) return v.map((x) => walk(x, key, depth + 1));
     if (v && typeof v === "object") {
-      // Serving telemetry is an explicit, bounded public contract; credentials
-      // and adapter configuration remain redacted everywhere, including here.
+      // Actual serving identity stays in server-side telemetry. Public routing
+      // never exposes platform providers, registry IDs or internal diagnostics.
       if (key === "routing") {
         const r = v as Record<string, unknown>;
-        return { provider: String(r.provider ?? "").slice(0, 80), modelId: String(r.modelId ?? "").slice(0, 240), reason: String(r.reason ?? "").slice(0, 600) };
+        const id = String(r.modelId ?? "");
+        return { provider: "ORVYN", modelId: isUserModelId(id) ? id : customerNameFor(id), reason: String(r.reason ?? "").startsWith("Explicit model selection") ? "Explicit model selection" : "Automatic model selection" };
       }
       // A customer's own model is shown to them as they entered it (never its key).
       if ((v as { kind?: unknown }).kind === "user" && isUserModelId((v as { id?: string }).id)) {
@@ -161,6 +162,11 @@ export function redactForCustomer<T>(value: T, platformIds: ReadonlySet<string>)
       }
       const out: Record<string, unknown> = {};
       for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if ((v as { role?: unknown }).role === "assistant" && k === "content" && typeof x === "string"
+          && /^\[Error: Model "[^"\n]+" stream failed: HTTP \d{3}:/.test(x)) {
+          out[k] = "I couldn't complete that reply. Please retry.";
+          continue;
+        }
         if (k === "endpoint" || k === "apiKey" || k === "apiModelId") continue;
         if (k === "provider" && typeof x === "string") { out[k] = isUserModelId(x) ? x : "ORVYN"; continue; }
         const value = walk(x, CONTENT_KEYS.has(key) ? key : k, depth + 1);
