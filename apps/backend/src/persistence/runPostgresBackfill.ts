@@ -30,6 +30,8 @@ async function main(): Promise<void> {
         tenantId: result.tenantId,
         sqlite: result.sqlite,
         postgres: result.postgres,
+        content: result.content,
+        fingerprints: result.fingerprints,
         matches: result.matches,
       })
     );
