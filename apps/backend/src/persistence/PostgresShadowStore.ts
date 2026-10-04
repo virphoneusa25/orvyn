@@ -228,3 +228,11 @@ export function getPostgresShadowStore(): PostgresShadowStore | null {
   singleton = new PostgresShadowStore(process.env.DATABASE_URL!.trim());
   return singleton;
 }
+
+
+export async function closePostgresShadowStore(): Promise<void> {
+  if (!singleton) return;
+  const active = singleton;
+  singleton = undefined;
+  await active.close();
+}
