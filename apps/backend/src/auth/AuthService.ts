@@ -243,9 +243,57 @@ export class AuthService {
   }
 
   async loginAsync(email: string, password: string): Promise<{ user: User; token: string }> {
-    const result = this.login(email, password);
-    if (postgresMirror.isPrimaryReadsEnabled()) await postgresMirror.flush();
-    return result;
+    if (!postgresMirror.isPrimaryReadsEnabled()) {
+      return this.login(email, password);
+    }
+
+    const normalized = email.trim().toLowerCase();
+    const f = this.failures.get(normalized);
+    if (f && f.count >= MAX_LOGIN_FAILURES && Date.now() - f.firstAt < LOCKOUT_WINDOW_MS) {
+      throw new Error("Too many failed attempts — try again later");
+    }
+    if (f && Date.now() - f.firstAt >= LOCKOUT_WINDOW_MS) {
+      this.failures.delete(normalized);
+    }
+
+    try {
+      const row = await postgresMirror.getUserAuthByEmail(normalized);
+      if (!row || !verifyPassword(password, row.passwordHash)) {
+        const cur = this.failures.get(normalized) ?? {
+          count: 0,
+          firstAt: Date.now(),
+        };
+        this.failures.set(normalized, {
+          count: cur.count + 1,
+          firstAt: cur.firstAt,
+        });
+        throw new Error("Invalid email or password");
+      }
+
+      this.failures.delete(normalized);
+      const user: User = {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        createdAt: row.createdAt,
+      };
+      const token = this.createSession(user.id);
+      await postgresMirror.flush();
+      return { user, token };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (
+        message === "Invalid email or password" ||
+        process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0"
+      ) {
+        throw err;
+      }
+
+      console.warn(
+        `[postgres-primary-reads] credential read failed; falling back to SQLite: ${message}`
+      );
+      return this.login(email, password);
+    }
   }
 
   async verifyAsync(token: string): Promise<User | null> {
