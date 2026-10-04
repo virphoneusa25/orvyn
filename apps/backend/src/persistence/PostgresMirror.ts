@@ -391,6 +391,101 @@ export class PostgresMirror {
     );
   }
 
+  async registerAccount(input: {
+    user: {
+      id: string;
+      email: string;
+      name: string | null;
+      passwordHash: string;
+      createdAt: number;
+    };
+    legal: {
+      version: string;
+      acceptedAt: number;
+    };
+    session: {
+      tokenHash: string;
+      createdAt: number;
+      expiresAt: number;
+    };
+  }): Promise<void> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO users(id,email,name,password_hash,created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [
+          input.user.id,
+          input.user.email,
+          input.user.name,
+          input.user.passwordHash,
+          input.user.createdAt,
+        ]
+      );
+      await client.query(
+        `INSERT INTO legal_acceptances(user_id,version,accepted_at)
+         VALUES ($1,$2,$3)`,
+        [
+          input.user.id,
+          input.legal.version,
+          input.legal.acceptedAt,
+        ]
+      );
+      await client.query(
+        "DELETE FROM sessions WHERE expires_at <= $1",
+        [Date.now()]
+      );
+      await client.query(
+        `INSERT INTO sessions(token_hash,user_id,created_at,expires_at)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          input.session.tokenHash,
+          input.user.id,
+          input.session.createdAt,
+          input.session.expiresAt,
+        ]
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createPrimarySession(session: {
+    tokenHash: string;
+    userId: string;
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<void> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM sessions WHERE expires_at <= $1", [Date.now()]);
+      await client.query(
+        `INSERT INTO sessions(token_hash,user_id,created_at,expires_at)
+         VALUES ($1,$2,$3,$4)`,
+        [
+          session.tokenHash,
+          session.userId,
+          session.createdAt,
+          session.expiresAt,
+        ]
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async upsertUser(user: {
     id: string;
     email: string;
