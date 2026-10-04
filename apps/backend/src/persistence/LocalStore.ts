@@ -76,7 +76,7 @@ export class LocalStore {
   private warned = false;
 
   constructor(
-    private readonly tenantId: string,
+    public readonly tenantId: string,
     dataDir: string = defaultDataDir()
   ) {
     fs.mkdirSync(dataDir, { recursive: true });
