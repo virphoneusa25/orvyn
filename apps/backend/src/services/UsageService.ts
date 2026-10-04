@@ -325,8 +325,8 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        const quotaReserved = await usage.checkQuota();
         usage.checkMissionBudget();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
 
         let res: AIResponse;
@@ -375,8 +375,8 @@ export class UsageService {
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        const quotaReserved = await usage.checkQuota();
         usage.checkMissionBudget();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
