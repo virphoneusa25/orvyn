@@ -803,6 +803,37 @@ v1Router.get("/agent/modes", (_req, res) => {
   });
 });
 
+// --- Distributed runtime health ---
+v1Router.get("/runtime/status", async (_req, res) => {
+  if (!distributedRuntimeReady()) {
+    return res.json({
+      distributed: false,
+      status: "disabled",
+      workers: 0,
+    });
+  }
+
+  try {
+    const health = await getDistributedMissionCoordinator().health();
+    const ready = health.activeWorkers > 0;
+    return res.status(ready ? 200 : 503).json({
+      distributed: true,
+      status: ready ? "ready" : "degraded",
+      workers: health.activeWorkers,
+      redis: health.redis,
+      queue: health.queue,
+    });
+  } catch (err: any) {
+    return res.status(503).json({
+      distributed: true,
+      status: "unavailable",
+      workers: 0,
+      redis: "error",
+      error: err.message,
+    });
+  }
+});
+
 // --- Usage metering (server-side records; the basis for billing later) ---
 v1Router.get("/usage", async (req, res) => {
   const t = requireTenant(req);
