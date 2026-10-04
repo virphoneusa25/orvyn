@@ -9,6 +9,8 @@ import { resolveTenant, resolveTenantFromToken } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
+import { closePostgresTenantPools } from "./persistence/PostgresTenantStore";
+import { closePostgresShadowStore } from "./persistence/PostgresShadowStore";
 
 const app = express();
 app.use(cors());
@@ -112,6 +114,28 @@ async function main(): Promise<void> {
     }
   });
 }
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`ORVYN backend shutting down on ${signal}`);
+
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    // Do not wait forever for a broken keep-alive connection.
+    setTimeout(resolve, 5_000).unref?.();
+  });
+
+  wss.close();
+  await Promise.allSettled([
+    closePostgresTenantPools(),
+    closePostgresShadowStore(),
+  ]);
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 void main().catch((err) => {
   console.error(`ORVYN backend failed to initialize: ${err?.message ?? err}`);
