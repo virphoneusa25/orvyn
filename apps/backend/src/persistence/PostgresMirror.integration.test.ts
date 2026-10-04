@@ -9,7 +9,7 @@ import { LocalStore } from "./LocalStore";
 import { postgresMirror } from "./PostgresMirror";
 import { AuthService } from "../auth/AuthService";
 import type { Mission } from "../agent/TaskEngine";
-import type { UsageEvent } from "../services/UsageService";
+import { QuotaExceededError, UsageService, type UsageEvent } from "../services/UsageService";
 
 const enabled =
   process.env.ORVYN_POSTGRES_MIRROR === "1" &&
@@ -213,6 +213,64 @@ test(
       else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedPrimary;
       if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
       else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+    }
+  }
+);
+
+
+test(
+  "real Postgres: UsageService primary quota read sees Postgres-only usage",
+  { skip: !enabled },
+  async () => {
+    const savedPrimary = process.env.ORVYN_POSTGRES_PRIMARY_READS;
+    const savedFallback = process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+    const savedQuota = process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
+
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
+    process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = "0";
+    process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = "1";
+
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-usage-pg-primary-"));
+    const tenantId = `tenant_quota_${Date.now()}`;
+    const store = new LocalStore(tenantId, dir);
+
+    try {
+      await postgresMirror.upsertTenant(tenantId, "Quota Primary Test");
+      await postgresMirror.saveUsageEvent(tenantId, {
+        id: "pg-only-usage",
+        timestamp: Date.now(),
+        modelId: "pg-only-model",
+        provider: "test",
+        method: "generate",
+        durationMs: 1,
+        ok: true,
+      });
+
+      assert.equal(store.countUsageSince(0), 0, "SQLite source should be empty");
+
+      const usage = new UsageService();
+      usage.attachStore(store);
+
+      const quota = await usage.quotaAsync();
+      assert.equal(quota.used, 1);
+      assert.equal(quota.remaining, 0);
+
+      await assert.rejects(
+        () => usage.checkQuotaAsync(),
+        (err: unknown) =>
+          err instanceof QuotaExceededError &&
+          /1\/1/.test(err.message)
+      );
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+
+      if (savedPrimary === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedPrimary;
+      if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+      else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+      if (savedQuota === undefined) delete process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
+      else process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = savedQuota;
     }
   }
 );
