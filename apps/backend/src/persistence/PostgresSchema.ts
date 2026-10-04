@@ -50,6 +50,14 @@ CREATE INDEX IF NOT EXISTS idx_orvyn_usage_tenant_ts
 CREATE INDEX IF NOT EXISTS idx_orvyn_usage_tenant_mission
   ON orvyn_usage_events (tenant_id, mission_id);
 
+CREATE TABLE IF NOT EXISTS orvyn_usage_quota_monthly (
+  tenant_id TEXT NOT NULL,
+  month_start BIGINT NOT NULL,
+  used_count BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (tenant_id, month_start)
+);
+
 CREATE TABLE IF NOT EXISTS orvyn_settings (
   tenant_id TEXT NOT NULL,
   key TEXT NOT NULL,
