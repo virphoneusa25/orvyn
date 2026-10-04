@@ -1060,11 +1060,33 @@ v1Router.get("/usage", async (req, res) => {
     }
   }
 
+  let totals = t.modelService.usage.totals();
+  let events = t.modelService.usage.recent(limit);
+  let source = "sqlite";
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      [totals, events] = await Promise.all([
+        postgresMirror.usageTotals(t.id),
+        postgresMirror.loadRecentUsage(t.id, limit),
+      ]);
+      source = "postgresql";
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL usage storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
   res.json({
-    totals: t.modelService.usage.totals(),
+    totals,
     quota: await t.modelService.usage.quotaAsync(),
     queue,
-    events: t.modelService.usage.recent(limit),
+    events,
+    source,
   });
 });
 
