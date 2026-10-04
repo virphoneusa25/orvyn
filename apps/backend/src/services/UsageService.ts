@@ -294,36 +294,50 @@ export class UsageService {
         await usage.checkQuota();
         usage.checkMissionBudget();
         const start = Date.now();
+
+        let res: AIResponse;
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
-          // the final outcome, not one per attempt.
-          const res = await withModelRetries(() => inner.generate(request), {
+          // the final provider outcome, not one per retry attempt.
+          res = await withModelRetries(() => inner.generate(request), {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "generate",
-            durationMs: Date.now() - start,
-            ok: true,
-            promptTokens: res.usage?.promptTokens,
-            completionTokens: res.usage?.completionTokens,
-            outputChars: res.content?.length ?? 0,
-            toolCalls: res.toolCalls?.length || undefined,
-          });
-          return res;
         } catch (err: any) {
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "generate",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          // Preserve the original provider error even if the accounting store
+          // is temporarily unavailable. The failed inference already happened;
+          // a metering outage must not rewrite its cause.
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "generate",
+              durationMs: Date.now() - start,
+              ok: false,
+              error: String(err?.message ?? err).slice(0, 300),
+            });
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed generate event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
+          }
           throw err;
         }
+
+        // A successful paid inference is not acknowledged until its billing
+        // event is durable in the authoritative persistence driver.
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "generate",
+          durationMs: Date.now() - start,
+          ok: true,
+          promptTokens: res.usage?.promptTokens,
+          completionTokens: res.usage?.completionTokens,
+          outputChars: res.content?.length ?? 0,
+          toolCalls: res.toolCalls?.length || undefined,
+        });
+        return res;
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
@@ -354,6 +368,10 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
+          // Note: stream chunks may already have reached the caller. We still
+          // require the final success accounting event to persist; a failure
+          // here terminates the stream with an accounting error rather than
+          // fabricating a provider failure event.
           await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -364,15 +382,28 @@ export class UsageService {
             toolCalls: toolCalls || undefined,
           });
         } catch (err: any) {
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "stream",
-            durationMs: Date.now() - start,
-            ok: false,
-            outputChars: chars,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          const isUsagePersistenceError =
+            String(err?.message ?? "").includes("usage") ||
+            String(err?.message ?? "").includes("database") ||
+            String(err?.message ?? "").includes("Postgres");
+
+          if (!isUsagePersistenceError) {
+            try {
+              await usage.record({
+                modelId: inner.config.id,
+                provider: inner.config.provider,
+                method: "stream",
+                durationMs: Date.now() - start,
+                ok: false,
+                outputChars: chars,
+                error: String(err?.message ?? err).slice(0, 300),
+              });
+            } catch (meterErr: any) {
+              console.error(
+                `[usage] failed to persist failed stream event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+              );
+            }
+          }
           throw err;
         }
       },
@@ -390,27 +421,36 @@ export class UsageService {
       wrapper.generateImage = async (request) => {
         await usage.checkQuota();
         const start = Date.now();
+
+        let res;
         try {
-          const res = await inner.generateImage!(request);
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: true,
-          });
-          return res;
+          res = await inner.generateImage!(request);
         } catch (err: any) {
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "image",
+              durationMs: Date.now() - start,
+              ok: false,
+              error: String(err?.message ?? err).slice(0, 300),
+            });
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed image event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
+          }
           throw err;
         }
+
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "image",
+          durationMs: Date.now() - start,
+          ok: true,
+        });
+        return res;
       };
     }
 
