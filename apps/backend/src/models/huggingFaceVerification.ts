@@ -58,7 +58,12 @@ export async function verifyHuggingFace(config: ModelConfig): Promise<void> {
   const key = createHash("sha256").update(JSON.stringify([config.endpoint, config.apiModelId, config.apiKey])).digest("hex");
   let pending = checks.get(key);
   if (!pending) {
-    pending = check(config);
+    // A cold/transient provider failure must not poison every tenant for ten minutes.
+    pending = check(config).catch(async (error) => {
+      const retryable = error?.name === 'AbortError' || error?.name === 'TimeoutError' || /^(catalog HTTP (429|5\d\d)|stream probe failed|stream\/tool probe did not verify advertised capabilities)$/.test(error?.message ?? '');
+      if (!retryable) throw error;
+      return check(config);
+    });
     checks.set(key, pending);
     const expiry = setTimeout(() => checks.delete(key), 10 * 60_000);
     expiry.unref();
@@ -72,6 +77,7 @@ export async function verifyHuggingFace(config: ModelConfig): Promise<void> {
     config.capabilities = { ...config.capabilities, chat: true, code: true, completion: true, agent: evidence.tools, tools: evidence.tools, vision: evidence.vision };
     config.routingVerification = { status: "verified", reason: evidence.visionFailed ? "Catalog and streaming/tool probes verified; vision probe failed, images excluded" : "Live provider catalog and streaming/tool/vision probes verified" };
   } catch (error) {
+    if (checks.get(key) === pending) checks.delete(key);
     // Only our bounded status codes/messages reach logs or the renderer. Raw provider errors can contain credentials.
     const message = error instanceof Error && /^(catalog HTTP \d+|an explicit inference provider is required|provider\/context absent from live catalog|stream probe failed|stream\/tool probe did not verify advertised capabilities|vision probe failed)$/.test(error.message) ? error.message : "capability verification unavailable";
     config.routingVerification = { status: "failed", reason: message };
