@@ -128,7 +128,13 @@ export class DockerSandbox {
     await new Promise<void>((resolve, reject) => {
       const excludes = [...SYNC_EXCLUDE].flatMap((d) => ["--exclude", d]);
       const tar = spawn("tar", ["cf", "-", ...excludes, "-C", projectRoot, "."], { windowsHide: true });
-      const dock = spawn("docker", ["exec", "-i", this.containerId, "tar", "xf", "-", "-C", "/workspace"], { windowsHide: true });
+      // --no-same-owner keeps copy-in portable under rootless/non-root
+      // container runtimes and CI where chown/chgrp are intentionally denied.
+      const dock = spawn(
+        "docker",
+        ["exec", "-i", this.containerId, "tar", "xf", "-", "--no-same-owner", "-C", "/workspace"],
+        { windowsHide: true }
+      );
       let err = "";
       dock.stderr.on("data", (d) => (err += d));
       tar.stderr.on("data", (d) => (err += d));
