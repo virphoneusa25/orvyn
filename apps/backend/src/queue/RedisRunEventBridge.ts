@@ -36,7 +36,20 @@ export class RedisRunEventBridge {
         const event = record.event;
         if (event.runId !== this.runId) continue;
 
-        this.store.emit(this.runId, event.type, event.data);
+        const alreadyProjected = this.store
+          .get(this.runId)
+          ?.events.some(
+            (existing) =>
+              String(existing.data.__distributedSourceEventId ?? "") === event.sourceEventId
+          );
+
+        if (!alreadyProjected) {
+          this.store.emit(this.runId, event.type, {
+            ...event.data,
+            __distributedSourceEventId: event.sourceEventId,
+          });
+        }
+
         this.cursor = record.redisId;
         await this.transport.saveConsumerCursor(this.runId, this.cursor);
 
