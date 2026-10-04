@@ -1,5 +1,45 @@
-// Complete current SQLite authentication contract; migration rejects schema drift.
+// Complete production auth.db contract: authentication, staff and onboarding.
 export const AUTH_TABLES = [
+  {
+    name: "account_suspensions",
+    sql: "CREATE TABLE account_suspensions (\n        id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, reason TEXT NOT NULL, category TEXT NOT NULL, by_email TEXT NOT NULL,\n        at INTEGER NOT NULL, lifted_at INTEGER, lifted_by TEXT\n      )",
+    columns: [
+      {"name":"id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"tenant_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"reason","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"category","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"by_email","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"lifted_at","type":"INTEGER","notNull":false,"primaryKey":0},
+      {"name":"lifted_by","type":"TEXT","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
+    name: "admin_audit",
+    sql: "CREATE TABLE admin_audit (\n        seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at INTEGER NOT NULL,\n        actor_id TEXT NOT NULL, actor_email TEXT NOT NULL, action TEXT NOT NULL, tenant_id TEXT, detail TEXT NOT NULL DEFAULT '{}', ip TEXT\n      )",
+    columns: [
+      {"name":"seq","type":"INTEGER","notNull":false,"primaryKey":1},
+      {"name":"id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"actor_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"actor_email","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"action","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"tenant_id","type":"TEXT","notNull":false,"primaryKey":0},
+      {"name":"detail","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"ip","type":"TEXT","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
+    name: "analytics_events",
+    sql: "CREATE TABLE analytics_events (\n        id TEXT PRIMARY KEY,\n        user_id TEXT,\n        name TEXT NOT NULL,\n        props TEXT NOT NULL,\n        created_at INTEGER NOT NULL\n      )",
+    columns: [
+      {"name":"id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"user_id","type":"TEXT","notNull":false,"primaryKey":0},
+      {"name":"name","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"props","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"created_at","type":"INTEGER","notNull":true,"primaryKey":0},
+    ],
+  },
   {
     name: "api_keys",
     sql: "CREATE TABLE api_keys (\n        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, organization_id TEXT NOT NULL, name TEXT NOT NULL,\n        prefix TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL,\n        last_used_at INTEGER, revoked_at INTEGER\n      )",
@@ -107,6 +147,20 @@ export const AUTH_TABLES = [
     ],
   },
   {
+    name: "onboarding_profiles",
+    sql: "CREATE TABLE onboarding_profiles (\n        user_id TEXT PRIMARY KEY,\n        id TEXT NOT NULL,\n        current_step TEXT NOT NULL,\n        completed_steps TEXT NOT NULL,\n        answers TEXT NOT NULL,\n        created_at INTEGER NOT NULL,\n        updated_at INTEGER NOT NULL,\n        completed_at INTEGER\n      )",
+    columns: [
+      {"name":"user_id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"current_step","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"completed_steps","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"answers","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"created_at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"updated_at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"completed_at","type":"INTEGER","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
     name: "org_invites",
     sql: "CREATE TABLE org_invites (\n        id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL,\n        token_hash TEXT NOT NULL UNIQUE, invited_by TEXT NOT NULL, created_at INTEGER NOT NULL,\n        expires_at INTEGER NOT NULL, accepted_at INTEGER, revoked_at INTEGER\n      )",
     columns: [
@@ -120,6 +174,18 @@ export const AUTH_TABLES = [
       {"name":"expires_at","type":"INTEGER","notNull":true,"primaryKey":0},
       {"name":"accepted_at","type":"INTEGER","notNull":false,"primaryKey":0},
       {"name":"revoked_at","type":"INTEGER","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
+    name: "org_profiles",
+    sql: "CREATE TABLE org_profiles (tenant_id TEXT PRIMARY KEY, website TEXT, industry TEXT, location TEXT, updated_at INTEGER NOT NULL, updated_by TEXT)",
+    columns: [
+      {"name":"tenant_id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"website","type":"TEXT","notNull":false,"primaryKey":0},
+      {"name":"industry","type":"TEXT","notNull":false,"primaryKey":0},
+      {"name":"location","type":"TEXT","notNull":false,"primaryKey":0},
+      {"name":"updated_at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"updated_by","type":"TEXT","notNull":false,"primaryKey":0},
     ],
   },
   {
@@ -155,6 +221,16 @@ export const AUTH_TABLES = [
     ],
   },
   {
+    name: "platform_staff",
+    sql: "CREATE TABLE platform_staff (user_id TEXT PRIMARY KEY, role TEXT NOT NULL, created_at INTEGER NOT NULL, created_by TEXT)",
+    columns: [
+      {"name":"user_id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"role","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"created_at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"created_by","type":"TEXT","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
     name: "session_rotations",
     sql: "CREATE TABLE session_rotations (old_hash TEXT PRIMARY KEY, family TEXT NOT NULL, user_id TEXT NOT NULL, rotated_at INTEGER NOT NULL)",
     columns: [
@@ -177,6 +253,18 @@ export const AUTH_TABLES = [
       {"name":"device","type":"TEXT","notNull":false,"primaryKey":0},
       {"name":"last_used_at","type":"INTEGER","notNull":false,"primaryKey":0},
       {"name":"family","type":"TEXT","notNull":false,"primaryKey":0},
+    ],
+  },
+  {
+    name: "support_notes",
+    sql: "CREATE TABLE support_notes (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, author_id TEXT NOT NULL, author_email TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL)",
+    columns: [
+      {"name":"id","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"tenant_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"author_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"author_email","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"body","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"created_at","type":"INTEGER","notNull":true,"primaryKey":0},
     ],
   },
   {
@@ -220,9 +308,27 @@ export const AUTH_TABLES = [
       {"name":"terms_accepted_at","type":"INTEGER","notNull":false,"primaryKey":0},
     ],
   },
+  {
+    name: "view_as_sessions",
+    sql: "CREATE TABLE view_as_sessions (token_hash TEXT PRIMARY KEY, staff_id TEXT NOT NULL, staff_email TEXT NOT NULL, user_id TEXT NOT NULL, organization_id TEXT NOT NULL, tenant_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
+    columns: [
+      {"name":"token_hash","type":"TEXT","notNull":false,"primaryKey":1},
+      {"name":"staff_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"staff_email","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"user_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"organization_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"tenant_id","type":"TEXT","notNull":true,"primaryKey":0},
+      {"name":"created_at","type":"INTEGER","notNull":true,"primaryKey":0},
+      {"name":"expires_at","type":"INTEGER","notNull":true,"primaryKey":0},
+    ],
+  },
 ] as const;
 
 export const AUTH_INDEXES = [
+  "CREATE INDEX account_suspensions_tenant ON account_suspensions (tenant_id, lifted_at)",
+  "CREATE INDEX admin_audit_at ON admin_audit (at)",
+  "CREATE INDEX admin_audit_tenant ON admin_audit (tenant_id, at)",
+  "CREATE INDEX idx_analytics_name ON analytics_events (name, created_at)",
   "CREATE INDEX idx_api_keys_user ON api_keys (user_id)",
   "CREATE INDEX idx_chats_tenant ON tenant_chats (tenant_id, created_at)",
   "CREATE INDEX idx_invites_org ON org_invites (organization_id)",
@@ -232,13 +338,41 @@ export const AUTH_INDEXES = [
   "CREATE INDEX idx_sessions_id ON sessions (id)",
   "CREATE INDEX idx_sessions_user ON sessions (user_id)",
   "CREATE INDEX idx_shares_session ON chat_shares (session_id)",
-  "CREATE INDEX idx_verify_user ON email_verifications (user_id)"
+  "CREATE INDEX idx_verify_user ON email_verifications (user_id)",
+  "CREATE INDEX support_notes_tenant ON support_notes (tenant_id, created_at)"
 ] as const;
 
 export const AUTH_UNIQUE_KEYS = {
+  "account_suspensions": [
+    [
+      "id"
+    ],
+    [
+      "id"
+    ]
+  ],
+  "admin_audit": [
+    [
+      "id"
+    ],
+    [
+      "seq"
+    ]
+  ],
+  "analytics_events": [
+    [
+      "id"
+    ],
+    [
+      "id"
+    ]
+  ],
   "api_keys": [
     [
       "key_hash"
+    ],
+    [
+      "id"
     ],
     [
       "id"
@@ -250,9 +384,15 @@ export const AUTH_UNIQUE_KEYS = {
     ],
     [
       "id"
+    ],
+    [
+      "id"
     ]
   ],
   "desktop_handoffs": [
+    [
+      "id"
+    ],
     [
       "id"
     ]
@@ -260,9 +400,15 @@ export const AUTH_UNIQUE_KEYS = {
   "email_verifications": [
     [
       "token_hash"
+    ],
+    [
+      "token_hash"
     ]
   ],
   "github_links": [
+    [
+      "id_hash"
+    ],
     [
       "id_hash"
     ]
@@ -271,9 +417,16 @@ export const AUTH_UNIQUE_KEYS = {
     [
       "user_id",
       "version"
+    ],
+    [
+      "user_id",
+      "version"
     ]
   ],
   "login_failures": [
+    [
+      "email"
+    ],
     [
       "email"
     ]
@@ -282,11 +435,26 @@ export const AUTH_UNIQUE_KEYS = {
     [
       "provider",
       "subject"
+    ],
+    [
+      "provider",
+      "subject"
     ]
   ],
   "oauth_states": [
     [
       "state_hash"
+    ],
+    [
+      "state_hash"
+    ]
+  ],
+  "onboarding_profiles": [
+    [
+      "user_id"
+    ],
+    [
+      "user_id"
     ]
   ],
   "org_invites": [
@@ -295,9 +463,24 @@ export const AUTH_UNIQUE_KEYS = {
     ],
     [
       "id"
+    ],
+    [
+      "id"
+    ]
+  ],
+  "org_profiles": [
+    [
+      "tenant_id"
+    ],
+    [
+      "tenant_id"
     ]
   ],
   "organization_members": [
+    [
+      "organization_id",
+      "user_id"
+    ],
     [
       "organization_id",
       "user_id"
@@ -309,14 +492,31 @@ export const AUTH_UNIQUE_KEYS = {
     ],
     [
       "id"
+    ],
+    [
+      "id"
     ]
   ],
   "password_resets": [
     [
       "token_hash"
+    ],
+    [
+      "token_hash"
+    ]
+  ],
+  "platform_staff": [
+    [
+      "user_id"
+    ],
+    [
+      "user_id"
     ]
   ],
   "session_rotations": [
+    [
+      "old_hash"
+    ],
     [
       "old_hash"
     ]
@@ -324,14 +524,31 @@ export const AUTH_UNIQUE_KEYS = {
   "sessions": [
     [
       "token_hash"
+    ],
+    [
+      "token_hash"
+    ]
+  ],
+  "support_notes": [
+    [
+      "id"
+    ],
+    [
+      "id"
     ]
   ],
   "tenant_chats": [
     [
       "id"
+    ],
+    [
+      "id"
     ]
   ],
   "tenant_projects": [
+    [
+      "id"
+    ],
     [
       "id"
     ]
@@ -342,6 +559,28 @@ export const AUTH_UNIQUE_KEYS = {
     ],
     [
       "id"
+    ],
+    [
+      "id"
+    ]
+  ],
+  "view_as_sessions": [
+    [
+      "token_hash"
+    ],
+    [
+      "token_hash"
     ]
   ]
 } as const;
+
+export const AUTH_TRIGGERS = [
+  {
+    "name": "admin_audit_no_delete",
+    "sql": "CREATE TRIGGER admin_audit_no_delete BEFORE DELETE ON admin_audit BEGIN SELECT RAISE(ABORT, 'admin_audit is append-only'); END"
+  },
+  {
+    "name": "admin_audit_no_update",
+    "sql": "CREATE TRIGGER admin_audit_no_update BEFORE UPDATE ON admin_audit BEGIN SELECT RAISE(ABORT, 'admin_audit is append-only'); END"
+  }
+] as const;

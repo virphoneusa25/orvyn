@@ -7,7 +7,7 @@ async function main(): Promise<void> {
     throw new Error("Usage: authMigrationCli --source AUTH_DB --check|--import|--verify");
   }
   const snapshot = readAuthSnapshot(args[1]);
-  const counts = Object.fromEntries(Object.entries(snapshot).map(([table, rows]) => [table, rows.length]));
+  const counts = Object.fromEntries(Object.entries(snapshot).filter(([table]) => table !== "__sequences").map(([table, rows]) => [table, rows.length]));
   if (args[2] === "--check") { console.log(JSON.stringify({ mode:"source-check", tables:counts, ready:true })); return; }
   const storage = new PostgresAuthStorage(process.env.ORVYN_AUTH_PG_URL || "");
   try {

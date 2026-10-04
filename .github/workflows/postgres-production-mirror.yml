@@ -74,6 +74,7 @@ jobs:
           pgclient pg_restore -h 127.0.0.1 -U orvyn -d mirror_restore --no-owner --no-privileges /backup/mirror.dump
           tables=(orvyn_storage.migrations orvyn_storage.missions orvyn_storage.usage_events orvyn_storage.settings orvyn_storage.models public.identity_migrations public.identity_users public.identity_organizations public.identity_organization_members public.identity_sessions public.identity_projects public.identity_chats)
           tables+=(orvyn_auth.migrations orvyn_auth.imports orvyn_auth.api_keys orvyn_auth.chat_shares orvyn_auth.desktop_handoffs orvyn_auth.email_verifications orvyn_auth.github_links orvyn_auth.legal_acceptances orvyn_auth.login_failures orvyn_auth.oauth_identities orvyn_auth.oauth_states orvyn_auth.org_invites orvyn_auth.organization_members orvyn_auth.organizations orvyn_auth.password_resets orvyn_auth.session_rotations orvyn_auth.sessions orvyn_auth.tenant_chats orvyn_auth.tenant_projects orvyn_auth.users)
+          tables+=(orvyn_auth.source_sequences orvyn_auth.account_suspensions orvyn_auth.admin_audit orvyn_auth.analytics_events orvyn_auth.onboarding_profiles orvyn_auth.org_profiles orvyn_auth.platform_staff orvyn_auth.support_notes orvyn_auth.view_as_sessions)
           for table in "${tables[@]}"; do
             query="SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM $table t"
             original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
@@ -81,6 +82,11 @@ jobs:
             test "$original" = "$restored"
             printf '%s restored content matches\n' "$table"
           done
+          query="SELECT last_value::text || ':' || is_called::text FROM orvyn_auth.admin_audit_seq_seq"
+          original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
+          restored=$(pgclient psql -h 127.0.0.1 -U orvyn -d mirror_restore -Atc "$query")
+          test "$original" = "$restored"
+          printf 'Restored audit sequence matches\n'
       - name: Compose validation with existing production overlays
         run: |
           cp .env.example .env

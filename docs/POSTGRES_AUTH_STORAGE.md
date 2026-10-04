@@ -4,10 +4,12 @@ The current production authentication service remains SQLite-authoritative. This
 change provides its complete PostgreSQL migration target, not a live authentication
 switch. Global primary flags remain rejected by the production tenant store.
 
-`orvyn_auth` covers all 18 tables in the current AuthService contract: users,
+`orvyn_auth` covers all 26 business tables in the production auth.db contract: users,
 sessions, organizations, membership, projects, chats, invitations, API keys,
 share links, legal acceptances, verification/reset links, rotations, OAuth
-identities/state, desktop handoffs, GitHub links and login failures. Existing
+identities/state, desktop handoffs, GitHub links and login failures, plus staff roles,
+append-only admin audit, account suspensions, support notes, organization profiles,
+view-as sessions, onboarding profiles and analytics events. Existing
 `public.identity_*` tables remain separate; they lack the complete account data.
 
 The checked-in catalog includes every column and primary/unique constraint plus
@@ -17,6 +19,9 @@ cannot represent null characters; an affected export fails without altering data
 Do not scrub source authentication records to bypass this check.
 
 The source reader opens SQLite read-only and uses one consistent read transaction.
+Audit update/delete protection is recreated in PostgreSQL. The SQLite AUTOINCREMENT
+high-water mark is preserved, including gaps above the current maximum row; the
+PostgreSQL identity sequence is restarted transactionally so retries remain safe.
 The destination migration/import uses transactions, a shared advisory lock,
 bounded statement/lock waits, and table locks for consistent cross-table checks.
 Only an empty destination can be seeded. Identical repeated imports are safe;
@@ -47,7 +52,7 @@ This change does not provide ongoing authentication mirroring.
 
 ## Validation and next boundary
 
-Tests populate all 18 tables/columns, check hashed credential storage, force an
+Tests populate all 26 tables/columns, check hashed credential storage, force an
 import failure midway through the transaction, retry concurrent imports, reject
 different existing data, detect schema drift and revocation changes at unchanged
 counts, and restore PostgreSQL-exported rows into the current authentication service.
@@ -60,5 +65,6 @@ Next implement the asynchronous authentication repository operations and migrate
 their callers together. Preserve atomic registration, invitation seat limits,
 single-use token consumption, session rotation/reuse handling, and persistent login
 failure accounting. Connect live requests only after those semantics pass against
-PostgreSQL. Billing and durable WorkSession integration remain separate prerequisites
+PostgreSQL. Admin and onboarding callers also share auth.db and must migrate with it.
+Billing and durable WorkSession integration remain separate prerequisites
 for a full primary-storage rollout. No production flags are changed by this work.
