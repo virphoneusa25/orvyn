@@ -89,6 +89,7 @@ export class PostgresShadowStore {
   private readonly pool: Pool;
   private initPromise: Promise<void> | null = null;
   private readonly pending = new Set<Promise<unknown>>();
+  private writeTail: Promise<void> = Promise.resolve();
   private failures = 0;
   private lastError?: string;
 
@@ -110,11 +111,16 @@ export class PostgresShadowStore {
   }
 
   private track(label: string, work: () => Promise<unknown>): void {
+    // Preserve call order. Shadow mode receives synchronous LocalStore writes
+    // (profile A -> profile B, mission RUNNING -> COMPLETED, etc.). Launching
+    // each PostgreSQL query concurrently can let an older write commit after a
+    // newer one and leave the shadow database stale.
     let p!: Promise<unknown>;
-    p = (async () => {
-      await this.init();
-      await work();
-    })()
+    p = this.writeTail
+      .then(async () => {
+        await this.init();
+        await work();
+      })
       .catch((err: any) => {
         this.failures++;
         this.lastError = `${label}: ${err?.message ?? String(err)}`;
@@ -122,6 +128,12 @@ export class PostgresShadowStore {
       })
       .finally(() => this.pending.delete(p));
 
+    // A failed mirror write is recorded above but must never poison the queue
+    // and prevent later shadow writes from being attempted.
+    this.writeTail = p.then(
+      () => undefined,
+      () => undefined
+    );
     this.pending.add(p);
   }
 
