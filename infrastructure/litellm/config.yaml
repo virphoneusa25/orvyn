@@ -1,0 +1,33 @@
+# infrastructure/litellm/config.yaml
+#
+# LiteLLM is the operational provider/deployment layer beneath ORVYN's
+# ModelGateway. ORION still chooses semantic lanes/roles; this proxy handles
+# upstream provider connectivity, retries, cooldowns, and later KXM fallbacks.
+#
+# Caching is intentionally disabled for agent trajectories. Redis is still
+# configured for LiteLLM coordination/cooldowns and future opt-in caching.
+
+model_list:
+  - model_name: fast-tier
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: code-tier
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  - model_name: premium-tier
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+router_settings:
+  routing_strategy: simple-shuffle
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+litellm_settings:
+  cache: false
