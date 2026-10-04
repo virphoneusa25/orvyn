@@ -463,3 +463,56 @@ test(
     await postgresMirror.flushStrict();
   }
 );
+
+
+test(
+  "real Postgres: UsageService recordAsync is visible to the next Postgres quota read before it returns",
+  { skip: !enabled },
+  async () => {
+    const savedReads = process.env.ORVYN_POSTGRES_PRIMARY_READS;
+    const savedWrites = process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+    const savedFallback = process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+    const savedQuota = process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
+
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
+    process.env.ORVYN_POSTGRES_PRIMARY_WRITES = "1";
+    process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = "0";
+    process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = "10";
+
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-usage-ack-"));
+    const tenantId = `tenant_usage_ack_${Date.now()}`;
+    const store = new LocalStore(tenantId, dir);
+
+    try {
+      await postgresMirror.upsertTenant(tenantId, "Usage Ack Test");
+
+      const usage = new UsageService();
+      usage.attachStore(store);
+
+      await usage.recordAsync({
+        modelId: "ack-model",
+        provider: "test",
+        method: "generate",
+        durationMs: 5,
+        ok: true,
+      });
+
+      // No manual postgresMirror.flush() here. recordAsync() itself must be the
+      // acknowledgement boundary.
+      assert.equal(await postgresMirror.countUsageSince(tenantId, 0), 1);
+      assert.equal((await usage.quotaAsync()).used, 1);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+
+      if (savedReads === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedReads;
+      if (savedWrites === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+      else process.env.ORVYN_POSTGRES_PRIMARY_WRITES = savedWrites;
+      if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+      else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+      if (savedQuota === undefined) delete process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
+      else process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = savedQuota;
+    }
+  }
+);
