@@ -1,8 +1,5 @@
 name: PostgreSQL Mirror Validation
 
-permissions:
-  contents: write
-
 on:
   workflow_dispatch:
   pull_request:
@@ -46,31 +43,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      # Temporary during this migration branch: regenerate the lock for pg.
-      # After the bot commits it once, this workflow is tightened to npm ci.
-      - name: Install dependencies and regenerate lock
-        run: npm install --workspaces --ignore-scripts --no-audit --no-fund
-
-      - name: Commit regenerated lockfile
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        shell: bash
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "package-lock.json already synchronized"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "deps: regenerate lockfile for PostgreSQL mirror"
-          git push origin HEAD:${{ github.head_ref }}
+      - name: Install dependencies
+        run: npm ci --workspaces --ignore-scripts --no-audit --no-fund
 
       - name: Build ai-core
         run: npm run build -w @orvyn/ai-core
