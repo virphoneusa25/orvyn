@@ -298,6 +298,69 @@ export class LocalStore {
     );
   }
 
+  exportForPostgresMigration(): {
+    missions: Mission[];
+    usageEvents: UsageEvent[];
+    settings: Array<{ key: string; value: string }>;
+    models: ModelConfig[];
+  } {
+    const missions =
+      this.guard("export missions", () => {
+        const rows = this.db.prepare(`SELECT * FROM missions ORDER BY created_at ASC`).all() as any[];
+        return rows.map((r) => ({
+          id: String(r.id),
+          runId: String(r.run_id),
+          projectRoot: String(r.project_root),
+          goal: String(r.goal),
+          status: r.status,
+          reviewCycles: Number(r.review_cycles),
+          createdAt: Number(r.created_at),
+          updatedAt: Number(r.updated_at),
+          tasks: JSON.parse(String(r.tasks_json)),
+        })) as Mission[];
+      }) ?? [];
+
+    const usageEvents =
+      this.guard("export usage", () => {
+        const rows = this.db.prepare(`SELECT * FROM usage_events ORDER BY ts ASC`).all() as any[];
+        return rows.map((r) => {
+          const e: UsageEvent = {
+            id: String(r.id),
+            timestamp: Number(r.ts),
+            modelId: String(r.model_id),
+            provider: String(r.provider),
+            method: r.method,
+            durationMs: Number(r.duration_ms),
+            ok: r.ok === 1,
+          };
+          if (r.error != null) e.error = String(r.error);
+          if (r.prompt_tokens != null) e.promptTokens = Number(r.prompt_tokens);
+          if (r.completion_tokens != null) e.completionTokens = Number(r.completion_tokens);
+          if (r.output_chars != null) e.outputChars = Number(r.output_chars);
+          if (r.tool_calls != null) e.toolCalls = Number(r.tool_calls);
+          if (r.mission_id != null) e.missionId = String(r.mission_id);
+          if (r.task_id != null) e.taskId = String(r.task_id);
+          if (r.agent != null) e.agent = String(r.agent);
+          if (r.source != null) e.source = String(r.source);
+          return e;
+        });
+      }) ?? [];
+
+    const settings =
+      this.guard("export settings", () => {
+        const rows = this.db.prepare(`SELECT key, value FROM settings ORDER BY key`).all() as any[];
+        return rows.map((r) => ({ key: String(r.key), value: String(r.value) }));
+      }) ?? [];
+
+    const models =
+      this.guard("export models", () => {
+        const rows = this.db.prepare(`SELECT config_json FROM models ORDER BY id`).all() as any[];
+        return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
+      }) ?? [];
+
+    return { missions, usageEvents, settings, models };
+  }
+
   parityCounts(): {
     missions: number;
     usageEvents: number;
