@@ -84,9 +84,14 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
-  saveUsageEvent(e: UsageEvent): void;
-  loadRecentUsage(limit?: number): UsageEvent[];
-  countUsageSince?(ts: number): number;
+  saveUsageEvent(e: UsageEvent): Promise<void>;
+  loadRecentUsage(limit?: number): Promise<UsageEvent[]>;
+  countUsageSince?(ts: number): Promise<number>;
+  reserveUsageRequest?(
+    monthStart: number,
+    limit: number
+  ): Promise<{ allowed: boolean; used: number }>;
+  getUsageRequestCount?(monthStart: number): Promise<number>;
 }
 
 export class UsageService {
@@ -116,35 +121,38 @@ export class UsageService {
    * persists every subsequent event. Structural type avoids a circular import
    * with LocalStore.
    */
-  attachStore(store: UsageStore): void {
+  async attachStore(store: UsageStore): Promise<void> {
     this.store = store;
-    const persisted = store.loadRecentUsage(MAX_EVENTS);
+    const persisted = await store.loadRecentUsage(MAX_EVENTS);
     if (persisted.length > 0) {
       this.events = [...persisted, ...this.events].slice(-MAX_EVENTS);
     }
     // Quota counting must survive restarts, or a customer could reset their
     // budget by crashing the backend.
-    this.monthCount = store.countUsageSince?.(this.monthStart) ?? this.monthCount;
+    if (store.getUsageRequestCount) {
+      this.monthCount = await store.getUsageRequestCount(this.monthStart);
+    } else if (store.countUsageSince) {
+      this.monthCount = await store.countUsageSince(this.monthStart);
+    }
   }
 
-  private refreshPersistedUsage(): void {
+  private async refreshPersistedUsage(): Promise<void> {
     if (!this.store) return;
-    // Worker and API processes share the durable tenant store during the
-    // SQLite transition phase. Re-read the bounded window so Reports includes
-    // usage written by other processes instead of freezing at startup state.
-    this.events = this.store.loadRecentUsage(MAX_EVENTS).slice(-MAX_EVENTS);
+    this.events = (await this.store.loadRecentUsage(MAX_EVENTS)).slice(-MAX_EVENTS);
   }
 
-  private refreshMonthCount(): void {
-    if (this.store?.countUsageSince) {
-      this.monthCount = this.store.countUsageSince(this.monthStart);
+  private async refreshMonthCount(): Promise<void> {
+    if (this.store?.getUsageRequestCount) {
+      this.monthCount = await this.store.getUsageRequestCount(this.monthStart);
+    } else if (this.store?.countUsageSince) {
+      this.monthCount = await this.store.countUsageSince(this.monthStart);
     }
   }
 
   /** Current quota state; surfaced on /usage so clients can warn early. */
-  quota(): { limit: number; used: number; remaining: number | null; resetsAt: number } {
-    this.rollMonth();
-    this.refreshMonthCount();
+  async quota(): Promise<{ limit: number; used: number; remaining: number | null; resetsAt: number }> {
+    await this.rollMonth();
+    await this.refreshMonthCount();
     return {
       limit: this.quotaLimit,
       used: this.monthCount,
@@ -153,24 +161,47 @@ export class UsageService {
     };
   }
 
-  private rollMonth(): void {
+  private async rollMonth(): Promise<void> {
     const start = utcMonthStart();
     if (start !== this.monthStart) {
       this.monthStart = start;
-      this.monthCount = this.store?.countUsageSince?.(start) ?? 0;
+      if (this.store?.getUsageRequestCount) {
+        this.monthCount = await this.store.getUsageRequestCount(start);
+      } else if (this.store?.countUsageSince) {
+        this.monthCount = await this.store.countUsageSince(start);
+      } else {
+        this.monthCount = 0;
+      }
     }
   }
 
-  /** Throws QuotaExceededError when the monthly budget is spent. */
-  checkQuota(): void {
-    if (this.quotaLimit <= 0) return;
-    this.rollMonth();
-    // Cross-process workers may have recorded usage since this instance was
-    // created. Recount from durable storage before every billable model call.
-    this.refreshMonthCount();
+  /**
+   * Throws QuotaExceededError when the monthly budget is spent.
+   * Returns true when the selected store atomically reserved this request.
+   */
+  async checkQuota(): Promise<boolean> {
+    if (this.quotaLimit <= 0) return false;
+    await this.rollMonth();
+
+    if (this.store?.reserveUsageRequest) {
+      const reservation = await this.store.reserveUsageRequest(
+        this.monthStart,
+        this.quotaLimit
+      );
+      this.monthCount = reservation.used;
+      if (!reservation.allowed) {
+        throw new QuotaExceededError(reservation.used, this.quotaLimit);
+      }
+      return true;
+    }
+
+    // SQLite/local fallback: durable recount, but no cross-process atomic
+    // reservation. Cloud production uses the PostgreSQL implementation above.
+    await this.refreshMonthCount();
     if (this.monthCount >= this.quotaLimit) {
       throw new QuotaExceededError(this.monthCount, this.quotaLimit);
     }
+    return false;
   }
 
   /** Run `fn` with mission/task/agent attribution attached to every model call inside it. */
@@ -180,14 +211,21 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  async record(
+    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>,
+    quotaReserved = false
+  ): Promise<void> {
     const ctx = this.als.getStore() ?? {};
     const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+
+    // Durable write first in PostgreSQL-primary mode. A billing event must not
+    // be acknowledged only in process memory.
+    if (this.store) await this.store.saveUsageEvent(event);
+
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
-    this.rollMonth();
-    this.monthCount++;
-    this.store?.saveUsageEvent(event);
+    await this.rollMonth();
+    if (!quotaReserved) this.monthCount++;
 
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
@@ -229,13 +267,13 @@ export class UsageService {
     }
   }
 
-  recent(limit = 200): UsageEvent[] {
-    this.refreshPersistedUsage();
+  async recent(limit = 200): Promise<UsageEvent[]> {
+    await this.refreshPersistedUsage();
     return this.events.slice(-limit).reverse();
   }
 
-  totals() {
-    this.refreshPersistedUsage();
+  async totals() {
+    await this.refreshPersistedUsage();
     const byModel = new Map<string, { requests: number; errors: number; promptTokens: number; completionTokens: number; durationMs: number }>();
     const byMission = new Map<string, { requests: number; promptTokens: number; completionTokens: number }>();
     let requests = 0, errors = 0, promptTokens = 0, completionTokens = 0, tokensReportedFor = 0;
@@ -287,47 +325,62 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        usage.checkQuota();
         usage.checkMissionBudget();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
+
+        let res: AIResponse;
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
-          // the final outcome, not one per attempt.
-          const res = await withModelRetries(() => inner.generate(request), {
+          // the final provider outcome, not one per retry attempt.
+          res = await withModelRetries(() => inner.generate(request), {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "generate",
-            durationMs: Date.now() - start,
-            ok: true,
-            promptTokens: res.usage?.promptTokens,
-            completionTokens: res.usage?.completionTokens,
-            outputChars: res.content?.length ?? 0,
-            toolCalls: res.toolCalls?.length || undefined,
-          });
-          return res;
         } catch (err: any) {
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "generate",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          // Preserve the original provider error even if the accounting store
+          // is temporarily unavailable. The failed inference already happened;
+          // a metering outage must not rewrite its cause.
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "generate",
+              durationMs: Date.now() - start,
+              ok: false,
+              error: String(err?.message ?? err).slice(0, 300),
+            }, quotaReserved);
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed generate event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
+          }
           throw err;
         }
+
+        // A successful paid inference is not acknowledged until its billing
+        // event is durable in the authoritative persistence driver.
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "generate",
+          durationMs: Date.now() - start,
+          ok: true,
+          promptTokens: res.usage?.promptTokens,
+          completionTokens: res.usage?.completionTokens,
+          outputChars: res.content?.length ?? 0,
+          toolCalls: res.toolCalls?.length || undefined,
+        }, quotaReserved);
+        return res;
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        usage.checkQuota();
         usage.checkMissionBudget();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
+
         try {
           // A stream may only be retried before the first chunk reaches the
           // consumer — after that, replaying would duplicate output.
@@ -350,27 +403,39 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "stream",
-            durationMs: Date.now() - start,
-            ok: true,
-            outputChars: chars,
-            toolCalls: toolCalls || undefined,
-          });
         } catch (err: any) {
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "stream",
-            durationMs: Date.now() - start,
-            ok: false,
-            outputChars: chars,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          // Provider/transport error only. Preserve it even if persistence of
+          // the failure event is unavailable.
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "stream",
+              durationMs: Date.now() - start,
+              ok: false,
+              outputChars: chars,
+              error: String(err?.message ?? err).slice(0, 300),
+            }, quotaReserved);
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed stream event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
+          }
           throw err;
         }
+
+        // The provider stream completed normally. Persist exactly one success
+        // event outside the provider-error catch so a Postgres failure cannot
+        // be mislabeled as an upstream model failure.
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "stream",
+          durationMs: Date.now() - start,
+          ok: true,
+          outputChars: chars,
+          toolCalls: toolCalls || undefined,
+        }, quotaReserved);
       },
 
       healthCheck: () => inner.healthCheck(),
@@ -384,29 +449,38 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
+
+        let res;
         try {
-          const res = await inner.generateImage!(request);
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: true,
-          });
-          return res;
+          res = await inner.generateImage!(request);
         } catch (err: any) {
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "image",
+              durationMs: Date.now() - start,
+              ok: false,
+              error: String(err?.message ?? err).slice(0, 300),
+            }, quotaReserved);
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed image event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
+          }
           throw err;
         }
+
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "image",
+          durationMs: Date.now() - start,
+          ok: true,
+        }, quotaReserved);
+        return res;
       };
     }
 

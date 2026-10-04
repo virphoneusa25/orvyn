@@ -10,21 +10,21 @@ import {
 class SharedUsageStore {
   events: UsageEvent[] = [];
 
-  saveUsageEvent(event: UsageEvent): void {
+  async saveUsageEvent(event: UsageEvent): Promise<void> {
     this.events.push(structuredClone(event));
   }
 
-  loadRecentUsage(limit = 5000): UsageEvent[] {
+  async loadRecentUsage(limit = 5000): Promise<UsageEvent[]> {
     return this.events.slice(-limit).map((event) => structuredClone(event));
   }
 
-  countUsageSince(ts: number): number {
+  async countUsageSince(ts: number): Promise<number> {
     return this.events.filter((event) => event.timestamp >= ts).length;
   }
 }
 
-function recordOne(service: UsageService, modelId: string): void {
-  service.record({
+async function recordOne(service: UsageService, modelId: string): Promise<void> {
+  await service.record({
     modelId,
     provider: "test",
     method: "generate",
@@ -35,28 +35,28 @@ function recordOne(service: UsageService, modelId: string): void {
   });
 }
 
-test("distributed UsageService instances refresh totals from the shared durable store", () => {
+test("distributed UsageService instances refresh totals from the shared durable store", async () => {
   const store = new SharedUsageStore();
   const worker = new UsageService();
   const api = new UsageService();
 
-  worker.attachStore(store);
-  api.attachStore(store);
+  await worker.attachStore(store);
+  await api.attachStore(store);
 
-  recordOne(worker, "worker-model");
+  await recordOne(worker, "worker-model");
 
-  const totals = api.totals();
+  const totals = await api.totals();
   assert.equal(totals.requests, 1);
   assert.equal(totals.promptTokens, 10);
   assert.equal(totals.completionTokens, 5);
   assert.equal(totals.byModel["worker-model"]?.requests, 1);
 
-  const recent = api.recent();
+  const recent = await api.recent();
   assert.equal(recent.length, 1);
   assert.equal(recent[0]?.modelId, "worker-model");
 });
 
-test("distributed quota checks recount usage written by other worker processes", () => {
+test("distributed quota checks recount usage written by other worker processes", async () => {
   const saved = process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
   process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = "2";
 
@@ -65,17 +65,17 @@ test("distributed quota checks recount usage written by other worker processes",
     const workerA = new UsageService();
     const workerB = new UsageService();
 
-    workerA.attachStore(store);
-    workerB.attachStore(store);
+    await workerA.attachStore(store);
+    await workerB.attachStore(store);
 
-    recordOne(workerA, "a");
-    assert.equal(workerB.quota().used, 1);
-    workerB.checkQuota();
+    await recordOne(workerA, "a");
+    assert.equal((await workerB.quota()).used, 1);
+    await workerB.checkQuota();
 
-    recordOne(workerA, "a");
-    assert.equal(workerB.quota().used, 2);
+    await recordOne(workerA, "a");
+    assert.equal((await workerB.quota()).used, 2);
 
-    assert.throws(
+    await assert.rejects(
       () => workerB.checkQuota(),
       (err: unknown) =>
         err instanceof QuotaExceededError &&

@@ -9,6 +9,8 @@ import { resolveTenant, resolveTenantFromToken } from "./middleware/tenant";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
 import { Orchestrator } from "./ai/Orchestrator";
+import { closePostgresTenantPools } from "./persistence/PostgresTenantStore";
+import { closePostgresShadowStore } from "./persistence/PostgresShadowStore";
 
 const app = express();
 app.use(cors());
@@ -32,19 +34,32 @@ app.use("/api/v1", resolveTenant, tenantRateLimit(), v1Router);
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
-wss.on("connection", (socket, req) => {
+wss.on("connection", async (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = resolveTenantFromToken(token);
 
-  // If API keys are registered, a valid token is mandatory on the socket too —
-  // otherwise the WS would be an unauthenticated bypass around the REST auth.
-  if (tenantManager.hasRegisteredKeys() && !tenant) {
-    socket.send(JSON.stringify({ delta: "", done: true, error: "Unauthorized — missing or invalid token" }));
+  let tenant;
+  try {
+    tenant = await resolveTenantFromToken(token);
+
+    // If API keys are registered, a valid token is mandatory on the socket too —
+    // otherwise the WS would be an unauthenticated bypass around the REST auth.
+    if (tenantManager.hasRegisteredKeys() && !tenant) {
+      socket.send(JSON.stringify({ delta: "", done: true, error: "Unauthorized — missing or invalid token" }));
+      socket.close();
+      return;
+    }
+    if (!tenant) tenant = await tenantManager.ensureLocalDefault();
+  } catch (err: any) {
+    console.error(`[ws] tenant hydration failed: ${err?.message ?? err}`);
+    socket.send(JSON.stringify({
+      delta: "",
+      done: true,
+      error: "Tenant storage is temporarily unavailable.",
+    }));
     socket.close();
     return;
   }
-  if (!tenant) tenant = tenantManager.ensureLocalDefault();
 
   socket.on("message", async (raw) => {
     let body;
@@ -78,19 +93,51 @@ wss.on("connection", (socket, req) => {
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
-bootstrapDefaultTenant();
 
-server.listen(PORT, () => {
-  console.log(`ORVYN backend listening on http://localhost:${PORT}`);
-  console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
-  console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
-  if (tenantManager.hasRegisteredKeys()) {
-    console.log(`  Tenant "default" seeded from ORVYN_API_KEY.`);
-  } else {
-    console.warn(
-      "\n⚠️  ORVYN_API_KEY is not set — the API is UNAUTHENTICATED and running\n" +
-        "   single-tenant. Fine for local development only. Set ORVYN_API_KEY\n" +
-        "   before exposing this to any network.\n"
-    );
-  }
+async function main(): Promise<void> {
+  // Do not open the network listener until the default tenant's configured
+  // persistence driver has initialized and hydrated durable state.
+  await bootstrapDefaultTenant();
+
+  server.listen(PORT, () => {
+    console.log(`ORVYN backend listening on http://localhost:${PORT}`);
+    console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
+    console.log(`  WS stream: ws://localhost:${PORT}/ws/chat`);
+    if (tenantManager.hasRegisteredKeys()) {
+      console.log(`  Tenant "default" seeded from ORVYN_API_KEY.`);
+    } else {
+      console.warn(
+        "\n⚠️  ORVYN_API_KEY is not set — the API is UNAUTHENTICATED and running\n" +
+          "   single-tenant. Fine for local development only. Set ORVYN_API_KEY\n" +
+          "   before exposing this to any network.\n"
+      );
+    }
+  });
+}
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`ORVYN backend shutting down on ${signal}`);
+
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+    // Do not wait forever for a broken keep-alive connection.
+    setTimeout(resolve, 5_000).unref?.();
+  });
+
+  wss.close();
+  await Promise.allSettled([
+    closePostgresTenantPools(),
+    closePostgresShadowStore(),
+  ]);
+}
+
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
+
+void main().catch((err) => {
+  console.error(`ORVYN backend failed to initialize: ${err?.message ?? err}`);
+  process.exitCode = 1;
 });

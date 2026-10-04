@@ -17,6 +17,8 @@ import { DistributedRunController } from "../queue/DistributedRunController";
 import { TenantMissionSemaphore } from "../queue/TenantMissionSemaphore";
 import { RedisMissionStateStore } from "../queue/RedisMissionStateStore";
 import { WorkerHeartbeatRegistry } from "../queue/WorkerHeartbeat";
+import { closePostgresTenantPools } from "../persistence/PostgresTenantStore";
+import { closePostgresShadowStore } from "../persistence/PostgresShadowStore";
 
 async function executeMission(payload: MissionJobPayload): Promise<void> {
   // Blocking reads and event publishing use dedicated Redis connections so
@@ -32,7 +34,7 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
   // A private TenantManager per job prevents horizontally scaled jobs from
   // sharing mutable ToolRegistry/project-root state inside one Node process.
   const manager = new TenantManager();
-  const tenant = manager.create(payload.tenantName, "", payload.tenantId, {
+  const tenant = await manager.create(payload.tenantName, "", payload.tenantId, {
     runStore,
     recoverDistributedRuns: false,
     distributedWorker: true,
@@ -166,6 +168,10 @@ async function main(): Promise<void> {
     await connection.quit();
     await semaphoreRedis.quit();
     await heartbeatRedis.quit();
+    await Promise.allSettled([
+      closePostgresTenantPools(),
+      closePostgresShadowStore(),
+    ]);
   };
   process.once("SIGTERM", () => void shutdown());
   process.once("SIGINT", () => void shutdown());
