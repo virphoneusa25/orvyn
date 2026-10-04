@@ -17,7 +17,7 @@ import { RedisRunEventTransport } from "./RedisRunEventTransport";
 import { RedisRunEventBridge } from "./RedisRunEventBridge";
 import { RedisRunControlTransport } from "./RedisRunControlTransport";
 import { RunControlPublisher } from "./RunControlPublisher";
-import type { MissionJobPayload } from "./types";
+import { MISSION_QUEUE_NAME, type MissionJobPayload } from "./types";
 import type { ApprovalScope } from "./controlTypes";
 
 interface ActiveBridge {
