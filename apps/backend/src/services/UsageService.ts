@@ -87,6 +87,11 @@ interface UsageStore {
   saveUsageEvent(e: UsageEvent): Promise<void>;
   loadRecentUsage(limit?: number): Promise<UsageEvent[]>;
   countUsageSince?(ts: number): Promise<number>;
+  reserveUsageRequest?(
+    monthStart: number,
+    limit: number
+  ): Promise<{ allowed: boolean; used: number }>;
+  getUsageRequestCount?(monthStart: number): Promise<number>;
 }
 
 export class UsageService {
@@ -124,7 +129,9 @@ export class UsageService {
     }
     // Quota counting must survive restarts, or a customer could reset their
     // budget by crashing the backend.
-    if (store.countUsageSince) {
+    if (store.getUsageRequestCount) {
+      this.monthCount = await store.getUsageRequestCount(this.monthStart);
+    } else if (store.countUsageSince) {
       this.monthCount = await store.countUsageSince(this.monthStart);
     }
   }
@@ -135,7 +142,9 @@ export class UsageService {
   }
 
   private async refreshMonthCount(): Promise<void> {
-    if (this.store?.countUsageSince) {
+    if (this.store?.getUsageRequestCount) {
+      this.monthCount = await this.store.getUsageRequestCount(this.monthStart);
+    } else if (this.store?.countUsageSince) {
       this.monthCount = await this.store.countUsageSince(this.monthStart);
     }
   }
@@ -156,21 +165,43 @@ export class UsageService {
     const start = utcMonthStart();
     if (start !== this.monthStart) {
       this.monthStart = start;
-      this.monthCount = this.store?.countUsageSince
-        ? await this.store.countUsageSince(start)
-        : 0;
+      if (this.store?.getUsageRequestCount) {
+        this.monthCount = await this.store.getUsageRequestCount(start);
+      } else if (this.store?.countUsageSince) {
+        this.monthCount = await this.store.countUsageSince(start);
+      } else {
+        this.monthCount = 0;
+      }
     }
   }
 
-  /** Throws QuotaExceededError when the monthly budget is spent. */
-  async checkQuota(): Promise<void> {
-    if (this.quotaLimit <= 0) return;
+  /**
+   * Throws QuotaExceededError when the monthly budget is spent.
+   * Returns true when the selected store atomically reserved this request.
+   */
+  async checkQuota(): Promise<boolean> {
+    if (this.quotaLimit <= 0) return false;
     await this.rollMonth();
-    // Recount from authoritative storage before every billable model call.
+
+    if (this.store?.reserveUsageRequest) {
+      const reservation = await this.store.reserveUsageRequest(
+        this.monthStart,
+        this.quotaLimit
+      );
+      this.monthCount = reservation.used;
+      if (!reservation.allowed) {
+        throw new QuotaExceededError(reservation.used, this.quotaLimit);
+      }
+      return true;
+    }
+
+    // SQLite/local fallback: durable recount, but no cross-process atomic
+    // reservation. Cloud production uses the PostgreSQL implementation above.
     await this.refreshMonthCount();
     if (this.monthCount >= this.quotaLimit) {
       throw new QuotaExceededError(this.monthCount, this.quotaLimit);
     }
+    return false;
   }
 
   /** Run `fn` with mission/task/agent attribution attached to every model call inside it. */
@@ -180,7 +211,10 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  async record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): Promise<void> {
+  async record(
+    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>,
+    quotaReserved = false
+  ): Promise<void> {
     const ctx = this.als.getStore() ?? {};
     const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
 
@@ -191,7 +225,7 @@ export class UsageService {
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     await this.rollMonth();
-    this.monthCount++;
+    if (!quotaReserved) this.monthCount++;
 
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
@@ -291,7 +325,7 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        await usage.checkQuota();
+        const quotaReserved = await usage.checkQuota();
         usage.checkMissionBudget();
         const start = Date.now();
 
@@ -315,7 +349,7 @@ export class UsageService {
               durationMs: Date.now() - start,
               ok: false,
               error: String(err?.message ?? err).slice(0, 300),
-            });
+            }, quotaReserved);
           } catch (meterErr: any) {
             console.error(
               `[usage] failed to persist failed generate event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
@@ -336,12 +370,12 @@ export class UsageService {
           completionTokens: res.usage?.completionTokens,
           outputChars: res.content?.length ?? 0,
           toolCalls: res.toolCalls?.length || undefined,
-        });
+        }, quotaReserved);
         return res;
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        await usage.checkQuota();
+        const quotaReserved = await usage.checkQuota();
         usage.checkMissionBudget();
         const start = Date.now();
         let chars = 0;
@@ -381,7 +415,7 @@ export class UsageService {
               ok: false,
               outputChars: chars,
               error: String(err?.message ?? err).slice(0, 300),
-            });
+            }, quotaReserved);
           } catch (meterErr: any) {
             console.error(
               `[usage] failed to persist failed stream event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
@@ -401,7 +435,7 @@ export class UsageService {
           ok: true,
           outputChars: chars,
           toolCalls: toolCalls || undefined,
-        });
+        }, quotaReserved);
       },
 
       healthCheck: () => inner.healthCheck(),
@@ -415,7 +449,7 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        await usage.checkQuota();
+        const quotaReserved = await usage.checkQuota();
         const start = Date.now();
 
         let res;
@@ -430,7 +464,7 @@ export class UsageService {
               durationMs: Date.now() - start,
               ok: false,
               error: String(err?.message ?? err).slice(0, 300),
-            });
+            }, quotaReserved);
           } catch (meterErr: any) {
             console.error(
               `[usage] failed to persist failed image event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
@@ -445,7 +479,7 @@ export class UsageService {
           method: "image",
           durationMs: Date.now() - start,
           ok: true,
-        });
+        }, quotaReserved);
         return res;
       };
     }
