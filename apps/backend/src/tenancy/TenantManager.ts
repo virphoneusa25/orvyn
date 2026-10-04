@@ -98,7 +98,11 @@ export class TenantManager {
     name: string,
     apiKey: string,
     id: string = randomUUID(),
-    options: { runStore?: RunStore; recoverDistributedRuns?: boolean } = {}
+    options: {
+      runStore?: RunStore;
+      recoverDistributedRuns?: boolean;
+      distributedWorker?: boolean;
+    } = {}
   ): Tenant {
     const localStore = new LocalStore(id);
     const modelService = new ModelService();
@@ -180,7 +184,25 @@ export class TenantManager {
     }
 
     tenant.eventBus = new EventBus(tenant.runStore);
-    tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
+    tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore, {
+      // A worker must NEVER mark other workers' persisted in-flight missions
+      // failed merely because it constructed its own per-job TenantManager.
+      shouldFailRecoveredMission: options.distributedWorker
+        ? () => false
+        : (mission) => {
+            const run = tenant.runStore.get(mission.runId);
+            return !(
+              distributedRuntimeReady() &&
+              run &&
+              isDistributedRun(run) &&
+              !isTerminal(run.status)
+            );
+          },
+      // Worker writes land in the shared SQLite store today. Refreshing on API
+      // reads keeps Mission Control current until PostgreSQL replaces SQLite.
+      refreshFromStoreOnRead:
+        !options.distributedWorker && distributedRuntimeReady(),
+    });
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);
     tenant.agentRuntime = new StreamingAgentRuntime(
       tenant.modelService,
