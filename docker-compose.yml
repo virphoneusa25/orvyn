@@ -17,6 +17,23 @@
 # - BullMQ requires Redis maxmemory-policy=noeviction.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"${POSTGRES_USER}\" -d \"${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   orvyn-redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -102,11 +119,17 @@ services:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
       - ORVYN_DATA_DIR=/data
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - ORVYN_POSTGRES_SHADOW=${ORVYN_POSTGRES_SHADOW:-0}
+      - ORVYN_POSTGRES_POOL_MAX=${ORVYN_POSTGRES_POOL_MAX:-10}
 
       # Dedicated mission/event Redis. The existing in-process MissionQueue is
       # still active until the BullMQ migration phase lands; these variables
       # establish the production connection contract now.
       - ORVYN_REDIS_URL=redis://:${ORVYN_REDIS_PASSWORD}@orvyn-redis:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - ORVYN_POSTGRES_SHADOW=${ORVYN_POSTGRES_SHADOW:-0}
+      - ORVYN_POSTGRES_POOL_MAX=${ORVYN_POSTGRES_POOL_MAX:-10}
 
       # Internal LiteLLM endpoint. ModelGateway migration is feature-gated and
       # will switch to this URL in a later phase without changing ORION roles.
@@ -122,6 +145,10 @@ services:
     expose:
       - "4570"
     depends_on:
+      postgres:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
       orvyn-redis:
         condition: service_healthy
       litellm:
@@ -185,6 +212,7 @@ services:
       - backend
 
 volumes:
+  postgres-data:
   orvyn-data:
   orvyn-projects:
   orvyn-redis-data:
