@@ -171,3 +171,32 @@ existing SQLite persistence remains the production state store until
 distributed execution parity is verified. Persistence migration will be a
 separate phase so execution-topology defects are not mixed with database
 migration defects.
+
+
+## LiteLLM model routing cutover
+
+ORVYN now supports LiteLLM as an operational routing layer beneath the existing
+`ModelGateway`.
+
+Enable with:
+
+```env
+ORVYN_LITELLM_ENABLED=1
+MODEL_ROUTER_URL=http://litellm:4000
+MODEL_ROUTER_KEY=<same value as LITELLM_MASTER_KEY>
+```
+
+The URL is the LiteLLM server root, **not** `/v1`, because ORVYN's
+OpenAI-compatible adapter appends `/v1/chat/completions`, `/v1/models`,
+and other wire endpoints itself.
+
+When enabled, default semantic routes become:
+
+- chat / completion → `litellm:fast-tier`
+- code / agent / executor → `litellm:code-tier`
+- planner / reviewer → `litellm:premium-tier`
+
+Vision, image generation, and embeddings remain on their existing routes until
+dedicated LiteLLM groups are defined.
+
+Direct providers remain registered and available for manual routing/rollback.
