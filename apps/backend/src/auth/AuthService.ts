@@ -295,6 +295,10 @@ export class AuthService {
     return acceptance;
   }
 
+  close(): void {
+    this.db.close();
+  }
+
   userCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS n FROM users`).get() as any;
     return Number(row?.n ?? 0);
