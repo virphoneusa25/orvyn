@@ -2,10 +2,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Pool } from "pg";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { PostgresShadowStore } from "./PostgresShadowStore";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
 import type { ModelConfig } from "@orvyn/ai-core";
+import { LocalStore } from "./LocalStore";
+import { backfillTenant, compareTenantParity } from "./PostgresBackfill";
+import { readSQLiteTenantSnapshot } from "./SQLiteSnapshot";
 
 const url = process.env.ORVYN_POSTGRES_TEST_URL;
 
@@ -147,6 +153,95 @@ test(
     } finally {
       await shadow.close();
       await sql.end();
+    }
+  }
+);
+
+
+test(
+  "real SQLite + Postgres: tenant backfill reaches count parity end-to-end",
+  { skip: !url },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-pg-backfill-"));
+    const tenantId = "tenant-backfill";
+    const local = new LocalStore(tenantId, dir);
+    const shadow = new PostgresShadowStore(url!);
+    const sql = new Pool({ connectionString: url! });
+
+    try {
+      await shadow.ping();
+      await sql.query(
+        "DELETE FROM orvyn_missions WHERE tenant_id=$1; DELETE FROM orvyn_usage_events WHERE tenant_id=$1; DELETE FROM orvyn_settings WHERE tenant_id=$1; DELETE FROM orvyn_models WHERE tenant_id=$1;",
+        [tenantId]
+      );
+
+      local.saveMission({
+        id: "mission_backfill",
+        runId: "run_backfill",
+        projectRoot: "/projects/backfill",
+        goal: "backfill",
+        status: "COMPLETED",
+        tasks: [],
+        reviewCycles: 0,
+        createdAt: 10,
+        updatedAt: 20,
+      });
+      local.saveUsageEvent({
+        id: "use_backfill",
+        timestamp: 30,
+        modelId: "model-backfill",
+        provider: "test",
+        method: "generate",
+        durationMs: 1,
+        ok: true,
+      });
+      local.setSetting("profile", "SAFE");
+      local.saveModel({
+        id: "backfill-model",
+        name: "Backfill Model",
+        provider: "openai-compatible",
+        endpoint: "https://example.invalid",
+        apiKey: "test",
+        contextWindow: 8192,
+        maxOutputTokens: 1024,
+        defaultTemperature: 0.2,
+        defaultTopP: 1,
+        streaming: true,
+        capabilities: {
+          chat: true,
+          code: false,
+          agent: false,
+          tools: false,
+          vision: false,
+          embeddings: false,
+          completion: true,
+          image: false,
+        },
+      });
+
+      local.close();
+
+      const snapshot = readSQLiteTenantSnapshot(tenantId, dir);
+      assert.deepEqual(
+        {
+          missions: snapshot.missions.length,
+          usage: snapshot.usage.length,
+          settings: snapshot.settings.length,
+          models: snapshot.models.length,
+        },
+        { missions: 1, usage: 1, settings: 1, models: 1 }
+      );
+
+      await backfillTenant(shadow, snapshot);
+      const parity = await compareTenantParity(sql, snapshot);
+
+      assert.equal(parity.matches, true);
+      assert.deepEqual(parity.sqlite, parity.postgres);
+    } finally {
+      try { local.close(); } catch {}
+      await shadow.close();
+      await sql.end();
+      rmSync(dir, { recursive: true, force: true });
     }
   }
 );
