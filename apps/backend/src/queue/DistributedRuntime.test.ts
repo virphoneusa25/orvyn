@@ -122,8 +122,9 @@ test("RunStore restart keeps distributed runs alive but fails local in-process g
     const recovered = new RunStore(dir);
 
     assert.equal(recovered.get("local-run")?.status, "error");
+    const localEvents = recovered.get("local-run")?.events ?? [];
     assert.equal(
-      recovered.get("local-run")?.events.at(-1)?.type,
+      localEvents[localEvents.length - 1]?.type,
       "run.error",
       "local process-owned runs cannot survive an API restart"
     );
