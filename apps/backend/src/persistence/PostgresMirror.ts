@@ -133,7 +133,7 @@ function primaryReadsEnabled(): boolean {
 function primaryWritesEnabled(): boolean {
   return (
     process.env.ORVYN_POSTGRES_PRIMARY_WRITES?.trim() === "1" &&
-    enabled()
+    primaryReadsEnabled()
   );
 }
 
