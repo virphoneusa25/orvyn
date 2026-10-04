@@ -109,6 +109,63 @@ export class DistributedMissionCoordinator {
       });
 
     this.bridges.set(runId, { bridge, redis, task, store });
+
+    // QueueEvents only observes live transitions. If the API was offline when
+    // a worker/job failed, reconcile persisted Redis/BullMQ state immediately
+    // when the bridge is reattached.
+    void this.reconcileRecoveredRun(runId, store).catch((err) => {
+      console.error(
+        `[distributed-mission-coordinator] recovery reconciliation failed for ${runId}: ${err?.message ?? err}`
+      );
+    });
+  }
+
+  private async reconcileRecoveredRun(runId: string, store: RunStore): Promise<void> {
+    const run = store.get(runId);
+    if (!run || ["completed", "error", "cancelled"].includes(run.status)) return;
+
+    const [missionState, job] = await Promise.all([
+      this.state.get(runId),
+      this.queue.inspect(runId),
+    ]);
+
+    if (missionState && ["completed", "error", "cancelled"].includes(missionState.status)) {
+      if (missionState.status === "completed") {
+        store.emit(runId, "run.completed", {
+          distributed: true,
+          recovered: true,
+        });
+      } else if (missionState.status === "cancelled") {
+        store.emit(runId, "run.cancelled", {
+          distributed: true,
+          recovered: true,
+        });
+      } else {
+        store.emit(runId, "run.error", {
+          distributed: true,
+          recovered: true,
+          message: missionState.error || "Distributed mission failed while the API was offline.",
+        });
+      }
+      store.setStatus(runId, missionState.status);
+      this.bridges.get(runId)?.bridge.stop();
+      return;
+    }
+
+    if (job?.state === "failed") {
+      const message = job.failedReason || "Distributed worker job failed while the API was offline.";
+      store.emit(runId, "run.error", {
+        distributed: true,
+        recovered: true,
+        message,
+      });
+      store.setStatus(runId, "error");
+      await this.state.setStatus(runId, "error", {
+        error: message,
+        completedAt: new Date().toISOString(),
+      });
+      this.bridges.get(runId)?.bridge.stop();
+    }
   }
 
   async cancel(runId: string, tenantId: string): Promise<void> {
