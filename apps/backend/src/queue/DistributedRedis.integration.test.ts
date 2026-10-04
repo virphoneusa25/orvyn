@@ -61,6 +61,11 @@ test(
       const stats = await queue.stats();
       assert.equal(stats.waiting, 1);
       assert.equal(stats.active, 0);
+
+      assert.equal(await queue.cancelPending("run-integration-1"), true);
+      const afterCancel = await queue.stats();
+      assert.equal(afterCancel.waiting, 0);
+      assert.equal(await queue.cancelPending("run-integration-1"), false);
     } finally {
       await queue.close();
       await redis.quit();
