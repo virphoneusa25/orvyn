@@ -436,6 +436,39 @@ export class PostgresMirror {
     });
   }
 
+  async getUserAuthByEmail(email: string): Promise<{
+    id: string;
+    email: string;
+    name: string | null;
+    passwordHash: string;
+    createdAt: number;
+  } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      email: string;
+      name: string | null;
+      password_hash: string;
+      created_at: string;
+    }>(
+      `SELECT id, email, name, password_hash, created_at::text
+       FROM users
+       WHERE email=$1
+       LIMIT 1`,
+      [email.trim().toLowerCase()]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          passwordHash: row.password_hash,
+          createdAt: Number(row.created_at),
+        }
+      : null;
+  }
+
   async verifySession(tokenHash: string): Promise<{
     id: string;
     email: string;
