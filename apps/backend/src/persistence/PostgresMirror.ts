@@ -436,6 +436,30 @@ export class PostgresMirror {
     });
   }
 
+  async loadTenantSettings(tenantId: string): Promise<Array<{ key: string; value: string }>> {
+    const pool = await this.ready();
+    const result = await pool.query<{ key: string; value: string }>(
+      `SELECT key, value
+       FROM tenant_settings
+       WHERE tenant_id=$1
+       ORDER BY key`,
+      [tenantId]
+    );
+    return result.rows.map((row) => ({ key: row.key, value: row.value }));
+  }
+
+  async loadTenantModels(tenantId: string): Promise<ModelConfig[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{ config_json: ModelConfig }>(
+      `SELECT config_json
+       FROM tenant_models
+       WHERE tenant_id=$1
+       ORDER BY id`,
+      [tenantId]
+    );
+    return result.rows.map((row) => row.config_json as ModelConfig);
+  }
+
   async getUserAuthByEmail(email: string): Promise<{
     id: string;
     email: string;
