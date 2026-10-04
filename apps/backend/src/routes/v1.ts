@@ -804,24 +804,92 @@ v1Router.get("/agent/modes", (_req, res) => {
 });
 
 // --- Distributed runtime health ---
+async function liteLLMGatewayStatus(): Promise<{
+  enabled: boolean;
+  status: "disabled" | "ready" | "unavailable" | "misconfigured";
+  latencyMs?: number;
+  error?: string;
+}> {
+  if (process.env.ORVYN_LITELLM_ENABLED?.trim() !== "1") {
+    return { enabled: false, status: "disabled" };
+  }
+
+  const raw = process.env.MODEL_ROUTER_URL?.trim();
+  if (!raw) {
+    return {
+      enabled: true,
+      status: "misconfigured",
+      error: "MODEL_ROUTER_URL is not configured",
+    };
+  }
+
+  const base = raw.replace(/\/v1\/?$/, "").replace(/\/$/, "");
+  const key =
+    process.env.MODEL_ROUTER_KEY?.trim() ||
+    process.env.LITELLM_MASTER_KEY?.trim();
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3_000);
+  const started = Date.now();
+
+  try {
+    const response = await fetch(`${base}/health/liveliness`, {
+      headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return {
+        enabled: true,
+        status: "unavailable",
+        latencyMs: Date.now() - started,
+        error: `HTTP ${response.status}`,
+      };
+    }
+
+    return {
+      enabled: true,
+      status: "ready",
+      latencyMs: Date.now() - started,
+    };
+  } catch (err: any) {
+    return {
+      enabled: true,
+      status: "unavailable",
+      latencyMs: Date.now() - started,
+      error: err?.name === "AbortError" ? "health check timed out" : err?.message ?? String(err),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 v1Router.get("/runtime/status", async (_req, res) => {
+  const modelGateway = await liteLLMGatewayStatus();
+  const modelGatewayReady =
+    !modelGateway.enabled || modelGateway.status === "ready";
+
   if (!distributedRuntimeReady()) {
-    return res.json({
+    return res.status(modelGatewayReady ? 200 : 503).json({
       distributed: false,
-      status: "disabled",
+      status: modelGatewayReady ? "local" : "degraded",
       workers: 0,
+      modelGateway,
     });
   }
 
   try {
     const health = await getDistributedMissionCoordinator().health();
-    const ready = health.activeWorkers > 0;
+    const workersReady = health.activeWorkers > 0;
+    const ready = workersReady && modelGatewayReady;
+
     return res.status(ready ? 200 : 503).json({
       distributed: true,
       status: ready ? "ready" : "degraded",
       workers: health.activeWorkers,
       redis: health.redis,
       queue: health.queue,
+      modelGateway,
     });
   } catch (err: any) {
     return res.status(503).json({
@@ -829,6 +897,7 @@ v1Router.get("/runtime/status", async (_req, res) => {
       status: "unavailable",
       workers: 0,
       redis: "error",
+      modelGateway,
       error: err.message,
     });
   }
