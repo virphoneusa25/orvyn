@@ -14,6 +14,10 @@ function streamKey(runId: string): string {
   return `${MISSION_EVENT_STREAM_PREFIX}${runId}`;
 }
 
+function cursorKey(runId: string): string {
+  return `orvyn:run-event-cursor:${runId}`;
+}
+
 export interface DistributedRunEvent {
   runId: string;
   type: AgentEventType;
@@ -69,6 +73,17 @@ export class RedisRunEventTransport {
       }
     }
     return out;
+  }
+
+  /** Last Redis Stream record projected into the API RunStore. */
+  async loadConsumerCursor(runId: string): Promise<string> {
+    return (await this.redis.get(cursorKey(runId))) || "0-0";
+  }
+
+  async saveConsumerCursor(runId: string, redisId: string): Promise<void> {
+    // Keep the cursor beyond normal job/event retention so an API restart can
+    // resume without replaying the whole stream into RunStore.
+    await this.redis.set(cursorKey(runId), redisId, "EX", 14 * 24 * 60 * 60);
   }
 
   async close(): Promise<void> {
