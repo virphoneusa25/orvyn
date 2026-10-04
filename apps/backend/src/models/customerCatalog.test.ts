@@ -105,3 +105,12 @@ test("nested live/history routing and HF diagnostics never reveal platform ident
   assert.deepEqual(result.providers, {ORVYN:5});
   assert.equal(routing.provider,"nebius");
 });
+
+test("customer usage preserves numeric rates without provider pricing-source URLs", () => {
+  const rate = {input:0.68,output:3.4,source:"https://router.huggingface.co/v1/models",verifiedAt:1,expiresAt:2};
+  const output = redactForCustomer({usage:[{provider:"huggingface",modelId:"hf:moonshotai/Kimi-K2.7-Code:deepinfra",rate}]}, IDS);
+  assert.equal(output.usage[0]!.rate.input,0.68);
+  assert.ok(!("source" in output.usage[0]!.rate));
+  assert.doesNotMatch(JSON.stringify(output),/huggingface|deepinfra|moonshotai/);
+  assert.equal(rate.source,"https://router.huggingface.co/v1/models");
+});

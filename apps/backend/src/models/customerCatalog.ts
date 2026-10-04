@@ -148,6 +148,10 @@ export function redactForCustomer<T>(value: T, platformIds: ReadonlySet<string>)
     }
     if (Array.isArray(v)) return v.map((x) => walk(x, key, depth + 1));
     if (v && typeof v === "object") {
+      if (key === "rate" || key === "imageRate") {
+        const { source: _source, ...publicRate } = v as Record<string, unknown>;
+        return publicRate;
+      }
       // Actual serving identity stays in server-side telemetry. Public routing
       // never exposes platform providers, registry IDs or internal diagnostics.
       if (key === "routing") {
