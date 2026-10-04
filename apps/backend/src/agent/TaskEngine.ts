@@ -71,22 +71,63 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   BLOCKED: ["RUNNING", "REWORK"],
 };
 
+export interface TaskEngineOptions {
+  /**
+   * Called only during constructor warm-start for persisted in-flight missions.
+   * Local single-process runtimes return true (old behavior); distributed API
+   * and worker contexts can preserve missions still owned by BullMQ workers.
+   */
+  shouldFailRecoveredMission?: (mission: Mission) => boolean;
+  /**
+   * API instances in distributed mode refresh SQLite-backed mission snapshots
+   * before reads so Mission Control sees updates written by worker processes.
+   */
+  refreshFromStoreOnRead?: boolean;
+}
+
 export class TaskEngine {
   private missions = new Map<string, Mission>();
 
-  constructor(private bus: EventBus, private store?: LocalStore) {
-    // Warm-start mission history so Mission Control survives restarts.
-    // Missions that were mid-flight when the process died can never resume
-    // (their run loop is gone), so mark them FAILED rather than lying.
-    if (store) {
-      for (const m of store.loadMissions()) {
-        if (m.status === "QUEUED" || m.status === "PLANNING" || m.status === "RUNNING" || m.status === "REVIEW") {
-          m.status = "FAILED";
-          m.updatedAt = Date.now();
-          store.saveMission(m);
-        }
+  constructor(
+    private bus: EventBus,
+    private store?: LocalStore,
+    private options: TaskEngineOptions = {}
+  ) {
+    this.loadFromStore(true);
+  }
+
+  private isInFlight(status: MissionStatus): boolean {
+    return status === "QUEUED" || status === "PLANNING" || status === "RUNNING" || status === "REVIEW";
+  }
+
+  private loadFromStore(warmStart: boolean): void {
+    if (!this.store) return;
+
+    for (const persisted of this.store.loadMissions()) {
+      const m: Mission = persisted;
+
+      if (
+        warmStart &&
+        this.isInFlight(m.status) &&
+        (this.options.shouldFailRecoveredMission?.(m) ?? true)
+      ) {
+        m.status = "FAILED";
+        m.updatedAt = Date.now();
+        this.store.saveMission(m);
+      }
+
+      const current = this.missions.get(m.id);
+      if (!current || m.updatedAt >= current.updatedAt) {
         this.missions.set(m.id, m);
       }
+    }
+  }
+
+  private refreshForRead(): void {
+    if (this.options.refreshFromStoreOnRead) {
+      // Refresh is observational only: never apply warm-start failure logic on
+      // a normal UI read, or the API could kill a worker-owned live mission.
+      this.loadFromStore(false);
     }
   }
 
@@ -113,15 +154,18 @@ export class TaskEngine {
   }
 
   getMission(id: string): Mission | undefined {
+    this.refreshForRead();
     return this.missions.get(id);
   }
 
   missionForRun(runId: string): Mission | undefined {
+    this.refreshForRead();
     for (const m of this.missions.values()) if (m.runId === runId) return m;
     return undefined;
   }
 
   listMissions(): Mission[] {
+    this.refreshForRead();
     return Array.from(this.missions.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
