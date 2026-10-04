@@ -103,9 +103,10 @@ export class TenantManager {
       runStore?: RunStore;
       recoverDistributedRuns?: boolean;
       distributedWorker?: boolean;
+      localStore?: LocalStore;
     } = {}
   ): Tenant {
-    const localStore = new LocalStore(id);
+    const localStore = options.localStore ?? new LocalStore(id);
     const modelService = new ModelService();
     const tenantCreatedAt = Date.now();
     postgresMirror.mirror("upsertTenant", () =>
@@ -263,6 +264,41 @@ export class TenantManager {
   ensureUserTenant(userId: string, label: string): Tenant {
     const id = `user_${userId}`;
     return this.get(id) ?? this.create(label, "", id);
+  }
+
+  /**
+   * Cloud/multi-instance bootstrap path. When PostgreSQL primary reads are
+   * enabled, hydrate the per-node SQLite cache from Postgres BEFORE creating
+   * ModelService/ToolGateway so routing, profiles, tool overrides, and custom
+   * models are identical on a fresh API node.
+   */
+  async ensureUserTenantAsync(userId: string, label: string): Promise<Tenant> {
+    const id = `user_${userId}`;
+    const existing = this.get(id);
+    if (existing) return existing;
+
+    if (!postgresMirror.isPrimaryReadsEnabled()) {
+      return this.create(label, "", id);
+    }
+
+    const localStore = new LocalStore(id);
+    try {
+      const [settings, models] = await Promise.all([
+        postgresMirror.loadTenantSettings(id),
+        postgresMirror.loadTenantModels(id),
+      ]);
+      localStore.hydrateConfigurationFromPrimary(settings, models);
+      return this.create(label, "", id, { localStore });
+    } catch (err) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        localStore.close();
+        throw err;
+      }
+      console.warn(
+        `[postgres-primary-reads] tenant bootstrap failed; using SQLite cache: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return this.create(label, "", id, { localStore });
+    }
   }
 
   revokeKey(apiKey: string): void {
