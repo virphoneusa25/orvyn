@@ -126,6 +126,7 @@ services:
       - ORVYN_POSTGRES_READ_FALLBACK_SQLITE=${ORVYN_POSTGRES_READ_FALLBACK_SQLITE:-1}
       - ORVYN_POSTGRES_SSL=disable
       - ORVYN_MODEL_SECRET_KEY=${ORVYN_MODEL_SECRET_KEY}
+      - ORVYN_CREDITS_ENABLED=${ORVYN_CREDITS_ENABLED:-0}
 
       # Dedicated mission/event Redis. The existing in-process MissionQueue is
       # still active until the BullMQ migration phase lands; these variables
@@ -179,6 +180,7 @@ services:
       - ORVYN_POSTGRES_READ_FALLBACK_SQLITE=${ORVYN_POSTGRES_READ_FALLBACK_SQLITE:-1}
       - ORVYN_POSTGRES_SSL=disable
       - ORVYN_MODEL_SECRET_KEY=${ORVYN_MODEL_SECRET_KEY}
+      - ORVYN_CREDITS_ENABLED=${ORVYN_CREDITS_ENABLED:-0}
       - MODEL_ROUTER_URL=http://litellm:4000
       - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
       - ORVYN_LITELLM_ENABLED=${ORVYN_LITELLM_ENABLED:-0}
