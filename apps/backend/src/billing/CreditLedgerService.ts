@@ -391,7 +391,7 @@ export class CreditLedgerService {
         bucket_id: string;
         reserved_credits: string;
       }>(
-        "SELECT bucket_id,reserved_credits::text FROM credit_reservation_allocations WHERE reservation_id=$1 ORDER BY bucket_id FOR UPDATE",
+        "SELECT a.bucket_id,a.reserved_credits::text FROM credit_reservation_allocations a JOIN credit_buckets b ON b.id=a.bucket_id WHERE a.reservation_id=$1 ORDER BY b.expires_at ASC NULLS LAST,b.created_at ASC,b.id ASC FOR UPDATE OF a",
         [input.reservationId]
       );
       const ids = allocations.rows.map((row) => row.bucket_id);
