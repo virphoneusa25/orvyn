@@ -9,8 +9,9 @@
 // DURABILITY: when a directory is provided, every event is appended to
 // `<dir>/<runId>.jsonl` as it is emitted and the newest logs are replayed at
 // boot — a backend restart no longer erases finished runs' replayable
-// history. In-flight runs still die with the process (reviving them needs
-// the cloud tier's durable queue).
+// history. Local in-process runs still die with the API process; BullMQ-owned
+// distributed runs are preserved and reattach their Redis event bridge after
+// an API restart.
 
 import { mkdirSync, appendFileSync, readdirSync, readFileSync, statSync } from "fs";
 import { basename, join } from "path";
