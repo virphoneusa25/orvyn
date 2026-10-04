@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import IORedis from "ioredis";
 import { TenantMissionSemaphore } from "./TenantMissionSemaphore";
 import { RedisMissionQueue } from "./RedisMissionQueue";
+import { RedisMissionStateStore } from "./RedisMissionStateStore";
 
 const url = process.env.ORVYN_REDIS_TEST_URL;
 
@@ -61,6 +62,46 @@ test(
       assert.equal(stats.active, 0);
     } finally {
       await queue.close();
+      await redis.quit();
+    }
+  }
+);
+
+
+test(
+  "real Redis: mission state follows queued -> running -> completed lifecycle",
+  { skip: !url },
+  async () => {
+    const redis = new IORedis(url!, { maxRetriesPerRequest: 1 });
+    try {
+      await redis.flushdb();
+      const state = new RedisMissionStateStore(redis);
+      const payload = {
+        runId: "run-state-1",
+        tenantId: "tenant-state",
+        tenantName: "State Test",
+        projectRoot: "/projects/state",
+        goal: "validate state",
+        requestedAt: new Date().toISOString(),
+      };
+
+      await state.create(payload);
+      assert.equal((await state.get(payload.runId))?.status, "queued");
+
+      const startedAt = new Date().toISOString();
+      await state.setStatus(payload.runId, "running", { workerStartedAt: startedAt });
+      const running = await state.get(payload.runId);
+      assert.equal(running?.status, "running");
+      assert.equal(running?.workerStartedAt, startedAt);
+
+      const completedAt = new Date().toISOString();
+      await state.setStatus(payload.runId, "completed", { completedAt });
+      const completed = await state.get(payload.runId);
+      assert.equal(completed?.status, "completed");
+      assert.equal(completed?.completedAt, completedAt);
+      assert.equal(completed?.tenantId, "tenant-state");
+      assert.equal(completed?.projectRoot, "/projects/state");
+    } finally {
       await redis.quit();
     }
   }
