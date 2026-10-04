@@ -30,8 +30,8 @@ if(action==='create'){
  if(action==='telemetry'){
   const usage=new DatabaseSync(path.join(data,fixture.tenantId+'.db'),{readOnly:true});usage.exec('PRAGMA busy_timeout=5000');
   const events=usage.prepare('SELECT provider,model_id AS modelId,method,ok,prompt_tokens AS promptTokens,completion_tokens AS completionTokens FROM usage_events WHERE ts>=? ORDER BY ts ASC').all(fixture.createdAt);
-  console.log(JSON.stringify({events}));usage.close();auth.close();creditLedger.close();return;
- }
+  console.log(JSON.stringify({events}));usage.close();auth.close();creditLedger.close();
+ }else{
  const clean=(db,keys)=>{
  db.exec('BEGIN IMMEDIATE');try{for(const {name} of db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all()){
  const columns=new Set(db.prepare('PRAGMA table_info("'+name+'")').all().map(c=>c.name));
@@ -43,4 +43,5 @@ if(action==='create'){
  // usage/grant records; remove its sign-in access and tenant data only.
  for(const suffix of ['.db','.db-wal','.db-shm'])fs.rmSync(path.join(data,fixture.tenantId+suffix),{force:true});
  fs.rmSync(marker);console.log(JSON.stringify({fixtureCleaned:true}));creditLedger.close();
+ }
 }else throw new Error('Unknown fixture action');

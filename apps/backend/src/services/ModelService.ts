@@ -194,6 +194,7 @@ function deepseekConfig(id: string, apiKey: string, endpoint: string, temperatur
     name: `DeepSeek ${id.replace(/^deepseek-/, "")}`,
     provider: "openai-compatible",
     providerName: "deepseek",
+    routingVerification: { status: "failed", reason: "Direct DeepSeek requires an exact, refreshable billing rate card before customer routing" },
     endpoint,
     apiKey,
     contextWindow: 128000,
