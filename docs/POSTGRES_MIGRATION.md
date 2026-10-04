@@ -113,3 +113,79 @@ Do not switch reads to PostgreSQL until:
    proven.
 
 Only Phase B should set PostgreSQL as the authoritative application store.
+
+
+## Phase B staged primary reads/writes
+
+The stacked Phase B branch adds three independent flags:
+
+```env
+ORVYN_POSTGRES_PRIMARY_READS=0
+ORVYN_POSTGRES_PRIMARY_WRITES=0
+ORVYN_POSTGRES_READ_FALLBACK_SQLITE=1
+```
+
+### Primary reads
+
+When enabled, PostgreSQL supplies:
+
+- session verification
+- login credential lookup
+- legal acceptance lookup
+- tenant model configuration bootstrap
+- tenant routing/profile settings bootstrap
+- Mission Control mission/task reads
+- monthly mission quota counts
+- monthly model-request quota counts
+- usage/reporting totals
+- recent usage events
+
+A fresh API node can authenticate an existing user and reconstruct their tenant
+model/routing/profile configuration from PostgreSQL even when its local SQLite
+cache starts empty.
+
+### Primary mission writes
+
+When `ORVYN_POSTGRES_PRIMARY_WRITES=1`, `MultiAgentRuntime` uses TaskEngine
+durable mutation wrappers. Mission creation, status transitions, task creation,
+task transitions, and review-cycle changes wait for the PostgreSQL mirror write
+chain to acknowledge before ORION advances to the next state.
+
+SQLite is still updated as the node-local compatibility cache.
+
+A PostgreSQL write failure is surfaced through `flushStrict()` instead of
+being silently logged and ignored.
+
+### Usage durability
+
+Model generate/stream/image paths use an async usage recording boundary when
+primary writes are enabled. A completed provider call waits until its usage
+event is visible in PostgreSQL before the next PostgreSQL-backed quota decision.
+
+This closes the short race where back-to-back model calls could both pass a
+quota check before the first usage event reached the primary store.
+
+### Storage status
+
+`GET /api/v1/storage/status` reports the active staged mode:
+
+- `sqlite-primary`
+- `sqlite-primary-postgres-mirror`
+- `postgres-primary-reads`
+- `postgres-primary-reads-acknowledged-mission-writes`
+
+along with PostgreSQL health, schema version, and parity counts.
+
+### Still not cut over
+
+This branch does not yet remove SQLite from the cloud deployment. SQLite remains
+the local cache/fallback and the synchronous compatibility layer.
+
+Full primary-store conversion still requires:
+
+- PostgreSQL-native transactional register/login/session writes
+- atomic billing/credits/subscription accounting
+- first-class organization/project schemas
+- backup/restore drills
+- explicit DB outage/failover testing
+- final removal of cloud SQLite authority/cache dependencies
