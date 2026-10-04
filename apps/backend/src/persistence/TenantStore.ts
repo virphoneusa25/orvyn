@@ -20,6 +20,15 @@ export interface TenantStore {
 
   saveUsageEvent(event: UsageEvent): Promise<void>;
   countUsageSince(ts: number): Promise<number>;
+  /**
+   * Optional atomic quota primitive. PostgreSQL-primary implements this to
+   * prevent concurrent workers from overspending the final monthly slot.
+   */
+  reserveUsageRequest?(
+    monthStart: number,
+    limit: number
+  ): Promise<{ allowed: boolean; used: number }>;
+  getUsageRequestCount?(monthStart: number): Promise<number>;
   countMissionsSince(ts: number): Promise<number>;
   loadRecentUsage(limit?: number): Promise<UsageEvent[]>;
 
