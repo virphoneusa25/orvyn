@@ -8,6 +8,7 @@ import type { ModelConfig } from "@orvyn/ai-core";
 import { LocalStore } from "./LocalStore";
 import { postgresMirror } from "./PostgresMirror";
 import { AuthService } from "../auth/AuthService";
+import { TenantManager } from "../tenancy/TenantManager";
 import type { Mission } from "../agent/TaskEngine";
 import { QuotaExceededError, UsageService, type UsageEvent } from "../services/UsageService";
 
@@ -101,6 +102,11 @@ test(
       });
       assert.equal(await postgresMirror.countMissionsSince(tenantId, 0), 1);
       assert.equal(await postgresMirror.countUsageSince(tenantId, 0), 1);
+      const pgMissions = await postgresMirror.loadMissions(tenantId);
+      assert.equal(pgMissions.length, 1);
+      assert.equal(pgMissions[0]?.id, mission.id);
+      assert.equal(pgMissions[0]?.status, "RUNNING");
+      assert.equal((await postgresMirror.getMission(tenantId, mission.id))?.goal, mission.goal);
 
       mission.status = "COMPLETED";
       mission.updatedAt = Date.now() + 1;
@@ -289,6 +295,77 @@ test(
       else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
       if (savedQuota === undefined) delete process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
       else process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = savedQuota;
+    }
+  }
+);
+
+
+test(
+  "real Postgres: fresh API node reconstructs tenant models routing and profile from primary store",
+  { skip: !enabled },
+  async () => {
+    const savedPrimary = process.env.ORVYN_POSTGRES_PRIMARY_READS;
+    const savedFallback = process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+    const savedDataDir = process.env.ORVYN_DATA_DIR;
+
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
+    process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = "0";
+
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-tenant-pg-bootstrap-"));
+    process.env.ORVYN_DATA_DIR = dir;
+
+    const userId = `bootstrap_${Date.now()}`;
+    const tenantId = `user_${userId}`;
+    const customModel = model(`pg-custom-${Date.now()}`);
+
+    try {
+      await postgresMirror.upsertTenant(tenantId, "Fresh Node User");
+      await postgresMirror.saveModel(tenantId, customModel);
+      await postgresMirror.setSetting(tenantId, "profile", "AUTONOMOUS");
+      await postgresMirror.setSetting(
+        tenantId,
+        "routing",
+        JSON.stringify({ chat: customModel.id })
+      );
+
+      const manager = new TenantManager();
+      const tenant = await manager.ensureUserTenantAsync(
+        userId,
+        "fresh-node@example.com"
+      );
+
+      assert.ok(
+        tenant.modelService.registry.get(customModel.id),
+        "custom model should hydrate from PostgreSQL before ModelService routing is restored"
+      );
+      assert.equal(
+        tenant.modelService.router.resolve("chat").config.id,
+        customModel.id
+      );
+      assert.equal(tenant.toolGateway.profile, "AUTONOMOUS");
+
+      // The node-local SQLite store is only a cache in this mode, but it
+      // should now contain the Postgres snapshot for local compatibility.
+      assert.equal(tenant.localStore.getSetting("profile"), "AUTONOMOUS");
+      assert.equal(
+        JSON.parse(tenant.localStore.getSetting("routing") ?? "{}").chat,
+        customModel.id
+      );
+      assert.equal(
+        tenant.localStore.loadModels().some((cfg) => cfg.id === customModel.id),
+        true
+      );
+
+      tenant.localStore.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+
+      if (savedPrimary === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedPrimary;
+      if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+      else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+      if (savedDataDir === undefined) delete process.env.ORVYN_DATA_DIR;
+      else process.env.ORVYN_DATA_DIR = savedDataDir;
     }
   }
 );
