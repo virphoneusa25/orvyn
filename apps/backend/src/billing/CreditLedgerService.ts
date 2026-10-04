@@ -221,7 +221,18 @@ export class CreditLedgerService {
         );
         if (prior.rows[0]?.bucket_id) {
           const existing = await this.bucket(client, prior.rows[0].bucket_id);
-          if (existing) return existing;
+          if (existing) {
+            if (
+              existing.grantedCredits !== amount ||
+              existing.source !== source ||
+              existing.expiresAt !== (input.expiresAt ?? null)
+            ) {
+              throw new Error(
+                "externalRef already exists with different grant parameters"
+              );
+            }
+            return existing;
+          }
         }
       }
 
@@ -456,6 +467,7 @@ export class CreditLedgerService {
         "UPDATE credit_reservations SET status='settled',settled_credits=$2,updated_at=$3 WHERE id=$1",
         [input.reservationId, actual.toString(), now]
       );
+      await this.expireAvailable(client, input.tenantId);
       const settled = await this.reservationById(client, input.reservationId);
       if (!settled) throw new Error("Settled reservation could not be reloaded");
       return settled;
@@ -520,6 +532,7 @@ export class CreditLedgerService {
         "UPDATE credit_reservations SET status='released',updated_at=$2 WHERE id=$1",
         [input.reservationId, now]
       );
+      await this.expireAvailable(client, input.tenantId);
 
       const released = await this.reservationById(client, input.reservationId);
       if (!released) throw new Error("Released reservation could not be reloaded");
