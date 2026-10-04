@@ -1,6 +1,9 @@
 // apps/backend/src/queue/DistributedRuntime.test.ts
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { RunStore } from "../agent/events";
 import { DistributedRunStore } from "./DistributedRunStore";
 import { RedisRunEventBridge } from "./RedisRunEventBridge";
@@ -36,7 +39,12 @@ test("RedisRunEventBridge makes API RunStore authoritative for sequence and stat
   store.create("run-b", "/workspace", "queued");
 
   let delivered = false;
+  let savedCursor = "0-0";
   const transport = {
+    loadConsumerCursor: async () => savedCursor,
+    saveConsumerCursor: async (_runId: string, id: string) => {
+      savedCursor = id;
+    },
     readAfter: async () => {
       if (delivered) return [];
       delivered = true;
@@ -92,4 +100,83 @@ test("distributed run helpers locate unresolved approvals only", () => {
 
   store.emit("run-c", "approval.resolved", { callId: "call-c", approved: true });
   assert.equal(findDistributedApprovalRun(store.list(), "call-c"), undefined);
+});
+
+
+test("RunStore restart keeps distributed runs alive but fails local in-process ghosts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-runstore-"));
+  try {
+    const first = new RunStore(dir);
+
+    first.create("local-run", "/workspace/local", "running");
+    first.emit("local-run", "run.started", {});
+
+    first.create("distributed-run", "/workspace/distributed", "queued");
+    first.emit("distributed-run", "run.queued", { distributed: true });
+    first.setStatus("distributed-run", "running");
+    first.emit("distributed-run", "run.started", {});
+
+    const recovered = new RunStore(dir);
+
+    assert.equal(recovered.get("local-run")?.status, "error");
+    assert.equal(
+      recovered.get("local-run")?.events.at(-1)?.type,
+      "run.error",
+      "local process-owned runs cannot survive an API restart"
+    );
+
+    assert.equal(
+      recovered.get("distributed-run")?.status,
+      "running",
+      "BullMQ-owned run stays live because its worker can still be executing"
+    );
+    assert.equal(
+      recovered.get("distributed-run")?.events.some((event) => event.type === "run.error"),
+      false
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("RedisRunEventBridge resumes from persisted transport cursor", async () => {
+  const store = new RunStore();
+  store.create("run-resume", "/workspace", "running");
+
+  let loadCount = 0;
+  const seenAfter: string[] = [];
+  const saved: string[] = [];
+  const transport = {
+    loadConsumerCursor: async () => {
+      loadCount++;
+      return "7-0";
+    },
+    saveConsumerCursor: async (_runId: string, id: string) => {
+      saved.push(id);
+    },
+    readAfter: async (_runId: string, after: string) => {
+      seenAfter.push(after);
+      if (seenAfter.length > 1) return [];
+      return [
+        {
+          redisId: "8-0",
+          event: {
+            runId: "run-resume",
+            type: "run.completed",
+            timestamp: Date.now(),
+            data: {},
+          },
+        },
+      ];
+    },
+  } as any;
+
+  const bridge = new RedisRunEventBridge("run-resume", store, transport);
+  await bridge.run();
+
+  assert.equal(loadCount, 1);
+  assert.equal(seenAfter[0], "7-0");
+  assert.deepEqual(saved, ["8-0"]);
+  assert.equal(store.get("run-resume")?.status, "completed");
+  assert.deepEqual(store.get("run-resume")?.events.map((event) => event.type), ["run.completed"]);
 });
