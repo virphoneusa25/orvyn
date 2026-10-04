@@ -48,8 +48,32 @@ test("mirror-off mode preserves tenant memory, artifacts, billing outbox and mod
   } finally { store.close(); rmSync(dir, { recursive:true, force:true }); restoreFlag(); }
 });
 
+test("real Postgres: failed identity migration rolls back schema and can be retried", { skip:!integration }, async () => {
+  const schema = `identity_retry_${randomUUID().replace(/-/g, "")}`;
+  const scopedUrl = new URL(url()!);
+  scopedUrl.searchParams.set("options", `-c search_path=${schema}`);
+  const pool = new Pool({ connectionString:url() });
+  try {
+    await pool.query(`CREATE SCHEMA ${schema}`);
+    // An incompatible existing table makes the final index creation fail.
+    await pool.query(`CREATE TABLE ${schema}.identity_projects(id TEXT PRIMARY KEY)`);
+    await assert.rejects(migratePostgresIdentity(scopedUrl.toString()), /tenant_id/);
+    const rollback = await pool.query("SELECT to_regclass($1) AS migrations, to_regclass($2) AS users", [`${schema}.identity_migrations`, `${schema}.identity_users`]);
+    assert.equal(rollback.rows[0].migrations, null);
+    assert.equal(rollback.rows[0].users, null);
+    await pool.query(`DROP TABLE ${schema}.identity_projects`);
+    const results = await Promise.all(Array.from({ length:4 }, () => migratePostgresIdentity(scopedUrl.toString())));
+    assert.deepEqual(results.flatMap(result => result.applied), ["001_identity"]);
+    assert.deepEqual((await migratePostgresIdentity(scopedUrl.toString())).applied, []);
+  } finally {
+    await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await pool.end();
+  }
+});
+
 test("real Postgres: concurrent mirror migrations coexist with production identity schema", { skip:!integration }, async () => {
-  await migratePostgresIdentity(url());
+  const identityMigrations = await Promise.all(Array.from({ length:4 }, () => migratePostgresIdentity(url())));
+  assert.equal(identityMigrations.flatMap(result => result.applied).filter(id => id === "001_identity").length, 1);
   // Reproduce the deployed v1 JSONB schema before concurrent upgrade.
   const legacyPool = new Pool({ connectionString:url() });
   const legacyMission = { ...mission(), goal:"Existing v1 mission" };
