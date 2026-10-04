@@ -22,7 +22,9 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.3.289",
     "pptxgenjs": "^4.0.1",
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "bullmq": "^5.58.5",
+    "ioredis": "^5.7.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
