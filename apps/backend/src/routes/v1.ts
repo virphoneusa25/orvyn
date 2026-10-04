@@ -8,7 +8,10 @@ import {
   getDistributedMissionCoordinator,
   isDistributedRun,
 } from "../queue/DistributedMissionCoordinator";
-import { distributedRuntimeReady } from "../queue/redisConnection";
+import {
+  distributedProjectRootEligible,
+  distributedRuntimeReady,
+} from "../queue/redisConnection";
 import { requireTenant } from "../middleware/tenant";
 import { Orchestrator } from "../ai/Orchestrator";
 import { InlineEditService } from "../edit/InlineEditService";
@@ -570,7 +573,7 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
 
   t.usage.agentRuns++;
 
-  if (distributedRuntimeReady()) {
+  if (distributedProjectRootEligible(String(req.body.projectRoot ?? ""))) {
     const runId = randomUUID();
     t.runStore.create(runId, req.body.projectRoot, "queued");
     t.runStore.emit(runId, "run.queued", {
