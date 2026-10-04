@@ -123,6 +123,13 @@ function enabled(): boolean {
   );
 }
 
+function primaryReadsEnabled(): boolean {
+  return (
+    process.env.ORVYN_POSTGRES_PRIMARY_READS?.trim() === "1" &&
+    enabled()
+  );
+}
+
 function sslConfig(): false | { rejectUnauthorized: boolean } {
   const mode = process.env.ORVYN_POSTGRES_SSL?.trim().toLowerCase();
   if (!mode || mode === "0" || mode === "false" || mode === "disable") return false;
@@ -137,6 +144,10 @@ export class PostgresMirror {
 
   isEnabled(): boolean {
     return enabled();
+  }
+
+  isPrimaryReadsEnabled(): boolean {
+    return primaryReadsEnabled();
   }
 
   private getPool(): Pool {
@@ -423,6 +434,81 @@ export class PostgresMirror {
         await this.saveModel(tenantId, model);
       }
     });
+  }
+
+  async verifySession(tokenHash: string): Promise<{
+    id: string;
+    email: string;
+    name: string | null;
+    createdAt: number;
+  } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      email: string;
+      name: string | null;
+      created_at: string;
+    }>(
+      `SELECT u.id, u.email, u.name, u.created_at::text
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = $1
+         AND s.expires_at > $2
+       LIMIT 1`,
+      [tokenHash, Date.now()]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          name: row.name,
+          createdAt: Number(row.created_at),
+        }
+      : null;
+  }
+
+  async getLegalAcceptance(
+    userId: string,
+    version: string
+  ): Promise<{ version: string; acceptedAt: number } | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      version: string;
+      accepted_at: string;
+    }>(
+      `SELECT version, accepted_at::text
+       FROM legal_acceptances
+       WHERE user_id=$1 AND version=$2
+       LIMIT 1`,
+      [userId, version]
+    );
+    const row = result.rows[0];
+    return row
+      ? { version: row.version, acceptedAt: Number(row.accepted_at) }
+      : null;
+  }
+
+  async countUsageSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+       FROM usage_events
+       WHERE tenant_id=$1 AND ts >= $2`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0]?.n ?? 0);
+  }
+
+  async countMissionsSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+       FROM missions
+       WHERE tenant_id=$1 AND created_at >= $2`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0]?.n ?? 0);
   }
 
   async parityCounts(tenantId: string): Promise<{
