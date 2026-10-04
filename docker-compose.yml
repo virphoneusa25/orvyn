@@ -1,49 +1,132 @@
 # docker-compose.yml
-# Cloud deployment: backend + optional self-hosted Ollama + Caddy for
-# automatic HTTPS via Let's Encrypt. Run on any Linux VM (AWS/Azure/
-# DigitalOcean/Vultr/bare metal) with Docker + Docker Compose installed.
+# Cloud deployment: ORVYN backend + dedicated Redis services + LiteLLM +
+# optional Ollama + Caddy TLS.
+#
+# Redis is deliberately split by responsibility:
+#   orvyn-redis   -> mission queue/state/events (BullMQ + Redis Streams)
+#   litellm-redis -> LiteLLM coordination/cooldowns/cache metadata
 #
 # Quick start:
 #   1. Point a DNS A record at the server (e.g. orvyn.yourdomain.com)
-#   2. cp .env.example .env  and fill in ORVYN_API_KEY + DOMAIN
+#   2. cp .env.example .env and fill in required secrets
 #   3. docker compose up -d
 #
-# The desktop client then connects to https://orvyn.yourdomain.com
-# (see docs/DEPLOYMENT.md for the Windows client side).
+# IMPORTANT:
+# - Redis is never published to the host.
+# - LiteLLM is internal-only; the ORVYN backend reaches it over the Compose network.
+# - BullMQ requires Redis maxmemory-policy=noeviction.
 
 services:
+  orvyn-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--requirepass",
+        "${ORVYN_REDIS_PASSWORD}",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        "--maxmemory-policy",
+        "noeviction"
+      ]
+    volumes:
+      - orvyn-redis-data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${ORVYN_REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      - ORVYN_REDIS_PASSWORD=${ORVYN_REDIS_PASSWORD}
+
+  litellm-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--requirepass",
+        "${LITELLM_REDIS_PASSWORD}",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+        "--maxmemory-policy",
+        "noeviction"
+      ]
+    volumes:
+      - litellm-redis-data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${LITELLM_REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      - LITELLM_REDIS_PASSWORD=${LITELLM_REDIS_PASSWORD}
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    expose:
+      - "4000"
+    volumes:
+      - ./infrastructure/litellm/config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - LITELLM_SALT_KEY=${LITELLM_SALT_KEY}
+      - REDIS_HOST=litellm-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${LITELLM_REDIS_PASSWORD}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      litellm-redis:
+        condition: service_healthy
+
   backend:
     build:
       context: .
       dockerfile: apps/backend/Dockerfile
     restart: unless-stopped
-    # Model/provider keys, quotas, etc. all come from .env — the backend reads
-    # the same variables in a container as it does on a dev machine.
     env_file:
       - .env
     environment:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
-      # SQLite tenant stores (accounts, missions, usage/billing records) must
-      # outlive image rebuilds — losing usage events loses money.
       - ORVYN_DATA_DIR=/data
+
+      # Dedicated mission/event Redis. The existing in-process MissionQueue is
+      # still active until the BullMQ migration phase lands; these variables
+      # establish the production connection contract now.
+      - ORVYN_REDIS_URL=redis://:${ORVYN_REDIS_PASSWORD}@orvyn-redis:6379/0
+
+      # Internal LiteLLM endpoint. ModelGateway migration is feature-gated and
+      # will switch to this URL in a later phase without changing ORION roles.
+      - MODEL_ROUTER_URL=http://litellm:4000/v1
+      - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
     volumes:
       - orvyn-data:/data
-      # Sandbox execution: the backend spawns per-mission containers as
-      # SIBLINGS on the host daemon (not nested inside itself). The socket
-      # mount is the minimum required for that; the sandbox containers it
-      # spawns run with --network none, --cap-drop ALL and resource ceilings.
+      # TEMPORARY: backend still owns sandbox execution today.
+      # This mount moves to the dedicated mission worker in the BullMQ phase.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Cloud mission workspaces (repos cloned for cloud jobs land here).
       - orvyn-projects:/projects
     expose:
       - "4570"
-    # Uncomment to persist future Postgres-backed state (Phase 7):
-    # depends_on: [postgres]
+    depends_on:
+      orvyn-redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
 
-  # Optional: self-hosted model server. Comment this whole block out if
-  # you're pointing ORVYN at a different GPU box or a custom model API
-  # instead — the backend doesn't care where models live.
+  # Optional self-hosted model server. Comment out when unused.
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -51,17 +134,7 @@ services:
       - "11434"
     volumes:
       - ollama-data:/root/.ollama
-    # Requires the NVIDIA container runtime on the host for GPU access:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
-  # Terminates TLS and reverse-proxies to the backend. Caddy fetches and
-  # renews Let's Encrypt certificates automatically from DOMAIN.
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -80,6 +153,8 @@ services:
 volumes:
   orvyn-data:
   orvyn-projects:
+  orvyn-redis-data:
+  litellm-redis-data:
   ollama-data:
   caddy-data:
   caddy-config:
