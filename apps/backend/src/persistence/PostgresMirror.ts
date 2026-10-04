@@ -272,6 +272,7 @@ export class PostgresMirror {
     latencyMs?: number;
     error?: string;
     migrationVersion?: number;
+    modelSecretEncryption?: "configured" | "missing";
   }> {
     if (!enabled()) return { enabled: false, status: "disabled" };
 
@@ -287,7 +288,7 @@ export class PostgresMirror {
         latencyMs: Date.now() - started,
         migrationVersion: Number(result.rows[0]?.version ?? 0),
         modelSecretEncryption: modelSecretKeyConfigured() ? "configured" : "missing",
-      } as any;
+      };
     } catch (err) {
       return {
         enabled: true,
