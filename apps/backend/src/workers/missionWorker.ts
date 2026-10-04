@@ -4,6 +4,7 @@
 // ORION planning/review/tool behavior is unchanged; only process ownership
 // moves from the HTTP API to this worker.
 
+import { randomUUID } from "crypto";
 import { DelayedError, Worker } from "bullmq";
 import { TenantManager } from "../tenancy/TenantManager";
 import { registerProjectToolsFor } from "../ai/registerProjectTools";
@@ -15,6 +16,7 @@ import { DistributedRunStore } from "../queue/DistributedRunStore";
 import { DistributedRunController } from "../queue/DistributedRunController";
 import { TenantMissionSemaphore } from "../queue/TenantMissionSemaphore";
 import { RedisMissionStateStore } from "../queue/RedisMissionStateStore";
+import { WorkerHeartbeatRegistry } from "../queue/WorkerHeartbeat";
 
 async function executeMission(payload: MissionJobPayload): Promise<void> {
   // Blocking reads and event publishing use dedicated Redis connections so
@@ -100,9 +102,13 @@ async function main(): Promise<void> {
 
   const connection = createWorkerRedis();
   const semaphoreRedis = createWorkerRedis();
+  const heartbeatRedis = createWorkerRedis();
   const concurrency = Math.max(1, Number(process.env.ORVYN_WORKER_CONCURRENCY) || 1);
   const maxPerTenant = Math.max(1, Number(process.env.ORVYN_MAX_CONCURRENT_MISSIONS) || 2);
   const semaphore = new TenantMissionSemaphore(semaphoreRedis, maxPerTenant);
+  const workerId = `worker-${randomUUID()}`;
+  const heartbeat = new WorkerHeartbeatRegistry(heartbeatRedis);
+  const stopHeartbeat = heartbeat.start(workerId);
 
   const worker = new Worker<MissionJobPayload>(
     MISSION_QUEUE_NAME,
@@ -132,7 +138,7 @@ async function main(): Promise<void> {
   );
 
   worker.on("ready", () => {
-    console.log(`[mission-worker] ready; concurrency=${concurrency}`);
+    console.log(`[mission-worker] ready; id=${workerId}; concurrency=${concurrency}`);
   });
   worker.on("completed", (job) => {
     console.log(`[mission-worker] job ${job.id} completed`);
@@ -146,8 +152,10 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     await worker.close();
+    await stopHeartbeat();
     await connection.quit();
     await semaphoreRedis.quit();
+    await heartbeatRedis.quit();
   };
   process.once("SIGTERM", () => void shutdown());
   process.once("SIGINT", () => void shutdown());
