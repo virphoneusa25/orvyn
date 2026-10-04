@@ -96,6 +96,15 @@ export class PostgresTenantStore implements TenantStore {
     await this.shared.init;
   }
 
+  async health(): Promise<boolean> {
+    try {
+      await this.shared.pool.query("SELECT 1");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async saveMission(m: Mission): Promise<void> {
     await this.shared.pool.query(
       `INSERT INTO orvyn_missions
