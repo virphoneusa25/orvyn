@@ -390,7 +390,9 @@ test(
   "real Postgres: TaskEngine durable wrappers acknowledge mission/task writes before returning",
   { skip: !enabled },
   async () => {
+    const savedReads = process.env.ORVYN_POSTGRES_PRIMARY_READS;
     const savedWrites = process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
     process.env.ORVYN_POSTGRES_PRIMARY_WRITES = "1";
 
     const dir = mkdtempSync(join(tmpdir(), "orvyn-task-pg-primary-"));
@@ -439,6 +441,8 @@ test(
     } finally {
       store.close();
       rmSync(dir, { recursive: true, force: true });
+      if (savedReads === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedReads;
       if (savedWrites === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
       else process.env.ORVYN_POSTGRES_PRIMARY_WRITES = savedWrites;
     }
