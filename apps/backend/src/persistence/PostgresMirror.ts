@@ -795,35 +795,38 @@ export class PostgresMirror {
 
   async usageTotals(tenantId: string): Promise<{
     requests: number;
+    errors: number;
     promptTokens: number;
     completionTokens: number;
-    outputChars: number;
-    toolCalls: number;
-    errors: number;
+    tokensReportedFor: number;
     byModel: Record<string, {
+      requests: number;
+      errors: number;
+      promptTokens: number;
+      completionTokens: number;
+      durationMs: number;
+    }>;
+    byMission: Record<string, {
       requests: number;
       promptTokens: number;
       completionTokens: number;
-      errors: number;
     }>;
   }> {
     const pool = await this.ready();
-    const [totalsResult, modelResult] = await Promise.all([
+    const [totalsResult, modelResult, missionResult] = await Promise.all([
       pool.query<{
         requests: string;
+        errors: string;
         prompt_tokens: string;
         completion_tokens: string;
-        output_chars: string;
-        tool_calls: string;
-        errors: string;
+        tokens_reported_for: string;
       }>(
         `SELECT
           COUNT(*)::text AS requests,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors,
           COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
           COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
-          COALESCE(SUM(output_chars),0)::text AS output_chars,
-          COALESCE(SUM(tool_calls),0)::text AS tool_calls,
-          COUNT(*) FILTER (WHERE ok = false)::text AS errors
+          COUNT(*) FILTER (WHERE prompt_tokens IS NOT NULL)::text AS tokens_reported_for
          FROM usage_events
          WHERE tenant_id=$1`,
         [tenantId]
@@ -831,19 +834,37 @@ export class PostgresMirror {
       pool.query<{
         model_id: string;
         requests: string;
+        errors: string;
         prompt_tokens: string;
         completion_tokens: string;
-        errors: string;
+        duration_ms: string;
       }>(
         `SELECT
           model_id,
           COUNT(*)::text AS requests,
+          COUNT(*) FILTER (WHERE ok = false)::text AS errors,
           COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
           COALESCE(SUM(completion_tokens),0)::text AS completion_tokens,
-          COUNT(*) FILTER (WHERE ok = false)::text AS errors
+          COALESCE(SUM(duration_ms),0)::text AS duration_ms
          FROM usage_events
          WHERE tenant_id=$1
          GROUP BY model_id`,
+        [tenantId]
+      ),
+      pool.query<{
+        mission_id: string;
+        requests: string;
+        prompt_tokens: string;
+        completion_tokens: string;
+      }>(
+        `SELECT
+          mission_id,
+          COUNT(*)::text AS requests,
+          COALESCE(SUM(prompt_tokens),0)::text AS prompt_tokens,
+          COALESCE(SUM(completion_tokens),0)::text AS completion_tokens
+         FROM usage_events
+         WHERE tenant_id=$1 AND mission_id IS NOT NULL
+         GROUP BY mission_id`,
         [tenantId]
       ),
     ]);
@@ -851,27 +872,42 @@ export class PostgresMirror {
     const row = totalsResult.rows[0];
     const byModel: Record<string, {
       requests: number;
+      errors: number;
       promptTokens: number;
       completionTokens: number;
-      errors: number;
+      durationMs: number;
     }> = {};
     for (const model of modelResult.rows) {
       byModel[model.model_id] = {
         requests: Number(model.requests),
+        errors: Number(model.errors),
         promptTokens: Number(model.prompt_tokens),
         completionTokens: Number(model.completion_tokens),
-        errors: Number(model.errors),
+        durationMs: Number(model.duration_ms),
+      };
+    }
+
+    const byMission: Record<string, {
+      requests: number;
+      promptTokens: number;
+      completionTokens: number;
+    }> = {};
+    for (const mission of missionResult.rows) {
+      byMission[mission.mission_id] = {
+        requests: Number(mission.requests),
+        promptTokens: Number(mission.prompt_tokens),
+        completionTokens: Number(mission.completion_tokens),
       };
     }
 
     return {
       requests: Number(row?.requests ?? 0),
+      errors: Number(row?.errors ?? 0),
       promptTokens: Number(row?.prompt_tokens ?? 0),
       completionTokens: Number(row?.completion_tokens ?? 0),
-      outputChars: Number(row?.output_chars ?? 0),
-      toolCalls: Number(row?.tool_calls ?? 0),
-      errors: Number(row?.errors ?? 0),
+      tokensReportedFor: Number(row?.tokens_reported_for ?? 0),
       byModel,
+      byMission,
     };
   }
 
