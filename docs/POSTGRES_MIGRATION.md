@@ -111,7 +111,13 @@ are explicitly awaited.
 
 ### Phase B — backfill + parity
 - migrate existing SQLite tenant data
-- compare row counts and content hashes
+- compare per-tenant row counts
+- compare canonical SHA-256 content fingerprints for:
+  - missions/task graphs
+  - usage/billing events
+  - settings/tool overrides
+  - model configurations
+- deliberately fail parity when same-count rows contain different data
 - repair any divergence
 - run shadow mode under production traffic
 
@@ -141,3 +147,20 @@ returns ORVYN to the exact SQLite-authoritative behavior.
 No Postgres shadow table is allowed to influence model routing, mission
 execution, billing enforcement, authentication, or user-visible state during
 this phase.
+
+
+## Backfill command
+
+After building the backend:
+
+```bash
+DATABASE_URL=postgresql://... \
+ORVYN_DATA_DIR=/data \
+npm run postgres:backfill -w @orvyn/backend
+```
+
+The command is idempotent. For each tenant it prints SQLite counts, PostgreSQL
+counts, content-parity flags, and SHA-256 fingerprints.
+
+A non-matching tenant causes a non-zero exit code. Count equality alone is not
+accepted as parity.
