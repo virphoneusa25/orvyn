@@ -399,6 +399,32 @@ export class PostgresMirror {
     );
   }
 
+  backfillTenant(
+    tenantId: string,
+    snapshot: {
+      missions: Mission[];
+      usageEvents: UsageEvent[];
+      settings: Array<{ key: string; value: string }>;
+      models: ModelConfig[];
+    }
+  ): void {
+    if (!enabled()) return;
+    this.mirror("backfillTenant", async () => {
+      for (const mission of snapshot.missions) {
+        await this.saveMission(tenantId, mission);
+      }
+      for (const usage of snapshot.usageEvents) {
+        await this.saveUsageEvent(tenantId, usage);
+      }
+      for (const setting of snapshot.settings) {
+        await this.setSetting(tenantId, setting.key, setting.value);
+      }
+      for (const model of snapshot.models) {
+        await this.saveModel(tenantId, model);
+      }
+    });
+  }
+
   async parityCounts(tenantId: string): Promise<{
     missions: number;
     usageEvents: number;
