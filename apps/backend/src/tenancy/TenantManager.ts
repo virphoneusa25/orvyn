@@ -89,7 +89,12 @@ export class TenantManager {
   /** sha256(apiKey) -> tenantId. Raw keys are never stored. */
   private keyIndex = new Map<string, string>();
 
-  create(name: string, apiKey: string, id: string = randomUUID()): Tenant {
+  create(
+    name: string,
+    apiKey: string,
+    id: string = randomUUID(),
+    options: { runStore?: RunStore } = {}
+  ): Tenant {
     const localStore = new LocalStore(id);
     const modelService = new ModelService();
     // Restore user-added/edited models. removeModel first so a persisted edit
@@ -152,7 +157,7 @@ export class TenantManager {
     // Streaming runtime is per-tenant too, so runs and their event logs are
     // never visible across customers. The store gets a per-tenant directory:
     // events append to disk as they stream and replay after a restart.
-    tenant.runStore = new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
+    tenant.runStore = options.runStore ?? new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
     tenant.eventBus = new EventBus(tenant.runStore);
     tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);
