@@ -35,7 +35,18 @@ const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 102
 wss.on("connection", async (socket, req) => {
   const url = new URL(req.url ?? "", "http://internal");
   const token = url.searchParams.get("token");
-  let tenant = await resolveTenantFromToken(token);
+  let tenant;
+  try {
+    tenant = await resolveTenantFromToken(token);
+  } catch (err: any) {
+    socket.send(JSON.stringify({
+      delta: "",
+      done: true,
+      error: `Authentication storage unavailable: ${err?.message ?? String(err)}`,
+    }));
+    socket.close();
+    return;
+  }
 
   // If API keys are registered, a valid token is mandatory on the socket too —
   // otherwise the WS would be an unauthenticated bypass around the REST auth.
