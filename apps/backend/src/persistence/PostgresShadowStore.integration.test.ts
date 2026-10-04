@@ -170,10 +170,12 @@ test(
 
     try {
       await shadow.ping();
-      await sql.query(
-        "DELETE FROM orvyn_missions WHERE tenant_id=$1; DELETE FROM orvyn_usage_events WHERE tenant_id=$1; DELETE FROM orvyn_settings WHERE tenant_id=$1; DELETE FROM orvyn_models WHERE tenant_id=$1;",
-        [tenantId]
-      );
+      await Promise.all([
+        sql.query("DELETE FROM orvyn_missions WHERE tenant_id=$1", [tenantId]),
+        sql.query("DELETE FROM orvyn_usage_events WHERE tenant_id=$1", [tenantId]),
+        sql.query("DELETE FROM orvyn_settings WHERE tenant_id=$1", [tenantId]),
+        sql.query("DELETE FROM orvyn_models WHERE tenant_id=$1", [tenantId]),
+      ]);
 
       local.saveMission({
         id: "mission_backfill",
