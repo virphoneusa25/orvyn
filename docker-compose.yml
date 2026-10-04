@@ -17,6 +17,23 @@
 # - BullMQ requires Redis maxmemory-policy=noeviction.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-orvyn}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-orvyn}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orvyn} -d ${POSTGRES_DB:-orvyn}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   orvyn-redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -102,6 +119,9 @@ services:
       - PORT=4570
       - ORVYN_API_KEY=${ORVYN_API_KEY}
       - ORVYN_DATA_DIR=/data
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-orvyn}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-orvyn}
+      - ORVYN_POSTGRES_MIRROR=${ORVYN_POSTGRES_MIRROR:-0}
+      - ORVYN_POSTGRES_SSL=disable
 
       # Dedicated mission/event Redis. The existing in-process MissionQueue is
       # still active until the BullMQ migration phase lands; these variables
@@ -122,6 +142,8 @@ services:
     expose:
       - "4570"
     depends_on:
+      postgres:
+        condition: service_healthy
       orvyn-redis:
         condition: service_healthy
       litellm:
@@ -146,6 +168,9 @@ services:
       - ORVYN_WORKER_CONCURRENCY=${ORVYN_WORKER_CONCURRENCY:-1}
       - ORVYN_WORKER_MAX_STALLED_COUNT=${ORVYN_WORKER_MAX_STALLED_COUNT:-0}
       - ORVYN_MISSION_EXECUTION=sandbox
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-orvyn}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-orvyn}
+      - ORVYN_POSTGRES_MIRROR=${ORVYN_POSTGRES_MIRROR:-0}
+      - ORVYN_POSTGRES_SSL=disable
       - MODEL_ROUTER_URL=http://litellm:4000
       - MODEL_ROUTER_KEY=${LITELLM_MASTER_KEY}
       - ORVYN_LITELLM_ENABLED=${ORVYN_LITELLM_ENABLED:-0}
@@ -155,6 +180,8 @@ services:
       - orvyn-projects:/projects
       - orvyn-data:/data
     depends_on:
+      postgres:
+        condition: service_healthy
       orvyn-redis:
         condition: service_healthy
       litellm:
@@ -185,6 +212,7 @@ services:
       - backend
 
 volumes:
+  postgres-data:
   orvyn-data:
   orvyn-projects:
   orvyn-redis-data:
