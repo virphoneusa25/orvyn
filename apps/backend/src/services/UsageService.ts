@@ -346,6 +346,7 @@ export class UsageService {
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
+
         try {
           // A stream may only be retried before the first chunk reaches the
           // consumer — after that, replaying would duplicate output.
@@ -368,44 +369,39 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          // Note: stream chunks may already have reached the caller. We still
-          // require the final success accounting event to persist; a failure
-          // here terminates the stream with an accounting error rather than
-          // fabricating a provider failure event.
-          await usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "stream",
-            durationMs: Date.now() - start,
-            ok: true,
-            outputChars: chars,
-            toolCalls: toolCalls || undefined,
-          });
         } catch (err: any) {
-          const isUsagePersistenceError =
-            String(err?.message ?? "").includes("usage") ||
-            String(err?.message ?? "").includes("database") ||
-            String(err?.message ?? "").includes("Postgres");
-
-          if (!isUsagePersistenceError) {
-            try {
-              await usage.record({
-                modelId: inner.config.id,
-                provider: inner.config.provider,
-                method: "stream",
-                durationMs: Date.now() - start,
-                ok: false,
-                outputChars: chars,
-                error: String(err?.message ?? err).slice(0, 300),
-              });
-            } catch (meterErr: any) {
-              console.error(
-                `[usage] failed to persist failed stream event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
-              );
-            }
+          // Provider/transport error only. Preserve it even if persistence of
+          // the failure event is unavailable.
+          try {
+            await usage.record({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "stream",
+              durationMs: Date.now() - start,
+              ok: false,
+              outputChars: chars,
+              error: String(err?.message ?? err).slice(0, 300),
+            });
+          } catch (meterErr: any) {
+            console.error(
+              `[usage] failed to persist failed stream event for ${inner.config.id}: ${meterErr?.message ?? meterErr}`
+            );
           }
           throw err;
         }
+
+        // The provider stream completed normally. Persist exactly one success
+        // event outside the provider-error catch so a Postgres failure cannot
+        // be mislabeled as an upstream model failure.
+        await usage.record({
+          modelId: inner.config.id,
+          provider: inner.config.provider,
+          method: "stream",
+          durationMs: Date.now() - start,
+          ok: true,
+          outputChars: chars,
+          toolCalls: toolCalls || undefined,
+        });
       },
 
       healthCheck: () => inner.healthCheck(),
