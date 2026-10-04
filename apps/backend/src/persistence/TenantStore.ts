@@ -13,6 +13,7 @@ export interface TenantStore {
   readonly tenantId: string;
 
   initialize(): Promise<void>;
+  health(): Promise<boolean>;
 
   saveMission(mission: Mission): Promise<void>;
   loadMissions(limit?: number): Promise<Mission[]>;
@@ -46,6 +47,7 @@ export class SQLiteTenantStore implements TenantStore {
   }
 
   async initialize(): Promise<void> {}
+  async health(): Promise<boolean> { return true; }
 
   async saveMission(mission: Mission): Promise<void> {
     this.local.saveMission(mission);
