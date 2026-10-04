@@ -298,6 +298,43 @@ export class LocalStore {
     );
   }
 
+  /**
+   * Replace the local tenant configuration cache from an authoritative
+   * PostgreSQL snapshot. This intentionally bypasses mirror writes to avoid
+   * echoing the same data back to Postgres during fresh-node bootstrap.
+   */
+  hydrateConfigurationFromPrimary(
+    settings: Array<{ key: string; value: string }>,
+    models: ModelConfig[]
+  ): void {
+    this.guard("hydrate primary configuration", () => {
+      this.db.exec("BEGIN IMMEDIATE;");
+      try {
+        this.db.exec("DELETE FROM settings;");
+        this.db.exec("DELETE FROM models;");
+
+        const insertSetting = this.db.prepare(
+          `INSERT INTO settings (key, value) VALUES (?, ?)`
+        );
+        for (const setting of settings) {
+          insertSetting.run(setting.key, setting.value);
+        }
+
+        const insertModel = this.db.prepare(
+          `INSERT INTO models (id, config_json) VALUES (?, ?)`
+        );
+        for (const config of models) {
+          insertModel.run(config.id, JSON.stringify(config));
+        }
+
+        this.db.exec("COMMIT;");
+      } catch (err) {
+        this.db.exec("ROLLBACK;");
+        throw err;
+      }
+    });
+  }
+
   exportForPostgresMigration(): {
     missions: Mission[];
     usageEvents: UsageEvent[];
