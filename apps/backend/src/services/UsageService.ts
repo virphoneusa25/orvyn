@@ -84,9 +84,9 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
-  saveUsageEvent(e: UsageEvent): void;
-  loadRecentUsage(limit?: number): UsageEvent[];
-  countUsageSince?(ts: number): number;
+  saveUsageEvent(e: UsageEvent): Promise<void>;
+  loadRecentUsage(limit?: number): Promise<UsageEvent[]>;
+  countUsageSince?(ts: number): Promise<number>;
 }
 
 export class UsageService {
@@ -116,35 +116,34 @@ export class UsageService {
    * persists every subsequent event. Structural type avoids a circular import
    * with LocalStore.
    */
-  attachStore(store: UsageStore): void {
+  async attachStore(store: UsageStore): Promise<void> {
     this.store = store;
-    const persisted = store.loadRecentUsage(MAX_EVENTS);
+    const persisted = await store.loadRecentUsage(MAX_EVENTS);
     if (persisted.length > 0) {
       this.events = [...persisted, ...this.events].slice(-MAX_EVENTS);
     }
     // Quota counting must survive restarts, or a customer could reset their
     // budget by crashing the backend.
-    this.monthCount = store.countUsageSince?.(this.monthStart) ?? this.monthCount;
+    if (store.countUsageSince) {
+      this.monthCount = await store.countUsageSince(this.monthStart);
+    }
   }
 
-  private refreshPersistedUsage(): void {
+  private async refreshPersistedUsage(): Promise<void> {
     if (!this.store) return;
-    // Worker and API processes share the durable tenant store during the
-    // SQLite transition phase. Re-read the bounded window so Reports includes
-    // usage written by other processes instead of freezing at startup state.
-    this.events = this.store.loadRecentUsage(MAX_EVENTS).slice(-MAX_EVENTS);
+    this.events = (await this.store.loadRecentUsage(MAX_EVENTS)).slice(-MAX_EVENTS);
   }
 
-  private refreshMonthCount(): void {
+  private async refreshMonthCount(): Promise<void> {
     if (this.store?.countUsageSince) {
-      this.monthCount = this.store.countUsageSince(this.monthStart);
+      this.monthCount = await this.store.countUsageSince(this.monthStart);
     }
   }
 
   /** Current quota state; surfaced on /usage so clients can warn early. */
-  quota(): { limit: number; used: number; remaining: number | null; resetsAt: number } {
-    this.rollMonth();
-    this.refreshMonthCount();
+  async quota(): Promise<{ limit: number; used: number; remaining: number | null; resetsAt: number }> {
+    await this.rollMonth();
+    await this.refreshMonthCount();
     return {
       limit: this.quotaLimit,
       used: this.monthCount,
@@ -153,21 +152,22 @@ export class UsageService {
     };
   }
 
-  private rollMonth(): void {
+  private async rollMonth(): Promise<void> {
     const start = utcMonthStart();
     if (start !== this.monthStart) {
       this.monthStart = start;
-      this.monthCount = this.store?.countUsageSince?.(start) ?? 0;
+      this.monthCount = this.store?.countUsageSince
+        ? await this.store.countUsageSince(start)
+        : 0;
     }
   }
 
   /** Throws QuotaExceededError when the monthly budget is spent. */
-  checkQuota(): void {
+  async checkQuota(): Promise<void> {
     if (this.quotaLimit <= 0) return;
-    this.rollMonth();
-    // Cross-process workers may have recorded usage since this instance was
-    // created. Recount from durable storage before every billable model call.
-    this.refreshMonthCount();
+    await this.rollMonth();
+    // Recount from authoritative storage before every billable model call.
+    await this.refreshMonthCount();
     if (this.monthCount >= this.quotaLimit) {
       throw new QuotaExceededError(this.monthCount, this.quotaLimit);
     }
@@ -180,14 +180,18 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  async record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): Promise<void> {
     const ctx = this.als.getStore() ?? {};
     const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+
+    // Durable write first in PostgreSQL-primary mode. A billing event must not
+    // be acknowledged only in process memory.
+    if (this.store) await this.store.saveUsageEvent(event);
+
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
-    this.rollMonth();
+    await this.rollMonth();
     this.monthCount++;
-    this.store?.saveUsageEvent(event);
 
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
@@ -229,13 +233,13 @@ export class UsageService {
     }
   }
 
-  recent(limit = 200): UsageEvent[] {
-    this.refreshPersistedUsage();
+  async recent(limit = 200): Promise<UsageEvent[]> {
+    await this.refreshPersistedUsage();
     return this.events.slice(-limit).reverse();
   }
 
-  totals() {
-    this.refreshPersistedUsage();
+  async totals() {
+    await this.refreshPersistedUsage();
     const byModel = new Map<string, { requests: number; errors: number; promptTokens: number; completionTokens: number; durationMs: number }>();
     const byMission = new Map<string, { requests: number; promptTokens: number; completionTokens: number }>();
     let requests = 0, errors = 0, promptTokens = 0, completionTokens = 0, tokensReportedFor = 0;
@@ -287,7 +291,7 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        usage.checkQuota();
+        await usage.checkQuota();
         usage.checkMissionBudget();
         const start = Date.now();
         try {
@@ -297,7 +301,7 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
@@ -310,7 +314,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "generate",
@@ -323,7 +327,7 @@ export class UsageService {
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        usage.checkQuota();
+        await usage.checkQuota();
         usage.checkMissionBudget();
         const start = Date.now();
         let chars = 0;
@@ -350,7 +354,7 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -360,7 +364,7 @@ export class UsageService {
             toolCalls: toolCalls || undefined,
           });
         } catch (err: any) {
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "stream",
@@ -384,11 +388,11 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
+        await usage.checkQuota();
         const start = Date.now();
         try {
           const res = await inner.generateImage!(request);
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
@@ -397,7 +401,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.provider,
             method: "image",
