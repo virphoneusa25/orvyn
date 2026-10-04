@@ -187,6 +187,91 @@ export class PostgresTenantStore implements TenantStore {
     return Number(result.rows[0]?.n ?? 0);
   }
 
+  async reserveUsageRequest(
+    monthStart: number,
+    limit: number
+  ): Promise<{ allowed: boolean; used: number }> {
+    if (limit <= 0) {
+      return {
+        allowed: true,
+        used: await this.getUsageRequestCount(monthStart),
+      };
+    }
+
+    const client = await this.shared.pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Seed the ledger from already-persisted usage exactly once. This makes
+      // cutover safe after SQLite backfill and also repairs a missing ledger
+      // row without resetting the customer's month.
+      await client.query(
+        `INSERT INTO orvyn_usage_quota_monthly
+           (tenant_id, month_start, used_count, updated_at)
+         SELECT $1, $2, COUNT(*)::bigint, NOW()
+           FROM orvyn_usage_events
+          WHERE tenant_id=$1 AND ts >= $2
+         ON CONFLICT (tenant_id, month_start) DO NOTHING`,
+        [this.tenantId, monthStart]
+      );
+
+      const result = await client.query(
+        `UPDATE orvyn_usage_quota_monthly
+            SET used_count = used_count + 1,
+                updated_at = NOW()
+          WHERE tenant_id=$1
+            AND month_start=$2
+            AND used_count < $3
+        RETURNING used_count`,
+        [this.tenantId, monthStart, limit]
+      );
+
+      if (result.rowCount === 1) {
+        await client.query("COMMIT");
+        return {
+          allowed: true,
+          used: Number(result.rows[0].used_count),
+        };
+      }
+
+      const current = await client.query(
+        `SELECT used_count
+           FROM orvyn_usage_quota_monthly
+          WHERE tenant_id=$1 AND month_start=$2`,
+        [this.tenantId, monthStart]
+      );
+      await client.query("COMMIT");
+      return {
+        allowed: false,
+        used: Number(current.rows[0]?.used_count ?? limit),
+      };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getUsageRequestCount(monthStart: number): Promise<number> {
+    const result = await this.shared.pool.query(
+      `SELECT GREATEST(
+          COALESCE((
+            SELECT used_count
+              FROM orvyn_usage_quota_monthly
+             WHERE tenant_id=$1 AND month_start=$2
+          ), 0),
+          COALESCE((
+            SELECT COUNT(*)::bigint
+              FROM orvyn_usage_events
+             WHERE tenant_id=$1 AND ts >= $2
+          ), 0)
+        ) AS n`,
+      [this.tenantId, monthStart]
+    );
+    return Number(result.rows[0]?.n ?? 0);
+  }
+
   async countMissionsSince(ts: number): Promise<number> {
     const result = await this.shared.pool.query(
       `SELECT COUNT(*)::int AS n
