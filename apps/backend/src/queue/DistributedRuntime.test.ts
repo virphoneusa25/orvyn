@@ -28,6 +28,7 @@ test("DistributedRunStore forwards raw event envelopes without owning SSE sequen
   assert.equal(published.length, 1);
   assert.deepEqual(published[0], {
     runId: "run-a",
+    sourceEventId: local?.id,
     type: "run.started",
     timestamp: local?.timestamp,
     data: { instruction: "test" },
@@ -52,12 +53,13 @@ test("RedisRunEventBridge makes API RunStore authoritative for sequence and stat
       return [
         {
           redisId: "1-0",
-          event: { runId: "run-b", type: "run.started", timestamp: 1, data: {} },
+          event: { runId: "run-b", sourceEventId: "worker-1", type: "run.started", timestamp: 1, data: {} },
         },
         {
           redisId: "2-0",
           event: {
             runId: "run-b",
+            sourceEventId: "worker-2",
             type: "approval.required",
             timestamp: 2,
             data: { callId: "call-1" },
@@ -65,11 +67,11 @@ test("RedisRunEventBridge makes API RunStore authoritative for sequence and stat
         },
         {
           redisId: "3-0",
-          event: { runId: "run-b", type: "approval.resolved", timestamp: 3, data: { callId: "call-1" } },
+          event: { runId: "run-b", sourceEventId: "worker-3", type: "approval.resolved", timestamp: 3, data: { callId: "call-1" } },
         },
         {
           redisId: "4-0",
-          event: { runId: "run-b", type: "run.completed", timestamp: 4, data: {} },
+          event: { runId: "run-b", sourceEventId: "worker-4", type: "run.completed", timestamp: 4, data: {} },
         },
       ];
     },
@@ -163,6 +165,7 @@ test("RedisRunEventBridge resumes from persisted transport cursor", async () => 
           redisId: "8-0",
           event: {
             runId: "run-resume",
+            sourceEventId: "worker-resume-1",
             type: "run.completed",
             timestamp: Date.now(),
             data: {},
@@ -180,6 +183,10 @@ test("RedisRunEventBridge resumes from persisted transport cursor", async () => 
   assert.deepEqual(saved, ["8-0"]);
   assert.equal(store.get("run-resume")?.status, "completed");
   assert.deepEqual(store.get("run-resume")?.events.map((event) => event.type), ["run.completed"]);
+  assert.equal(
+    store.get("run-resume")?.events[0]?.data.__distributedSourceEventId,
+    "worker-resume-1"
+  );
 });
 
 
@@ -216,4 +223,79 @@ test("distributedProjectRootEligible only accepts shared worker project roots", 
     if (saved.root === undefined) delete process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT;
     else process.env.ORVYN_DISTRIBUTED_PROJECT_ROOT = saved.root;
   }
+});
+
+
+test("RedisRunEventBridge deduplicates a worker event replayed after an API crash", async () => {
+  const store = new RunStore();
+  store.create("run-dedupe", "/workspace", "running");
+  store.emit("run-dedupe", "tool.completed", {
+    tool: "terminal",
+    __distributedSourceEventId: "worker-event-42",
+  });
+
+  const transport = {
+    loadConsumerCursor: async () => "40-0",
+    saveConsumerCursor: async () => undefined,
+    readAfter: async () => [
+      {
+        redisId: "41-0",
+        event: {
+          runId: "run-dedupe",
+          sourceEventId: "worker-event-42",
+          type: "tool.completed",
+          timestamp: Date.now(),
+          data: { tool: "terminal" },
+        },
+      },
+      {
+        redisId: "42-0",
+        event: {
+          runId: "run-dedupe",
+          sourceEventId: "worker-event-43",
+          type: "run.completed",
+          timestamp: Date.now(),
+          data: {},
+        },
+      },
+    ],
+  } as any;
+
+  let calls = 0;
+  transport.readAfter = async () => {
+    calls++;
+    if (calls > 1) return [];
+    return [
+      {
+        redisId: "41-0",
+        event: {
+          runId: "run-dedupe",
+          sourceEventId: "worker-event-42",
+          type: "tool.completed",
+          timestamp: Date.now(),
+          data: { tool: "terminal" },
+        },
+      },
+      {
+        redisId: "42-0",
+        event: {
+          runId: "run-dedupe",
+          sourceEventId: "worker-event-43",
+          type: "run.completed",
+          timestamp: Date.now(),
+          data: {},
+        },
+      },
+    ];
+  };
+
+  const bridge = new RedisRunEventBridge("run-dedupe", store, transport);
+  await bridge.run();
+
+  assert.equal(
+    store.get("run-dedupe")?.events.filter((event) => event.type === "tool.completed").length,
+    1,
+    "replayed worker event must not duplicate the already-durable API event"
+  );
+  assert.equal(store.get("run-dedupe")?.status, "completed");
 });
