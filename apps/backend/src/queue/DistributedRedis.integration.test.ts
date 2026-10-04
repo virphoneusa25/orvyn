@@ -2,10 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import IORedis from "ioredis";
+import { Worker } from "bullmq";
 import { TenantMissionSemaphore } from "./TenantMissionSemaphore";
 import { RedisMissionQueue } from "./RedisMissionQueue";
 import { RedisMissionStateStore } from "./RedisMissionStateStore";
 import { WorkerHeartbeatRegistry } from "./WorkerHeartbeat";
+import { MISSION_QUEUE_NAME } from "./types";
 
 const url = process.env.ORVYN_REDIS_TEST_URL;
 
@@ -135,6 +137,53 @@ test(
       assert.equal(await registry.activeCount(), 0);
     } finally {
       await redis.quit();
+    }
+  }
+);
+
+
+test(
+  "real Redis: failed BullMQ jobs are inspectable for API restart reconciliation",
+  { skip: !url },
+  async () => {
+    const producerRedis = new IORedis(url!, { maxRetriesPerRequest: 1 });
+    const workerRedis = new IORedis(url!, { maxRetriesPerRequest: null });
+    const queue = new RedisMissionQueue(producerRedis);
+    const worker = new Worker(
+      MISSION_QUEUE_NAME,
+      async () => {
+        throw new Error("integration worker boom");
+      },
+      { connection: workerRedis }
+    );
+
+    try {
+      await producerRedis.flushdb();
+
+      await queue.enqueue({
+        runId: "run-failed-inspect",
+        tenantId: "tenant-failed",
+        tenantName: "Failure Test",
+        projectRoot: "/projects/failure",
+        goal: "fail intentionally",
+        requestedAt: new Date().toISOString(),
+      });
+
+      const deadline = Date.now() + 5_000;
+      let inspected: Awaited<ReturnType<RedisMissionQueue["inspect"]>> = null;
+      while (Date.now() < deadline) {
+        inspected = await queue.inspect("run-failed-inspect");
+        if (inspected?.state === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      assert.equal(inspected?.state, "failed");
+      assert.match(inspected?.failedReason ?? "", /integration worker boom/);
+    } finally {
+      await worker.close();
+      await queue.close();
+      if (producerRedis.status !== "end") await producerRedis.quit().catch(() => undefined);
+      if (workerRedis.status !== "end") await workerRedis.quit().catch(() => undefined);
     }
   }
 );
