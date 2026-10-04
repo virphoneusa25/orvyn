@@ -7,7 +7,7 @@ export ORVYN_RESTORE_RECORD_STATUS=0
 FIXTURE="$(mktemp -d /tmp/orvyn-drill-ci-XXXX)"
 trap '[[ "$FIXTURE" == /tmp/orvyn-drill-ci-* ]] && rm -rf -- "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/data" "$FIXTURE/backup" "$FIXTURE/snap" "$FIXTURE/files"
-docker run --rm --user "$(id -u):$(id -g)" --network none -v "$FIXTURE/data:/data" --entrypoint node "$ORVYN_RESTORE_IMAGE" \
+docker run --rm --user "$(id -u):$(id -g)" --network none -v "$FIXTURE/data:/data" -e ORVYN_DATA_DIR=/data --entrypoint node "$ORVYN_RESTORE_IMAGE" \
   -e "const {AuthService}=require('./dist/auth/AuthService.js'); const auth=new AuthService('/data'); auth.register('restore-fixture@example.test','Synthetic-fixture-password-42','Restore fixture');"
 docker run --rm --user "$(id -u):$(id -g)" --network none -v "$FIXTURE:/w" -i --entrypoint node "$ORVYN_RESTORE_IMAGE" \
   --no-warnings --input-type=module - snapshot --data /w/data --out /w/snap < infrastructure/ovh/backup-data.mjs
