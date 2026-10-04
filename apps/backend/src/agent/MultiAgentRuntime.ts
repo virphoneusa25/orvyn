@@ -216,7 +216,7 @@ export class MultiAgentRuntime {
     this.tools.applyProfile();
     // Bounded concurrency: beyond ORVYN_MAX_CONCURRENT_MISSIONS the mission
     // waits its turn instead of piling more agent loops onto the box.
-    const position = this.queue.enqueue(() => this.orchestrate(runId, projectRoot, goal, rules, attachments));
+    const position = this.queue.enqueue(() => this.executeQueuedMission(runId, projectRoot, goal, rules, attachments));
     if (position > 0) {
       // Truthful state: the run EXISTS but has not started — say so, or the
       // UI shows RUNNING while nothing at all is executing.
@@ -228,6 +228,26 @@ export class MultiAgentRuntime {
       });
     }
     return runId;
+  }
+
+  /**
+   * Worker entry point for an already-created/queued run.
+   *
+   * This executes the exact same orchestration path as local start(); it does
+   * not create a second planner loop or change ORION behavior. Distributed
+   * workers pre-create the run in their forwarding RunStore and call here.
+   */
+  async executeQueuedMission(
+    runId: string,
+    projectRoot: string,
+    goal: string,
+    rules?: string,
+    attachments?: Attachment[]
+  ): Promise<void> {
+    if (!this.store.get(runId)) this.store.create(runId, projectRoot, "queued");
+    applyMode(this.tools.registry, "multitask");
+    this.tools.applyProfile();
+    await this.orchestrate(runId, projectRoot, goal, rules, attachments);
   }
 
   private async orchestrate(
