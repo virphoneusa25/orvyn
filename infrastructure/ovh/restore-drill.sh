@@ -44,13 +44,13 @@ tar xzf "$WORK/data-files.tgz" -C "$WORK/data"
 [[ -f "$WORK/env.bak" ]] || { echo "[drill] FAILED: matching backup environment is missing" >&2; exit 1; }
 IMAGE="${ORVYN_RESTORE_IMAGE:-$(docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml images -q backend | head -1)}"
 [[ -n "$IMAGE" ]] || { echo "[drill] FAILED: backend image is missing" >&2; exit 1; }
-run_node() { docker run --rm --network none -v "$WORK":/w -i --entrypoint node "$IMAGE" --no-warnings --input-type=module - "$@" < infrastructure/ovh/backup-data.mjs; }
+run_node() { docker run --rm --user "$(id -u):$(id -g)" --network none -v "$WORK":/w -i --entrypoint node "$IMAGE" --no-warnings --input-type=module - "$@" < infrastructure/ovh/backup-data.mjs; }
 run_node verify --dir /w/snap/sqlite --manifest /w/snap/manifest.json
 run_node restore --from /w/snap --data /w/data --force
 echo "[drill] booting a throwaway backend on the restored data"
 # Retain the snapshot's matching vault key. Network isolation prevents restored
 # integration credentials from reaching providers or production databases.
-CID="$(docker run -d --network none --env-file "$WORK/env.bak" -v "$WORK/data":/data \
+CID="$(docker run -d --user "$(id -u):$(id -g)" --network none --env-file "$WORK/env.bak" -v "$WORK/data":/data \
   -e ORVYN_DATA_DIR=/data -e ORVYN_CLOUD_MODE=true -e PORT=4999 \
   -e ORVYN_PG_URL= -e DATABASE_URL= -e ORVYN_POSTGRES_MIRROR=0 \
   -e ORVYN_POSTGRES_PRIMARY_READS=0 -e ORVYN_POSTGRES_PRIMARY_WRITES=0 "$IMAGE")"
