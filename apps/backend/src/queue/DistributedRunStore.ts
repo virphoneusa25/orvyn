@@ -28,6 +28,7 @@ export class DistributedRunStore extends RunStore {
     const publish = this.transport
       .publish({
         runId,
+        sourceEventId: local.id,
         type,
         timestamp: local.timestamp,
         data,
