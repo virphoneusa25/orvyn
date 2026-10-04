@@ -132,6 +132,9 @@ test("real Postgres: outage keeps SQLite usable and reopening repairs missed wri
     if (savedDatabaseUrl === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL=savedDatabaseUrl;
     if (savedPgUrl === undefined) delete process.env.ORVYN_PG_URL; else process.env.ORVYN_PG_URL=savedPgUrl;
     store.close(); store = new LocalStore(tenant, dir);
+    const pending = await tenantPostgresMirror.status(tenant);
+    assert.equal(pending.ready, false); assert.ok(pending.queuedWrites > 0);
+    await tenantPostgresMirror.flush();
     const status = await tenantPostgresMirror.status(tenant);
     assert.equal(status.ready, true); assert.equal(status.failedWrites, false);
     assert.deepEqual(status.counts, store.tenantMirrorCounts());

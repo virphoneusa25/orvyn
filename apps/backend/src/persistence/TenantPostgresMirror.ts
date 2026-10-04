@@ -199,7 +199,9 @@ export class TenantPostgresMirror {
 
   async status(tenantId: string): Promise<{ enabled: boolean; ready: boolean; migrationVersion?: number; failedWrites: boolean; queuedWrites: number; counts?: Record<string, number> }> {
     if (!this.isEnabled()) return { enabled: false, ready: true, failedWrites: false, queuedWrites: 0 };
-    await this.flush();
+    // A health request must not wait behind a large backfill/outage backlog.
+    // Report it as incomplete and let the next poll measure settled parity.
+    if (this.queued > 0) return { enabled:true, ready:false, failedWrites:this.failures.has(tenantId), queuedWrites:this.queued };
     try {
       await this.init();
       const result = await this.getPool().query(`SELECT
