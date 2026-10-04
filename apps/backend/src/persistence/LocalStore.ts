@@ -23,6 +23,7 @@ import * as os from "os";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import { getPostgresShadowStore } from "./PostgresShadowStore";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -73,8 +74,10 @@ export function defaultDataDir(): string {
 export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
+  private readonly tenantId: string;
 
   constructor(tenantId: string, dataDir: string = defaultDataDir()) {
+    this.tenantId = tenantId;
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     // WAL permits concurrent readers + one writer across API/worker processes.
@@ -115,6 +118,7 @@ export class LocalStore {
         )
         .run(m.id, m.runId, m.projectRoot, m.goal, m.status, m.reviewCycles, m.createdAt, m.updatedAt, JSON.stringify(m.tasks))
     );
+    getPostgresShadowStore()?.mirrorMission(this.tenantId, m);
   }
 
   loadMissions(limit = 200): Mission[] {
@@ -167,6 +171,7 @@ export class LocalStore {
           e.source ?? null
         )
     );
+    getPostgresShadowStore()?.mirrorUsageEvent(this.tenantId, e);
   }
 
   /** Count of model requests since `ts` — the basis for monthly quotas. */
@@ -237,6 +242,7 @@ export class LocalStore {
         .prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
         .run(key, value)
     );
+    getPostgresShadowStore()?.mirrorSetting(this.tenantId, key, value);
   }
 
   /** Per-project explicit tool permission overrides (the user's last word). */
@@ -264,10 +270,12 @@ export class LocalStore {
         .prepare(`INSERT INTO models (id, config_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`)
         .run(config.id, JSON.stringify(config))
     );
+    getPostgresShadowStore()?.mirrorModel(this.tenantId, config);
   }
 
   deleteModel(id: string): void {
     this.guard("deleteModel", () => this.db.prepare(`DELETE FROM models WHERE id = ?`).run(id));
+    getPostgresShadowStore()?.deleteModel(this.tenantId, id);
   }
 
   loadModels(): ModelConfig[] {
