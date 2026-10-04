@@ -28,6 +28,7 @@ test(
         await Promise.all([
           sql.query("DELETE FROM orvyn_missions WHERE tenant_id=$1", [id]),
           sql.query("DELETE FROM orvyn_usage_events WHERE tenant_id=$1", [id]),
+          sql.query("DELETE FROM orvyn_usage_quota_monthly WHERE tenant_id=$1", [id]),
           sql.query("DELETE FROM orvyn_settings WHERE tenant_id=$1", [id]),
           sql.query("DELETE FROM orvyn_models WHERE tenant_id=$1", [id]),
         ]);
@@ -138,6 +139,80 @@ test(
 
       await fresh.deleteModel(model.id);
       assert.equal((await fresh.loadModels()).length, 0);
+    } finally {
+      await sql.end();
+    }
+  }
+);
+
+
+test(
+  "real Postgres primary store atomically enforces monthly request quota across concurrent workers",
+  { skip: !url },
+  async () => {
+    const tenantId = "tenant-quota-concurrency";
+    const store = new PostgresTenantStore(tenantId, url!);
+    const sql = new Pool({ connectionString: url! });
+    const monthStart = Date.UTC(2026, 9, 1);
+
+    try {
+      await store.initialize();
+      await Promise.all([
+        sql.query("DELETE FROM orvyn_usage_events WHERE tenant_id=$1", [tenantId]),
+        sql.query("DELETE FROM orvyn_usage_quota_monthly WHERE tenant_id=$1", [tenantId]),
+      ]);
+
+      const attempts = await Promise.all(
+        Array.from({ length: 12 }, () =>
+          store.reserveUsageRequest(monthStart, 3)
+        )
+      );
+
+      const allowed = attempts.filter((result) => result.allowed);
+      const denied = attempts.filter((result) => !result.allowed);
+
+      assert.equal(allowed.length, 3);
+      assert.equal(denied.length, 9);
+      assert.equal(await store.getUsageRequestCount(monthStart), 3);
+      assert.ok(denied.every((result) => result.used >= 3));
+    } finally {
+      await sql.end();
+    }
+  }
+);
+
+test(
+  "real Postgres quota ledger seeds from backfilled usage and never resets the month",
+  { skip: !url },
+  async () => {
+    const tenantId = "tenant-quota-backfill";
+    const store = new PostgresTenantStore(tenantId, url!);
+    const sql = new Pool({ connectionString: url! });
+    const monthStart = Date.UTC(2026, 9, 1);
+
+    try {
+      await store.initialize();
+      await Promise.all([
+        sql.query("DELETE FROM orvyn_usage_events WHERE tenant_id=$1", [tenantId]),
+        sql.query("DELETE FROM orvyn_usage_quota_monthly WHERE tenant_id=$1", [tenantId]),
+      ]);
+
+      for (let i = 0; i < 2; i++) {
+        await store.saveUsageEvent({
+          id: `use-preexisting-${i}`,
+          timestamp: monthStart + i + 1,
+          modelId: "existing-model",
+          provider: "test",
+          method: "generate",
+          durationMs: 1,
+          ok: true,
+        });
+      }
+
+      const denied = await store.reserveUsageRequest(monthStart, 2);
+      assert.equal(denied.allowed, false);
+      assert.equal(denied.used, 2);
+      assert.equal(await store.getUsageRequestCount(monthStart), 2);
     } finally {
       await sql.end();
     }
