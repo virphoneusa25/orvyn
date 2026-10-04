@@ -1,30 +1,56 @@
 # infrastructure/litellm/config.yaml
 #
 # LiteLLM is the operational provider/deployment layer beneath ORVYN's
-# ModelGateway. ORION still chooses semantic lanes/roles; this proxy handles
-# upstream provider connectivity, retries, cooldowns, and later KXM fallbacks.
+# ModelGateway. ORION still chooses semantic lanes/roles; this proxy chooses
+# the actual upstream deployment/provider within each lane.
 #
-# Caching is intentionally disabled for agent trajectories. Redis is still
-# configured for LiteLLM coordination/cooldowns and future opt-in caching.
+# Direct providers remain registered inside ORVYN as rollback options.
+# Agent response caching stays disabled to avoid replaying stale decisions
+# after workspace/tool state changes.
 
 model_list:
+  # FAST TIER — favor the lowest-cost/lowest-latency deployment.
   - model_name: fast-tier
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
+      model: openai/gpt-6-luna
+      api_key: os.environ/MODEL_API_KEY
+      weight: 4
+
+  - model_name: fast-tier
+    litellm_params:
+      model: deepseek/deepseek-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      weight: 1
+
+  # CODE TIER — favor DeepSeek's current agent/coding Flash model.
+  - model_name: code-tier
+    litellm_params:
+      model: deepseek/deepseek-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      weight: 4
 
   - model_name: code-tier
     litellm_params:
-      model: deepseek/deepseek-chat
-      api_key: os.environ/DEEPSEEK_API_KEY
+      model: openai/gpt-6-luna
+      api_key: os.environ/MODEL_API_KEY
+      weight: 1
+
+  # PREMIUM TIER — stronger reasoning/planning, with provider diversity.
+  - model_name: premium-tier
+    litellm_params:
+      model: openai/gpt-6-sol
+      api_key: os.environ/MODEL_API_KEY
+      weight: 3
 
   - model_name: premium-tier
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+      weight: 1
 
 router_settings:
   routing_strategy: simple-shuffle
+  enable_weighted_failover: true
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   redis_password: os.environ/REDIS_PASSWORD
