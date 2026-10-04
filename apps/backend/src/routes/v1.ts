@@ -574,6 +574,28 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   t.usage.agentRuns++;
 
   if (distributedProjectRootEligible(String(req.body.projectRoot ?? ""))) {
+    const coordinator = getDistributedMissionCoordinator();
+
+    // Fail fast when the execution plane has no live consumers. Falling back
+    // to API-host execution for a shared cloud workspace would defeat the
+    // sandbox/worker separation this mode exists to enforce.
+    try {
+      const health = await coordinator.health();
+      if (health.activeWorkers < 1) {
+        return res.status(503).json({
+          error: "Distributed mission workers are unavailable. No cloud mission was started.",
+          distributed: true,
+          workers: 0,
+          queue: health.queue,
+        });
+      }
+    } catch (err: any) {
+      return res.status(503).json({
+        error: `Distributed mission runtime is unavailable: ${err.message}`,
+        distributed: true,
+      });
+    }
+
     const runId = randomUUID();
     t.runStore.create(runId, req.body.projectRoot, "queued");
     t.runStore.emit(runId, "run.queued", {
@@ -582,7 +604,6 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
     });
 
     try {
-      const coordinator = getDistributedMissionCoordinator();
       await coordinator.enqueue(
         {
           runId,
