@@ -69,6 +69,66 @@ jobs:
           ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
         run: node --test apps/backend/dist/queue/*.test.js
 
+      - name: PostgreSQL backup and restore drill
+        shell: bash
+        env:
+          PGPASSWORD: test-postgres-password
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+
+          docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$PWD:/work" \
+            postgres:16-alpine \
+            pg_dump -h 127.0.0.1 -U orvyn -d orvyn_test -Fc \
+            -f /work/.tmp/orvyn_test.dump
+
+          docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            postgres:16-alpine \
+            psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 \
+            -c "DROP DATABASE IF EXISTS orvyn_restore" \
+            -c "CREATE DATABASE orvyn_restore"
+
+          docker run --rm --network host \
+            -e PGPASSWORD="$PGPASSWORD" \
+            -v "$PWD:/work" \
+            postgres:16-alpine \
+            pg_restore -h 127.0.0.1 -U orvyn -d orvyn_restore \
+            --no-owner --no-privileges /work/.tmp/orvyn_test.dump
+
+          query_count() {
+            local db="$1"
+            local table="$2"
+            docker run --rm --network host \
+              -e PGPASSWORD="$PGPASSWORD" \
+              postgres:16-alpine \
+              psql -h 127.0.0.1 -U orvyn -d "$db" -Atc \
+              "SELECT COUNT(*) FROM $table"
+          }
+
+          tables=(
+            schema_migrations
+            tenants
+            missions
+            usage_events
+            tenant_settings
+            tenant_models
+            users
+            sessions
+            legal_acceptances
+          )
+
+          for table in "${tables[@]}"; do
+            source_count="$(query_count orvyn_test "$table")"
+            restore_count="$(query_count orvyn_restore "$table")"
+            echo "$table source=$source_count restore=$restore_count"
+            test "$source_count" = "$restore_count"
+          done
+
+          rm -f .tmp/orvyn_test.dump
+
       - name: Existing test suite
         env:
           ORVYN_REDIS_TEST_URL: redis://127.0.0.1:6379/15
