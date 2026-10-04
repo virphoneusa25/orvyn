@@ -1,59 +1,38 @@
 # infrastructure/litellm/config.yaml
 #
 # LiteLLM is the operational provider/deployment layer beneath ORVYN's
-# ModelGateway. ORION still chooses semantic lanes/roles; this proxy chooses
-# the actual upstream deployment/provider within each lane.
+# ModelGateway. This file intentionally mirrors the model defaults already
+# present in ModelService; enabling LiteLLM must not silently change the
+# product's model strategy.
 #
-# Direct providers remain registered inside ORVYN as rollback options.
-# Agent response caching stays disabled to avoid replaying stale decisions
-# after workspace/tool state changes.
+# ORVYN_LITELLM_ENABLED defaults to 0. Direct providers remain registered for
+# rollback/manual routing even after the proxy path is enabled.
 
 model_list:
-  # FAST TIER — favor the lowest-cost/lowest-latency deployment.
+  # Mirrors OPENAI_MODEL default in ModelService.
   - model_name: fast-tier
     litellm_params:
-      model: openai/gpt-6-luna
+      model: openai/gpt-4o-mini
       api_key: os.environ/MODEL_API_KEY
-      weight: 4
 
-  - model_name: fast-tier
-    litellm_params:
-      model: deepseek/deepseek-flash
-      api_key: os.environ/DEEPSEEK_API_KEY
-      weight: 1
-
-  # CODE TIER — favor DeepSeek's current agent/coding Flash model.
+  # Mirrors DEEPSEEK_CODE_MODEL default in ModelService.
   - model_name: code-tier
     litellm_params:
-      model: deepseek/deepseek-flash
+      model: deepseek/deepseek-v4-flash
       api_key: os.environ/DEEPSEEK_API_KEY
-      weight: 4
 
-  - model_name: code-tier
-    litellm_params:
-      model: openai/gpt-6-luna
-      api_key: os.environ/MODEL_API_KEY
-      weight: 1
-
-  # PREMIUM TIER — stronger reasoning/planning, with provider diversity.
+  # Mirrors OPENAI_CODE_MODEL/default planner path in ModelService.
   - model_name: premium-tier
     litellm_params:
-      model: openai/gpt-6-sol
+      model: openai/gpt-4o
       api_key: os.environ/MODEL_API_KEY
-      weight: 3
-
-  - model_name: premium-tier
-    litellm_params:
-      model: deepseek/deepseek-v4-pro
-      api_key: os.environ/DEEPSEEK_API_KEY
-      weight: 1
 
 router_settings:
   routing_strategy: simple-shuffle
-  enable_weighted_failover: true
   redis_host: os.environ/REDIS_HOST
   redis_port: os.environ/REDIS_PORT
   redis_password: os.environ/REDIS_PASSWORD
 
 litellm_settings:
+  # Agent trajectories are stateful; exact/semantic response caching stays off.
   cache: false
