@@ -19,11 +19,11 @@ CREATE TABLE IF NOT EXISTS orvyn_storage.migrations (
   version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS orvyn_storage.missions (
-  tenant_id TEXT NOT NULL, id TEXT NOT NULL, payload JSONB NOT NULL,
+  tenant_id TEXT NOT NULL, id TEXT NOT NULL, payload JSON NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
 CREATE TABLE IF NOT EXISTS orvyn_storage.usage_events (
-  tenant_id TEXT NOT NULL, id TEXT NOT NULL, payload JSONB NOT NULL,
+  tenant_id TEXT NOT NULL, id TEXT NOT NULL, payload JSON NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
 CREATE TABLE IF NOT EXISTS orvyn_storage.settings (
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS orvyn_storage.settings (
   PRIMARY KEY (tenant_id, key)
 );
 CREATE TABLE IF NOT EXISTS orvyn_storage.models (
-  tenant_id TEXT NOT NULL, id TEXT NOT NULL, config JSONB NOT NULL,
+  tenant_id TEXT NOT NULL, id TEXT NOT NULL, config JSON NOT NULL,
   PRIMARY KEY (tenant_id, id)
 );
 INSERT INTO orvyn_storage.migrations(version) VALUES (1) ON CONFLICT DO NOTHING;
@@ -78,6 +78,15 @@ export class TenantPostgresMirror {
           await client.query("BEGIN");
           await client.query("SELECT pg_advisory_xact_lock(hashtextextended('orvyn-tenant-mirror-migration', 0))");
           await client.query(SCHEMA);
+          // JSON preserves escaped NULs in real mission/tool output. JSONB
+          // rejects those strings (22P05), even though SQLite/JSON accept them.
+          const version = await client.query("SELECT EXISTS(SELECT 1 FROM orvyn_storage.migrations WHERE version=2) AS applied");
+          if (!version.rows[0].applied) {
+            await client.query("ALTER TABLE orvyn_storage.missions ALTER COLUMN payload TYPE JSON USING payload::json");
+            await client.query("ALTER TABLE orvyn_storage.usage_events ALTER COLUMN payload TYPE JSON USING payload::json");
+            await client.query("ALTER TABLE orvyn_storage.models ALTER COLUMN config TYPE JSON USING config::json");
+            await client.query("INSERT INTO orvyn_storage.migrations(version) VALUES (2)");
+          }
           await client.query("COMMIT");
         } catch (error) {
           await client.query("ROLLBACK").catch(() => undefined);
@@ -109,7 +118,7 @@ export class TenantPostgresMirror {
     if (!this.isEnabled()) return;
     const payload = JSON.stringify(mission);
     this.enqueue(tenantId, async client => {
-      await client.query(`INSERT INTO orvyn_storage.missions(tenant_id,id,payload) VALUES ($1,$2,$3::jsonb)
+      await client.query(`INSERT INTO orvyn_storage.missions(tenant_id,id,payload) VALUES ($1,$2,$3::json)
         ON CONFLICT(tenant_id,id) DO UPDATE SET payload=EXCLUDED.payload`, [tenantId, mission.id, payload]);
     });
   }
@@ -120,7 +129,7 @@ export class TenantPostgresMirror {
     // image counts, cached tokens and estimation markers. Never invent values.
     const payload = JSON.stringify(event);
     this.enqueue(tenantId, async client => {
-      await client.query(`INSERT INTO orvyn_storage.usage_events(tenant_id,id,payload) VALUES ($1,$2,$3::jsonb)
+      await client.query(`INSERT INTO orvyn_storage.usage_events(tenant_id,id,payload) VALUES ($1,$2,$3::json)
         ON CONFLICT(tenant_id,id) DO NOTHING`, [tenantId, event.id, payload]);
     });
   }
@@ -146,7 +155,7 @@ export class TenantPostgresMirror {
     try { payload = JSON.stringify(sealModelConfig(config, tenantId)); }
     catch { this.failures.add(tenantId); return; }
     this.enqueue(tenantId, async client => {
-      await client.query(`INSERT INTO orvyn_storage.models(tenant_id,id,config) VALUES ($1,$2,$3::jsonb)
+      await client.query(`INSERT INTO orvyn_storage.models(tenant_id,id,config) VALUES ($1,$2,$3::json)
         ON CONFLICT(tenant_id,id) DO UPDATE SET config=EXCLUDED.config`, [tenantId, config.id, payload]);
     });
   }
@@ -176,13 +185,13 @@ export class TenantPostgresMirror {
           ["models", captured.models.map(model => model.id), "id"],
         ] as const) await client.query(`DELETE FROM orvyn_storage.${table} WHERE tenant_id=$1 AND NOT (${key}=ANY($2::text[]))`, [tenantId, ids]);
         for (const mission of captured.missions) await client.query(`INSERT INTO orvyn_storage.missions(tenant_id,id,payload)
-          VALUES ($1,$2,$3::jsonb) ON CONFLICT(tenant_id,id) DO UPDATE SET payload=EXCLUDED.payload`, [tenantId, mission.id, JSON.stringify(mission)]);
+          VALUES ($1,$2,$3::json) ON CONFLICT(tenant_id,id) DO UPDATE SET payload=EXCLUDED.payload`, [tenantId, mission.id, JSON.stringify(mission)]);
         for (const event of captured.usageEvents) await client.query(`INSERT INTO orvyn_storage.usage_events(tenant_id,id,payload)
-          VALUES ($1,$2,$3::jsonb) ON CONFLICT(tenant_id,id) DO NOTHING`, [tenantId, event.id, JSON.stringify(event)]);
+          VALUES ($1,$2,$3::json) ON CONFLICT(tenant_id,id) DO NOTHING`, [tenantId, event.id, JSON.stringify(event)]);
         for (const setting of captured.settings) await client.query(`INSERT INTO orvyn_storage.settings(tenant_id,key,value)
           VALUES ($1,$2,$3) ON CONFLICT(tenant_id,key) DO UPDATE SET value=EXCLUDED.value`, [tenantId, setting.key, setting.value]);
         for (const config of models) await client.query(`INSERT INTO orvyn_storage.models(tenant_id,id,config)
-          VALUES ($1,$2,$3::jsonb) ON CONFLICT(tenant_id,id) DO UPDATE SET config=EXCLUDED.config`, [tenantId, config.id, config.json]);
+          VALUES ($1,$2,$3::json) ON CONFLICT(tenant_id,id) DO UPDATE SET config=EXCLUDED.config`, [tenantId, config.id, config.json]);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(() => undefined); throw error;

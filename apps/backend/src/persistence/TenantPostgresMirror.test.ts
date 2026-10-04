@@ -17,8 +17,8 @@ const integration = process.env.ORVYN_POSTGRES_MIRROR === "1" && Boolean(process
 const configured = process.env.ORVYN_POSTGRES_MIRROR;
 const restoreFlag = () => { if (configured === undefined) delete process.env.ORVYN_POSTGRES_MIRROR; else process.env.ORVYN_POSTGRES_MIRROR = configured; };
 const url = () => process.env.DATABASE_URL || process.env.ORVYN_PG_URL;
-const mission = (): Mission => ({ id: "shared", runId: "run", projectRoot: "/projects/test", goal: "mirror", status: "RUNNING", tasks: [], reviewCycles: 0, createdAt: Date.now(), updatedAt: Date.now() });
-const config = (): ModelConfig => ({ id: "my:test", name: "Customer model", provider: "openai-compatible", endpoint: "https://example.invalid", apiKey: "customer-key", contextWindow: 8192, maxOutputTokens: 1024, defaultTemperature: 0.2, defaultTopP: 1, streaming: true, capabilities: { chat:true, code:true, agent:true, tools:true, vision:false, embeddings:false, completion:true, image:false } });
+const mission = (): Mission => ({ id: "shared", runId: "run", projectRoot: "/projects/test", goal: "mirror\u0000historical tool output", status: "RUNNING", tasks: [], reviewCycles: 0, createdAt: Date.now(), updatedAt: Date.now() });
+const config = (): ModelConfig => ({ id: "my:test", name: "Customer model\u0000name", provider: "openai-compatible", endpoint: "https://example.invalid", apiKey: "customer-key", contextWindow: 8192, maxOutputTokens: 1024, defaultTemperature: 0.2, defaultTopP: 1, streaming: true, capabilities: { chat:true, code:true, agent:true, tools:true, vision:false, embeddings:false, completion:true, image:false } });
 const event = (): UsageEvent => ({ id: "shared", timestamp: Date.now(), modelId: "test", provider: "test", method: "embed", durationMs: 1, ok: true, promptTokens: 12, completionTokens: 0, cachedTokens: 4, providerCostUsd: 0.003, estimated: false, imageCount: 1, imageRate: { usdPerImage: 0.003, premium: true } as UsageEvent["imageRate"] });
 
 after(async () => { await tenantPostgresMirror.close(); restoreFlag(); });
@@ -50,6 +50,18 @@ test("mirror-off mode preserves tenant memory, artifacts, billing outbox and mod
 
 test("real Postgres: concurrent mirror migrations coexist with production identity schema", { skip:!integration }, async () => {
   await migratePostgresIdentity(url());
+  // Reproduce the deployed v1 JSONB schema before concurrent upgrade.
+  const legacyPool = new Pool({ connectionString:url() });
+  const legacyMission = { ...mission(), goal:"Existing v1 mission" };
+  try {
+    await legacyPool.query(`CREATE SCHEMA IF NOT EXISTS orvyn_storage;
+      CREATE TABLE orvyn_storage.migrations(version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());
+      INSERT INTO orvyn_storage.migrations(version) VALUES (1);
+      CREATE TABLE orvyn_storage.missions(tenant_id TEXT NOT NULL,id TEXT NOT NULL,payload JSONB NOT NULL,PRIMARY KEY(tenant_id,id));
+      CREATE TABLE orvyn_storage.usage_events(tenant_id TEXT NOT NULL,id TEXT NOT NULL,payload JSONB NOT NULL,PRIMARY KEY(tenant_id,id));
+      CREATE TABLE orvyn_storage.models(tenant_id TEXT NOT NULL,id TEXT NOT NULL,config JSONB NOT NULL,PRIMARY KEY(tenant_id,id));`);
+    await legacyPool.query("INSERT INTO orvyn_storage.missions VALUES ($1,$2,$3::jsonb)", ["schema-upgrade", legacyMission.id, JSON.stringify(legacyMission)]);
+  } finally { await legacyPool.end(); }
   const a = new TenantPostgresMirror(); const b = new TenantPostgresMirror();
   try {
     await Promise.all([a.init(), b.init()]);
@@ -57,6 +69,11 @@ test("real Postgres: concurrent mirror migrations coexist with production identi
     try {
       const result = await pool.query("SELECT to_regclass('public.identity_organizations') AS identity, to_regclass('orvyn_storage.missions') AS missions");
       assert.ok(result.rows[0].identity); assert.ok(result.rows[0].missions);
+      const types = await pool.query("SELECT data_type FROM information_schema.columns WHERE table_schema='orvyn_storage' AND column_name IN ('payload','config') ORDER BY table_name");
+      assert.deepEqual(types.rows.map(row => row.data_type), ["json", "json", "json"]);
+      const preservedMission = await pool.query("SELECT payload FROM orvyn_storage.missions WHERE tenant_id='schema-upgrade'");
+      assert.deepEqual(preservedMission.rows[0].payload, legacyMission);
+      assert.equal((await a.status("schema-upgrade")).migrationVersion, 2);
       const identityId = randomUUID();
       await pool.query("INSERT INTO public.identity_users(id,email,name,created_at) VALUES ($1,$2,$3,$4)",
         [identityId, `${identityId}@example.invalid`, "Existing identity", 1]);
@@ -80,12 +97,15 @@ test("real Postgres: live mirroring retains billing metadata, tenant isolation a
     await tenantPostgresMirror.flush();
     const pool = new Pool({ connectionString:url() });
     try {
+      const copiedMission = await pool.query("SELECT payload FROM orvyn_storage.missions WHERE tenant_id=$1", [tenants[0]]);
+      assert.equal(copiedMission.rows[0].payload.goal, mission().goal);
       const rows = await pool.query("SELECT tenant_id,payload FROM orvyn_storage.usage_events WHERE tenant_id=ANY($1::text[])", [tenants]);
       assert.equal(rows.rows.length, 2);
       assert.deepEqual(rows.rows.find(row => row.tenant_id === tenants[0]).payload, usage);
       const saved = await pool.query("SELECT config FROM orvyn_storage.models WHERE tenant_id=$1", [tenants[0]]);
       assert.equal(saved.rows[0].config.apiKey, undefined);
       assert.match(saved.rows[0].config.apiKeySealed, /^orvyn:v1:/);
+      assert.equal(saved.rows[0].config.name, model.name);
       assert.equal(openModelConfig(saved.rows[0].config, tenants[0]).apiKey, model.apiKey);
       assert.throws(() => openModelConfig(saved.rows[0].config, tenants[1]), /unsealed/);
       // Reopening/backfill cannot replace rich provider settlement metadata
