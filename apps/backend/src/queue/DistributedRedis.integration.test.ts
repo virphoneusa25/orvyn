@@ -5,6 +5,7 @@ import IORedis from "ioredis";
 import { TenantMissionSemaphore } from "./TenantMissionSemaphore";
 import { RedisMissionQueue } from "./RedisMissionQueue";
 import { RedisMissionStateStore } from "./RedisMissionStateStore";
+import { WorkerHeartbeatRegistry } from "./WorkerHeartbeat";
 
 const url = process.env.ORVYN_REDIS_TEST_URL;
 
@@ -101,6 +102,32 @@ test(
       assert.equal(completed?.completedAt, completedAt);
       assert.equal(completed?.tenantId, "tenant-state");
       assert.equal(completed?.projectRoot, "/projects/state");
+    } finally {
+      await redis.quit();
+    }
+  }
+);
+
+
+test(
+  "real Redis: worker heartbeat count drops after graceful removal and crash expiry",
+  { skip: !url },
+  async () => {
+    const redis = new IORedis(url!, { maxRetriesPerRequest: 1 });
+    try {
+      await redis.flushdb();
+      const registry = new WorkerHeartbeatRegistry(redis, 80);
+
+      await registry.beat("worker-a");
+      await registry.beat("worker-b");
+      assert.equal(await registry.activeCount(), 2);
+
+      await registry.remove("worker-a");
+      assert.equal(await registry.activeCount(), 1);
+
+      // Simulate worker-b disappearing without a graceful remove().
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      assert.equal(await registry.activeCount(), 0);
     } finally {
       await redis.quit();
     }
