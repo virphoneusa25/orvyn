@@ -39,3 +39,9 @@ No Redis role or LiteLLM activation is required for this mirror canary. Those ar
 For this mirror-only integration, set `ORVYN_POSTGRES_MIRROR=0` and recreate the backend through the established overlay/deploy path. SQLite, the production identity/credit stores and named volumes remain authoritative and unchanged. Preserve the new schema for diagnosis; do not drop it or delete customer volumes.
 
 A full production failover drill and PostgreSQL-native ledger/identity consistency remain rollout requirements for future primary modes.
+
+## Restore-drill repair
+
+The production backup service succeeded on October 4, but the scheduled restore drill failed. Its journal verified all 25 SQLite databases, then the throwaway backend disappeared before health checks. Inspection found that the drill did not supply the vault environment required by the current production backend, and automatic container removal masked its exit. This identifies a concrete boot defect; the removed container's original exception is unavailable.
+
+The candidate drill loads the matching backed-up environment, including its original vault key, with networking disabled and PostgreSQL storage flags off. It mounts only scratch data, retains the container until cleanup, detects early exits, records failures, and rejects checksum errors or missing environment archives. CI boots the actual production image on a synthetic restored account and verifies unhealthy input fails closed. No live restore or server update has been performed. The server's scheduled drill must pass after the reviewed repair is deployed before mirror activation.

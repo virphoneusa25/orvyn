@@ -4,6 +4,9 @@ on:
     paths:
       - "apps/backend/**"
       - "infrastructure/ovh/compose.control-plane.yml"
+      - "infrastructure/ovh/restore-drill.sh"
+      - "infrastructure/ovh/backup-data.mjs"
+      - "scripts/acceptance/restore-drill-ci.sh"
       - ".env.example"
       - "package.json"
       - ".github/workflows/postgres-production-mirror.yml"
@@ -82,3 +85,8 @@ jobs:
         run: >-
           docker run --rm --entrypoint node orvyn-production-mirror:${{ github.sha }}
           -e "const m=require('./dist/persistence/TenantPostgresMirror.js'); m.validateTenantMirrorMode({}); console.log('Compiled mirror module loads with flags off')"
+      - name: Restore SQLite backup and boot isolated production backend
+        env:
+          ORVYN_RESTORE_IMAGE: orvyn-production-mirror:${{ github.sha }}
+          ORVYN_RESTORE_RECORD_STATUS: "0"
+        run: bash scripts/acceptance/restore-drill-ci.sh
