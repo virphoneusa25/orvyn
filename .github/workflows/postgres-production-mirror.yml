@@ -76,3 +76,9 @@ jobs:
         run: |
           cp .env.example .env
           docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml config --quiet
+      - name: Build the actual production backend image
+        run: docker build -f apps/backend/Dockerfile -t orvyn-production-mirror:${{ github.sha }} .
+      - name: Verify compiled mirror integration in the runtime image
+        run: >-
+          docker run --rm --entrypoint node orvyn-production-mirror:${{ github.sha }}
+          -e "const m=require('./dist/persistence/TenantPostgresMirror.js'); m.validateTenantMirrorMode({}); console.log('Compiled mirror module loads with flags off')"
