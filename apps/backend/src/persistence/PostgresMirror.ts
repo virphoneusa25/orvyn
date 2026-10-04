@@ -436,6 +436,75 @@ export class PostgresMirror {
     });
   }
 
+  async loadMissions(tenantId: string): Promise<Mission[]> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      run_id: string;
+      project_root: string;
+      goal: string;
+      status: Mission["status"];
+      review_cycles: number;
+      created_at: string;
+      updated_at: string;
+      tasks_json: Mission["tasks"];
+    }>(
+      `SELECT id, run_id, project_root, goal, status, review_cycles,
+              created_at::text, updated_at::text, tasks_json
+       FROM missions
+       WHERE tenant_id=$1
+       ORDER BY created_at DESC`,
+      [tenantId]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      runId: row.run_id,
+      projectRoot: row.project_root,
+      goal: row.goal,
+      status: row.status,
+      reviewCycles: Number(row.review_cycles),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      tasks: Array.isArray(row.tasks_json) ? row.tasks_json : [],
+    }));
+  }
+
+  async getMission(tenantId: string, missionId: string): Promise<Mission | null> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      id: string;
+      run_id: string;
+      project_root: string;
+      goal: string;
+      status: Mission["status"];
+      review_cycles: number;
+      created_at: string;
+      updated_at: string;
+      tasks_json: Mission["tasks"];
+    }>(
+      `SELECT id, run_id, project_root, goal, status, review_cycles,
+              created_at::text, updated_at::text, tasks_json
+       FROM missions
+       WHERE tenant_id=$1 AND id=$2
+       LIMIT 1`,
+      [tenantId, missionId]
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          runId: row.run_id,
+          projectRoot: row.project_root,
+          goal: row.goal,
+          status: row.status,
+          reviewCycles: Number(row.review_cycles),
+          createdAt: Number(row.created_at),
+          updatedAt: Number(row.updated_at),
+          tasks: Array.isArray(row.tasks_json) ? row.tasks_json : [],
+        }
+      : null;
+  }
+
   async loadTenantSettings(tenantId: string): Promise<Array<{ key: string; value: string }>> {
     const pool = await this.ready();
     const result = await pool.query<{ key: string; value: string }>(
