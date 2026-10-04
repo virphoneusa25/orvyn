@@ -38,7 +38,7 @@ export class RedisRunEventTransport {
     if (blockMs > 0) args.push("BLOCK", blockMs);
     args.push("STREAMS", streamKey(runId), afterId);
 
-    const result = (await this.redis.xread(...(args as [any, ...any[]]))) as
+    const result = (await (this.redis as any).xread(...args)) as
       | Array<[string, Array<[string, string[]]>]>
       | null;
 
