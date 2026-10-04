@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import type { EventBus } from "./EventBus";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantStore } from "../persistence/TenantStore";
 
 export type TaskStatus =
   | "QUEUED"
@@ -78,11 +78,6 @@ export interface TaskEngineOptions {
    * and worker contexts can preserve missions still owned by BullMQ workers.
    */
   shouldFailRecoveredMission?: (mission: Mission) => boolean;
-  /**
-   * API instances in distributed mode refresh SQLite-backed mission snapshots
-   * before reads so Mission Control sees updates written by worker processes.
-   */
-  refreshFromStoreOnRead?: boolean;
 }
 
 export class TaskEngine {
@@ -90,20 +85,35 @@ export class TaskEngine {
 
   constructor(
     private bus: EventBus,
-    private store?: LocalStore,
+    private store?: TenantStore,
     private options: TaskEngineOptions = {}
-  ) {
-    this.loadFromStore(true);
-  }
+  ) {}
 
   private isInFlight(status: MissionStatus): boolean {
     return status === "QUEUED" || status === "PLANNING" || status === "RUNNING" || status === "REVIEW";
   }
 
-  private loadFromStore(warmStart: boolean): void {
+  /**
+   * Must be awaited once after construction. TenantManager owns this lifecycle
+   * so no request can observe a partially hydrated mission map.
+   */
+  async hydrate(): Promise<void> {
+    await this.loadFromStore(true);
+  }
+
+  /**
+   * Refresh persisted state without applying warm-start failure semantics.
+   * API Mission Control calls this before reads in distributed mode so worker
+   * updates become visible across processes.
+   */
+  async refresh(): Promise<void> {
+    await this.loadFromStore(false);
+  }
+
+  private async loadFromStore(warmStart: boolean): Promise<void> {
     if (!this.store) return;
 
-    for (const persisted of this.store.loadMissions()) {
+    for (const persisted of await this.store.loadMissions()) {
       const m: Mission = persisted;
 
       if (
@@ -113,7 +123,7 @@ export class TaskEngine {
       ) {
         m.status = "FAILED";
         m.updatedAt = Date.now();
-        this.store.saveMission(m);
+        await this.store.saveMission(m);
       }
 
       const current = this.missions.get(m.id);
@@ -123,19 +133,11 @@ export class TaskEngine {
     }
   }
 
-  private refreshForRead(): void {
-    if (this.options.refreshFromStoreOnRead) {
-      // Refresh is observational only: never apply warm-start failure logic on
-      // a normal UI read, or the API could kill a worker-owned live mission.
-      this.loadFromStore(false);
-    }
+  private async persist(m: Mission): Promise<void> {
+    await this.store?.saveMission(m);
   }
 
-  private persist(m: Mission): void {
-    this.store?.saveMission(m);
-  }
-
-  createMission(runId: string, projectRoot: string, goal: string): Mission {
+  async createMission(runId: string, projectRoot: string, goal: string): Promise<Mission> {
     const mission: Mission = {
       id: `mission_${randomUUID().slice(0, 8)}`,
       runId,
@@ -148,39 +150,36 @@ export class TaskEngine {
       updatedAt: Date.now(),
     };
     this.missions.set(mission.id, mission);
-    this.persist(mission);
+    await this.persist(mission);
     this.bus.missionCreated(mission);
     return mission;
   }
 
   getMission(id: string): Mission | undefined {
-    this.refreshForRead();
     return this.missions.get(id);
   }
 
   missionForRun(runId: string): Mission | undefined {
-    this.refreshForRead();
     for (const m of this.missions.values()) if (m.runId === runId) return m;
     return undefined;
   }
 
   listMissions(): Mission[] {
-    this.refreshForRead();
     return Array.from(this.missions.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  setMissionStatus(missionId: string, status: MissionStatus): void {
+  async setMissionStatus(missionId: string, status: MissionStatus): Promise<void> {
     const m = this.missions.get(missionId);
     if (!m) return;
     m.status = status;
     m.updatedAt = Date.now();
-    this.persist(m);
+    await this.persist(m);
     if (status === "RUNNING") this.bus.missionStarted(m);
     if (status === "COMPLETED" || status === "FAILED") this.bus.missionCompleted(m);
     if (status === "BLOCKED") this.bus.missionBlocked(m);
   }
 
-  addTask(missionId: string, description: string, agent: AgentRole): Task | undefined {
+  async addTask(missionId: string, description: string, agent: AgentRole): Promise<Task | undefined> {
     const m = this.missions.get(missionId);
     if (!m) return undefined;
     const task: Task = {
@@ -195,13 +194,13 @@ export class TaskEngine {
     };
     m.tasks.push(task);
     m.updatedAt = Date.now();
-    this.persist(m);
+    await this.persist(m);
     this.bus.taskCreated(m, task);
     return task;
   }
 
   /** Moves a task through the state machine; invalid jumps throw so bugs surface. */
-  transition(missionId: string, taskId: string, to: TaskStatus): Task {
+  async transition(missionId: string, taskId: string, to: TaskStatus): Promise<Task> {
     const m = this.missions.get(missionId);
     const task = m?.tasks.find((t) => t.id === taskId);
     if (!m || !task) throw new Error(`Unknown task ${missionId}/${taskId}`);
@@ -213,15 +212,15 @@ export class TaskEngine {
     m.updatedAt = Date.now();
     // Transitions happen right after result/attempt mutations in the runtime,
     // so persisting here also captures those fields.
-    this.persist(m);
+    await this.persist(m);
     return task;
   }
 
-  incrementReviewCycles(missionId: string): number {
+  async incrementReviewCycles(missionId: string): Promise<number> {
     const m = this.missions.get(missionId);
     if (!m) return 0;
     m.reviewCycles++;
-    this.persist(m);
+    await this.persist(m);
     return m.reviewCycles;
   }
 
