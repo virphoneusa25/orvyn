@@ -130,6 +130,13 @@ function primaryReadsEnabled(): boolean {
   );
 }
 
+function primaryWritesEnabled(): boolean {
+  return (
+    process.env.ORVYN_POSTGRES_PRIMARY_WRITES?.trim() === "1" &&
+    enabled()
+  );
+}
+
 function sslConfig(): false | { rejectUnauthorized: boolean } {
   const mode = process.env.ORVYN_POSTGRES_SSL?.trim().toLowerCase();
   if (!mode || mode === "0" || mode === "false" || mode === "disable") return false;
@@ -140,6 +147,7 @@ export class PostgresMirror {
   private pool: Pool | null = null;
   private initPromise: Promise<void> | null = null;
   private writeChain: Promise<void> = Promise.resolve();
+  private writeFailures: Array<{ operation: string; error: unknown }> = [];
   private warned = false;
 
   isEnabled(): boolean {
@@ -148,6 +156,10 @@ export class PostgresMirror {
 
   isPrimaryReadsEnabled(): boolean {
     return primaryReadsEnabled();
+  }
+
+  isPrimaryWritesEnabled(): boolean {
+    return primaryWritesEnabled();
   }
 
   private getPool(): Pool {
@@ -220,12 +232,33 @@ export class PostgresMirror {
     this.writeChain = this.writeChain
       .then(fn)
       .catch((err) => {
+        this.writeFailures.push({ operation, error: err });
         this.report(operation, err);
       });
   }
 
   async flush(): Promise<void> {
     await this.writeChain;
+  }
+
+  /**
+   * Wait for all writes queued by this process and fail if any mirror write
+   * failed. Used only by the staged Postgres-primary mission write path.
+   */
+  async flushStrict(): Promise<void> {
+    await this.writeChain;
+    if (this.writeFailures.length === 0) return;
+
+    const failures = this.writeFailures.splice(0);
+    const first = failures[0];
+    const detail =
+      first?.error instanceof Error
+        ? first.error.message
+        : String(first?.error ?? "unknown PostgreSQL write failure");
+    throw new Error(
+      `PostgreSQL durable write failed during ${first?.operation ?? "unknown operation"}: ${detail}` +
+        (failures.length > 1 ? ` (+${failures.length - 1} additional write failure(s))` : "")
+    );
   }
 
   async health(): Promise<{
