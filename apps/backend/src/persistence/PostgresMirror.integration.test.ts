@@ -516,3 +516,81 @@ test(
     }
   }
 );
+
+
+test(
+  "real Postgres: concurrent multi-node registration is globally unique and transactional",
+  { skip: !enabled },
+  async () => {
+    const savedReads = process.env.ORVYN_POSTGRES_PRIMARY_READS;
+    const savedWrites = process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+    const savedFallback = process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+
+    process.env.ORVYN_POSTGRES_PRIMARY_READS = "1";
+    process.env.ORVYN_POSTGRES_PRIMARY_WRITES = "1";
+    process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = "0";
+
+    const dirA = mkdtempSync(join(tmpdir(), "orvyn-auth-pg-node-a-"));
+    const dirB = mkdtempSync(join(tmpdir(), "orvyn-auth-pg-node-b-"));
+    const dirC = mkdtempSync(join(tmpdir(), "orvyn-auth-pg-node-c-"));
+    const nodeA = new AuthService(dirA);
+    const nodeB = new AuthService(dirB);
+    const nodeC = new AuthService(dirC);
+
+    try {
+      const suffix = Date.now().toString(36);
+      const email = `unique-${suffix}@example.com`;
+      const password = "CorrectHorseBatteryStaple!";
+
+      const results = await Promise.allSettled([
+        nodeA.registerAsync(email, password, "Node A", {
+          accepted: true,
+          version: "2026-10-01",
+        }),
+        nodeB.registerAsync(email, password, "Node B", {
+          accepted: true,
+          version: "2026-10-01",
+        }),
+      ]);
+
+      const fulfilled = results.filter(
+        (result): result is PromiseFulfilledResult<Awaited<ReturnType<AuthService["registerAsync"]>>> =>
+          result.status === "fulfilled"
+      );
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected"
+      );
+
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+      assert.match(
+        String(rejected[0]?.reason?.message ?? rejected[0]?.reason),
+        /already exists/i
+      );
+
+      // A third node with an empty SQLite auth cache authenticates using
+      // PostgreSQL alone, proving registration + session/account state is
+      // globally visible after the winning transaction commits.
+      const login = await nodeC.loginAsync(email, password);
+      assert.equal(login.user.email, email);
+      assert.equal((await nodeC.verifyAsync(login.token))?.id, login.user.id);
+
+      await nodeC.logoutAsync(login.token);
+      assert.equal(await nodeC.verifyAsync(login.token), null);
+    } finally {
+      nodeA.close();
+      nodeB.close();
+      nodeC.close();
+      rmSync(dirA, { recursive: true, force: true });
+      rmSync(dirB, { recursive: true, force: true });
+      rmSync(dirC, { recursive: true, force: true });
+
+      if (savedReads === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_READS;
+      else process.env.ORVYN_POSTGRES_PRIMARY_READS = savedReads;
+      if (savedWrites === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+      else process.env.ORVYN_POSTGRES_PRIMARY_WRITES = savedWrites;
+      if (savedFallback === undefined) delete process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE;
+      else process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE = savedFallback;
+    }
+  }
+);
