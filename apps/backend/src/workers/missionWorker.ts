@@ -17,6 +17,8 @@ import { DistributedRunController } from "../queue/DistributedRunController";
 import { TenantMissionSemaphore } from "../queue/TenantMissionSemaphore";
 import { RedisMissionStateStore } from "../queue/RedisMissionStateStore";
 import { WorkerHeartbeatRegistry } from "../queue/WorkerHeartbeat";
+import { closePostgresTenantPools } from "../persistence/PostgresTenantStore";
+import { closePostgresShadowStore } from "../persistence/PostgresShadowStore";
 
 async function executeMission(payload: MissionJobPayload): Promise<void> {
   // Blocking reads and event publishing use dedicated Redis connections so
@@ -166,6 +168,10 @@ async function main(): Promise<void> {
     await connection.quit();
     await semaphoreRedis.quit();
     await heartbeatRedis.quit();
+    await Promise.allSettled([
+      closePostgresTenantPools(),
+      closePostgresShadowStore(),
+    ]);
   };
   process.once("SIGTERM", () => void shutdown());
   process.once("SIGINT", () => void shutdown());
