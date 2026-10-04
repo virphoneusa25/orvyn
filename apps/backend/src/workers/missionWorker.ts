@@ -14,6 +14,7 @@ import { RedisRunControlTransport } from "../queue/RedisRunControlTransport";
 import { DistributedRunStore } from "../queue/DistributedRunStore";
 import { DistributedRunController } from "../queue/DistributedRunController";
 import { TenantMissionSemaphore } from "../queue/TenantMissionSemaphore";
+import { RedisMissionStateStore } from "../queue/RedisMissionStateStore";
 
 async function executeMission(payload: MissionJobPayload): Promise<void> {
   // Blocking reads and event publishing use dedicated Redis connections so
@@ -23,6 +24,7 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
 
   const eventTransport = new RedisRunEventTransport(eventRedis);
   const controlTransport = new RedisRunControlTransport(controlRedis);
+  const missionState = new RedisMissionStateStore(eventRedis);
   const runStore = new DistributedRunStore(eventTransport);
 
   // A private TenantManager per job prevents horizontally scaled jobs from
@@ -46,6 +48,10 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
   const controlLoop = controls.run();
 
   try {
+    await missionState.setStatus(payload.runId, "running", {
+      workerStartedAt: new Date().toISOString(),
+    });
+
     await tenant.multiAgentRuntime.executeQueuedMission(
       payload.runId,
       payload.projectRoot,
@@ -53,6 +59,19 @@ async function executeMission(payload: MissionJobPayload): Promise<void> {
       payload.rules,
       payload.attachments
     );
+
+    const terminal = runStore.get(payload.runId)?.status ?? "completed";
+    await missionState.setStatus(payload.runId, terminal, {
+      completedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    await missionState
+      .setStatus(payload.runId, "error", {
+        error: err?.message ?? String(err),
+        completedAt: new Date().toISOString(),
+      })
+      .catch(() => undefined);
+    throw err;
   } finally {
     controls.stop();
     await runStore.flush();
