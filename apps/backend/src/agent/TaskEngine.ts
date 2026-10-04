@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import type { EventBus } from "./EventBus";
 import type { LocalStore } from "../persistence/LocalStore";
+import { postgresMirror } from "../persistence/PostgresMirror";
 
 export type TaskStatus =
   | "QUEUED"
@@ -135,6 +136,12 @@ export class TaskEngine {
     this.store?.saveMission(m);
   }
 
+  private async confirmDurableWrite(): Promise<void> {
+    if (postgresMirror.isPrimaryWritesEnabled()) {
+      await postgresMirror.flushStrict();
+    }
+  }
+
   createMission(runId: string, projectRoot: string, goal: string): Mission {
     const mission: Mission = {
       id: `mission_${randomUUID().slice(0, 8)}`,
@@ -150,6 +157,16 @@ export class TaskEngine {
     this.missions.set(mission.id, mission);
     this.persist(mission);
     this.bus.missionCreated(mission);
+    return mission;
+  }
+
+  async createMissionDurable(
+    runId: string,
+    projectRoot: string,
+    goal: string
+  ): Promise<Mission> {
+    const mission = this.createMission(runId, projectRoot, goal);
+    await this.confirmDurableWrite();
     return mission;
   }
 
@@ -180,6 +197,14 @@ export class TaskEngine {
     if (status === "BLOCKED") this.bus.missionBlocked(m);
   }
 
+  async setMissionStatusDurable(
+    missionId: string,
+    status: MissionStatus
+  ): Promise<void> {
+    this.setMissionStatus(missionId, status);
+    await this.confirmDurableWrite();
+  }
+
   addTask(missionId: string, description: string, agent: AgentRole): Task | undefined {
     const m = this.missions.get(missionId);
     if (!m) return undefined;
@@ -200,6 +225,16 @@ export class TaskEngine {
     return task;
   }
 
+  async addTaskDurable(
+    missionId: string,
+    description: string,
+    agent: AgentRole
+  ): Promise<Task | undefined> {
+    const task = this.addTask(missionId, description, agent);
+    await this.confirmDurableWrite();
+    return task;
+  }
+
   /** Moves a task through the state machine; invalid jumps throw so bugs surface. */
   transition(missionId: string, taskId: string, to: TaskStatus): Task {
     const m = this.missions.get(missionId);
@@ -217,12 +252,28 @@ export class TaskEngine {
     return task;
   }
 
+  async transitionDurable(
+    missionId: string,
+    taskId: string,
+    to: TaskStatus
+  ): Promise<Task> {
+    const task = this.transition(missionId, taskId, to);
+    await this.confirmDurableWrite();
+    return task;
+  }
+
   incrementReviewCycles(missionId: string): number {
     const m = this.missions.get(missionId);
     if (!m) return 0;
     m.reviewCycles++;
     this.persist(m);
     return m.reviewCycles;
+  }
+
+  async incrementReviewCyclesDurable(missionId: string): Promise<number> {
+    const cycle = this.incrementReviewCycles(missionId);
+    await this.confirmDurableWrite();
+    return cycle;
   }
 
   /** Snapshot for the UI (Mission Control). */
