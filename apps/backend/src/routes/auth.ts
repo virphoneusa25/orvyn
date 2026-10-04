@@ -45,37 +45,50 @@ authRouter.post("/login", async (req, res) => {
 });
 
 authRouter.post("/logout", async (req, res) => {
-  const token = bearerToken(req);
-  if (token) await authService.logoutAsync(token);
-  res.json({ ok: true });
+  try {
+    const token = bearerToken(req);
+    if (token) await authService.logoutAsync(token);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(503).json({ error: "Authentication storage is unavailable", detail: err.message });
+  }
 });
 
 authRouter.get("/me", async (req, res) => {
-  const token = bearerToken(req);
-  const user = token ? await authService.verifyAsync(token) : null;
-  if (!user) return res.status(401).json({ error: "Not signed in" });
-  res.json({ user, legalAcceptance: await authService.getLegalAcceptanceAsync(user.id) });
+  try {
+    const token = bearerToken(req);
+    const user = token ? await authService.verifyAsync(token) : null;
+    if (!user) return res.status(401).json({ error: "Not signed in" });
+    res.json({ user, legalAcceptance: await authService.getLegalAcceptanceAsync(user.id) });
+  } catch (err: any) {
+    res.status(503).json({ error: "Authentication storage is unavailable", detail: err.message });
+  }
 });
 
 authRouter.get("/legal", async (req, res) => {
-  const token = bearerToken(req);
-  const user = token ? await authService.verifyAsync(token) : null;
-  res.json({
-    version: LEGAL_VERSION,
-    requiredDocuments: REQUIRED_LEGAL_DOCUMENTS,
-    acceptance: user ? await authService.getLegalAcceptanceAsync(user.id) : null,
-  });
+  try {
+    const token = bearerToken(req);
+    const user = token ? await authService.verifyAsync(token) : null;
+    res.json({
+      version: LEGAL_VERSION,
+      requiredDocuments: REQUIRED_LEGAL_DOCUMENTS,
+      acceptance: user ? await authService.getLegalAcceptanceAsync(user.id) : null,
+    });
+  } catch (err: any) {
+    res.status(503).json({ error: "Authentication storage is unavailable", detail: err.message });
+  }
 });
 
 authRouter.post("/legal/accept", async (req, res) => {
-  const token = bearerToken(req);
-  const user = token ? await authService.verifyAsync(token) : null;
-  if (!user) return res.status(401).json({ error: "Not signed in" });
   try {
+    const token = bearerToken(req);
+    const user = token ? await authService.verifyAsync(token) : null;
+    if (!user) return res.status(401).json({ error: "Not signed in" });
     const version = String(req.body.version ?? "");
     const acceptance = await authService.recordLegalAcceptanceAsync(user.id, version);
     res.json({ acceptance });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    const storageFailure = /postgres|database|connect|timeout|ECONN/i.test(String(err?.message ?? ""));
+    res.status(storageFailure ? 503 : 400).json({ error: err.message });
   }
 });
