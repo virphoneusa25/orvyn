@@ -214,3 +214,55 @@ The PostgreSQL cutover is not considered ready if backup/restore parity fails.
 Production should use the same principle with encrypted off-host backups,
 retention policies, and a scheduled restore drill. A backup that has never been
 restored successfully should not be treated as a recovery plan.
+
+
+## Tenant model credential encryption
+
+Cloud/PostgreSQL persistence requires a stable 32-byte secret:
+
+```env
+ORVYN_MODEL_SECRET_KEY=<64 hex chars or base64-encoded 32 bytes>
+```
+
+Recommended generation:
+
+```bash
+openssl rand -hex 32
+```
+
+When configured:
+
+- tenant-added model API keys are encrypted with AES-256-GCM before being
+  written to PostgreSQL
+- the same protection is applied to the node-local SQLite compatibility cache
+- each stored value uses a fresh random 12-byte IV and authenticated GCM tag
+- runtime loaders decrypt only in memory
+- existing plaintext migration rows remain readable so they can be rewritten
+  during normal backfill/save operations
+
+The key must be identical across API and worker instances and should be stored
+only in the deployment secret manager. Losing it makes encrypted tenant model
+credentials unrecoverable.
+
+## Transactional account writes
+
+When both staged primary flags are enabled:
+
+```env
+ORVYN_POSTGRES_PRIMARY_READS=1
+ORVYN_POSTGRES_PRIMARY_WRITES=1
+```
+
+new account registration is committed in one PostgreSQL transaction containing:
+
+- user
+- legal acceptance
+- initial session
+
+PostgreSQL therefore becomes the global uniqueness boundary for account email
+addresses across multiple API nodes.
+
+Login session creation, logout, and legal acceptance writes are also
+PostgreSQL-acknowledged before the local SQLite cache is updated.
+
+`PRIMARY_WRITES` cannot activate unless `PRIMARY_READS` is also enabled.
