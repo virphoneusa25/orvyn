@@ -49,7 +49,7 @@ test("mirror-off mode preserves tenant memory, artifacts, billing outbox and mod
 });
 
 test("real Postgres: failed identity migration rolls back schema and can be retried", { skip:!integration }, async () => {
-  const schema = `identity_retry_${randomUUID().replaceAll("-", "")}`;
+  const schema = `identity_retry_${randomUUID().replace(/-/g, "")}`;
   const scopedUrl = new URL(url()!);
   scopedUrl.searchParams.set("options", `-c search_path=${schema}`);
   const pool = new Pool({ connectionString:url() });
