@@ -1,0 +1,78 @@
+name: Production-compatible PostgreSQL mirror
+on:
+  pull_request:
+    paths:
+      - "apps/backend/**"
+      - "infrastructure/ovh/compose.control-plane.yml"
+      - ".env.example"
+      - "package.json"
+      - ".github/workflows/postgres-production-mirror.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: orvyn
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: production_compatibility_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orvyn -d production_compatibility_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - name: Install existing production dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build production workspaces
+        run: npm run build
+      - name: Existing production regression suite with mirror off
+        run: npm test
+      - name: Existing worker sandbox regression tests
+        run: node --test apps/worker/dist/sandbox/*.test.js
+      - name: Exact billing and Stripe regression gate
+        run: node scripts/acceptance/billing-e2e.mjs
+      - name: Compatible mirror, identity coexistence, vault and outage tests
+        env:
+          ORVYN_POSTGRES_MIRROR: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
+        run: node --test --test-concurrency=1 apps/backend/dist/persistence/TenantPostgresMirror.test.js
+      - name: Backup and restore tenant mirror alongside identity schema
+        env:
+          PGPASSWORD: test-password
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          pgclient() { docker run --rm --network host -e PGPASSWORD -v "$PWD/.tmp:/backup" postgres:16-alpine "$@"; }
+          pgclient pg_dump -h 127.0.0.1 -U orvyn -d production_compatibility_test -Fc -f /backup/mirror.dump
+          pgclient psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mirror_restore'
+          pgclient pg_restore -h 127.0.0.1 -U orvyn -d mirror_restore --no-owner --no-privileges /backup/mirror.dump
+          tables=(orvyn_storage.migrations orvyn_storage.missions orvyn_storage.usage_events orvyn_storage.settings orvyn_storage.models public.identity_migrations public.identity_users public.identity_organizations public.identity_organization_members public.identity_sessions public.identity_projects public.identity_chats)
+          for table in "${tables[@]}"; do
+            query="SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM $table t"
+            original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
+            restored=$(pgclient psql -h 127.0.0.1 -U orvyn -d mirror_restore -Atc "$query")
+            test "$original" = "$restored"
+            printf '%s restored content matches\n' "$table"
+          done
+      - name: Compose validation with existing production overlays
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml -f infrastructure/ovh/compose.control-plane.yml -f infrastructure/ovh/compose.worker.yml config --quiet

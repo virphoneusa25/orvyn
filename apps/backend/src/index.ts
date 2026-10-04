@@ -34,6 +34,7 @@ import { registerWorkspaceFreeToolsFor } from "./ai/registerProjectTools";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
 import { loadVaultKey } from "./secrets/vault";
+import { validateTenantMirrorMode } from "./persistence/TenantPostgresMirror";
 import { githubToken } from "./integrations/githubConnection";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
@@ -500,6 +501,7 @@ server.on("close", () => clearInterval(heartbeat));
 
 try {
   loadVaultKey();
+  validateTenantMirrorMode();
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);

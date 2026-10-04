@@ -23,6 +23,7 @@ import * as os from "os";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import { tenantPostgresMirror, type TenantMirrorSnapshot } from "./TenantPostgresMirror";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS missions (
@@ -196,7 +197,7 @@ export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
 
-  constructor(tenantId: string, dataDir: string = defaultDataDir()) {
+  constructor(public readonly tenantId: string, dataDir: string = defaultDataDir()) {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, `${tenantId}.db`));
     this.db.exec("PRAGMA journal_mode = WAL;");
@@ -205,6 +206,10 @@ export class LocalStore {
     this.db.exec("CREATE TABLE IF NOT EXISTS billing_outbox (id TEXT PRIMARY KEY, event_json TEXT NOT NULL)");
     this.migrateArtifacts();
     this.migrateLearning();
+    if (tenantPostgresMirror.isEnabled()) {
+      try { tenantPostgresMirror.backfill(this.tenantId, this.tenantMirrorSnapshot()); }
+      catch { tenantPostgresMirror.noteSnapshotFailure(this.tenantId); }
+    }
   }
 
   private migrateArtifacts(): void {
@@ -245,7 +250,7 @@ export class LocalStore {
   // ---------- missions ----------
 
   saveMission(m: Mission): void {
-    this.guard("saveMission", () =>
+    const saved = this.guard("saveMission", () =>
       this.db
         .prepare(
           `INSERT INTO missions (id, run_id, project_root, goal, status, review_cycles, created_at, updated_at, tasks_json)
@@ -258,6 +263,7 @@ export class LocalStore {
         )
         .run(m.id, m.runId, m.projectRoot, m.goal, m.status, m.reviewCycles, m.createdAt, m.updatedAt, JSON.stringify(m.tasks))
     );
+    if (saved) tenantPostgresMirror.saveMission(this.tenantId, m);
   }
 
   loadMissions(limit = 200): Mission[] {
@@ -284,7 +290,7 @@ export class LocalStore {
   // ---------- usage ----------
 
   saveUsageEvent(e: UsageEvent): void {
-    this.guard("saveUsageEvent", () =>
+    const saved = this.guard("saveUsageEvent", () =>
       this.db
         .prepare(
           `INSERT OR IGNORE INTO usage_events
@@ -310,6 +316,7 @@ export class LocalStore {
           e.source ?? null
         )
     );
+    if (saved) tenantPostgresMirror.saveUsage(this.tenantId, e);
   }
 
   /** Count of model requests since `ts` — the basis for monthly quotas. */
@@ -383,11 +390,12 @@ export class LocalStore {
   completeBilling(id: string): void { this.db.prepare("DELETE FROM billing_outbox WHERE id = ?").run(id); }
 
   setSetting(key: string, value: string): void {
-    this.guard("setSetting", () =>
+    const saved = this.guard("setSetting", () =>
       this.db
         .prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
         .run(key, value)
     );
+    if (saved) tenantPostgresMirror.setSetting(this.tenantId, key, value);
   }
 
   /** Per-project explicit tool permission overrides (the user's last word). */
@@ -665,15 +673,17 @@ export class LocalStore {
   // ---------- models ----------
 
   saveModel(config: ModelConfig): void {
-    this.guard("saveModel", () =>
+    const saved = this.guard("saveModel", () =>
       this.db
         .prepare(`INSERT INTO models (id, config_json) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`)
         .run(config.id, JSON.stringify(config))
     );
+    if (saved) tenantPostgresMirror.saveModel(this.tenantId, config);
   }
 
   deleteModel(id: string): void {
-    this.guard("deleteModel", () => this.db.prepare(`DELETE FROM models WHERE id = ?`).run(id));
+    const saved = this.guard("deleteModel", () => this.db.prepare(`DELETE FROM models WHERE id = ?`).run(id));
+    if (saved) tenantPostgresMirror.deleteModel(this.tenantId, id);
   }
 
   loadModels(): ModelConfig[] {
@@ -683,6 +693,29 @@ export class LocalStore {
         return rows.map((r) => JSON.parse(String(r.config_json)) as ModelConfig);
       }) ?? []
     );
+  }
+
+  /** Full history for backfill, including rows outside the Reports window. */
+  tenantMirrorSnapshot(): TenantMirrorSnapshot {
+    const snapshot: TenantMirrorSnapshot = {
+      missions: this.loadMissions(2147483647),
+      usageEvents: this.loadRecentUsage(2147483647),
+      settings: this.db.prepare("SELECT key,value FROM settings ORDER BY key").all() as unknown as Array<{ key: string; value: string }>,
+      models: this.loadModels(),
+    };
+    // Guarded product reads return empty arrays on failure. Never interpret
+    // that degraded result as an authoritative empty snapshot for deletion.
+    const counts = this.tenantMirrorCounts();
+    if (snapshot.missions.length !== counts.missions || snapshot.usageEvents.length !== counts.usage ||
+        snapshot.models.length !== counts.models || snapshot.settings.length !== counts.settings) {
+      throw new Error("Incomplete SQLite mirror snapshot");
+    }
+    return snapshot;
+  }
+
+  tenantMirrorCounts(): Record<string, number> {
+    const count = (table: string) => Number((this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+    return { missions: count("missions"), usage: count("usage_events"), settings: count("settings"), models: count("models") };
   }
 
   close(): void {
