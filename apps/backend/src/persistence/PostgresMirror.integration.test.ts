@@ -57,7 +57,7 @@ test(
     try {
       const health = await postgresMirror.health();
       assert.equal(health.status, "ready");
-      assert.equal(health.migrationVersion, 1);
+      assert.equal(health.migrationVersion, 2);
 
       await postgresMirror.upsertTenant(tenantId, "Postgres Integration");
 

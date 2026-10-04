@@ -63,7 +63,7 @@ jobs:
           ORVYN_POSTGRES_MIRROR: "1"
           ORVYN_POSTGRES_SSL: disable
           ORVYN_MODEL_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-        run: node --test apps/backend/dist/persistence/*.test.js
+        run: node --test --test-concurrency=1 apps/backend/dist/persistence/*.test.js
 
       - name: Distributed Redis tests
         env:
@@ -114,6 +114,8 @@ jobs:
             tenants
             missions
             usage_events
+            usage_reservations
+            mission_reservations
             tenant_settings
             tenant_models
             users

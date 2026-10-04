@@ -2,7 +2,7 @@
 
 ## Scope
 
-This branch is **Phase A: mirror + parity validation**.
+This branch contains **Phase A mirror/parity validation and the feature-gated Phase B cutover**.
 
 SQLite remains the synchronous source of truth while ORVYN mirrors durable
 writes into PostgreSQL. This keeps the migration reversible and avoids forcing
@@ -107,8 +107,8 @@ Do not switch reads to PostgreSQL until:
 5. PostgreSQL backup/restore is exercised.
 6. Pool exhaustion and database-unavailable behavior is tested.
 7. The storage interface is refactored to async reads/writes.
-8. Monthly quota/billing counters use atomic PostgreSQL transactions rather
-   than read-count-write behavior.
+8. Monthly mission/model admission uses PostgreSQL reservations in primary-write mode;
+   credits/billing settlement still requires its own atomic ledger.
 9. A rollback plan keeps SQLite readable until the Postgres primary cutover is
    proven.
 
@@ -183,10 +183,9 @@ the local cache/fallback and the synchronous compatibility layer.
 
 Full primary-store conversion still requires:
 
-- PostgreSQL-native transactional register/login/session writes
 - atomic billing/credits/subscription accounting
 - first-class organization/project schemas
-- backup/restore drills
+- production backup/restore and off-host recovery drills
 - explicit DB outage/failover testing
 - final removal of cloud SQLite authority/cache dependencies
 
@@ -203,6 +202,8 @@ CI now performs a real PostgreSQL 16 disaster-recovery drill:
    - tenants
    - missions
    - usage_events
+   - usage_reservations
+   - mission_reservations
    - tenant_settings
    - tenant_models
    - users
@@ -266,3 +267,36 @@ Login session creation, logout, and legal acceptance writes are also
 PostgreSQL-acknowledged before the local SQLite cache is updated.
 
 `PRIMARY_WRITES` cannot activate unless `PRIMARY_READS` is also enabled.
+
+
+## Atomic quota admission (migration version 2)
+
+With primary reads **and** primary writes enabled, monthly model-request and
+mission quotas reserve capacity in PostgreSQL before provider execution or
+mission queue admission. A per-tenant, per-quota transaction lock serializes
+the count of completed records plus outstanding reservations with insertion of
+the next reservation. Requests rejected at this boundary do not invoke providers
+or start missions. Admission never falls back to SQLite during a database outage.
+Read-only canaries still use their configured SQLite read fallback.
+
+Version 2 adds `usage_reservations` and `mission_reservations`. Completing a
+usage event or persisting a mission replaces its matching reservation atomically
+in the same SQL statement. Event IDs remain stable across settlement retries;
+mission reservations use the run ID, including while BullMQ jobs wait in queue.
+Mission creation retains its admission timestamp so a queue delay across the UTC
+monthly boundary cannot move consumption to the wrong month.
+
+Provider failures count as attempts. Streams closed early settle one failed
+usage event. If a process crashes or settlement/enqueue acknowledgement is
+uncertain, its reservation remains counted until the UTC monthly reset; there is
+no automatic expiry that could admit additional paid work. Operators must verify
+that no work executed before manually releasing an abandoned reservation.
+Outstanding reservations are quota state, not completed usage or billing events,
+and are included in database backups. This does not implement a credits ledger.
+
+Database connections have a five-second acquisition deadline. SQL statements
+have a ten-second deadline and lock waits have a five-second deadline, so a stuck
+pool or lock cannot indefinitely block the provider admission/write chain.
+CI exercises competing independent PostgreSQL connections, quota saturation,
+stream closure, settlement retry, pool exhaustion, unavailable connections and
+recovery. A real production failover drill remains required before broad rollout.

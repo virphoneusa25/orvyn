@@ -629,7 +629,7 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   // Monthly mission quota (0/unset = unlimited). Checked against the
   // persisted missions table so restarts don't reset the budget.
   const missionQuota = Number(process.env.ORVYN_QUOTA_MISSIONS_MONTH) || 0;
-  if (missionQuota > 0) {
+  if (missionQuota > 0 && !postgresMirror.isPrimaryWritesEnabled()) {
     const d = new Date();
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
     let used = t.localStore.countMissionsSince(monthStart);
@@ -651,7 +651,18 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
     }
   }
 
-  t.usage.agentRuns++;
+  const runId = randomUUID();
+  const admitMission = async (): Promise<boolean> => {
+    if (!postgresMirror.isPrimaryWritesEnabled() || missionQuota <= 0) return true;
+    try {
+      await postgresMirror.flushStrict();
+      if (await postgresMirror.reserveMission(t.id, runId, Date.now(), missionQuota)) return true;
+      res.status(429).json({ error: `Monthly mission quota exceeded (${missionQuota}/${missionQuota}). Resets at the start of next month (UTC).` });
+    } catch (err) {
+      res.status(503).json({ error: `PostgreSQL mission admission failed: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    return false;
+  };
 
   if (distributedProjectRootEligible(String(req.body.projectRoot ?? ""))) {
     const coordinator = getDistributedMissionCoordinator();
@@ -676,7 +687,8 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
       });
     }
 
-    const runId = randomUUID();
+    if (!await admitMission()) return;
+    t.usage.agentRuns++;
     t.runStore.create(runId, req.body.projectRoot, "queued");
     t.runStore.emit(runId, "run.queued", {
       distributed: true,
@@ -712,11 +724,14 @@ v1Router.post("/agent/orchestrate", async (req, res) => {
   }
 
   _regTools(t, req.body.projectRoot);
-  const runId = t.multiAgentRuntime.start(
+  if (!await admitMission()) return;
+  t.usage.agentRuns++;
+  t.multiAgentRuntime.start(
     req.body.projectRoot,
     req.body.goal,
     req.body.rules,
-    req.body.attachments
+    req.body.attachments,
+    runId
   );
   res.status(201).json({ runId, queue: t.multiAgentRuntime.queueStats() });
 });

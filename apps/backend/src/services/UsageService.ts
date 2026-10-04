@@ -164,7 +164,9 @@ export class UsageService {
       this.store?.tenantId
     ) {
       try {
-        used = await postgresMirror.countUsageSince(
+        used = await (postgresMirror.isPrimaryWritesEnabled()
+          ? postgresMirror.countReservedUsageSince.bind(postgresMirror)
+          : postgresMirror.countUsageSince.bind(postgresMirror))(
           this.store.tenantId,
           this.monthStart
         );
@@ -221,6 +223,23 @@ export class UsageService {
     }
   }
 
+  private async beginRequest(): Promise<{ id: string; timestamp: number } | undefined> {
+    this.checkMissionBudget();
+    if (postgresMirror.isPrimaryWritesEnabled() && this.quotaLimit > 0) {
+      if (!this.store?.tenantId) throw new Error("PostgreSQL quota enforcement requires tenant storage");
+      const reservation = { id: `use_${randomUUID()}`, timestamp: Date.now() };
+      // Never fall back to SQLite for admission: another node may already own
+      // the final slot, and an unavailable database cannot prove otherwise.
+      await postgresMirror.flushStrict();
+      if (!await postgresMirror.reserveUsage(this.store.tenantId, reservation.id, reservation.timestamp, this.quotaLimit)) {
+        throw new QuotaExceededError(this.quotaLimit, this.quotaLimit);
+      }
+      return reservation;
+    }
+    await this.checkQuotaAsync();
+    return undefined;
+  }
+
   /** Run `fn` with mission/task/agent attribution attached to every model call inside it. */
   with<T>(ctx: UsageContext, fn: () => Promise<T>): Promise<T> {
     // Merge with any outer context so a task-level wrap inherits the missionId.
@@ -228,9 +247,9 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>, reservation?: { id: string; timestamp: number }): void {
     const ctx = this.als.getStore() ?? {};
-    const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+    const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...reservation, ...ctx, ...e };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     this.rollMonth();
@@ -253,9 +272,10 @@ export class UsageService {
    * event had arrived.
    */
   async recordAsync(
-    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>
+    e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>,
+    reservation?: { id: string; timestamp: number }
   ): Promise<void> {
-    this.record(e);
+    this.record(e, reservation);
     if (postgresMirror.isPrimaryWritesEnabled()) {
       await postgresMirror.flushStrict();
     }
@@ -350,8 +370,7 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        await usage.checkQuotaAsync();
-        usage.checkMissionBudget();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
         let recording = false;
         try {
@@ -372,10 +391,11 @@ export class UsageService {
             completionTokens: res.usage?.completionTokens,
             outputChars: res.content?.length ?? 0,
             toolCalls: res.toolCalls?.length || undefined,
-          });
+          }, reservation);
           return res;
         } catch (err: any) {
           if (recording) throw err;
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -383,14 +403,13 @@ export class UsageService {
             durationMs: Date.now() - start,
             ok: false,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
         }
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        await usage.checkQuotaAsync();
-        usage.checkMissionBudget();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
@@ -426,9 +445,10 @@ export class UsageService {
             ok: true,
             outputChars: chars,
             toolCalls: toolCalls || undefined,
-          });
+          }, reservation);
         } catch (err: any) {
           if (recording) throw err;
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -437,8 +457,21 @@ export class UsageService {
             ok: false,
             outputChars: chars,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
+        } finally {
+          if (!recording) {
+            recording = true;
+            await usage.recordAsync({
+              modelId: inner.config.id,
+              provider: inner.config.provider,
+              method: "stream",
+              durationMs: Date.now() - start,
+              ok: false,
+              outputChars: chars,
+              error: "Stream closed before completion",
+            }, reservation);
+          }
         }
       },
 
@@ -453,7 +486,7 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        await usage.checkQuotaAsync();
+        const reservation = await usage.beginRequest();
         const start = Date.now();
         let recording = false;
         try {
@@ -465,10 +498,11 @@ export class UsageService {
             method: "image",
             durationMs: Date.now() - start,
             ok: true,
-          });
+          }, reservation);
           return res;
         } catch (err: any) {
           if (recording) throw err;
+          recording = true;
           await usage.recordAsync({
             modelId: inner.config.id,
             provider: inner.config.provider,
@@ -476,7 +510,7 @@ export class UsageService {
             durationMs: Date.now() - start,
             ok: false,
             error: String(err?.message ?? err).slice(0, 300),
-          });
+          }, reservation);
           throw err;
         }
       };

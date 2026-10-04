@@ -209,8 +209,7 @@ export class MultiAgentRuntime {
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
   }
 
-  start(projectRoot: string, goal: string, rules?: string, attachments?: Attachment[]): string {
-    const runId = randomUUID();
+  start(projectRoot: string, goal: string, rules?: string, attachments?: Attachment[], runId = randomUUID()): string {
     this.store.create(runId, projectRoot);
     applyMode(this.tools.registry, "multitask");
     this.tools.applyProfile();

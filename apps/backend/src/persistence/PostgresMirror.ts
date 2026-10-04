@@ -23,7 +23,7 @@ import {
   modelSecretKeyConfigured,
 } from "./modelSecret";
 
-const MIGRATION_VERSION = 1;
+const MIGRATION_VERSION = 2;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -79,6 +79,24 @@ CREATE INDEX IF NOT EXISTS idx_usage_tenant_ts
   ON usage_events (tenant_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_usage_tenant_mission
   ON usage_events (tenant_id, mission_id);
+
+CREATE TABLE IF NOT EXISTS usage_reservations (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ts BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_reservations_tenant_ts
+  ON usage_reservations (tenant_id, ts);
+
+CREATE TABLE IF NOT EXISTS mission_reservations (
+  tenant_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  ts BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_mission_reservations_tenant_ts
+  ON mission_reservations (tenant_id, ts);
 
 CREATE TABLE IF NOT EXISTS tenant_settings (
   tenant_id TEXT NOT NULL,
@@ -175,6 +193,8 @@ export class PostgresMirror {
         max: Math.max(1, Number(process.env.ORVYN_POSTGRES_POOL_MAX) || 10),
         idleTimeoutMillis: 30_000,
         connectionTimeoutMillis: 5_000,
+        statement_timeout: 10_000,
+        lock_timeout: 5_000,
         ssl: sslConfig(),
         application_name: process.env.ORVYN_POSTGRES_APPLICATION_NAME?.trim() || "orvyn",
       });
@@ -312,9 +332,9 @@ export class PostgresMirror {
   async saveMission(tenantId: string, m: Mission): Promise<void> {
     const pool = await this.ready();
     await pool.query(
-      `INSERT INTO missions
+      `WITH recorded AS (INSERT INTO missions
        (tenant_id, id, run_id, project_root, goal, status, review_cycles, created_at, updated_at, tasks_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE((SELECT ts FROM mission_reservations WHERE tenant_id=$1 AND id=$3), $8),$9,$10::jsonb)
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          run_id=EXCLUDED.run_id,
          project_root=EXCLUDED.project_root,
@@ -322,7 +342,8 @@ export class PostgresMirror {
          status=EXCLUDED.status,
          review_cycles=EXCLUDED.review_cycles,
          updated_at=EXCLUDED.updated_at,
-         tasks_json=EXCLUDED.tasks_json`,
+         tasks_json=EXCLUDED.tasks_json RETURNING id)
+       DELETE FROM mission_reservations WHERE tenant_id=$1 AND id=$3`,
       [
         tenantId,
         m.id,
@@ -341,11 +362,12 @@ export class PostgresMirror {
   async saveUsageEvent(tenantId: string, e: UsageEvent): Promise<void> {
     const pool = await this.ready();
     await pool.query(
-      `INSERT INTO usage_events
+      `WITH recorded AS (INSERT INTO usage_events
        (tenant_id,id,ts,model_id,provider,method,duration_ms,ok,error,prompt_tokens,
         completion_tokens,output_chars,tool_calls,mission_id,task_id,agent,source)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       ON CONFLICT(tenant_id,id) DO NOTHING`,
+       ON CONFLICT(tenant_id,id) DO NOTHING RETURNING id)
+       DELETE FROM usage_reservations WHERE tenant_id=$1 AND id=$2`,
       [
         tenantId,
         e.id,
@@ -930,6 +952,57 @@ export class PostgresMirror {
       [tenantId, ts]
     );
     return Number(result.rows[0]?.n ?? 0);
+  }
+
+  /** Reserve before executing a provider call. Crashed/uncertain calls retain
+   * their slot until the monthly reset; never expire a potentially paid call. */
+  async reserveUsage(tenantId: string, id: string, timestamp: number, limit: number): Promise<boolean> {
+    return this.reserveQuota(tenantId, id, timestamp, limit, "usage");
+  }
+
+  async reserveMission(tenantId: string, runId: string, timestamp: number, limit: number): Promise<boolean> {
+    return this.reserveQuota(tenantId, runId, timestamp, limit, "mission");
+  }
+
+  private async reserveQuota(tenantId: string, id: string, timestamp: number, limit: number, kind: "usage" | "mission"): Promise<boolean> {
+    const pool = await this.ready();
+    const client = await pool.connect();
+    const events = kind === "usage" ? "usage_events" : "missions";
+    const reservations = kind === "usage" ? "usage_reservations" : "mission_reservations";
+    const timestampColumn = kind === "usage" ? "ts" : "created_at";
+    const date = new Date(timestamp);
+    const month = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${kind}-quota:${tenantId}`]);
+      const result = await client.query<{ n: string }>(
+        `SELECT ((SELECT COUNT(*) FROM ${events} WHERE tenant_id=$1 AND ${timestampColumn} >= $2)
+          + (SELECT COUNT(*) FROM ${reservations} WHERE tenant_id=$1 AND ts >= $2))::text AS n`,
+        [tenantId, month]
+      );
+      if (Number(result.rows[0].n) >= limit) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query(`INSERT INTO ${reservations}(tenant_id,id,ts) VALUES ($1,$2,$3)`, [tenantId, id, timestamp]);
+      await client.query("COMMIT");
+      return true;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async countReservedUsageSince(tenantId: string, ts: number): Promise<number> {
+    const pool = await this.ready();
+    const result = await pool.query<{ n: string }>(
+      `SELECT ((SELECT COUNT(*) FROM usage_events WHERE tenant_id=$1 AND ts >= $2)
+        + (SELECT COUNT(*) FROM usage_reservations WHERE tenant_id=$1 AND ts >= $2))::text AS n`,
+      [tenantId, ts]
+    );
+    return Number(result.rows[0].n);
   }
 
   async countMissionsSince(tenantId: string, ts: number): Promise<number> {
