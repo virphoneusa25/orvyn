@@ -240,3 +240,45 @@ mode. Workers acquire renewable Redis leases before executing a mission. If a
 tenant has filled its slots, BullMQ moves the job back to the delayed set
 instead of consuming an idle worker while waiting. Leases expire automatically
 after a worker crash and are renewed while a mission remains active.
+
+
+## Runtime readiness
+
+Authenticated clients/operators can inspect:
+
+```text
+GET /api/v1/runtime/status
+```
+
+The response reports:
+
+- distributed runtime enabled/disabled
+- active BullMQ worker count
+- BullMQ waiting/active/completed/failed/delayed counts
+- `orvyn-redis` availability
+- LiteLLM liveness when `ORVYN_LITELLM_ENABLED=1`
+
+When distributed mode is enabled but no worker heartbeat is alive, the endpoint
+returns a degraded/503 status instead of claiming the execution plane is ready.
+
+## Stalled mission policy
+
+BullMQ normally follows an at-least-once model for stalled jobs and may
+re-process a mission after a worker loses its lock. ORVYN autonomous missions
+may contain non-idempotent file, terminal, server, or deploy actions, so the
+default is:
+
+```env
+ORVYN_WORKER_MAX_STALLED_COUNT=0
+```
+
+That causes a stalled autonomous mission to fail rather than silently replay
+partially completed tool work. Raise the value only after mission-level
+idempotency/recovery semantics are explicitly implemented and tested.
+
+## Queued cancellation
+
+Stopping a distributed run before it starts removes the pending/delayed BullMQ
+job immediately, writes `cancelled` to live Redis mission state, and emits the
+normal `run.cancelled` event. Active jobs continue to use the Redis control
+stream so the owning `MultiAgentRuntime` handles cancellation safely.
