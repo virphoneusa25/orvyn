@@ -22,6 +22,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { LEGAL_VERSION } from "../legal/policy";
+import { postgresMirror } from "../persistence/PostgresMirror";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -90,6 +91,8 @@ export class AuthService {
     fs.mkdirSync(dataDir, { recursive: true });
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA synchronous = NORMAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
   }
 
@@ -114,9 +117,19 @@ export class AuthService {
       name: name?.trim() || null,
       createdAt: Date.now(),
     };
+    const passwordHash = hashPassword(password);
     this.db
       .prepare(`INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)`)
-      .run(user.id, user.email, user.name, hashPassword(password), user.createdAt);
+      .run(user.id, user.email, user.name, passwordHash, user.createdAt);
+    postgresMirror.mirror("upsertUser", () =>
+      postgresMirror.upsertUser({
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        passwordHash,
+        createdAt: user.createdAt,
+      })
+    );
     const legalAcceptance = this.recordLegalAcceptance(user.id, LEGAL_VERSION);
     return { user, token: this.createSession(user.id), legalAcceptance };
   }
@@ -156,7 +169,11 @@ export class AuthService {
   }
 
   logout(token: string): void {
-    this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(hashToken(token));
+    const tokenHash = hashToken(token);
+    this.db.prepare(`DELETE FROM sessions WHERE token_hash = ?`).run(tokenHash);
+    postgresMirror.mirror("deleteSession", () =>
+      postgresMirror.deleteSession(tokenHash)
+    );
   }
 
   recordLegalAcceptance(userId: string, version: string = LEGAL_VERSION): LegalAcceptance {
@@ -165,6 +182,9 @@ export class AuthService {
     this.db
       .prepare(`INSERT INTO legal_acceptances (user_id, version, accepted_at) VALUES (?, ?, ?) ON CONFLICT(user_id, version) DO UPDATE SET accepted_at = excluded.accepted_at`)
       .run(userId, version, acceptedAt);
+    postgresMirror.mirror("saveLegalAcceptance", () =>
+      postgresMirror.saveLegalAcceptance(userId, version, acceptedAt)
+    );
     return { version, acceptedAt };
   }
 
@@ -184,9 +204,20 @@ export class AuthService {
     // Expired-session cleanup piggybacks on session creation.
     this.db.prepare(`DELETE FROM sessions WHERE expires_at <= ?`).run(Date.now());
     const token = `orvsess_${randomBytes(32).toString("hex")}`;
+    const tokenHash = hashToken(token);
+    const createdAt = Date.now();
+    const expiresAt = createdAt + SESSION_TTL_MS;
     this.db
       .prepare(`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`)
-      .run(hashToken(token), userId, Date.now(), Date.now() + SESSION_TTL_MS);
+      .run(tokenHash, userId, createdAt, expiresAt);
+    postgresMirror.mirror("upsertSession", () =>
+      postgresMirror.upsertSession({
+        tokenHash,
+        userId,
+        createdAt,
+        expiresAt,
+      })
+    );
     return token;
   }
 }
