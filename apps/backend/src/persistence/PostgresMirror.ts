@@ -454,6 +454,30 @@ export class PostgresMirror {
     };
   }
 
+  async authParityCounts(): Promise<{
+    users: number;
+    sessions: number;
+    legalAcceptances: number;
+  }> {
+    const pool = await this.ready();
+    const result = await pool.query<{
+      users: string;
+      sessions: string;
+      legal_acceptances: string;
+    }>(
+      `SELECT
+        (SELECT COUNT(*) FROM users)::text AS users,
+        (SELECT COUNT(*) FROM sessions)::text AS sessions,
+        (SELECT COUNT(*) FROM legal_acceptances)::text AS legal_acceptances`
+    );
+    const row = result.rows[0];
+    return {
+      users: Number(row?.users ?? 0),
+      sessions: Number(row?.sessions ?? 0),
+      legalAcceptances: Number(row?.legal_acceptances ?? 0),
+    };
+  }
+
   async close(): Promise<void> {
     const pool = this.pool;
     this.pool = null;
