@@ -821,16 +821,56 @@ v1Router.delete("/checkpoints/:id", async (req, res) => {
 });
 
 // --- Missions (Task Engine state for Mission Control) ---
-v1Router.get("/missions", (req, res) => {
+v1Router.get("/missions", async (req, res) => {
   const t = requireTenant(req);
-  res.json({ missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)) });
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      const missions = await postgresMirror.loadMissions(t.id);
+      return res.json({
+        missions: missions.map((m) => t.taskEngine.serialize(m)),
+        source: "postgresql",
+      });
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL mission storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
+  res.json({
+    missions: t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m)),
+    source: "sqlite",
+  });
 });
 
-v1Router.get("/missions/:id", (req, res) => {
+v1Router.get("/missions/:id", async (req, res) => {
   const t = requireTenant(req);
+
+  if (postgresMirror.isPrimaryReadsEnabled()) {
+    try {
+      const m = await postgresMirror.getMission(t.id, req.params.id);
+      if (!m) return res.status(404).json({ error: "Unknown mission" });
+      return res.json({
+        mission: t.taskEngine.serialize(m),
+        source: "postgresql",
+      });
+    } catch (err: any) {
+      if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+        return res.status(503).json({
+          error: "PostgreSQL mission storage is unavailable",
+          detail: err.message,
+        });
+      }
+    }
+  }
+
   const m = t.taskEngine.getMission(req.params.id);
   if (!m) return res.status(404).json({ error: "Unknown mission" });
-  res.json({ mission: t.taskEngine.serialize(m) });
+  res.json({ mission: t.taskEngine.serialize(m), source: "sqlite" });
 });
 
 // --- Servers (SSH connections from the project's .orvyn/ssh.json) ---
