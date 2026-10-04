@@ -17,6 +17,11 @@ import { Pool } from "pg";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
+import {
+  decryptModelConfig,
+  encryptModelConfig,
+  modelSecretKeyConfigured,
+} from "./modelSecret";
 
 const MIGRATION_VERSION = 1;
 
@@ -281,7 +286,8 @@ export class PostgresMirror {
         status: "ready",
         latencyMs: Date.now() - started,
         migrationVersion: Number(result.rows[0]?.version ?? 0),
-      };
+        modelSecretEncryption: modelSecretKeyConfigured() ? "configured" : "missing",
+      } as any;
     } catch (err) {
       return {
         enabled: true,
@@ -374,12 +380,13 @@ export class PostgresMirror {
 
   async saveModel(tenantId: string, config: ModelConfig): Promise<void> {
     const pool = await this.ready();
+    const persisted = encryptModelConfig(config);
     await pool.query(
       `INSERT INTO tenant_models(tenant_id,id,config_json)
        VALUES ($1,$2,$3::jsonb)
        ON CONFLICT(tenant_id,id) DO UPDATE
        SET config_json=EXCLUDED.config_json, updated_at=now()`,
-      [tenantId, config.id, JSON.stringify(config)]
+      [tenantId, config.id, JSON.stringify(persisted)]
     );
   }
 
@@ -654,7 +661,9 @@ export class PostgresMirror {
        ORDER BY id`,
       [tenantId]
     );
-    return result.rows.map((row) => row.config_json as ModelConfig);
+    return result.rows.map((row) =>
+      decryptModelConfig(row.config_json as ModelConfig)
+    );
   }
 
   async getUserAuthByEmail(email: string): Promise<{
