@@ -17,6 +17,7 @@ import { RedisRunEventTransport } from "./RedisRunEventTransport";
 import { RedisRunEventBridge } from "./RedisRunEventBridge";
 import { RedisRunControlTransport } from "./RedisRunControlTransport";
 import { RunControlPublisher } from "./RunControlPublisher";
+import { RedisMissionStateStore } from "./RedisMissionStateStore";
 import { MISSION_QUEUE_NAME, type MissionJobPayload } from "./types";
 import type { ApprovalScope } from "./controlTypes";
 
@@ -31,6 +32,7 @@ export class DistributedMissionCoordinator {
   private readonly producerRedis = createProducerRedis();
   private readonly controlRedis = createProducerRedis();
   private readonly queue = new RedisMissionQueue(this.producerRedis);
+  private readonly state = new RedisMissionStateStore(this.producerRedis);
   private readonly controls = new RunControlPublisher(
     new RedisRunControlTransport(this.controlRedis)
   );
@@ -56,6 +58,12 @@ export class DistributedMissionCoordinator {
         distributed: true,
       });
       store.setStatus(String(jobId), "error");
+      void this.state
+        .setStatus(String(jobId), "error", {
+          error: failedReason || "unknown worker failure",
+          completedAt: new Date().toISOString(),
+        })
+        .catch(() => undefined);
       active?.bridge.stop();
     });
 
@@ -66,7 +74,13 @@ export class DistributedMissionCoordinator {
 
   async enqueue(payload: MissionJobPayload, store: RunStore): Promise<void> {
     this.ensureBridge(payload.runId, store);
-    await this.queue.enqueue(payload);
+    await this.state.create(payload);
+    try {
+      await this.queue.enqueue(payload);
+    } catch (err: any) {
+      await this.state.setStatus(payload.runId, "error", { error: err.message }).catch(() => undefined);
+      throw err;
+    }
   }
 
   ensureBridge(runId: string, store: RunStore): void {
@@ -115,6 +129,10 @@ export class DistributedMissionCoordinator {
 
   async stats() {
     return this.queue.stats();
+  }
+
+  async missionState(runId: string) {
+    return this.state.get(runId);
   }
 }
 
