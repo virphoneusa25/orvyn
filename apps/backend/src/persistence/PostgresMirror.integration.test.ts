@@ -204,6 +204,24 @@ test(
       );
       assert.equal(legal?.version, "2026-10-01");
 
+      // Prove credential lookup is actually PostgreSQL-backed: this second
+      // AuthService has an empty SQLite database but can still authenticate
+      // the user created above.
+      const secondDir = mkdtempSync(join(tmpdir(), "orvyn-auth-pg-secondary-"));
+      const secondary = new AuthService(secondDir);
+      try {
+        const login = await secondary.loginAsync(
+          result.user.email,
+          "CorrectHorseBatteryStaple!"
+        );
+        assert.equal(login.user.id, result.user.id);
+        assert.equal(await secondary.verifyAsync(login.token).then((u) => u?.id), result.user.id);
+        await secondary.logoutAsync(login.token);
+      } finally {
+        secondary.close();
+        rmSync(secondDir, { recursive: true, force: true });
+      }
+
       await auth.logoutAsync(result.token);
       assert.equal(await auth.verifyAsync(result.token), null);
     } finally {
