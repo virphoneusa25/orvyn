@@ -9,6 +9,9 @@ import { LocalStore } from "./LocalStore";
 import { postgresMirror } from "./PostgresMirror";
 import { AuthService } from "../auth/AuthService";
 import { TenantManager } from "../tenancy/TenantManager";
+import { EventBus } from "../agent/EventBus";
+import { RunStore } from "../agent/events";
+import { TaskEngine } from "../agent/TaskEngine";
 import type { Mission } from "../agent/TaskEngine";
 import { QuotaExceededError, UsageService, type UsageEvent } from "../services/UsageService";
 
@@ -379,5 +382,84 @@ test(
       if (savedDataDir === undefined) delete process.env.ORVYN_DATA_DIR;
       else process.env.ORVYN_DATA_DIR = savedDataDir;
     }
+  }
+);
+
+
+test(
+  "real Postgres: TaskEngine durable wrappers acknowledge mission/task writes before returning",
+  { skip: !enabled },
+  async () => {
+    const savedWrites = process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+    process.env.ORVYN_POSTGRES_PRIMARY_WRITES = "1";
+
+    const dir = mkdtempSync(join(tmpdir(), "orvyn-task-pg-primary-"));
+    const tenantId = `tenant_task_primary_${Date.now()}`;
+    const store = new LocalStore(tenantId, dir);
+
+    try {
+      await postgresMirror.upsertTenant(tenantId, "Task Primary Test");
+
+      const engine = new TaskEngine(new EventBus(new RunStore()), store, {
+        shouldFailRecoveredMission: () => false,
+      });
+
+      const mission = await engine.createMissionDurable(
+        "run-task-primary",
+        "/projects/task-primary",
+        "prove durable writes"
+      );
+      await engine.setMissionStatusDurable(mission.id, "RUNNING");
+
+      const task = await engine.addTaskDurable(
+        mission.id,
+        "edit the source",
+        "coder"
+      );
+      assert.ok(task);
+
+      await engine.transitionDurable(mission.id, task!.id, "RUNNING");
+      task!.attempts = 1;
+      task!.result = "done";
+      await engine.transitionDurable(mission.id, task!.id, "REVIEW");
+      await engine.transitionDurable(mission.id, task!.id, "COMPLETED");
+      await engine.incrementReviewCyclesDurable(mission.id);
+      await engine.setMissionStatusDurable(mission.id, "COMPLETED");
+
+      // No additional flush here: durable wrapper return itself is the
+      // acknowledgement contract.
+      const persisted = await postgresMirror.getMission(tenantId, mission.id);
+      assert.ok(persisted);
+      assert.equal(persisted?.status, "COMPLETED");
+      assert.equal(persisted?.reviewCycles, 1);
+      assert.equal(persisted?.tasks.length, 1);
+      assert.equal(persisted?.tasks[0]?.status, "COMPLETED");
+      assert.equal(persisted?.tasks[0]?.attempts, 1);
+      assert.equal(persisted?.tasks[0]?.result, "done");
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+      if (savedWrites === undefined) delete process.env.ORVYN_POSTGRES_PRIMARY_WRITES;
+      else process.env.ORVYN_POSTGRES_PRIMARY_WRITES = savedWrites;
+    }
+  }
+);
+
+test(
+  "real Postgres: strict write acknowledgement surfaces queued write failures",
+  { skip: !enabled },
+  async () => {
+    postgresMirror.mirror("forced-integration-failure", async () => {
+      throw new Error("forced postgres mirror failure");
+    });
+
+    await assert.rejects(
+      () => postgresMirror.flushStrict(),
+      /forced-integration-failure.*forced postgres mirror failure/
+    );
+
+    // Failure is consumed by the strict boundary so a later clean flush does
+    // not keep rethrowing stale failures.
+    await postgresMirror.flushStrict();
   }
 );
