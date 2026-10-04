@@ -173,7 +173,12 @@ test(
       let inspected: Awaited<ReturnType<RedisMissionQueue["inspect"]>> = null;
       while (Date.now() < deadline) {
         inspected = await queue.inspect("run-failed-inspect");
-        if (inspected?.state === "failed") break;
+        if (
+          inspected?.state === "failed" &&
+          /integration worker boom/.test(inspected.failedReason ?? "")
+        ) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
