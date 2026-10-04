@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { AIChunk, AIModelProvider, AIRequest, AIResponse } from "@orvyn/ai-core";
 import { isTransientError, withModelRetries } from "./modelRetries";
+import { postgresMirror } from "../persistence/PostgresMirror";
 
 export interface UsageContext {
   missionId?: string;
@@ -84,6 +85,7 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
+  readonly tenantId?: string;
   saveUsageEvent(e: UsageEvent): void;
   loadRecentUsage(limit?: number): UsageEvent[];
   countUsageSince?(ts: number): number;
@@ -141,7 +143,7 @@ export class UsageService {
     }
   }
 
-  /** Current quota state; surfaced on /usage so clients can warn early. */
+  /** Current synchronous quota state retained for local/backward-compatible callers. */
   quota(): { limit: number; used: number; remaining: number | null; resetsAt: number } {
     this.rollMonth();
     this.refreshMonthCount();
@@ -150,6 +152,44 @@ export class UsageService {
       used: this.monthCount,
       remaining: this.quotaLimit > 0 ? Math.max(0, this.quotaLimit - this.monthCount) : null,
       resetsAt: utcMonthStart(new Date(this.monthStart).setUTCMonth(new Date(this.monthStart).getUTCMonth() + 1)),
+    };
+  }
+
+  async quotaAsync(): Promise<{ limit: number; used: number; remaining: number | null; resetsAt: number }> {
+    this.rollMonth();
+    let used = this.monthCount;
+
+    if (
+      postgresMirror.isPrimaryReadsEnabled() &&
+      this.store?.tenantId
+    ) {
+      try {
+        used = await postgresMirror.countUsageSince(
+          this.store.tenantId,
+          this.monthStart
+        );
+        this.monthCount = used;
+      } catch (err) {
+        if (process.env.ORVYN_POSTGRES_READ_FALLBACK_SQLITE?.trim() === "0") {
+          throw err;
+        }
+        this.refreshMonthCount();
+        used = this.monthCount;
+      }
+    } else {
+      this.refreshMonthCount();
+      used = this.monthCount;
+    }
+
+    return {
+      limit: this.quotaLimit,
+      used,
+      remaining: this.quotaLimit > 0 ? Math.max(0, this.quotaLimit - used) : null,
+      resetsAt: utcMonthStart(
+        new Date(this.monthStart).setUTCMonth(
+          new Date(this.monthStart).getUTCMonth() + 1
+        )
+      ),
     };
   }
 
@@ -170,6 +210,14 @@ export class UsageService {
     this.refreshMonthCount();
     if (this.monthCount >= this.quotaLimit) {
       throw new QuotaExceededError(this.monthCount, this.quotaLimit);
+    }
+  }
+
+  async checkQuotaAsync(): Promise<void> {
+    if (this.quotaLimit <= 0) return;
+    const state = await this.quotaAsync();
+    if (state.used >= this.quotaLimit) {
+      throw new QuotaExceededError(state.used, this.quotaLimit);
     }
   }
 
@@ -287,7 +335,7 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        usage.checkQuota();
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
         const start = Date.now();
         try {
@@ -323,7 +371,7 @@ export class UsageService {
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        usage.checkQuota();
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
         const start = Date.now();
         let chars = 0;
@@ -384,7 +432,7 @@ export class UsageService {
     if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
+        await usage.checkQuotaAsync();
         const start = Date.now();
         try {
           const res = await inner.generateImage!(request);
