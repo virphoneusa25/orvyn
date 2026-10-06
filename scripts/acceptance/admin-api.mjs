@@ -119,10 +119,11 @@ async function main() {
     STRIPE_SECRET_KEY: "sk_test_admin", STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_API_BASE: `http://127.0.0.1:${STRIPE_PORT}`,
     STRIPE_PRICE_PRO_MONTHLY: "price_pro_m", STRIPE_PRICE_POWER_MONTHLY: "price_power_m", STRIPE_PRICE_POWER_ANNUAL: "price_power_y", STRIPE_PRICE_STARTER_MONTHLY: "price_starter_m", STRIPE_PRICE_PACK_10K: "price_pack10k",
     MODEL_API_KEY: "k", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "nebius:zai-org/GLM-5.3-Flash", OPENAI_CODE_MODEL: "nebius:zai-org/GLM-5.3-Flash",
+    ORVYN_PROVIDER_RATES_JSON: JSON.stringify([{ provider: "openai-compatible", modelId: "nebius:zai-org/GLM-5.3-Flash", input: .2, cachedInput: .02, output: .8, source: "https://fixture.invalid/pricing", verifiedAt: Date.now() - 1000, expiresAt: Date.now() + 3_600_000 }]),
   };
   delete env.ORVYN_API_KEY; delete env.NODE_ENV;
   for (const k of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "FIREWORKS_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "NEBIUS_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST"]) env[k] = "";
-  const server = spawn(process.execPath, ["dist/index.js"], { cwd: backendCwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  const server = spawn(process.execPath, ["dist/index.js"], { cwd: backendCwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   const log = []; server.stdout.on("data", (d) => log.push(String(d))); server.stderr.on("data", (d) => log.push(String(d)));
   try {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await sleep(250); }
@@ -153,8 +154,8 @@ async function main() {
     // Some real activity: a paid Pro subscription for Alice, usage for Bob.
     await webhook({ id: "evt_a1", type: "checkout.session.completed", data: { object: { id: "cs_a1", mode: "subscription", customer: "cus_admin", subscription: "sub_admin", payment_status: "paid", metadata: { accountId: A, kind: "subscription", planId: "pro", period: "monthly" } } } });
     await webhook({ id: "evt_a2", type: "invoice.paid", data: { object: { id: "in_admin_1", customer: "cus_admin", subscription: "sub_admin", amount_paid: 5900, subscription_details: { metadata: { accountId: A, planId: "pro" } }, lines: { data: [{ price: { id: "price_pro_m" }, period: { start: now, end: now + 30 * 86400 } }] } } } });
-    const started = await call("/agent/stream/runs", "POST", { instruction: "Say hello", mode: "ask", composerMode: "auto", executionTarget: "auto" }, bob.token);
-    for (let i = 0; i < 80 && started.json.runId; i++) { const r = await call(`/agent/stream/runs/${started.json.runId}/events.json`, "GET", null, bob.token); if (["completed", "error", "failed"].includes(r.json.status)) break; await sleep(250); }
+    const answered = await call("/chat/completions", "POST", { message: "Say hello", composerMode: "ask", context: { mode: "ask" } }, bob.token);
+    ok(answered.status === 200 && Boolean(answered.json.content), "scripted chat records real usage", `${answered.status} ${JSON.stringify(answered.json)}`);
     const dash = await call("/admin/dashboard", "GET", null, boss.token);
     ok(dash.status === 200 && dash.json.totalUsers.value === 4 && dash.json.paidCustomers.value === 1 && dash.json.mrr.value === 59, "dashboard: 4 users, 1 paid customer, MRR $59 (from the real subscription)", JSON.stringify({ u: dash.json.totalUsers, p: dash.json.paidCustomers, m: dash.json.mrr }));
     ok(dash.json.revenueByPlan?.[0]?.plan === "pro" && dash.json.subscriptions.active === 1 && dash.json.creditsUsed.value > 0 && dash.json.creditTrend.length === 30 && dash.json.signups.days.length === 30, "…revenue by plan, subscription status, credits used, 30-day trends", JSON.stringify({ r: dash.json.revenueByPlan, s: dash.json.subscriptions, c: dash.json.creditsUsed }));
