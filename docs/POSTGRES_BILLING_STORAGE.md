@@ -91,3 +91,9 @@ The financial owner provides an account-scoped PostgreSQL outbox in `orvyn_recov
 Terminal reservation releases also persist before execution and acknowledge in the same transaction as release. Restart recovery replays requested cleanup without releasing active runs indiscriminately. Identification of unfinished runs after a crash still needs the coordinated durable run/session lifecycle.
 
 These operations are available from `PostgresFinancialStores.outbox(accountId)` and the asynchronous `TenantBilling` interface. The production backend selector remains SQLite until session/reporting integration, recharge recovery and coordinated activation are complete. This phase does not claim those remaining requirements are implemented.
+
+## Recharge restart recovery
+
+New recharge requests use a versioned pending state and the durable account/cycle/request number as the Stripe idempotency key. A lost response leaves the same request pending; restart recovery retries it without generating a new payment identity. A successfully dispatched intent remains submitted until its signed payment webhook credits the wallet. Webhook completion/failure uses the exact request metadata so late events cannot mark a newer request paid or failed.
+
+Automatic retries stop before Stripe's 24-hour idempotency retention boundary. Expired ambiguous payments and legacy timestamp-key requests require reconciliation rather than a new charge. Startup/minute recovery resumes only versioned pending requests. This removes the restart replay gap without sending legacy ambiguous payments again.

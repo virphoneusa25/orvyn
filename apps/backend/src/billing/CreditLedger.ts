@@ -385,7 +385,7 @@ export class CreditLedger {
   // ---------- money in ----------
 
   /** Credits a paid top-up. `paymentRef` is the payment's id (Stripe event / payment intent): one credit per payment. */
-  creditPurchase(accountId: string, packId: PackId, opts: { paymentRef: string; source?: "checkout" | "auto_recharge"; amountUsd?: number }, now = Date.now()): { credits: number; priceUsd: number; duplicate: boolean } {
+  creditPurchase(accountId: string, packId: PackId, opts: { paymentRef: string; source?: "checkout" | "auto_recharge"; amountUsd?: number; recharge?:{cycleStart:number;n:number} }, now = Date.now()): { credits: number; priceUsd: number; duplicate: boolean } {
     const pack = packById(packId);
     if (!pack) throw new BillingLimitError("PACK", "Unknown credit pack.");
     if (!opts.paymentRef) throw new BillingLimitError("PAYMENT", "A top-up needs a payment reference.");
@@ -397,7 +397,8 @@ export class CreditLedger {
         key: `topup:${opts.paymentRef}`, meta: { pack: pack.id, priceUsd: opts.amountUsd ?? pack.priceUsd, source: opts.source ?? "checkout", paymentRef: opts.paymentRef }, now,
       });
       if (!duplicate && opts.source === "auto_recharge") {
-        this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+        if(opts.recharge)this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId,opts.recharge.cycleStart,opts.recharge.n);
+        else this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId);
       }
     });
     return { credits: pack.credits, priceUsd: pack.priceUsd, duplicate };
@@ -828,10 +829,10 @@ export class CreditLedger {
     const w = this.wallet(accountId)!;
     if (this.available(accountId) >= settings.threshold) return;
     const requests = this.db.prepare(`SELECT n, status FROM auto_recharge_requests WHERE account_id = ? AND cycle_start = ? ORDER BY n`).all(accountId, w.cycle_start) as { n: number; status: string }[];
-    if (requests.some((r) => r.status === "pending")) return; // one payment in flight at a time
+    if (requests.some((r) => r.status === "pending" || r.status === "pending_v2" || r.status.startsWith("submitted:"))) return; // one payment in flight at a time
     if (requests.length >= settings.max_per_month) return; // the monthly cap
     this.db.prepare(
-      `INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`,
+      `INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending_v2', ?)`,
     ).run(accountId, w.cycle_start, requests.length + 1, settings.pack_id, now);
     for (const l of this.rechargeListeners) {
       try { l(accountId, settings.pack_id as PackId); } catch { /* the payment side logs its own failures */ }
@@ -839,8 +840,20 @@ export class CreditLedger {
   }
 
   /** The payment side reports a failed auto-recharge so the next one can be tried (still within the cap). */
-  autoRechargeFailed(accountId: string): void {
-    this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+  autoRechargeFailed(accountId: string,recharge?:{cycleStart:number;n:number}): void {
+    if(recharge)this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId,recharge.cycleStart,recharge.n);
+    else this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+  }
+
+  /** Legacy requests used timestamp keys and must be reconciled rather than automatically replayed. */
+  pendingAutoRecharges():Array<{accountId:string;cycleStart:number;n:number;packId:PackId;createdAt:number}> {
+    return (this.db.prepare(`SELECT account_id,cycle_start,n,pack_id,created_at FROM auto_recharge_requests WHERE status='pending_v2' ORDER BY created_at`).all() as any[])
+      .map(row=>({accountId:row.account_id,cycleStart:Number(row.cycle_start),n:Number(row.n),packId:row.pack_id,createdAt:Number(row.created_at)}));
+  }
+
+  autoRechargeDispatched(accountId:string,recharge:{cycleStart:number;n:number},paymentIntentId:string):void {
+    if(!/^pi_[a-zA-Z0-9_]+$/.test(paymentIntentId))throw new Error("Invalid recharge payment intent");
+    this.db.prepare(`UPDATE auto_recharge_requests SET status = ? WHERE account_id = ? AND cycle_start = ? AND n = ? AND status = 'pending_v2'`).run(`submitted:${paymentIntentId}`,accountId,recharge.cycleStart,recharge.n);
   }
 
   private assertRunCap(accountId: string, runId: string, nextCostUsd: number, _now: number): void {

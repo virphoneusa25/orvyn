@@ -272,6 +272,10 @@ export class PostgresCreditLedger implements AsyncLedgerContract {
         paymentRef: string;
         source?: "checkout" | "auto_recharge";
         amountUsd?: number;
+        recharge?: {
+            cycleStart: number;
+            n: number;
+        };
     }, now = Date.now()): Promise<{
         credits: number;
         priceUsd: number;
@@ -291,7 +295,10 @@ export class PostgresCreditLedger implements AsyncLedgerContract {
                     key: `topup:${opts.paymentRef}`, meta: { pack: pack.id, priceUsd: opts.amountUsd ?? pack.priceUsd, source: opts.source ?? "checkout", paymentRef: opts.paymentRef }, now,
                 }));
                 if (!duplicate && opts.source === "auto_recharge") {
-                    (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId));
+                    if (opts.recharge)
+                        (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId, opts.recharge.cycleStart, opts.recharge.n));
+                    else
+                        (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId));
                 }
             }));
             return { credits: pack.credits, priceUsd: pack.priceUsd, duplicate };
@@ -834,11 +841,11 @@ export class PostgresCreditLedger implements AsyncLedgerContract {
             n: number;
             status: string;
         }[];
-        if (requests.some((r) => r.status === "pending"))
+        if (requests.some((r) => r.status === "pending" || r.status === "pending_v2" || r.status.startsWith("submitted:")))
             return; // one payment in flight at a time
         if (requests.length >= settings.max_per_month)
             return; // the monthly cap
-        (await this.db.prepare(`INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`).run(accountId, w.cycle_start, requests.length + 1, settings.pack_id, now));
+        (await this.db.prepare(`INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending_v2', ?)`).run(accountId, w.cycle_start, requests.length + 1, settings.pack_id, now));
         this.db.afterCommit(() => {
             for (const l of this.rechargeListeners) {
                 try {
@@ -849,9 +856,38 @@ export class PostgresCreditLedger implements AsyncLedgerContract {
         });
     }
     /** The payment side reports a failed auto-recharge so the next one can be tried (still within the cap). */
-    async autoRechargeFailed(accountId: string): Promise<void> {
+    async autoRechargeFailed(accountId: string, recharge?: {
+        cycleStart: number;
+        n: number;
+    }): Promise<void> {
         return this.db.transaction(async () => {
-            (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId));
+            if (recharge)
+                (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId, recharge.cycleStart, recharge.n));
+            else
+                (await this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId));
+        });
+    }
+    /** Legacy requests used timestamp keys and must be reconciled rather than automatically replayed. */
+    async pendingAutoRecharges(): Promise<Array<{
+        accountId: string;
+        cycleStart: number;
+        n: number;
+        packId: PackId;
+        createdAt: number;
+    }>> {
+        return this.db.transaction(async () => {
+            return ((await this.db.prepare(`SELECT account_id,cycle_start,n,pack_id,created_at FROM auto_recharge_requests WHERE status='pending_v2' ORDER BY created_at`).all()) as any[])
+                .map(row => ({ accountId: row.account_id, cycleStart: Number(row.cycle_start), n: Number(row.n), packId: row.pack_id, createdAt: Number(row.created_at) }));
+        });
+    }
+    async autoRechargeDispatched(accountId: string, recharge: {
+        cycleStart: number;
+        n: number;
+    }, paymentIntentId: string): Promise<void> {
+        return this.db.transaction(async () => {
+            if (!/^pi_[a-zA-Z0-9_]+$/.test(paymentIntentId))
+                throw new Error("Invalid recharge payment intent");
+            (await this.db.prepare(`UPDATE auto_recharge_requests SET status = ? WHERE account_id = ? AND cycle_start = ? AND n = ? AND status = 'pending_v2'`).run(`submitted:${paymentIntentId}`, accountId, recharge.cycleStart, recharge.n));
         });
     }
     private async assertRunCap(accountId: string, runId: string, nextCostUsd: number, _now: number): Promise<void> {

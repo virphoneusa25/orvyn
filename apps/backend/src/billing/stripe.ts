@@ -442,23 +442,37 @@ export class BillingService {
   /** Auto-recharge: charge the saved card off-session. Credits arrive with the payment_intent.succeeded webhook. */
   async autoRecharge(accountId: string, packId: PackId): Promise<void> {
     const cfg = this.require();
+    const request=(await this.ledger.pendingAutoRecharges()).find(item=>item.accountId===accountId&&item.packId===packId);
+    if(!request)return;
+    // Stripe may remove idempotency keys after 24 hours. Do not recreate an ambiguous payment.
+    if(Date.now()-request.createdAt>=23*60*60_000)throw new Error("Recharge requires payment reconciliation before retry");
     const customer = (await this.store.customerOf(accountId));
     const pack = packById(packId);
-    if (!customer || !pack) { (await this.ledger.autoRechargeFailed(accountId)); return; }
+    if (!customer || !pack) { (await this.ledger.autoRechargeFailed(accountId,request)); return; }
     try {
       const methods = await stripeRequest<{ data: { id: string }[] }>(cfg, "GET", "/v1/payment_methods", { customer, type: "card", limit: 1 });
       const pm = methods.data?.[0]?.id;
-      if (!pm) { (await this.ledger.autoRechargeFailed(accountId)); return; }
-      const sub = (await this.ledger.subscriptionOf(accountId));
-      await stripeRequest(cfg, "POST", "/v1/payment_intents", {
+      if (!pm) { (await this.ledger.autoRechargeFailed(accountId,request)); return; }
+      const intent=await stripeRequest<{id:string}>(cfg, "POST", "/v1/payment_intents", {
         amount: Math.round(pack.priceUsd * 100), currency: "usd", customer, payment_method: pm,
         off_session: "true", confirm: "true",
-        metadata: { accountId, kind: "auto_recharge", packId },
+        metadata: { accountId, kind: "auto_recharge", packId, rechargeCycle:String(request.cycleStart),rechargeNumber:String(request.n) },
         description: `ORVYN auto-recharge: ${pack.credits.toLocaleString("en-US")} credits`,
-      }, `recharge:${accountId}:${sub?.cycleStart ?? 0}:${Date.now()}`);
+      }, `recharge:v2:${accountId}:${request.cycleStart}:${request.n}`);
+      await this.ledger.autoRechargeDispatched(accountId,request,intent.id);
     } catch (err) {
-      (await this.ledger.autoRechargeFailed(accountId));
-      console.warn(JSON.stringify({ event: "billing.auto_recharge_failed", accountId, reason: (err as Error).message.slice(0, 160) }));
+      // Network/5xx/acknowledgement failures may hide a committed payment. Retain the durable identity.
+      if(err instanceof StripeApiError&&err.status===402&&err.type==="card_error")await this.ledger.autoRechargeFailed(accountId,request);
+      console.warn(JSON.stringify({ event: "billing.auto_recharge_pending", accountId, reason:"Dispatch requires retry or reconciliation" }));
+      throw err;
+    }
+  }
+
+  async recoverAutoRecharges():Promise<void> {
+    if(!this.cfg)return;
+    for(const request of await this.ledger.pendingAutoRecharges()) {
+      try{await this.autoRecharge(request.accountId,request.packId);}
+      catch{console.warn(JSON.stringify({event:"billing.auto_recharge_recovery_pending"}));}
     }
   }
 
@@ -575,13 +589,14 @@ export class BillingService {
         if (o.metadata?.kind !== "auto_recharge") return false; // checkout top-ups are credited from the session
         const accountId = (await this.accountFor(o));
         if (!accountId) return false;
-        (await this.ledger.creditPurchase(accountId, String(o.metadata.packId) as PackId, { paymentRef: String(o.id), source: "auto_recharge", amountUsd: (o.amount_received ?? o.amount ?? 0) / 100 }));
+        const recharge=this.rechargeIdentity(o.metadata);
+        (await this.ledger.creditPurchase(accountId, String(o.metadata.packId) as PackId, { paymentRef: String(o.id), source: "auto_recharge", amountUsd: (o.amount_received ?? o.amount ?? 0) / 100,recharge }));
         return true;
       }
       case "payment_intent.payment_failed": {
         if (o.metadata?.kind !== "auto_recharge") return false;
         const accountId = (await this.accountFor(o));
-        if (accountId) (await this.ledger.autoRechargeFailed(accountId));
+        if (accountId) (await this.ledger.autoRechargeFailed(accountId,this.rechargeIdentity(o.metadata)));
         return true;
       }
       case "charge.refunded": {
@@ -599,6 +614,13 @@ export class BillingService {
         return false;
     }
   }
+
+  private rechargeIdentity(metadata:Record<string,unknown>):{cycleStart:number;n:number}|undefined {
+    if(metadata.rechargeCycle===undefined&&metadata.rechargeNumber===undefined)return undefined;
+    const cycleStart=Number(metadata.rechargeCycle),n=Number(metadata.rechargeNumber);
+    if(!Number.isSafeInteger(cycleStart)||cycleStart<0||!Number.isSafeInteger(n)||n<=0)throw new Error("Invalid recharge identity");
+    return {cycleStart,n};
+  }
 }
 
 let serviceSingleton: BillingService | null = null;
@@ -611,6 +633,10 @@ export function billingService(): BillingService {
         console.warn(JSON.stringify({ event: "billing.auto_recharge_dispatch_failed" }));
       });
     });
+    let recovering=false;
+    const recover=async()=>{if(recovering)return;recovering=true;try{await serviceSingleton!.recoverAutoRecharges();}catch{console.warn(JSON.stringify({event:"billing.auto_recharge_recovery_unavailable"}));}finally{recovering=false;}};
+    queueMicrotask(()=>{void recover();});
+    const timer=setInterval(()=>{void recover();},60_000);timer.unref();
   }
   return serviceSingleton;
 }

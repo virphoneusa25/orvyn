@@ -28,6 +28,49 @@ function deliver(svc: BillingService, event: object, secret = SECRET) {
   return svc.handleWebhook(Buffer.from(body), signStripePayload(body, secret));
 }
 
+test("recharge restart retries the durable payment identity after a lost response and credits only a verified webhook",async()=>{
+  const {ledger,store,svc}=setup("https://stripe.fixture");
+  const original=globalThis.fetch,account="recharge-restart",now=Date.now(),keys:string[]=[];
+  let loseResponse=true,payments=0;
+  const intents=new Map<string,string>();
+  globalThis.fetch=(async(url,options)=>{
+    if(String(url).includes('/payment_methods'))return Response.json({data:[{id:'pm_fixture'}]});
+    const key=(options!.headers as Record<string,string>)['Idempotency-Key'];keys.push(key);
+    if(!intents.has(key)){intents.set(key,'pi_fixture_recovery');payments++;}
+    if(loseResponse){loseResponse=false;throw new TypeError('fixture lost response after payment creation');}
+    return Response.json({id:intents.get(key)});
+  }) as typeof fetch;
+  try {
+    ledger.setPlan(account,'starter',now);store.saveCustomer(account,'cus_fixture','fixture@example.test');
+    ledger.setAutoRecharge(account,{threshold:23999,packId:'pack_10k',maxPerMonth:2},now);
+    ledger.charge({eventId:'recharge-restart-trigger',userId:account,type:'model',providerCostUsd:0.2,now});
+    const pending=ledger.pendingAutoRecharges()[0];assert.ok(pending);
+    await assert.rejects(svc.autoRecharge(account,'pack_10k'),/lost response/);
+    assert.equal(ledger.pendingAutoRecharges().length,1);assert.equal(ledger.snapshot(account).purchasedBalance,0);
+    const restarted=new BillingService({secretKey:'sk_fixture',webhookSecret:SECRET,apiBase:'https://stripe.fixture',publicOrigin:'https://fixture.example'},store,ledger,{},env);
+    await restarted.recoverAutoRecharges();
+    assert.equal(payments,1);assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+    assert.equal(ledger.pendingAutoRecharges().length,0);assert.equal(ledger.snapshot(account).purchasedBalance,0);
+    const event={id:'evt_recharge_recovery',type:'payment_intent.succeeded',data:{object:{id:'pi_fixture_recovery',amount_received:1000,metadata:{accountId:account,kind:'auto_recharge',packId:'pack_10k',rechargeCycle:String(pending.cycleStart),rechargeNumber:String(pending.n)}}}};
+    assert.equal((await deliver(restarted,event)).status,200);assert.equal((await deliver(restarted,event)).status,200);
+    assert.equal(ledger.snapshot(account).purchasedBalance,10000);
+    await restarted.recoverAutoRecharges();assert.equal(payments,1);
+  }finally{globalThis.fetch=original;ledger.close();store.db.close();}
+});
+
+test("expired recharge retry requires reconciliation and never creates a new payment",async()=>{
+  const {ledger,store,svc}=setup("https://stripe.fixture");
+  const original=globalThis.fetch,account="recharge-expired",now=Date.now()-24*60*60_000;
+  let calls=0;globalThis.fetch=(async()=>{calls++;throw new Error('unexpected payment');}) as typeof fetch;
+  try {
+    ledger.setPlan(account,'starter',now);store.saveCustomer(account,'cus_fixture_expired','fixture@example.test');
+    ledger.setAutoRecharge(account,{threshold:23999,packId:'pack_10k',maxPerMonth:2},now);
+    ledger.charge({eventId:'recharge-expired-trigger',userId:account,type:'model',providerCostUsd:0.2,now});
+    await assert.rejects(svc.autoRecharge(account,'pack_10k'),/reconciliation/);
+    assert.equal(calls,0);assert.equal(ledger.pendingAutoRecharges().length,1);
+  }finally{globalThis.fetch=original;ledger.close();store.db.close();}
+});
+
 test("signatures: valid passes; tampered, wrong secret and stale are refused", () => {
   const body = '{"id":"evt_1"}';
   const now = Math.floor(Date.now() / 1000);
