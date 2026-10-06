@@ -23,7 +23,7 @@ test("real PostgreSQL webhook commits payment and credits together, rolls back f
   })}));
   const account="runtime-webhook-atomic";
   const service=new BillingService({secretKey:"sk_fixture",webhookSecret:"whsec_fixture",apiBase:"http://127.0.0.1:9",publicOrigin:"https://fixture.example"},stores.payments,stores.ledger,{paymentSucceeded:()=>{notifications++;}},{} as NodeJS.ProcessEnv,stores.transaction);
-  const event={id:"evt_runtime_atomic",type:"checkout.session.completed",data:{object:{id:"cs_runtime_atomic",mode:"payment",payment_status:"paid",customer:"cus_runtime_atomic",payment_intent:"pi_runtime_atomic",amount_total:1000,metadata:{accountId:account,kind:"topup",packId:"pack_10k"}}}};
+  const event={id:"evt_runtime_ledger_webhook",type:"checkout.session.completed",data:{object:{id:"cs_runtime_atomic",mode:"payment",payment_status:"paid",customer:"cus_runtime_atomic",payment_intent:"pi_runtime_atomic",amount_total:1000,metadata:{accountId:account,kind:"topup",packId:"pack_10k"}}}};
   const raw=Buffer.from(JSON.stringify(event)),signature=signStripePayload(raw.toString("utf8"),"whsec_fixture");
   try{
     await owner.ledger.ensureAccount(account);
