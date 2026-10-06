@@ -1,12 +1,12 @@
 // apps/backend/src/onboarding/applyPreferences.ts
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { tenantManager } from "../tenancy/TenantManager";
 import type { OnboardingAnswers } from "./OnboardingStore";
 import { PREFERENCES_KEY, type OrionPreferences, type SettingsLike } from "./preferences";
 
 /** Writes the onboarding choices into the user's personal tenant settings. */
-export function applyPreferences(userId: string, answers: OnboardingAnswers): void {
-  const org = authService.listOrganizations(userId).find((o) => o.kind === "personal");
+export async function applyPreferences(userId: string, answers: OnboardingAnswers): Promise<void> {
+  const org = (await authService.listOrganizations(userId)).find((o) => o.kind === "personal");
   if (!org) return;
   const tenant = tenantManager.ensureUserTenant(userId, org.name);
   const prefs: OrionPreferences = {

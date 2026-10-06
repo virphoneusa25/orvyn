@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 import { desktopReleaseStore } from "../releases/desktopReleaseStore";
 import { accountRouter } from "./account";
 import { publicOrigin } from "./auth";
@@ -22,7 +23,7 @@ import { activeRunForSession } from "../agent/activeSessionRun";
 import { Router } from "express";
 import { customerRedaction } from "../middleware/customerRedaction";
 import { requirePrincipal, requireTenant } from "../middleware/tenant";
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { tenantPostgresMirror } from "../persistence/TenantPostgresMirror";
 import { tenantManager } from "../tenancy/TenantManager";
 import { Orchestrator } from "../ai/Orchestrator";
@@ -222,115 +223,115 @@ v1Router.get("/models/roles", (req, res) => {
   res.json({ roles, production });
 });
 
-v1Router.get("/session", (req, res) => {
+v1Router.get("/session", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const principal = req.principal;
   res.json({
     tenantId: t.id,
     principal: principal ?? null,
-    organizations: principal ? authService.listOrganizations(principal.userId) : [],
+    organizations: principal ? (await authService.listOrganizations(principal.userId)) : [],
   });
-});
+}));
 
-v1Router.get("/organizations", (req, res) => {
+v1Router.get("/organizations", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
-  res.json({ organizations: authService.listOrganizations(principal.userId) });
-});
+  res.json({ organizations: (await authService.listOrganizations(principal.userId)) });
+}));
 
-v1Router.post("/organizations", (req, res) => {
+v1Router.post("/organizations", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    const organization = authService.createOrganization(principal, String(req.body.name ?? "Organization"));
+    const organization = (await authService.createOrganization(principal, String(req.body.name ?? "Organization")));
     res.status(201).json({ organization });
   } catch (err: any) {
     res.status(err.status ?? 400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/organizations/:id/members", (req, res) => {
+v1Router.post("/organizations/:id/members", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    authService.addOrganizationMember(principal, req.params.id, String(req.body.userId ?? ""), req.body.role === "admin" ? "admin" : "member");
+    (await authService.addOrganizationMember(principal, req.params.id, String(req.body.userId ?? ""), req.body.role === "admin" ? "admin" : "member"));
     res.status(201).json({ ok: true });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
-});
+}));
 
-v1Router.get("/projects", (req, res) => {
+v1Router.get("/projects", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
-  res.json({ projects: authService.listProjects(principal.tenantId) });
-});
+  res.json({ projects: (await authService.listProjects(principal.tenantId)) });
+}));
 
-v1Router.post("/projects", (req, res) => {
+v1Router.post("/projects", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    const project = authService.createProject(principal, String(req.body.name ?? "Untitled project"), req.body.projectRoot);
+    const project = (await authService.createProject(principal, String(req.body.name ?? "Untitled project"), req.body.projectRoot));
     res.status(201).json({ project });
   } catch (err: any) {
     res.status(err.status ?? 400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.get("/projects/:id", (req, res) => {
+v1Router.get("/projects/:id", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    res.json({ project: authService.getProject(req.params.id, principal.tenantId) });
+    res.json({ project: (await authService.getProject(req.params.id, principal.tenantId)) });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
-});
+}));
 
-v1Router.patch("/projects/:id", (req, res) => {
+v1Router.patch("/projects/:id", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
     if ((req as any).viewAs) return res.status(403).json({ error: "Support view is read-only." });
-    const project = authService.updateProject(req.params.id, principal.tenantId, {
+    const project = (await authService.updateProject(req.params.id, principal.tenantId, {
       name: typeof req.body?.name === "string" ? req.body.name : undefined,
       description: req.body?.description === null || typeof req.body?.description === "string" ? req.body.description : undefined,
-    });
+    }));
     res.json({ project });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
-});
+}));
 
 /** Deletes the project. Its chats and files are kept (they move back to Chats and Files). */
-v1Router.delete("/projects/:id", (req, res) => {
+v1Router.delete("/projects/:id", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
     const t = requireTenant(req);
-    authService.deleteProject(req.params.id, principal.tenantId);
+    (await authService.deleteProject(req.params.id, principal.tenantId));
     for (const s of t.sessions.list()) if (s.projectId === req.params.id) t.sessions.setProject(s.sessionId, null);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
-});
+}));
 
-v1Router.get("/chats", (req, res) => {
+v1Router.get("/chats", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
-  res.json({ chats: authService.listChats(principal.tenantId) });
-});
+  res.json({ chats: (await authService.listChats(principal.tenantId)) });
+}));
 
-v1Router.post("/chats", (req, res) => {
+v1Router.post("/chats", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    const chat = authService.createChat(principal, String(req.body.title ?? "New chat"));
+    const chat = (await authService.createChat(principal, String(req.body.title ?? "New chat")));
     res.status(201).json({ chat });
   } catch (err: any) {
     res.status(err.status ?? 400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.get("/chats/:id", (req, res) => {
+v1Router.get("/chats/:id", asyncHandler(async (req, res) => {
   try {
     const principal = requirePrincipal(req);
-    res.json({ chat: authService.getChat(req.params.id, principal.tenantId) });
+    res.json({ chat: (await authService.getChat(req.params.id, principal.tenantId)) });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
   }
-});
+}));
 
 v1Router.post("/models", async (req, res) => {
   const t = requireTenant(req);
@@ -1331,13 +1332,13 @@ v1Router.get("/sessions", (req, res) => {
   res.json({ sessions: list.map((x) => ({ ...x, ...t.sessions.messageSummary(x.sessionId) })) });
 });
 
-v1Router.post("/sessions", (req, res) => {
+v1Router.post("/sessions", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   // A Cloud project chat: the project must be this tenant's.
   let projectId: string | null = null;
   if (typeof req.body?.projectId === "string" && req.body.projectId) {
     try {
-      projectId = authService.getProject(req.body.projectId, t.id).id;
+      projectId = (await authService.getProject(req.body.projectId, t.id)).id;
     } catch {
       return res.status(404).json({ error: "Unknown project" });
     }
@@ -1349,7 +1350,7 @@ v1Router.post("/sessions", (req, res) => {
     projectId,
   });
   res.status(201).json({ session: s });
-});
+}));
 
 v1Router.get("/sessions/:id", (req, res) => {
   const t = requireTenant(req);
@@ -1406,42 +1407,42 @@ v1Router.patch("/sessions/:id/messages/:messageId", (req, res) => {
   res.json({ message: m });
 });
 
-v1Router.patch("/sessions/:id", (req, res) => {
+v1Router.patch("/sessions/:id", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   // Move to a project (or out of one: null). The project must be this tenant's.
   if (req.body && "projectId" in req.body) {
     let projectId: string | null = null;
     if (typeof req.body.projectId === "string" && req.body.projectId) {
-      try { projectId = authService.getProject(req.body.projectId, t.id).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
+      try { projectId = (await authService.getProject(req.body.projectId, t.id)).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
     }
     if (!t.sessions.setProject(String(req.params.id), projectId)) return res.status(404).json({ error: "Unknown session" });
   }
   const s = t.sessions.update(String(req.params.id), { title: req.body?.title, status: req.body?.status, pinned: typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined });
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s });
-});
+}));
 
 // ---- Share a conversation (read-only public link) -----------------------------
-v1Router.get("/sessions/:id/share", (req, res) => {
+v1Router.get("/sessions/:id/share", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
   const t = requireTenant(req);
   if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
-  res.json({ share: authService.shareFor(String(req.params.id), principal.userId) });
-});
+  res.json({ share: (await authService.shareFor(String(req.params.id), principal.userId)) });
+}));
 
-v1Router.post("/sessions/:id/share", (req, res) => {
+v1Router.post("/sessions/:id/share", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
   const t = requireTenant(req);
   if ((req as any).viewAs || (req as any).apiKeyId) return res.status(403).json({ error: "Only the account owner can share a conversation." });
   if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
-  const { token } = authService.createShare(principal, String(req.params.id));
+  const { token } = (await authService.createShare(principal, String(req.params.id)));
   res.status(201).json({ url: `${publicOrigin(req)}/share/${token}` });
-});
+}));
 
-v1Router.delete("/sessions/:id/share", (req, res) => {
+v1Router.delete("/sessions/:id/share", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
-  res.json({ ok: authService.revokeShare(principal.userId, String(req.params.id)) });
-});
+  res.json({ ok: (await authService.revokeShare(principal.userId, String(req.params.id))) });
+}));
 
 v1Router.delete("/sessions/:id", (req, res) => {
   const t = requireTenant(req);
@@ -1795,7 +1796,7 @@ v1Router.get("/files/read", async (req, res) => {
   }
 });
 
-v1Router.post("/artifacts", async (req, res) => {
+v1Router.post("/artifacts", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     // Cloud uploads name their conversation/project; neither may be another tenant's or another member's.
@@ -1806,7 +1807,7 @@ v1Router.post("/artifacts", async (req, res) => {
     }
     let projectId: string | undefined;
     if (typeof req.body.projectId === "string" && req.body.projectId) {
-      try { projectId = authService.getProject(req.body.projectId, t.id).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
+      try { projectId = (await authService.getProject(req.body.projectId, t.id)).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
     }
     const rec = await t.artifactService.create({
       name: String(req.body.name ?? "file.txt"),
@@ -1824,7 +1825,7 @@ v1Router.post("/artifacts", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // A file from another member's conversation answers 404 (tenant isolation already holds below this).
 v1Router.use("/artifacts/:id", (req, res, next) => {

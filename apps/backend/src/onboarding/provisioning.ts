@@ -13,7 +13,7 @@
 // Running it twice issues nothing twice: the wallet grant happens once when
 // the wallet is created (CreditLedger.ensureAccount).
 
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { DEFAULT_PLAN, planById } from "../billing/plans";
 import { tenantManager } from "../tenancy/TenantManager";
@@ -37,16 +37,16 @@ export function verificationRequired(env: NodeJS.ProcessEnv = process.env): bool
 }
 
 /** Reads the real state of each step (no side effects). */
-export function provisioningStatus(userId: string): ProvisionStep[] {
-  const user = authService.getUser(userId);
-  const orgs = user ? authService.listOrganizations(userId) : [];
+export async function provisioningStatus(userId: string): Promise<ProvisionStep[]> {
+  const user = (await authService.getUser(userId));
+  const orgs = user ? (await authService.listOrganizations(userId)) : [];
   const personal = orgs.find((o) => o.kind === "personal");
   const tenantId = personal?.tenantId ?? "";
   const plan = tenantId ? creditLedger.planOf(tenantId) : null;
   const grants = tenantId ? creditLedger.grantsIssued(tenantId) : [];
   const tenant = tenantId ? tenantManager.get(tenantId) : undefined;
   const profile = onboardingStore().get(userId);
-  const verified = user ? (authService.isEmailVerified(userId) || !verificationRequired()) : false;
+  const verified = user ? ((await authService.isEmailVerified(userId)) || !verificationRequired()) : false;
   const planLabel = plan ? planById(plan).label : planById(DEFAULT_PLAN).label;
   return [
     { id: "account", label: PROVISION_LABELS.account, done: Boolean(user) && verified },
@@ -58,14 +58,14 @@ export function provisioningStatus(userId: string): ProvisionStep[] {
 }
 
 /** Performs each missing step in order; stops at the first one that cannot run yet. */
-export function provisionAccount(userId: string): ProvisionStep[] {
-  const user = authService.getUser(userId);
-  if (!user) return provisioningStatus(userId);
-  if (verificationRequired() && !authService.isEmailVerified(userId)) return provisioningStatus(userId);
-  const org = authService.ensurePersonalOrganization(user);
+export async function provisionAccount(userId: string): Promise<ProvisionStep[]> {
+  const user = (await authService.getUser(userId));
+  if (!user) return (await provisioningStatus(userId));
+  if (verificationRequired() && !(await authService.isEmailVerified(userId))) return (await provisioningStatus(userId));
+  const org = (await authService.ensurePersonalOrganization(user));
   tenantManager.ensureUserTenant(userId, org.name || user.email);
   // The wallet is created on the Free plan with its monthly credits exactly once.
   if (!creditLedger.planOf(org.tenantId)) creditLedger.ensureAccount(org.tenantId, DEFAULT_PLAN);
   onboardingStore().ensure(userId, "name");
-  return provisioningStatus(userId);
+  return (await provisioningStatus(userId));
 }

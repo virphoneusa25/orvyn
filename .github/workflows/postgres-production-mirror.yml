@@ -51,6 +51,8 @@ jobs:
         run: node --test apps/worker/dist/sandbox/*.test.js
       - name: Exact billing and Stripe regression gate
         run: node scripts/acceptance/billing-e2e.mjs
+      - name: Authentication, onboarding, admin and WebSocket acceptance
+        run: node scripts/acceptance/admin-api.mjs
       - name: Compatible mirror, identity coexistence, vault and outage tests
         env:
           ORVYN_POSTGRES_MIRROR: "1"

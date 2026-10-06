@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/admin.ts
 //
 // The ORVYN Admin Portal API (/api/v1/admin). Mounted BEFORE the customer
@@ -12,7 +13,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { can, staffStore, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
 import { adminService, AUDIT_TITLES, CUSTOMER_FILTERS, CREDIT_VALUE_USD, type CustomerFilter } from "../admin/AdminService";
 import { creditLedger } from "../billing/creditLedgerInstance";
@@ -47,12 +48,12 @@ function bearer(req: Request): string | null {
 }
 
 /** Server-side RBAC: staff only (403 for everyone else, including customer org owners). */
-adminRouter.use((req: AdminRequest, res, next) => {
+adminRouter.use(asyncHandler(async (req: AdminRequest, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   // The Admin Portal lives on its own host; elsewhere the admin API doesn't exist.
   if (adminHostMismatch(req)) return res.status(404).json({ error: "Not found" });
   const token = bearer(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Sign in to continue.", code: "UNAUTHENTICATED" });
   let role = staffStore().roleOf(session.user.id);
   if (!role && process.env.ORVYN_SUPER_ADMIN_EMAILS) { staffStore().seedFromEnv(); role = staffStore().roleOf(session.user.id); }
@@ -62,7 +63,7 @@ adminRouter.use((req: AdminRequest, res, next) => {
   }
   req.staff = { id: session.user.id, email: session.user.email, name: session.user.name, role };
   next();
-});
+}));
 
 const need = (p: StaffPermission) => (req: AdminRequest, res: Response, next: NextFunction) => {
   if (!can(req.staff?.role, p)) return res.status(403).json({ error: "Your staff role can't do that.", code: "FORBIDDEN" });
@@ -155,12 +156,12 @@ adminRouter.post("/customers", need("support.write"), wrap(async (req, res) => {
   let created;
   try {
     // A random password nobody knows; the customer chooses theirs through the reset link.
-    created = authService.register(email, `${randomBytes(24).toString("base64url")}Aa1!`, name, "staff-invite");
+    created = (await authService.register(email, `${randomBytes(24).toString("base64url")}Aa1!`, name, "staff-invite"));
   } catch (err: any) {
     return res.status(409).json({ error: /exist|taken|already/i.test(String(err?.message)) ? "An account already uses that email." : "Couldn't create that account." });
   }
-  authService.logout(created.token);
-  const tenantId = created.organization?.tenantId ?? authService.listOrganizations(created.user.id)[0]?.tenantId;
+  (await authService.logout(created.token));
+  const tenantId = created.organization?.tenantId ?? (await authService.listOrganizations(created.user.id))[0]?.tenantId;
   if (orgName && created.organization?.id) staffStore().db.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).run(orgName, created.organization.id);
   const mail = await sendPasswordReset(req, email);
   audit(req, "customer.create", tenantId ?? null, { email, emailed: mail.sent });
@@ -291,7 +292,7 @@ adminRouter.post("/customers/:id/resend-verification", need("support.write"), wr
   const id = customerOr404(req, res); if (!id) return;
   const owner = adminService().owner(id);
   if (!owner) return res.status(404).json({ error: "This customer has no contact to email." });
-  if (authService.isEmailVerified(owner.userId)) return res.status(409).json({ error: "Their email is already verified." });
+  if ((await authService.isEmailVerified(owner.userId))) return res.status(409).json({ error: "Their email is already verified." });
   const out = await sendVerification(req, owner.userId, owner.name);
   if (!out.sent) return res.status(out.error?.includes("configured") ? 503 : 429).json({ error: out.error });
   audit(req, "support.resend_verification", id, { to: owner.email });

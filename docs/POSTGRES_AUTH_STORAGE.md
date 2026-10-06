@@ -84,9 +84,16 @@ PostgreSQL 16, including concurrent operations, lockout accounting, forced rollb
 of registration and password reset, OAuth and desktop handoff consumption, tenant
 isolation, invitation seats, API key revocation and session reuse detection.
 
-Next migrate the HTTP, middleware, CLI and WebSocket callers to the asynchronous
-boundary. Admin and onboarding callers also share auth.db and must migrate with it.
-The runtime is not selected by live requests and exposes no production activation
-flag yet. A passing runtime test is not evidence of a completed live cutover.
+The HTTP, middleware, CLI, provisioning, GitHub and WebSocket callers now await
+the `AsyncAuthService` boundary. Its current lazy adapter preserves SQLite behavior;
+it does not expose a PostgreSQL activation flag. Express 4 handlers forward rejected
+promises to error middleware. WebSocket admission awaits ticket redemption, account
+readiness and tenant authorization; premature messages are refused and admission
+failures close the connection without exposing database details.
+
+Next migrate the shared admin and onboarding stores and admin cross-store reporting.
+Those stores still access auth.db directly and cannot safely be left behind during
+an authentication cutover. The PostgreSQL runtime is not yet selected by requests.
+A passing runtime test is not evidence of a completed live cutover.
 Billing and durable WorkSession integration remain separate prerequisites
 for a full primary-storage rollout. No production flags are changed by this work.

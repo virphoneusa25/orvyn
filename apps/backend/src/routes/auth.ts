@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/auth.ts
 //
 // Account endpoints. Mounted BEFORE the tenant resolver in index.ts:
@@ -6,7 +7,7 @@
 
 import { Router, Request } from "express";
 import { staffStore } from "../admin/staffStore";
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { onboardingStore } from "../onboarding/OnboardingStore";
 import { verificationRequired } from "../onboarding/provisioning";
 import { mailConfigured, passwordResetMail, securityNoticeMail, sendMail, verificationMail } from "../onboarding/mailer";
@@ -32,7 +33,7 @@ export async function sendVerification(req: Request, userId: string, name: strin
   const prev = lastSent.get(userId) ?? 0;
   if (Date.now() - prev < 60_000) return { sent: false, error: "A verification email was just sent. Check your inbox (and spam), or try again in a minute." };
   lastSent.set(userId, Date.now());
-  const { token, email } = authService.createEmailVerification(userId);
+  const { token, email } = (await authService.createEmailVerification(userId));
   const link = `${publicOrigin(req)}/api/v1/auth/verify?token=${encodeURIComponent(token)}`;
   try {
     await sendMail(verificationMail({ to: email, name, link }));
@@ -50,14 +51,14 @@ function deviceOf(req: Request): string {
   return String(req.body?.device ?? req.header("x-orvyn-device") ?? req.header("user-agent") ?? "");
 }
 
-function sessionOf(req: Request) {
+async function sessionOf(req: Request) {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   return session ? { token: token!, ...session } : null;
 }
 
 async function notify(userId: string, subject: string, message: string): Promise<void> {
-  const user = authService.getUser(userId);
+  const user = (await authService.getUser(userId));
   if (!user || !mailConfigured()) return;
   try { await sendMail(securityNoticeMail({ to: user.email, name: user.name, subject, message })); } catch { /* best effort */ }
 }
@@ -68,7 +69,7 @@ function bearerToken(req: Request): string | null {
   return null;
 }
 
-authRouter.post("/register", async (req, res) => {
+authRouter.post("/register", asyncHandler(async (req, res) => {
   // The web sign-up asks for a full name and agreement to the Terms (the desktop app collects its own).
   const web = req.body?.client === "web";
   if (web && String(req.body?.name ?? "").trim().split(/\s+/).filter(Boolean).length < 2) return res.status(400).json({ error: "Enter your first and last name." });
@@ -76,16 +77,16 @@ authRouter.post("/register", async (req, res) => {
     return res.status(400).json({ error: "Review and accept the current ORVYN Software License, Privacy Policy, Acceptable Use Policy, and AI & Agent Disclosure to create an account.", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   }
   try {
-    const { user, token, organization } = authService.register(
+    const { user, token, organization } = (await authService.register(
       String(req.body.email ?? ""),
       String(req.body.password ?? ""),
       req.body.name ? String(req.body.name) : undefined,
       deviceOf(req),
-    );
-    if (web) authService.acceptLegal(user.id, LEGAL_VERSION, "web-signup");
-    else if (req.body?.acceptTerms === true) authService.acceptTerms(user.id, Date.now(), String(req.body?.client ?? "client"));
-    if (typeof req.body?.organization === "string" && req.body.organization.trim() && organization?.id) authService.nameOrganization(organization.id, req.body.organization);
-    const session = authService.verifyPrincipal(token);
+    ));
+    if (web) (await authService.acceptLegal(user.id, LEGAL_VERSION, "web-signup"));
+    else if (req.body?.acceptTerms === true) (await authService.acceptTerms(user.id, Date.now(), String(req.body?.client ?? "client")));
+    if (typeof req.body?.organization === "string" && req.body.organization.trim() && organization?.id) (await authService.nameOrganization(organization.id, req.body.organization));
+    const session = (await authService.verifyPrincipal(token));
     // A new account starts onboarding at email verification (or straight at
     // provisioning when this server cannot send email).
     const required = verificationRequired();
@@ -103,53 +104,53 @@ authRouter.post("/register", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 /** The link in the verification email. Opens in the browser; ORVYN notices on its own. */
-authRouter.get("/verify", (req, res) => {
-  const user = authService.verifyEmailToken(String(req.query.token ?? ""));
+authRouter.get("/verify", asyncHandler(async (req, res) => {
+  const user = (await authService.verifyEmailToken(String(req.query.token ?? "")));
   if (user) {
     onboardingStore().track(user.id, "email_verified");
     const profile = onboardingStore().get(user.id);
     if (profile && profile.currentStep === "verification") onboardingStore().update(user.id, { step: "provisioning", completed: ["verification"] });
   }
   res.status(user ? 200 : 400).type("html").send(verifiedPage(Boolean(user)));
-});
+}));
 
-authRouter.get("/verification/status", (req, res) => {
+authRouter.get("/verification/status", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
-  res.json({ email: session.user.email, verified: authService.isEmailVerified(session.user.id), required: verificationRequired() });
-});
+  res.json({ email: session.user.email, verified: (await authService.isEmailVerified(session.user.id)), required: verificationRequired() });
+}));
 
-authRouter.post("/verification/resend", async (req, res) => {
+authRouter.post("/verification/resend", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
-  if (authService.isEmailVerified(session.user.id)) return res.json({ sent: false, verified: true });
+  if ((await authService.isEmailVerified(session.user.id))) return res.json({ sent: false, verified: true });
   const out = await sendVerification(req, session.user.id, session.user.name);
   res.status(out.sent ? 200 : 429).json(out);
-});
+}));
 
-authRouter.post("/verification/change-email", async (req, res) => {
+authRouter.post("/verification/change-email", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
   try {
-    const user = authService.changeUnverifiedEmail(session.user.id, String(req.body?.email ?? ""));
+    const user = (await authService.changeUnverifiedEmail(session.user.id, String(req.body?.email ?? "")));
     lastSent.delete(user.id);
     const out = await sendVerification(req, user.id, user.name);
     res.json({ email: user.email, ...out });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-authRouter.post("/login", (req, res) => {
+authRouter.post("/login", asyncHandler(async (req, res) => {
   try {
-    const { user, token, organization } = authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""), deviceOf(req));
-    const session = authService.verifyPrincipal(token);
+    const { user, token, organization } = (await authService.login(String(req.body.email ?? ""), String(req.body.password ?? ""), deviceOf(req)));
+    const session = (await authService.verifyPrincipal(token));
     res.json({
       user,
       token,
@@ -161,9 +162,9 @@ authRouter.post("/login", (req, res) => {
     const status = err.message.startsWith("Too many") ? 429 : 401;
     res.status(status).json({ error: err.message });
   }
-});
+}));
 
-authRouter.post("/logout", (req, res) => {
+authRouter.post("/logout", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
   if (token?.startsWith("orvview_")) {
     const view = staffStore().resolveViewAs(token);
@@ -171,34 +172,34 @@ authRouter.post("/logout", (req, res) => {
     if (view) staffStore().audit({ actorId: view.staffId, actorEmail: view.staffEmail, action: "support.view_as_end", tenantId: view.tenantId, ip: req.ip ?? null });
     return res.json({ ok: true });
   }
-  if (token) authService.logout(token);
+  if (token) (await authService.logout(token));
   res.json({ ok: true });
-});
+}));
 
-authRouter.post("/switch-organization", (req, res) => {
+authRouter.post("/switch-organization", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
   if (!token) return res.status(401).json({ error: "Not signed in" });
   try {
-    const switched = authService.switchOrganization(token, String(req.body.organizationId ?? ""));
+    const switched = (await authService.switchOrganization(token, String(req.body.organizationId ?? "")));
     res.json(switched);
   } catch (err: any) {
     res.status(err.status ?? 400).json({ error: err.message === "Not found" ? "Not found" : err.message });
   }
-});
+}));
 
-authRouter.get("/me", (req, res) => {
+authRouter.get("/me", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
   // Staff "View as customer" (read-only): the customer's view, labelled as a support session.
   const view = token?.startsWith("orvview_") ? staffStore().resolveViewAs(token) : null;
-  const session = view ? authService.principalFor(view.userId, view.organizationId) : token ? authService.verifyPrincipal(token) : null;
+  const session = view ? (await authService.principalFor(view.userId, view.organizationId)) : token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
   const profile = onboardingStore().get(session.user.id);
   if (!view && process.env.ORVYN_SUPER_ADMIN_EMAILS) staffStore().seedFromEnv();
   const paused = staffStore().suspension(session.principal.tenantId);
   res.json({
-    user: { ...session.user, emailVerified: authService.isEmailVerified(session.user.id) },
+    user: { ...session.user, emailVerified: (await authService.isEmailVerified(session.user.id)) },
     principal: session.principal,
-    organizations: authService.listOrganizations(session.user.id),
+    organizations: (await authService.listOrganizations(session.user.id)),
     onboarding: profile ? { step: profile.currentStep, completedAt: profile.completedAt } : null,
     verificationRequired: verificationRequired(),
     staff: view ? null : (() => { const role = staffStore().roleOf(session.user.id); return role ? { role } : null; })(),
@@ -206,38 +207,38 @@ authRouter.get("/me", (req, res) => {
     viewAs: view ? { staffEmail: view.staffEmail, expiresAt: view.expiresAt, paused: Boolean(paused) } : null,
     legal: view ? { version: LEGAL_VERSION, accepted: true, acceptance: null } : {
       version: LEGAL_VERSION,
-      accepted: authService.hasAcceptedCurrentLegal(session.user.id),
-      acceptance: authService.legalAcceptance(session.user.id),
+      accepted: (await authService.hasAcceptedCurrentLegal(session.user.id)),
+      acceptance: (await authService.legalAcceptance(session.user.id)),
     },
   });
-});
+}));
 
 /** Public legal bundle. Signed-in callers also receive their acceptance status. */
-authRouter.get("/legal", (req, res) => {
+authRouter.get("/legal", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   res.json({
     ...publicLegalBundle(),
-    acceptance: session ? authService.legalAcceptance(session.user.id) : null,
-    accepted: session ? authService.hasAcceptedCurrentLegal(session.user.id) : false,
+    acceptance: session ? (await authService.legalAcceptance(session.user.id)) : null,
+    accepted: session ? (await authService.hasAcceptedCurrentLegal(session.user.id)) : false,
   });
-});
+}));
 
-authRouter.post("/legal/accept", (req, res) => {
+authRouter.post("/legal/accept", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const session = token ? authService.verifyPrincipal(token) : null;
+  const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
   try {
-    const acceptance = authService.acceptLegal(
+    const acceptance = (await authService.acceptLegal(
       session.user.id,
       String(req.body?.version ?? ""),
       String(req.body?.source ?? "web"),
-    );
+    ));
     res.json({ accepted: true, acceptance, version: LEGAL_VERSION });
   } catch (err: any) {
     res.status(err?.status ?? 400).json({ error: err.message, code: err?.code });
   }
-});
+}));
 
 function verifiedPage(ok: boolean): string {
   const title = ok ? "Email verified" : "This link has expired";
@@ -252,45 +253,45 @@ function verifiedPage(ok: boolean): string {
 }
 
 /** The browser's chat socket: a one-minute, single-use ticket instead of the session token in the URL. */
-authRouter.post("/ws-ticket", (req, res) => {
+authRouter.post("/ws-ticket", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const ticket = token ? authService.createWsTicket(token) : null;
+  const ticket = token ? (await authService.createWsTicket(token)) : null;
   if (!ticket) return res.status(401).json({ error: "Not signed in" });
   res.json({ ticket });
-});
+}));
 
 // ---------- sessions: see them, end one, end all, rotate ----------
 
-authRouter.get("/sessions", (req, res) => {
-  const s = sessionOf(req);
+authRouter.get("/sessions", asyncHandler(async (req, res) => {
+  const s = (await sessionOf(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  res.json({ sessions: authService.listSessions(s.user.id, s.token) });
-});
+  res.json({ sessions: (await authService.listSessions(s.user.id, s.token)) });
+}));
 
-authRouter.delete("/sessions/:id", (req, res) => {
-  const s = sessionOf(req);
+authRouter.delete("/sessions/:id", asyncHandler(async (req, res) => {
+  const s = (await sessionOf(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  const ok = authService.revokeSession(s.user.id, String(req.params.id));
+  const ok = (await authService.revokeSession(s.user.id, String(req.params.id)));
   res.status(ok ? 200 : 404).json({ ok });
-});
+}));
 
 /** Sign out everywhere else (or everywhere, with {includeThis: true}). */
-authRouter.post("/logout-all", async (req, res) => {
-  const s = sessionOf(req);
+authRouter.post("/logout-all", asyncHandler(async (req, res) => {
+  const s = (await sessionOf(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  const ended = authService.logoutAll(s.user.id, req.body?.includeThis === true ? undefined : s.token);
-  if (req.body?.includeThis === true) authService.logout(s.token);
-  void notify(s.user.id, "You were signed out of ORVYN everywhere", "All other devices signed in to your ORVYN account were signed out.");
+  const ended = (await authService.logoutAll(s.user.id, req.body?.includeThis === true ? undefined : s.token));
+  if (req.body?.includeThis === true) (await authService.logout(s.token));
+  void (await notify(s.user.id, "You were signed out of ORVYN everywhere", "All other devices signed in to your ORVYN account were signed out."));
   res.json({ ended });
-});
+}));
 
 /** A fresh session token for this device; the old one stops working (reuse ends the whole family). */
-authRouter.post("/refresh", (req, res) => {
+authRouter.post("/refresh", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
-  const next = token ? authService.rotateSession(token) : null;
+  const next = token ? (await authService.rotateSession(token)) : null;
   if (!next) return res.status(401).json({ error: "Session expired — sign in again." });
   res.json({ token: next });
-});
+}));
 
 // ---------- password reset ----------
 
@@ -301,7 +302,7 @@ export async function sendPasswordReset(req: Request, emailInput: string): Promi
   const email = emailInput.trim().toLowerCase();
   if (!mailConfigured()) return { sent: false, error: "Email is not configured on this server." };
   if (Date.now() - (resetSent.get(email) ?? 0) < 60_000) return { sent: false, error: "A reset email was sent less than a minute ago." };
-  const reset = authService.createPasswordReset(email);
+  const reset = (await authService.createPasswordReset(email));
   if (!reset) return { sent: false, error: "No account uses that email." };
   resetSent.set(email, Date.now());
   const link = `${publicOrigin(req)}/api/v1/auth/reset?token=${encodeURIComponent(reset.token)}`;
@@ -316,12 +317,12 @@ export async function sendPasswordReset(req: Request, emailInput: string): Promi
 }
 
 /** Always answers the same, whether or not the account exists. */
-authRouter.post("/password/forgot", async (req, res) => {
+authRouter.post("/password/forgot", asyncHandler(async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   const answer = { ok: true, message: "If an account uses that email, a reset link is on its way." };
   if (!email || Date.now() - (resetSent.get(email) ?? 0) < 60_000) return res.json(answer);
   resetSent.set(email, Date.now());
-  const reset = authService.createPasswordReset(email);
+  const reset = (await authService.createPasswordReset(email));
   if (reset && mailConfigured()) {
     const link = `${publicOrigin(req)}/api/v1/auth/reset?token=${encodeURIComponent(reset.token)}`;
     try { await sendMail(passwordResetMail({ to: reset.user.email, name: reset.user.name, link })); } catch (err: any) {
@@ -329,17 +330,17 @@ authRouter.post("/password/forgot", async (req, res) => {
     }
   }
   res.json(answer);
-});
+}));
 
-authRouter.post("/password/reset", async (req, res) => {
+authRouter.post("/password/reset", asyncHandler(async (req, res) => {
   try {
-    const user = authService.resetPassword(String(req.body?.token ?? ""), String(req.body?.password ?? ""));
-    void notify(user.id, "Your ORVYN password was changed", "Your password was just changed and every device was signed out.");
+    const user = (await authService.resetPassword(String(req.body?.token ?? ""), String(req.body?.password ?? "")));
+    void (await notify(user.id, "Your ORVYN password was changed", "Your password was just changed and every device was signed out."));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 /** The page the reset email links to (works without the app). */
 authRouter.get("/reset", (req, res) => {
@@ -375,7 +376,7 @@ function b64url(buf: Buffer): string { return buf.toString("base64url"); }
  * Starts provider sign-in. Desktop: ?client=desktop&hid=<id>&challenge=<S256(verifier)>
  * (the app later claims the session with its verifier). No token ever rides a URL.
  */
-authRouter.get("/oauth/:provider/start", (req, res) => {
+authRouter.get("/oauth/:provider/start", asyncHandler(async (req, res) => {
   const provider = String(req.params.provider);
   const p = oauthProvider(provider);
   if (!p || !oauthConfigured(provider)) return res.status(404).type("html").send(page("Not available", `<p>Sign-in with ${escapeHtml(provider)} isn't switched on.</p>`));
@@ -385,7 +386,7 @@ authRouter.get("/oauth/:provider/start", (req, res) => {
     // Desktop and the Cloud portal both hand the session over by claim (id + secret verifier).
     if (client === "desktop" || req.query.hid) {
       handoffId = String(req.query.hid ?? "");
-      authService.startHandoff(handoffId, String(req.query.challenge ?? ""));
+      (await authService.startHandoff(handoffId, String(req.query.challenge ?? "")));
     }
   } catch (err: any) {
     return res.status(400).type("html").send(page("Sign-in didn't start", `<p>${escapeHtml(err.message)}. Go back to ORVYN and try again.</p>`));
@@ -393,11 +394,11 @@ authRouter.get("/oauth/:provider/start", (req, res) => {
   const state = b64url(randomBytes(24));
   const verifier = b64url(randomBytes(32));
   const challenge = b64url(createHash("sha256").update(verifier).digest());
-  authService.saveOAuthState({ state, provider, verifier, client, handoffId });
+  (await authService.saveOAuthState({ state, provider, verifier, client, handoffId }));
   res.redirect(302, authorizeUrl(p, { redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/${provider}/callback`, state, challenge }));
-});
+}));
 
-authRouter.get("/oauth/:provider/callback", async (req, res) => {
+authRouter.get("/oauth/:provider/callback", asyncHandler(async (req, res) => {
   const provider = String(req.params.provider);
   const p = oauthProvider(provider);
   res.setHeader("Cache-Control", "no-store");
@@ -405,28 +406,28 @@ authRouter.get("/oauth/:provider/callback", async (req, res) => {
   const fail = (msg: string) => res.status(400).type("html").send(page("Sign-in didn't finish", `<p>${escapeHtml(msg)}</p><p>Go back to ORVYN and try again.</p>`));
   if (!p || !oauthConfigured(provider)) return fail("This sign-in method isn't switched on.");
   if (req.query.error) return fail("Sign-in was cancelled.");
-  const saved = authService.takeOAuthState(String(req.query.state ?? ""), provider);
+  const saved = (await authService.takeOAuthState(String(req.query.state ?? ""), provider));
   if (!saved) return fail("This sign-in link expired or was already used.");
   try {
     // "Connect GitHub" (repository access) shares this callback: the link id names the ORVYN account.
     if (saved.client === "github-connect" && provider === "github" && saved.handoffId) {
       const out = await exchangeCodeWithToken(p, { code: String(req.query.code ?? ""), redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/${provider}/callback`, verifier: saved.verifier });
-      const userId = authService.takeGithubLink(saved.handoffId);
+      const userId = (await authService.takeGithubLink(saved.handoffId));
       if (!userId) return fail("This connect link expired.");
-      saveGithubConnection(userId, { token: out.accessToken, login: out.profile.name ?? "", scope: out.scope });
+      (await saveGithubConnection(userId, { token: out.accessToken, login: out.profile.name ?? "", scope: out.scope }));
       return res.type("html").send(page("GitHub connected", "<p>Go back to ORVYN — it continues on its own. You can close this tab.</p>"));
     }
     const profile = await exchangeCode(p, { code: String(req.query.code ?? ""), redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/${provider}/callback`, verifier: saved.verifier });
-    const user = authService.userForOAuth({ provider, subject: profile.subject, email: profile.email, emailVerified: profile.emailVerified, name: profile.name });
+    const user = (await authService.userForOAuth({ provider, subject: profile.subject, email: profile.email, emailVerified: profile.emailVerified, name: profile.name }));
     onboardingStore().track(user.id, "signup_completed", { method: provider });
     if (saved.client === "desktop" && saved.handoffId) {
-      if (!authService.completeHandoff(saved.handoffId, user.id)) return fail("This sign-in request expired.");
+      if (!(await authService.completeHandoff(saved.handoffId, user.id))) return fail("This sign-in request expired.");
       return res.type("html").send(page("You're signed in", "<p>Go back to ORVYN — it continues on its own. You can close this tab.</p>"));
     }
     // The Cloud portal: back to the portal, which claims its session with the
     // verifier it kept (the URL carries only the public handoff id).
     if (saved.handoffId) {
-      if (!authService.completeHandoff(saved.handoffId, user.id)) return fail("This sign-in request expired.");
+      if (!(await authService.completeHandoff(saved.handoffId, user.id))) return fail("This sign-in request expired.");
       return res.redirect(302, `${publicOrigin(req)}/signin?complete=${encodeURIComponent(saved.handoffId)}`);
     }
     return res.type("html").send(page("You're signed in", "<p>You can close this tab and return to ORVYN.</p>"));
@@ -434,36 +435,36 @@ authRouter.get("/oauth/:provider/callback", async (req, res) => {
     console.warn(JSON.stringify({ event: "auth.oauth.failed", provider, reason: String(err?.message ?? err).slice(0, 120) }));
     return fail(/verified email/.test(String(err?.message)) ? err.message : "The provider didn't confirm your sign-in.");
   }
-});
+}));
 
 /** "Connect GitHub" from a signed-in app: a one-time link the browser opens (no session in the URL). */
-authRouter.post("/github/connect-link", (req, res) => {
-  const s = sessionOf(req);
+authRouter.post("/github/connect-link", asyncHandler(async (req, res) => {
+  const s = (await sessionOf(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
   if (!oauthConfigured("github")) return res.status(404).json({ error: "GitHub connection isn't switched on." });
-  const link = authService.createGithubLink(s.user.id);
+  const link = (await authService.createGithubLink(s.user.id));
   res.json({ url: `${publicOrigin(req)}/api/v1/auth/github/connect?link=${encodeURIComponent(link)}` });
-});
+}));
 
-authRouter.get("/github/connect", (req, res) => {
+authRouter.get("/github/connect", asyncHandler(async (req, res) => {
   const p = oauthProvider("github");
   if (!p || !oauthConfigured("github")) return res.status(404).type("html").send(page("Not available", "<p>GitHub connection isn't switched on.</p>"));
   const link = String(req.query.link ?? "");
-  if (!authService.githubLinkValid(link)) return res.status(400).type("html").send(page("This link expired", "<p>Go back to ORVYN and choose Connect GitHub again.</p>"));
+  if (!(await authService.githubLinkValid(link))) return res.status(400).type("html").send(page("This link expired", "<p>Go back to ORVYN and choose Connect GitHub again.</p>"));
   const state = b64url(randomBytes(24));
   const verifier = b64url(randomBytes(32));
-  authService.saveOAuthState({ state, provider: "github", verifier, client: "github-connect", handoffId: link });
+  (await authService.saveOAuthState({ state, provider: "github", verifier, client: "github-connect", handoffId: link }));
   res.redirect(302, authorizeUrl(p, { redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/github/callback`, state, challenge: b64url(createHash("sha256").update(verifier).digest()), scope: "repo read:user user:email" }));
-});
+}));
 
 /** The desktop claims its session with the secret verifier: "pending" until the browser finishes; the token exactly once. */
-authRouter.post("/handoff/claim", (req, res) => {
-  const out = authService.claimHandoff(String(req.body?.hid ?? ""), String(req.body?.verifier ?? ""), deviceOf(req));
+authRouter.post("/handoff/claim", asyncHandler(async (req, res) => {
+  const out = (await authService.claimHandoff(String(req.body?.hid ?? ""), String(req.body?.verifier ?? ""), deviceOf(req)));
   if (out.status === "pending") return res.status(202).json({ status: "pending" });
   if (out.status === "invalid") return res.status(400).json({ status: "invalid", error: "This sign-in request expired. Try again." });
-  const session = authService.verifyPrincipal(out.token)!;
-  res.json({ status: "ok", token: out.token, user: session.user, principal: session.principal, organizations: authService.listOrganizations(session.user.id) });
-});
+  const session = (await authService.verifyPrincipal(out.token))!;
+  res.json({ status: "ok", token: out.token, user: session.user, principal: session.principal, organizations: (await authService.listOrganizations(session.user.id)) });
+}));
 
 const INPUT = "display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:10px 12px;border-radius:8px;border:1px solid #2a3350;background:#0b1024;color:#F8FAFF;font:inherit";
 

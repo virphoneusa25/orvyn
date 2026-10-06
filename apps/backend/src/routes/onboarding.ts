@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/onboarding.ts
 //
 // The onboarding state machine over HTTP. Web and desktop call the same
@@ -7,7 +8,7 @@
 
 import { onAdminHost } from "../http/hosts";
 import { Router, type Request, type Response } from "express";
-import { authService } from "../auth/AuthService";
+import { authService } from "../auth/AsyncAuthService";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { PLANS, planById, CREDIT_PACKS } from "../billing/plans";
 import {
@@ -24,39 +25,39 @@ import { githubConnection } from "../integrations/githubConnection";
 
 export const onboardingRouter = Router();
 
-function session(req: Request) {
+async function session(req: Request) {
   const header = req.header("authorization");
   const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
-  return token ? authService.verifyPrincipal(token) : null;
+  return token ? (await authService.verifyPrincipal(token)) : null;
 }
 
 const index = (s: OnboardingStep) => ONBOARDING_STEPS.indexOf(s);
 
 /** The profile, creating it for an account that existed before onboarding ("finish setup"). */
-function profileFor(userId: string) {
+async function profileFor(userId: string) {
   const store = onboardingStore();
   let profile = store.get(userId);
   if (!profile) {
     // Existing account: never asked to sign up or verify again.
-    authService.markEmailVerified(userId);
+    (await authService.markEmailVerified(userId));
     profile = store.ensure(userId, "provisioning", ["welcome", "signup", "verification"]);
-    const name = authService.getUser(userId)?.name;
+    const name = (await authService.getUser(userId))?.name;
     if (name) profile = store.update(userId, { answers: { name } });
   }
   return profile;
 }
 
-function view(userId: string) {
-  const profile = profileFor(userId);
-  const user = authService.getUser(userId)!;
-  const tenantId = authService.listOrganizations(userId).find((o) => o.kind === "personal")?.tenantId ?? "";
+async function view(userId: string) {
+  const profile = (await profileFor(userId));
+  const user = (await authService.getUser(userId))!;
+  const tenantId = (await authService.listOrganizations(userId)).find((o) => o.kind === "personal")?.tenantId ?? "";
   const planId = tenantId ? creditLedger.planOf(tenantId) : null;
   return {
     profile,
     steps: ONBOARDING_STEPS,
-    user: { id: user.id, email: user.email, name: user.name, emailVerified: authService.isEmailVerified(userId) },
+    user: { id: user.id, email: user.email, name: user.name, emailVerified: (await authService.isEmailVerified(userId)) },
     verificationRequired: verificationRequired(),
-    provisioning: provisioningStatus(userId),
+    provisioning: (await provisioningStatus(userId)),
     plan: planId ? publicPlan(planById(planId)) : null,
   };
 }
@@ -69,66 +70,66 @@ function publicPlan(p: (typeof PLANS)[keyof typeof PLANS]) {
   };
 }
 
-onboardingRouter.get("/", (req, res) => {
-  const s = session(req);
+onboardingRouter.get("/", asyncHandler(async (req, res) => {
+  const s = (await session(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  res.json(view(s.user.id));
-});
+  res.json((await view(s.user.id)));
+}));
 
 /** Save answers and move to a step. Steps after verification need a verified email. */
-onboardingRouter.put("/", (req: Request, res: Response) => {
-  const s = session(req);
+onboardingRouter.put("/", asyncHandler(async (req: Request, res: Response) => {
+  const s = (await session(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
   const userId = s.user.id;
-  const current = profileFor(userId);
+  const current = (await profileFor(userId));
   const step = isStep(req.body?.step) ? (req.body.step as OnboardingStep) : undefined;
   const completed = Array.isArray(req.body?.completed) ? (req.body.completed as unknown[]).filter(isStep) : [];
   const answers = sanitizeAnswers(req.body?.answers);
-  if (step && index(step) > index("verification") && verificationRequired() && !authService.isEmailVerified(userId)) {
-    return res.status(409).json({ error: "Verify your email first.", code: "EMAIL_NOT_VERIFIED", ...view(userId) });
+  if (step && index(step) > index("verification") && verificationRequired() && !(await authService.isEmailVerified(userId))) {
+    return res.status(409).json({ error: "Verify your email first.", code: "EMAIL_NOT_VERIFIED", ...(await view(userId)) });
   }
-  if (step && index(step) > index("provisioning") && provisioningStatus(userId).some((p) => !p.done)) {
-    return res.status(409).json({ error: "Your workspace is still being set up.", code: "NOT_PROVISIONED", ...view(userId) });
+  if (step && index(step) > index("provisioning") && (await provisioningStatus(userId)).some((p) => !p.done)) {
+    return res.status(409).json({ error: "Your workspace is still being set up.", code: "NOT_PROVISIONED", ...(await view(userId)) });
   }
   try {
-    if (answers.name) authService.setName(userId, answers.name);
+    if (answers.name) (await authService.setName(userId, answers.name));
   } catch { /* the name stays in the answers */ }
   const updated = onboardingStore().update(userId, { step, completed, answers });
   try {
-    applyPreferences(userId, updated.answers);
+    (await applyPreferences(userId, updated.answers));
   } catch { /* preferences apply on the next save */ }
   for (const c of completed) if (!current.completedSteps.includes(c)) onboardingStore().track(userId, "onboarding_step_completed", { step: c });
   if (step && step !== current.currentStep) onboardingStore().track(userId, "onboarding_step_viewed", { step });
   if (step === "complete" && !current.completedAt) onboardingStore().track(userId, "onboarding_completed");
-  res.json({ ...view(userId), profile: updated });
-});
+  res.json({ ...(await view(userId)), profile: updated });
+}));
 
 /** Runs the account bootstrap (idempotent) and reports the real state of each step. */
-onboardingRouter.post("/provision", (req, res) => {
-  const s = session(req);
+onboardingRouter.post("/provision", asyncHandler(async (req, res) => {
+  const s = (await session(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  const steps = provisionAccount(s.user.id);
+  const steps = (await provisionAccount(s.user.id));
   const profile = onboardingStore().get(s.user.id);
   if (steps.every((p) => p.done) && profile && index(profile.currentStep) <= index("provisioning")) {
     onboardingStore().update(s.user.id, { step: "name", completed: ["verification", "provisioning"] });
   }
-  res.json(view(s.user.id));
-});
+  res.json((await view(s.user.id)));
+}));
 
-onboardingRouter.post("/event", (req, res) => {
-  const s = session(req);
+onboardingRouter.post("/event", asyncHandler(async (req, res) => {
+  const s = (await session(req));
   const name = String(req.body?.name ?? "");
   if (!ANALYTICS_EVENTS.has(name)) return res.status(400).json({ error: "Unknown event" });
   onboardingStore().track(s?.user.id ?? null, name, (req.body?.props ?? {}) as Record<string, string | number | boolean>);
   res.json({ ok: true });
-});
+}));
 
 /** Whether this account has connected GitHub (repository access). */
-onboardingRouter.get("/github", (req, res) => {
-  const s = session(req);
+onboardingRouter.get("/github", asyncHandler(async (req, res) => {
+  const s = (await session(req));
   if (!s) return res.status(401).json({ error: "Not signed in" });
-  res.json(githubConnection(s.user.id));
-});
+  res.json((await githubConnection(s.user.id)));
+}));
 
 /** Public plan list for the pricing screens (from the billing configuration). */
 onboardingRouter.get("/plans", (_req, res) => {
