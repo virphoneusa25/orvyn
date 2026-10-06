@@ -83,6 +83,11 @@ jobs:
           ORVYN_STRIPE_STORAGE_TEST: "1"
           ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
         run: node --test apps/backend/dist/billing/PostgresStripeStorage.test.js
+      - name: PostgreSQL payment runtime and shared billing transactions
+        env:
+          ORVYN_PAYMENT_RUNTIME_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
+        run: node --test apps/backend/dist/billing/PostgresPaymentRuntime.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         env:
           PGPASSWORD: test-password
