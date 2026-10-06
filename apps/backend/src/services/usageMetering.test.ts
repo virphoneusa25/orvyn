@@ -3,6 +3,70 @@ import assert from "node:assert/strict";
 import { UsageService, type UsageEvent } from "./UsageService";
 import { OpenAICompatibleAdapter, settledProviderCost } from "@orvyn/ai-core";
 
+function deferred() {
+  let resolve!:()=>void;
+  const promise=new Promise<void>(done=>{resolve=done;});
+  return {promise,resolve};
+}
+
+test("generate awaits asynchronous admission, settlement and lease cleanup before completing",async()=>{
+  const usage=new UsageService(),guard=deferred(),guardEntered=deferred(),sink=deferred(),sinkEntered=deferred(),release=deferred(),releaseEntered=deferred();
+  let reached=false,finished=false;
+  const provider=fakeProvider([]);
+  provider.generate=async()=>{reached=true;return {content:"fixture"};};
+  usage.onPreflight(async()=>{guardEntered.resolve();await guard.promise;return async()=>{releaseEntered.resolve();await release.promise;};});
+  usage.onRecord(async()=>{sinkEntered.resolve();await sink.promise;});
+  const result=usage.wrap(provider).generate({messages:[]}).then(()=>{finished=true;});
+  await guardEntered.promise;assert.equal(reached,false);
+  guard.resolve();await sinkEntered.promise;assert.equal(reached,true);assert.equal(finished,false);
+  sink.resolve();await releaseEntered.promise;assert.equal(finished,false);
+  release.resolve();await result;assert.equal(finished,true);
+  assert.equal(usage.recent().length,1);
+});
+
+test("concurrent preflights share one asynchronous retry and block providers until it finishes",async()=>{
+  const usage=new UsageService(),retry=deferred(),entered=deferred();
+  let ready=false,retries=0,reached=0;
+  usage.onRecord(async event=>{
+    if(!ready)throw new Error("fixture settlement outage");
+    if(event.modelId==="pending-fixture"){retries++;entered.resolve();await retry.promise;}
+  });
+  await usage.record({modelId:"pending-fixture",provider:"fixture",method:"generate",durationMs:1,ok:true});
+  ready=true;
+  const provider=fakeProvider([]);provider.generate=async()=>{reached++;return {content:"fixture"};};
+  const wrapped=usage.wrap(provider),results=Promise.all([wrapped.generate({messages:[]}),wrapped.generate({messages:[]})]);
+  await entered.promise;assert.equal(retries,1);assert.equal(reached,0);
+  retry.resolve();await results;assert.equal(retries,1);assert.equal(reached,2);
+});
+
+test("async guard failure awaits all earlier cleanup and preserves the admission error",async()=>{
+  const usage=new UsageService(),calls:string[]=[];let reached=false;
+  usage.onPreflight(async()=>async()=>{await Promise.resolve();calls.push("first");});
+  usage.onPreflight(async()=>async()=>{calls.push("second");throw new Error("fixture cleanup failure");});
+  usage.onPreflight(async()=>{throw new Error("fixture admission failure");});
+  const provider=fakeProvider([]);provider.generate=async()=>{reached=true;return {content:"fixture"};};
+  await assert.rejects(usage.wrap(provider).generate({messages:[]}),/fixture admission failure/);
+  assert.deepEqual(calls,["second","first"]);assert.equal(reached,false);assert.equal(usage.recent().length,0);
+});
+
+test("image failure awaits asynchronous reservation release",async()=>{
+  const usage=new UsageService(),release=deferred(),entered=deferred();let finished=false;
+  usage.onPreflight(async()=>async()=>{entered.resolve();await release.promise;});
+  const result=assert.rejects(usage.imageCall({id:"fixture-image",provider:"openai-compatible"},1,async()=>{throw new Error("fixture image failed");},()=>1),/fixture image failed/).then(()=>{finished=true;});
+  await entered.promise;assert.equal(finished,false);
+  release.resolve();await result;assert.equal(usage.recent()[0].ok,false);
+});
+
+test("early stream cancellation awaits asynchronous metering and cleanup exactly once",async()=>{
+  const usage=new UsageService(),sink=deferred(),entered=deferred();let records=0,releases=0,finished=false;
+  usage.onPreflight(async()=>async()=>{await Promise.resolve();releases++;});
+  usage.onRecord(async()=>{records++;entered.resolve();await sink.promise;});
+  const wrapped=usage.wrap(fakeProvider([{delta:"fixture",done:false},{delta:"unread",done:true}]));
+  const result=(async()=>{for await(const _ of wrapped.stream({messages:[]})){break;}finished=true;})();
+  await entered.promise;assert.equal(finished,false);assert.equal(releases,0);
+  sink.resolve();await result;assert.equal(records,1);assert.equal(releases,1);assert.equal(usage.recent()[0].ok,true);
+});
+
 function fakeProvider(chunks: { delta: string; done: boolean; usage?: { promptTokens: number; completionTokens: number } }[]) {
   return {
     config: { id: "fake-model", provider: "openai-compatible" },

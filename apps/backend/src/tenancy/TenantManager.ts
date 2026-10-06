@@ -14,12 +14,12 @@ import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { releaseSandboxControlForRun } from "../desktop/sandboxDesktop";
-import { creditLedger } from "../billing/creditLedgerInstance";
-import { settleProviderUsage, recordProviderQuote } from "../billing/providerSettlement";
+import { creditLedger } from "../billing/AsyncFinancialStores";
+import { recordProviderQuote } from "../billing/providerSettlement";
+import { TenantBilling } from "../billing/TenantBilling";
 import { customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
 import { openModelConfig } from "../models/userModels";
-import { LANE_FACTORS, laneForUsage, planById } from "../billing/plans";
-import { customerCreditsFor } from "../billing/creditMath";
+import { laneForUsage } from "../billing/plans";
 import { requiredCapability, TaskType } from "@orvyn/ai-core";
 import { embedModelChoice, ModelService } from "../services/ModelService";
 import { IndexService } from "../indexing/IndexService";
@@ -143,27 +143,22 @@ export class TenantManager {
     if (preferred && modelService.isUserModel(preferred)) modelService.preferredModel = preferred;
     // Every provider is metered; from here they're also durably recorded.
     modelService.usage.attachStore(localStore);
-    const recoverBilling = () => {
-      for (const pending of localStore.pendingBilling()) {
-        settleProviderUsage(creditLedger, id, pending.event, pending.own, creditsEnforced());
-        localStore.completeBilling(pending.event.id);
-      }
-      if (localStore.pendingBilling().length) throw new Error("Billing recovery is still pending.");
-    };
-    void modelService.huggingFaceReady.then(() => {
+    const billing = new TenantBilling(creditLedger, id, localStore);
+    void modelService.huggingFaceReady.then(async () => {
       for (const p of modelService.registry.list()) {
         if (modelService.isUserModel(p.config.id)) continue;
         const rate = p.config.rate, imageRate = p.config.imageRate;
-        if (rate && rate.expiresAt > Date.now()) recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, rate });
-        if (imageRate && imageRate.expiresAt > Date.now()) recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, imageRate });
+        if (rate && rate.expiresAt > Date.now()) await recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, rate });
+        if (imageRate && imageRate.expiresAt > Date.now()) await recordProviderQuote(creditLedger, { provider: p.config.providerName ?? p.config.provider, modelId: p.config.id, imageRate });
       }
     }).catch(() => console.warn("Provider billing price initialization failed; paid calls remain guarded."));
     // Before every model call: the wallet (balance, rolling windows, the run's
     // budget) must be able to pay for it. Enforced on ORVYN Cloud; a local
     // engine running on the user's own keys only records.
-    modelService.usage.onPreflight((ctx, model) => {
+    modelService.usage.onPreflight(async (ctx, model) => {
       if (!creditsEnforced()) return;
-      recoverBilling();
+      await billing.awaitRun(ctx.missionId);
+      await billing.recover(creditsEnforced());
       // The customer's own model runs on their provider account, not ORVYN credits.
         if (model && modelService.isUserModel(model.id)) return;
         if (model?.method === "image") {
@@ -177,15 +172,13 @@ export class TenantManager {
       if (!model?.rate || model.rate.expiresAt <= Date.now() || ![model.rate.input, model.rate.output, model.rate.cachedInput ?? model.rate.input].every((n) => Number.isFinite(n) && n >= 0)) {
         throw new Error("This model is unavailable until a current exact billing price is configured.");
       }
-      recordProviderQuote(creditLedger, { provider: model.providerName ?? model.provider ?? "", modelId: model.id, rate: model.rate });
-      creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
+      await recordProviderQuote(creditLedger, { provider: model.providerName ?? model.provider ?? "", modelId: model.id, rate: model.rate });
+      await creditLedger.assertCanSpend(id, ctx.missionId, Date.now(), { lane: laneForUsage(ctx) });
     });
     // After it: settle exactly once per call (the usage event id is the key).
-      modelService.usage.onRecord((event) => {
+      modelService.usage.onRecord(async (event) => {
         const own = modelService.isUserModel(event.modelId);
-        localStore.enqueueBilling(event, own);
-        settleProviderUsage(creditLedger, id, event, own, creditsEnforced());
-        localStore.completeBilling(event.id);
+        await billing.record(event, own, creditsEnforced());
     });
     // Restore the user's routing choices, the same way the autonomy profile is
     // restored. Without this, every restart silently reverted routing to the
@@ -287,18 +280,14 @@ export class TenantManager {
     // settles against the hold; what is left returns when the run ends.
     tenant.runStore.onCreated((runId) => {
       if (!creditsEnforced()) return;
-      try {
-        const available = creditLedger.snapshot(id).availableBalance;
-        const plan = planById(creditLedger.planOf(id) ?? "free");
-        const budget = customerCreditsFor(plan.perRunCostUsd, LANE_FACTORS.auto).customerCredits;
-        const hold = Math.min(budget, available);
-        if (hold > 0) creditLedger.reserve(id, runId, hold);
-      } catch (err) {
+      void billing.reserveRun(runId).catch((err) => {
         console.warn(JSON.stringify({ event: "credits.reserve_failed", tenantId: id, runId, code: (err as { code?: string }).code ?? "ERROR" }));
-      }
+      });
     });
     tenant.runStore.onTerminalStatus((runId) => {
-      try { creditLedger.release(runId); } catch { /* nothing held */ }
+      void billing.releaseRun(runId).catch(() => {
+        console.warn(JSON.stringify({ event: "credits.release_failed", tenantId: id, runId }));
+      });
     });
     tenant.runStore.onTerminalStatus((runId) => {
       const released = releaseSandboxControlForRun(runId);
