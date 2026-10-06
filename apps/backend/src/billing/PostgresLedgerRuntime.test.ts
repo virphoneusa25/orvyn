@@ -16,6 +16,33 @@ import {recordProviderQuote} from "./providerSettlement";
 
 const integration=process.env.ORVYN_LEDGER_RUNTIME_TEST==="1"&&Boolean(process.env.ORVYN_PG_URL);
 const now=Date.UTC(2026,9,12),day=86400000;
+test("PostgreSQL recharge recovery reconnects with the same Stripe identity after a lost response",{skip:!integration},async()=>{
+  let owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const original=globalThis.fetch,account="runtime-recharge-recovery",at=Date.now(),keys:string[]=[];
+  let lose=true;const intents=new Map<string,string>();
+  const config={secretKey:"sk_fixture",webhookSecret:"whsec_fixture",apiBase:"https://stripe.fixture",publicOrigin:"https://fixture.example"};
+  globalThis.fetch=(async(url,options)=>{
+    if(String(url).includes("payment_methods"))return Response.json({data:[{id:"pm_runtime_recovery"}]});
+    const key=(options!.headers as Record<string,string>)["Idempotency-Key"];keys.push(key);
+    if(!intents.has(key))intents.set(key,"pi_runtime_recovery");
+    if(lose){lose=false;throw new TypeError("fixture lost payment response");}
+    return Response.json({id:intents.get(key)});
+  }) as typeof fetch;
+  try {
+    await owner.ledger.setPlan(account,"starter",at);await owner.payments.saveCustomer(account,"cus_runtime_recovery","fixture@example.test");
+    await owner.ledger.setAutoRecharge(account,{threshold:23999,packId:"pack_10k",maxPerMonth:2},at);
+    await owner.ledger.charge({eventId:"runtime-recharge-recovery-trigger",userId:account,type:"model",providerCostUsd:0.2,now:at});
+    const service=new BillingService(config,owner.payments,owner.ledger);
+    await assert.rejects(service.autoRecharge(account,"pack_10k"),/lost payment response/);
+    assert.ok((await owner.ledger.pendingAutoRecharges()).some(request=>request.accountId===account));
+    await owner.close();owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+    const restarted=new BillingService(config,owner.payments,owner.ledger);
+    await restarted.autoRecharge(account,"pack_10k");
+    assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);assert.equal(intents.size,1);
+    assert.ok(!(await owner.ledger.pendingAutoRecharges()).some(request=>request.accountId===account));
+    assert.equal((await owner.ledger.snapshot(account)).purchasedBalance,0);
+  }finally{globalThis.fetch=original;await owner.close();}
+});
 test("shared PostgreSQL usage queue survives restart, serializes competing settlers and rejects foreign event ownership",{skip:!integration},async()=>{
   let owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
   const account="runtime-shared-outbox",event={id:"runtime-shared-outbox-usage",timestamp:Date.now(),modelId:"fixture",provider:"fixture",method:"generate" as const,durationMs:1,ok:true,providerCostUsd:0.01};
