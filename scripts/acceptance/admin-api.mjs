@@ -220,6 +220,8 @@ async function main() {
     ok((await call("/admin/customers?filter=paused", "GET", null, boss.token)).json.customers?.[0]?.id === A, "the Paused filter lists it");
     const re = await call(`/admin/customers/${A}/reactivate`, "POST", { reason: "Resolved" }, boss.token);
     ok(re.status === 200 && (await call("/projects", "GET", null, alice.token)).json.projects?.some((p) => p.id === projBefore.id), "reactivate restores access with the data intact");
+    const admittedTurn = await socketTurn(alice.token);
+    ok(admittedTurn.error === null && !admittedTurn.refused, "reactivated chat awaits admission and completes a turn", JSON.stringify(admittedTurn));
     const acts = (await call(`/admin/customers/${A}/audit`, "GET", null, boss.token)).json.audit.map((a) => a.action);
     ok(acts.includes("account.suspend") && acts.includes("account.reactivate"), "both are audited");
 
