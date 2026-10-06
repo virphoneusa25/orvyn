@@ -74,9 +74,10 @@ test("real Postgres: onboarding creation and concurrent answer updates preserve 
     assert.ok(complete.completedSteps.includes("first_mission"));
     await a.onboarding.track(id,"onboarding_completed",{step:"complete",token:"sensitive",email:"private",count:1});
     await a.onboarding.track(id,"unknown_event",{step:"ignored"});
-    const events=(await b.onboarding.events()).filter(event => event.userId === id);
+    const events=(await b.onboarding.events("onboarding_completed")).filter(event => event.userId === id);
     assert.equal(events.length,1);
     assert.deepEqual(events[0].props,{step:"complete",count:1});
+    assert.equal((await b.onboarding.events("unknown_event")).length,0);
   } finally { await a.close(); await b.close(); }
 });
 
