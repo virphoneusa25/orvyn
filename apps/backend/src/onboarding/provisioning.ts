@@ -1,3 +1,4 @@
+import { onboardingStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/onboarding/provisioning.ts
 //
 // Account bootstrap after signup (and email verification), idempotent and
@@ -17,7 +18,7 @@ import { authService } from "../auth/AsyncAuthService";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { DEFAULT_PLAN, planById } from "../billing/plans";
 import { tenantManager } from "../tenancy/TenantManager";
-import { onboardingStore } from "./OnboardingStore";
+
 
 export type ProvisionStepId = "account" | "workspace" | "plan" | "credits" | "orion";
 export interface ProvisionStep { id: ProvisionStepId; label: string; done: boolean; detail?: string }
@@ -45,7 +46,7 @@ export async function provisioningStatus(userId: string): Promise<ProvisionStep[
   const plan = tenantId ? creditLedger.planOf(tenantId) : null;
   const grants = tenantId ? creditLedger.grantsIssued(tenantId) : [];
   const tenant = tenantId ? tenantManager.get(tenantId) : undefined;
-  const profile = onboardingStore().get(userId);
+  const profile = (await onboardingStore().get(userId));
   const verified = user ? ((await authService.isEmailVerified(userId)) || !verificationRequired()) : false;
   const planLabel = plan ? planById(plan).label : planById(DEFAULT_PLAN).label;
   return [
@@ -66,6 +67,6 @@ export async function provisionAccount(userId: string): Promise<ProvisionStep[]>
   tenantManager.ensureUserTenant(userId, org.name || user.email);
   // The wallet is created on the Free plan with its monthly credits exactly once.
   if (!creditLedger.planOf(org.tenantId)) creditLedger.ensureAccount(org.tenantId, DEFAULT_PLAN);
-  onboardingStore().ensure(userId, "name");
+  (await onboardingStore().ensure(userId, "name"));
   return (await provisioningStatus(userId));
 }

@@ -14,7 +14,8 @@ import { defaultDataDir } from "../persistence/LocalStore";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { stripeStore } from "../billing/stripe";
 import { PLANS, planById, type PlanId } from "../billing/plans";
-import { staffStore } from "./staffStore";
+import { staffStore as sqliteStaffStore } from "./staffStore";
+import { staffStore } from "../auth/AsyncAccountStores";
 
 const DAY = 86_400_000;
 export type CustomerStatus = "active" | "past_due" | "trial" | "cancelled" | "paused";
@@ -77,7 +78,7 @@ export class AdminService {
   constructor(dataDir: string = defaultDataDir()) {
     this.dataDir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
-    staffStore(); // tables exist
+    sqliteStaffStore(); // Local reporting still attaches the SQLite billing/payment stores.
     void creditLedger; // billing.sqlite exists (opened at import)
     stripeStore(); // payments.sqlite exists
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
@@ -157,7 +158,7 @@ export class AdminService {
 
   // ---------- one customer ----------
 
-  customer(tenantId: string) {
+  async customer(tenantId: string) {
     const r = this.db.prepare(`SELECT o.id AS org_id, o.name, o.kind, o.tenant_id, o.created_at, w.plan_id, w.subscription_status, w.subscription_id, w.cycle_end, s.at AS paused_at,
       (SELECT COUNT(*) FROM organization_members m WHERE m.organization_id = o.id) AS members
       FROM organizations o LEFT JOIN b.wallets w ON w.account_id = o.tenant_id LEFT JOIN account_suspensions s ON s.tenant_id = o.tenant_id AND s.lifted_at IS NULL
@@ -177,7 +178,7 @@ export class AdminService {
     const cycleLen = Math.max(DAY, (wallet.subscription?.cycleEnd ?? now) - cycleStart);
     const topups = this.db.prepare(`SELECT meta FROM b.ledger_entries WHERE account_id = ? AND type = 'topup_purchase'`).all(tenantId) as { meta: string }[];
     const topupUsd = topups.reduce((s, t) => { try { return s + Number(JSON.parse(t.meta).priceUsd ?? 0); } catch { return s; } }, 0);
-    const suspension = staffStore().suspension(tenantId);
+    const suspension = (await staffStore().suspension(tenantId));
     const plan = planById(wallet.plan.id);
     const tags: string[] = [];
     if (plan.id === "enterprise" || plan.id === "team") tags.push("Enterprise Customer");
@@ -189,7 +190,7 @@ export class AdminService {
       ...base,
       tags,
       since: Number(r.created_at),
-      profile: staffStore().profile(tenantId),
+      profile: (await staffStore().profile(tenantId)),
       team: members,
       wallet: {
         planId: wallet.plan.id, included: wallet.includedBalance, purchased: wallet.purchasedBalance, reserved: wallet.reservedBalance, available: wallet.availableBalance,
@@ -209,8 +210,8 @@ export class AdminService {
       },
       topupSpendUsd: Math.round(topupUsd * 100) / 100,
       suspension,
-      notes: staffStore().notes(tenantId, 20),
-      supportNotesCount: staffStore().notes(tenantId, 500).length,
+      notes: (await staffStore().notes(tenantId, 20)),
+      supportNotesCount: (await staffStore().notes(tenantId, 500)).length,
     };
   }
 
@@ -267,7 +268,7 @@ export class AdminService {
   }
 
   /** Account activity timeline (credits, projects, payments, plan, team, staff actions). */
-  activity(tenantId: string | null, limit = 30) {
+  async activity(tenantId: string | null, limit = 30) {
     type Item = { at: number; kind: string; title: string; detail: string; tenantId?: string | null; customer?: string | null };
     const items: Item[] = [];
     const t = tenantId ? "AND account_id = ?" : "";
@@ -283,7 +284,7 @@ export class AdminService {
     for (const u of usage) if (Number(u.n) > 0) items.push({ at: u.at, kind: "usage", title: "Credits used", detail: `${Number(u.n).toLocaleString("en-US")} credits on ${u.day}`, tenantId: u.user_id });
     for (const p of this.db.prepare(`SELECT tenant_id, name, created_at FROM tenant_projects ${tenantId ? "WHERE tenant_id = ?" : ""} ORDER BY created_at DESC LIMIT 30`).all(...a) as any[]) items.push({ at: p.created_at, kind: "project", title: "New project created", detail: p.name, tenantId: p.tenant_id });
     for (const m of this.db.prepare(`SELECT o.tenant_id, u.email, m.created_at, m.role FROM organization_members m JOIN organizations o ON o.id = m.organization_id JOIN users u ON u.id = m.user_id ${tenantId ? "WHERE o.tenant_id = ?" : ""} ORDER BY m.created_at DESC LIMIT 30`).all(...a) as any[]) items.push({ at: m.created_at, kind: "team", title: m.role === "owner" ? "Account created" : "Team member added", detail: m.email, tenantId: m.tenant_id });
-    for (const x of staffStore().auditLog({ tenantId: tenantId ?? undefined, limit: 40 })) if (x.tenantId) items.push({ at: x.at, kind: "support", title: AUDIT_TITLES[x.action] ?? x.action, detail: `${x.actorEmail}${x.detail?.reason ? ` · ${String(x.detail.reason).slice(0, 80)}` : ""}`, tenantId: x.tenantId });
+    for (const x of (await staffStore().auditLog({ tenantId: tenantId ?? undefined, limit: 40 }))) if (x.tenantId) items.push({ at: x.at, kind: "support", title: AUDIT_TITLES[x.action] ?? x.action, detail: `${x.actorEmail}${x.detail?.reason ? ` · ${String(x.detail.reason).slice(0, 80)}` : ""}`, tenantId: x.tenantId });
     items.sort((x, y) => y.at - x.at);
     const out = items.slice(0, limit);
     if (!tenantId) for (const i of out) i.customer = i.tenantId ? this.orgByTenant(i.tenantId)?.name ?? null : null;
@@ -292,7 +293,7 @@ export class AdminService {
 
   // ---------- platform metrics ----------
 
-  dashboard(now = Date.now()) {
+  async dashboard(now = Date.now()) {
     const n = (sql: string, ...args: (string | number)[]) => Number((this.db.prepare(sql).get(...args) as { n: number }).n ?? 0);
     const users = n(`SELECT COUNT(*) AS n FROM users`);
     const users30 = n(`SELECT COUNT(*) AS n FROM users WHERE created_at >= ?`, now - 30 * DAY);
@@ -333,7 +334,7 @@ export class AdminService {
       creditTrend: this.usageSeries(null, 30, now).map((d) => ({ day: d.day, credits: d.credits })),
       signups: { total30d: users30, change: pctChange(users30, usersPrev), days: days(30, now).map((d) => ({ day: d, count: signupRows.get(d) ?? 0 })) },
       providerCosts: { totalUsd: costs.totalUsd, byClass: costs.byClass },
-      activity: this.activity(null, 8),
+      activity: (await this.activity(null, 8)),
     };
   }
 

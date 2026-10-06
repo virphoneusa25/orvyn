@@ -1,3 +1,4 @@
+import { onboardingStore, staffStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/cli/account.ts
 //
 // Operator tool: create (or update) an ORVYN account from the server, ready
@@ -12,9 +13,9 @@
 
 import readline from "node:readline";
 import { authService } from "../auth/AsyncAuthService";
-import { onboardingStore } from "../onboarding/OnboardingStore";
+
 import { provisionAccount } from "../onboarding/provisioning";
-import { staffStore, STAFF_ROLES, type StaffRole } from "../admin/staffStore";
+import { STAFF_ROLES, type StaffRole } from "../admin/staffStore";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -67,13 +68,13 @@ async function main() {
     (await authService.verifyEmailToken(v.token));
   }
   const store = onboardingStore();
-  store.ensure(userId, "provisioning", ["welcome", "signup", "verification"]);
+  (await store.ensure(userId, "provisioning", ["welcome", "signup", "verification"]));
   (await provisionAccount(userId));
-  store.update(userId, { step: "complete", completed: ["provisioning", "name"], ...(name ? { answers: { name } } : {}) });
+  (await store.update(userId, { step: "complete", completed: ["provisioning", "name"], ...(name ? { answers: { name } } : {}) }));
   console.log("Email verified and setup complete.");
   if (role) {
-    staffStore().setStaff(email, role, "operator-cli");
-    staffStore().audit({ actorId: "operator-cli", actorEmail: "operator-cli", action: "staff.set", tenantId: null, detail: { email, role } });
+    (await staffStore().setStaff(email, role, "operator-cli"));
+    (await staffStore().audit({ actorId: "operator-cli", actorEmail: "operator-cli", action: "staff.set", tenantId: null, detail: { email, role } }));
     console.log(`Staff role: ${role}.`);
   }
 }

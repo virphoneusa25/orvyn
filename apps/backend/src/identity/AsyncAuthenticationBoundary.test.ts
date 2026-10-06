@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 import type { AuthService } from "../auth/AuthService";
 import { asyncAuthService } from "../auth/AsyncAuthService";
 import { asyncHandler } from "../http/asyncHandler";
+import { createAsyncAccountStores } from "../auth/AsyncAccountStores";
+
+test("shared account interfaces propagate initialization failure without another backend", async () => {
+  const failure=new Error("account database unavailable");
+  let initializations=0;
+  const stores=createAsyncAccountStores(async () => { initializations++; throw failure; });
+  for(const operation of [() => stores.auth.getUser("user"),() => stores.staff.roleOf("user"),() => stores.onboarding.get("user")]) {
+    await assert.rejects(operation(),error => error === failure);
+  }
+  assert.equal(initializations,1,"all interfaces share one initialization outcome");
+});
 
 test("async auth boundary preserves receiver binding, awaits delayed state, and rejects failures", async () => {
   let release!:(value:null) => void;
