@@ -95,5 +95,28 @@ Next migrate the shared admin and onboarding stores and admin cross-store report
 Those stores still access auth.db directly and cannot safely be left behind during
 an authentication cutover. The PostgreSQL runtime is not yet selected by requests.
 A passing runtime test is not evidence of a completed live cutover.
+
+`PostgresStaffStore` and `PostgresOnboardingStore` now provide the shared-store
+operations using the same source-generation check as authentication. They preserve
+staff roles and revocation, audit records, notes, suspension history, CRM fields,
+support views, onboarding progress/answers and analytics filtering. Their public
+operations use the same cross-instance advisory lock and transaction boundary.
+
+`PostgresAccountStores.connect` validates one database and creates all three stores
+with one pool and async transaction context. It seeds configured staff accounts in
+that database and closes the pool on startup failure. Use its `transaction` method
+for related account changes and audit writes; nested calls across the three stores
+join the transaction. Any composite rejection rolls back every write, including
+rejection from a nested login. Run password login independently when its failure
+counter must persist; standalone login retains the commit-on-rejection behavior.
+Close the shared owner after requests drain, rather than closing child stores.
+
+Real PostgreSQL tests verify concurrent last-super-admin removal, staff revocation
+of support views, single suspension under concurrent requests, audit-failure
+rollback, append-only audit enforcement, merged CRM/onboarding updates, idempotent
+profile creation/completion, analytics filtering and all-store commit/rollback.
+These runtime implementations are not yet selected by the request adapters.
+Next wire the shared stores and migrate AdminService cross-store reporting before
+exposing an authentication activation flag. SQLite remains authoritative in production.
 Billing and durable WorkSession integration remain separate prerequisites
 for a full primary-storage rollout. No production flags are changed by this work.

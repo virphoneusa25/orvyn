@@ -46,7 +46,7 @@ export class PostgresAuthDatabase {
     return new PostgresAuthDatabase(url);
   }
 
-  async transaction<T>(operation:() => Promise<T>): Promise<T> {
+  async transaction<T>(operation:() => Promise<T>, options:{ commitLoginRejection?:boolean } = {}): Promise<T> {
     if (this.context.getStore()) return operation();
     const client = await this.pool.connect();
     let discard: Error | undefined;
@@ -61,7 +61,7 @@ export class PostgresAuthDatabase {
         finished = true;
         return result;
       } catch (error) {
-        if (error instanceof LoginRejected) { await client.query("COMMIT"); finished = true; throw error; }
+        if (error instanceof LoginRejected && options.commitLoginRejection !== false) { await client.query("COMMIT"); finished = true; throw error; }
         throw error;
       }
     } catch (error) {
