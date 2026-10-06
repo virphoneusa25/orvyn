@@ -1,30 +1,43 @@
 import type {AsyncCreditLedger} from "./AsyncFinancialStores";
 import type {UsageEvent} from "../services/UsageService";
-import type {LocalStore} from "../persistence/LocalStore";
 import {settleProviderUsage} from "./providerSettlement";
 import {customerCreditsFor} from "./creditMath";
 import {planById,LANE_FACTORS} from "./plans";
+
+export interface BillingOutbox {
+  pendingBilling:()=>Array<{event:UsageEvent;own:boolean}>|Promise<Array<{event:UsageEvent;own:boolean}>>;
+  enqueueBilling:(event:UsageEvent,own:boolean)=>void|Promise<void>;
+  completeBilling:(id:string)=>void|Promise<void>;
+  settle?:(event:UsageEvent,own:boolean,strict:boolean,ledger:AsyncCreditLedger)=>Promise<void>;
+  releaseRun?:(runId:string,ledger:AsyncCreditLedger)=>Promise<void>;
+  recoverReleases?:(ledger:AsyncCreditLedger)=>Promise<void>;
+}
 
 /** Keep durable usage pending until the ledger acknowledges it; order run holds and cleanup. */
 export class TenantBilling {
   private recovering?:Promise<void>;
   private admissions=new Map<string,Promise<void>>();
   constructor(private ledger:AsyncCreditLedger,private accountId:string,
-    private store:Pick<LocalStore,"pendingBilling"|"enqueueBilling"|"completeBilling">) {}
+    private store:BillingOutbox) {}
 
   async record(event:UsageEvent,own:boolean,strict:boolean):Promise<void> {
-    this.store.enqueueBilling(event,own);
+    await this.store.enqueueBilling(event,own);
+    await this.settle(event,own,strict);
+  }
+
+  private async settle(event:UsageEvent,own:boolean,strict:boolean):Promise<void> {
+    if(this.store.settle)return this.store.settle(event,own,strict,this.ledger);
     await settleProviderUsage(this.ledger,this.accountId,event,own,strict);
-    this.store.completeBilling(event.id);
+    await this.store.completeBilling(event.id);
   }
 
   recover(strict:boolean):Promise<void> {
     if(!this.recovering)this.recovering=(async()=>{
-      for(const pending of this.store.pendingBilling()) {
-        await settleProviderUsage(this.ledger,this.accountId,pending.event,pending.own,strict);
-        this.store.completeBilling(pending.event.id);
+      for(const pending of await this.store.pendingBilling()) {
+        await this.settle(pending.event,pending.own,strict);
       }
-      if(this.store.pendingBilling().length)throw new Error("Billing recovery is still pending.");
+      if((await this.store.pendingBilling()).length)throw new Error("Billing recovery is still pending.");
+      await this.store.recoverReleases?.(this.ledger);
     })().finally(()=>{this.recovering=undefined;});
     return this.recovering;
   }
@@ -49,7 +62,8 @@ export class TenantBilling {
   async releaseRun(runId:string):Promise<void> {
     try {
       try{await this.awaitRun(runId);}catch{/* still release any hold left by an interrupted admission */}
-      await this.ledger.release(runId);
+      if(this.store.releaseRun)await this.store.releaseRun(runId,this.ledger);
+      else await this.ledger.release(runId);
     }finally{this.admissions.delete(runId);}
   }
 }
