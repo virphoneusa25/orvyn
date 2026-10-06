@@ -6,7 +6,7 @@ import { Tenant, tenantManager } from "../tenancy/TenantManager";
 import { authService } from "../auth/AsyncAuthService";
 import type { Principal } from "../identity/principal";
 import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { planById } from "../billing/plans";
 
 declare global {
@@ -88,7 +88,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       res.status(401).json({ error: "Unauthorized — this API key is invalid or was revoked", code: "API_KEY_INVALID" });
       return;
     }
-    if (!planById(creditLedger.planOf(k.principal.tenantId) ?? "free").features.apiAccess) {
+    if (!planById((await creditLedger.planOf(k.principal.tenantId)) ?? "free").features.apiAccess) {
       res.status(403).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
       return;
     }

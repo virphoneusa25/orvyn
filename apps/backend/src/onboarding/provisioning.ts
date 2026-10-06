@@ -15,7 +15,7 @@ import { onboardingStore } from "../auth/AsyncAccountStores";
 // the wallet is created (CreditLedger.ensureAccount).
 
 import { authService } from "../auth/AsyncAuthService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { DEFAULT_PLAN, planById } from "../billing/plans";
 import { tenantManager } from "../tenancy/TenantManager";
 
@@ -43,8 +43,8 @@ export async function provisioningStatus(userId: string): Promise<ProvisionStep[
   const orgs = user ? (await authService.listOrganizations(userId)) : [];
   const personal = orgs.find((o) => o.kind === "personal");
   const tenantId = personal?.tenantId ?? "";
-  const plan = tenantId ? creditLedger.planOf(tenantId) : null;
-  const grants = tenantId ? creditLedger.grantsIssued(tenantId) : [];
+  const plan = tenantId ? (await creditLedger.planOf(tenantId)) : null;
+  const grants = tenantId ? (await creditLedger.grantsIssued(tenantId)) : [];
   const tenant = tenantId ? tenantManager.get(tenantId) : undefined;
   const profile = (await onboardingStore().get(userId));
   const verified = user ? ((await authService.isEmailVerified(userId)) || !verificationRequired()) : false;
@@ -66,7 +66,7 @@ export async function provisionAccount(userId: string): Promise<ProvisionStep[]>
   const org = (await authService.ensurePersonalOrganization(user));
   tenantManager.ensureUserTenant(userId, org.name || user.email);
   // The wallet is created on the Free plan with its monthly credits exactly once.
-  if (!creditLedger.planOf(org.tenantId)) creditLedger.ensureAccount(org.tenantId, DEFAULT_PLAN);
+  if (!(await creditLedger.planOf(org.tenantId))) (await creditLedger.ensureAccount(org.tenantId, DEFAULT_PLAN));
   (await onboardingStore().ensure(userId, "name"));
   return (await provisioningStatus(userId));
 }

@@ -11,7 +11,7 @@ import { asyncHandler } from "../http/asyncHandler";
 
 import { Router, type Request, type Response } from "express";
 import { authService } from "../auth/AsyncAuthService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { planById } from "../billing/plans";
 import { githubConnection } from "../integrations/githubConnection";
 import { deploymentConnections, removeDeploymentConnection, saveDeploymentConnection } from "../integrations/deploymentConnections";
@@ -42,8 +42,8 @@ function fail(res: Response, err: any): void {
   res.status(err?.status ?? 400).json({ error: String(err?.message ?? err), code: err?.code });
 }
 
-function seatsFor(tenantId: string): number {
-  return planById(creditLedger.planOf(tenantId) ?? "free").features.teamSeats;
+async function seatsFor(tenantId: string): Promise<number> {
+  return planById((await creditLedger.planOf(tenantId)) ?? "free").features.teamSeats;
 }
 
 // ── Profile & password ───────────────────────────────────────────────────
@@ -78,7 +78,7 @@ accountRouter.get("/team", asyncHandler(async (req, res) => {
   const members = (await authService.listMembers(p.organizationId));
   const invites = (await authService.listInvites(p.organizationId));
   const role = (await authService.memberRole(p.organizationId, p.userId)) ?? p.role;
-  const seats = seatsFor(p.tenantId);
+  const seats = (await seatsFor(p.tenantId));
   res.json({
     organization: org ? { id: org.id, name: org.name, kind: org.kind } : null,
     role,
@@ -86,7 +86,7 @@ accountRouter.get("/team", asyncHandler(async (req, res) => {
     members: members.map((m) => ({ ...m, you: m.userId === p.userId })),
     invites,
     seats: { included: seats, used: members.filter((m) => m.role !== "owner").length + invites.length },
-    plan: planById(creditLedger.planOf(p.tenantId) ?? "free").label,
+    plan: planById((await creditLedger.planOf(p.tenantId)) ?? "free").label,
   });
 }));
 
@@ -101,7 +101,7 @@ accountRouter.post("/team/invites", asyncHandler(async (req, res) => {
   if (!p) return;
   const role: OrgRole = req.body?.role === "admin" ? "admin" : "member";
   try {
-    const { token, invite } = (await authService.createInvite(p, String(req.body?.email ?? ""), role, seatsFor(p.tenantId)));
+    const { token, invite } = (await authService.createInvite(p, String(req.body?.email ?? ""), role, (await seatsFor(p.tenantId))));
     const org = (await authService.getOrganization(p.organizationId));
     const link = `${publicOrigin(req)}/invite?token=${encodeURIComponent(token)}`;
     let emailed = false;
@@ -185,14 +185,14 @@ accountRouter.post("/team/leave", asyncHandler(async (req, res) => {
 accountRouter.get("/api-keys", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const included = planById(creditLedger.planOf(p.tenantId) ?? "free").features.apiAccess;
+  const included = planById((await creditLedger.planOf(p.tenantId)) ?? "free").features.apiAccess;
   res.json({ included, keys: (await authService.listApiKeys(p.userId, p.organizationId)) });
 }));
 
 accountRouter.post("/api-keys", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  if (!planById(creditLedger.planOf(p.tenantId) ?? "free").features.apiAccess) {
+  if (!planById((await creditLedger.planOf(p.tenantId)) ?? "free").features.apiAccess) {
     return res.status(402).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
   }
   try {
@@ -279,7 +279,7 @@ accountRouter.post("/network-requests/:id", asyncHandler(async (req, res) => {
 accountRouter.get("/notifications", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const w = creditLedger.snapshot(p.tenantId);
+  const w = (await creditLedger.snapshot(p.tenantId));
   const out: { id: string; kind: "warning" | "info" | "danger"; title: string; body: string; href?: string; at: number; inviteId?: string }[] = [];
   const now = Date.now();
   if (w.subscription.status === "past_due" || w.subscription.status === "unpaid") {

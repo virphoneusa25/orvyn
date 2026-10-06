@@ -888,7 +888,7 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // aborts the run itself.
 v1Router.post("/agent/stream/runs", async (req, _res, next) => {
   try { await requireTenant(req).modelService.huggingFaceReady; next(); } catch (error) { next(error); }
-}, (req, res) => {
+}, asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   // One owner per turn: an answer-only prompt is a chat turn — no run, no
   // workspace preflight, no resource resolution, no worker scheduling. The
@@ -916,7 +916,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
   const ownModel = t.modelService.isUserModel(String(t.modelService.effectiveRequest(req.body?.requestedModelId) ?? ""));
   if (creditsEnforced() && !ownModel) {
     try {
-      creditLedger.assertCanSpend(t.id);
+      (await creditLedger.assertCanSpend(t.id));
     } catch (err) {
       if (err instanceof BillingLimitError) return res.status(402).json({ error: err.message, code: `CREDITS_${err.code}` });
       throw err;
@@ -1158,7 +1158,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
     executionTargetActual: routed.actual,
     executionLabel,
   });
-});
+}));
 
 // List runs (newest first) so panels like Agent Activity and Review can find
 // the latest run without holding their own state.
@@ -2144,7 +2144,7 @@ import { persistDataset } from "../learning/datasetBuilder";
 import { buildRunReplay } from "../learning/runReplay";
 import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider";
 import { EntitlementService } from "../billing/EntitlementService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { customerCatalog, customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
 import { buildUserModel, publicUserModel, sealModelConfig } from "../models/userModels";
 import { billingService, purchasablePacks, StripeApiError } from "../billing/stripe";
@@ -2319,10 +2319,10 @@ v1Router.post("/learning/refresh", (req, res) => {
   res.json({ ok: true, skills: skills.length, dataset });
 });
 
-v1Router.get("/billing", (req, res) => {
+v1Router.get("/billing", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const totals = t.modelService.usage.totals();
-  const wallet = creditLedger.snapshot(t.id);
+  const wallet = (await creditLedger.snapshot(t.id));
   const payments = billingService();
   res.json({
     provider: payments.enabled ? "stripe" : billing.name,
@@ -2342,12 +2342,12 @@ v1Router.get("/billing", (req, res) => {
       completionTokens: totals.completionTokens,
     }),
   });
-});
+}));
 
-v1Router.get("/billing/stats", (req, res) => {
+v1Router.get("/billing/stats", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  res.json(creditLedger.usageStats(t.id));
-});
+  res.json((await creditLedger.usageStats(t.id)));
+}));
 
 // Plans and credits are bought through Stripe Checkout. Nothing here grants
 // them: the verified webhook does (routes/billingPublic.ts → billing/stripe.ts).
@@ -2423,22 +2423,22 @@ v1Router.get("/billing/account", async (req, res) => {
 v1Router.post("/billing/topup", (_req, res) => res.status(410).json({ error: "Buy credits through checkout.", code: "USE_CHECKOUT" }));
 v1Router.post("/billing/plan", (_req, res) => res.status(410).json({ error: "Change plans through checkout.", code: "USE_CHECKOUT" }));
 
-v1Router.post("/billing/auto-recharge", (req, res) => {
+v1Router.post("/billing/auto-recharge", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
-  if (req.body?.enabled === false) { creditLedger.disableAutoRecharge(t.id); return res.json({ wallet: creditLedger.snapshot(t.id) }); }
+  if (req.body?.enabled === false) { (await creditLedger.disableAutoRecharge(t.id)); return res.json({ wallet: (await creditLedger.snapshot(t.id)) }); }
   const pack = packById(String(req.body?.packId ?? "pack_10k"));
   if (!pack) return res.status(400).json({ error: "Unknown credit pack." });
   const threshold = Number(req.body?.threshold ?? 500);
   const maxPerMonth = Number(req.body?.maxPerMonth ?? 3);
   try {
-    creditLedger.setAutoRecharge(t.id, { threshold, packId: pack.id as PackId, maxPerMonth });
-    res.json({ wallet: creditLedger.snapshot(t.id) });
+    (await creditLedger.setAutoRecharge(t.id, { threshold, packId: pack.id as PackId, maxPerMonth }));
+    res.json({ wallet: (await creditLedger.snapshot(t.id)) });
   } catch (err) {
     const message = err instanceof BillingLimitError ? err.message : "Could not save auto-recharge.";
     res.status(400).json({ error: message });
   }
-});
+}));
 
 v1Router.get("/privacy", (_req, res) => {
   res.json({ privacy: DEFAULT_PRIVACY });

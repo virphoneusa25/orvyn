@@ -10,7 +10,7 @@ import { asyncHandler } from "../http/asyncHandler";
 import { onAdminHost } from "../http/hosts";
 import { Router, type Request, type Response } from "express";
 import { authService } from "../auth/AsyncAuthService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { PLANS, planById, CREDIT_PACKS } from "../billing/plans";
 import { ANALYTICS_EVENTS, ONBOARDING_STEPS, isStep, sanitizeAnswers, type OnboardingStep } from "../onboarding/OnboardingStore";
 import { provisionAccount, provisioningStatus, verificationRequired } from "../onboarding/provisioning";
@@ -45,7 +45,7 @@ async function view(userId: string) {
   const profile = (await profileFor(userId));
   const user = (await authService.getUser(userId))!;
   const tenantId = (await authService.listOrganizations(userId)).find((o) => o.kind === "personal")?.tenantId ?? "";
-  const planId = tenantId ? creditLedger.planOf(tenantId) : null;
+  const planId = tenantId ? (await creditLedger.planOf(tenantId)) : null;
   return {
     profile,
     steps: ONBOARDING_STEPS,

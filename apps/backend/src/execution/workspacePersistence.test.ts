@@ -55,7 +55,7 @@ test("provisioned workspace files survive desktop restart, backend restart, work
 
   // The worker is given a Windows checkout path and must still use the durable directory.
   const runId = "run_persist_ws";
-  queueExecutorJob(runId, "C:\\Users\\builder\\site", {
+  await queueExecutorJob(runId, "C:\\Users\\builder\\site", {
     tenantId,
     organizationId: tenantId,
     userId: "user_a",
