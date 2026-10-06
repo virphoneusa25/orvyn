@@ -78,6 +78,11 @@ jobs:
           ORVYN_LEDGER_STORAGE_TEST: "1"
           ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
         run: node --test apps/backend/dist/billing/PostgresLedgerStorage.test.js
+      - name: Complete Stripe payment migration and restored webhook behavior
+        env:
+          ORVYN_STRIPE_STORAGE_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
+        run: node --test apps/backend/dist/billing/PostgresStripeStorage.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         env:
           PGPASSWORD: test-password
@@ -93,6 +98,7 @@ jobs:
           tables+=(orvyn_auth.migrations orvyn_auth.imports orvyn_auth.api_keys orvyn_auth.chat_shares orvyn_auth.desktop_handoffs orvyn_auth.email_verifications orvyn_auth.github_links orvyn_auth.legal_acceptances orvyn_auth.login_failures orvyn_auth.oauth_identities orvyn_auth.oauth_states orvyn_auth.org_invites orvyn_auth.organization_members orvyn_auth.organizations orvyn_auth.password_resets orvyn_auth.session_rotations orvyn_auth.sessions orvyn_auth.tenant_chats orvyn_auth.tenant_projects orvyn_auth.users)
           tables+=(orvyn_auth.source_sequences orvyn_auth.account_suspensions orvyn_auth.admin_audit orvyn_auth.analytics_events orvyn_auth.onboarding_profiles orvyn_auth.org_profiles orvyn_auth.platform_staff orvyn_auth.support_notes orvyn_auth.view_as_sessions)
           tables+=(orvyn_billing.migrations orvyn_billing.imports orvyn_billing.source_sequences orvyn_billing.auto_recharge orvyn_billing.auto_recharge_requests orvyn_billing.image_rate_cards orvyn_billing.image_reservations orvyn_billing.image_usage_counts orvyn_billing.ledger_entries orvyn_billing.rate_cards orvyn_billing.run_budget orvyn_billing.usage_events orvyn_billing.wallets)
+          tables+=(orvyn_payments.migrations orvyn_payments.imports orvyn_payments.stripe_customers orvyn_payments.stripe_events orvyn_payments.stripe_checkouts orvyn_payments.stripe_subscriptions)
           for table in "${tables[@]}"; do
             query="SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM $table t"
             original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
