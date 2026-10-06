@@ -62,10 +62,31 @@ single-use verification/OAuth/reset state and password-reset session invalidatio
 CI also dumps/restores the new schema with the existing mirror and identity tables
 and compares every table's content.
 
-Next implement the asynchronous authentication repository operations and migrate
-their callers together. Preserve atomic registration, invitation seat limits,
-single-use token consumption, session rotation/reuse handling, and persistent login
-failure accounting. Connect live requests only after those semantics pass against
-PostgreSQL. Admin and onboarding callers also share auth.db and must migrate with it.
+The asynchronous `PostgresAuthService` now provides the existing authentication
+operations against this schema. Its implementation is generated from `AuthService.ts`
+so password, token, tenant and portal rules share one source. Backend builds reject
+stale generated output; regenerate with `node apps/backend/scripts/generate-postgres-auth.cjs`
+after changing the source service. Importing this runtime does not instantiate the
+SQLite service. Runtime connection validates the complete authentication schema.
+
+Each public operation uses a PostgreSQL transaction. Nested operations share the
+same connection through async context. A common advisory lock serializes operations
+across instances and migrations, preserving atomic registration, invitation seat
+limits, single-use token consumption and session rotation. This coarse lock is an
+initial correctness boundary and limits throughput; contention has bounded timeouts.
+Failed password logins commit their persistent failure counter before rejecting;
+other errors roll back. Database failures propagate without a SQLite fallback.
+WebSocket tickets retain the existing instance-local memory behavior and still
+require a shared ticket store or instance affinity for multiple API instances.
+
+Runtime integration tests exercise two independent service instances against real
+PostgreSQL 16, including concurrent operations, lockout accounting, forced rollback
+of registration and password reset, OAuth and desktop handoff consumption, tenant
+isolation, invitation seats, API key revocation and session reuse detection.
+
+Next migrate the HTTP, middleware, CLI and WebSocket callers to the asynchronous
+boundary. Admin and onboarding callers also share auth.db and must migrate with it.
+The runtime is not selected by live requests and exposes no production activation
+flag yet. A passing runtime test is not evidence of a completed live cutover.
 Billing and durable WorkSession integration remain separate prerequisites
 for a full primary-storage rollout. No production flags are changed by this work.
