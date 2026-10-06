@@ -58,6 +58,23 @@ test("run admission and terminal cleanup wait for the same reservation before re
   gate.resolve();await Promise.all([admission,provider,terminal]);assert.deepEqual(calls,["reserve-start","reserved","released"]);
 });
 
+test("lost settlement acknowledgement survives restart without charging committed usage twice",async()=>{
+  const f=fixture();let store=new LocalStore("fixture",f.dir),loseAcknowledgement=true;
+  const ledger=new Proxy(f.stores.ledger,{get(target,key){if(key==="charge")return async(...args:Parameters<CreditLedger["charge"]>)=>{
+    const result=await target.charge(...args);
+    if(loseAcknowledgement){loseAcknowledgement=false;throw new Error("fixture lost acknowledgement");}
+    return result;
+  };return Reflect.get(target,key);}});
+  try{
+    await assert.rejects(new TenantBilling(ledger,"fixture",store).record(event,false,true),/fixture lost acknowledgement/);
+    assert.equal(store.pendingBilling().length,1);assert.ok(f.ledger.usageEvent(event.id));
+    const balance=f.ledger.snapshot("fixture").availableBalance;
+    store.close();store=new LocalStore("fixture",f.dir);
+    await new TenantBilling(ledger,"fixture",store).recover(true);
+    assert.equal(store.pendingBilling().length,0);assert.equal(f.ledger.snapshot("fixture").availableBalance,balance);
+  }finally{store.close();f.close();}
+});
+
 test("failed run admission prevents provider work and terminal cleanup still releases",async()=>{
   let released=false;
   const ledger={snapshot:async()=>{throw new Error("fixture reservation unavailable");},release:async()=>{released=true;}} as unknown as AsyncCreditLedger;
