@@ -18,7 +18,8 @@ import { WORKER_STALE_MS, countOnlineWorkers, isWorkerOnline } from "./workerPre
 import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
 import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
 import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
+import { WorkerAdmission } from "./workerAdmission";
 import { LocalStore } from "../persistence/LocalStore";
 import type { MissionCheckpoint } from "../agent/missionCheckpoint";
 import { githubToken } from "../integrations/githubConnection";
@@ -77,6 +78,7 @@ interface PendingJob {
 
 const workers = new Map<string, WorkerRecord>();
 const jobQueue: PendingJob[] = [];
+const jobAdmissions = new WorkerAdmission();
 
 /** The run's durable mission checkpoint, when one was persisted for it. */
 function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoint | null {
@@ -91,10 +93,10 @@ function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoin
  * whose journals replay with a live status are re-queued with recover=true
  * so the next worker reattaches to the sandbox and workspace bytes.
  */
-function recoverOrphanedRunsOnBoot(
+async function recoverOrphanedRunsOnBoot(
   getStore: (tenantId?: string) => RunStore,
   resumeRun?: (tenantId: string, runId: string) => void,
-): void {
+): Promise<void> {
   try {
     const dataDir = process.env.ORVYN_DATA_DIR || "";
     if (!dataDir) return;
@@ -145,13 +147,13 @@ function recoverOrphanedRunsOnBoot(
                 provider: record.provider,
                 fallback: record.provider === "openshell" && String(process.env.ORVYN_EXECUTION_PROVIDER).toLowerCase() === "openshell" ? "none" : "docker",
                 policyTemplate: record.policyTemplate as PolicyTemplateId,
-                resources: resourcesForPlan(creditLedger.planOf(tenantId)),
+                resources: resourcesForPlan((await creditLedger.planOf(tenantId))),
                 retention: record.retention,
                 credentials: [],
                 reason: "backend restart recovery",
-              } : (() => {
+              } : (await (async () => {
                 try {
-                  return planSandbox(identity);
+                  return (await planSandbox(identity));
                 } catch (err: any) {
                   // Mandatory-OpenShell deployments: a sandbox that cannot be
                   // planned blocks the run truthfully — it never rides a
@@ -161,7 +163,7 @@ function recoverOrphanedRunsOnBoot(
                   recoveryBlocked = true;
                   return undefined;
                 }
-              })();
+              })());
               if (recoveryBlocked) continue;
               jobQueue.push({
                 runId,
@@ -277,35 +279,39 @@ export function workerStats(): { online: number; total: number } {
  * this control plane (ORVYN_DATA_DIR). The worker stages that tree over HTTP
  * and syncs changes back before its sandbox is removed.
  */
-export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string, canonicalProjectRoot?: string, recover = false): void {
-  if (jobQueue.some((job) => job.runId === runId)) return;
-  const mission = assertTrustedMission({
-    ...(typeof identity === "string" ? { tenantId: identity } : identity ?? {}),
-    runId,
-    organizationId: typeof identity === "string" ? identity : identity?.organizationId || identity?.tenantId || "",
-    userId: typeof identity === "string" ? identity : identity?.userId || identity?.tenantId || "",
-    tenantId: typeof identity === "string" ? identity : identity?.tenantId || "",
-    projectId: typeof identity === "string" ? null : identity?.projectId ?? null,
-  });
-  rememberTenant(runId, mission.tenantId, mission);
-  const canonical = bindCanonicalRoot(runId, canonicalProjectRoot || projectRoot);
-  const sandbox = planSandbox(mission);
-  jobQueue.push({
-    runId,
-    missionId: `mission_${runId.slice(0, 8)}`,
-    instruction: "",
-    projectRoot,
-    canonicalProjectRoot: canonical,
-    tenantId: mission.tenantId,
-    organizationId: mission.organizationId,
-    userId: mission.userId,
-    projectId: mission.projectId,
-    // A retained sandbox keeps one workspace directory per project across runs.
-    workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, sandbox?.retention === "retained" ? sandbox.sandboxId : mission.runId),
-    role: "executor",
-    createdAt: Date.now(),
-    ...(recover ? { recover: true } : {}),
-    ...(sandbox ? { sandbox } : {}),
+export function queueExecutorJob(runId: string, projectRoot: string, identity?: Partial<MissionIdentity> | string, canonicalProjectRoot?: string, recover = false): Promise<void> {
+  if (jobQueue.some((job) => job.runId === runId)) return Promise.resolve();
+  return jobAdmissions.run(runId, async current => {
+    if (!current()) return;
+    const mission = assertTrustedMission({
+      ...(typeof identity === "string" ? { tenantId: identity } : identity ?? {}),
+      runId,
+      organizationId: typeof identity === "string" ? identity : identity?.organizationId || identity?.tenantId || "",
+      userId: typeof identity === "string" ? identity : identity?.userId || identity?.tenantId || "",
+      tenantId: typeof identity === "string" ? identity : identity?.tenantId || "",
+      projectId: typeof identity === "string" ? null : identity?.projectId ?? null,
+    });
+    rememberTenant(runId, mission.tenantId, mission);
+    const canonical = bindCanonicalRoot(runId, canonicalProjectRoot || projectRoot);
+    const sandbox = (await planSandbox(mission));
+    if (!current() || jobQueue.some((job) => job.runId === runId)) return;
+    jobQueue.push({
+      runId,
+      missionId: `mission_${runId.slice(0, 8)}`,
+      instruction: "",
+      projectRoot,
+      canonicalProjectRoot: canonical,
+      tenantId: mission.tenantId,
+      organizationId: mission.organizationId,
+      userId: mission.userId,
+      projectId: mission.projectId,
+      // A retained sandbox keeps one workspace directory per project across runs.
+      workspace: missionWorkspacePath(WORKSPACE_ROOT, mission.tenantId, sandbox?.retention === "retained" ? sandbox.sandboxId : mission.runId),
+      role: "executor",
+      createdAt: Date.now(),
+      ...(recover ? { recover: true } : {}),
+      ...(sandbox ? { sandbox } : {}),
+    });
   });
 }
 
@@ -318,9 +324,10 @@ export function queueExecutorJob(runId: string, projectRoot: string, identity?: 
  * ineligible selection propagates so the run can block truthfully instead
  * of silently losing its isolation.
  */
-function planSandbox(mission: MissionIdentity): SandboxPlan | undefined {
+async function planSandbox(mission: MissionIdentity): Promise<SandboxPlan | undefined> {
+  // A failed financial read must block admission, never select a default resource plan.
+  const planId = (await creditLedger.planOf(mission.tenantId)) ?? null;
   try {
-    const planId = creditLedger.planOf(mission.tenantId) ?? null;
     const plan = selectSandbox({
       organizationId: mission.organizationId, tenantId: mission.tenantId, projectId: mission.projectId,
       planId, runId: mission.runId, workspaceId: String(mission.projectId ?? mission.runId),
@@ -356,6 +363,7 @@ export function workerRuntimeReports(): Array<{ workerId: string; status: string
 
 /** Removes any queued job for the run and drops pending tool RPCs. */
 export function cancelWorkerRun(runId: string): void {
+  jobAdmissions.cancel(runId);
   const job = jobQueue.find((j) => j.runId === runId);
   if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
   toolRpc.cancelRun(runId);
@@ -409,7 +417,7 @@ export function workerRouter(
   };
 
   // Boot-time recovery: scan for orphaned runs 5s after startup.
-  setTimeout(() => recoverOrphanedRunsOnBoot(getRunStore, resumeRun), 5_000).unref?.();
+  setTimeout(async () => (await recoverOrphanedRunsOnBoot(getRunStore, resumeRun)), 5_000).unref?.();
 
   // ── Worker loss → recovery ───────────────────────────────────────────
   // A job assigned to a worker that stopped heartbeating is re-queued with

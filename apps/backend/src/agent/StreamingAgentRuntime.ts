@@ -134,7 +134,7 @@ import { resolveSafePath } from "../execution/pathSafety";
 import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
 import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
 import { POLICY_TEMPLATES } from "../execution/sandbox/selection";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 
 /** Asks a person to widen this run's sandbox network policy. Never widens it itself. */
@@ -1778,16 +1778,16 @@ export class StreamingAgentRuntime {
     // before queueing remote tool calls. Local Worker paths still belong to
     // the customer's computer and must never be opened here.
     const checkpointVisibleHere = !execution || execution.location === "LOCAL" || execution.location === "OVH_WORKER";
-    const queueRemoteRun = (): void => {
+    const queueRemoteRun = async (): Promise<void> => {
       if (execution?.location !== "OVH_WORKER") return;
       try {
-        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
+        (await queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
           tenantId: execution.tenantId ?? "",
           organizationId: execution.organizationId ?? "",
           userId: execution.userId ?? "",
           projectId: execution.projectId ?? null,
           runId,
-        }, projectRoot, recovering);
+        }, projectRoot, recovering));
       } catch (err: any) {
         // A sandbox that cannot be planned under a mandatory provider (e.g.
         // ORVYN_EXECUTION_PROVIDER=openshell with the run ineligible) must not
@@ -1799,7 +1799,7 @@ export class StreamingAgentRuntime {
     if (recovering) {
       // Preserve the original pre-run checkpoint. Recovery continues from the
       // durable workspace instead of replacing Undo with a mid-run snapshot.
-      queueRemoteRun();
+      void queueRemoteRun();
     } else if (this.checkpoints && checkpointVisibleHere) {
       void this.checkpoints
         .create(projectRoot, {
@@ -1828,7 +1828,7 @@ export class StreamingAgentRuntime {
         // it simply has no Undo button.
         .finally(queueRemoteRun);
     } else {
-      queueRemoteRun();
+      void queueRemoteRun();
     }
 
     const memoryContext = this.relevantMemory(projectRoot, instruction);
@@ -2233,7 +2233,7 @@ export class StreamingAgentRuntime {
         const id = context?.runId || runId;
         const tenantId = context?.tenantId || state.execution?.tenantId || "";
         let planId: string | null = null;
-        try { planId = creditLedger.planOf(tenantId) ?? null; } catch { planId = null; }
+        try { planId = (await creditLedger.planOf(tenantId)) ?? null; } catch { planId = null; }
         const out = requestNetworkAccess(sandboxRegistry(), {
           runId: id, template: String(args.access ?? ""), hosts: Array.isArray(args.hosts) ? args.hosts.map(String) : [],
           reason: String(args.reason ?? "").slice(0, 300), planId,

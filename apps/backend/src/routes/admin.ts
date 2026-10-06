@@ -1,3 +1,4 @@
+import { paymentStore as stripeStore } from "../billing/AsyncFinancialStores";
 import { staffStore } from "../auth/AsyncAccountStores";
 import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/admin.ts
@@ -17,9 +18,9 @@ import path from "node:path";
 import { authService } from "../auth/AsyncAuthService";
 import { can, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
 import { adminService, AUDIT_TITLES, CUSTOMER_FILTERS, CREDIT_VALUE_USD, type CustomerFilter } from "../admin/AdminService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { BillingLimitError } from "../billing/CreditLedger";
-import { billingService, priceIdFor, purchasablePacks, stripeStore, StripeApiError } from "../billing/stripe";
+import { billingService, priceIdFor, purchasablePacks, StripeApiError } from "../billing/stripe";
 import { CREDIT_PACKS, PLANS, type PlanId } from "../billing/plans";
 import { sendPasswordReset, sendVerification } from "./auth";
 import { mailConfigured, passwordResetMail, paymentFailedMail, securityNoticeMail, verificationMail } from "../onboarding/mailer";
@@ -131,7 +132,7 @@ adminRouter.get("/search", need("read"), wrap(async (req, res) => {
 adminRouter.get("/notifications", need("read"), wrap(async (_req, res) => {
   const items: { id: string; level: "warning" | "error" | "info"; title: string; detail: string; at: number; href?: string }[] = [];
   const since = Date.now() - 86_400_000;
-  for (const e of stripeStore().failedEvents(since)) items.push({ id: `stripe:${e.id}`, level: "error", title: "Stripe webhook failed", detail: `${e.type}${e.error ? ` — ${e.error.slice(0, 80)}` : ""}`, at: e.received_at, href: "/admin/health" });
+  for (const e of (await stripeStore().failedEvents(since))) items.push({ id: `stripe:${e.id}`, level: "error", title: "Stripe webhook failed", detail: `${e.type}${e.error ? ` — ${e.error.slice(0, 80)}` : ""}`, at: e.received_at, href: "/admin/health" });
   const counts = adminService().counts();
   if (counts.past_due) items.push({ id: "past_due", level: "warning", title: `${counts.past_due} past-due customer${counts.past_due === 1 ? "" : "s"}`, detail: "Payment failed; Stripe is retrying.", at: Date.now(), href: "/admin/customers?filter=past_due" });
   for (const s of (await staffStore().pausedTenants()).slice(0, 5)) items.push({ id: `paused:${s.tenantId}`, level: "info", title: `${adminService().orgByTenant(s.tenantId)?.name ?? "A customer"} is paused`, detail: `${s.category} · ${s.reason.slice(0, 60)}`, at: s.at, href: `/admin/customers/${s.tenantId}` });
@@ -143,9 +144,9 @@ adminRouter.get("/notifications", need("read"), wrap(async (_req, res) => {
 
 // ---------- customers ----------
 
-adminRouter.get("/customers", need("read"), wrap((req, res) => {
+adminRouter.get("/customers", need("read"), wrap(async (req, res) => {
   const filter = (CUSTOMER_FILTERS as readonly string[]).includes(String(req.query.filter)) ? (String(req.query.filter) as CustomerFilter) : "all";
-  res.json(adminService().customers({ q: String(req.query.q ?? ""), filter, page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25), sort: String(req.query.sort ?? "") }));
+  res.json((await adminService().customers({ q: String(req.query.q ?? ""), filter, page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25), sort: String(req.query.sort ?? "") })));
 }));
 
 /** Invite a customer: the account is created and the customer sets their own password from an emailed link. */
@@ -220,19 +221,19 @@ adminRouter.get("/customers/:id/audit", need("read"), wrap(async (req, res) => {
   res.json({ audit: (await staffStore().auditLog({ tenantId: id, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) })), titles: AUDIT_TITLES });
 }));
 
-adminRouter.get("/customers/:id/ledger", need("read"), wrap((req, res) => {
+adminRouter.get("/customers/:id/ledger", need("read"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  res.json({ entries: adminService().ledger(id, Math.min(500, num(req.query.limit, 100))), verify: creditLedger.verify(id) });
+  res.json({ entries: (await adminService().ledger(id, Math.min(500, num(req.query.limit, 100)))), verify: (await creditLedger.verify(id)) });
 }));
 
 /** The live Stripe subscription (read from Stripe, not guessed). */
 adminRouter.get("/customers/:id/subscription", need("read"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  const wallet = creditLedger.snapshot(id);
+  const wallet = (await creditLedger.snapshot(id));
   const base = {
     plan: { id: wallet.plan.id, label: wallet.plan.label }, walletStatus: wallet.subscription?.status ?? "none",
     cycleStart: wallet.subscription?.cycleStart ?? null, cycleEnd: wallet.subscription?.cycleEnd ?? null,
-    customerId: stripeStore().customerOf(id),
+    customerId: (await stripeStore().customerOf(id)),
     plans: Object.values(PLANS).filter((p) => p.public || p.id === "enterprise").map((p) => ({ id: p.id, label: p.label, priceMonthlyUsd: p.priceMonthlyUsd, priceAnnualUsd: p.priceAnnualUsd, monthlyCredits: p.monthlyCredits, monthly: Boolean(priceIdFor({ planId: p.id, period: "monthly" })), yearly: Boolean(priceIdFor({ planId: p.id, period: "yearly" })) })),
   };
   if (!billingService().enabled) return res.json({ ...base, stripe: "not_configured", subscription: null });
@@ -260,20 +261,20 @@ adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap(as
   if (!requestId) return res.status(400).json({ error: "Missing request id." });
   const key = `adjust:${id}:${requestId}`;
   const actor = `staff:${req.staff!.email}`;
-  const before = creditLedger.snapshot(id);
+  const before = (await creditLedger.snapshot(id));
   const entries = [];
   if (credits > 0) {
-    entries.push(creditLedger.adminAdjust(id, credits, { actor, reason, category, bucket: "purchased", key }));
+    entries.push((await creditLedger.adminAdjust(id, credits, { actor, reason, category, bucket: "purchased", key })));
   } else {
     // A debit takes top-up credits first, then this cycle's included credits — never below zero.
     const take = -credits;
     if (take > before.includedBalance + before.purchasedBalance - before.reservedBalance) return res.status(400).json({ error: `Only ${(before.availableBalance).toLocaleString("en-US")} credits are available to remove.` });
     const fromPurchased = Math.min(take, before.purchasedBalance);
     const fromIncluded = take - fromPurchased;
-    if (fromPurchased) entries.push(creditLedger.adminAdjust(id, -fromPurchased, { actor, reason, category, bucket: "purchased", key: `${key}:p` }));
-    if (fromIncluded) entries.push(creditLedger.adminAdjust(id, -fromIncluded, { actor, reason, category, bucket: "included", key: `${key}:i` }));
+    if (fromPurchased) entries.push((await creditLedger.adminAdjust(id, -fromPurchased, { actor, reason, category, bucket: "purchased", key: `${key}:p` })));
+    if (fromIncluded) entries.push((await creditLedger.adminAdjust(id, -fromIncluded, { actor, reason, category, bucket: "included", key: `${key}:i` })));
   }
-  const after = creditLedger.snapshot(id);
+  const after = (await creditLedger.snapshot(id));
   // A replayed request (same id) returns the same entries and writes no second audit row.
   if (before.availableBalance !== after.availableBalance) (await audit(req, "credits.adjust", id, { credits, reason, category, entries: entries.map((e) => e.id), before: before.availableBalance, after: after.availableBalance }));
   res.json({ entries, wallet: { available: after.availableBalance, purchased: after.purchasedBalance, included: after.includedBalance } });
@@ -370,10 +371,10 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
       if (req.staff!.role !== "super_admin") return res.status(403).json({ error: "Only a super admin can assign a complimentary plan." });
       if (!validPlan || planId === "free") return res.status(400).json({ error: "Choose a plan." });
       if (reason.length < 3) return res.status(400).json({ error: "Give a reason." });
-      const w = creditLedger.snapshot(id);
-      const sub = stripeStore().latestSubscription(id);
+      const w = (await creditLedger.snapshot(id));
+      const sub = (await stripeStore().latestSubscription(id));
       if (sub && ["active", "trialing", "past_due"].includes(sub.status)) return res.status(409).json({ error: "This customer pays through Stripe. Change the plan there instead." });
-      creditLedger.setPlan(id, planId, Date.now(), `staff:${req.staff!.email}`);
+      (await creditLedger.setPlan(id, planId, Date.now(), `staff:${req.staff!.email}`));
       (await audit(req, "plan.complimentary", id, { planId, reason, from: w.plan.id }));
       return res.json({ ok: true });
     }
@@ -381,8 +382,8 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
       if (req.staff!.role !== "super_admin") return res.status(403).json({ error: "Only a super admin can end a complimentary plan." });
       const row = (await adminService().customer(id));
       if (!row?.complimentary) return res.status(409).json({ error: "This customer isn't on a complimentary plan." });
-      const wallet = creditLedger.snapshot(id);
-      creditLedger.endSubscription(id, creditLedger.subscriptionIdOf(id) ?? "");
+      const wallet = (await creditLedger.snapshot(id));
+      (await creditLedger.endSubscription(id, (await creditLedger.subscriptionIdOf(id)) ?? ""));
       (await audit(req, "plan.complimentary_end", id, { reason, from: wallet.plan.id }));
       return res.json({ ok: true });
     }
@@ -403,12 +404,12 @@ adminRouter.post("/customers/:id/view-as", need("support.write"), wrap(async (re
 
 // ---------- lists ----------
 
-adminRouter.get("/organizations", need("read"), wrap((req, res) => {
-  res.json(adminService().customers({ q: String(req.query.q ?? ""), filter: "all", page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25), sort: String(req.query.sort ?? "") }));
+adminRouter.get("/organizations", need("read"), wrap(async (req, res) => {
+  res.json((await adminService().customers({ q: String(req.query.q ?? ""), filter: "all", page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25), sort: String(req.query.sort ?? "") })));
 }));
 
-adminRouter.get("/subscriptions", need("read"), wrap((req, res) => {
-  res.json(adminService().subscriptions({ status: req.query.status ? String(req.query.status) : undefined, page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25) }));
+adminRouter.get("/subscriptions", need("read"), wrap(async (req, res) => {
+  res.json((await adminService().subscriptions({ status: req.query.status ? String(req.query.status) : undefined, page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25) })));
 }));
 
 adminRouter.get("/usage", need("read"), wrap((req, res) => {
@@ -539,10 +540,10 @@ async function healthChecks(): Promise<{ status: "operational" | "degraded" | "d
   checks.push({ id: "workers", name: "Workers", status: w.total === 0 ? "not_configured" : w.online > 0 ? (w.online < w.total ? "degraded" : "operational") : "down", detail: `${w.online}/${w.total} online` });
   if (billingService().enabled) {
     const day = Date.now() - 86_400_000;
-    const stats = stripeStore().eventStats(day);
+    const stats = (await stripeStore().eventStats(day));
     const failed = stats.find((x) => x.status === "failed")?.n ?? 0;
     const total = stats.reduce((a, x) => a + Number(x.n), 0);
-    const last = stripeStore().lastEventAt();
+    const last = (await stripeStore().lastEventAt());
     checks.push({ id: "stripe", name: "Stripe Webhooks", status: failed ? "degraded" : "operational", detail: `${total} event${total === 1 ? "" : "s"} in 24 h${failed ? ` · ${failed} failed` : ""}${last ? ` · last ${new Date(last).toISOString().slice(0, 16).replace("T", " ")} UTC` : " · none received yet"}` });
   } else checks.push({ id: "stripe", name: "Stripe Webhooks", status: "not_configured", detail: "payments not set up" });
   checks.push({ id: "email", name: "Email Service", status: mailConfigured() ? "operational" : "not_configured", detail: mailConfigured() ? "SMTP configured" : "SMTP not configured" });
