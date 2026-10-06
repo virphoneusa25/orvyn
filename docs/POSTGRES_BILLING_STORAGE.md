@@ -60,4 +60,12 @@ reserveImage returns a promise for an asynchronous release callback. Callers mus
 
 PostgreSQL 16 tests compare public snapshots and usage reports with SQLite across signup grants, topups, versioned exact rates, holds, settlements, failed usage, replayed usage, refunds and staff adjustment. Additional tests cover concurrent duplicate topups/subscription grants, competing reservations, free-cycle renewal, original entitlement errors, image leases and burst limits, rolling windows, run budgets, full payment/credit commit and rollback, and recharge notifications/caps.
 
-Remaining: await ledger/payment callers and port BillingService with acknowledged webhook/grant transactions and external requests outside database locks; establish recovery for pending recharge requests; migrate durable sessions and admin reports; then rehearse final consistent import, backups, rollback and staged activation. Production remains on SQLite.
+Remaining: await provider, tenant and direct route/admin ledger/payment callers; establish recovery for pending recharge requests; migrate durable sessions and admin reports; then rehearse final consistent import, backups, rollback and staged activation. Production remains on SQLite.
+
+## Asynchronous billing service boundary
+
+`AsyncFinancialStores` resolves the ledger, payments and transaction owner once. Initialization failure is cached and shared; it never independently selects a fallback for one store. The configured owner remains SQLite. PostgreSQL activation is still blocked on the remaining provider, route, reporting and restart-recovery integration.
+
+`BillingService` awaits every ledger/payment operation. A PostgreSQL-backed service can inject `PostgresFinancialStores.transaction` through the boundary so webhook claim, customer/checkout/subscription updates, credit changes and processed acknowledgement commit together. Failures return a retryable response and record failed status in a separate transaction without downgrading a concurrently processed event. Customer notifications run only after transaction acknowledgement; notification failure cannot turn a committed payment into a failed webhook. Stripe HTTP requests remain outside internal database transactions. SQLite retains its existing separate-database transaction behavior.
+
+Validation includes shared initialization/failure, asynchronous image lease release, the existing Stripe regression tests and a real PostgreSQL webhook test covering rollback after credit mutation, retry, replay and duplicate deliveries. This is billing-service integration; provider settlement, tenant hooks and direct route/admin ledger callers still require asynchronous conversion before a primary-storage rollout.
