@@ -17,7 +17,7 @@ function mockRes() {
   };
 }
 
-function runResolve(key?: string) {
+async function runResolve(key?: string) {
   const req = {
     tenant: undefined as unknown,
     header(name: string) {
@@ -28,23 +28,23 @@ function runResolve(key?: string) {
   };
   const res = mockRes();
   let next = false;
-  resolveTenant(req as never, res as never, () => {
+  (await resolveTenant(req as never, res as never, () => {
     next = true;
-  });
+  }));
   return { req, res, next };
 }
 
-test("cloud mode rejects a missing credential instead of the local default tenant", () => {
+test("cloud mode rejects a missing credential instead of the local default tenant", async () => {
   const prev = process.env.ORVYN_CLOUD_MODE;
   process.env.ORVYN_CLOUD_MODE = "true";
   try {
-    const { req, res, next } = runResolve();
+    const { req, res, next } = (await runResolve());
     assert.equal(next, false);
     assert.equal(res.statusCode, 401);
     assert.equal(req.tenant, undefined);
-    const socket = authorizeSocket(null);
+    const socket = (await authorizeSocket(null));
     assert.equal(socket.ok, false);
-    const bad = authorizeSocket("orvsess_not-a-real-session");
+    const bad = (await authorizeSocket("orvsess_not-a-real-session"));
     assert.equal(bad.ok, false);
   } finally {
     if (prev === undefined) delete process.env.ORVYN_CLOUD_MODE;
@@ -52,15 +52,15 @@ test("cloud mode rejects a missing credential instead of the local default tenan
   }
 });
 
-test("local mode still admits the default tenant when no keys are registered", () => {
+test("local mode still admits the default tenant when no keys are registered", async () => {
   const prev = process.env.ORVYN_CLOUD_MODE;
   delete process.env.ORVYN_CLOUD_MODE;
   try {
-    const { req, res, next } = runResolve();
+    const { req, res, next } = (await runResolve());
     assert.equal(next, true);
     assert.equal(res.statusCode, 0);
     assert.equal((req.tenant as { id?: string } | undefined)?.id, "default");
-    const socket = authorizeSocket(null);
+    const socket = (await authorizeSocket(null));
     assert.equal(socket.ok, true);
     if (socket.ok) assert.equal(socket.tenant.id, "default");
   } finally {

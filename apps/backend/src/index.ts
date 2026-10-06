@@ -1,3 +1,4 @@
+import { asyncHandler } from "./http/asyncHandler";
 import * as pathModule from "path";
 import * as fsModule from "fs";
 import "./loadEnv";
@@ -24,7 +25,7 @@ import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
-import { authService } from "./auth/AuthService";
+import { authService } from "./auth/AsyncAuthService";
 import { redactChunk } from "./middleware/customerRedaction";
 import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
@@ -204,11 +205,11 @@ app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RA
 
 // A shared conversation (read-only public link from Chats → Share). Text only:
 // attachments, files and account details never leave through a share link.
-app.get("/api/v1/public/shares/:token", ipRateLimit(120), (req, res) => {
+app.get("/api/v1/public/shares/:token", ipRateLimit(120), asyncHandler(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  const share = authService.resolveShare(String(req.params.token));
-  const as = share ? authService.principalFor(share.userId, share.organizationId) : null;
+  const share = (await authService.resolveShare(String(req.params.token)));
+  const as = share ? (await authService.principalFor(share.userId, share.organizationId)) : null;
   const tenant = as ? tenantManager.ensureOrgTenant(as.principal) : null;
   const session = share && tenant ? tenant.sessions.get(share.sessionId) : undefined;
   if (!share || !session || (session.userId && session.userId !== share.userId)) return res.status(404).json({ error: "This shared conversation isn't available. The link may have been turned off." });
@@ -216,14 +217,14 @@ app.get("/api/v1/public/shares/:token", ipRateLimit(120), (req, res) => {
     .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
     .map((m: { role: string; content: string; createdAt: number }) => ({ role: m.role, content: String(m.content ?? ""), createdAt: m.createdAt }));
   res.json({ title: session.title, sharedAt: share.createdAt, author: as!.user.name?.split(" ")[0] ?? null, messages });
-});
+}));
 
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.
 // The rate limit is per tenant, so one customer can't starve the others.
 // …then the account gate: a signed-in person uses ORVYN only after verifying
 // their email and finishing onboarding (no skipping into the app).
-app.use("/api/v1", resolveTenant, requireAccountReady, (req, res, next) => {
+app.use("/api/v1", asyncHandler(resolveTenant), asyncHandler(requireAccountReady), (req, res, next) => {
     // Desktop frame polling is a real-time visual stream (~11 FPS), not a
     // typical API call — exempting it prevents the 300 RPM tenant limiter
     // from starving the stream with 429s while the user watches.
@@ -295,22 +296,26 @@ server.on("upgrade", (req, socket, head) => {
 });
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
-wss.on("connection", (socket, req) => {
+wss.on("connection", async (socket, req) => {
+  // Clients wait for connection.ready. Fail closed if data arrives during admission.
+  const prematureMessage = () => socket.close(1008, "Authentication pending");
+  socket.on("message", prematureMessage);
+  try {
   const url = new URL(req.url ?? "", "http://internal");
   const ticket = url.searchParams.get("ticket");
-  const token = ticket ? authService.redeemWsTicket(ticket) : url.searchParams.get("token");
+  const token = ticket ? (await authService.redeemWsTicket(ticket)) : url.searchParams.get("token");
   if (ticket && !token) {
     socket.send(JSON.stringify({ delta: "", done: true, error: "This connection expired. Reconnecting…", code: "TICKET_EXPIRED" }));
     socket.close();
     return;
   }
-  const ready = socketAccountReady(token);
+  const ready = (await socketAccountReady(token));
   if (!ready.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: ready.error, code: ready.code }));
     socket.close();
     return;
   }
-  const admitted = authorizeSocket(token);
+  const admitted = (await authorizeSocket(token));
   if (!admitted.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: admitted.error }));
     socket.close();
@@ -319,7 +324,13 @@ wss.on("connection", (socket, req) => {
   const tenant = admitted.tenant;
   (socket as any).__orvynTenantId = tenant.id;
   // The person on this socket (session tokens): conversations are theirs alone.
-  const socketUserId = token ? authService.verifyPrincipal(token)?.user.id ?? null : null;
+  const socketUserId = token ? (await authService.verifyPrincipal(token))?.user.id ?? null : null;
+  if (token?.startsWith("orvsess_") && !socketUserId) {
+    socket.close(1008, "Session expired");
+    return;
+  }
+  if (socket.readyState !== socket.OPEN) return;
+  socket.off("message", prematureMessage);
 
   socket.send(JSON.stringify({
     type: "connection.ready",
@@ -482,6 +493,12 @@ wss.on("connection", (socket, req) => {
   });
   // The app closed mid-reply: keep what arrived.
   socket.on("close", () => { for (const controller of chatControllers) controller.abort(); recorder?.finish(); });
+  } catch {
+    // Do not admit a socket or expose database details after authentication errors.
+    if (socket.readyState === socket.OPEN) socket.close(1011, "Authentication unavailable");
+  } finally {
+    socket.off("message", prematureMessage);
+  }
 });
 
 // Liveness heartbeat for desktop/cloud clients. A half-open socket must not
