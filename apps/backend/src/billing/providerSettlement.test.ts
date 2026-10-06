@@ -14,7 +14,7 @@ test("positive embedding/cache costs stay positive until credit rounding", () =>
   const cost = providerCostUsd({ inputTokens: 1, outputTokens: 0, inputUsdPerMillion: .02, cachedInputUsdPerMillion: .02, outputUsdPerMillion: 0 });
   assert.ok(cost > 0); assert.equal(customerCreditsFor(cost, 1.75).customerCredits, 2);
 });
-test("every platform provider settles exact model/cache prices and replays idempotently", () => {
+test("every platform provider settles exact model/cache prices and replays idempotently", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'orvyn-all-billing-')), ledger = new CreditLedger(join(dir, 'billing.sqlite'));
   const now = Date.now();
   try {
@@ -23,11 +23,11 @@ test("every platform provider settles exact model/cache prices and replays idemp
       ledger.purchase(provider, 'pack_10k', 'checkout', now);
       const event: UsageEvent = { id: `test-${provider}`, timestamp: now, modelId: `${provider}-model`, provider, method: 'generate', durationMs: 1, ok: true, promptTokens: 1_000_000, cachedTokens: 250_000, completionTokens: 100_000,
         rate: { input: 1, cachedInput: .1, output: 2, verifiedAt: now - 100, expiresAt: now + 1000, source: 'https://fixture.invalid/pricing' } };
-      settleProviderUsage(ledger, provider, event, false, true);
+      await settleProviderUsage(ledger, provider, event, false, true);
       const row = ledger.usageEvent(event.id) as any;
       assert.equal(row.provider_cost_micros, 975_000);
       assert.equal(row.credits_charged, 2194);
-      settleProviderUsage(ledger, provider, event, false, true);
+      await settleProviderUsage(ledger, provider, event, false, true);
       assert.equal((ledger.usageEvent(event.id) as any).credits_charged, 2194);
     }
   } finally { ledger.close(); }
@@ -42,7 +42,7 @@ test("unknown exact prices cannot charge generic cards; settled gateway costs ov
     assert.throws(() => ledger.charge({ userId: 'u', type: 'model', providerCostUsd: NaN }), /Invalid provider/);
   } finally { ledger.close(); }
 });
-test("a pending quoted settlement survives restart and remains recoverable after a newer price", () => {
+test("a pending quoted settlement survives restart and remains recoverable after a newer price", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'orvyn-billing-replay-')), ledger = new CreditLedger(join(dir, 'billing.sqlite'));
   let store = new LocalStore('u', dir);
   const now = Date.now();
@@ -52,7 +52,7 @@ test("a pending quoted settlement survives restart and remains recoverable after
   try {
     ledger.setRateCard({ provider: 'deepseek', modelId: 'deepseek-flash', inputUsdPerMillion: .3, cachedInputUsdPerMillion: .006, outputUsdPerMillion: 1.2, effectiveFrom: now + 10 });
     const pending = store.pendingBilling(); assert.equal(pending.length, 1);
-    settleProviderUsage(ledger, 'u', pending[0].event, pending[0].own, true);
+    await settleProviderUsage(ledger, 'u', pending[0].event, pending[0].own, true);
     assert.equal((ledger.usageEvent(event.id) as any).provider_cost_micros, 150_000);
     store.completeBilling(event.id); assert.equal(store.pendingBilling().length, 0);
     assert.equal(ledger.rateCardAt('deepseek', 'deepseek-flash', now + 20)?.inputUsdPerMillion, .3);

@@ -95,14 +95,20 @@ interface UsageStore {
   loadRecentUsage(limit?: number): UsageEvent[];
   countUsageSince?(ts: number): number;
 }
+type UsageRelease = () => void | Promise<void>;
+// Existing synchronous listeners may return incidental values; await thenables and ignore results.
+type UsageSink = (event: UsageEvent) => unknown;
+type UsageGuard = (ctx: UsageContext, model?: UsagePreflight) => void | UsageRelease | Promise<void | UsageRelease>;
 
 export class UsageService {
   private events: UsageEvent[] = [];
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
-  private sinks: Array<(event: UsageEvent) => void> = [];
-  private pendingSinks: Array<{ event: UsageEvent; sink: (event: UsageEvent) => void }> = [];
-  private preflights: Array<(ctx: UsageContext, model?: UsagePreflight) => void | (() => void)> = [];
+  private sinks: UsageSink[] = [];
+  private pendingSinks: Array<{ event: UsageEvent; sink: UsageSink }> = [];
+  private preflights: UsageGuard[] = [];
+  private settling = new Set<Promise<void>>();
+  private retrying?: Promise<void>;
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -127,22 +133,38 @@ export class UsageService {
    * with LocalStore.
    */
   /** A check run before every provider call (the credit wallet): throwing stops the call. */
-  onPreflight(fn: (ctx: UsageContext, model?: UsagePreflight) => void | (() => void)): void {
+  onPreflight(fn: UsageGuard): void {
     this.preflights.push(fn);
   }
 
-  private runPreflight(model?: UsagePreflight): () => void {
-    while (this.pendingSinks.length) {
-      const pending = this.pendingSinks[0];
-      try { pending.sink(pending.event); } catch { throw new Error("Billing settlement is temporarily unavailable. Please retry."); }
-      this.pendingSinks.shift();
-    }
+  private async retryPendingSinks(): Promise<void> {
+    if (!this.retrying) this.retrying = (async () => {
+      while (this.pendingSinks.length) {
+        const pending = this.pendingSinks[0];
+        try { await pending.sink(pending.event); } catch { throw new Error("Billing settlement is temporarily unavailable. Please retry."); }
+        this.pendingSinks.shift();
+      }
+    })().finally(() => { this.retrying = undefined; });
+    return this.retrying;
+  }
+
+  private async runPreflight(model?: UsagePreflight): Promise<() => Promise<void>> {
+    await Promise.all([...this.settling]);
+    await this.retryPendingSinks();
     const ctx = this.als.getStore() ?? {};
-    const releases: Array<() => void> = [];
+    const releases: UsageRelease[] = [];
+    const releaseAll = async () => {
+      let failure: unknown;
+      let failed = false;
+      for (const release of [...releases].reverse()) {
+        try { await release(); } catch (error) { if (!failed) failure = error; failed = true; }
+      }
+      if (failed) throw failure;
+    };
     try {
-      for (const fn of this.preflights) { const release = fn(ctx, model); if (release) releases.push(release); }
-    } catch (err) { for (const release of releases.reverse()) release(); throw err; }
-    return () => { for (const release of releases.reverse()) release(); };
+      for (const fn of this.preflights) { const release = await fn(ctx, model); if (release) releases.push(release); }
+    } catch (err) { try { await releaseAll(); } catch { /* preserve the admission failure */ } throw err; }
+    return releaseAll;
   }
 
   /** Covers adapters and the direct Fireworks Kontext wire with the same billing boundary. */
@@ -151,7 +173,7 @@ export class UsageService {
     this.checkQuota();
     this.checkMissionBudget();
     const rate = config.imageRate ? { ...config.imageRate } : undefined;
-    const release = this.runPreflight({ id: config.id, method: "image", imageCount: count,
+    const release = await this.runPreflight({ id: config.id, method: "image", imageCount: count,
       imageRate: rate, rate: config.rate, imageSettlementBudgetUsd: config.imageSettlementBudgetUsd, providerCostUsd: config.imageSettlementBudgetUsd ? count * config.imageSettlementBudgetUsd : rate ? count * rate.usdPerImage : undefined });
     const start = Date.now();
     try {
@@ -160,17 +182,17 @@ export class UsageService {
       if (!Number.isInteger(actual) || actual < 1 || actual > count) throw new Error("Image provider returned an invalid image count");
       const exact = settledCost?.(result);
       if (config.imageSettlementBudgetUsd && (exact === undefined || !Number.isFinite(exact) || exact < 0)) throw new Error("Image provider did not report final settled cost");
-      this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: true,
+      await this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: true,
         imageCount: actual, imageRate: rate, imagePremium: rate?.premium, providerCostUsd: exact ?? (rate ? actual * rate.usdPerImage : undefined), durationMs: Date.now() - start });
       return result;
     } catch (err: any) {
-      this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: false,
+      await this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: false,
         imageCount: 0, providerCostUsd: 0, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
       throw err;
-    } finally { release(); }
+    } finally { await release(); }
   }
 
-  onRecord(fn: (event: UsageEvent) => void): void {
+  onRecord(fn: UsageSink): void {
     this.sinks.push(fn);
   }
 
@@ -220,7 +242,7 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  async record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): Promise<void> {
     const ctx = this.als.getStore() ?? {};
     const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...ctx, ...e };
     this.events.push(event);
@@ -228,13 +250,6 @@ export class UsageService {
     this.rollMonth();
     this.monthCount++;
     this.store?.saveUsageEvent(event);
-    for (const sink of this.sinks) {
-      try { sink(event); } catch (err) {
-        this.pendingSinks.push({ event, sink });
-        console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
-      }
-    }
-
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
       m.requests++;
@@ -242,6 +257,16 @@ export class UsageService {
       m.completionTokens += e.completionTokens ?? 0;
       this.missions.set(ctx.missionId, m);
     }
+    const settlement = (async () => {
+      for (const sink of this.sinks) {
+        try { await sink(event); } catch (err) {
+          this.pendingSinks.push({ event, sink });
+          console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
+        }
+      }
+    })();
+    this.settling.add(settlement);
+    try { await settlement; } finally { this.settling.delete(settlement); }
   }
 
   /** Per-mission counters, for the usage endpoint and reports. */
@@ -334,7 +359,7 @@ export class UsageService {
         const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
         usage.checkQuota();
         usage.checkMissionBudget();
-        usage.runPreflight({ ...inner.config, rate });
+        const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
@@ -345,7 +370,7 @@ export class UsageService {
           });
           const reported = Boolean(res.usage);
           if (inner.config.billingRequired && inner.config.settledCostRequired && res.usage?.providerCostUsd === undefined) throw new Error("Provider did not report final settled cost");
-          usage.record({
+          await usage.record({
             rate,
             cachedTokens: res.usage?.cachedTokens,
             providerCostUsd: res.usage?.providerCostUsd,
@@ -362,7 +387,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.providerName ?? inner.config.provider,
             method: "generate",
@@ -371,25 +396,25 @@ export class UsageService {
             error: String(err?.message ?? err).slice(0, 300),
           });
           throw err;
-        }
+        } finally { await release(); }
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
         const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
         usage.checkQuota();
         usage.checkMissionBudget();
-        usage.runPreflight({ ...inner.config, rate });
+        const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
         let reportedUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; providerCostUsd?: number } | undefined;
         let settled = false;
         let yieldedAny = false;
-        const recordOk = () => {
+        const recordOk = async () => {
           if (settled) return;
           if (inner.config.billingRequired && inner.config.settledCostRequired && reportedUsage?.providerCostUsd === undefined) throw new Error("Provider did not report final settled cost");
           settled = true;
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
@@ -433,10 +458,10 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          recordOk();
+          await recordOk();
         } catch (err: any) {
           settled = true;
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
             provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
@@ -449,7 +474,8 @@ export class UsageService {
         } finally {
           // The consumer stopped reading (it had the final chunk, or the run
           // was cancelled mid-answer): what was delivered is still one call.
-          if (!settled && yieldedAny) recordOk();
+          try { if (!settled && yieldedAny) await recordOk(); }
+          finally { await release(); }
         }
       },
 
@@ -463,18 +489,18 @@ export class UsageService {
     const embed = async (inputs: string[]): Promise<number[][]> => {
       if (!inputs.length) return [];
       const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
-      usage.checkQuota(); usage.checkMissionBudget(); usage.runPreflight({ ...inner.config, rate });
+      usage.checkQuota(); usage.checkMissionBudget(); const release = await usage.runPreflight({ ...inner.config, rate });
       const start = Date.now();
       try {
         const result = inner.embedWithUsage ? await inner.embedWithUsage(inputs) : { embeddings: inner.embedMany ? await inner.embedMany(inputs) : await Promise.all(inputs.map((s) => inner.embed!(s))) };
-        usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: true, rate, durationMs: Date.now() - start,
+        await usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: true, rate, durationMs: Date.now() - start,
           promptTokens: result.usage?.promptTokens ?? estimateTokens(inputs.reduce((sum, s) => sum + s.length, 0)), completionTokens: 0,
           cachedTokens: result.usage?.cachedTokens, providerCostUsd: result.usage?.providerCostUsd, estimated: result.usage ? undefined : true });
         return result.embeddings;
       } catch (err: any) {
-        usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: false, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
+        await usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: false, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
         throw err;
-      }
+      } finally { await release(); }
     };
     if (inner.embed) wrapper.embed = async (input) => (await embed([input]))[0] ?? [];
     if (inner.embedMany) wrapper.embedMany = embed;

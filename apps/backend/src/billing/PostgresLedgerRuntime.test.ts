@@ -9,9 +9,48 @@ import {PostgresFinancialStores} from "./PostgresFinancialStores";
 import {paymentSql} from "./PostgresBillingDatabase";
 import {createAsyncFinancialStores} from "./AsyncFinancialStores";
 import {BillingService,signStripePayload} from "./stripe";
+import {UsageService} from "../services/UsageService";
+import {LocalStore} from "../persistence/LocalStore";
+import {TenantBilling} from "./TenantBilling";
+import {recordProviderQuote} from "./providerSettlement";
 
 const integration=process.env.ORVYN_LEDGER_RUNTIME_TEST==="1"&&Boolean(process.env.ORVYN_PG_URL);
 const now=Date.UTC(2026,9,12),day=86400000;
+test("real PostgreSQL tenant usage waits for settlement, replays durable pending usage and releases failed image reservations",{skip:!integration},async()=>{
+  const owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const dir=mkdtempSync(join(tmpdir(),"pg-tenant-usage-")),account="runtime-tenant-provider-hooks",store=new LocalStore(account,dir);
+  let available=false,reached=0;
+  const ledger=new Proxy(owner.ledger,{get(target,key){
+    if(key==="charge")return async(...args:Parameters<PostgresCreditLedger["charge"]>)=>{if(!available)throw new Error("fixture settlement unavailable");return target.charge(...args);};
+    const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+  }});
+  const financial=createAsyncFinancialStores(()=>({ledger,payments:owner.payments,transaction:operation=>owner.transaction(()=>operation())}));
+  const billing=new TenantBilling(financial.ledger,account,store),usage=new UsageService(),at=Date.now();
+  const rate={input:1,output:2,verifiedAt:at,expiresAt:at+60000,source:"fixture"};
+  usage.onPreflight(async(_ctx,model)=>{
+    await billing.recover(true);
+    if(model?.method==="image")return financial.ledger.reserveImage(account,2,"image",0.01);
+    await recordProviderQuote(financial.ledger,{provider:"fixture",modelId:"runtime-usage-model",rate});
+    await financial.ledger.assertCanSpend(account);
+  });
+  usage.onRecord(event=>billing.record(event,false,true));
+  const provider={config:{id:"runtime-usage-model",provider:"openai-compatible",providerName:"fixture",rate},generate:async()=>{reached++;return {content:"fixture",usage:{promptTokens:100,completionTokens:10,providerCostUsd:0.01}};},stream:async function*(){yield {delta:"fixture",done:true};},healthCheck:async()=>true,supportsTools:()=>false,supportsVision:()=>false} as any;
+  try{
+    await financial.ledger.ensureAccount(account);
+    const wrapped=usage.wrap(provider);
+    await wrapped.generate({messages:[]});assert.equal(reached,1);assert.equal(store.pendingBilling().length,1);
+    const pending=store.pendingBilling()[0].event;
+    assert.equal(await owner.ledger.usageEvent(pending.id),undefined);
+    await assert.rejects(wrapped.generate({messages:[]}),/settlement is temporarily unavailable/);assert.equal(reached,1);
+    available=true;await wrapped.generate({messages:[]});assert.equal(reached,2);assert.equal(store.pendingBilling().length,0);
+    assert.ok(await owner.ledger.usageEvent(pending.id));
+    const balance=(await owner.ledger.snapshot(account)).availableBalance;
+    await billing.record(pending,false,true);assert.equal((await owner.ledger.snapshot(account)).availableBalance,balance);
+    await assert.rejects(usage.imageCall({id:"runtime-usage-image",provider:"openai-compatible"},2,async()=>{throw new Error("fixture image outage");},()=>2),/fixture image outage/);
+    const release=await financial.ledger.reserveImage(account,2,"image",0.01);await release();
+    assert.equal(store.pendingBilling().length,0);
+  }finally{store.close();rmSync(dir,{recursive:true,force:true});await owner.close();}
+});
 test("real PostgreSQL webhook commits payment and credits together, rolls back failed acknowledgement and safely retries",{skip:!integration},async()=>{
   const owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
   const observer=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
