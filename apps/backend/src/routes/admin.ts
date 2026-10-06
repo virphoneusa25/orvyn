@@ -1,3 +1,4 @@
+import { staffStore } from "../auth/AsyncAccountStores";
 import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/admin.ts
 //
@@ -14,7 +15,7 @@ import fs from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { authService } from "../auth/AsyncAuthService";
-import { can, staffStore, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
+import { can, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
 import { adminService, AUDIT_TITLES, CUSTOMER_FILTERS, CREDIT_VALUE_USD, type CustomerFilter } from "../admin/AdminService";
 import { creditLedger } from "../billing/creditLedgerInstance";
 import { BillingLimitError } from "../billing/CreditLedger";
@@ -55,8 +56,8 @@ adminRouter.use(asyncHandler(async (req: AdminRequest, res, next) => {
   const token = bearer(req);
   const session = token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Sign in to continue.", code: "UNAUTHENTICATED" });
-  let role = staffStore().roleOf(session.user.id);
-  if (!role && process.env.ORVYN_SUPER_ADMIN_EMAILS) { staffStore().seedFromEnv(); role = staffStore().roleOf(session.user.id); }
+  let role = (await staffStore().roleOf(session.user.id));
+  if (!role && process.env.ORVYN_SUPER_ADMIN_EMAILS) { (await staffStore().seedFromEnv()); role = (await staffStore().roleOf(session.user.id)); }
   if (!role) {
     console.warn(JSON.stringify({ event: "admin.denied", path: req.path.slice(0, 80) }));
     return res.status(403).json({ error: "This area is for ORVYN staff.", code: "ADMIN_ONLY" });
@@ -70,8 +71,8 @@ const need = (p: StaffPermission) => (req: AdminRequest, res: Response, next: Ne
   next();
 };
 
-function audit(req: AdminRequest, action: string, tenantId: string | null, detail: Record<string, unknown> = {}) {
-  return staffStore().audit({ actorId: req.staff!.id, actorEmail: req.staff!.email, action, tenantId, detail, ip: req.ip ?? null });
+async function audit(req: AdminRequest, action: string, tenantId: string | null, detail: Record<string, unknown> = {}) {
+  return (await staffStore().audit({ actorId: req.staff!.id, actorEmail: req.staff!.email, action, tenantId, detail, ip: req.ip ?? null }));
 }
 
 /** The customer (tenant) in the path, or a 404. */
@@ -108,8 +109,8 @@ adminRouter.get("/me", (req: AdminRequest, res) => {
 
 // ---------- dashboard, search, notifications ----------
 
-adminRouter.get("/dashboard", need("read"), wrap((req, res) => {
-  const d = adminService().dashboard();
+adminRouter.get("/dashboard", need("read"), wrap(async (req, res) => {
+  const d = (await adminService().dashboard());
   if (!can(req.staff!.role, "costs.read")) (d as any).providerCosts = null;
   res.json(d);
 }));
@@ -133,7 +134,7 @@ adminRouter.get("/notifications", need("read"), wrap(async (_req, res) => {
   for (const e of stripeStore().failedEvents(since)) items.push({ id: `stripe:${e.id}`, level: "error", title: "Stripe webhook failed", detail: `${e.type}${e.error ? ` — ${e.error.slice(0, 80)}` : ""}`, at: e.received_at, href: "/admin/health" });
   const counts = adminService().counts();
   if (counts.past_due) items.push({ id: "past_due", level: "warning", title: `${counts.past_due} past-due customer${counts.past_due === 1 ? "" : "s"}`, detail: "Payment failed; Stripe is retrying.", at: Date.now(), href: "/admin/customers?filter=past_due" });
-  for (const s of staffStore().pausedTenants().slice(0, 5)) items.push({ id: `paused:${s.tenantId}`, level: "info", title: `${adminService().orgByTenant(s.tenantId)?.name ?? "A customer"} is paused`, detail: `${s.category} · ${s.reason.slice(0, 60)}`, at: s.at, href: `/admin/customers/${s.tenantId}` });
+  for (const s of (await staffStore().pausedTenants()).slice(0, 5)) items.push({ id: `paused:${s.tenantId}`, level: "info", title: `${adminService().orgByTenant(s.tenantId)?.name ?? "A customer"} is paused`, detail: `${s.category} · ${s.reason.slice(0, 60)}`, at: s.at, href: `/admin/customers/${s.tenantId}` });
   const health = await healthChecks();
   for (const h of health.checks) if (h.status === "down" || h.status === "degraded") items.push({ id: `health:${h.id}`, level: h.status === "down" ? "error" : "warning", title: `${h.name}: ${h.status}`, detail: h.detail, at: Date.now(), href: "/admin/health" });
   items.sort((a, b) => b.at - a.at);
@@ -162,15 +163,15 @@ adminRouter.post("/customers", need("support.write"), wrap(async (req, res) => {
   }
   (await authService.logout(created.token));
   const tenantId = created.organization?.tenantId ?? (await authService.listOrganizations(created.user.id))[0]?.tenantId;
-  if (orgName && created.organization?.id) staffStore().db.prepare(`UPDATE organizations SET name = ? WHERE id = ?`).run(orgName, created.organization.id);
+  if (orgName && created.organization?.id) await authService.nameOrganization(created.organization.id,orgName);
   const mail = await sendPasswordReset(req, email);
-  audit(req, "customer.create", tenantId ?? null, { email, emailed: mail.sent });
+  (await audit(req, "customer.create", tenantId ?? null, { email, emailed: mail.sent }));
   res.status(201).json({ customer: { id: tenantId }, emailed: mail.sent });
 }));
 
-adminRouter.get("/customers/:id", need("read"), wrap((req, res) => {
+adminRouter.get("/customers/:id", need("read"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  res.json({ customer: adminService().customer(id) });
+  res.json({ customer: (await adminService().customer(id)) });
 }));
 
 adminRouter.get("/customers/:id/usage", need("read"), wrap((req, res) => {
@@ -209,14 +210,14 @@ adminRouter.get("/customers/:id/chats", need("read"), wrap((req, res) => {
   res.json({ chats: adminService().chats(id, Math.min(200, num(req.query.limit, 50))) });
 }));
 
-adminRouter.get("/customers/:id/activity", need("read"), wrap((req, res) => {
+adminRouter.get("/customers/:id/activity", need("read"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  res.json({ activity: adminService().activity(id, Math.min(200, num(req.query.limit, 40))) });
+  res.json({ activity: (await adminService().activity(id, Math.min(200, num(req.query.limit, 40)))) });
 }));
 
-adminRouter.get("/customers/:id/audit", need("read"), wrap((req, res) => {
+adminRouter.get("/customers/:id/audit", need("read"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  res.json({ audit: staffStore().auditLog({ tenantId: id, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) }), titles: AUDIT_TITLES });
+  res.json({ audit: (await staffStore().auditLog({ tenantId: id, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) })), titles: AUDIT_TITLES });
 }));
 
 adminRouter.get("/customers/:id/ledger", need("read"), wrap((req, res) => {
@@ -247,7 +248,7 @@ adminRouter.get("/customers/:id/subscription", need("read"), wrap(async (req, re
 
 const ADJUST_CATEGORIES = ["promotional", "billing_correction", "refund_adjustment", "goodwill", "other"];
 
-adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap((req, res) => {
+adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
   const credits = Number(req.body?.credits);
   const reason = String(req.body?.reason ?? "").trim();
@@ -274,7 +275,7 @@ adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap((r
   }
   const after = creditLedger.snapshot(id);
   // A replayed request (same id) returns the same entries and writes no second audit row.
-  if (before.availableBalance !== after.availableBalance) audit(req, "credits.adjust", id, { credits, reason, category, entries: entries.map((e) => e.id), before: before.availableBalance, after: after.availableBalance });
+  if (before.availableBalance !== after.availableBalance) (await audit(req, "credits.adjust", id, { credits, reason, category, entries: entries.map((e) => e.id), before: before.availableBalance, after: after.availableBalance }));
   res.json({ entries, wallet: { available: after.availableBalance, purchased: after.purchasedBalance, included: after.includedBalance } });
 }));
 
@@ -284,7 +285,7 @@ adminRouter.post("/customers/:id/password-reset", need("support.write"), wrap(as
   if (!owner) return res.status(404).json({ error: "This customer has no contact to email." });
   const out = await sendPasswordReset(req, owner.email);
   if (!out.sent) return res.status(out.error?.includes("configured") ? 503 : 429).json({ error: out.error });
-  audit(req, "support.password_reset", id, { to: owner.email });
+  (await audit(req, "support.password_reset", id, { to: owner.email }));
   res.json({ sent: true, to: owner.email });
 }));
 
@@ -295,37 +296,37 @@ adminRouter.post("/customers/:id/resend-verification", need("support.write"), wr
   if ((await authService.isEmailVerified(owner.userId))) return res.status(409).json({ error: "Their email is already verified." });
   const out = await sendVerification(req, owner.userId, owner.name);
   if (!out.sent) return res.status(out.error?.includes("configured") ? 503 : 429).json({ error: out.error });
-  audit(req, "support.resend_verification", id, { to: owner.email });
+  (await audit(req, "support.resend_verification", id, { to: owner.email }));
   res.json({ sent: true, to: owner.email });
 }));
 
-adminRouter.post("/customers/:id/suspend", need("account.suspend"), wrap((req, res) => {
+adminRouter.post("/customers/:id/suspend", need("account.suspend"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
   if (req.body?.confirm !== true) return res.status(400).json({ error: "Confirm the pause." });
-  const s = staffStore().suspend(id, { reason: String(req.body?.reason ?? ""), category: String(req.body?.category ?? "other") }, req.staff!.email);
-  audit(req, "account.suspend", id, { reason: s.reason, category: s.category });
+  const s = (await staffStore().suspend(id, { reason: String(req.body?.reason ?? ""), category: String(req.body?.category ?? "other") }, req.staff!.email));
+  (await audit(req, "account.suspend", id, { reason: s.reason, category: s.category }));
   res.json({ suspension: s });
 }));
 
-adminRouter.post("/customers/:id/reactivate", need("account.suspend"), wrap((req, res) => {
+adminRouter.post("/customers/:id/reactivate", need("account.suspend"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  if (!staffStore().reactivate(id, req.staff!.email)) return res.status(409).json({ error: "This account isn't paused." });
-  audit(req, "account.reactivate", id, { reason: String(req.body?.reason ?? "").slice(0, 500) });
+  if (!(await staffStore().reactivate(id, req.staff!.email))) return res.status(409).json({ error: "This account isn't paused." });
+  (await audit(req, "account.reactivate", id, { reason: String(req.body?.reason ?? "").slice(0, 500) }));
   res.json({ ok: true });
 }));
 
-adminRouter.post("/customers/:id/support-note", need("support.write"), wrap((req, res) => {
+adminRouter.post("/customers/:id/support-note", need("support.write"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  const note = staffStore().addNote(id, { id: req.staff!.id, email: req.staff!.email }, String(req.body?.body ?? ""));
-  audit(req, "support.note", id, { noteId: note.id });
+  const note = (await staffStore().addNote(id, { id: req.staff!.id, email: req.staff!.email }, String(req.body?.body ?? "")));
+  (await audit(req, "support.note", id, { noteId: note.id }));
   res.status(201).json({ note });
 }));
 
-adminRouter.put("/customers/:id/profile", need("support.write"), wrap((req, res) => {
+adminRouter.put("/customers/:id/profile", need("support.write"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
-  staffStore().saveProfile(id, { website: req.body?.website, industry: req.body?.industry, location: req.body?.location }, req.staff!.email);
-  audit(req, "profile.update", id, { fields: Object.keys(req.body ?? {}).filter((k) => ["website", "industry", "location"].includes(k)) });
-  res.json({ profile: staffStore().profile(id) });
+  (await staffStore().saveProfile(id, { website: req.body?.website, industry: req.body?.industry, location: req.body?.location }, req.staff!.email));
+  (await audit(req, "profile.update", id, { fields: Object.keys(req.body ?? {}).filter((k) => ["website", "industry", "location"].includes(k)) }));
+  res.json({ profile: (await staffStore().profile(id)) });
 }));
 
 /** Plan management. Paid changes go through Stripe (the webhook applies them); complimentary plans are super-admin only. */
@@ -341,19 +342,19 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
     case "change": {
       if (!validPlan || planId === "free" || planId === "enterprise") return res.status(400).json({ error: "Choose a paid self-serve plan." });
       const out = await svc.adminChangePlan(id, planId, period, req.staff!.email);
-      audit(req, "plan.change", id, { planId, period, reason, subscriptionId: out.subscriptionId });
+      (await audit(req, "plan.change", id, { planId, period, reason, subscriptionId: out.subscriptionId }));
       return res.json({ ok: true, message: "Stripe is updating the subscription. The plan and credits change when Stripe confirms the invoice." });
     }
     case "schedule": {
       if (!validPlan || planId === "free" || planId === "enterprise") return res.status(400).json({ error: "Choose a paid self-serve plan." });
       const out = await svc.adminScheduleChange(id, planId, period);
-      audit(req, "plan.schedule", id, { planId, period, reason, effectiveAt: out.effectiveAt });
+      (await audit(req, "plan.schedule", id, { planId, period, reason, effectiveAt: out.effectiveAt }));
       return res.json({ ok: true, effectiveAt: out.effectiveAt, message: "The change takes effect at the next renewal." });
     }
     case "cancel_at_period_end":
     case "resume": {
       const out = await svc.adminCancelAtPeriodEnd(id, action === "cancel_at_period_end");
-      audit(req, action === "resume" ? "plan.resume" : "plan.cancel_at_period_end", id, { reason, until: out.currentPeriodEnd });
+      (await audit(req, action === "resume" ? "plan.resume" : "plan.cancel_at_period_end", id, { reason, until: out.currentPeriodEnd }));
       return res.json({ ok: true, currentPeriodEnd: out.currentPeriodEnd });
     }
     case "checkout_link": {
@@ -362,7 +363,7 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
       if (!owner) return res.status(404).json({ error: "This customer has no contact." });
       const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
       const out = await svc.checkout({ accountId: id, email: owner.email, name: owner.name, planId, period, origin, returnTo: "portal" });
-      audit(req, "plan.checkout_link", id, { planId, period });
+      (await audit(req, "plan.checkout_link", id, { planId, period }));
       return res.json({ ok: true, url: out.url });
     }
     case "complimentary": {
@@ -373,16 +374,16 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
       const sub = stripeStore().latestSubscription(id);
       if (sub && ["active", "trialing", "past_due"].includes(sub.status)) return res.status(409).json({ error: "This customer pays through Stripe. Change the plan there instead." });
       creditLedger.setPlan(id, planId, Date.now(), `staff:${req.staff!.email}`);
-      audit(req, "plan.complimentary", id, { planId, reason, from: w.plan.id });
+      (await audit(req, "plan.complimentary", id, { planId, reason, from: w.plan.id }));
       return res.json({ ok: true });
     }
     case "end_complimentary": {
       if (req.staff!.role !== "super_admin") return res.status(403).json({ error: "Only a super admin can end a complimentary plan." });
-      const row = adminService().customer(id);
+      const row = (await adminService().customer(id));
       if (!row?.complimentary) return res.status(409).json({ error: "This customer isn't on a complimentary plan." });
       const wallet = creditLedger.snapshot(id);
       creditLedger.endSubscription(id, creditLedger.subscriptionIdOf(id) ?? "");
-      audit(req, "plan.complimentary_end", id, { reason, from: wallet.plan.id });
+      (await audit(req, "plan.complimentary_end", id, { reason, from: wallet.plan.id }));
       return res.json({ ok: true });
     }
     default:
@@ -391,12 +392,12 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
 }));
 
 /** Read-only "View as customer": a 30-minute token that can only read (the customer API refuses writes). */
-adminRouter.post("/customers/:id/view-as", need("support.write"), wrap((req, res) => {
+adminRouter.post("/customers/:id/view-as", need("support.write"), wrap(async (req, res) => {
   const id = customerOr404(req, res); if (!id) return;
   const owner = adminService().owner(id);
   if (!owner) return res.status(404).json({ error: "This customer has no member to view as." });
-  const out = staffStore().createViewAs({ id: req.staff!.id, email: req.staff!.email }, { userId: owner.userId, organizationId: owner.organizationId, tenantId: id });
-  audit(req, "support.view_as", id, { as: owner.email, expiresAt: out.expiresAt, reason: String(req.body?.reason ?? "").slice(0, 300) });
+  const out = (await staffStore().createViewAs({ id: req.staff!.id, email: req.staff!.email }, { userId: owner.userId, organizationId: owner.organizationId, tenantId: id }));
+  (await audit(req, "support.view_as", id, { as: owner.email, expiresAt: out.expiresAt, reason: String(req.body?.reason ?? "").slice(0, 300) }));
   res.json(out);
 }));
 
@@ -421,17 +422,17 @@ adminRouter.get("/invoices", need("read"), wrap(async (req, res) => {
   res.json({ ...out, invoices: out.invoices.map((i) => ({ ...i, customer: i.accountId ? adminService().orgByTenant(i.accountId)?.name ?? null : null })), stripe: "ok" });
 }));
 
-adminRouter.get("/support", need("read"), wrap((_req, res) => {
+adminRouter.get("/support", need("read"), wrap(async (_req, res) => {
   const name = (t: string) => adminService().orgByTenant(t)?.name ?? t;
   res.json({
-    notes: staffStore().notes(undefined, 50).map((n) => ({ ...n, customer: name(n.tenantId) })),
-    paused: staffStore().pausedTenants().map((s) => ({ ...s, customer: name(s.tenantId) })),
-    actions: staffStore().auditLog({ action: "support.", limit: 50 }).map((a) => ({ ...a, customer: a.tenantId ? name(a.tenantId) : null, title: AUDIT_TITLES[a.action] ?? a.action })),
+    notes: (await staffStore().notes(undefined, 50)).map((n) => ({ ...n, customer: name(n.tenantId) })),
+    paused: (await staffStore().pausedTenants()).map((s) => ({ ...s, customer: name(s.tenantId) })),
+    actions: (await staffStore().auditLog({ action: "support.", limit: 50 })).map((a) => ({ ...a, customer: a.tenantId ? name(a.tenantId) : null, title: AUDIT_TITLES[a.action] ?? a.action })),
   });
 }));
 
-adminRouter.get("/plans", need("read"), wrap((_req, res) => {
-  const dash = adminService().dashboard();
+adminRouter.get("/plans", need("read"), wrap(async (_req, res) => {
+  const dash = (await adminService().dashboard());
   res.json({
     plans: Object.values(PLANS).map((p) => ({
       id: p.id, label: p.label, public: p.public, priceMonthlyUsd: p.priceMonthlyUsd, priceAnnualUsd: p.priceAnnualUsd, monthlyCredits: p.monthlyCredits,
@@ -612,10 +613,10 @@ adminRouter.get("/workers", need("read"), wrap((_req, res) => {
 
 // ---------- execution runtime (sandboxes) ----------
 
-adminRouter.get("/runtime", need("read"), wrap((_req, res) => {
+adminRouter.get("/runtime", need("read"), wrap(async (_req, res) => {
   const reg = sandboxRegistry();
   const day = 86_400_000;
-  const orgName = (orgId: string) => { try { return (staffStore().db.prepare(`SELECT name FROM organizations WHERE id = ?`).get(orgId) as any)?.name ?? null; } catch { return null; } };
+  const orgName = async (orgId: string) => (await authService.getOrganization(orgId))?.name ?? null;
   const failures = (reg.db.prepare(`SELECT * FROM execution_sandboxes WHERE state = 'failed' OR fallback_reason IS NOT NULL ORDER BY updated_at DESC LIMIT 25`).all() as any[])
     .map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenant_id, customer: adminService().orgByTenant(r.tenant_id)?.name ?? null, state: r.state, error: r.last_error, fallback: r.fallback_reason, at: r.updated_at }));
   res.json({
@@ -630,33 +631,33 @@ adminRouter.get("/runtime", need("read"), wrap((_req, res) => {
     stats: reg.stats(day).byProvider,
     active: reg.active().slice(0, 50).map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenantId, customer: adminService().orgByTenant(r.tenantId)?.name ?? null, state: r.state, policy: `${r.policyTemplate}.v${r.policyVersion}`, retention: r.retention, createdAt: r.createdAt })),
     failures,
-    flags: reg.flags(OPENSHELL_FLAG).map((f) => ({ ...f, name: f.scope === "org" ? orgName(f.scopeId) : null })),
-    pendingRequests: reg.policyRequests({ status: "pending", limit: 50 }).map((r) => ({ ...r, customer: orgName(r.organizationId) })),
+    flags: (await Promise.all(reg.flags(OPENSHELL_FLAG).map(async (f) => ({ ...f, name: f.scope === "org" ? (await orgName(f.scopeId)) : null })))),
+    pendingRequests: (await Promise.all(reg.policyRequests({ status: "pending", limit: 50 }).map(async (r) => ({ ...r, customer: (await orgName(r.organizationId)) })))),
     audit: reg.auditLog({ limit: 60 }),
     denials24h: reg.countAudit("network.denied", day),
   });
 }));
 
-adminRouter.put("/runtime/flags", need("staff.manage"), wrap((req: AdminRequest, res) => {
+adminRouter.put("/runtime/flags", need("staff.manage"), wrap(async (req: AdminRequest, res) => {
   const scope = req.body?.scope === "project" ? "project" : req.body?.scope === "org" ? "org" : null;
   const scopeId = String(req.body?.scopeId ?? "").trim();
   if (!scope || !scopeId || typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "scope (org|project), scopeId and enabled are required." });
   if (scope === "org") {
-    const exists = staffStore().db.prepare(`SELECT id FROM organizations WHERE id = ?`).get(scopeId);
+    const exists = await authService.getOrganization(scopeId);
     if (!exists) return res.status(404).json({ error: "No such organization." });
   }
   sandboxRegistry().setFlag(scope, scopeId, OPENSHELL_FLAG, req.body.enabled, `staff:${req.staff!.email}`);
   sandboxRegistry().audit("runtime.flag", `staff:${req.staff!.email}`, { organizationId: scope === "org" ? scopeId : null, detail: { scope, scopeId, flag: OPENSHELL_FLAG, enabled: req.body.enabled } });
-  audit(req, "runtime.flag", null, { scope, scopeId, flag: OPENSHELL_FLAG, enabled: req.body.enabled });
+  (await audit(req, "runtime.flag", null, { scope, scopeId, flag: OPENSHELL_FLAG, enabled: req.body.enabled }));
   res.json({ ok: true });
 }));
 
-adminRouter.post("/runtime/requests/:id", need("support.write"), wrap((req: AdminRequest, res) => {
+adminRouter.post("/runtime/requests/:id", need("support.write"), wrap(async (req: AdminRequest, res) => {
   if (typeof req.body?.approve !== "boolean") return res.status(400).json({ error: "approve must be true or false." });
   try {
     const out = decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `staff:${req.staff!.email}`);
     if (!out) return res.status(404).json({ error: "No such request." });
-    audit(req, req.body.approve ? "runtime.request.approve" : "runtime.request.deny", null, { requestId: out.id, template: out.template });
+    (await audit(req, req.body.approve ? "runtime.request.approve" : "runtime.request.deny", null, { requestId: out.id, template: out.template }));
     res.json({ request: out });
   } catch (err: any) { res.status(400).json({ error: String(err?.message ?? err) }); }
 }));
@@ -686,30 +687,30 @@ adminRouter.get("/backups", need("read"), wrap((_req, res) => {
   res.json({ backup, drill, history: Array.isArray(history) ? history.slice(-48).reverse() : [], visible: Boolean(backup || drill) });
 }));
 
-adminRouter.get("/audit", need("read"), wrap((req, res) => {
-  const rows = staffStore().auditLog({ action: req.query.action ? String(req.query.action) : undefined, actor: req.query.actor ? String(req.query.actor) : undefined, tenantId: req.query.tenant ? String(req.query.tenant) : undefined, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) });
+adminRouter.get("/audit", need("read"), wrap(async (req, res) => {
+  const rows = (await staffStore().auditLog({ action: req.query.action ? String(req.query.action) : undefined, actor: req.query.actor ? String(req.query.actor) : undefined, tenantId: req.query.tenant ? String(req.query.tenant) : undefined, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) }));
   res.json({ audit: rows.map((r) => ({ ...r, title: AUDIT_TITLES[r.action] ?? r.action, customer: r.tenantId ? adminService().orgByTenant(r.tenantId)?.name ?? null : null })) });
 }));
 
 // ---------- staff ----------
 
-adminRouter.get("/staff", need("read"), wrap((_req, res) => {
-  res.json({ staff: staffStore().listStaff(), roles: STAFF_ROLES, suspendCategories: SUSPEND_CATEGORIES });
+adminRouter.get("/staff", need("read"), wrap(async (_req, res) => {
+  res.json({ staff: (await staffStore().listStaff()), roles: STAFF_ROLES, suspendCategories: SUSPEND_CATEGORIES });
 }));
 
-adminRouter.post("/staff", need("staff.manage"), wrap((req, res) => {
+adminRouter.post("/staff", need("staff.manage"), wrap(async (req, res) => {
   const role = String(req.body?.role ?? "") as StaffRole;
-  const m = staffStore().setStaff(String(req.body?.email ?? ""), role, req.staff!.email);
-  audit(req, "staff.set", null, { email: m.email, role });
+  const m = (await staffStore().setStaff(String(req.body?.email ?? ""), role, req.staff!.email));
+  (await audit(req, "staff.set", null, { email: m.email, role }));
   res.json({ member: m });
 }));
 
-adminRouter.delete("/staff/:userId", need("staff.manage"), wrap((req, res) => {
+adminRouter.delete("/staff/:userId", need("staff.manage"), wrap(async (req, res) => {
   if (req.params.userId === req.staff!.id) return res.status(409).json({ error: "You can't remove yourself." });
-  const member = staffStore().listStaff().find((s) => s.userId === req.params.userId);
+  const member = (await staffStore().listStaff()).find((s) => s.userId === req.params.userId);
   if (!member) return res.status(404).json({ error: "Not staff." });
-  staffStore().removeStaff(member.userId);
-  audit(req, "staff.remove", null, { email: member.email });
+  (await staffStore().removeStaff(member.userId));
+  (await audit(req, "staff.remove", null, { email: member.email }));
   res.json({ ok: true });
 }));
 
@@ -717,7 +718,7 @@ adminRouter.get("/releases", need("read"), wrap((_req, res) => {
   res.json(desktopReleaseStore().summary());
 }));
 
-adminRouter.post("/releases", need("staff.manage"), wrap((req, res) => {
+adminRouter.post("/releases", need("staff.manage"), wrap(async (req, res) => {
   const release = desktopReleaseStore().upsertFromPipeline({
     version: String(req.body?.version ?? ""),
     channel: req.body?.channel,
@@ -727,11 +728,11 @@ adminRouter.post("/releases", need("staff.manage"), wrap((req, res) => {
     gitSha: req.body?.gitSha,
     status: req.body?.status,
   });
-  audit(req, "desktop.release.record", null, { version: release.version, channel: release.channel });
+  (await audit(req, "desktop.release.record", null, { version: release.version, channel: release.channel }));
   res.json({ release });
 }));
 
-adminRouter.post("/releases/installs", need("staff.manage"), wrap((req, res) => {
+adminRouter.post("/releases/installs", need("staff.manage"), wrap(async (req, res) => {
   const installationId = String(req.body?.installationId ?? `admin-${randomUUID()}`).slice(0, 80);
   desktopReleaseStore().recordTelemetry({
     installationId,
@@ -742,11 +743,11 @@ adminRouter.post("/releases/installs", need("staff.manage"), wrap((req, res) => 
     channel: req.body?.channel,
     event: req.body?.event ?? "app_started",
   });
-  audit(req, "desktop.install.record", null, { version: String(req.body?.version ?? ""), channel: String(req.body?.channel ?? "") });
+  (await audit(req, "desktop.install.record", null, { version: String(req.body?.version ?? ""), channel: String(req.body?.channel ?? "") }));
   res.json({ ok: true, installationId, summary: desktopReleaseStore().summary() });
 }));
 
-adminRouter.patch("/releases/:id", need("support.write"), wrap((req, res) => {
+adminRouter.patch("/releases/:id", need("support.write"), wrap(async (req, res) => {
   const body = req.body ?? {};
   const requiredChange = body.required !== undefined || body.minimumSupportedVersion !== undefined;
   if (requiredChange && !can(req.staff?.role, "staff.manage")) {
@@ -761,7 +762,7 @@ adminRouter.patch("/releases/:id", need("support.write"), wrap((req, res) => {
     ...(body.minimumSupportedVersion !== undefined ? { minimumSupportedVersion: body.minimumSupportedVersion } : {}),
     allowRequired: can(req.staff?.role, "staff.manage"),
   });
-  audit(req, "desktop.release.patch", null, { id: release.id, status: release.status, rolloutPercent: release.rolloutPercent });
+  (await audit(req, "desktop.release.patch", null, { id: release.id, status: release.status, rolloutPercent: release.rolloutPercent }));
   res.json({ release });
 }));
 

@@ -3,10 +3,26 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { PostgresAccountStores } from "../auth/PostgresAccountStores";
+import { createAsyncAccountStores } from "../auth/AsyncAccountStores";
 
 const integration=process.env.ORVYN_AUTH_RUNTIME_TEST === "1" && Boolean(process.env.ORVYN_PG_URL);
 const email=() => `${randomUUID()}@example.invalid`;
 const password="shared-store-password-123";
+
+test("real Postgres: asynchronous account interfaces resolve through one PostgreSQL owner", {skip:!integration}, async () => {
+  const backend=await PostgresAccountStores.connect(process.env.ORVYN_PG_URL!);
+  const stores=createAsyncAccountStores(() => backend);
+  try {
+    const account=await stores.auth.register(email(),password);
+    await stores.staff.setStaff(account.user.email,"support","test");
+    await stores.onboarding.ensure(account.user.id,"name");
+    assert.equal(await stores.staff.roleOf(account.user.id),"support");
+    assert.ok(await stores.onboarding.get(account.user.id));
+    assert.equal((await stores.auth.verify(account.token))!.id,account.user.id);
+    await stores.auth.logout(account.token);
+    assert.equal(await stores.auth.verify(account.token),null);
+  } finally { await backend.close(); }
+});
 
 test("real Postgres: staff revocation, concurrent suspension and audit rollback share account state", {skip:!integration}, async () => {
   const a=await PostgresAccountStores.connect(process.env.ORVYN_PG_URL!);

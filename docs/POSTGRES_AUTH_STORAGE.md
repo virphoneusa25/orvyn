@@ -115,8 +115,27 @@ Real PostgreSQL tests verify concurrent last-super-admin removal, staff revocati
 of support views, single suspension under concurrent requests, audit-failure
 rollback, append-only audit enforcement, merged CRM/onboarding updates, idempotent
 profile creation/completion, analytics filtering and all-store commit/rollback.
-These runtime implementations are not yet selected by the request adapters.
-Next wire the shared stores and migrate AdminService cross-store reporting before
-exposing an authentication activation flag. SQLite remains authoritative in production.
+The request adapters now await staff and onboarding operations through
+`AsyncAccountStores`, alongside authentication. One lazy initialization outcome is
+shared by all three interfaces; initialization failure propagates without choosing
+another backend. Domain constants and validation helpers remain available from the
+original store modules. The factory can wrap a PostgreSQL owner, which is exercised
+against real PostgreSQL, while the application's configured owner remains SQLite.
+
+Admin admission, account suspension checks, support views, onboarding/provisioning,
+operator tooling, notes, audit and staff management now await the shared interface.
+The affected AdminService customer/activity/dashboard methods and their callers
+also await staff results. Admin-route organization lookups and renames use the
+authentication interface instead of reaching into StaffStore's database handle.
+Asynchronous collections are resolved before response serialization.
+
+AdminService's reporting connection still attaches SQLite billing/payment stores,
+and session reporting still reads tenant-local session databases. Its constructor
+explicitly initializes the local reporting schema. These remaining local reads
+are not a PostgreSQL outage fallback: PostgreSQL selection is not exposed yet.
+Next migrate the financial and durable-session data needed by those reports, then
+replace the cross-store queries and connect startup/lifecycle selection. Staff
+mutations and their audit writes also need the PostgreSQL composite transaction
+when activating that backend. SQLite remains authoritative in production.
 Billing and durable WorkSession integration remain separate prerequisites
 for a full primary-storage rollout. No production flags are changed by this work.

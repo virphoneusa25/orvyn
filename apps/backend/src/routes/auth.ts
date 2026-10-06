@@ -1,3 +1,4 @@
+import { staffStore, onboardingStore } from "../auth/AsyncAccountStores";
 import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/auth.ts
 //
@@ -6,9 +7,9 @@ import { asyncHandler } from "../http/asyncHandler";
 // authenticate directly against the session store (they don't need a tenant).
 
 import { Router, Request } from "express";
-import { staffStore } from "../admin/staffStore";
+
 import { authService } from "../auth/AsyncAuthService";
-import { onboardingStore } from "../onboarding/OnboardingStore";
+
 import { verificationRequired } from "../onboarding/provisioning";
 import { mailConfigured, passwordResetMail, securityNoticeMail, sendMail, verificationMail } from "../onboarding/mailer";
 import { createHash, randomBytes } from "node:crypto";
@@ -90,9 +91,9 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
     // A new account starts onboarding at email verification (or straight at
     // provisioning when this server cannot send email).
     const required = verificationRequired();
-    onboardingStore().ensure(user.id, required ? "verification" : "provisioning", ["welcome", "signup"]);
-    if (user.name) onboardingStore().update(user.id, { answers: { name: user.name } });
-    onboardingStore().track(user.id, "signup_completed", { method: "email" });
+    (await onboardingStore().ensure(user.id, required ? "verification" : "provisioning", ["welcome", "signup"]));
+    if (user.name) (await onboardingStore().update(user.id, { answers: { name: user.name } }));
+    (await onboardingStore().track(user.id, "signup_completed", { method: "email" }));
     const verification = required ? await sendVerification(req, user.id, user.name) : { sent: false };
     res.status(201).json({
       user,
@@ -110,9 +111,9 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
 authRouter.get("/verify", asyncHandler(async (req, res) => {
   const user = (await authService.verifyEmailToken(String(req.query.token ?? "")));
   if (user) {
-    onboardingStore().track(user.id, "email_verified");
-    const profile = onboardingStore().get(user.id);
-    if (profile && profile.currentStep === "verification") onboardingStore().update(user.id, { step: "provisioning", completed: ["verification"] });
+    (await onboardingStore().track(user.id, "email_verified"));
+    const profile = (await onboardingStore().get(user.id));
+    if (profile && profile.currentStep === "verification") (await onboardingStore().update(user.id, { step: "provisioning", completed: ["verification"] }));
   }
   res.status(user ? 200 : 400).type("html").send(verifiedPage(Boolean(user)));
 }));
@@ -167,9 +168,9 @@ authRouter.post("/login", asyncHandler(async (req, res) => {
 authRouter.post("/logout", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
   if (token?.startsWith("orvview_")) {
-    const view = staffStore().resolveViewAs(token);
-    staffStore().endViewAs(token);
-    if (view) staffStore().audit({ actorId: view.staffId, actorEmail: view.staffEmail, action: "support.view_as_end", tenantId: view.tenantId, ip: req.ip ?? null });
+    const view = (await staffStore().resolveViewAs(token));
+    (await staffStore().endViewAs(token));
+    if (view) (await staffStore().audit({ actorId: view.staffId, actorEmail: view.staffEmail, action: "support.view_as_end", tenantId: view.tenantId, ip: req.ip ?? null }));
     return res.json({ ok: true });
   }
   if (token) (await authService.logout(token));
@@ -190,19 +191,19 @@ authRouter.post("/switch-organization", asyncHandler(async (req, res) => {
 authRouter.get("/me", asyncHandler(async (req, res) => {
   const token = bearerToken(req);
   // Staff "View as customer" (read-only): the customer's view, labelled as a support session.
-  const view = token?.startsWith("orvview_") ? staffStore().resolveViewAs(token) : null;
+  const view = token?.startsWith("orvview_") ? (await staffStore().resolveViewAs(token)) : null;
   const session = view ? (await authService.principalFor(view.userId, view.organizationId)) : token ? (await authService.verifyPrincipal(token)) : null;
   if (!session) return res.status(401).json({ error: "Not signed in" });
-  const profile = onboardingStore().get(session.user.id);
-  if (!view && process.env.ORVYN_SUPER_ADMIN_EMAILS) staffStore().seedFromEnv();
-  const paused = staffStore().suspension(session.principal.tenantId);
+  const profile = (await onboardingStore().get(session.user.id));
+  if (!view && process.env.ORVYN_SUPER_ADMIN_EMAILS) (await staffStore().seedFromEnv());
+  const paused = (await staffStore().suspension(session.principal.tenantId));
   res.json({
     user: { ...session.user, emailVerified: (await authService.isEmailVerified(session.user.id)) },
     principal: session.principal,
     organizations: (await authService.listOrganizations(session.user.id)),
     onboarding: profile ? { step: profile.currentStep, completedAt: profile.completedAt } : null,
     verificationRequired: verificationRequired(),
-    staff: view ? null : (() => { const role = staffStore().roleOf(session.user.id); return role ? { role } : null; })(),
+    staff: view ? null : (await (async () => { const role = (await staffStore().roleOf(session.user.id)); return role ? { role } : null; })()),
     paused: paused && !view ? { since: paused.at } : null,
     viewAs: view ? { staffEmail: view.staffEmail, expiresAt: view.expiresAt, paused: Boolean(paused) } : null,
     legal: view ? { version: LEGAL_VERSION, accepted: true, acceptance: null } : {
@@ -419,7 +420,7 @@ authRouter.get("/oauth/:provider/callback", asyncHandler(async (req, res) => {
     }
     const profile = await exchangeCode(p, { code: String(req.query.code ?? ""), redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/${provider}/callback`, verifier: saved.verifier });
     const user = (await authService.userForOAuth({ provider, subject: profile.subject, email: profile.email, emailVerified: profile.emailVerified, name: profile.name }));
-    onboardingStore().track(user.id, "signup_completed", { method: provider });
+    (await onboardingStore().track(user.id, "signup_completed", { method: provider }));
     if (saved.client === "desktop" && saved.handoffId) {
       if (!(await authService.completeHandoff(saved.handoffId, user.id))) return fail("This sign-in request expired.");
       return res.type("html").send(page("You're signed in", "<p>Go back to ORVYN — it continues on its own. You can close this tab.</p>"));

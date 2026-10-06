@@ -1,7 +1,8 @@
+import { staffStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/middleware/tenant.ts
 import { Request, Response, NextFunction } from "express";
 import { Tenant, tenantManager } from "../tenancy/TenantManager";
-import { staffStore } from "../admin/staffStore";
+
 import { authService } from "../auth/AsyncAuthService";
 import type { Principal } from "../identity/principal";
 import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
@@ -60,7 +61,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
 
   // Staff "View as customer": read-only, time-limited, and never a customer session.
   if (key.startsWith("orvview_")) {
-    const view = staffStore().resolveViewAs(key);
+    const view = (await staffStore().resolveViewAs(key));
     const as = view ? (await authService.principalFor(view.userId, view.organizationId)) : null;
     if (!view || !as) {
       res.status(401).json({ error: "This support view has ended.", code: "VIEW_AS_ENDED" });
