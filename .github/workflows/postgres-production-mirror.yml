@@ -68,6 +68,11 @@ jobs:
           ORVYN_AUTH_RUNTIME_TEST: "1"
           ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
         run: node --test apps/backend/dist/identity/PostgresAuthRuntime.test.js
+      - name: Shared PostgreSQL staff and onboarding transactions
+        env:
+          ORVYN_AUTH_RUNTIME_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
+        run: node --test apps/backend/dist/identity/PostgresSharedAccountStores.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         env:
           PGPASSWORD: test-password
