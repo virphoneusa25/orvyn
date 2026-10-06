@@ -16,6 +16,66 @@ import {recordProviderQuote} from "./providerSettlement";
 
 const integration=process.env.ORVYN_LEDGER_RUNTIME_TEST==="1"&&Boolean(process.env.ORVYN_PG_URL);
 const now=Date.UTC(2026,9,12),day=86400000;
+test("shared PostgreSQL usage queue survives restart, serializes competing settlers and rejects foreign event ownership",{skip:!integration},async()=>{
+  let owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const account="runtime-shared-outbox",event={id:"runtime-shared-outbox-usage",timestamp:Date.now(),modelId:"fixture",provider:"fixture",method:"generate" as const,durationMs:1,ok:true,providerCostUsd:0.01};
+  const ledger=owner.ledger;
+  try {
+    await ledger.ensureAccount(account);
+    await owner.outbox(account).enqueueBilling(event,false);
+    await assert.rejects(owner.outbox(account).enqueueBilling({...event,providerCostUsd:2},false),/conflicts/);
+    await owner.close();owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+    const other=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+    try {
+      assert.equal((await owner.outbox(account).pendingBilling()).length,1);
+      const before=(await owner.ledger.snapshot(account)).availableBalance;
+      await Promise.all([new TenantBilling(owner.ledger,account,owner.outbox(account)).recover(true),new TenantBilling(other.ledger,account,other.outbox(account)).recover(true)]);
+      assert.equal((await owner.outbox(account).pendingBilling()).length,0);
+      const after=(await owner.ledger.snapshot(account)).availableBalance;
+      assert.ok(after<before);
+      await new TenantBilling(owner.ledger,account,owner.outbox(account)).record(event,false,true);
+      assert.equal((await owner.ledger.snapshot(account)).availableBalance,after);
+      const foreign="runtime-shared-outbox-foreign";
+      await owner.outbox(foreign).enqueueBilling(event,false);
+      await assert.rejects(new TenantBilling(owner.ledger,foreign,owner.outbox(foreign)).recover(true),/another account/);
+      assert.equal((await owner.outbox(foreign).pendingBilling()).length,1);
+    }finally{await other.close();}
+  }finally{await owner.close();}
+});
+
+test("shared PostgreSQL settlement rolls back charge when queue acknowledgement fails",{skip:!integration},async()=>{
+  const owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const account="runtime-outbox-atomic",outbox=owner.outbox(account),event={id:"runtime-outbox-atomic-usage",timestamp:Date.now(),modelId:"fixture",provider:"fixture",method:"generate" as const,durationMs:1,ok:true,providerCostUsd:0.01};
+  const complete=outbox.completeBilling.bind(outbox);
+  try {
+    await owner.ledger.ensureAccount(account);
+    const before=(await owner.ledger.snapshot(account)).availableBalance;
+    outbox.completeBilling=async()=>{throw new Error("fixture queue acknowledgement rejected");};
+    await assert.rejects(new TenantBilling(owner.ledger,account,outbox).record(event,false,true),/acknowledgement rejected/);
+    assert.equal(await owner.ledger.usageEvent(event.id),undefined);
+    assert.equal((await owner.ledger.snapshot(account)).availableBalance,before);
+    assert.equal((await outbox.pendingBilling()).length,1);
+    outbox.completeBilling=complete;
+    await new TenantBilling(owner.ledger,account,outbox).recover(true);
+    assert.equal((await outbox.pendingBilling()).length,0);
+  }finally{await owner.close();}
+});
+
+test("failed PostgreSQL hold cleanup remains recoverable after reconnect and cannot release another account's run",{skip:!integration},async()=>{
+  let owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const account="runtime-release-outbox",runId="runtime-release-outbox-run";
+  try {
+    await owner.ledger.ensureAccount(account);await owner.ledger.reserve(account,runId,100);
+    const failed=owner.outbox(account);failed.completeRelease=async()=>{throw new Error("fixture release unavailable");};
+    await assert.rejects(failed.releaseRun(runId,owner.ledger),/release unavailable/);
+    assert.equal((await owner.ledger.snapshot(account)).reservedBalance,100);
+    await assert.rejects(owner.outbox("runtime-release-foreign").releaseRun(runId,owner.ledger),/another account/);
+    await owner.close();owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+    await owner.outbox(account).recoverReleases(owner.ledger);
+    assert.equal((await owner.ledger.snapshot(account)).reservedBalance,0);
+    await owner.outbox(account).recoverReleases(owner.ledger);
+  }finally{await owner.close();}
+});
 test("real PostgreSQL tenant usage waits for settlement, replays durable pending usage and releases failed image reservations",{skip:!integration},async()=>{
   const owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
   const dir=mkdtempSync(join(tmpdir(),"pg-tenant-usage-")),account="runtime-tenant-provider-hooks",store=new LocalStore(account,dir);

@@ -70,7 +70,11 @@ export async function refreshDeepSeekRates(config: ModelConfig): Promise<void> {
     await probe.pending;
     config.contextWindow = 1_000_000;
     config.routingVerification = { status: "verified", reason: "Exact current DeepSeek prices and streaming tool call verified" };
-  } catch {
-    config.routingVerification = { status: "failed", reason: "Direct DeepSeek current price, schedule or tool verification unavailable" };
+  } catch (error) {
+    // Expose only a known status, never raw provider responses or credentials.
+    const insufficientBalance=error instanceof Error&&/\bHTTP 402\b/.test(error.message);
+    config.routingVerification = { status: "failed", reason: insufficientBalance
+      ? "DeepSeek account has insufficient balance; fund the provider account to restore service"
+      : "Direct DeepSeek current price, schedule or tool verification unavailable" };
   }
 }

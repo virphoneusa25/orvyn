@@ -37,3 +37,18 @@ test("direct DeepSeek writing requires a real streaming tool call and a current 
   assert.equal(writingProvider([provider], { capability: 'agent', vision: true }, () => false), undefined);
   assert.match(incompatibility({ ...config, billingRequired: true, rate: undefined }, { capability: 'chat' })!, /billing rate/);
 });
+
+test("unfunded DeepSeek exposes a safe actionable reason and verifies again after funding",async()=>{
+  const original=globalThis.fetch;
+  const config={id:'deepseek-flash',providerName:'deepseek',provider:'openai-compatible',apiKey:'fixture-funding-recovery',endpoint:'https://api.deepseek.com',contextWindow:128000,streaming:true,capabilities:{agent:true,chat:true,tools:true,vision:false}} as ModelConfig;
+  let funded=false;
+  globalThis.fetch=(async(_url,opts)=>!opts?.method?new Response(table):!funded?new Response('private provider diagnostic',{status:402}):new Response('data: '+JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:'probe',function:{name:'capability_probe',arguments:'{"value":"verified"}'}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n')) as typeof fetch;
+  try {
+    await refreshDeepSeekRates(config);
+    assert.equal(config.routingVerification?.status,'failed');
+    assert.match(config.routingVerification!.reason,/insufficient balance/);
+    assert.doesNotMatch(config.routingVerification!.reason,/private provider diagnostic|fixture-funding/);
+    funded=true;await refreshDeepSeekRates(config);
+    assert.equal(config.routingVerification?.status,'verified');
+  }finally{globalThis.fetch=original;}
+});
