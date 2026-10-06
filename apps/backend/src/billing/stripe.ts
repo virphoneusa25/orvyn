@@ -1,3 +1,4 @@
+import {creditLedger as financialLedger,paymentStore,financialTransaction,type AsyncCreditLedger,type AsyncPaymentStore,type FinancialTransaction} from "./AsyncFinancialStores";
 // apps/backend/src/billing/stripe.ts
 //
 // Payments through Stripe (no SDK: form-encoded REST + webhook signature
@@ -21,7 +22,6 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import * as path from "path";
 import * as fs from "fs";
 import { defaultDataDir } from "../persistence/LocalStore";
-import { creditLedger as defaultLedger } from "./creditLedgerInstance";
 import type { CreditLedger } from "./CreditLedger";
 import { CREDIT_PACKS, PLANS, type PackId, type PlanId, packById, planById } from "./plans";
 
@@ -244,10 +244,11 @@ export interface Notify {
 export class BillingService {
   constructor(
     private cfg: StripeConfig | null,
-    private store: StripeStore,
-    private ledger: CreditLedger,
+    private store: StripeStore | AsyncPaymentStore,
+    private ledger: CreditLedger | AsyncCreditLedger,
     private notify: Notify = {},
     private env: NodeJS.ProcessEnv = process.env,
+    private transaction:FinancialTransaction = operation=>operation(),
   ) {}
 
   get enabled(): boolean {
@@ -265,12 +266,12 @@ export class BillingService {
 
   async ensureCustomer(accountId: string, email: string, name?: string | null): Promise<string> {
     const cfg = this.require();
-    const existing = this.store.customerOf(accountId);
+    const existing = (await this.store.customerOf(accountId));
     if (existing) return existing;
     const customer = await stripeRequest<{ id: string }>(cfg, "POST", "/v1/customers", {
       email, name: name ?? undefined, metadata: { accountId },
     }, `customer:${accountId}`);
-    this.store.saveCustomer(accountId, customer.id, email);
+    (await this.store.saveCustomer(accountId, customer.id, email));
     return customer.id;
   }
 
@@ -304,14 +305,14 @@ export class BillingService {
         : { subscription_data: { metadata } }),
       allow_promotion_codes: "true",
     });
-    this.store.saveCheckout({ sessionId: session.id, accountId: input.accountId, kind: isPack ? "topup" : "subscription", item: (isPack ? input.packId : input.planId)!, period: input.period });
+    (await this.store.saveCheckout({ sessionId: session.id, accountId: input.accountId, kind: isPack ? "topup" : "subscription", item: (isPack ? input.packId : input.planId)!, period: input.period }));
     return { url: session.url, sessionId: session.id };
   }
 
   /** Stripe's hosted customer portal (payment methods, invoices, cancel). */
   async portal(accountId: string, origin?: string, returnTo?: "portal"): Promise<{ url: string }> {
     const cfg = this.require();
-    const customer = this.store.customerOf(accountId);
+    const customer = (await this.store.customerOf(accountId));
     if (!customer) throw new StripeApiError(404, "There's no billing account yet — buy a plan or credits first.");
     const s = await stripeRequest<{ url: string }>(cfg, "POST", "/v1/billing_portal/sessions", { customer, return_url: this.returnUrl(returnTo === "portal" ? "/billing" : "/api/v1/billing/return?status=portal", origin) });
     return { url: s.url };
@@ -324,7 +325,7 @@ export class BillingService {
    */
   async account(accountId: string): Promise<{ invoices: { id: string; date: number; description: string; amountUsd: number; status: string; hostedUrl: string | null; pdfUrl: string | null }[]; paymentMethod: { brand: string; last4: string; expMonth: number; expYear: number } | null; subscription: { cancelAtPeriodEnd: boolean; currentPeriodEnd: number | null; status: string } | null }> {
     const cfg = this.cfg;
-    const customer = this.store.customerOf(accountId);
+    const customer = (await this.store.customerOf(accountId));
     if (!cfg || !customer) return { invoices: [], paymentMethod: null, subscription: null };
     const [inv, pms, subs] = await Promise.all([
       stripeRequest<{ data: any[] }>(cfg, "GET", "/v1/invoices", { customer, limit: 12 }).catch(() => ({ data: [] })),
@@ -353,7 +354,7 @@ export class BillingService {
   /** The subscription as Stripe has it now (null: no Stripe subscription). */
   async adminSubscription(accountId: string): Promise<null | { id: string; status: string; cancelAtPeriodEnd: boolean; currentPeriodStart: number | null; currentPeriodEnd: number | null; priceId: string; planId: string | null; period: "monthly" | "yearly"; itemId: string; scheduleId: string | null }> {
     const cfg = this.require();
-    const known = this.store.latestSubscription(accountId);
+    const known = (await this.store.latestSubscription(accountId));
     if (!known) return null;
     const sub = await stripeRequest<any>(cfg, "GET", `/v1/subscriptions/${encodeURIComponent(known.subscription_id)}`);
     const item = sub.items?.data?.[0] ?? {};
@@ -381,7 +382,7 @@ export class BillingService {
       items: [{ id: sub.itemId, price }], proration_behavior: "create_prorations", cancel_at_period_end: "false",
       metadata: { accountId, planId, period, changedBy: actor },
     }, `admin-plan:${sub.id}:${planId}:${period}:${Math.floor(Date.now() / 60_000)}`);
-    this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId, status: sub.status, cancelAtPeriodEnd: false });
+    (await this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId, status: sub.status, cancelAtPeriodEnd: false }));
     return { subscriptionId: sub.id };
   }
 
@@ -410,45 +411,45 @@ export class BillingService {
     if (!sub || sub.status === "canceled") throw new StripeApiError(409, "This customer has no active Stripe subscription.");
     if (sub.scheduleId && cancel) await stripeRequest(cfg, "POST", `/v1/subscription_schedules/${encodeURIComponent(sub.scheduleId)}/release`, {});
     await stripeRequest(cfg, "POST", `/v1/subscriptions/${encodeURIComponent(sub.id)}`, { cancel_at_period_end: cancel ? "true" : "false" });
-    const known = this.store.latestSubscription(accountId);
-    this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId: known?.plan_id ?? sub.planId ?? "free", status: sub.status, cancelAtPeriodEnd: cancel });
+    const known = (await this.store.latestSubscription(accountId));
+    (await this.store.saveSubscription({ subscriptionId: sub.id, accountId, planId: known?.plan_id ?? sub.planId ?? "free", status: sub.status, cancelAtPeriodEnd: cancel }));
     return { subscriptionId: sub.id, currentPeriodEnd: sub.currentPeriodEnd };
   }
 
   /** Invoices for staff, newest first, one page at a time (null account: every customer). */
   async adminInvoices(opts: { accountId?: string; limit?: number; startingAfter?: string } = {}): Promise<{ invoices: { id: string; number: string | null; accountId: string | null; customerId: string | null; date: number; description: string; amountUsd: number; status: string; hostedUrl: string | null; pdfUrl: string | null }[]; hasMore: boolean }> {
     const cfg = this.require();
-    const customer = opts.accountId ? this.store.customerOf(opts.accountId) : undefined;
+    const customer = opts.accountId ? (await this.store.customerOf(opts.accountId)) : undefined;
     if (opts.accountId && !customer) return { invoices: [], hasMore: false };
     const r = await stripeRequest<{ data: any[]; has_more?: boolean }>(cfg, "GET", "/v1/invoices", { ...(customer ? { customer } : {}), limit: Math.min(100, opts.limit ?? 25), ...(opts.startingAfter ? { starting_after: opts.startingAfter } : {}) });
     return {
-      invoices: (r.data ?? []).map((i: any) => {
+      invoices: await Promise.all((r.data ?? []).map(async (i: any) => {
         const cust = typeof i.customer === "string" ? i.customer : i.customer?.id ?? null;
         return {
-          id: String(i.id), number: i.number ?? null, customerId: cust, accountId: opts.accountId ?? (cust ? this.store.accountOfCustomer(cust) : null),
+          id: String(i.id), number: i.number ?? null, customerId: cust, accountId: opts.accountId ?? (cust ? (await this.store.accountOfCustomer(cust)) : null),
           date: Number(i.created ?? 0) * 1000, description: String(i.lines?.data?.[0]?.description ?? i.description ?? "ORVYN"),
           amountUsd: Number(i.amount_paid || i.amount_due || 0) / 100, status: String(i.status ?? ""), hostedUrl: i.hosted_invoice_url ?? null, pdfUrl: i.invoice_pdf ?? null,
         };
-      }),
+      })),
       hasMore: Boolean(r.has_more),
     };
   }
 
-  customerIdOf(accountId: string): string | null {
-    return this.store.customerOf(accountId);
+  async customerIdOf(accountId: string): Promise<string | null> {
+    return (await this.store.customerOf(accountId));
   }
 
   /** Auto-recharge: charge the saved card off-session. Credits arrive with the payment_intent.succeeded webhook. */
   async autoRecharge(accountId: string, packId: PackId): Promise<void> {
     const cfg = this.require();
-    const customer = this.store.customerOf(accountId);
+    const customer = (await this.store.customerOf(accountId));
     const pack = packById(packId);
-    if (!customer || !pack) { this.ledger.autoRechargeFailed(accountId); return; }
+    if (!customer || !pack) { (await this.ledger.autoRechargeFailed(accountId)); return; }
     try {
       const methods = await stripeRequest<{ data: { id: string }[] }>(cfg, "GET", "/v1/payment_methods", { customer, type: "card", limit: 1 });
       const pm = methods.data?.[0]?.id;
-      if (!pm) { this.ledger.autoRechargeFailed(accountId); return; }
-      const sub = this.ledger.subscriptionOf(accountId);
+      if (!pm) { (await this.ledger.autoRechargeFailed(accountId)); return; }
+      const sub = (await this.ledger.subscriptionOf(accountId));
       await stripeRequest(cfg, "POST", "/v1/payment_intents", {
         amount: Math.round(pack.priceUsd * 100), currency: "usd", customer, payment_method: pm,
         off_session: "true", confirm: "true",
@@ -456,7 +457,7 @@ export class BillingService {
         description: `ORVYN auto-recharge: ${pack.credits.toLocaleString("en-US")} credits`,
       }, `recharge:${accountId}:${sub?.cycleStart ?? 0}:${Date.now()}`);
     } catch (err) {
-      this.ledger.autoRechargeFailed(accountId);
+      (await this.ledger.autoRechargeFailed(accountId));
       console.warn(JSON.stringify({ event: "billing.auto_recharge_failed", accountId, reason: (err as Error).message.slice(0, 160) }));
     }
   }
@@ -480,42 +481,49 @@ export class BillingService {
       return { status: 400, body: { error: "Invalid payload" } };
     }
     if (!event?.id || !event?.type) return { status: 400, body: { error: "Invalid event" } };
-    if (!this.store.claimEvent(event.id, event.type)) return { status: 200, body: { received: true, duplicate: true } };
+    const notifications:Array<()=>void>=[];
     try {
-      const handled = await this.apply(event);
-      this.store.finishEvent(event.id, handled ? "processed" : "ignored");
-      return { status: 200, body: { received: true } };
+      const duplicate=await this.transaction(async()=>{
+        if(!await this.store.claimEvent(event.id,event.type))return true;
+        const handled=await this.apply(event,notifications);
+        await this.store.finishEvent(event.id,handled?"processed":"ignored");return false;
+      });
+      for(const notification of notifications)try{notification();}catch{/* notification failure cannot undo a committed payment */}
+      return { status: 200, body: { received: true, ...(duplicate?{duplicate:true}:{}) } };
     } catch (err) {
-      this.store.finishEvent(event.id, "failed", (err as Error).message.slice(0, 300));
+      try{await this.transaction(async()=>{
+        // A concurrent retry may already have committed; never downgrade processed state.
+        if(await this.store.claimEvent(event.id,event.type))await this.store.finishEvent(event.id,"failed",(err as Error).message.slice(0,300));
+      });}catch{/* failed storage is still returned as retryable, never acknowledged */}
       console.error(JSON.stringify({ event: "billing.webhook_failed", type: event.type, id: event.id, reason: (err as Error).message.slice(0, 200) }));
       return { status: 500, body: { error: "Processing failed; Stripe will retry." } };
     }
   }
 
-  private accountFor(obj: any): string | null {
+  private async accountFor(obj: any): Promise<string | null> {
     const fromMeta = obj?.metadata?.accountId || obj?.subscription_details?.metadata?.accountId || obj?.parent?.subscription_details?.metadata?.accountId;
     if (fromMeta) return String(fromMeta);
     const customer = typeof obj?.customer === "string" ? obj.customer : obj?.customer?.id;
-    return customer ? this.store.accountOfCustomer(customer) : null;
+    return customer ? (await this.store.accountOfCustomer(customer)) : null;
   }
 
-  private async apply(event: { id: string; type: string; data: { object: any } }): Promise<boolean> {
+  private async apply(event: { id: string; type: string; data: { object: any } }, notifications:Array<()=>void>): Promise<boolean> {
     const o = event.data.object;
     switch (event.type) {
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded": {
-        const accountId = this.accountFor(o);
+        const accountId = (await this.accountFor(o));
         if (!accountId) return false;
-        if (o.customer) this.store.saveCustomer(accountId, String(o.customer), o.customer_details?.email ?? null);
+        if (o.customer) (await this.store.saveCustomer(accountId, String(o.customer), o.customer_details?.email ?? null));
         const kind = o.mode === "payment" ? "topup" : "subscription";
-        this.store.saveCheckout({ sessionId: o.id, accountId, kind, item: String((kind === "topup" ? o.metadata?.packId : o.metadata?.planId) ?? ""), period: o.metadata?.period });
-        this.store.completeCheckout(o.id, { paymentIntent: o.payment_intent ?? null, subscriptionId: o.subscription ?? null });
+        (await this.store.saveCheckout({ sessionId: o.id, accountId, kind, item: String((kind === "topup" ? o.metadata?.packId : o.metadata?.planId) ?? ""), period: o.metadata?.period }));
+        (await this.store.completeCheckout(o.id, { paymentIntent: o.payment_intent ?? null, subscriptionId: o.subscription ?? null }));
         if (o.mode === "payment" && o.metadata?.kind === "topup") {
           if (o.payment_status !== "paid") return true; // async methods finish in async_payment_succeeded
           const packId = String(o.metadata.packId) as PackId;
-          this.ledger.creditPurchase(accountId, packId, { paymentRef: String(o.payment_intent ?? o.id), source: "checkout", amountUsd: (o.amount_total ?? 0) / 100 });
+          (await this.ledger.creditPurchase(accountId, packId, { paymentRef: String(o.payment_intent ?? o.id), source: "checkout", amountUsd: (o.amount_total ?? 0) / 100 }));
           const pack = packById(packId);
-          this.notify.paymentSucceeded?.(accountId, { description: `${pack?.credits.toLocaleString("en-US")} ORVYN credits`, amountUsd: (o.amount_total ?? 0) / 100 });
+          notifications.push(() => { this.notify.paymentSucceeded?.(accountId, { description: `${pack?.credits.toLocaleString("en-US")} ORVYN credits`, amountUsd: (o.amount_total ?? 0) / 100 }); });
         }
         // Subscriptions: credits come with invoice.paid.
         return true;
@@ -526,65 +534,65 @@ export class BillingService {
         if (!subscriptionId) return false;
         const line = (o.lines?.data ?? []).find((l: any) => l?.price?.id || l?.pricing?.price_details?.price) ?? o.lines?.data?.[0];
         const priceId = String(line?.price?.id ?? line?.pricing?.price_details?.price ?? "");
-        const known = this.store.subscription(subscriptionId);
+        const known = (await this.store.subscription(subscriptionId));
         const planId = planForPrice(priceId, this.env) ?? (o.subscription_details?.metadata?.planId as PlanId | undefined) ?? (o.parent?.subscription_details?.metadata?.planId as PlanId | undefined) ?? (known?.plan_id as PlanId | undefined);
-        const accountId = this.accountFor(o) ?? known?.account_id ?? null;
+        const accountId = (await this.accountFor(o)) ?? known?.account_id ?? null;
         if (!accountId || !planId) throw new Error(`invoice ${o.id}: cannot map to an account/plan`);
         const periodStart = Number(line?.period?.start ?? o.period_start) * 1000;
         const periodEnd = Number(line?.period?.end ?? o.period_end) * 1000;
-        this.store.saveSubscription({ subscriptionId, accountId, planId, status: "active", periodStart, periodEnd });
-        this.ledger.applySubscription({ accountId, planId, subscriptionId, periodStart, periodEnd, status: "active" });
-        this.notify.paymentSucceeded?.(accountId, { description: `ORVYN ${planById(planId).label}`, amountUsd: (o.amount_paid ?? 0) / 100 });
+        (await this.store.saveSubscription({ subscriptionId, accountId, planId, status: "active", periodStart, periodEnd }));
+        (await this.ledger.applySubscription({ accountId, planId, subscriptionId, periodStart, periodEnd, status: "active" }));
+        notifications.push(() => { this.notify.paymentSucceeded?.(accountId, { description: `ORVYN ${planById(planId).label}`, amountUsd: (o.amount_paid ?? 0) / 100 }); });
         return true;
       }
       case "invoice.payment_failed": {
-        const accountId = this.accountFor(o);
+        const accountId = (await this.accountFor(o));
         if (!accountId) return false;
-        this.ledger.setSubscriptionStatus(accountId, "past_due");
-        this.notify.paymentFailed?.(accountId, { amountDue: (o.amount_due ?? 0) / 100, hostedInvoiceUrl: o.hosted_invoice_url ?? null });
+        (await this.ledger.setSubscriptionStatus(accountId, "past_due"));
+        notifications.push(() => { this.notify.paymentFailed?.(accountId, { amountDue: (o.amount_due ?? 0) / 100, hostedInvoiceUrl: o.hosted_invoice_url ?? null }); });
         return true;
       }
       case "customer.subscription.created":
       case "customer.subscription.updated": {
-        const accountId = this.accountFor(o);
+        const accountId = (await this.accountFor(o));
         if (!accountId) return false;
         const priceId = String(o.items?.data?.[0]?.price?.id ?? "");
         const planId = planForPrice(priceId, this.env) ?? (o.metadata?.planId as PlanId | undefined);
         if (!planId) return false;
-        this.store.saveSubscription({ subscriptionId: o.id, accountId, planId, status: String(o.status), cancelAtPeriodEnd: Boolean(o.cancel_at_period_end) });
+        (await this.store.saveSubscription({ subscriptionId: o.id, accountId, planId, status: String(o.status), cancelAtPeriodEnd: Boolean(o.cancel_at_period_end) }));
         // Status only: credits are granted by paid invoices, never here.
-        this.ledger.setSubscriptionStatus(accountId, String(o.status));
+        (await this.ledger.setSubscriptionStatus(accountId, String(o.status)));
         return true;
       }
       case "customer.subscription.deleted": {
-        const accountId = this.accountFor(o);
+        const accountId = (await this.accountFor(o));
         if (!accountId) return false;
-        this.store.saveSubscription({ subscriptionId: o.id, accountId, planId: String(o.metadata?.planId ?? "free"), status: "canceled" });
-        this.ledger.endSubscription(accountId, o.id);
+        (await this.store.saveSubscription({ subscriptionId: o.id, accountId, planId: String(o.metadata?.planId ?? "free"), status: "canceled" }));
+        (await this.ledger.endSubscription(accountId, o.id));
         return true;
       }
       case "payment_intent.succeeded": {
         if (o.metadata?.kind !== "auto_recharge") return false; // checkout top-ups are credited from the session
-        const accountId = this.accountFor(o);
+        const accountId = (await this.accountFor(o));
         if (!accountId) return false;
-        this.ledger.creditPurchase(accountId, String(o.metadata.packId) as PackId, { paymentRef: String(o.id), source: "auto_recharge", amountUsd: (o.amount_received ?? o.amount ?? 0) / 100 });
+        (await this.ledger.creditPurchase(accountId, String(o.metadata.packId) as PackId, { paymentRef: String(o.id), source: "auto_recharge", amountUsd: (o.amount_received ?? o.amount ?? 0) / 100 }));
         return true;
       }
       case "payment_intent.payment_failed": {
         if (o.metadata?.kind !== "auto_recharge") return false;
-        const accountId = this.accountFor(o);
-        if (accountId) this.ledger.autoRechargeFailed(accountId);
+        const accountId = (await this.accountFor(o));
+        if (accountId) (await this.ledger.autoRechargeFailed(accountId));
         return true;
       }
       case "charge.refunded": {
         const pi = String(o.payment_intent ?? "");
-        const checkout = pi ? this.store.checkoutByPaymentIntent(pi) : undefined;
-        const accountId = checkout?.account_id ?? this.accountFor(o);
+        const checkout = pi ? (await this.store.checkoutByPaymentIntent(pi)) : undefined;
+        const accountId = checkout?.account_id ?? (await this.accountFor(o));
         const packId = (checkout?.kind === "topup" ? checkout.item : o.metadata?.packId) as string | undefined;
         const pack = packId ? packById(packId) : null;
         if (!accountId || !pack) return false;
         const fraction = o.amount ? Math.min(1, (o.amount_refunded ?? 0) / o.amount) : 1;
-        this.ledger.refund(accountId, Math.round(pack.credits * fraction), { paymentRef: `${pi || o.id}:${o.amount_refunded ?? 0}`, reason: "stripe_refund" });
+        (await this.ledger.refund(accountId, Math.round(pack.credits * fraction), { paymentRef: `${pi || o.id}:${o.amount_refunded ?? 0}`, reason: "stripe_refund" }));
         return true;
       }
       default:
@@ -596,9 +604,13 @@ export class BillingService {
 let serviceSingleton: BillingService | null = null;
 export function billingService(): BillingService {
   if (!serviceSingleton) {
-    serviceSingleton = new BillingService(stripeConfig(), stripeStore(), defaultLedger);
+    serviceSingleton = new BillingService(stripeConfig(), paymentStore(), financialLedger, {}, process.env, financialTransaction);
     // Auto-recharge asks Stripe for the payment; the webhook adds the credits.
-    defaultLedger.onAutoRecharge((accountId, packId) => { void serviceSingleton?.autoRecharge(accountId, packId); });
+    financialLedger.onAutoRecharge((accountId, packId) => {
+      void serviceSingleton?.autoRecharge(accountId, packId).catch(() => {
+        console.warn(JSON.stringify({ event: "billing.auto_recharge_dispatch_failed" }));
+      });
+    });
   }
   return serviceSingleton;
 }

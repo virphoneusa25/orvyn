@@ -7,9 +7,43 @@ import {CreditLedger,BillingLimitError} from "./CreditLedger";
 import {PostgresCreditLedger} from "./PostgresCreditLedger";
 import {PostgresFinancialStores} from "./PostgresFinancialStores";
 import {paymentSql} from "./PostgresBillingDatabase";
+import {createAsyncFinancialStores} from "./AsyncFinancialStores";
+import {BillingService,signStripePayload} from "./stripe";
 
 const integration=process.env.ORVYN_LEDGER_RUNTIME_TEST==="1"&&Boolean(process.env.ORVYN_PG_URL);
 const now=Date.UTC(2026,9,12),day=86400000;
+test("real PostgreSQL webhook commits payment and credits together, rolls back failed acknowledgement and safely retries",{skip:!integration},async()=>{
+  const owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const observer=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  let rejectCommit=true,notifications=0;
+  const stores=createAsyncFinancialStores(()=>({ledger:owner.ledger,payments:owner.payments,transaction:operation=>owner.transaction(async()=>{
+    const result=await operation();
+    if(rejectCommit){rejectCommit=false;throw new Error("fixture acknowledgement rejection");}
+    return result;
+  })}));
+  const account="runtime-webhook-atomic";
+  const service=new BillingService({secretKey:"sk_fixture",webhookSecret:"whsec_fixture",apiBase:"http://127.0.0.1:9",publicOrigin:"https://fixture.example"},stores.payments,stores.ledger,{paymentSucceeded:()=>{notifications++;}},{} as NodeJS.ProcessEnv,stores.transaction);
+  const event={id:"evt_runtime_ledger_webhook",type:"checkout.session.completed",data:{object:{id:"cs_runtime_atomic",mode:"payment",payment_status:"paid",customer:"cus_runtime_atomic",payment_intent:"pi_runtime_atomic",amount_total:1000,metadata:{accountId:account,kind:"topup",packId:"pack_10k"}}}};
+  const raw=Buffer.from(JSON.stringify(event)),signature=signStripePayload(raw.toString("utf8"),"whsec_fixture");
+  try{
+    await owner.ledger.ensureAccount(account);
+    assert.equal((await service.handleWebhook(raw,signature)).status,500);
+    assert.equal(await observer.payments.eventStatus(event.id),"failed");
+    assert.equal(await observer.payments.customerOf(account),null);
+    assert.equal(await observer.payments.checkoutByPaymentIntent("pi_runtime_atomic"),undefined);
+    assert.equal((await observer.ledger.snapshot(account)).purchasedBalance,0);
+    assert.equal(notifications,0);
+    assert.equal((await service.handleWebhook(raw,signature)).status,200);
+    assert.equal(await observer.payments.eventStatus(event.id),"processed");
+    assert.equal(await observer.payments.customerOf(account),"cus_runtime_atomic");
+    assert.equal((await observer.ledger.snapshot(account)).purchasedBalance,10000);
+    assert.equal(notifications,1);
+    const replay=await Promise.all([service.handleWebhook(raw,signature),service.handleWebhook(raw,signature)]);
+    assert.ok(replay.every(result=>result.status===200&&result.body.duplicate===true));
+    assert.equal((await observer.ledger.snapshot(account)).purchasedBalance,10000);
+    assert.equal(notifications,1);
+  }finally{await owner.close();await observer.close();}
+});
 test("ledger SQL rewrites SQLite aggregate aliases and retains the existing billing error identity",()=>{
   assert.match(paymentSql("SELECT run_id,SUM(amount) AS n FROM ledger_entries GROUP BY run_id HAVING n > 0"),/HAVING SUM\(amount\) > 0/);
   assert.match(paymentSql("SELECT input_tokens AS inputTokens"),/AS "inputTokens"/);
