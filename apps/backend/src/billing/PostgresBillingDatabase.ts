@@ -3,12 +3,15 @@ import { Pool, type PoolClient } from "pg";
 import { PostgresLedgerStorage } from "./PostgresLedgerStorage";
 import { PostgresStripeStorage } from "./PostgresStripeStorage";
 
-/** Translate only the SQLite syntax used by payment operations. */
+/** Translate the checked-in ledger/payment SQL; not a general SQLite translator. */
 export function paymentSql(sql:string):string {
   if (/INSERT OR REPLACE/i.test(sql)) throw new Error("Unsupported payment replacement statement");
   if (/INSERT OR IGNORE/i.test(sql)) sql=sql.replace(/INSERT OR IGNORE/i,"INSERT")+" ON CONFLICT DO NOTHING";
   // PostgreSQL upsert RHS needs qualification when both existing and excluded rows expose a column.
   sql=sql.replace(/COALESCE\(excluded\.(period_start|period_end),\s*\1\)/g,"COALESCE(excluded.$1, stripe_subscriptions.$1)");
+  sql=sql.replace(/HAVING n > 0/g,"HAVING SUM(amount) > 0");
+  sql=sql.replace(/\bAS (inputTokens|cachedTokens|outputTokens|sessionId|runId)\b/g,'AS "$1"');
+  sql=sql.replace(/SET extra_usd = extra_usd \+/g,"SET extra_usd = run_budget.extra_usd +");
   let quoted=false,index=0,result="";
   for(let offset=0;offset<sql.length;offset++) {
     const character=sql[offset];
@@ -23,7 +26,7 @@ export function paymentSql(sql:string):string {
 
 /** One transaction owner for ledger and payment schemas. No local fallback. */
 export class PostgresBillingDatabase {
-  private context=new AsyncLocalStorage<{client:PoolClient;active:boolean}>();
+  private context=new AsyncLocalStorage<{client:PoolClient;active:boolean;effects:Array<()=>void>}>();
   private pool:Pool;
   private constructor(url:string) {
     this.pool=new Pool({connectionString:url,max:4,connectionTimeoutMillis:5000,
@@ -42,21 +45,28 @@ export class PostgresBillingDatabase {
     const inherited=this.context.getStore();
     if(inherited) {if(!inherited.active)throw new Error("Billing transaction already finished");return operation();}
     const client=await this.pool.connect();let discard:Error|undefined;
-    const frame={client,active:true};
+    const frame={client,active:true,effects:[] as Array<()=>void>};
+    let result:T;
     try {
       await client.query("BEGIN");
       // Same locks as migration tooling; acquire them in this order everywhere.
       await client.query("SELECT pg_advisory_xact_lock(730021,3)");
       await client.query("SELECT pg_advisory_xact_lock(730021,4)");
       await client.query("SET LOCAL search_path=pg_catalog,orvyn_billing,orvyn_payments");
-      const result=await this.context.run(frame,operation);
+      result=await this.context.run(frame,operation);
       const committed=await client.query("COMMIT");
       if(committed.command!=="COMMIT")throw new Error("Billing transaction was not committed");
-      return result;
     }catch(error){
       try{await client.query("ROLLBACK");}catch{discard=new Error("Billing transaction connection failed");}
       throw error;
     }finally{frame.active=false;client.release(discard);}
+    // Run outside the released transaction context; failures cannot undo committed credits.
+    for(const effect of frame.effects)try{effect();}catch{/* listener owns its failure handling */}
+    return result;
+  }
+  afterCommit(effect:()=>void):void {
+    const frame=this.context.getStore();if(!frame?.active)throw new Error("Billing effect outside active transaction");
+    frame.effects.push(effect);
   }
   prepare(sql:string) {
     const query=async(values:unknown[])=>{
