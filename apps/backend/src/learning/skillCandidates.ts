@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import type { Experience } from "./ExperienceStore";
 import { sanitizeRecord } from "./sanitize";
 
@@ -49,13 +49,13 @@ export function skillCandidatesFromExperiences(experiences: Experience[]): Skill
   return out;
 }
 
-export function persistSkillCandidates(store: LocalStore, experiences: Experience[]): SkillCandidate[] {
+export async function persistSkillCandidates(store: LocalStore, experiences: Experience[]): Promise<SkillCandidate[]> {
   const skills = skillCandidatesFromExperiences(experiences);
-  const existing = store.listLearningRecords("skill", 200);
+  const existing = await store.listLearningRecords("skill", 200);
   for (const s of skills) {
     const hit = existing.find((r) => r.id === s.id);
     if (hit && (hit.payload as { validated?: boolean }).validated) continue;
-    store.saveLearningRecord({ id: s.id, kind: "skill", payload: s });
+    await store.saveLearningRecord({ id: s.id, kind: "skill", payload: s });
   }
   return skills;
 }

@@ -66,12 +66,12 @@ test("ExperienceStore captures a run and isolates tenants", async () => {
   const b = new LocalStore("tenant-b", dir);
   const storeA = new ExperienceStore("tenant-a", a);
   const storeB = new ExperienceStore("tenant-b", b);
-  storeA.captureFromRun(run());
-  assert.equal(storeA.list("experience").length, 1);
-  assert.equal(storeB.list("experience").length, 0);
-  assert.equal(storeA.list("experience")[0].tenantId, "tenant-a");
-  assert.equal(storeA.list("experience")[0].executionTarget, undefined);
-  const exp = storeA.list("experience")[0];
+  (await storeA.captureFromRun(run()));
+  assert.equal((await storeA.list("experience")).length, 1);
+  assert.equal((await storeB.list("experience")).length, 0);
+  assert.equal((await storeA.list("experience"))[0].tenantId, "tenant-a");
+  assert.equal((await storeA.list("experience"))[0].executionTarget, undefined);
+  const exp = (await storeA.list("experience"))[0];
   assert.equal(exp.result, "success");
   assert.equal(exp.tests.passed, true);
   assert.equal(exp.verification.artifacts, 1);
@@ -82,14 +82,14 @@ test("skill candidates need two successful runs and stay unvalidated", async () 
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-skill-"));
   const store = new LocalStore("tenant-a", dir);
   const expStore = new ExperienceStore("tenant-a", store);
-  const e1 = expStore.captureFromRun(run({ id: "run_1" }));
-  const e2 = expStore.captureFromRun(run({ id: "run_2" }));
+  const e1 = (await expStore.captureFromRun(run({ id: "run_1" })));
+  const e2 = (await expStore.captureFromRun(run({ id: "run_2" })));
   const skills = skillCandidatesFromExperiences([e1, e2]);
   assert.equal(skills.length, 1);
   assert.equal(skills[0].validated, false);
   assert.match(skills[0].validation, /do not auto-promote/);
-  persistSkillCandidates(store, [e1, e2]);
-  persistSkillCandidates(store, [e1, e2]);
+  (await persistSkillCandidates(store, [e1, e2]));
+  (await persistSkillCandidates(store, [e1, e2]));
   assert.equal(store.listLearningRecords("skill").length, 1);
 });
 
@@ -97,14 +97,14 @@ test("training dataset filters rejected and failed runs", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-ds-"));
   const store = new LocalStore("tenant-a", dir);
   const expStore = new ExperienceStore("tenant-a", store);
-  const good = expStore.captureFromRun(run());
-  const failed = expStore.captureFromRun(run({
+  const good = (await expStore.captureFromRun(run()));
+  const failed = (await expStore.captureFromRun(run({
     id: "run_bad",
     status: "error",
     events: [ev("tool.failed", { tool: "run_tests", error: "boom" })],
-  }));
+  })));
   assert.equal(trainingCandidates([good, failed]).length, 1);
-  const ds = persistDataset(store, [good, failed]);
+  const ds = (await persistDataset(store, [good, failed]));
   assert.ok(ds);
   assert.equal(ds.status, "candidate");
   assert.equal(ds.id, "ds_current");
@@ -136,4 +136,28 @@ test("run replay records requested vs actual target and artifacts", () => {
   assert.equal(replay.filesChanged.includes("calc.ts"), true);
   assert.equal(replay.artifacts[0].artifactId, "art_1");
   assert.equal(replay.tests.passed, true);
+});
+
+test("experience capture waits for asynchronous storage and reports failed writes", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-learning-ack-"));
+  const local = new LocalStore("tenant-ack", dir);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let fail = false;
+  const asyncStore = new Proxy(local, { get(target, property) {
+    if (property === "saveLearningRecord") return async (input: Parameters<LocalStore["saveLearningRecord"]>[0]) => { await gate; if (fail) throw new Error("storage unavailable"); target.saveLearningRecord(input); };
+    const value = Reflect.get(target, property);
+    return typeof value === "function" ? async (...args: unknown[]) => value.apply(target, args) : value;
+  } });
+  const { } = {};
+  const store = new ExperienceStore("tenant-ack", asyncStore);
+  let finished = false;
+  const capture = store.captureFromRun(run()).then((value) => { finished = true; return value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finished, false);
+  release(); await capture;
+  assert.equal((await store.list()).length, 1);
+  fail = true;
+  await assert.rejects(store.captureFromRun(run({ id: "failed-write" })), /storage unavailable/);
+  assert.equal((await store.list()).length, 1);
 });

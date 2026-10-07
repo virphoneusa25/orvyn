@@ -605,12 +605,12 @@ export class StreamingAgentRuntime {
     args: Record<string, unknown>;
     projectRoot: string;
   }) => Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
-  private onRunSettled?: (runId: string) => void;
+  private onRunSettled?: (runId: string) => void | Promise<void>;
   private artifacts?: import("../artifacts/ArtifactService").ArtifactService;
 
   setHardeningHooks(hooks: {
     cloudMcpInvoke?: StreamingAgentRuntime["cloudMcpInvoke"];
-    onRunSettled?: (runId: string) => void;
+    onRunSettled?: (runId: string) => void | Promise<void>;
     artifacts?: import("../artifacts/ArtifactService").ArtifactService;
   }): void {
     this.cloudMcpInvoke = hooks.cloudMcpInvoke;
@@ -2117,7 +2117,7 @@ export class StreamingAgentRuntime {
       } finally {
         this.teardownRemote(runId);
         try {
-          this.onRunSettled?.(runId);
+          await this.onRunSettled?.(runId);
         } catch {
           /* run-scope cleanup must not fail the settle */
         }
