@@ -768,18 +768,18 @@ export function workerRouter(
   // Brokered credential for one run + one integration. Only for an OpenShell
   // sandbox whose approved template needs it; the value goes straight into
   // the gateway's credential store and never into the sandbox or any log.
-  r.get("/credentials/:runId/:integrationId", (req, res) => {
+  r.get("/credentials/:runId/:integrationId", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
     const allowed = credentialAllowed(reg, req.params.runId, req.params.integrationId);
     if (!allowed.ok) return res.status(403).json({ error: "Not permitted" });
     const credentials = req.params.integrationId === "github"
-      ? (() => { const token = githubToken(allowed.tenantId); return token ? { GITHUB_TOKEN: token, GH_TOKEN: token } : null; })()
-      : deploymentCredential(allowed.tenantId, req.params.integrationId);
+      ? await (async () => { const token = await githubToken(allowed.tenantId); return token ? { GITHUB_TOKEN: token, GH_TOKEN: token } : null; })()
+      : await deploymentCredential(allowed.tenantId, req.params.integrationId);
     if (!credentials) return res.json({ credentials: null });
     reg.audit("credential.attached", "worker", { sandboxId: allowed.sandboxId, organizationId: allowed.organizationId, detail: { integrationId: req.params.integrationId } });
     res.json({ credentials });
-  });
+  }));
 
   /** Sandbox ids still in use, for the worker's reconciliation pass. */
   r.get("/sandboxes/live", asyncHandler(async (req, res) => {

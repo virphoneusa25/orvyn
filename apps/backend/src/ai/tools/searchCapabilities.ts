@@ -10,7 +10,7 @@ import { builtinCoreHitLines, coreCapabilityCovers } from "../coreCapabilityHits
  * user to paste a raw token into a chat card.
  */
 export interface ConnectionHints {
-  githubToken?: () => string | null;
+  githubToken?: () => string | null | Promise<string | null>;
 }
 
 const GITHUBISH = /\bgithub\b/i;
@@ -51,13 +51,14 @@ export function makeSearchCapabilitiesTool(market: () => MarketplaceService, con
       for (const h of hits.slice(0, 10)) {
         lines.push(`- [${h.kind}${h.installed ? ", installed" : ""}] ${h.name} · ${h.server} — ${h.description.slice(0, 140)}`);
       }
+      const githubCredential = askInstall.some(githubish) ? await connections?.githubToken?.() : null;
       const recommended = askInstall.map((h) => {
         const need = h.secrets ?? [];
         // A GitHub server installs against the user's GitHub connection:
         // secrets the stored OAuth token satisfies are marked provided, so
         // the card renders Connect/Install instead of raw token fields.
         const gh = githubish(h);
-        const provided = gh && connections?.githubToken?.() ? need.filter((n) => SECRET_VALUE.test(n)) : [];
+        const provided = gh && githubCredential ? need.filter((n) => SECRET_VALUE.test(n)) : [];
         return {
           name: h.name,
           server: h.server,
@@ -139,7 +140,7 @@ export function makeInstallMcpServerTool(market: () => MarketplaceService, conne
       // The signed-in user's GitHub OAuth grant satisfies a GitHub server's
       // token secrets — they were never meant to be typed into a chat card.
       if (githubish(server)) {
-        const token = connections?.githubToken?.();
+        const token = await connections?.githubToken?.();
         if (token) for (const n of secretNamesFor(server)) if (SECRET_VALUE.test(n) && !String(secrets[n] ?? "").trim()) secrets[n] = token;
       }
       let out;

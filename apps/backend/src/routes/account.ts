@@ -217,26 +217,26 @@ accountRouter.get("/connections", asyncHandler(async (req, res) => {
   const desktops = sessions.filter((s) => /desktop|electron|orvyn/i.test(s.device) && !/browser|chrome|firefox|safari|edge/i.test(s.device));
   res.json({
     github: (await githubConnection(p.userId)),
-    deployment: deploymentConnections(p.tenantId),
+    deployment: await deploymentConnections(p.tenantId),
     desktop: { connected: desktops.length > 0, devices: desktops.map((d) => ({ id: d.id, device: d.device, lastUsedAt: d.lastUsedAt })) },
   });
 }));
 
-accountRouter.put("/connections/:id", (req, res) => {
+accountRouter.put("/connections/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   if (p.role !== "owner" && p.role !== "admin") return res.status(403).json({ error: "Only a workspace owner or admin can manage deployment credentials." });
-  try { saveDeploymentConnection(p.tenantId, String(req.params.id), String(req.body?.token ?? "")); res.json({ ok: true }); }
+  try { await saveDeploymentConnection(p.tenantId, String(req.params.id), String(req.body?.token ?? "")); res.json({ ok: true }); }
   catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.delete("/connections/:id", (req, res) => {
+accountRouter.delete("/connections/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   if (p.role !== "owner" && p.role !== "admin") return res.status(403).json({ error: "Only a workspace owner or admin can manage deployment credentials." });
-  try { removeDeploymentConnection(p.tenantId, String(req.params.id)); res.json({ ok: true }); }
+  try { await removeDeploymentConnection(p.tenantId, String(req.params.id)); res.json({ ok: true }); }
   catch (err) { fail(res, err); }
-});
+}));
 
 // ── Network access requests from cloud missions ─────────────────────────
 // A mission's workspace starts with no network. When ORION needs some, it
