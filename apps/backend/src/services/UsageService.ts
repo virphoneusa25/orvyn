@@ -91,16 +91,23 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
-  saveUsageEvent(e: UsageEvent): void;
-  loadRecentUsage(limit?: number): UsageEvent[];
-  countUsageSince?(ts: number): number;
+  saveUsageEvent(e: UsageEvent): void | Promise<void>;
+  loadRecentUsage(limit?: number): UsageEvent[] | Promise<UsageEvent[]>;
+  countUsageSince?(ts: number): number | Promise<number>;
 }
 type UsageRelease = () => void | Promise<void>;
 // Existing synchronous listeners may return incidental values; await thenables and ignore results.
 type UsageSink = (event: UsageEvent) => unknown;
 type UsageGuard = (ctx: UsageContext, model?: UsagePreflight) => void | UsageRelease | Promise<void | UsageRelease>;
 
+class UsagePersistenceError extends Error {
+  constructor() { super("Usage storage is temporarily unavailable. Please retry."); }
+}
+
 export class UsageService {
+  private storeReady: Promise<void> = Promise.resolve();
+  private pendingStorage: UsageEvent[] = [];
+  private storing?: Promise<void>;
   private events: UsageEvent[] = [];
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
@@ -149,6 +156,8 @@ export class UsageService {
   }
 
   private async runPreflight(model?: UsagePreflight): Promise<() => Promise<void>> {
+    await this.storeReady;
+    await this.flushStorage();
     await Promise.all([...this.settling]);
     await this.retryPendingSinks();
     const ctx = this.als.getStore() ?? {};
@@ -170,7 +179,7 @@ export class UsageService {
   /** Covers adapters and the direct Fireworks Kontext wire with the same billing boundary. */
   async imageCall<T>(config: Pick<ModelConfig, "id" | "provider" | "providerName" | "rate" | "imageRate" | "imageSettlementBudgetUsd">, count: number,
     call: () => Promise<T>, produced: (result: T) => number, settledCost?: (result: T) => number | undefined): Promise<T> {
-    this.checkQuota();
+    await this.checkQuotaAsync();
     this.checkMissionBudget();
     const rate = config.imageRate ? { ...config.imageRate } : undefined;
     const release = await this.runPreflight({ id: config.id, method: "image", imageCount: count,
@@ -186,6 +195,7 @@ export class UsageService {
         imageCount: actual, imageRate: rate, imagePremium: rate?.premium, providerCostUsd: exact ?? (rate ? actual * rate.usdPerImage : undefined), durationMs: Date.now() - start });
       return result;
     } catch (err: any) {
+      if (err instanceof UsagePersistenceError) throw err;
       await this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: false,
         imageCount: 0, providerCostUsd: 0, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
       throw err;
@@ -196,15 +206,54 @@ export class UsageService {
     this.sinks.push(fn);
   }
 
-  attachStore(store: UsageStore): void {
+  attachStore(store: UsageStore): void | Promise<void> {
     this.store = store;
     const persisted = store.loadRecentUsage(MAX_EVENTS);
-    if (persisted.length > 0) {
-      this.events = [...persisted, ...this.events].slice(-MAX_EVENTS);
+    const count = store.countUsageSince?.(this.monthStart);
+    const hydrate = (events: UsageEvent[], total?: number) => {
+      const existing = new Set(this.events.map(event => event.id));
+      this.events = [...events.filter(event => !existing.has(event.id)), ...this.events].slice(-MAX_EVENTS);
+      if (total !== undefined) this.monthCount = total;
+    };
+    if (Array.isArray(persisted) && (count === undefined || typeof count === "number")) {
+      hydrate(persisted, count);
+      return;
     }
-    // Quota counting must survive restarts, or a customer could reset their
-    // budget by crashing the backend.
-    this.monthCount = store.countUsageSince?.(this.monthStart) ?? this.monthCount;
+    this.storeReady = Promise.all([persisted, count]).then(([events, total]) => { hydrate(events, total); });
+    void this.storeReady.catch(() => {});
+    return this.storeReady;
+  }
+
+  /** Read authoritative usage before admission or displaying a quota. */
+  async quotaAsync(): Promise<ReturnType<UsageService["quota"]>> {
+    await this.storeReady;
+    await this.flushStorage();
+    this.rollMonth();
+    if (this.store?.countUsageSince) this.monthCount = await this.store.countUsageSince(this.monthStart);
+    return this.quota();
+  }
+
+  private async checkQuotaAsync(): Promise<void> {
+    await this.quotaAsync();
+    this.checkQuota();
+  }
+
+  private flushStorage(): Promise<void> {
+    if (!this.storing) this.storing = (async () => {
+      while (this.pendingStorage.length) {
+        const event = this.pendingStorage[0];
+        try { await this.store?.saveUsageEvent(event); }
+        catch { throw new UsagePersistenceError(); }
+        for (const sink of this.sinks) {
+          try { await sink(event); } catch (err) {
+            this.pendingSinks.push({ event, sink });
+            console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
+          }
+        }
+        this.pendingStorage.shift();
+      }
+    })().finally(() => { this.storing = undefined; });
+    return this.storing;
   }
 
   /** Current quota state; surfaced on /usage so clients can warn early. */
@@ -222,7 +271,7 @@ export class UsageService {
     const start = utcMonthStart();
     if (start !== this.monthStart) {
       this.monthStart = start;
-      this.monthCount = this.store?.countUsageSince?.(start) ?? 0;
+      this.monthCount = 0;
     }
   }
 
@@ -243,13 +292,14 @@ export class UsageService {
   }
 
   async record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): Promise<void> {
+    await this.storeReady;
     const ctx = this.als.getStore() ?? {};
     const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...ctx, ...e };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     this.rollMonth();
     this.monthCount++;
-    this.store?.saveUsageEvent(event);
+    this.pendingStorage.push(event);
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
       m.requests++;
@@ -257,14 +307,7 @@ export class UsageService {
       m.completionTokens += e.completionTokens ?? 0;
       this.missions.set(ctx.missionId, m);
     }
-    const settlement = (async () => {
-      for (const sink of this.sinks) {
-        try { await sink(event); } catch (err) {
-          this.pendingSinks.push({ event, sink });
-          console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
-        }
-      }
-    })();
+    const settlement = this.flushStorage();
     this.settling.add(settlement);
     try { await settlement; } finally { this.settling.delete(settlement); }
   }
@@ -357,7 +400,7 @@ export class UsageService {
 
       async generate(request: AIRequest): Promise<AIResponse> {
         const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
-        usage.checkQuota();
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
         const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
@@ -387,6 +430,7 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
+          if (err instanceof UsagePersistenceError) throw err;
           await usage.record({
             modelId: inner.config.id,
             provider: inner.config.providerName ?? inner.config.provider,
@@ -401,7 +445,7 @@ export class UsageService {
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
         const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
-        usage.checkQuota();
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
         const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
@@ -461,6 +505,7 @@ export class UsageService {
           await recordOk();
         } catch (err: any) {
           settled = true;
+          if (err instanceof UsagePersistenceError) throw err;
           await usage.record({
             modelId: inner.config.id,
             provider: inner.config.providerName ?? inner.config.provider,
@@ -489,7 +534,7 @@ export class UsageService {
     const embed = async (inputs: string[]): Promise<number[][]> => {
       if (!inputs.length) return [];
       const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
-      usage.checkQuota(); usage.checkMissionBudget(); const release = await usage.runPreflight({ ...inner.config, rate });
+      await usage.checkQuotaAsync(); usage.checkMissionBudget(); const release = await usage.runPreflight({ ...inner.config, rate });
       const start = Date.now();
       try {
         const result = inner.embedWithUsage ? await inner.embedWithUsage(inputs) : { embeddings: inner.embedMany ? await inner.embedMany(inputs) : await Promise.all(inputs.map((s) => inner.embed!(s))) };
@@ -498,6 +543,7 @@ export class UsageService {
           cachedTokens: result.usage?.cachedTokens, providerCostUsd: result.usage?.providerCostUsd, estimated: result.usage ? undefined : true });
         return result.embeddings;
       } catch (err: any) {
+        if (err instanceof UsagePersistenceError) throw err;
         await usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: false, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
         throw err;
       } finally { await release(); }

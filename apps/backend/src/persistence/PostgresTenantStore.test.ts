@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Pool } from "pg";
+import { UsageService } from "../services/UsageService";
 import { LocalStore } from "./LocalStore";
 import { PostgresTenantStore } from "./PostgresTenantStore";
 import { PostgresTenantDatabase, tenantDataSchema, tenantSql, encodeTenantText, decodeTenantText } from "./PostgresTenantDatabase";
@@ -133,4 +134,25 @@ test("real PostgreSQL: a failed final import table rolls back all eleven familie
     await assert.rejects(migration.importSqlite(seed(tenant)), /synthetic failure/);
     assert.equal(Object.values(await migration.exportSnapshot()).every(table => table.rows.length === 0), true);
   } finally { await pool.end(); await migration.close(); await cleanup(tenant); }
+});
+
+
+test("real PostgreSQL: metered provider completion persists usage and restores quota state", { skip: !live }, async () => {
+  const tenant = "metered-" + randomUUID();
+  const store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const usage = new UsageService(); await usage.attachStore(store);
+    const provider = {
+      config: { id: "fixture", provider: "openai-compatible" },
+      async generate() { return { content: "fixture", usage: { promptTokens: 12, completionTokens: 3 } }; },
+      async *stream() { yield { delta: "fixture", done: true }; },
+      async healthCheck() { return true; }, supportsTools() { return false; }, supportsVision() { return false; },
+    } as any;
+    await usage.wrap(provider).generate({ messages: [] });
+    const persisted = await store.loadRecentUsage();
+    assert.equal(persisted.length, 1); assert.equal(persisted[0].promptTokens, 12);
+    const restarted = new UsageService(); await restarted.attachStore(store);
+    assert.equal(restarted.recent()[0].id, persisted[0].id);
+    assert.equal((await restarted.quotaAsync()).used, 1);
+  } finally { await store.close(); await cleanup(tenant); }
 });

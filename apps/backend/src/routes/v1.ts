@@ -2129,7 +2129,7 @@ v1Router.get("/agent/modes", (_req, res) => {
 });
 
 // --- Usage metering (server-side records; the basis for billing later) ---
-v1Router.get("/usage", (req, res) => {
+v1Router.get("/usage", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const limit = req.query.limit ? Math.min(Number(req.query.limit), 1000) : 200;
   const totals = t.modelService.usage.totals();
@@ -2139,13 +2139,13 @@ v1Router.get("/usage", (req, res) => {
   });
   res.json({
     totals,
-    quota: t.modelService.usage.quota(),
+    quota: await t.modelService.usage.quotaAsync(),
     entitlements: entitlements.limits(),
     billing: { provider: billing.name, ...cost },
     queue: t.multiAgentRuntime.queueStats(),
     events: t.modelService.usage.recent(limit),
   });
-});
+}));
 
 import { ModelRegistry } from "../learning/ModelRegistry";
 import { persistSkillCandidates } from "../learning/skillCandidates";
