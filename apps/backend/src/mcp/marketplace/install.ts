@@ -80,7 +80,7 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
   ) {
     args.push(input.cwd);
   }
-  const cfg = manager.addServer({
+  const cfg = (await manager.addServer({
     name: input.server.title || input.server.name.split("/").pop() || input.server.name,
     transport: plan.transport,
     command: plan.command,
@@ -98,7 +98,7 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
     scope: input.cwd && input.server.filesystemScope === "project" ? "project" : "global",
     executionLocation: plan.transport === "http" ? "remote" : "local",
     authKind: input.server.auth[0]?.kind,
-  });
+  }));
   const npmPkg = input.server.packages.find((p) => p.registry === "npm");
   if (npmPkg?.identifier && plan.version) {
     try {
@@ -108,7 +108,7 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
         provenance.repositoryMismatch = flagRepositoryMismatch(input.server.repository, provenance.repository);
         if (provenance.repositoryMismatch) provenance.signals.push("repository metadata mismatch");
       }
-      manager.updateServer(cfg.id, {
+      (await manager.updateServer(cfg.id, {
         provenance: {
           package: provenance.package,
           version: provenance.version,
@@ -118,7 +118,7 @@ export async function installMarketplaceServer(manager: McpManager, input: Marke
           installedAt: provenance.installedAt,
           installSource: input.server.sources.join(","),
         },
-      });
+      }));
       (cfg as typeof cfg & { provenanceWarning?: string }).provenanceWarning = provenance.scriptWarning;
     } catch {
       /* metadata inspect is best-effort after pin check */

@@ -378,7 +378,7 @@ export class TenantManager {
       },
       onRunSettled:  async (runId) => {
         for (const s of tenant.mcpManager.listServers()) {
-          if (s.scope === "run") tenant.mcpManager.setEnabled(s.id, false);
+          if (s.scope === "run") (await tenant.mcpManager.setEnabled(s.id, false));
         }
         if (DEFAULT_PRIVACY.trainingOptOut) return;
         try {

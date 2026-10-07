@@ -142,13 +142,13 @@ export class McpHardening {
       { code, redirectUri: session.redirectUri, clientId: session.clientId, verifier: session.pkce.verifier, resource: session.resource },
       this.fetchImpl
     );
-    this.storeTokens(session.serverId, tokens);
-    this.manager.updateServer(session.serverId, {
+    await this.storeTokens(session.serverId, tokens);
+    (await this.manager.updateServer(session.serverId, {
       authType: "bearer",
       authKind: "oauth",
       headers: { ...(this.manager.listServers().find((s) => s.id === session.serverId)?.headers ?? {}), Authorization: "Bearer {{oauth_access}}" },
-    } as any);
-    this.manager.setSecret(session.serverId, "oauth_access", tokens.access_token);
+    } as any));
+    (await this.manager.setSecret(session.serverId, "oauth_access", tokens.access_token));
     this.sessions.delete(state);
     await this.loopback.close();
     this.appendAudit("connect", { serverId: session.serverId, method: "oauth" });
@@ -165,10 +165,10 @@ export class McpHardening {
     if (cfg?.authKind && cfg.authKind !== "oauth") return "ok";
     const backoff = this.refreshBackoff.get(serverId) ?? 0;
     if (backoff > Date.now()) return "needs-auth";
-    const raw = this.manager.secret(serverId, OAUTH_SECRET);
+    const raw = (await this.manager.secret(serverId, OAUTH_SECRET));
     const tokens = parseStoredTokens(raw);
     if (!tokens) {
-      const access = this.manager.secret(serverId, "oauth_access");
+      const access = (await this.manager.secret(serverId, "oauth_access"));
       if (access) return "ok";
       if (cfg?.authKind === "oauth") return "needs-auth";
       return "ok";
@@ -179,7 +179,7 @@ export class McpHardening {
     try {
       const meta = await discoverOAuthMetadata(cfg.url, this.fetchImpl);
       const next = await refreshTokens(meta, { refreshToken: tokens.refresh_token, clientId: process.env.ORVYN_MCP_OAUTH_CLIENT_ID || "orvyn-mcp" }, this.fetchImpl);
-      this.storeTokens(serverId, { ...tokens, ...next, refresh_token: next.refresh_token ?? tokens.refresh_token });
+      await this.storeTokens(serverId, { ...tokens, ...next, refresh_token: next.refresh_token ?? tokens.refresh_token });
       this.refreshBackoff.delete(serverId);
       return "ok";
     } catch {
@@ -190,7 +190,7 @@ export class McpHardening {
   }
 
   async disconnectAccount(serverId: string): Promise<void> {
-    const raw = this.manager.secret(serverId, OAUTH_SECRET);
+    const raw = (await this.manager.secret(serverId, OAUTH_SECRET));
     const tokens = parseStoredTokens(raw);
     const cfg = this.manager.listServers().find((s) => s.id === serverId);
     if (tokens && cfg?.url) {
@@ -202,8 +202,8 @@ export class McpHardening {
         /* revocation is best-effort */
       }
     }
-    this.manager.deleteSecret(serverId, OAUTH_SECRET);
-    this.manager.deleteSecret(serverId, "oauth_access");
+    (await this.manager.deleteSecret(serverId, OAUTH_SECRET));
+    (await this.manager.deleteSecret(serverId, "oauth_access"));
     this.manager.markNeedsAuth(serverId, "Disconnected — Needs Auth");
     this.appendAudit("disconnect", { serverId });
   }
@@ -238,15 +238,15 @@ export class McpHardening {
     }
   }
 
-  private storeTokens(serverId: string, tokens: StoredOAuthTokens): void {
-    this.manager.setSecret(serverId, OAUTH_SECRET, JSON.stringify({
+   private async storeTokens(serverId: string, tokens: StoredOAuthTokens): Promise<void> {
+    (await this.manager.setSecret(serverId, OAUTH_SECRET, JSON.stringify({
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       token_type: tokens.token_type,
       expires_at: tokens.expires_at,
       scope: tokens.scope,
-    }));
-    this.manager.setSecret(serverId, "oauth_access", tokens.access_token);
+    })));
+    (await this.manager.setSecret(serverId, "oauth_access", tokens.access_token));
   }
 }
 

@@ -87,16 +87,16 @@ export class McpManager {
     return this.registry.list();
   }
 
-  secret(id: string, name: string): string | null {
-    return this.registry.secret(id, name);
+   async secret(id: string, name: string): Promise<string | null> {
+    return (await this.registry.secret(id, name));
   }
 
-  setSecret(id: string, name: string, value: string): void {
-    this.registry.setSecret(id, name, value);
+   async setSecret(id: string, name: string, value: string): Promise<void> {
+    (await this.registry.setSecret(id, name, value));
   }
 
-  deleteSecret(id: string, name: string): void {
-    this.registry.deleteSecret(id, name);
+   async deleteSecret(id: string, name: string): Promise<void> {
+    (await this.registry.deleteSecret(id, name));
   }
 
   setStartGuard(fn: (id: string) => string | null): void {
@@ -111,13 +111,13 @@ export class McpManager {
     this.restartHook = fn;
   }
 
-  setScope(id: string, scope: "global" | "project" | "run", cwd?: string): McpServerConfig | null {
-    return this.updateServer(id, { scope, cwd: cwd ?? this.registry.get(id)?.cwd });
+  async setScope(id: string, scope: "global" | "project" | "run", cwd?: string): Promise<McpServerConfig | null> {
+    return (await this.updateServer(id, { scope, cwd: cwd ?? this.registry.get(id)?.cwd }));
   }
 
-  setBlocked(id: string, blocked: boolean, reason?: string): McpServerConfig | null {
+  async setBlocked(id: string, blocked: boolean, reason?: string): Promise<McpServerConfig | null> {
     if (blocked) void this.disconnect(id).catch(() => {});
-    return this.updateServer(id, { blocked, blockedReason: reason, enabled: blocked ? false : this.registry.get(id)?.enabled });
+    return (await this.updateServer(id, { blocked, blockedReason: reason, enabled: blocked ? false : this.registry.get(id)?.enabled }));
   }
 
   async invokeDiscoveredTool(serverId: string, originalName: string, args: Record<string, unknown>): Promise<{ ok: boolean; output: string; error?: string }> {
@@ -133,12 +133,12 @@ export class McpManager {
     const status = await this.connect(id, { probe: true });
     if (status.state === "CONNECTED") {
       await this.disconnect(id).catch(() => {});
-      this.setEnabled(id, false);
+      (await this.setEnabled(id, false));
     }
     return status;
   }
 
-  addServer(input: {
+   async addServer(input: {
     name: string;
     transport: "stdio" | "http";
     command?: string;
@@ -157,7 +157,7 @@ export class McpManager {
     executionLocation?: "local" | "cloud" | "remote";
     authKind?: McpServerConfig["authKind"];
     provenance?: McpServerConfig["provenance"];
-  }): McpServerConfig {
+  }): Promise<McpServerConfig> {
     const id = `mcp_${randomUUID().slice(0, 8)}`;
     const secretNames = input.secretValues ? Object.keys(input.secretValues) : [];
     const cfg: McpServerConfig = {
@@ -185,31 +185,31 @@ export class McpManager {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    for (const [k, v] of Object.entries(input.secretValues ?? {})) this.registry.setSecret(id, k, v);
+    for (const [k, v] of Object.entries(input.secretValues ?? {})) (await this.registry.setSecret(id, k, v));
     this.registry.upsert(cfg, this.store);
     return cfg;
   }
 
-  updateServer(id: string, patch: Partial<McpServerConfig> & { secretValues?: Record<string, string> }): McpServerConfig | null {
+   async updateServer(id: string, patch: Partial<McpServerConfig> & { secretValues?: Record<string, string> }): Promise<McpServerConfig | null> {
     const cfg = this.registry.get(id);
     if (!cfg) return null;
     const { secretValues, ...rest } = patch;
-    for (const [k, v] of Object.entries(secretValues ?? {})) this.registry.setSecret(id, k, v);
+    for (const [k, v] of Object.entries(secretValues ?? {})) (await this.registry.setSecret(id, k, v));
     const next = { ...cfg, ...rest, updatedAt: Date.now() };
     this.registry.upsert(next, this.store);
     return next;
   }
 
-  removeServer(id: string): boolean {
+   async removeServer(id: string): Promise<boolean> {
     if (!this.registry.get(id)) return false;
     void this.disconnect(id).catch(() => {});
     this.unregisterTools(id);
-    this.registry.remove(id, this.store);
+    (await this.registry.remove(id, this.store));
     return true;
   }
 
-  setEnabled(id: string, enabled: boolean): McpServerConfig | null {
-    const updated = this.updateServer(id, { enabled });
+  async setEnabled(id: string, enabled: boolean): Promise<McpServerConfig | null> {
+    const updated = await this.updateServer(id, { enabled });
     if (!updated) return null;
     if (!enabled) {
       void this.disconnect(id).catch(() => {});
@@ -239,13 +239,13 @@ export class McpManager {
     const conn: Connection = { state: "CONNECTING", client: null, tools: [] };
     this.connections.set(id, conn);
     try {
-      const headers = this.registry.resolveHeaders(id, cfg.headers);
+      const headers = (await this.registry.resolveHeaders(id, cfg.headers));
       const client = new McpClient(
         {
           transport: cfg.transport,
           command: cfg.command,
           args: cfg.args,
-          env: this.registry.resolveEnv(id, cfg.env),
+          env: (await this.registry.resolveEnv(id, cfg.env)),
           cwd: cfg.cwd,
           url: cfg.url,
           headers,
@@ -284,7 +284,7 @@ export class McpManager {
       }));
       conn.state = "CONNECTED";
       conn.tools = tools;
-      this.updateServer(id, {
+      (await this.updateServer(id, {
         // A successful connect is the definition of "enabled" unless this was a sandbox probe.
         enabled: opts?.probe ? false : true,
         lastConnectedAt: Date.now(),
@@ -292,7 +292,7 @@ export class McpManager {
         toolCount: tools.length,
         resourceCount: resources.length,
         promptCount: prompts.length,
-      });
+      }));
       this.registerTools(id, cfg.name, tools);
       this.sink?.("mcp.connected", { serverId: id, name: cfg.name, tools: tools.length });
     } catch (err: any) {
@@ -300,7 +300,7 @@ export class McpManager {
       conn.lastError = String(err?.message ?? err).slice(0, 300);
       await conn.client?.close().catch(() => {});
       conn.client = null;
-      this.updateServer(id, { lastError: conn.lastError });
+      (await this.updateServer(id, { lastError: conn.lastError }));
       this.sink?.("mcp.error", { serverId: id, name: cfg.name, error: conn.lastError });
     }
     return this.status(id)!;
@@ -313,12 +313,12 @@ export class McpManager {
     this.unregisterTools(id);
   }
 
-  markNeedsAuth(id: string, reason = "Needs Auth"): void {
+   async markNeedsAuth(id: string, reason = "Needs Auth"): Promise<void> {
     const conn = this.connections.get(id);
     if (conn?.client) void conn.client.close().catch(() => {});
     this.connections.set(id, { state: "NEEDS_AUTH", client: null, tools: [], lastError: reason });
     this.unregisterTools(id);
-    this.updateServer(id, { lastError: reason });
+    (await this.updateServer(id, { lastError: reason }));
   }
 
   async reconnect(id: string): Promise<McpServerStatus> {

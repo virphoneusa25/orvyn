@@ -202,13 +202,13 @@ export class MarketplaceService {
     return parseImportedMcpConfig(raw);
   }
 
-  importDrafts(drafts: ImportedServerDraft[], confirm: boolean) {
+   async importDrafts(drafts: ImportedServerDraft[], confirm: boolean) {
     if (!confirm) return { imported: 0, drafts };
     const existing = new Set(this.manager.listServers().map((s) => s.name.toLowerCase()));
     let imported = 0;
     for (const d of drafts) {
       if (existing.has(d.name.toLowerCase())) continue;
-      this.manager.addServer({
+      (await this.manager.addServer({
         name: d.name,
         transport: d.transport,
         command: d.command,
@@ -217,7 +217,7 @@ export class MarketplaceService {
         headers: d.headers,
         env: d.env,
         description: `Imported from ${d.sourceFormat} (secrets were stripped — re-enter in Tools & MCP)`,
-      });
+      }));
       imported += 1;
     }
     return { imported, drafts };

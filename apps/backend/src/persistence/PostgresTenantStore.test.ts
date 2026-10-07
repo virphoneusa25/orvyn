@@ -232,3 +232,21 @@ test("real PostgreSQL: validated skills and candidate model status survive resta
     assert.equal((await seedValidatedSkills(store)).length, seeded.length);
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+test("real PostgreSQL: tenant-bound MCP credentials reopen and delete after acknowledgement", { skip: !live }, async () => {
+  const { makeSecretStore } = await import("../mcp/McpRegistry");
+  const tenant = "mcp-secret-" + randomUUID();
+  const previousVaultKey = process.env.ORVYN_VAULT_KEY;
+  if (!previousVaultKey) process.env.ORVYN_VAULT_KEY = Buffer.alloc(32, 0x63).toString("base64");
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    await makeSecretStore(store, tenant).set("fixture.token", "synthetic-fixture-token");
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const secrets = makeSecretStore(store, tenant);
+    assert.equal(await secrets.get("fixture.token"), "synthetic-fixture-token");
+    assert.equal(await makeSecretStore(store, "foreign-tenant").get("fixture.token"), null);
+    assert.notEqual(await store.getSetting("mcp.secret.fixture.token"), "synthetic-fixture-token");
+    await secrets.delete("fixture.token");
+    assert.equal(await secrets.get("fixture.token"), null);
+  } finally { await store.close(); await cleanup(tenant); if (previousVaultKey === undefined) delete process.env.ORVYN_VAULT_KEY; else process.env.ORVYN_VAULT_KEY = previousVaultKey; }
+});
