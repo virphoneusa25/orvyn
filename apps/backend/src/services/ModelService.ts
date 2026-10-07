@@ -599,7 +599,7 @@ export class ModelService {
     if (retired) retired.config.routingVerification = { status: "failed", reason: "Fireworks Kimi K2.7 Code serverless retired 2026-09-25; configure an explicit on-demand deployment instead" };
   }
 
-  addModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
+  prepareModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
     config.billingRequired = source === "platform" && process.env.ORVYN_ENFORCE_CREDITS !== "false" && (process.env.ORVYN_ENFORCE_CREDITS === "true" || process.env.ORVYN_CLOUD_MODE === "true");
     if (source === "platform") applyConfiguredRate(config);
     let provider: AIModelProvider;
@@ -629,11 +629,19 @@ export class ModelService {
     }
     // Metering proxy: every generate/stream/image call on any registered
     // model produces a usage event, regardless of which code path calls it.
-    const metered = this.usage.wrap(provider);
+    return this.usage.wrap(provider);
+  }
+
+  publishModel(metered: AIModelProvider, source: "platform" | "user" = "platform"): AIModelProvider {
+    const config = metered.config;
     this.registry.register(metered);
     if (source === "user") this.userModelIds.add(config.id);
     else this.userModelIds.delete(config.id);
     return metered;
+  }
+
+  addModel(config: ModelConfig, source: "platform" | "user" = "platform"): AIModelProvider {
+    return this.publishModel(this.prepareModel(config, source), source);
   }
 
   removeModel(id: string): void {
