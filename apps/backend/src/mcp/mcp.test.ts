@@ -46,7 +46,7 @@ function fakeStore() {
   };
 }
 
-test("registry: secrets live in a separate namespace, config JSON never contains them", () => {
+test("registry: secrets live in a separate namespace, config JSON never contains them",  async () => {
   const store = fakeStore();
   const reg = new McpRegistry(store, "tenant-a");
   const cfg = {
@@ -55,13 +55,13 @@ test("registry: secrets live in a separate namespace, config JSON never contains
     secretNames: ["token"], createdAt: Date.now(), updatedAt: Date.now(),
   };
   reg.upsert(cfg, store);
-  reg.setSecret("srv1", "token", "ghp_supersecret123");
+  (await reg.setSecret("srv1", "token", "ghp_supersecret123"));
   const persisted = store.dump().get("mcp.servers.v1") ?? "";
   assert.ok(!persisted.includes("ghp_supersecret123"), "secret value must never appear in config JSON");
-  assert.equal(reg.secret("srv1", "token"), "ghp_supersecret123");
-  const resolved = reg.resolveHeaders("srv1", { Authorization: "Bearer {{token}}" });
+  assert.equal((await reg.secret("srv1", "token")), "ghp_supersecret123");
+  const resolved = (await reg.resolveHeaders("srv1", { Authorization: "Bearer {{token}}" }));
   assert.equal(resolved.Authorization, "Bearer ghp_supersecret123", "secret resolves at connect time");
-  const env = reg.resolveEnv("srv1", { PATH: "/usr/bin" });
+  const env = (await reg.resolveEnv("srv1", { PATH: "/usr/bin" }));
   assert.equal(env.token, "ghp_supersecret123");
   assert.equal(env.GITHUB_PERSONAL_ACCESS_TOKEN, "ghp_supersecret123");
   assert.equal(env.PATH, "/usr/bin");
@@ -116,7 +116,7 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
   const mgr = new McpManager({ gateway, engine, store });
 
   try {
-    const cfg = mgr.addServer({ name: "echosrv", transport: "stdio", command: process.execPath, args: [scriptPath] });
+    const cfg = (await mgr.addServer({ name: "echosrv", transport: "stdio", command: process.execPath, args: [scriptPath] }));
     const status = await mgr.connect(cfg.id);
     assert.equal(status.state, "CONNECTED", `server should connect (got ${status.state}: ${status.lastError})`);
     assert.equal(status.toolCount, 5, "all five tools discovered");
@@ -167,7 +167,7 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
     assert.ok(afterClear.ok, `reregistered echo should succeed: ${afterClear.error}`);
 
     // Disable → tools become denied (removed from availability)
-    mgr.setEnabled(cfg.id, false);
+    (await mgr.setEnabled(cfg.id, false));
     assert.equal(gateway.getPermission("mcp.echosrv.echo_message"), "denied");
     assert.equal(mgr.status(cfg.id)!.state, "DISABLED");
   } finally {
@@ -197,8 +197,30 @@ test("failure isolation: a server that cannot start reports ERROR, never throws"
     const engine = new PermissionEngine();
     const gateway = new ToolGateway(new ToolRegistry(), engine);
   const mgr = new McpManager({ gateway, store });
-  const cfg = mgr.addServer({ name: "broken", transport: "stdio", command: "definitely-not-a-real-command-xyz" });
+  const cfg = (await mgr.addServer({ name: "broken", transport: "stdio", command: "definitely-not-a-real-command-xyz" }));
   const status = await mgr.connect(cfg.id);
   assert.equal(status.state, "ERROR");
   assert.ok(status.lastError, "last error recorded");
+});
+
+test("asynchronous MCP credentials wait for acknowledgement and reject storage failures", async () => {
+  const { makeSecretStore } = await import("./McpRegistry");
+  const storage = fakeStore();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let fail = false;
+  const store = { getSetting: async (key: string) => storage.getSetting(key), setSetting: async (key: string, value: string) => { await gate; if (fail) throw new Error("storage unavailable"); storage.setSetting(key, value); }, deleteSetting: async (key: string) => storage.deleteSetting(key) };
+  const secrets = makeSecretStore(store, "tenant-ack");
+  let finished = false;
+  const writing = secrets.set("fixture.token", "synthetic-fixture-token").then(() => { finished = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finished, false);
+  release(); await writing;
+  assert.equal(await secrets.get("fixture.token"), "synthetic-fixture-token");
+  assert.equal(await makeSecretStore(store, "foreign-tenant").get("fixture.token"), null);
+  fail = true;
+  await assert.rejects(secrets.set("fixture.token", "replacement"), /storage unavailable/);
+  assert.equal(await secrets.get("fixture.token"), "synthetic-fixture-token");
+  await secrets.delete("fixture.token");
+  assert.equal(await secrets.get("fixture.token"), null);
 });

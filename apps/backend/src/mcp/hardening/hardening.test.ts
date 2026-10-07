@@ -81,7 +81,7 @@ test("token refresh: skew, missing refresh, backoff on failure", async () => {
   await assert.rejects(() => refreshTokens(meta, { refreshToken: "r", clientId: "c" }, fetchImpl as any));
 });
 
-test("secure token refs: parsed tokens never written as config plaintext", () => {
+test("secure token refs: parsed tokens never written as config plaintext",  async () => {
   const store = fakeStore();
   const gateway = new ToolGateway(new ToolRegistry(), new PermissionEngine());
   const mgr = new McpManager({ gateway, store });
@@ -91,13 +91,13 @@ test("secure token refs: parsed tokens never written as config plaintext", () =>
     json: async () => ({ access_token: "AT", refresh_token: "RT", expires_in: 3600 }),
     text: async () => "",
   })) as any);
-  mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" });
+  (await mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" }));
   const id = mgr.listServers()[0].id;
   (harden as any).storeTokens(id, { access_token: "AT_LIVE", refresh_token: "RT_LIVE", expires_at: Date.now() + 1000 });
   const dumped = [...store.dump().entries()];
   assert.ok(!JSON.stringify(mgr.listServers()).includes("AT_LIVE"));
   assert.ok(dumped.some(([k, v]) => k.includes("mcp.secret.") && v.startsWith("orvyn:v1:") && !v.includes("AT_LIVE")));
-  const stored = parseStoredTokens(mgr.secret(id, "oauth"));
+  const stored = parseStoredTokens((await mgr.secret(id, "oauth")));
   assert.equal(stored?.access_token, "AT_LIVE");
   assert.equal(stored?.refresh_token, "RT_LIVE");
   assert.ok(stored?.expires_at && stored.expires_at > Date.now());
@@ -123,7 +123,7 @@ test("gateway tenant binding rejects cross-tenant invoke", async () => {
 test("gateway: local stdio is Local Only on cloud runs", async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
-  const cfg = mgr.addServer({ name: "echo", transport: "stdio", command: "node", args: ["-e", ""], executionLocation: "local" });
+  const cfg = (await mgr.addServer({ name: "echo", transport: "stdio", command: "node", args: ["-e", ""], executionLocation: "local" }));
   const gw = new McpCloudGateway(mgr, () => ({ ...DEFAULT_POLICY }), new McpObservability());
   const out = await gw.invoke({
     tenantId: "t",
@@ -167,11 +167,11 @@ test("package provenance: pin required, scripts surfaced, checksum recorded", ()
   assert.ok(flagRepositoryMismatch("https://github.com/acme/safe", "https://github.com/evil/safe"));
 });
 
-test("scope: project servers are not visible to another project", () => {
+test("scope: project servers are not visible to another project",  async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
   const harden = new McpHardening(mgr, store, "t");
-  const cfg = mgr.addServer({ name: "db", transport: "stdio", command: "npx", cwd: "/proj-a", scope: "project" });
+  const cfg = (await mgr.addServer({ name: "db", transport: "stdio", command: "npx", cwd: "/proj-a", scope: "project" }));
   assert.equal(harden.inScope(cfg, "/proj-a"), true);
   assert.equal(harden.inScope(cfg, "/proj-b"), false);
   assert.equal(harden.inScope({ scope: "global" }, "/proj-b"), true);
@@ -243,7 +243,7 @@ test("replay metadata shape for mcp.activation / capability.required", () => {
 test("OAuth start refuses blocked servers", async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
-  const cfg = mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" });
+  const cfg = (await mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" }));
   const harden = new McpHardening(mgr, store, "t");
   harden.setPolicy({ blocklist: [cfg.id] });
   await assert.rejects(() => harden.startOAuth({ serverId: cfg.id, resource: "https://mcp.example/mcp" }), /Blocked/);
