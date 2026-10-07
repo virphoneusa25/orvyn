@@ -37,22 +37,71 @@ export function validateProviderSecret(provider: "glama" | "smithery", token: st
 
 export class MarketplaceService {
   readonly index: CapabilityIndex;
+  readonly ready: Promise<void>;
+  private initialized = false;
+  private settings = new Map<string, unknown>();
+  private writes: Promise<void> = Promise.resolve();
   private aggregator: RegistryAggregator;
   private cache: CatalogCache<any>;
 
   constructor(
     readonly manager: McpManager,
-    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void },
+    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void | Promise<void> },
     private tenantId = "local",
   ) {
-    this.cache = new CatalogCache(settingCacheStore(this.store));
+    const keys = [REGISTRIES_KEY, BLOCKLIST_KEY, "mcp.secret.glama", "mcp.secret.smithery", "mcp.marketplace.catalogCache.v3"];
+    const values = keys.map((key) => this.store.getSetting(key));
+    this.cache = new CatalogCache();
     this.aggregator = this.buildAggregator();
     this.index = new CapabilityIndex(manager, this.aggregator);
+    const hydrate = (resolved: unknown[]) => {
+      keys.forEach((key, index) => this.settings.set(key, resolved[index]));
+      const registries = this.readRegistries();
+      const secrets = registries.map((reg) => this.store.getSetting(`mcp.secret.registry.${reg.id}`));
+      const finish = (tokens: unknown[]) => {
+        registries.forEach((reg, index) => this.settings.set(`mcp.secret.registry.${reg.id}`, tokens[index]));
+        this.cache = new CatalogCache(settingCacheStore({
+          getSetting: (key) => this.settings.get(key),
+          setSetting: (key, value) => {
+            // Catalog persistence is optional; serialize it and handle failures.
+            void this.change(() => this.persist(key, value)).catch(() => {});
+          },
+        }));
+        this.refreshProviders();
+        this.initialized = true;
+      };
+      if (secrets.some((value) => value instanceof Promise)) return Promise.all(secrets).then(finish);
+      finish(secrets);
+    };
+    this.ready = values.some((value) => value instanceof Promise)
+      ? Promise.all(values).then(hydrate)
+      : Promise.resolve(hydrate(values));
+    void this.ready.catch(() => {});
+  }
+
+  private assertReady(): void {
+    if (!this.initialized) throw new Error("MCP marketplace is not ready");
+  }
+
+  private change<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.writes.then(async () => { await this.ready; return operation(); });
+    this.writes = next.then(() => {}, () => {});
+    return next;
+  }
+
+  private async persist(key: string, value: string): Promise<void> {
+    await this.store.setSetting(key, value);
+    this.settings.set(key, value);
+  }
+
+  async flushPersistence(): Promise<void> {
+    await this.ready;
+    await this.writes;
   }
 
   private readRegistries(): PrivateRegistryConfig[] {
     try {
-      const raw = this.store.getSetting(REGISTRIES_KEY);
+      const raw = this.settings.get(REGISTRIES_KEY);
       return raw ? (JSON.parse(String(raw)) as PrivateRegistryConfig[]) : [];
     } catch {
       return [];
@@ -61,7 +110,7 @@ export class MarketplaceService {
 
   private blocklist(): Set<string> {
     try {
-      const raw = this.store.getSetting(BLOCKLIST_KEY);
+      const raw = this.settings.get(BLOCKLIST_KEY);
       return new Set(raw ? (JSON.parse(String(raw)) as string[]) : []);
     } catch {
       return new Set();
@@ -69,14 +118,14 @@ export class MarketplaceService {
   }
 
   private secret(key: string): string {
-    const stored = this.store.getSetting(key);
+    const stored = this.settings.get(key);
     if (typeof stored !== "string" || !stored.trim()) return "";
     const opened = openSecret(stored, this.tenantId, key);
     return opened?.trim() ? opened.trim() : "";
   }
 
-  private writeSecret(key: string, value: string): void {
-    this.store.setSetting(key, value ? sealSecret(value, this.tenantId, key) : "");
+  private async writeSecret(key: string, value: string): Promise<void> {
+    await this.persist(key, value ? sealSecret(value, this.tenantId, key) : "");
   }
 
   private buildAggregator(): RegistryAggregator {
@@ -92,7 +141,7 @@ export class MarketplaceService {
       providers.push(
         privateProvider(reg, fetch, () => {
           const name = `mcp.secret.registry.${reg.id}`;
-          const v = this.store.getSetting(name);
+          const v = this.settings.get(name);
           if (typeof v !== "string" || !v) return null;
           return openSecret(v, this.tenantId, name);
         })
@@ -107,18 +156,21 @@ export class MarketplaceService {
   }
 
   providerSecretStatus(): { glama: boolean; smithery: boolean } {
+    this.assertReady();
     return {
       glama: Boolean(this.secret("mcp.secret.glama") || process.env.GLAMA_API_KEY),
       smithery: Boolean(this.secret("mcp.secret.smithery") || process.env.SMITHERY_API_KEY),
     };
   }
 
-  setProviderSecret(provider: "glama" | "smithery", token: string): { glama: boolean; smithery: boolean } {
+  async setProviderSecret(provider: "glama" | "smithery", token: string): Promise<{ glama: boolean; smithery: boolean }> {
     const key = provider === "glama" ? "mcp.secret.glama" : "mcp.secret.smithery";
     const value = validateProviderSecret(provider, token);
-    this.writeSecret(key, value);
-    this.refreshProviders();
-    return this.providerSecretStatus();
+    return this.change(async () => {
+      await this.writeSecret(key, value);
+      this.refreshProviders();
+      return this.providerSecretStatus();
+    });
   }
 
   invalidateCatalog(query?: string): void {
@@ -134,6 +186,7 @@ export class MarketplaceService {
   }
 
   async search(query: RegistrySearch) {
+    await this.ready;
     const out = await this.aggregator.search(query);
     const blocked = this.blocklist();
     return {
@@ -147,29 +200,37 @@ export class MarketplaceService {
     };
   }
 
-  health() {
+  async health() {
+    await this.ready;
     return this.aggregator.health();
   }
 
   listPrivateRegistries(): PrivateRegistryConfig[] {
-    return this.readRegistries().map((r) => ({ ...r }));
+    this.assertReady();
+    return structuredClone(this.readRegistries());
   }
 
-  upsertPrivateRegistry(cfg: PrivateRegistryConfig, token?: string): PrivateRegistryConfig {
-    const list = this.readRegistries().filter((r) => r.id !== cfg.id);
-    list.push(cfg);
-    this.store.setSetting(REGISTRIES_KEY, JSON.stringify(list));
-    if (token) this.writeSecret(`mcp.secret.registry.${cfg.id}`, token);
-    this.refreshProviders();
-    return cfg;
+  async upsertPrivateRegistry(cfg: PrivateRegistryConfig, token?: string): Promise<PrivateRegistryConfig> {
+    const config = structuredClone(cfg);
+    return this.change(async () => {
+      const list = this.readRegistries().filter((r) => r.id !== config.id);
+      list.push(config);
+      if (token) await this.writeSecret(`mcp.secret.registry.${config.id}`, token);
+      await this.persist(REGISTRIES_KEY, JSON.stringify(list));
+      this.refreshProviders();
+      return structuredClone(config);
+    });
   }
 
-  removePrivateRegistry(id: string): void {
-    this.store.setSetting(REGISTRIES_KEY, JSON.stringify(this.readRegistries().filter((r) => r.id !== id)));
-    this.refreshProviders();
+  async removePrivateRegistry(id: string): Promise<void> {
+    await this.change(async () => {
+      await this.persist(REGISTRIES_KEY, JSON.stringify(this.readRegistries().filter((r) => r.id !== id)));
+      this.refreshProviders();
+    });
   }
 
   async install(server: MarketplaceMcpServer, opts: { secrets?: Record<string, string>; connect?: boolean; cwd?: string; preferStdio?: boolean }) {
+    await this.ready;
     if (this.blocklist().has(server.canonicalId)) throw new Error("This server is blocked by policy");
     return installMarketplaceServer(this.manager, { server, secrets: opts.secrets, cwd: opts.cwd, connect: opts.connect, preferStdio: opts.preferStdio });
   }
@@ -228,7 +289,7 @@ const services = new WeakMap<McpManager, MarketplaceService>();
 
 export function marketplaceFor(
   manager: McpManager,
-  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void },
+  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void | Promise<void> },
   tenantId = "local",
 ): MarketplaceService {
   let s = services.get(manager);

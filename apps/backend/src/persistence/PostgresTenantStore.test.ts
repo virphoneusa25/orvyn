@@ -286,3 +286,23 @@ test("real PostgreSQL: enterprise policy and concurrent audit entries survive re
     assert.ok(reopened.readAudit().every((entry) => entry.secret === "[redacted]"));
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+
+test("real PostgreSQL: marketplace registries and optional catalog cache survive reopening", { skip: !live }, async () => {
+  const { MarketplaceService } = await import("../mcp/marketplace/service");
+  const tenant = "mcp-marketplace-" + randomUUID();
+  const manager = { listServers: () => [], searchTools: () => [], statuses: () => [] } as any;
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const market = new MarketplaceService(manager, store, tenant); await market.ready;
+    await Promise.all(Array.from({ length: 8 }, (_, i) => market.upsertPrivateRegistry({ id: `fixture-${i}`, name: "fixture", enabled: false, url: "https://fixture.invalid" })));
+    (market as any).cache.set("fixture", { name: "public listing" }); await market.flushPersistence();
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const reopened = new MarketplaceService(manager, store, tenant); await reopened.ready;
+    assert.equal(reopened.listPrivateRegistries().length, 8);
+    assert.deepEqual((reopened as any).cache.get("fixture").payload, { name: "public listing" });
+    await reopened.removePrivateRegistry("fixture-0");
+    const again = new MarketplaceService(manager, store, tenant); await again.ready;
+    assert.equal(again.listPrivateRegistries().length, 7);
+  } finally { await store.close(); await cleanup(tenant); }
+});

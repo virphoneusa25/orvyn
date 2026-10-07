@@ -337,6 +337,7 @@ export class TenantManager {
       (name) => marketplaceFor(tenant.mcpManager, localStore, id).index.exposeToModel(name)
     );
     const market = marketplaceFor(tenant.mcpManager, localStore, id);
+    await market.ready;
     market.index.rankContext = {
       get projectRoot() {
         return tenant.currentProjectRoot;
