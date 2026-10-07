@@ -162,6 +162,10 @@ export interface WorkspaceRecord {
     fingerprint?: WorkspaceFingerprint;
 }
 export type { WorkspaceFingerprint };
+/** Public session behavior, independent of synchronous local or async cloud storage. */
+export type WorkSessionPersistence = {
+    [K in keyof WorkSessionStore]: WorkSessionStore[K] extends (...args: infer A) => infer R ? (...args: A) => R | Promise<R> : WorkSessionStore[K];
+};
 export class PostgresWorkSessionStore implements AsyncSessionContract {
     private constructor(private readonly db: PostgresSessionDatabase, private readonly tenantId: string, readonly dataDirectory: string) { }
     static async connect(url: string, tenantId: string, dataDirectory: string = defaultDataDir()): Promise<PostgresWorkSessionStore> {

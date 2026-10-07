@@ -23,14 +23,14 @@ test("TEST A — a new website provisions one workspace and can write index.html
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-a-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-a-"));
   const { sessions, session } = open(dir);
-  const resolved = resolveRunWorkspace({
+  const resolved = (await resolveRunWorkspace({
     sessions,
     tenantId: "t1",
     session,
     instruction: "Build a simple website.",
     clientRoot: ".",
     cwd,
-  });
+  }));
   assert.equal(resolved.status, "resolved");
   if (resolved.status !== "resolved") return;
   assert.equal(resolved.created, true);
@@ -62,14 +62,14 @@ test("TEST B — a follow-up after restart keeps the same workspace and edits in
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-b-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-b-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "Build a simple website.",
     clientRoot: "/opt/orvyn/workspaces",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   await makeWriteFileTool(created.projectRoot).execute({ path: "index.html", content: "<h1>Hello</h1>\n" });
@@ -79,14 +79,14 @@ test("TEST B — a follow-up after restart keeps the same workspace and edits in
   const session = reopened.get(created.sessionId);
   assert.ok(session);
   const wrong = mkdtempSync(join(tmpdir(), "orvyn-wrong-b-"));
-  const follow = resolveRunWorkspace({
+  const follow = (await resolveRunWorkspace({
     sessions: reopened,
     tenantId: "t1",
     session: session!,
     instruction: "Add a contact section.",
     clientRoot: wrong,
     cwd,
-  });
+  }));
   assert.equal(follow.status, "resolved");
   if (follow.status !== "resolved") return;
   assert.equal(follow.sessionId, created.sessionId);
@@ -112,28 +112,28 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-c-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-c-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "Build a simple website.",
     clientRoot: "",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   writeFileSync(join(created.projectRoot, "index.html"), "<h1>Hello</h1>\n");
   first.sessions.rememberFiles(created.workspaceId, ["index.html"]);
 
   const wrong = mkdtempSync(join(tmpdir(), "orvyn-empty-c-"));
-  const restored = resolveRunWorkspace({
+  const restored = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.sessions.get(created.sessionId)!,
     instruction: "Add a contact section.",
     clientRoot: wrong,
     cwd,
-  });
+  }));
   assert.equal(restored.status, "resolved");
   if (restored.status !== "resolved") return;
   assert.equal(restored.workspaceId, created.workspaceId);
@@ -151,14 +151,14 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
   });
   assert.equal(drifted?.projectRoot, wrong);
 
-  const mismatch = resolveRunWorkspace({
+  const mismatch = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.sessions.get(created.sessionId)!,
     instruction: "Add a contact section.",
     clientRoot: wrong,
     cwd,
-  });
+  }));
   assert.equal(mismatch.status, "mismatch");
   if (mismatch.status !== "mismatch") return;
   assert.equal(mismatch.code, WORKSPACE_STATE_MISMATCH);
@@ -177,7 +177,7 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
   // The same follow-up for a project whose files live on the user's computer
   // (Local Worker): the server's empty copy is expected, so the run continues
   // in the same workspace instead of stopping.
-  const onClient = resolveRunWorkspace({
+  const onClient = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.sessions.get(created.sessionId)!,
@@ -185,7 +185,7 @@ test("TEST C — a wrong or empty path is not a new project", async () => {
     clientRoot: "C:\\Users\\someone\\ORVYN\\site",
     cwd,
     filesOnClient: true,
-  });
+  }));
   assert.equal(onClient.status, "resolved");
   if (onClient.status !== "resolved") return;
   assert.equal(onClient.workspaceId, created.workspaceId);
@@ -199,14 +199,14 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-hero-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-hero-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "Build a simple website.",
     clientRoot: ".",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   const html = "<!DOCTYPE html><html><head><link rel=\"stylesheet\" href=\"styles.css\"></head><body><h1>Harbor</h1></body></html>\n";
@@ -223,14 +223,14 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.deepEqual(reopened.knownFiles(session!.workspaceId!), ["index.html", "styles.css"]);
 
   const blank = mkdtempSync(join(tmpdir(), "orvyn-blank-hero-"));
-  const follow = resolveRunWorkspace({
+  const follow = (await resolveRunWorkspace({
     sessions: reopened,
     tenantId: "t1",
     session: session!,
     instruction: "Add a hero image in the background.",
     clientRoot: blank,
     cwd,
-  });
+  }));
   assert.equal(follow.status, "resolved");
   if (follow.status !== "resolved") return;
   assert.equal(follow.workspaceId, created.workspaceId);
@@ -273,14 +273,14 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.doesNotMatch(note, /has no project files yet/);
 
   rmSync(join(created.projectRoot, "styles.css"));
-  const partial = resolveRunWorkspace({
+  const partial = (await resolveRunWorkspace({
     sessions: reopened,
     tenantId: "t1",
     session: reopened.get(created.sessionId)!,
     instruction: "Add a hero image in the background.",
     clientRoot: blank,
     cwd,
-  });
+  }));
   assert.equal(partial.status, "resolved");
   if (partial.status !== "resolved") return;
   assert.equal(partial.workspaceId, created.workspaceId);
@@ -290,14 +290,14 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.equal(readdirSync(blank).length, 0);
 
   rmSync(join(created.projectRoot, "index.html"));
-  const mismatch = resolveRunWorkspace({
+  const mismatch = (await resolveRunWorkspace({
     sessions: reopened,
     tenantId: "t1",
     session: reopened.get(created.sessionId)!,
     instruction: "Add a hero image in the background.",
     clientRoot: blank,
     cwd,
-  });
+  }));
   assert.equal(mismatch.status, "mismatch");
   if (mismatch.status !== "mismatch") return;
   assert.equal(mismatch.code, WORKSPACE_STATE_MISMATCH);
@@ -308,17 +308,17 @@ test("a reopened website follow-up edits the existing workspace and does not pro
   assert.equal(readdirSync(blank).length, 0);
 });
 
-test("an informational question does not allocate a workspace", () => {
+test("an informational question does not allocate a workspace",  async () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-info-"));
   const { sessions, session } = open(dir);
-  const skipped = resolveRunWorkspace({
+  const skipped = (await resolveRunWorkspace({
     sessions,
     tenantId: "t1",
     session,
     instruction: "What is a closure in JavaScript?",
     clientRoot: ".",
     cwd: dir,
-  });
+  }));
   assert.equal(skipped.status, "skipped");
   assert.equal(exposeProjectTools(skipped), false);
   assert.equal(existsSync(join(dir, "tenants")), false);
@@ -328,14 +328,14 @@ test("TEST consecutive — hero image then animate stays on the same workspace",
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-anim-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-anim-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "can you add a hero image in the background",
     clientRoot: "C:\\Users\\builder\\site",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   assert.equal(created.projectRoot.startsWith(join(dir, "tenants", "t1", "workspaces")), true);
@@ -347,14 +347,14 @@ test("TEST consecutive — hero image then animate stays on the same workspace",
   const restarted = new WorkSessionStore("t1", dir);
   const session = restarted.get(created.sessionId)!;
   const empty = mkdtempSync(join(tmpdir(), "orvyn-empty-anim-"));
-  const follow = resolveRunWorkspace({
+  const follow = (await resolveRunWorkspace({
     sessions: restarted,
     tenantId: "t1",
     session,
     instruction: "can you make the hero background animated",
     clientRoot: empty,
     cwd,
-  });
+  }));
   assert.equal(follow.status, "resolved");
   if (follow.status !== "resolved") return;
   assert.equal(follow.workspaceId, created.workspaceId);
@@ -382,14 +382,14 @@ test("TEST E — an empty first look recovers the persisted project instead of a
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-recover-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-recover-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "Create index.html",
     clientRoot: "",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   writeFileSync(join(created.projectRoot, "index.html"), "<h1>Keep</h1>\n");
@@ -401,14 +401,14 @@ test("TEST E — an empty first look recovers the persisted project instead of a
   assert.equal(first.sessions.relocateWorkspace(created.workspaceId, detached), true);
   assert.equal(existsSync(join(created.projectRoot, "index.html")), true);
 
-  const follow = resolveRunWorkspace({
+  const follow = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.sessions.get(created.sessionId)!,
     instruction: "Change the heading.",
     clientRoot: detached,
     cwd,
-  });
+  }));
   assert.equal(follow.status, "resolved");
   if (follow.status !== "resolved") return;
   assert.equal(follow.workspaceId, created.workspaceId);
@@ -427,18 +427,18 @@ test("a blank project root is not the backend process directory", () => {
   assert.notEqual(dot.path, process.cwd());
 });
 
-test("generated deliverables in history do not force a workspace state mismatch", () => {
+test("generated deliverables in history do not force a workspace state mismatch",  async () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-gen-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-gen-"));
   const first = open(dir);
-  const created = resolveRunWorkspace({
+  const created = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.session,
     instruction: "Build a landing page.",
     clientRoot: "",
     cwd,
-  });
+  }));
   assert.equal(created.status, "resolved");
   if (created.status !== "resolved") return;
   // Image/document deliverables land in artifact storage as generated/ paths —
@@ -449,14 +449,14 @@ test("generated deliverables in history do not force a workspace state mismatch"
   // project state to mismatch — the run must keep going, not stop.
   rmSync(created.projectRoot, { recursive: true, force: true });
 
-  const follow = resolveRunWorkspace({
+  const follow = (await resolveRunWorkspace({
     sessions: first.sessions,
     tenantId: "t1",
     session: first.sessions.get(created.sessionId)!,
     instruction: "Now build a landing page.",
     clientRoot: "",
     cwd,
-  });
+  }));
   assert.equal(follow.status, "resolved");
   if (follow.status !== "resolved") return;
   assert.equal(follow.workspaceId, created.workspaceId);

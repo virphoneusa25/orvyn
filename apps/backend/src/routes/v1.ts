@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { asyncHandler } from "../http/asyncHandler";
 import { desktopReleaseStore } from "../releases/desktopReleaseStore";
 import { accountRouter } from "./account";
@@ -18,7 +19,7 @@ import { cloudWorkerSourcePath, isVirtualWorkspace, looksLikeForeignAbsolutePath
 import { routeExecutionTarget, runtimeLocation, isExecutionTarget } from "../execution/ExecutionTarget";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { portForwardingService } from "../ports/PortForwardingService";
-import { activeRunForSession } from "../agent/activeSessionRun";
+import { activeRunForSessionAsync } from "../agent/activeSessionRun";
 // apps/backend/src/routes/v1.ts
 import { Router } from "express";
 import { customerRedaction } from "../middleware/customerRedaction";
@@ -41,7 +42,7 @@ export const v1Router = Router();
 
 // Only this tenant's mirrored families are checked; identity/ledger parity
 // is deliberately not inferred from these counts.
-v1Router.get("/storage/status", async (req, res) => {
+v1Router.get("/storage/status", asyncHandler(async (req, res) => {
   const tenant = requireTenant(req);
   const postgres = await tenantPostgresMirror.status(tenant.id);
   const sqlite = tenant.localStore.tenantMirrorCounts();
@@ -54,7 +55,7 @@ v1Router.get("/storage/status", async (req, res) => {
     excluded: ["identity", "credits", "subscriptions", "work-sessions", "artifacts", "memory"],
     parity: { counts: parity, completeCloudCutover: false }, postgres, sqlite,
   });
-});
+}));
 
 // Customer portal account area: profile, password, team, API keys, notifications.
 v1Router.use("/account", accountRouter);
@@ -112,12 +113,12 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
   // the tenant services from their durable stores so live missions can resume.
   const tenant = tenantManager.get(tenantId) ?? tenantManager.create(tenantId, "", tenantId);
   return tenant.runStore;
-}, (tenantId, runId) => {
+},  async (tenantId, runId) => {
   const tenant = tenantManager.get(tenantId);
   const run = tenant?.runStore.get(runId);
   if (!tenant || !run) return;
-  const session = tenant.sessions.sessionOfRun(runId);
-  const instruction = tenant.sessions.messageOfRun(runId)?.content || instructionOf(run);
+  const session = (await tenant.sessions.sessionOfRun(runId));
+  const instruction = (await tenant.sessions.messageOfRun(runId))?.content || instructionOf(run);
   if (!instruction.trim()) {
     tenant.runStore.emit(runId, "run.error", { message: "The control plane restarted, but the durable run instruction was unavailable." });
     tenant.runStore.setStatus(runId, "error");
@@ -135,7 +136,7 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
     run.projectRoot,
     instruction,
     undefined,
-    (tenant.sessions.messageOfRun(runId)?.mode || "agent") as any,
+    ((await tenant.sessions.messageOfRun(runId))?.mode || "agent") as any,
     undefined,
     threadHistory(tenant.runStore, previousRunIds),
     undefined,
@@ -166,7 +167,7 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
 // remote run (executionLocation=OVH_WORKER) is exempt: its projectRoot names
 // a WORKER-side path the control plane cannot stat — the worker validates it
 // truthfully at project transfer, and a missing project fails the run there.
-v1Router.use(async (req, res, next) => {
+v1Router.use(asyncHandler(async (req, res, next) => {
   try {
     const forcedRemote = req.body?.executionLocation === "OVH_WORKER"
       || req.body?.executionTarget === "ovh_worker"
@@ -188,7 +189,7 @@ v1Router.use(async (req, res, next) => {
     if (req.query.projectRoot !== undefined) req.query.projectRoot = await resolveWorkspace(requireTenant(req), req.query.projectRoot);
     next();
   } catch (e: any) { res.status(400).json({error:e.message}); }
-});
+}));
 
 // Note: GET /api/v1/health is registered unauthenticated directly on the
 // Express app in index.ts (before apiKeyAuth), not here.
@@ -302,7 +303,7 @@ v1Router.delete("/projects/:id", asyncHandler(async (req, res) => {
     const principal = requirePrincipal(req);
     const t = requireTenant(req);
     (await authService.deleteProject(req.params.id, principal.tenantId));
-    for (const s of t.sessions.list()) if (s.projectId === req.params.id) t.sessions.setProject(s.sessionId, null);
+    for (const s of (await t.sessions.list())) if (s.projectId === req.params.id) (await t.sessions.setProject(s.sessionId, null));
     res.json({ ok: true });
   } catch (err: any) {
     res.status(err.status ?? 404).json({ error: "Not found" });
@@ -333,7 +334,7 @@ v1Router.get("/chats/:id", asyncHandler(async (req, res) => {
   }
 }));
 
-v1Router.post("/models", async (req, res) => {
+v1Router.post("/models", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   try {
     if (!customerCatalogEnabled()) {
@@ -350,7 +351,7 @@ v1Router.post("/models", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 /** Use one of your own models instead of ORVYN's routing whenever "Auto" is chosen (null: ORVYN routes). */
 v1Router.put("/models/preferred", (req, res) => {
@@ -362,7 +363,7 @@ v1Router.put("/models/preferred", (req, res) => {
   res.json({ preferredModelId: id });
 });
 
-v1Router.put("/models/:id", async (req, res) => {
+v1Router.put("/models/:id", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const ms = t.modelService;
   try {
@@ -385,7 +386,7 @@ v1Router.put("/models/:id", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 v1Router.delete("/models/:id", (req, res) => {
   const t = requireTenant(req);
@@ -400,12 +401,12 @@ v1Router.delete("/models/:id", (req, res) => {
 });
 
 
-v1Router.get("/models/health", async (req, res) => {
+v1Router.get("/models/health", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const results = await t.modelService.healthCheckAll();
   if (!customerCatalogEnabled()) return res.json({ results });
   res.json({ results: (results as any[]).filter((r) => t.modelService.isUserModel(String(r.id ?? r.modelId ?? ""))) });
-});
+}));
 
 // Live provider health from real traffic (success share, cool-downs after
 // 429/5xx/timeouts). The routing policy skips a cooling provider and runs the
@@ -419,7 +420,7 @@ v1Router.get("/models/providers/health", (req, res) => {
 // "Test Model" button: round-trips a tiny real prompt through the model
 // (not just a health ping) and reports latency + a response snippet, so
 // the user can confirm the model is actually reachable and answering.
-v1Router.post("/models/:id/test", async (req, res) => {
+v1Router.post("/models/:id/test", asyncHandler(async (req, res) => {
   const tt = requireTenant(req);
   if (customerCatalogEnabled() && !tt.modelService.isUserModel(req.params.id)) return res.status(403).json({ error: "Only your own models can be tested here.", code: "PLATFORM_MODEL" });
   const provider = tt.modelService.registry.get(req.params.id);
@@ -456,7 +457,7 @@ v1Router.post("/models/:id/test", async (req, res) => {
   } catch (err: any) {
     res.status(502).json({ ok: false, latencyMs: Date.now() - start, error: err.message });
   }
-});
+}));
 
 // --- Routing (which model handles each task type) ---
 import { requiredCapability } from "@orvyn/ai-core";
@@ -502,7 +503,7 @@ v1Router.delete("/routing/:task", (req, res) => {
 });
 
 // --- Codebase indexing / RAG ---
-v1Router.post("/index/build", async (req, res) => {
+v1Router.post("/index/build", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
   t.usage.indexBuilds++;
@@ -514,7 +515,7 @@ v1Router.post("/index/build", async (req, res) => {
   const stats = await t.indexService.build(req.body.projectRoot, { rebuild: Boolean(req.body.rebuild), projectId: req.body.projectId });
   if (stats.status === "error") return res.status(500).json({ stats });
   res.json({ stats });
-});
+}));
 
 v1Router.post("/index/watch", (req, res) => {
   const t = requireTenant(req);
@@ -523,7 +524,7 @@ v1Router.post("/index/watch", (req, res) => {
   res.json({ stats: t.indexService.getStats() });
 });
 
-v1Router.post("/index/update", async (req, res) => {
+v1Router.post("/index/update", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
   t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
@@ -532,23 +533,23 @@ v1Router.post("/index/update", async (req, res) => {
   else if (req.body.path) await t.indexService.updateFile(String(req.body.path));
   else await t.indexService.build(req.body.projectRoot, { projectId: req.body.projectId });
   res.json({ stats: t.indexService.getStats() });
-});
+}));
 
 v1Router.post("/index/cancel", (req, res) => {
   requireTenant(req).indexService.cancelBuild();
   res.json({ stats: requireTenant(req).indexService.getStats() });
 });
 
-v1Router.delete("/index", async (req, res) => {
+v1Router.delete("/index", asyncHandler(async (req, res) => {
   await requireTenant(req).indexService.deleteIndex();
   res.json({ stats: requireTenant(req).indexService.getStats() });
-});
+}));
 
 v1Router.get("/index/status", (req, res) => {
   res.json({ stats: requireTenant(req).indexService.getStats() });
 });
 
-v1Router.post("/index/snapshot", async (req, res) => {
+v1Router.post("/index/snapshot", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     if (!req.body.projectRoot) return res.status(400).json({ error: "projectRoot required" });
@@ -561,9 +562,9 @@ v1Router.post("/index/snapshot", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/search/semantic", async (req, res) => {
+v1Router.post("/search/semantic", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     if (req.body.projectRoot) t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
@@ -572,9 +573,9 @@ v1Router.post("/search/semantic", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/search/hybrid", async (req, res) => {
+v1Router.post("/search/hybrid", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     if (req.body.projectRoot) t.indexService.bindProject(req.body.projectRoot, req.body.projectId);
@@ -583,29 +584,29 @@ v1Router.post("/search/hybrid", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Composer (multi-file plan/apply) ---
 import { ComposerService } from "../composer/ComposerService";
 
 
-v1Router.post("/composer/plan", async (req, res) => {
+v1Router.post("/composer/plan", asyncHandler(async (req, res) => {
   try {
     const plan = await new ComposerService(requireTenant(req).modelService).plan(req.body.projectRoot, req.body.instruction, req.body.rules);
     res.json({ plan });
   } catch (err: any) {
     res.status(422).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/composer/apply", async (req, res) => {
+v1Router.post("/composer/apply", asyncHandler(async (req, res) => {
   try {
     const written = await new ComposerService(requireTenant(req).modelService).apply(req.body.projectRoot, req.body.files);
     res.json({ written });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Agent (tool-calling loop with approval pauses) ---
 import { AgentService } from "../agent/AgentService";
@@ -625,7 +626,7 @@ function serializeSession(session: import("../agent/AgentService").AgentSession)
   };
 }
 
-v1Router.post("/agent/runs", async (req, res) => {
+v1Router.post("/agent/runs", asyncHandler(async (req, res) => {
   try {
     const ta = requireTenant(req);
     registerProjectToolsFor(ta, req.body.projectRoot);
@@ -635,7 +636,7 @@ v1Router.post("/agent/runs", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 v1Router.get("/agent/runs/:id", (req, res) => {
   const session = requireTenant(req).agentSessions.get(req.params.id);
@@ -643,7 +644,7 @@ v1Router.get("/agent/runs/:id", (req, res) => {
   res.json({ session: serializeSession(session) });
 });
 
-v1Router.post("/agent/runs/:id/approve", async (req, res) => {
+v1Router.post("/agent/runs/:id/approve", asyncHandler(async (req, res) => {
   try {
     const tb = requireTenant(req);
     const session = await new AgentService(tb.modelService, tb.toolRegistry, tb.agentSessions).approve(req.params.id, req.body.approved === true);
@@ -651,10 +652,10 @@ v1Router.post("/agent/runs/:id/approve", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Tools ---
-v1Router.get("/tools", async (req, res) => {
+v1Router.get("/tools", asyncHandler(async (req, res) => {
   try {
   const tt = requireTenant(req);
   const root = await resolveWorkspace(tt, req.query.projectRoot ?? tt.currentProjectRoot);
@@ -674,7 +675,7 @@ v1Router.get("/tools", async (req, res) => {
     available: tt.toolGateway.list().length > 0,
   });
   } catch(e:any) { res.status(400).json({error:e.message}); }
-});
+}));
 
 v1Router.post("/tools/:name/permission", (req, res) => {
   const t = requireTenant(req);
@@ -689,7 +690,7 @@ v1Router.post("/tools/:name/permission", (req, res) => {
   res.json({ ok: true });
 });
 
-v1Router.post("/tools/:name/execute", async (req, res) => {
+v1Router.post("/tools/:name/execute", asyncHandler(async (req, res) => {
   const tr = requireTenant(req).toolRegistry;
   const permission = tr.getPermission(req.params.name);
   if (permission === "ask" && req.body.approved !== true) {
@@ -700,28 +701,28 @@ v1Router.post("/tools/:name/execute", async (req, res) => {
     ...(permission === "ask" ? { approval: { granted: true, scope: "once" as const, grantedBy: "user" as const } } : {}),
   });
   res.json(result);
-});
+}));
 
 // --- Inline edit (Ctrl+K) ---
-v1Router.post("/edit/inline", async (req, res) => {
+v1Router.post("/edit/inline", asyncHandler(async (req, res) => {
   try {
     const result = await new InlineEditService(requireTenant(req).modelService).edit(req.body);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/complete", async (req, res) => {
+v1Router.post("/complete", asyncHandler(async (req, res) => {
   try {
     const result = await new CompleteService(requireTenant(req).modelService).complete(req.body);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/images/generate", async (req, res) => {
+v1Router.post("/images/generate", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const result = await new ImageService(t.modelService, t.artifactService).generate({
@@ -732,10 +733,10 @@ v1Router.post("/images/generate", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Chat (non-streaming; use WS /ws/chat for streaming) ---
-v1Router.post("/chat/completions", async (req, res) => {
+v1Router.post("/chat/completions", asyncHandler(async (req, res) => {
   try {
     const tc = requireTenant(req);
     const message = String(req.body.message ?? "");
@@ -743,15 +744,15 @@ v1Router.post("/chat/completions", async (req, res) => {
     const intent = inferTaskIntent(message, composerMode);
     const chip = composerMode.toLowerCase();
     if (!intent.informational && chip !== "research" && chip !== "ask" && chip !== "plan") {
-      let session = typeof req.body.sessionId === "string" ? tc.sessions.get(req.body.sessionId) : undefined;
+      let session = typeof req.body.sessionId === "string" ? (await tc.sessions.get(req.body.sessionId)) : undefined;
       if (!session) {
-        session = tc.sessions.create({
+        session = (await tc.sessions.create({
           title: message.split("\n")[0]!.slice(0, 80) || "New conversation",
           userId: req.principal?.userId ?? "",
           projectRoot: null,
-        });
+        }));
       }
-      const preflight = resolveRunWorkspace({
+      const preflight = (await resolveRunWorkspace({
         sessions: tc.sessions,
         tenantId: tc.id,
         session,
@@ -760,7 +761,7 @@ v1Router.post("/chat/completions", async (req, res) => {
         clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
         ...projectChoice(req.body),
         filesOnClient: filesOnClient(tc, session, req.body),
-      });
+      }));
       if (preflight.status === "mismatch") {
         return res.status(409).json({
           error: preflight.message,
@@ -776,13 +777,17 @@ v1Router.post("/chat/completions", async (req, res) => {
       }
       _regTools(tc, preflight.projectRoot);
       await tc.modelService.huggingFaceReady;
-      const runId = tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+      const runId = randomUUID();
+      if (!await tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot)) throw new Error("Conversation admission could not be stored");
+      await recordRunInstruction(tc.sessions, session.sessionId, runId, message);
+      tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+        admittedRunId: runId,
         composerMode: chip,
         workspaceId: preflight.workspaceId,
-        workspaceIdentity: workspaceRunIdentity(tc.sessions, preflight),
-        onProjectFile: (rel: string) => { tc.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+        workspaceIdentity: (await workspaceRunIdentity(tc.sessions, preflight)),
+        onProjectFile:  async (rel: string) => { (await tc.sessions.rememberFiles(preflight.workspaceId, [rel])); },
       });
-      tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot);
+      recordRunAnswer(tc.sessions, tc.runStore, session.sessionId, runId);
       if (tc.runStore.get(runId)) {
         tc.runStore.emit(runId, "workspace.resolved", {
           sessionId: preflight.sessionId,
@@ -808,7 +813,7 @@ v1Router.post("/chat/completions", async (req, res) => {
     if (err instanceof BillingLimitError) return res.status(402).json({ error: err.message, code: `CREDITS_${err.code}` });
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 
 
@@ -822,7 +827,7 @@ import { inferTaskIntent } from "../agent/taskIntent";
 import { routeTurn } from "../agent/turnRouting";
 import { decideTurn } from "@orvyn/ai-core";
 import { exposeProjectTools, isProvisionedWorkspace, resolveRunWorkspace, type WorkspaceResolved } from "../agent/workspacePreflight";
-import type { WorkSessionStore } from "../sessions/WorkSessionStore";
+import type { WorkSessionPersistence as WorkSessionStore } from "../sessions/WorkSessionStore";
 
 function projectChoice(body: { switchProject?: unknown; newProject?: unknown; forkProject?: unknown; projectAction?: unknown }): { switchProject: boolean; newProject: boolean; forkProject: boolean } {
   const action = String(body.projectAction ?? "").trim().toLowerCase();
@@ -873,12 +878,12 @@ function filesOnClient(t: { runStore: { get(id: string): { events: { type: strin
   return false;
 }
 
-function workspaceRunIdentity(sessions: WorkSessionStore, preflight: WorkspaceResolved): { created: boolean; restored: boolean; fresh: boolean; knownFiles: string[] } {
+ async function workspaceRunIdentity(sessions: WorkSessionStore, preflight: WorkspaceResolved): Promise<{ created: boolean; restored: boolean; fresh: boolean; knownFiles: string[] }> {
   return {
     created: preflight.created,
     restored: preflight.restored,
     fresh: preflight.fresh,
-    knownFiles: sessions.knownFiles(preflight.workspaceId),
+    knownFiles: (await sessions.knownFiles(preflight.workspaceId)),
   };
 }
 import { notePublicOrigin } from "../agent/sitePreview";
@@ -886,9 +891,9 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
 // aborts the run itself.
-v1Router.post("/agent/stream/runs", async (req, _res, next) => {
+v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
   try { await requireTenant(req).modelService.huggingFaceReady; next(); } catch (error) { next(error); }
-}, asyncHandler(async (req, res) => {
+}), asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   // One owner per turn: an answer-only prompt is a chat turn — no run, no
   // workspace preflight, no resource resolution, no worker scheduling. The
@@ -896,10 +901,10 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
   const instruction = String(req.body.instruction ?? req.body.goal ?? "");
   const composerMode = String(req.body.composerMode ?? req.body.mode ?? "auto");
   const previousById = typeof req.body.previousRunId === "string" ? t.runStore.get(req.body.previousRunId) : undefined;
-  let requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
-  if (!requestedSession && previousById) requestedSession = t.sessions.sessionOfRun(previousById.id);
+  let requestedSession = typeof req.body.sessionId === "string" ? (await t.sessions.get(req.body.sessionId)) : undefined;
+  if (!requestedSession && previousById) requestedSession = (await t.sessions.sessionOfRun(previousById.id));
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
-  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? t.sessions.messages(requestedSession.sessionId).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? (await t.sessions.messages(requestedSession.sessionId)).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
   const route = routeTurn(instruction, composerMode, decisionContext);
   const turnDecision = { ...decideTurn(instruction, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "single_agent" as const };
   if (route === "chat") {
@@ -909,7 +914,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       turnDecision,
     });
   }
-  if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
+  if (await activeRunForSessionAsync(t.runStore.list(), requestedSession?.sessionId,  async (id) => (await t.sessions.sessionOfRun(id)))) {
     return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
   }
   // A run the wallet cannot pay for is refused up front, in plain words.
@@ -922,19 +927,19 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       throw err;
     }
   }
-  let session = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
-  if (!session && previousById) session = t.sessions.sessionOfRun(previousById.id);
+  let session = typeof req.body.sessionId === "string" ? (await t.sessions.get(req.body.sessionId)) : undefined;
+  if (!session && previousById) session = (await t.sessions.sessionOfRun(previousById.id));
   if (!session) {
-    session = t.sessions.create({
+    session = (await t.sessions.create({
       title: instruction.split("\n")[0]!.slice(0, 80) || "New conversation",
       userId: req.principal?.userId ?? "",
       projectRoot: null,
-    });
+    }));
   }
   const clientRoot = typeof req.body.projectRoot === "string"
     ? req.body.projectRoot
     : (typeof req.body.remoteProjectRoot === "string" ? req.body.remoteProjectRoot : null);
-  const preflight = resolveRunWorkspace({
+  const preflight = (await resolveRunWorkspace({
     sessions: t.sessions,
     tenantId: t.id,
     session,
@@ -943,7 +948,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
     clientRoot,
     ...projectChoice(req.body),
     filesOnClient: filesOnClient(t, session, req.body),
-  });
+  }));
   if (preflight.status === "mismatch") {
     return res.status(409).json({
       error: preflight.message,
@@ -954,7 +959,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       projectRoot: preflight.projectRoot,
     });
   }
-  session = t.sessions.get(session.sessionId) ?? session;
+  session = (await t.sessions.get(session.sessionId)) ?? session;
   const boundRoot = preflight.status === "resolved" ? preflight.projectRoot : "";
 
   const requestedTarget = isExecutionTarget(req.body.executionTarget)
@@ -1068,7 +1073,15 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
     });
     history.unshift({ role: "assistant", content: "Understood — continuing from the previous work." });
   }
-  const runId = t.agentRuntime.start(
+  const runId = randomUUID();
+  const attached = await t.sessions.attachRun(session.sessionId, runId, boundRoot || null);
+  if (!attached) throw new Error("Conversation admission could not be stored");
+  const userMessage = await recordRunInstruction(t.sessions, attached.sessionId, runId, String(req.body.instruction ?? ""), {
+    messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
+    mode: String(req.body.mode ?? "agent"),
+    turnDecision,
+  });
+  t.agentRuntime.start(
     boundRoot,
     req.body.instruction,
     req.body.rules,
@@ -1093,6 +1106,7 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),
     },
     {
+      admittedRunId: runId,
       reasoningEffort: ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
         ? req.body.reasoningEffort
         : undefined,
@@ -1113,9 +1127,9 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
-            workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
+            workspaceIdentity: (await workspaceRunIdentity(t.sessions, preflight)),
             previousRunIds: [...(session.runIds ?? [])],
-            onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+            onProjectFile:  async (rel: string) => { (await t.sessions.rememberFiles(preflight.workspaceId, [rel])); },
           }
         : {}),
     }
@@ -1123,7 +1137,6 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
   if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {
     queueLocalHostJob(runId, remoteProjectRoot || boundRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
   }
-  const attached = t.sessions.attachRun(session.sessionId, runId, boundRoot || null) ?? session;
   if (t.runStore.get(runId)) {
     t.runStore.emit(runId, "run.session", { sessionId: attached.sessionId, workspaceId: attached.workspaceId, projectId: attached.projectId, ...(attached.workspaceId && attached.projectRoot ? { projectRoot: attached.projectRoot } : {}) });
     if (preflight.status === "resolved") {
@@ -1137,12 +1150,6 @@ v1Router.post("/agent/stream/runs", async (req, _res, next) => {
       });
     }
   }
-  // The conversation is stored as it happens: the instruction now, ORION's answer when the run ends.
-  const userMessage = recordRunInstruction(t.sessions, attached.sessionId, runId, String(req.body.instruction ?? ""), {
-    messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
-    mode: String(req.body.mode ?? "agent"),
-    turnDecision,
-  });
   recordRunAnswer(t.sessions, t.runStore, attached.sessionId, runId);
   // What the user says about themselves or their work is remembered for next time.
   void learnFromUserMessage(t.localStore as unknown as MemoryStoreLike, memoryModel(t.modelService), String(req.body.instruction ?? ""));
@@ -1316,21 +1323,21 @@ function ownsSession(req: import("express").Request, s: { userId?: string | null
   return !me || !s.userId || s.userId === me;
 }
 
-v1Router.use("/sessions/:id", (req, res, next) => {
+v1Router.use("/sessions/:id",  asyncHandler(async (req, res, next) => {
   const t = requireTenant(req);
-  const s = t.sessions.get(String(req.params.id));
+  const s = (await t.sessions.get(String(req.params.id)));
   if (s && !ownsSession(req, s)) return res.status(404).json({ error: "Unknown session" });
   next();
-});
+}));
 
-v1Router.get("/sessions", (req, res) => {
+v1Router.get("/sessions",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
-  const list = t.sessions.list()
+  const list = (await t.sessions.list())
     .filter((x) => ownsSession(req, x))
     .filter((x) => !projectId || x.projectId === projectId);
-  res.json({ sessions: list.map((x) => ({ ...x, ...t.sessions.messageSummary(x.sessionId) })) });
-});
+  res.json({ sessions: await Promise.all(list.map(async (x) => ({ ...x, ...(await t.sessions.messageSummary(x.sessionId)) }))) });
+}));
 
 v1Router.post("/sessions", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
@@ -1343,46 +1350,46 @@ v1Router.post("/sessions", asyncHandler(async (req, res) => {
       return res.status(404).json({ error: "Unknown project" });
     }
   }
-  const s = t.sessions.create({
+  const s = (await t.sessions.create({
     title: String(req.body?.title ?? "New conversation"),
     userId: req.principal?.userId ?? "",
     projectRoot: typeof req.body?.projectRoot === "string" ? req.body.projectRoot : null,
     projectId,
-  });
+  }));
   res.status(201).json({ session: s });
 }));
 
-v1Router.get("/sessions/:id", (req, res) => {
+v1Router.get("/sessions/:id",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const s = t.sessions.get(String(req.params.id));
+  const s = (await t.sessions.get(String(req.params.id)));
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s, runs: summarizeRuns(t.runStore, s.runIds) });
-});
+}));
 
 // Everything the session produced: project, runs, changed files, artifacts,
 // newest live preview. Reopening a conversation restores from this.
-v1Router.get("/sessions/:id/state", (req, res) => {
+v1Router.get("/sessions/:id/state",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const s = t.sessions.get(String(req.params.id));
+  const s = (await t.sessions.get(String(req.params.id)));
   if (!s) return res.status(404).json({ error: "Unknown session" });
-  res.json(sessionState(t.sessions, t.runStore, s));
-});
+  res.json((await sessionState(t.sessions, t.runStore, s)));
+}));
 
 // ---- Durable messages of a session ------------------------------------------
-v1Router.get("/sessions/:id/messages", (req, res) => {
+v1Router.get("/sessions/:id/messages",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const s = t.sessions.get(String(req.params.id));
+  const s = (await t.sessions.get(String(req.params.id)));
   if (!s) return res.status(404).json({ error: "Unknown session" });
   const after = Math.max(0, Number(req.query.after) || 0);
-  res.json({ sessionId: s.sessionId, messages: t.sessions.messages(s.sessionId, after) });
-});
+  res.json({ sessionId: s.sessionId, messages: (await t.sessions.messages(s.sessionId, after)) });
+}));
 
-v1Router.post("/sessions/:id/messages", (req, res) => {
+v1Router.post("/sessions/:id/messages",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const role = String(req.body?.role ?? "");
   if (!["user", "assistant", "system"].includes(role)) return res.status(400).json({ error: "role must be user, assistant or system" });
   if (typeof req.body?.content !== "string") return res.status(400).json({ error: "content is required" });
-  const m = t.sessions.appendMessage(String(req.params.id), {
+  const m = (await t.sessions.appendMessage(String(req.params.id), {
     messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined,
     role: role as "user" | "assistant" | "system",
     content: req.body.content,
@@ -1390,22 +1397,22 @@ v1Router.post("/sessions/:id/messages", (req, res) => {
     mode: typeof req.body.mode === "string" ? req.body.mode : null,
     status: req.body.status === "streaming" ? "streaming" : "complete",
     createdAt: Number(req.body.createdAt) || undefined,
-  });
+  }));
   if (!m) return res.status(404).json({ error: "Unknown session (or that message belongs to another session)" });
   res.status(201).json({ message: m });
-});
+}));
 
-v1Router.patch("/sessions/:id/messages/:messageId", (req, res) => {
+v1Router.patch("/sessions/:id/messages/:messageId",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const existing = t.sessions.getMessage(String(req.params.messageId));
+  const existing = (await t.sessions.getMessage(String(req.params.messageId)));
   if (!existing || existing.sessionId !== String(req.params.id)) return res.status(404).json({ error: "Unknown message" });
-  const m = t.sessions.updateMessage(existing.messageId, {
+  const m = (await t.sessions.updateMessage(existing.messageId, {
     content: typeof req.body?.content === "string" ? req.body.content : undefined,
     runId: typeof req.body?.runId === "string" ? req.body.runId : undefined,
     status: req.body?.status === "streaming" ? "streaming" : req.body?.status === "complete" ? "complete" : undefined,
-  });
+  }));
   res.json({ message: m });
-});
+}));
 
 v1Router.patch("/sessions/:id", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
@@ -1415,9 +1422,9 @@ v1Router.patch("/sessions/:id", asyncHandler(async (req, res) => {
     if (typeof req.body.projectId === "string" && req.body.projectId) {
       try { projectId = (await authService.getProject(req.body.projectId, t.id)).id; } catch { return res.status(404).json({ error: "Unknown project" }); }
     }
-    if (!t.sessions.setProject(String(req.params.id), projectId)) return res.status(404).json({ error: "Unknown session" });
+    if (!(await t.sessions.setProject(String(req.params.id), projectId))) return res.status(404).json({ error: "Unknown session" });
   }
-  const s = t.sessions.update(String(req.params.id), { title: req.body?.title, status: req.body?.status, pinned: typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined });
+  const s = (await t.sessions.update(String(req.params.id), { title: req.body?.title, status: req.body?.status, pinned: typeof req.body?.pinned === "boolean" ? req.body.pinned : undefined }));
   if (!s) return res.status(404).json({ error: "Unknown session" });
   res.json({ session: s });
 }));
@@ -1426,7 +1433,7 @@ v1Router.patch("/sessions/:id", asyncHandler(async (req, res) => {
 v1Router.get("/sessions/:id/share", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
   const t = requireTenant(req);
-  if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
+  if (!(await t.sessions.get(String(req.params.id)))) return res.status(404).json({ error: "Unknown session" });
   res.json({ share: (await authService.shareFor(String(req.params.id), principal.userId)) });
 }));
 
@@ -1434,7 +1441,7 @@ v1Router.post("/sessions/:id/share", asyncHandler(async (req, res) => {
   const principal = requirePrincipal(req);
   const t = requireTenant(req);
   if ((req as any).viewAs || (req as any).apiKeyId) return res.status(403).json({ error: "Only the account owner can share a conversation." });
-  if (!t.sessions.get(String(req.params.id))) return res.status(404).json({ error: "Unknown session" });
+  if (!(await t.sessions.get(String(req.params.id)))) return res.status(404).json({ error: "Unknown session" });
   const { token } = (await authService.createShare(principal, String(req.params.id)));
   res.status(201).json({ url: `${publicOrigin(req)}/share/${token}` });
 }));
@@ -1444,10 +1451,10 @@ v1Router.delete("/sessions/:id/share", asyncHandler(async (req, res) => {
   res.json({ ok: (await authService.revokeShare(principal.userId, String(req.params.id))) });
 }));
 
-v1Router.delete("/sessions/:id", (req, res) => {
+v1Router.delete("/sessions/:id",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  res.json({ ok: t.sessions.delete(String(req.params.id)) });
-});
+  res.json({ ok: (await t.sessions.delete(String(req.params.id))) });
+}));
 
 // Polling fallback / catch-up without holding a stream open.
 v1Router.get("/agent/stream/runs/:id/events.json", (req, res) => {
@@ -1489,7 +1496,7 @@ v1Router.post("/agent/stream/runs/:id/cancel", (req, res) => {
 // files go back to their pre-run content; files the run created are deleted
 // (they are git-dirty and absent from the snapshot). Committed/ignored files
 // are never touched, and git history is never rewritten.
-v1Router.post("/agent/stream/runs/:id/undo", async (req, res) => {
+v1Router.post("/agent/stream/runs/:id/undo", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
@@ -1512,7 +1519,7 @@ v1Router.post("/agent/stream/runs/:id/undo", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
@@ -1526,20 +1533,20 @@ v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
   res.json({ ok: true });
 });
 
-v1Router.post("/agent/orchestrate", (req, res) => {
+v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   // Same one-owner rule as /agent/stream/runs: answer-only text is a chat
   // turn, and a chat turn must never consume mission quota.
-  const requestedSession = typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined;
+  const requestedSession = typeof req.body.sessionId === "string" ? (await t.sessions.get(req.body.sessionId)) : undefined;
   if (requestedSession && !ownsSession(req, requestedSession)) return res.status(404).json({ error: "Unknown conversation" });
   const goal = String(req.body.goal ?? "");
-  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? t.sessions.messages(requestedSession.sessionId).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
+  const decisionContext = { activeProjectId: requestedSession?.projectId ?? undefined, activeMissionId: requestedSession?.activeRunId ?? requestedSession?.runIds[requestedSession.runIds.length - 1], hasPreviousExecution: Boolean(requestedSession?.runIds.length), hasAttachments: Array.isArray(req.body.attachments) && req.body.attachments.length > 0, lastAssistantText: requestedSession ? (await t.sessions.messages(requestedSession.sessionId)).slice().reverse().find((m) => m.role === "assistant" && m.content.trim())?.content.slice(0, 4000) : undefined };
   const route = routeTurn(goal, typeof req.body.composerMode === "string" ? req.body.composerMode : undefined, decisionContext);
   const turnDecision = { ...decideTurn(goal, decisionContext), responseOwner: route === "chat" ? "conversation" as const : "multi_agent" as const };
   if (route === "chat") {
     return res.json({ routed: "chat", turnDecision });
   }
-  if (activeRunForSession(t.runStore.list(), requestedSession?.sessionId, (id) => t.sessions.sessionOfRun(id))) {
+  if (await activeRunForSessionAsync(t.runStore.list(), requestedSession?.sessionId,  async (id) => (await t.sessions.sessionOfRun(id)))) {
     return res.status(409).json({ error: "A task is already active in this conversation. Stop it or wait before starting another." });
   }
   // Monthly mission quota (0/unset = unlimited). Checked against the
@@ -1555,9 +1562,9 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  const missionSession = (typeof req.body.sessionId === "string" ? t.sessions.get(req.body.sessionId) : undefined)
-    ?? t.sessions.create({ title: goal.split("\n")[0]!.slice(0, 80) || "Mission", userId: req.principal?.userId ?? "", projectRoot: null });
-  const preflight = resolveRunWorkspace({
+  const missionSession = (typeof req.body.sessionId === "string" ? (await t.sessions.get(req.body.sessionId)) : undefined)
+    ?? (await t.sessions.create({ title: goal.split("\n")[0]!.slice(0, 80) || "Mission", userId: req.principal?.userId ?? "", projectRoot: null }));
+  const preflight = (await resolveRunWorkspace({
     sessions: t.sessions,
     tenantId: t.id,
     session: missionSession,
@@ -1566,7 +1573,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     clientRoot: typeof req.body.projectRoot === "string" ? req.body.projectRoot : null,
     ...projectChoice(req.body),
     filesOnClient: filesOnClient(t, missionSession, req.body),
-  });
+  }));
   if (preflight.status === "mismatch") {
     return res.status(409).json({
       error: preflight.message,
@@ -1585,7 +1592,11 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     : undefined;
   const accessMode = isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined;
   const missionRoot = preflight.status === "resolved" ? preflight.projectRoot : "";
-  const runId = t.agentRuntime.start(
+  const runId = randomUUID();
+  const joined = await t.sessions.attachRun(missionSession.sessionId, runId, missionRoot || null);
+  if (!joined) throw new Error("Conversation admission could not be stored");
+  await recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission", turnDecision });
+  t.agentRuntime.start(
     missionRoot,
     req.body.goal,
     req.body.rules,
@@ -1595,6 +1606,7 @@ v1Router.post("/agent/orchestrate", (req, res) => {
     typeof req.body.requestedModelId === "string" ? req.body.requestedModelId : undefined,
     undefined,
     {
+      admittedRunId: runId,
       reasoningEffort,
       accessMode,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
@@ -1613,14 +1625,13 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       ...(preflight.status === "resolved"
         ? {
             workspaceId: preflight.workspaceId,
-            workspaceIdentity: workspaceRunIdentity(t.sessions, preflight),
+            workspaceIdentity: (await workspaceRunIdentity(t.sessions, preflight)),
             previousRunIds: [...(missionSession.runIds ?? [])],
-            onProjectFile: (rel: string) => { t.sessions.rememberFiles(preflight.workspaceId, [rel]); },
+            onProjectFile:  async (rel: string) => { (await t.sessions.rememberFiles(preflight.workspaceId, [rel])); },
           }
         : {}),
     }
   );
-  const joined = t.sessions.attachRun(missionSession.sessionId, runId, missionRoot || null) ?? missionSession;
   if (t.runStore.get(runId)) {
     t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId, ...(joined.workspaceId && joined.projectRoot ? { projectRoot: joined.projectRoot } : {}) });
     if (preflight.status === "resolved") {
@@ -1634,10 +1645,9 @@ v1Router.post("/agent/orchestrate", (req, res) => {
       });
     }
   }
-  recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission", turnDecision });
   recordRunAnswer(t.sessions, t.runStore, joined.sessionId, runId);
   res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
-});
+}));
 
 v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {
   const t = requireTenant(req);
@@ -1723,7 +1733,7 @@ function publicArtifact(svc: { toPublic: (a: any) => unknown }, record: any) {
   return svc.toPublic(record);
 }
 
-v1Router.get("/artifacts", (req, res) => {
+v1Router.get("/artifacts", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
   const q = typeof req.query.q === "string" ? req.query.q : "";
@@ -1731,13 +1741,16 @@ v1Router.get("/artifacts", (req, res) => {
   const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
   const rows = (q ? t.artifactService.search(q) : t.artifactService.listArtifacts({ kind }))
     .filter((a) => !chatId || a.chatId === chatId)
-    .filter((a) => !projectId || a.projectId === projectId)
-    // A file from another member's conversation stays theirs.
-    .filter((a) => { if (!a.chatId) return true; const s = t.sessions.get(a.chatId); return !s || ownsSession(req, s); });
-  res.json({ artifacts: rows.map((a) => publicArtifact(t.artifactService, a)) });
-});
+    .filter((a) => !projectId || a.projectId === projectId);
+  const visible = [];
+  for (const row of rows) {
+    const session = row.chatId ? await t.sessions.get(row.chatId) : undefined;
+    if (!session || ownsSession(req, session)) visible.push(row);
+  }
+  res.json({ artifacts: visible.map((a) => publicArtifact(t.artifactService, a)) });
+}));
 
-v1Router.get("/files", async (req, res) => {
+v1Router.get("/files", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const requested = typeof req.query.projectRoot === "string" && req.query.projectRoot
@@ -1749,14 +1762,14 @@ v1Router.get("/files", async (req, res) => {
     // One conversation's view: Generated lists what its runs made, not every
     // image this account ever generated.
     const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId : "";
-    const runIds = sessionId ? t.sessions.get(sessionId)?.runIds : undefined;
+    const runIds = sessionId ? (await t.sessions.get(sessionId))?.runIds : undefined;
     res.json(await t.artifactService.filesTree(root, runIds ? { runIds: new Set(runIds) } : {}));
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.get("/files/read", async (req, res) => {
+v1Router.get("/files/read", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const id = typeof req.query.id === "string" ? req.query.id : "";
@@ -1794,7 +1807,7 @@ v1Router.get("/files/read", async (req, res) => {
     const raw = String(err?.message ?? "");
     res.status(404).json({ error: /enoent|not found|no such file/i.test(raw) ? "Artifact unavailable" : "Could not open this file." });
   }
-});
+}));
 
 v1Router.post("/artifacts", asyncHandler(async (req, res) => {
   try {
@@ -1802,7 +1815,7 @@ v1Router.post("/artifacts", asyncHandler(async (req, res) => {
     // Cloud uploads name their conversation/project; neither may be another tenant's or another member's.
     const chatId = typeof req.body.chatId === "string" && req.body.chatId ? req.body.chatId : undefined;
     if (chatId) {
-      const s = t.sessions.get(chatId);
+      const s = (await t.sessions.get(chatId));
       if (!s || !ownsSession(req, s)) return res.status(404).json({ error: "Unknown conversation" });
     }
     let projectId: string | undefined;
@@ -1828,15 +1841,15 @@ v1Router.post("/artifacts", asyncHandler(async (req, res) => {
 }));
 
 // A file from another member's conversation answers 404 (tenant isolation already holds below this).
-v1Router.use("/artifacts/:id", (req, res, next) => {
+v1Router.use("/artifacts/:id",  asyncHandler(async (req, res, next) => {
   const t = requireTenant(req);
   const a = t.artifactService.getArtifact(String(req.params.id));
   if (a?.chatId) {
-    const s = t.sessions.get(a.chatId);
+    const s = (await t.sessions.get(a.chatId));
     if (s && !ownsSession(req, s)) return res.status(404).json({ error: "Unknown artifact" });
   }
   next();
-});
+}));
 
 /**
  * Served on the portal's own origin: HTML/SVG must never run as that origin
@@ -1848,7 +1861,7 @@ export function isolateUntrustedContent(res: import("express").Response, mimeTyp
   if (/html|svg|xml|javascript/i.test(mimeType)) res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-forms; default-src 'self' data: blob: 'unsafe-inline'");
 }
 
-v1Router.get("/artifacts/:id", async (req, res) => {
+v1Router.get("/artifacts/:id", asyncHandler(async (req, res) => {
   try {
     const { record, bytes } = await requireTenant(req).artifactService.read(req.params.id);
     const textish = (record.mediaType ?? "").startsWith("text/") || /\.(md|txt|json|csv|html)$/i.test(record.name);
@@ -1860,9 +1873,9 @@ v1Router.get("/artifacts/:id", async (req, res) => {
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
-});
+}));
 
-v1Router.get("/artifacts/:id/preview", async (req, res) => {
+v1Router.get("/artifacts/:id/preview", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const { record, bytes, filename } = await t.artifactService.previewArtifact(req.params.id);
@@ -1874,7 +1887,7 @@ v1Router.get("/artifacts/:id/preview", async (req, res) => {
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
-});
+}));
 
 /** A five-minute link the portal's preview frame loads (HTML/PDF need a real, sandboxed URL). No model, no credits. */
 v1Router.post("/artifacts/:id/preview-link", (req, res) => {
@@ -1884,7 +1897,7 @@ v1Router.post("/artifacts/:id/preview-link", (req, res) => {
   res.json({ url: `/api/v1/preview/${createPreviewLink(t.id, a.artifactId)}` });
 });
 
-v1Router.get("/artifacts/:id/download", async (req, res) => {
+v1Router.get("/artifacts/:id/download", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const token = typeof req.query.token === "string" ? req.query.token : "";
@@ -1901,7 +1914,7 @@ v1Router.get("/artifacts/:id/download", async (req, res) => {
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
-});
+}));
 
 v1Router.get("/files/search", (req, res) => {
   const t = requireTenant(req);
@@ -1909,14 +1922,14 @@ v1Router.get("/files/search", (req, res) => {
   res.json({ artifacts: t.artifactService.search(q).map((a) => publicArtifact(t.artifactService, a)) });
 });
 
-v1Router.delete("/artifacts/:id", async (req, res) => {
+v1Router.delete("/artifacts/:id", asyncHandler(async (req, res) => {
   try {
     await requireTenant(req).artifactService.delete(req.params.id);
     res.status(204).end();
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
-});
+}));
 
 // --- Checkpoints (snapshot/restore/compare of dirty files) ---
 function requireProjectRoot(req: { query: Record<string, unknown>; body?: Record<string, unknown> }): string {
@@ -1925,7 +1938,7 @@ function requireProjectRoot(req: { query: Record<string, unknown>; body?: Record
   return root;
 }
 
-v1Router.get("/checkpoints", async (req, res) => {
+v1Router.get("/checkpoints", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = requireProjectRoot(req);
@@ -1933,9 +1946,9 @@ v1Router.get("/checkpoints", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/checkpoints", async (req, res) => {
+v1Router.post("/checkpoints", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = requireProjectRoot(req);
@@ -1944,9 +1957,9 @@ v1Router.post("/checkpoints", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.post("/checkpoints/:id/restore", async (req, res) => {
+v1Router.post("/checkpoints/:id/restore", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = requireProjectRoot(req);
@@ -1954,9 +1967,9 @@ v1Router.post("/checkpoints/:id/restore", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.get("/checkpoints/:id/compare", async (req, res) => {
+v1Router.get("/checkpoints/:id/compare", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = requireProjectRoot(req);
@@ -1964,9 +1977,9 @@ v1Router.get("/checkpoints/:id/compare", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
-v1Router.delete("/checkpoints/:id", async (req, res) => {
+v1Router.delete("/checkpoints/:id", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = requireProjectRoot(req);
@@ -1975,7 +1988,7 @@ v1Router.delete("/checkpoints/:id", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Missions (Task Engine state for Mission Control) ---
 v1Router.get("/missions", (req, res) => {
@@ -1997,7 +2010,7 @@ v1Router.get("/missions/:id", (req, res) => {
 // Lists aliases only — never key material. The renderer uses this for the
 // Servers workspace and Home's Connected Systems; live status is checked
 // on demand through the approval-gated tool execution route.
-v1Router.get("/servers", async (req, res) => {
+v1Router.get("/servers", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
   try {
@@ -2019,9 +2032,9 @@ v1Router.get("/servers", async (req, res) => {
   } catch {
     res.json({ servers: [] });
   }
-});
+}));
 
-v1Router.post("/servers", async (req, res) => {
+v1Router.post("/servers", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const root = String(req.body.projectRoot ?? req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
   try {
@@ -2052,10 +2065,10 @@ v1Router.post("/servers", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message || "Could not add the server." });
   }
-});
+}));
 
 // --- Runtime capabilities (truthful Home connection state) ---
-v1Router.get("/runtime/capabilities", async (req, res) => {
+v1Router.get("/runtime/capabilities", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
   let sshHostCount = 0;
@@ -2075,10 +2088,10 @@ v1Router.get("/runtime/capabilities", async (req, res) => {
     postgresConnected: false,
     cloudSignedIn: false,
   });
-});
+}));
 
 // --- MCP servers (status for the Agents view) ---
-v1Router.get("/mcp/servers", async (req, res) => {
+v1Router.get("/mcp/servers", asyncHandler(async (req, res) => {
   try {
     const t = requireTenant(req);
     const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim();
@@ -2088,7 +2101,7 @@ v1Router.get("/mcp/servers", async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
-});
+}));
 
 // --- Agent roster (live status; pending agents are explicitly marked) ---
 import { defaultRoster } from "../agent/Agent";
@@ -2362,7 +2375,7 @@ function billingError(res: import("express").Response, err: unknown) {
   return res.status(502).json({ error: "Billing is unavailable right now. Try again in a minute." });
 }
 
-v1Router.post("/billing/checkout", async (req, res) => {
+v1Router.post("/billing/checkout", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
   if (!req.principal) return res.status(401).json({ error: "Sign in to buy a plan or credits." });
@@ -2377,9 +2390,9 @@ v1Router.post("/billing/checkout", async (req, res) => {
   } catch (err) {
     billingError(res, err);
   }
-});
+}));
 
-v1Router.post("/billing/portal", async (req, res) => {
+v1Router.post("/billing/portal", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (!billingManager(req)) return res.status(403).json({ error: "Only an owner or admin can change billing." });
   try {
@@ -2388,7 +2401,7 @@ v1Router.post("/billing/portal", async (req, res) => {
   } catch (err) {
     billingError(res, err);
   }
-});
+}));
 
 /** Where to get ORVYN Desktop (control-plane catalog; env links still win). */
 v1Router.get("/downloads/desktop", (req, res) => {
@@ -2410,14 +2423,14 @@ v1Router.get("/downloads/desktop", (req, res) => {
 });
 
 /** Invoices, the card on file and the subscription's renewal (read from Stripe; the ledger stays the balance). */
-v1Router.get("/billing/account", async (req, res) => {
+v1Router.get("/billing/account", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   try {
     res.json(await billingService().account(t.id));
   } catch (err) {
     billingError(res, err);
   }
-});
+}));
 
 // The old free-grant endpoints are gone for good.
 v1Router.post("/billing/topup", (_req, res) => res.status(410).json({ error: "Buy credits through checkout.", code: "USE_CHECKOUT" }));

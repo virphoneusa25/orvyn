@@ -9,7 +9,7 @@
 // Every tenant now gets its own instances. Nothing is shared except stateless
 // adapter classes.
 
-import { WorkSessionStore } from "../sessions/WorkSessionStore";
+import { WorkSessionStore, type WorkSessionPersistence } from "../sessions/WorkSessionStore";
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import { join as pathJoin } from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
@@ -85,7 +85,7 @@ export interface Tenant {
   artifactService: ArtifactService;
   experienceStore: ExperienceStore;
   /** Durable WorkSessions: conversation → workspace → runs. Authoritative. */
-  sessions: WorkSessionStore;
+  sessions: WorkSessionPersistence;
 }
 
 function embedderFor(ms: ModelService) {

@@ -711,3 +711,13 @@ test("a fully-settled run emits run.completed and never run.partial", async () =
   const idxCompleted = events.findIndex((e) => e.type === "run.completed");
   assert.ok(idxSettled >= 0 && idxCompleted > idxSettled, "settlement precedes the completed event");
 });
+
+
+test("persisted admission uses its server-generated id and cannot replace an existing run", async () => {
+  const h = harness([[{ delta: "Verified.", done: true }]]);
+  const root = mkdtempSync(join(tmpdir(), "orvyn-admitted-run-"));
+  const id = h.runtime.start(root, "Explain this project", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: "run-admitted" });
+  assert.equal(id, "run-admitted");
+  assert.throws(() => h.runtime.start(root, "duplicate", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: id }), /already exists/);
+  await waitForStatus(h.store, id);
+});
