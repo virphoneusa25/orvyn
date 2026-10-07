@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const {PostgresTenantStore}=require('../../apps/backend/dist/persistence/PostgresTenantStore');
 const {PostgresTenantStorage}=require('../../apps/backend/dist/persistence/PostgresTenantStorage');
+const {McpRegistry}=require('../../apps/backend/dist/mcp/McpRegistry');
 const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\0 and literal \\0';
 (async()=>{
  const store=await PostgresTenantStore.connect(process.env.ORVYN_PG_URL,tenant);
@@ -12,6 +13,9 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
    const event={id:'usage',timestamp:1700000000000,modelId:'fixture',provider:'fixture',method:'generate',durationMs:1,ok:true};
    await store.saveUsageEvent(event);await store.enqueueBilling(event,false);
    await store.setSetting('fixture',content);
+   const registry=new McpRegistry(store,tenant);await registry.ready;
+   await registry.upsert({id:'mcp-fixture',name:'fixture',enabled:false,transport:'http',url:'https://fixture.invalid',createdAt:1,updatedAt:1},store);
+   await registry.setPolicy('mcp-fixture',{serverDefaults:{READ:'DENY'},toolOverrides:{}},store);
    await store.saveMemory({id:'memory',scope:'global',kind:'fixture',title:content,content});
    await store.saveArtifactStrict({id:'artifact',kind:'file',name:content,path:content,tenantId:tenant});
    await store.saveModel({id:'my:fixture',name:content});
@@ -22,8 +26,11 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
   }
   const snapshot=await migration.exportSnapshot();
   assert.equal(Object.keys(snapshot).length,11);
-  for(const table of Object.values(snapshot))assert.equal(table.rows.length,1);
+  for(const [name,table] of Object.entries(snapshot))assert.equal(table.rows.length,name==='settings'?2:1);
   assert.equal(await store.getSetting('fixture'),content);
+  const restoredRegistry=new McpRegistry(store,tenant);await restoredRegistry.ready;
+  assert.equal(restoredRegistry.list()[0].id,'mcp-fixture');
+  assert.equal(restoredRegistry.policy('mcp-fixture').serverDefaults.READ,'DENY');
   assert.equal((await store.getMemory('memory')).content,content);
   assert.equal((await store.getArtifact('artifact')).name,content);
   assert.deepEqual(await store.loadMissionCheckpoint('run'),{content});

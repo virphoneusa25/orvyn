@@ -54,9 +54,9 @@ test("registry: secrets live in a separate namespace, config JSON never contains
     url: "https://mcp.example", headers: { Authorization: "Bearer {{token}}" },
     secretNames: ["token"], createdAt: Date.now(), updatedAt: Date.now(),
   };
-  reg.upsert(cfg, store);
+  (await reg.upsert(cfg, store));
   (await reg.setSecret("srv1", "token", "ghp_supersecret123"));
-  const persisted = store.dump().get("mcp.servers.v1") ?? "";
+  const persisted = store.dump().get("mcp.registry.v2") ?? "";
   assert.ok(!persisted.includes("ghp_supersecret123"), "secret value must never appear in config JSON");
   assert.equal((await reg.secret("srv1", "token")), "ghp_supersecret123");
   const resolved = (await reg.resolveHeaders("srv1", { Authorization: "Bearer {{token}}" }));
@@ -153,9 +153,9 @@ test("stdio round-trip: connect, discover, classify, call, permissions, disable"
     assert.ok(summary.length === 1 && summary[0].includes("echosrv"), `summary: ${summary}`);
 
     // Per-tool permission override applies to the gateway
-    mgr.setToolPermission(cfg.id, "delete_item", "DENY");
+    (await mgr.setToolPermission(cfg.id, "delete_item", "DENY"));
     assert.equal(gateway.getPermission("mcp.echosrv.delete_item"), "denied");
-    mgr.setToolPermission(cfg.id, "delete_item", "ALLOW");
+    (await mgr.setToolPermission(cfg.id, "delete_item", "ALLOW"));
     assert.equal(gateway.getPermission("mcp.echosrv.delete_item"), "allowed");
 
     // ORION run start clears the gateway — connected MCP tools must come back.
@@ -223,4 +223,44 @@ test("asynchronous MCP credentials wait for acknowledgement and reject storage f
   assert.equal(await secrets.get("fixture.token"), "synthetic-fixture-token");
   await secrets.delete("fixture.token");
   assert.equal(await secrets.get("fixture.token"), null);
+});
+
+test("MCP registry awaits hydration and commits configuration and policies before publishing", async () => {
+  const storage = fakeStore();
+  let releaseRead!: () => void;
+  const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  let releaseWrite!: () => void;
+  let writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+  let fail = false;
+  const store = { getSetting: async (key: string) => { await readGate; return storage.getSetting(key); }, setSetting: async (key: string, value: string) => { await writeGate; if (fail) throw new Error("storage unavailable"); storage.setSetting(key, value); } };
+  const registry = new McpRegistry(store);
+  assert.throws(() => registry.list(), /initialization/);
+  releaseRead(); await registry.ready;
+  let finished = false;
+  const saving = registry.upsert({ id: "fixture", name: "fixture", enabled: false, transport: "http", url: "https://fixture.invalid", createdAt: 1, updatedAt: 1 }, store).then(() => { finished = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finished, false); assert.equal(registry.list().length, 0);
+  releaseWrite(); await saving;
+  await registry.setPolicy("fixture", { serverDefaults: { READ: "ALLOW" }, toolOverrides: {} }, store);
+  fail = true;
+  await assert.rejects(registry.setPolicy("fixture", { serverDefaults: { READ: "DENY" }, toolOverrides: {} }, store), /storage unavailable/);
+  assert.equal(registry.policy("fixture").serverDefaults.READ, "ALLOW");
+  const reopened = new McpRegistry(store); await reopened.ready;
+  assert.equal(reopened.list().length, 1);
+  assert.equal(reopened.policy("fixture").serverDefaults.READ, "ALLOW");
+});
+
+test("MCP registry imports legacy settings and serialized writes preserve every configuration", async () => {
+  const store = fakeStore();
+  store.setSetting("mcp.servers.v1", JSON.stringify([{ id: "legacy", name: "legacy", enabled: false, transport: "http", createdAt: 1, updatedAt: 1 }]));
+  store.setSetting("mcp.policies.v1", JSON.stringify({ legacy: { serverDefaults: { READ: "DENY" }, toolOverrides: {} } }));
+  const registry = new McpRegistry(store);
+  await Promise.all(Array.from({ length: 8 }, (_, i) => registry.upsert({ id: `fixture-${i}`, name: "fixture", enabled: false, transport: "http", createdAt: i + 2, updatedAt: 1 }, store)));
+  assert.equal(registry.list().length, 9);
+  await Promise.all(Array.from({ length: 8 }, (_, i) => registry.updatePolicy("legacy", (policy) => { policy.toolOverrides[`tool-${i}`] = "DENY"; }, store)));
+  assert.equal(Object.keys(registry.policy("legacy").toolOverrides).length, 8);
+  assert.equal(registry.policy("legacy").serverDefaults.READ, "DENY");
+  const reopened = new McpRegistry(store);
+  assert.equal(reopened.list().length, 9);
+  assert.equal(reopened.policy("legacy").serverDefaults.READ, "DENY");
 });

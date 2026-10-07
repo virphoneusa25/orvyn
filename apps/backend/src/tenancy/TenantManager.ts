@@ -261,6 +261,7 @@ export class TenantManager {
       tenantId: id,
       store: localStore as unknown as { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
     });
+    await tenant.mcpManager.ready;
     const harden = hardeningFor(tenant.mcpManager, localStore, id);
     tenant.mcpManager.setStartGuard((serverId) => {
       const cfg = tenant.mcpManager.listServers().find((s) => s.id === serverId);
