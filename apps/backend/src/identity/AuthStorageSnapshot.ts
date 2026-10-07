@@ -1,3 +1,4 @@
+import { readSqliteSnapshotRows } from "../persistence/SqliteSnapshotRows";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { AUTH_TABLES, AUTH_UNIQUE_KEYS, AUTH_TRIGGERS } from "./authSchema";
@@ -26,7 +27,7 @@ export function readAuthSnapshot(file: string): AuthSnapshot {
         `PRAGMA index_info("${String(index.name).replace(/"/g, '""')}")`).all().map(column => String(column.name)));
       keys.push(columns.filter(column => column.pk).sort((a,b) => Number(a.pk) - Number(b.pk)).map(column => String(column.name)));
       if (canonicalKeys(keys) !== canonicalKeys(AUTH_UNIQUE_KEYS[table.name])) throw new Error(`Authentication uniqueness differs: ${table.name}`);
-      snapshot[table.name] = db.prepare(`SELECT * FROM "${table.name}"`).all() as AuthRow[];
+      snapshot[table.name] = readSqliteSnapshotRows(db,table.name,table.columns) as AuthRow[];
     }
     const triggers = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all();
     const normalize = (value: unknown) => String(value).replace(/\s+/g, " ").trim();

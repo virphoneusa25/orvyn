@@ -1,3 +1,4 @@
+import { readSqliteSnapshotRows } from "../persistence/SqliteSnapshotRows";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { LEDGER_TABLES, LEDGER_UNIQUE_KEYS, LEDGER_TRIGGERS } from "./ledgerSchema";
@@ -26,7 +27,7 @@ export function readLedgerSnapshot(file: string): LedgerSnapshot {
         `PRAGMA index_info("${String(index.name).replace(/"/g, '""')}")`).all().map(column => String(column.name)));
       keys.push(columns.filter(column => column.pk).sort((a,b) => Number(a.pk) - Number(b.pk)).map(column => String(column.name)));
       if (canonicalKeys(keys) !== canonicalKeys(LEDGER_UNIQUE_KEYS[table.name])) throw new Error(`Credit ledger uniqueness differs: ${table.name}`);
-      snapshot[table.name] = db.prepare(`SELECT * FROM "${table.name}"`).all() as LedgerRow[];
+      snapshot[table.name] = readSqliteSnapshotRows(db,table.name,table.columns) as LedgerRow[];
     }
     const triggers = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name").all();
     const normalize = (value: unknown) => String(value).replace(/\s+/g, " ").trim();

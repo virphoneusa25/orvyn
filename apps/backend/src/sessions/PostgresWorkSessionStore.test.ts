@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Pool } from "pg";
+import { DatabaseSync } from "node:sqlite";
 import { WorkSessionStore } from "./WorkSessionStore";
 import { PostgresWorkSessionStore } from "./PostgresWorkSessionStore";
 import { PostgresSessionStorage, readSessionSnapshot } from "./PostgresSessionStorage";
@@ -42,7 +43,13 @@ test("real Postgres: complete SQLite sessions migrate with content parity, resta
  sqlite.appendMessage(session.sessionId,{messageId:'assistant-one',role:'assistant',content:'answer',runId:'run-one'});
  sqlite.rememberFiles(session.workspaceId!,['src/a.ts','../escape']);sqlite.update(session.sessionId,{pinned:true,status:'idle'});
  const expected={session:sqlite.get(session.sessionId),messages:sqlite.messages(session.sessionId),workspace:sqlite.getWorkspace(session.workspaceId!)};
- sqlite.close();let migration:PostgresSessionStorage|undefined,pg:PostgresWorkSessionStore|undefined;
+ sqlite.close();
+ const raw=new DatabaseSync(join(dir,`${tenant}-sessions.db`));
+ raw.prepare('UPDATE work_sessions SET title=? WHERE session_id=?').run('A\0title\\0',session.sessionId);
+ raw.prepare('UPDATE session_messages SET content=? WHERE message_id=?').run('content\0with\\0escape','user-one');raw.close();
+ expected.session!.title='A\0title\\0';
+ expected.messages.find(message=>message.messageId==='user-one')!.content='content\0with\\0escape';
+ let migration:PostgresSessionStorage|undefined,pg:PostgresWorkSessionStore|undefined;
  try{
   migration=await PostgresSessionStorage.connect(url,tenant);
   const first=await migration.importSqlite(join(dir,`${tenant}-sessions.db`));assert.equal(first.alreadyImported,false);assert.equal(first.tables,4);

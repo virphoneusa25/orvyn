@@ -107,6 +107,8 @@ jobs:
           set -euo pipefail
           mkdir -p .tmp
           ORVYN_SESSION_RUNTIME_TEST=1 node --test apps/backend/dist/sessions/PostgresWorkSessionStore.test.js
+          ORVYN_TENANT_RUNTIME_TEST=1 node --test apps/backend/dist/persistence/PostgresTenantStore.test.js
+          node scripts/acceptance/postgres-tenant-restore.cjs
           node scripts/acceptance/postgres-sessions-restore.cjs
           pgclient() { docker run --rm --network host -e PGPASSWORD -v "$PWD/.tmp:/backup" postgres:16-alpine "$@"; }
           pgclient pg_dump -h 127.0.0.1 -U orvyn -d production_compatibility_test -Fc -f /backup/mirror.dump
@@ -118,7 +120,7 @@ jobs:
           tables+=(orvyn_billing.migrations orvyn_billing.imports orvyn_billing.source_sequences orvyn_billing.auto_recharge orvyn_billing.auto_recharge_requests orvyn_billing.image_rate_cards orvyn_billing.image_reservations orvyn_billing.image_usage_counts orvyn_billing.ledger_entries orvyn_billing.rate_cards orvyn_billing.run_budget orvyn_billing.usage_events orvyn_billing.wallets)
           tables+=(orvyn_payments.migrations orvyn_payments.imports orvyn_payments.stripe_customers orvyn_payments.stripe_events orvyn_payments.stripe_checkouts orvyn_payments.stripe_subscriptions)
           tables+=(orvyn_recovery.billing_outbox orvyn_recovery.release_outbox)
-          while IFS= read -r table; do tables+=("$table"); done < <(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname LIKE 'orvyn_sessions_%' ORDER BY schemaname,tablename")
+          while IFS= read -r table; do tables+=("$table"); done < <(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname LIKE 'orvyn_sessions_%' OR schemaname LIKE 'orvyn_tenant_%' ORDER BY schemaname,tablename")
           for table in "${tables[@]}"; do
             query="SELECT md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM $table t"
             original=$(pgclient psql -h 127.0.0.1 -U orvyn -d production_compatibility_test -Atc "$query")
@@ -137,6 +139,7 @@ jobs:
           test "$original" = "$restored"
           printf 'Restored ledger sequence matches\n'
           ORVYN_PG_URL=postgresql://orvyn:test-password@127.0.0.1:5432/mirror_restore node scripts/acceptance/postgres-sessions-restore.cjs --verify
+          ORVYN_PG_URL=postgresql://orvyn:test-password@127.0.0.1:5432/mirror_restore node scripts/acceptance/postgres-tenant-restore.cjs --verify
       - name: Compose validation with existing production overlays
         run: |
           cp .env.example .env
