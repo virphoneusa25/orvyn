@@ -188,7 +188,7 @@ interface RunState {
   /** Tools the user approved for the rest of this run. */
   approvedTools: Set<string>;
   /** Persist session/project/always grants; run-scoped approvals stay in memory. */
-  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void;
+  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void | Promise<void>;
   cancelled: boolean;
   /** Tool executions this run, for the runaway guard. */
   toolCalls: number;
@@ -381,7 +381,7 @@ export interface RunOptions {
   /** Tools already granted at session/project/always scope for this user. */
   approvedTools?: string[];
   /** Remember a grant beyond this run. */
-  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void;
+  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void | Promise<void>;
 }
 
 /**
@@ -521,6 +521,7 @@ export function userFacingRunError(err: unknown): { message: string; code: strin
 
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
+  private resolvingApprovals = new Set<string>();
   /** What the user typed into an approval (an MCP server's API key), by callId. Used once, then dropped. */
   private approvalInputs = new Map<string, Record<string, string>>();
   private runs = new Map<string, RunState>();
@@ -4359,19 +4360,26 @@ export class StreamingAgentRuntime {
   }
 
   /** Resolves a pending approval, unblocking the paused loop. */
-  resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once", inputs?: { secrets?: Record<string, string> }): boolean {
-    const p = this.pending.get(callId);
-    if (!p) return false;
-    this.pending.delete(callId);
-    if (approved && inputs?.secrets && typeof inputs.secrets === "object") this.approvalInputs.set(callId, inputs.secrets);
-    if (approved && scope !== "once" && !p.destructive) {
-      const run = this.runs.get(p.runId);
-      run?.approvedTools.add(p.call.name);
-      if (scope === "session" || scope === "project" || scope === "always") {
-        try { run?.onApprovalGrant?.(scope, p.call.name); } catch { /* persistence must not block the approval */ }
+  async resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once", inputs?: { secrets?: Record<string, string> }): Promise<boolean> {
+    const pending = this.pending.get(callId);
+    if (!pending || this.resolvingApprovals.has(callId)) return false;
+    this.resolvingApprovals.add(callId);
+    try {
+      const run = this.runs.get(pending.runId);
+      if (approved && scope !== "once" && !pending.destructive) {
+        if (scope === "session" || scope === "project" || scope === "always") {
+          await run?.onApprovalGrant?.(scope, pending.call.name);
+        }
       }
+      // Cancellation or timeout may have removed the call while storage waited.
+      if (this.pending.get(callId) !== pending) return false;
+      this.pending.delete(callId);
+      if (approved && inputs?.secrets && typeof inputs.secrets === "object") this.approvalInputs.set(callId, inputs.secrets);
+      if (approved && scope !== "once" && !pending.destructive) run?.approvedTools.add(pending.call.name);
+      pending.resolve(approved);
+      return true;
+    } finally {
+      this.resolvingApprovals.delete(callId);
     }
-    p.resolve(approved);
-    return true;
   }
 }

@@ -77,7 +77,7 @@ import {
 //
 // Re-registering for the SAME root (e.g. the tools panel refreshing) keeps the
 // user's permission overrides instead of clobbering them back to defaults.
-export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): void {
+export async function registerProjectToolsFor(tenant: Tenant, projectRoot: string): Promise<void> {
   const g = tenant.toolGateway;
   const sameRoot = tenant.currentProjectRoot === projectRoot;
   const saved = new Map<string, ToolPermission>();
@@ -85,6 +85,7 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
     for (const t of g.list()) saved.set(t.name, g.getPermission(t.name));
   }
 
+  const overrides = sameRoot ? {} : await tenant.localStore.getToolOverrides(projectRoot);
   g.registry.clear();
 
   g.register(makeReadDocumentTool(projectRoot));
@@ -179,7 +180,6 @@ export function registerProjectToolsFor(tenant: Tenant, projectRoot: string): vo
   } else {
     // Fresh root (or first registration after a restart): re-apply the user's
     // persisted per-tool overrides for this project.
-    const overrides = tenant.localStore.getToolOverrides(projectRoot);
     for (const [name, permission] of Object.entries(overrides)) {
       g.setPermission(name, permission as ToolPermission);
     }

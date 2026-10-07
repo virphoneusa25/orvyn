@@ -405,3 +405,24 @@ test("real PostgreSQL: integration credentials decrypt after reopening and ackno
     if (previousKey === undefined) delete process.env.ORVYN_VAULT_KEY; else process.env.ORVYN_VAULT_KEY = previousKey;
   }
 });
+
+
+test("real PostgreSQL: remembered tool approval is acknowledged before action and survives reopening", { skip: !live }, async () => {
+  const { StreamingAgentRuntime } = await import("../agent/StreamingAgentRuntime");
+  const tenant = "tool-approval-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const runtime: any = Object.create(StreamingAgentRuntime.prototype);
+    let approved = false;
+    const approvedTools = new Set<string>();
+    runtime.pending = new Map([["call", { runId: "run", call: { name: "fixture" }, destructive: false, resolve: (value: boolean) => { approved = value; } }]]);
+    runtime.resolvingApprovals = new Set(); runtime.approvalInputs = new Map();
+    runtime.runs = new Map([["run", { approvedTools, onApprovalGrant: (scope: "project") => store.saveToolApprovalGrant(scope, "subject", "fixture", "session", "project") }]]);
+    assert.equal(await runtime.resolveApproval("call", true, "project"), true);
+    assert.equal(approved, true); assert.ok(approvedTools.has("fixture"));
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    assert.deepEqual(await store.getToolApprovalGrants("subject", "session", "project"), ["fixture"]);
+    await store.clearToolApprovalGrants("subject", "fixture");
+    assert.deepEqual(await store.getToolApprovalGrants("subject", "session", "project"), []);
+  } finally { await store.close(); await cleanup(tenant); }
+});
