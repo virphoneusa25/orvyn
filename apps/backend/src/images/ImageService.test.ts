@@ -35,7 +35,7 @@ test("generate_image persists PNG bytes, read-back matches, tool ok only with ar
     const img = out.images[0];
     assert.match(img.artifactId, /^art_/);
     assert.equal(img.filename, "virphone-logo.png");
-    const rec = artifacts.getArtifact(img.artifactId);
+    const rec = (await artifacts.getArtifact(img.artifactId));
     assert.equal(rec?.status, "ready");
     const { bytes } = await artifacts.read(img.artifactId);
     assert.equal(bytes.length, MINIMAL_PNG.length);
@@ -87,7 +87,7 @@ test("description-only provider output cannot succeed", async () => {
   const artifacts = new ArtifactService("tenant-a", store, dir);
   const images = new ImageService(modelService([{ }]), artifacts);
   await assert.rejects(images.generate({ prompt: "logo" }), /neither image bytes|text description/i);
-  assert.equal(artifacts.listArtifacts().length, 0);
+  assert.equal((await artifacts.listArtifacts()).length, 0);
   const tool = makeGenerateImageTool(undefined, modelService([{}]), artifacts);
   const result = await tool.execute({ prompt: "logo" });
   assert.equal(result.ok, false);
@@ -101,7 +101,7 @@ test("empty base64 cannot succeed", async () => {
   const artifacts = new ArtifactService("tenant-a", store, dir);
   const images = new ImageService(modelService([{ b64: "" }]), artifacts);
   await assert.rejects(images.generate({ prompt: "logo" }), /empty base64|neither image bytes/i);
-  assert.equal(artifacts.listArtifacts().length, 0);
+  assert.equal((await artifacts.listArtifacts()).length, 0);
   store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });
@@ -115,7 +115,7 @@ test("second generate with same name does not overwrite", async () => {
   const b = await images.generate({ prompt: "logo", filename: "virphone-logo.png" });
   assert.notEqual(a.images[0].artifactId, b.images[0].artifactId);
   assert.notEqual(a.images[0].filename, b.images[0].filename);
-  assert.equal(artifacts.listArtifacts({ kind: "generated" }).length, 2);
+  assert.equal((await artifacts.listArtifacts({ kind: "generated" })).length, 2);
   store.close();
   await fs.rm(dir, { recursive: true, force: true });
 });

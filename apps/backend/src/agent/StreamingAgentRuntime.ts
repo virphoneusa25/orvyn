@@ -623,7 +623,7 @@ export class StreamingAgentRuntime {
     if (!this.artifacts) return [];
     const ready: import("../artifacts/artifactContract").ToolArtifactResult[] = [];
     for (const art of parsed) {
-      const rec = this.artifacts.getArtifact(art.artifactId);
+      const rec = (await this.artifacts.getArtifact(art.artifactId));
       if (!rec || rec.status !== "ready") continue;
       try {
         const { bytes, record } = await this.artifacts.read(art.artifactId);
@@ -2005,7 +2005,7 @@ export class StreamingAgentRuntime {
         // verified project images from durable artifact storage so existing
         // CSS background URLs keep resolving after the first run or a restart.
         if (this.artifacts) {
-          const priorImages = this.artifacts.listArtifacts({ projectRoot })
+          const priorImages = (await this.artifacts.listArtifacts({ projectRoot }))
             .filter((a) => a.projectRoot === projectRoot && a.kind === "generated" && a.mimeType.startsWith("image/"));
           for (const image of priorImages) {
             try {
