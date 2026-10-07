@@ -1,3 +1,4 @@
+import { installModelSettingsRoutes } from "./modelSettingsRoutes";
 import { installTenantDataRoutes } from "./tenantDataRoutes";
 import { randomUUID } from "node:crypto";
 import { asyncHandler } from "../http/asyncHandler";
@@ -335,71 +336,14 @@ v1Router.get("/chats/:id", asyncHandler(async (req, res) => {
   }
 }));
 
-v1Router.post("/models", asyncHandler(async (req, res) => {
-  const t = requireTenant(req);
-  try {
-    if (!customerCatalogEnabled()) {
-      const provider = t.modelService.addModel(req.body, "user");
-      t.localStore.saveModel(req.body);
-      return res.status(201).json({ model: provider.config });
-    }
-    let config = await buildUserModel(req.body ?? {});
-    // Two models with the same name get distinct ids.
-    for (let n = 2; t.modelService.registry.get(config.id); n++) config = { ...config, id: `${config.id.replace(/-\d+$/, "")}-${n}` };
-    const provider = t.modelService.addModel(config, "user");
-    t.localStore.saveModel(sealModelConfig(config, t.id));
-    res.status(201).json({ model: publicUserModel(provider.config) });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-}));
+
 
 /** Use one of your own models instead of ORVYN's routing whenever "Auto" is chosen (null: ORVYN routes). */
-v1Router.put("/models/preferred", (req, res) => {
-  const t = requireTenant(req);
-  const id = req.body?.modelId ? String(req.body.modelId) : null;
-  if (id && !t.modelService.isUserModel(id)) return res.status(400).json({ error: "Choose one of your own models, or clear the default." });
-  t.modelService.preferredModel = id;
-  t.localStore.setSetting("preferredModel", id ?? "");
-  res.json({ preferredModelId: id });
-});
 
-v1Router.put("/models/:id", asyncHandler(async (req, res) => {
-  const t = requireTenant(req);
-  const ms = t.modelService;
-  try {
-    if (!customerCatalogEnabled()) {
-      ms.removeModel(req.params.id);
-      const config = { ...req.body, id: req.params.id };
-      const provider = ms.addModel(config, "user");
-      t.localStore.saveModel(config);
-      return res.json({ model: provider.config });
-    }
-    if (!ms.isUserModel(req.params.id)) return res.status(403).json({ error: "ORVYN's models can't be changed. Add your own model instead.", code: "PLATFORM_MODEL" });
-    const existing = ms.registry.get(req.params.id)!.config;
-    const config = await buildUserModel(req.body ?? {}, { existing, id: existing.id });
-    const wasPreferred = ms.preferredModel === existing.id;
-    ms.removeModel(existing.id);
-    const provider = ms.addModel(config, "user");
-    if (wasPreferred) ms.preferredModel = existing.id;
-    t.localStore.saveModel(sealModelConfig(config, t.id));
-    res.json({ model: publicUserModel(provider.config) });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-}));
 
-v1Router.delete("/models/:id", (req, res) => {
-  const t = requireTenant(req);
-  if (customerCatalogEnabled() && !t.modelService.isUserModel(req.params.id)) {
-    return res.status(403).json({ error: "ORVYN's models can't be removed.", code: "PLATFORM_MODEL" });
-  }
-  const wasPreferred = t.modelService.preferredModel === req.params.id;
-  t.modelService.removeModel(req.params.id);
-  t.localStore.deleteModel(req.params.id);
-  if (wasPreferred) t.localStore.setSetting("preferredModel", "");
-  res.status(204).end();
-});
+
+
+
 
 
 v1Router.get("/models/health", asyncHandler(async (req, res) => {
@@ -461,7 +405,6 @@ v1Router.post("/models/:id/test", asyncHandler(async (req, res) => {
 }));
 
 // --- Routing (which model handles each task type) ---
-import { requiredCapability } from "@orvyn/ai-core";
 
 v1Router.get("/routing", (req, res) => {
   const t = requireTenant(req);
@@ -470,38 +413,9 @@ v1Router.get("/routing", (req, res) => {
   res.json({ overrides: Object.fromEntries(Object.entries(overrides).filter(([, id]) => t.modelService.isUserModel(id))) });
 });
 
-v1Router.post("/routing", (req, res) => {
-  const { task, modelId } = req.body;
-  const ms2 = requireTenant(req);
-  if (customerCatalogEnabled() && !ms2.modelService.isUserModel(String(modelId))) {
-    return res.status(403).json({ error: "ORVYN routes its own models. You can route a task to one of your own models.", code: "PLATFORM_MODEL" });
-  }
-  const provider = ms2.modelService.registry.get(modelId);
-  if (!provider) {
-    return res.status(400).json({ error: `Unknown model "${modelId}"` });
-  }
-  // A model that cannot serve the task would break every request for it —
-  // reject at the door with the reason rather than letting it poison routing.
-  const capability = requiredCapability(task);
-  if (!provider.config.capabilities[capability]) {
-    return res.status(400).json({
-      error: `"${modelId}" cannot handle task "${task}" — it lacks the "${capability}" capability.`,
-    });
-  }
-  ms2.modelService.router.setOverride(task, modelId);
-  // Persist so a restart keeps the user's choices instead of reverting to
-  // env defaults (which may point at a dead-credits provider).
-  ms2.localStore.setSetting("routing", JSON.stringify(ms2.modelService.router.getExplicitOverrides()));
-  res.json({ overrides: ms2.modelService.router.getOverrides() });
-});
 
-v1Router.delete("/routing/:task", (req, res) => {
-  const tenant = requireTenant(req);
-  const ms3 = tenant.modelService;
-  ms3.router.clearOverride(req.params.task as any);
-  tenant.localStore.setSetting("routing", JSON.stringify(ms3.router.getExplicitOverrides()));
-  res.json({ overrides: ms3.router.getOverrides() });
-});
+
+
 
 // --- Codebase indexing / RAG ---
 v1Router.post("/index/build", asyncHandler(async (req, res) => {
@@ -2123,7 +2037,7 @@ import { NullBillingProvider, estimateRunCost } from "../billing/BillingProvider
 import { EntitlementService } from "../billing/EntitlementService";
 import { creditLedger } from "../billing/AsyncFinancialStores";
 import { customerCatalog, customerCatalogEnabled, isUserModelId } from "../models/customerCatalog";
-import { buildUserModel, publicUserModel, sealModelConfig } from "../models/userModels";
+import { publicUserModel } from "../models/userModels";
 import { billingService, purchasablePacks, StripeApiError } from "../billing/stripe";
 import { createPreviewLink } from "../artifacts/previewLinks";
 import { creditsEnforced } from "../tenancy/TenantManager";
@@ -2533,3 +2447,5 @@ v1Router.all("/ports/:id/proxy", (req, res) => {
 
 
 installTenantDataRoutes(v1Router, requireTenant);
+
+installModelSettingsRoutes(v1Router, requireTenant);

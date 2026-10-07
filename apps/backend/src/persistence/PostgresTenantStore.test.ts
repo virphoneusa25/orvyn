@@ -335,3 +335,41 @@ test("real PostgreSQL: tenant data HTTP endpoints persist memory and profile bef
     await store.close(); await cleanup(tenantId);
   }
 });
+
+
+test("real PostgreSQL: model settings HTTP writes persist before registry publication", { skip: !live }, async () => {
+  const { default: express } = await import("express");
+  const { installModelSettingsRoutes } = await import("../routes/modelSettingsRoutes");
+  const { ModelService } = await import("../services/ModelService");
+  const { ModelRegistry, ModelRouter } = await import("@orvyn/ai-core");
+  const tenantId = "model-settings-http-" + randomUUID();
+  const store = await PostgresTenantStore.connect(url, tenantId);
+  const service = Object.create(ModelService.prototype);
+  service.registry = new ModelRegistry(); service.router = new ModelRouter(service.registry);
+  service.userModelIds = new Set(); service.usage = { wrap: (provider: unknown) => provider }; service.preferredModel = null;
+  const previous = process.env.ORVYN_CUSTOMER_CATALOG; process.env.ORVYN_CUSTOMER_CATALOG = "false";
+  const app = express(); app.use(express.json()); installModelSettingsRoutes(app, () => ({ id: tenantId, modelService: service, localStore: store }));
+  const server = app.listen(0, "127.0.0.1"); await new Promise<void>((resolve) => server.once("listening", resolve));
+  const origin = "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const request = (path: string, method: string, body?: unknown) => fetch(origin + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const config = { id: "fixture", name: "fixture", provider: "mock", capabilities: { chat: true, code: true } };
+  try {
+    assert.equal((await request("/models", "POST", config)).status, 201);
+    assert.equal((await store.loadModels())[0].id, "fixture");
+    assert.equal((await request("/models/preferred", "PUT", { modelId: "fixture" })).status, 200);
+    assert.equal(await store.getSetting("preferredModel"), "fixture");
+    const responses = await Promise.all(["chat", "code"].map((task) => request("/routing", "POST", { task, modelId: "fixture" })));
+    assert.ok(responses.every((response) => response.status === 200));
+    assert.deepEqual(JSON.parse((await store.getSetting("routing"))!), { chat: "fixture", code: "fixture" });
+    assert.equal((await request("/models/fixture", "PUT", { ...config, name: "updated" })).status, 200);
+    assert.equal((await store.loadModels())[0].name, "updated");
+    assert.equal((await request("/models/fixture", "DELETE")).status, 204);
+    assert.equal((await store.loadModels()).length, 0);
+    assert.equal(await store.getSetting("preferredModel"), "");
+    assert.equal(service.registry.get("fixture"), undefined);
+  } finally {
+    server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
+    await store.close(); await cleanup(tenantId);
+    if (previous === undefined) delete process.env.ORVYN_CUSTOMER_CATALOG; else process.env.ORVYN_CUSTOMER_CATALOG = previous;
+  }
+});
