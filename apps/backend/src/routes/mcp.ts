@@ -69,7 +69,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
       }
       (await t.mcpManager.setEnabled(req.params.id, true));
       const server = await t.mcpManager.connect(req.params.id);
-      harden.appendAudit("enable", { serverId: req.params.id });
+      await harden.appendAudit("enable", { serverId: req.params.id });
       res.json({ server });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -198,7 +198,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
         preferStdio: req.body.preferStdio === true,
       });
       const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
-      harden.appendAudit("install", { serverId: out.config.id, marketplaceId: req.body.server?.canonicalId, version: out.plan.version });
+      await harden.appendAudit("install", { serverId: out.config.id, marketplaceId: req.body.server?.canonicalId, version: out.plan.version });
       if (harden.policy().requireApprovalForInstall) {
         (await t.mcpManager.setEnabled(out.config.id, false));
       }
@@ -235,7 +235,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
       ? await t.toolGateway.execute("install_mcp_server", args, undefined, context)
       : await makeInstallMcpServerTool(() => marketplaceFor(t.mcpManager, t.localStore, t.id), { githubToken: () => githubToken(t.id) }).execute(args, context);
     const installed = (result.meta?.installed ?? {}) as { name?: string; tools?: string[]; serverId?: string; state?: string };
-    try { hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("install", { serverId: installed.serverId, marketplaceId: canonicalId, via: "capability-card" }); } catch { /* audit is best-effort */ }
+    try { await hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("install", { serverId: installed.serverId, marketplaceId: canonicalId, via: "capability-card" }); } catch { /* audit is best-effort */ }
     if (!result.ok) return res.status(400).json({ ok: false, error: result.error ?? "The install did not finish.", ...installed });
     res.json({ ok: true, ...installed });
   }));
@@ -322,7 +322,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
         resource: String(req.body.resource ?? t.mcpManager.listServers().find((s: { id: string }) => s.id === req.body.serverId)?.url ?? ""),
         clientId: req.body.clientId,
       });
-      harden.appendAudit("connect", { serverId: req.body.serverId, method: "oauth-start" });
+      await harden.appendAudit("connect", { serverId: req.body.serverId, method: "oauth-start" });
       res.json(out);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -362,7 +362,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
       projectRoot: req.body.projectRoot ?? t.currentProjectRoot,
       cloudRun: req.body.cloudRun === true,
     });
-    harden.appendAudit("tool invocation", { serverId: req.body.serverId, tool: req.body.tool, ok: out.ok, cloudRun: req.body.cloudRun === true });
+    await harden.appendAudit("tool invocation", { serverId: req.body.serverId, tool: req.body.tool, ok: out.ok, cloudRun: req.body.cloudRun === true });
     res.status(out.ok ? 200 : 403).json(out);
   }));
 
@@ -392,13 +392,13 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     res.json({ policy: hardeningFor(t.mcpManager, t.localStore, t.id).policy() });
   });
 
-  r.put("/policy", (req, res) => {
+  r.put("/policy", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const harden = hardeningFor(t.mcpManager, t.localStore, t.id);
-    const policy = harden.setPolicy(req.body ?? {});
-    harden.appendAudit("approval", { action: "policy.update", mode: policy.mode });
+    const policy = await harden.setPolicy(req.body ?? {});
+    await harden.appendAudit("approval", { action: "policy.update", mode: policy.mode });
     res.json({ policy });
-  });
+  }));
 
   r.get("/health", (req, res) => {
     const t = requireTenant(req);
@@ -424,7 +424,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     const cwd = scope === "project" ? (req.body.cwd ?? t.currentProjectRoot) : undefined;
     const updated = (await t.mcpManager.setScope(req.params.id, scope, cwd ?? undefined));
     if (!updated) return res.status(404).json({ error: "Unknown MCP server" });
-    hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("update", { serverId: req.params.id, scope });
+    await hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit("update", { serverId: req.params.id, scope });
     res.json({ server: updated });
   }));
 
@@ -433,7 +433,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     const blocked = req.body.blocked !== false;
     const updated = (await t.mcpManager.setBlocked(req.params.id, blocked, req.body.reason));
     if (!updated) return res.status(404).json({ error: "Unknown MCP server" });
-    hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit(blocked ? "denial" : "approval", { serverId: req.params.id, reason: req.body.reason });
+    await hardeningFor(t.mcpManager, t.localStore, t.id).appendAudit(blocked ? "denial" : "approval", { serverId: req.params.id, reason: req.body.reason });
     res.json({ server: updated });
   }));
 

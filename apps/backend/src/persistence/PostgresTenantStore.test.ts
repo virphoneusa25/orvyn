@@ -268,3 +268,21 @@ test("real PostgreSQL: MCP configuration and permissions reopen as one acknowled
     assert.equal(empty.list().length, 0);
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+
+test("real PostgreSQL: enterprise policy and concurrent audit entries survive reopening", { skip: !live }, async () => {
+  const { McpHardening } = await import("../mcp/hardening/hardening");
+  const tenant = "mcp-enterprise-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const harden = new McpHardening({} as any, store, tenant); await harden.ready;
+    await harden.setPolicy({ mode: "allowlist-only", allowlist: ["fixture"] });
+    await Promise.all(Array.from({ length: 8 }, (_, index) => harden.appendAudit("fixture", { index, secret: "redacted" })));
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const reopened = new McpHardening({} as any, store, tenant); await reopened.ready;
+    assert.equal(reopened.policy().mode, "allowlist-only");
+    assert.deepEqual(reopened.policy().allowlist, ["fixture"]);
+    assert.equal(reopened.readAudit().length, 8);
+    assert.ok(reopened.readAudit().every((entry) => entry.secret === "[redacted]"));
+  } finally { await store.close(); await cleanup(tenant); }
+});

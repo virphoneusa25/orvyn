@@ -18,7 +18,7 @@ import {
 import { McpCloudGateway } from "./gateway";
 import { McpObservability } from "./observability";
 import { inspectNpmPackage, pinRequired, type ProvenanceRecord } from "./provenance";
-import { adminToolDenied, denyStartReason, readPolicy, writePolicy, type McpEnterprisePolicy } from "./policy";
+import { adminToolDenied, denyStartReason, readPolicy, type McpEnterprisePolicy } from "./policy";
 
 const OAUTH_SECRET = "oauth";
 const PROVENANCE_KEY = "mcp.provenance.v1";
@@ -26,6 +26,26 @@ const PROVENANCE_KEY = "mcp.provenance.v1";
 export class McpHardening {
   readonly obs = new McpObservability();
   readonly gateway: McpCloudGateway;
+  readonly ready: Promise<void>;
+  private initialized = false;
+  private settings = new Map<string, unknown>();
+  private writes: Promise<void> = Promise.resolve();
+
+  private assertReady(): void {
+    if (!this.initialized) throw new Error("MCP enterprise policy is not ready");
+  }
+
+  private change<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.writes.then(async () => { await this.ready; return operation(); });
+    this.writes = next.then(() => {}, () => {});
+    return next;
+  }
+
+  private async persist(key: string, value: string): Promise<void> {
+    await this.store.setSetting(key, value);
+    this.settings.set(key, value);
+  }
+
   private sessions = new Map<string, OAuthSession>();
   private loopback = new LoopbackCallback();
   private refreshBackoff = new Map<string, number>();
@@ -33,22 +53,39 @@ export class McpHardening {
 
   constructor(
     private manager: McpManager,
-    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
+    private store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void | Promise<void>; deleteSetting?(k: string): void },
     readonly tenantId: string,
     fetchImpl?: OAuthFetch
   ) {
+    const keys = ["mcp.enterprise.policy.v1", PROVENANCE_KEY, "mcp.audit.v1"];
+    const values = keys.map((key) => this.store.getSetting(key));
+    const hydrate = (resolved: unknown[]) => {
+      keys.forEach((key, index) => this.settings.set(key, resolved[index]));
+      this.initialized = true;
+    };
+    if (values.some((value) => value instanceof Promise)) {
+      this.ready = Promise.all(values).then(hydrate);
+    } else {
+      hydrate(values);
+      this.ready = Promise.resolve();
+    }
+    void this.ready.catch(() => {});
     this.fetchImpl = fetchImpl ?? (fetch as OAuthFetch);
     this.gateway = new McpCloudGateway(manager, () => this.policy(), this.obs);
   }
 
   policy(): McpEnterprisePolicy {
-    return readPolicy(this.store);
+    this.assertReady();
+    return structuredClone(readPolicy({ getSetting: (key) => this.settings.get(key) }));
   }
 
-  setPolicy(next: Partial<McpEnterprisePolicy>): McpEnterprisePolicy {
-    const merged = { ...this.policy(), ...next };
-    writePolicy(this.store, merged);
-    return merged;
+  async setPolicy(next: Partial<McpEnterprisePolicy>): Promise<McpEnterprisePolicy> {
+    const update = structuredClone(next);
+    return this.change(async () => {
+      const merged = { ...this.policy(), ...update };
+      await this.persist("mcp.enterprise.policy.v1", JSON.stringify(merged));
+      return structuredClone(merged);
+    });
   }
 
   denyServer(cfg: { id?: string; marketplaceId?: string; packageIdentifier?: string; sourceProviders?: string[]; trustLevel?: string }): string | null {
@@ -73,18 +110,22 @@ export class McpHardening {
   }
 
   readProvenance(): Record<string, ProvenanceRecord> {
+    this.assertReady();
     try {
-      const raw = this.store.getSetting(PROVENANCE_KEY);
+      const raw = this.settings.get(PROVENANCE_KEY);
       return raw ? (JSON.parse(String(raw)) as Record<string, ProvenanceRecord>) : {};
     } catch {
       return {};
     }
   }
 
-  writeProvenance(serverId: string, rec: ProvenanceRecord): void {
-    const all = this.readProvenance();
-    all[serverId] = rec;
-    this.store.setSetting(PROVENANCE_KEY, JSON.stringify(all));
+  async writeProvenance(serverId: string, rec: ProvenanceRecord): Promise<void> {
+    const record = structuredClone(rec);
+    await this.change(async () => {
+      const all = this.readProvenance();
+      all[serverId] = record;
+      await this.persist(PROVENANCE_KEY, JSON.stringify(all));
+    });
   }
 
   async inspectInstall(identifier: string, version: string): Promise<ProvenanceRecord> {
@@ -94,6 +135,7 @@ export class McpHardening {
   }
 
   async startOAuth(input: { serverId: string; resource: string; clientId?: string }): Promise<{ authorizeUrl: string; state: string; redirectUri: string }> {
+    await this.ready;
     const deny = this.denyServer({ id: input.serverId });
     if (deny) throw new Error(deny);
     const cfg = this.manager.listServers().find((s) => s.id === input.serverId);
@@ -133,6 +175,7 @@ export class McpHardening {
   }
 
   async finishOAuth(state: string, query: Record<string, string>): Promise<{ serverId: string }> {
+    await this.ready;
     const session = this.sessions.get(state);
     if (!session) throw new Error("Unknown or expired OAuth state");
     if (session.tenantId !== this.tenantId) throw new Error("OAuth session tenant mismatch");
@@ -151,7 +194,7 @@ export class McpHardening {
     (await this.manager.setSecret(session.serverId, "oauth_access", tokens.access_token));
     this.sessions.delete(state);
     await this.loopback.close();
-    this.appendAudit("connect", { serverId: session.serverId, method: "oauth" });
+    await this.appendAudit("connect", { serverId: session.serverId, method: "oauth" });
     await this.manager.connect(session.serverId);
     return { serverId: session.serverId };
   }
@@ -161,6 +204,7 @@ export class McpHardening {
   }
 
   async ensureFreshToken(serverId: string): Promise<"ok" | "needs-auth"> {
+    await this.ready;
     const cfg = this.manager.listServers().find((s) => s.id === serverId);
     if (cfg?.authKind && cfg.authKind !== "oauth") return "ok";
     const backoff = this.refreshBackoff.get(serverId) ?? 0;
@@ -184,12 +228,13 @@ export class McpHardening {
       return "ok";
     } catch {
       this.refreshBackoff.set(serverId, Date.now() + 60_000);
-      this.manager.markNeedsAuth(serverId, "OAuth refresh failed — Needs Auth");
+      await this.manager.markNeedsAuth(serverId, "OAuth refresh failed — Needs Auth");
       return "needs-auth";
     }
   }
 
   async disconnectAccount(serverId: string): Promise<void> {
+    await this.ready;
     const raw = (await this.manager.secret(serverId, OAUTH_SECRET));
     const tokens = parseStoredTokens(raw);
     const cfg = this.manager.listServers().find((s) => s.id === serverId);
@@ -204,34 +249,38 @@ export class McpHardening {
     }
     (await this.manager.deleteSecret(serverId, OAUTH_SECRET));
     (await this.manager.deleteSecret(serverId, "oauth_access"));
-    this.manager.markNeedsAuth(serverId, "Disconnected — Needs Auth");
-    this.appendAudit("disconnect", { serverId });
+    await this.manager.markNeedsAuth(serverId, "Disconnected — Needs Auth");
+    await this.appendAudit("disconnect", { serverId });
   }
 
-  appendAudit(kind: string, data: Record<string, unknown>): void {
-    const raw = this.store.getSetting("mcp.audit.v1");
-    let list: Array<Record<string, unknown>> = [];
-    try {
-      list = raw ? (JSON.parse(String(raw)) as Array<Record<string, unknown>>) : [];
-    } catch {
-      list = [];
-    }
-    const sanitized: Record<string, unknown> = { at: Date.now(), kind };
-    for (const [k, v] of Object.entries(data)) {
-      const key = k.toLowerCase();
-      if (/(token|secret|password|authorization|api[_-]?key)/.test(key)) {
-        sanitized[k] = "[redacted]";
-      } else {
-        sanitized[k] = v;
+  async appendAudit(kind: string, data: Record<string, unknown>): Promise<void> {
+    const input = structuredClone(data);
+    await this.change(async () => {
+      const raw = this.settings.get("mcp.audit.v1");
+      let list: Array<Record<string, unknown>> = [];
+      try {
+        list = raw ? (JSON.parse(String(raw)) as Array<Record<string, unknown>>) : [];
+      } catch {
+        list = [];
       }
-    }
-    list.push(sanitized);
-    this.store.setSetting("mcp.audit.v1", JSON.stringify(list.slice(-200)));
+      const sanitized: Record<string, unknown> = { at: Date.now(), kind };
+      for (const [k, v] of Object.entries(input)) {
+        const key = k.toLowerCase();
+        if (/(token|secret|password|authorization|api[_-]?key)/.test(key)) {
+          sanitized[k] = "[redacted]";
+        } else {
+          sanitized[k] = v;
+        }
+      }
+      list.push(sanitized);
+      await this.persist("mcp.audit.v1", JSON.stringify(list.slice(-200)));
+    });
   }
 
   readAudit(): Array<Record<string, unknown>> {
+    this.assertReady();
     try {
-      const raw = this.store.getSetting("mcp.audit.v1");
+      const raw = this.settings.get("mcp.audit.v1");
       return raw ? (JSON.parse(String(raw)) as Array<Record<string, unknown>>) : [];
     } catch {
       return [];
@@ -254,7 +303,7 @@ const services = new WeakMap<McpManager, McpHardening>();
 
 export function hardeningFor(
   manager: McpManager,
-  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
+  store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void | Promise<void>; deleteSetting?(k: string): void },
   tenantId: string
 ): McpHardening {
   let s = services.get(manager);

@@ -263,6 +263,7 @@ export class TenantManager {
     });
     await tenant.mcpManager.ready;
     const harden = hardeningFor(tenant.mcpManager, localStore, id);
+    await harden.ready;
     tenant.mcpManager.setStartGuard((serverId) => {
       const cfg = tenant.mcpManager.listServers().find((s) => s.id === serverId);
       return harden.denyServer({
@@ -374,7 +375,7 @@ export class TenantManager {
           projectRoot,
           cloudRun: true,
         });
-        harden.appendAudit("tool invocation", { serverId: cfg.id, tool, ok: out.ok, runId, executionLocation: out.executionLocation });
+        await harden.appendAudit("tool invocation", { serverId: cfg.id, tool, ok: out.ok, runId, executionLocation: out.executionLocation });
         return { ok: out.ok, output: out.output, error: out.error };
       },
       onRunSettled:  async (runId) => {
