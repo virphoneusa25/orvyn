@@ -4,7 +4,7 @@ import { isCustomerModelId, resolveCustomerModel } from "../models/customerCatal
 import { classifyModelFailure, isModelNotFound, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, type FailureClass } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "../agent/capabilityGap";
-import { preferencesPrompt } from "../onboarding/preferences";
+import { preferencesPromptAsync } from "../onboarding/preferences";
 import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, CLOUD_CHAT_TOOLS, CLOUD_CHAT_TOOL_NAMES, artifactsFromChatResult, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
@@ -13,7 +13,7 @@ import { FetchAttemptMemory, firstFetchUrlPerHost, isFetchProxyUrl, modelFetchRe
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
 const MAX_RESEARCH_CALLS = 12;
-import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
+import { userMemoryPromptAsync, type AsyncMemoryStoreLike as MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "../agent/advisorStyle";
 import { startRoute, stepFrom } from "../models/routingPolicy";
 import { generateEnglish, isMostlyChinese, RETRY_RULE } from "../agent/languageRule";
@@ -157,9 +157,9 @@ async function buildMessages(req: ChatTurnRequest, indexService?: IndexService, 
   if (req.conversationContext?.trim()) {
     systemParts.push(`Conversation state (facts and active references; not hidden reasoning):\n${req.conversationContext.trim()}`);
   }
-  const prefs = preferencesPrompt(memory);
+  const prefs = await preferencesPromptAsync(memory);
   if (prefs) systemParts.push(prefs);
-  const remembered = userMemoryPrompt(memory, req.userMessage, req.context?.projectRoot ?? null);
+  const remembered = await userMemoryPromptAsync(memory, req.userMessage, req.context?.projectRoot ?? null);
   if (remembered) systemParts.push(remembered);
   messages.push({ role: "system", content: systemParts.join("\n\n") });
 

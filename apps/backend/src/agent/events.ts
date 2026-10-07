@@ -184,6 +184,7 @@ export type AgentEventType =
   | "mission.settled"
   /** A durable checkpoint was written (phase change, tool batch, verification). */
   | "mission.checkpoint"
+  | "mission.checkpoint.failed"
   /** The process died mid-mission; a checkpoint exists and the run can resume. */
   | "mission.interrupted"
   /** A steering instruction superseded part of the plan; remaining work is replanned. */

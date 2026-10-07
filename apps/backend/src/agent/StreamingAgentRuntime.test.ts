@@ -153,9 +153,9 @@ test("boot recovery resumes the same durable run and tells the model to inspect 
   h.store.create("run-recover", root);
   h.store.emit("run-recover", "message.delta", { content: "work completed before restart" });
 
-  const id = h.runtime.start(root, "Continue the deployment", undefined, "agent", undefined, [], undefined, undefined, {
+  const id = (await h.runtime.start(root, "Continue the deployment", undefined, "agent", undefined, [], undefined, undefined, {
     recoverRunId: "run-recover",
-  });
+  }));
   assert.equal(id, "run-recover");
   assert.equal(await waitForStatus(h.store, id), "completed");
   assert.ok(h.store.get(id)?.events.some((event) => event.data?.content === "work completed before restart"));
@@ -175,7 +175,7 @@ test("answers every parallel tool call exactly once, in the order requested", as
     [{ delta: "All three read.", done: true }],
   ]);
 
-  const runId = h.runtime.start("/tmp/project", "read three things");
+  const runId = (await h.runtime.start("/tmp/project", "read three things"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
 
   // The second request carries the history the first turn produced.
@@ -209,7 +209,7 @@ test("runs read-only tools concurrently", async () => {
     [{ delta: "done", done: true }],
   ]);
 
-  const runId = h.runtime.start("/tmp/project", "read three things");
+  const runId = (await h.runtime.start("/tmp/project", "read three things"));
   await waitForStatus(h.store, runId);
 
   assert.ok(
@@ -232,7 +232,7 @@ test("serialises writes even when requested in the same turn", async () => {
   // re-applies the mode profile and would overwrite it.
   h.gateway.profile = "BALANCED";
 
-  const runId = h.runtime.start("/tmp/project", "write two files");
+  const runId = (await h.runtime.start("/tmp/project", "write two files"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
 
   assert.equal(h.stats().maxConcurrent, 1, "two writes must never run at the same time");
@@ -246,7 +246,7 @@ test("replies to a denied tool instead of leaving the call unanswered", async ()
 
   // Plan mode denies writes outright — a real configuration, and the branch
   // where a call must still be answered despite never running.
-  const runId = h.runtime.start("/tmp/project", "try a denied tool", undefined, "plan");
+  const runId = (await h.runtime.start("/tmp/project", "try a denied tool", undefined, "plan"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
 
   const followUp = h.provider.requests[1];
@@ -271,7 +271,7 @@ test("cancel ends the run as cancelled, not as an error", async () => {
   );
   runtimeRef = h.runtime;
 
-  runIdRef = h.runtime.start("/tmp/project", "long task");
+  runIdRef = (await h.runtime.start("/tmp/project", "long task"));
   const status = await waitForStatus(h.store, runIdRef);
 
   assert.equal(status, "cancelled");
@@ -298,7 +298,7 @@ test("cancel marks the run cancelled without waiting for a hung model call", asy
     yield { delta: "late", done: true };
   };
   const h = harness([], { provider: hung });
-  const runId = h.runtime.start("/tmp/project", "do not finish");
+  const runId = (await h.runtime.start("/tmp/project", "do not finish"));
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(h.runtime.cancel(runId), true);
   assert.equal(h.store.get(runId)?.status, "cancelled");
@@ -309,11 +309,11 @@ test("cancel marks the run cancelled without waiting for a hung model call", asy
   assert.equal(h.store.get(runId)?.events.filter((event) => event.type === "run.cancelled").length, 1);
 });
 
-test("cancel is idempotent and ignores unknown runs", () => {
+test("cancel is idempotent and ignores unknown runs",  async () => {
   const h = harness([[{ delta: "hi", done: true }]]);
   assert.equal(h.runtime.cancel("no-such-run"), false);
 
-  const runId = h.runtime.start("/tmp/project", "task");
+  const runId = (await h.runtime.start("/tmp/project", "task"));
   assert.equal(h.runtime.cancel(runId), true);
   assert.equal(h.runtime.cancel(runId), false, "a second cancel should be a no-op");
 });
@@ -323,7 +323,7 @@ test("records streamed token usage on the run", async () => {
     [{ delta: "hello", done: false }, { delta: "", usage: { promptTokens: 120, completionTokens: 35 }, done: true }],
   ]);
 
-  const runId = h.runtime.start("/tmp/project", "say hello");
+  const runId = (await h.runtime.start("/tmp/project", "say hello"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
 
   const run = h.store.get(runId)!;
@@ -344,7 +344,7 @@ test("a spent model-request budget ends with a written summary as Partial, not a
       [{ delta: "Checked the header. Remaining: nothing verified in the browser.", done: true }],
     ]);
 
-    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
+    const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test"));
     assert.equal(await waitForStatus(h.store, runId), "partial");
 
     const run = h.store.get(runId)!;
@@ -374,7 +374,7 @@ test("a model that ignores the budget wrap-up is stopped with a clear error", as
       [toolCallChunk("call_c", "read_file"), { delta: "", done: true }],
       [{ delta: "done", done: true }],
     ]);
-    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test");
+    const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "budget test"));
     assert.equal(await waitForStatus(h.store, runId), "error");
     const err = h.store.get(runId)!.events.find((e) => e.type === "run.error");
     assert.match(String(err?.data.message), /reached its execution limit/);
@@ -396,7 +396,7 @@ test("a spent tool-call budget answers further calls without running them, then 
       [{ delta: "Summary: read one file; nothing else verified.", done: true }],
     ]);
 
-    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "tool budget test");
+    const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "tool budget test"));
     assert.equal(await waitForStatus(h.store, runId), "partial");
 
     const run = h.store.get(runId)!;
@@ -421,7 +421,7 @@ test("terminal events carry their call id and bounded real output", async () => 
     name: "terminal", description: "test terminal", parameters: { type: "object", properties: {} }, defaultPermission: "allowed",
     async execute(_args: Record<string, unknown>, context?: { onOutput?: (chunk: string) => void }) { context?.onOutput?.("live "); return { ok: true, output: "x".repeat(17000) }; },
   });
-  const id = h.runtime.start("/tmp/project", "run a command");
+  const id = (await h.runtime.start("/tmp/project", "run a command"));
   h.gateway.setPermission("terminal", "allowed");
   assert.equal(await waitForStatus(h.store, id), "completed");
   const events = h.store.get(id)!.events.filter(e => e.type.startsWith("terminal."));
@@ -441,7 +441,7 @@ test("failed writes never emit a successful file change", async () => {
   // setPermission on the shared gateway cannot reach it — runs snapshot
   // their own permission baseline, which is the isolation this suite wants.
   h.gateway.profile = "BALANCED";
-  const id = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "edit a file");
+  const id = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "edit a file"));
   await waitForStatus(h.store, id);
   const events = h.store.get(id)!.events;
   assert.ok(events.some(e => e.type === "tool.failed"));
@@ -452,10 +452,10 @@ test("failed writes never emit a successful file change", async () => {
 
 test("run metadata records requested/actual model, reasoning, and access mode; reasoning reaches the provider", async () => {
   const h = harness([[{ delta: "Done.", done: true }]]);
-  const runId = h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
+  const runId = (await h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
     reasoningEffort: "deep",
     accessMode: "auto_workspace",
-  });
+  }));
   await waitForStatus(h.store, runId);
   const started = h.store.get(runId)!.events.find((e) => e.type === "run.started")!;
   assert.equal(started.data.requestedModelId, "auto");
@@ -469,9 +469,9 @@ test("run metadata records requested/actual model, reasoning, and access mode; r
 test("access mode is run-scoped: the gateway is restored after the run settles", async () => {
   const h = harness([[{ delta: "Done.", done: true }]]);
   h.gateway.profile = "SAFE";
-  const runId = h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
+  const runId = (await h.runtime.start("C:/proj", "hello", undefined, "agent", undefined, [], undefined, undefined, {
     accessMode: "full_access",
-  });
+  }));
   await waitForStatus(h.store, runId);
   // give the async kickoff's finally a beat
   await new Promise((r) => setTimeout(r, 50));
@@ -487,7 +487,7 @@ test("usage.updated carries the context breakdown, raw window, and cache rate", 
     [{ delta: "", usage: { promptTokens: 100, completionTokens: 10, cachedTokens: 80 } as any, done: true }],
     [{ delta: "done", done: true }],
   ]);
-  const runId = h.runtime.start("C:/proj", "inspect");
+  const runId = (await h.runtime.start("C:/proj", "inspect"));
   await waitForStatus(h.store, runId);
   const usage = h.store.get(runId)!.events.filter((e) => e.type === "usage.updated").pop();
   assert.ok(usage, "usage event emitted");
@@ -508,7 +508,7 @@ test("desktop tools emit the desktop.* lifecycle the Workbench derives its tab a
     [toolCallChunk("call_d1", "desktop_start"), toolCallChunk("call_d2", "desktop_click"), { delta: "", done: false }],
     [{ delta: "", done: true }],
   ]);
-  const runId = h.runtime.start("C:/proj", "desktop work");
+  const runId = (await h.runtime.start("C:/proj", "desktop work"));
   // Desktop tools are approval-gated in agent mode (the real production
   // path) — resolve each approval as the desktop UI's Allow Once does.
   for (let i = 0; i < 40; i++) {
@@ -535,7 +535,7 @@ test("action tasks with no tool call get one nudge", async () => {
     [{ delta: "I would edit the file like this.", done: true }],
     [{ delta: "Described the limit after the nudge.", done: true }],
   ]);
-  const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "Fix the login bug");
+  const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "Fix the login bug"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
   assert.equal(h.provider.requests.length, 2);
   const nudge = h.provider.requests[1].messages.find(
@@ -546,9 +546,9 @@ test("action tasks with no tool call get one nudge", async () => {
 
 test("the run prompt is built from live permissions", async () => {
   const h = harness([[{ delta: "hello", done: true }]]);
-  const runId = h.runtime.start("/tmp/project", "say hello", undefined, "agent", undefined, [], undefined, undefined, {
+  const runId = (await h.runtime.start("/tmp/project", "say hello", undefined, "agent", undefined, [], undefined, undefined, {
     composerMode: "server",
-  });
+  }));
   await waitForStatus(h.store, runId);
   const system = String(h.provider.requests[0].messages[0].content);
   assert.match(system, /Read files: available/);
@@ -562,7 +562,7 @@ test("the run prompt is built from live permissions", async () => {
 
 test("plan mode tells the model the terminal is unavailable", async () => {
   const h = harness([[{ delta: "plan", done: true }]]);
-  const runId = h.runtime.start("/tmp/project", "say hello", undefined, "plan");
+  const runId = (await h.runtime.start("/tmp/project", "say hello", undefined, "plan"));
   await waitForStatus(h.store, runId);
   const system = String(h.provider.requests[0].messages[0].content);
   assert.match(system, /Terminal, tests, builds, dev servers, and SSH: not available/);
@@ -573,7 +573,7 @@ test("a pinned model that cannot call tools fails instead of chatting", async ()
   const chatOnly = new FakeProvider([[{ delta: "I can only chat.", done: true }]], undefined, { id: "chat-only" });
   chatOnly.supportsTools = () => false;
   const h = harness([], { provider: chatOnly, registryModels: [chatOnly] });
-  const runId = h.runtime.start("/tmp/project", "Fix the login bug", undefined, "agent", undefined, [], "chat-only");
+  const runId = (await h.runtime.start("/tmp/project", "Fix the login bug", undefined, "agent", undefined, [], "chat-only"));
   assert.equal(await waitForStatus(h.store, runId), "error");
   assert.equal(chatOnly.requests.length, 0, "a chat-only pinned model must not be asked to finish the task");
   const err = h.store.get(runId)!.events.find((e) => e.type === "run.error");
@@ -585,7 +585,7 @@ test("auto switches off a chat-only model onto one that can call tools", async (
   chatOnly.supportsTools = () => false;
   const toolful = new FakeProvider([[{ delta: "Done.", done: true }]], undefined, { id: "tool-model" });
   const h = harness([], { provider: chatOnly, registryModels: [chatOnly, toolful] });
-  const runId = h.runtime.start("/tmp/project", "say hello");
+  const runId = (await h.runtime.start("/tmp/project", "say hello"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
   assert.equal(chatOnly.requests.length, 0);
   assert.equal(toolful.requests.length, 1);
@@ -596,7 +596,7 @@ test("auto switches off a chat-only model onto one that can call tools", async (
 
 test("a service diagnosis with no workspace or server is blocked before git or MCP", async () => {
   const h = harness([[{ delta: "I will run git status.", done: true }]]);
-  const runId = h.runtime.start("/tmp/orvyn-not-a-workspace", "Diagnose a failing service");
+  const runId = (await h.runtime.start("/tmp/orvyn-not-a-workspace", "Diagnose a failing service"));
   assert.equal(await waitForStatus(h.store, runId), "blocked");
   assert.equal(h.provider.requests.length, 0);
   const events = h.store.get(runId)!.events;
@@ -612,7 +612,7 @@ test("a service diagnosis with no workspace or server is blocked before git or M
 
 test("a server task with no configured server is blocked and does not call the model", async () => {
   const h = harness([[{ delta: "I will ssh somewhere.", done: true }]]);
-  const runId = h.runtime.start("/tmp/orvyn-no-such-project", "Log into my configured test server and tell me its hostname and uptime.");
+  const runId = (await h.runtime.start("/tmp/orvyn-no-such-project", "Log into my configured test server and tell me its hostname and uptime."));
   assert.equal(await waitForStatus(h.store, runId), "blocked");
   assert.equal(h.provider.requests.length, 0);
   const events = h.store.get(runId)!.events;
@@ -649,7 +649,7 @@ test("a model stream that never yields is aborted by the idle watchdog, not left
     healthy.config.id = "ok:test/model";
     const h = harness([], { provider: hung, registryModels: [hung, healthy] });
 
-    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "say something");
+    const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "say something"));
     const status = await waitForStatus(h.store, runId, 10_000);
     assert.notEqual(status, "running", "the run must not sit in running forever");
     assert.ok(["completed", "partial", "error", "failed", "cancelled"].includes(status), `settled state, got ${status}`);
@@ -671,7 +671,7 @@ test("a partially-settled run emits run.partial and never run.completed", async 
       [toolCallChunk("call_a", "read_file"), { delta: "", done: true }],
       [{ delta: "Read the file. Nothing was verified.", done: true }],
     ]);
-    const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "partial event test");
+    const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "partial event test"));
     assert.equal(await waitForStatus(h.store, runId), "partial");
 
     const events = h.store.get(runId)!.events;
@@ -698,7 +698,7 @@ test("a partially-settled run emits run.partial and never run.completed", async 
 
 test("a fully-settled run emits run.completed and never run.partial", async () => {
   const h = harness([[{ delta: "Done.", done: true }]]);
-  const runId = h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "completed event test");
+  const runId = (await h.runtime.start(mkdtempSync(join(tmpdir(), "orvyn-run-")), "completed event test"));
   assert.equal(await waitForStatus(h.store, runId), "completed");
 
   const events = h.store.get(runId)!.events;
@@ -716,8 +716,8 @@ test("a fully-settled run emits run.completed and never run.partial", async () =
 test("persisted admission uses its server-generated id and cannot replace an existing run", async () => {
   const h = harness([[{ delta: "Verified.", done: true }]]);
   const root = mkdtempSync(join(tmpdir(), "orvyn-admitted-run-"));
-  const id = h.runtime.start(root, "Explain this project", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: "run-admitted" });
+  const id = (await h.runtime.start(root, "Explain this project", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: "run-admitted" }));
   assert.equal(id, "run-admitted");
-  assert.throws(() => h.runtime.start(root, "duplicate", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: id }), /already exists/);
+  (await assert.rejects( async () => (await h.runtime.start(root, "duplicate", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: id })), /already exists/));
   await waitForStatus(h.store, id);
 });

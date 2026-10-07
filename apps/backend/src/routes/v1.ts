@@ -132,7 +132,7 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
   }
   _regTools(tenant, run.projectRoot);
   const previousRunIds = session?.runIds.filter((id) => id !== runId) ?? [];
-  tenant.agentRuntime.start(
+  (await tenant.agentRuntime.start(
     run.projectRoot,
     instruction,
     undefined,
@@ -160,7 +160,7 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
       previousRunIds,
       workspaceIdentity: { created: false, restored: true, fresh: false },
     },
-  );
+  ));
 }));
 
 // Validate every explicit project root before an endpoint uses it. A forced
@@ -780,13 +780,13 @@ v1Router.post("/chat/completions", asyncHandler(async (req, res) => {
       const runId = randomUUID();
       if (!await tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot)) throw new Error("Conversation admission could not be stored");
       await recordRunInstruction(tc.sessions, session.sessionId, runId, message);
-      tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
+      (await tc.agentRuntime.start(preflight.projectRoot, message, req.body.rules, "agent", req.body.attachments, req.body.history ?? [], req.body.requestedModelId, undefined, {
         admittedRunId: runId,
         composerMode: chip,
         workspaceId: preflight.workspaceId,
         workspaceIdentity: (await workspaceRunIdentity(tc.sessions, preflight)),
         onProjectFile:  async (rel: string) => { (await tc.sessions.rememberFiles(preflight.workspaceId, [rel])); },
-      });
+      }));
       recordRunAnswer(tc.sessions, tc.runStore, session.sessionId, runId);
       if (tc.runStore.get(runId)) {
         tc.runStore.emit(runId, "workspace.resolved", {
@@ -1081,7 +1081,7 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
     mode: String(req.body.mode ?? "agent"),
     turnDecision,
   });
-  t.agentRuntime.start(
+  (await t.agentRuntime.start(
     boundRoot,
     req.body.instruction,
     req.body.rules,
@@ -1133,7 +1133,7 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
           }
         : {}),
     }
-  );
+  ));
   if ((location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && localWorkerOnline) {
     queueLocalHostJob(runId, remoteProjectRoot || boundRoot, t.id, routed.actual === "local_sandbox" ? "local_sandbox" : "local_host");
   }
@@ -1596,7 +1596,7 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
   const joined = await t.sessions.attachRun(missionSession.sessionId, runId, missionRoot || null);
   if (!joined) throw new Error("Conversation admission could not be stored");
   await recordRunInstruction(t.sessions, joined.sessionId, runId, String(req.body.goal ?? ""), { messageId: typeof req.body.messageId === "string" ? req.body.messageId : undefined, mode: "mission", turnDecision });
-  t.agentRuntime.start(
+  (await t.agentRuntime.start(
     missionRoot,
     req.body.goal,
     req.body.rules,
@@ -1631,7 +1631,7 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
           }
         : {}),
     }
-  );
+  ));
   if (t.runStore.get(runId)) {
     t.runStore.emit(runId, "run.session", { sessionId: joined.sessionId, workspaceId: joined.workspaceId, projectId: joined.projectId, ...(joined.workspaceId && joined.projectRoot ? { projectRoot: joined.projectRoot } : {}) });
     if (preflight.status === "resolved") {

@@ -11,11 +11,11 @@ import { condenseOutput, shouldCondense } from "./outputCondenser";
 import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "./capabilityGap";
-import { preferencesPrompt } from "../onboarding/preferences";
+import { preferencesPromptAsync } from "../onboarding/preferences";
 export { builtInToolsFor };
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
-import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
+import { userMemoryPromptAsync, type AsyncMemoryStoreLike as MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
@@ -111,7 +111,7 @@ import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINU
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
@@ -1504,7 +1504,7 @@ export class StreamingAgentRuntime {
   }
 
   /** Starts a run and returns immediately; the loop continues in the background. */
-  start(
+  async start(
     projectRoot: string,
     instruction: string,
     rules?: string,
@@ -1514,7 +1514,7 @@ export class StreamingAgentRuntime {
     requestedModelId?: string,
     execution?: ExecutionSpec,
     options?: RunOptions
-  ): string {
+  ): Promise<string> {
     const recovering = Boolean(options?.recoverRunId);
     const runId = options?.recoverRunId ?? options?.admittedRunId ?? randomUUID();
     if (!recovering && this.store.get(runId)) throw new Error("Run id already exists");
@@ -1657,7 +1657,7 @@ export class StreamingAgentRuntime {
     // the checkpoint carries the plan, files changed, errors and verification
     // evidence the new execution needs to continue the SAME mission.
     const restored = recovering
-      ? ((this.memoryStore?.loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null)
+      ? (((await this.memoryStore?.loadMissionCheckpoint(runId)) ?? null) as MissionCheckpoint | null)
       : null;
 
     this.runs.set(runId, {
@@ -1834,7 +1834,7 @@ export class StreamingAgentRuntime {
       void queueRemoteRun();
     }
 
-    const memoryContext = this.relevantMemory(projectRoot, instruction);
+    const memoryContext = await this.relevantMemory(projectRoot, instruction);
     const toolNames = new Set(runGateway.list().map((tool) => tool.name));
     const routed = routeSkills({
       instruction,
@@ -2094,7 +2094,7 @@ export class StreamingAgentRuntime {
         });
         if (!prepared.canExecute) {
           const message = prepared.blockers[0] ?? "This run cannot start.";
-          this.enterPhase(runId, "blocked");
+          await this.enterPhase(runId, "blocked");
           this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT", terminal: true });
           this.store.setStatus(runId, "blocked");
           if (state) {
@@ -2261,10 +2261,10 @@ export class StreamingAgentRuntime {
     if (this.store.get(runId)?.status !== "blocked") this.runTools.delete(runId);
   }
 
-  private relevantMemory(projectRoot: string, instruction: string): string {
+  private async relevantMemory(projectRoot: string, instruction: string): Promise<string> {
     // What ORION knows about the user (every run), plus notes relevant to this task.
-    const prefs = preferencesPrompt(this.memoryStore);
-    const memory = userMemoryPrompt(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
+    const prefs = await preferencesPromptAsync(this.memoryStore);
+    const memory = await userMemoryPromptAsync(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
     return [prefs, memory].filter(Boolean).join("\n\n");
   }
 
@@ -2514,7 +2514,7 @@ export class StreamingAgentRuntime {
     if (!state.introSpoken) {
       state.introSpoken = true;
       state.spokenEvidence = collectRunEvidence([]);
-      this.enterPhase(runId, "introducing");
+      await this.enterPhase(runId, "introducing");
       // ORION introduces the work in its own words (see CONVERSATION_STYLE);
       // the app no longer inserts a scripted sentence here.
       if (introductionFor(state.instruction, state.intent.informational)) {
@@ -2524,7 +2524,7 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "website.phase", { phase: state.website.phase });
         }
       }
-      this.enterPhase(runId, "acting");
+      await this.enterPhase(runId, "acting");
     }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
@@ -2928,12 +2928,12 @@ export class StreamingAgentRuntime {
           }
           state.handoffModelId = undefined;
         }
-        this.enterPhase(runId, "observing");
+        await this.enterPhase(runId, "observing");
         this.noteWebsiteProgress(runId, state);
         this.speakProgress(runId);
         // A finished tool batch is a meaningful step: checkpoint the mission
         // so a crash or restart resumes here instead of starting over.
-        this.saveMissionCheckpoint(runId, state);
+        await this.saveMissionCheckpoint(runId, state);
         if (outcome === "cancelled") return cancelled();
         if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
           const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -3101,7 +3101,7 @@ export class StreamingAgentRuntime {
         // report_result call; complete() re-derives them fresh, so this turn
         // only produces the user-facing summary.
         if (state.resultRequest) return { kind: "approved" };
-        this.enterPhase(runId, "verifying");
+        await this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         // The site changed and has a live preview: it must load as the styled
         // site (page, stylesheets, scripts, images → 200 with the right type)
@@ -3114,7 +3114,7 @@ export class StreamingAgentRuntime {
           if (pv && !pv.passed && (state.previewRepairs ?? 0) < 2) {
             state.previewRepairs = (state.previewRepairs ?? 0) + 1;
             this.store.emit(runId, "completion.blocked", { gate: "preview", reasons: pv.issues, retries: state.previewRepairs });
-            this.enterPhase(runId, "repairing");
+            await this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
             messages.push({ role: "assistant", content: reply.content || "" });
             messages.push({ role: "user", content: `PREVIEW CHECK FAILED — the live preview does not load as the styled site:\n- ${pv.issues.slice(0, 8).join("\n- ")}\nFix the cause in the project files (a wrong path or file name in a <link>/<script>/<img>/url(), a file that was never written, a typo). Use your file tools; do not start a server. Then finish.` });
@@ -3135,7 +3135,7 @@ export class StreamingAgentRuntime {
             if (state.verifyRounds > MAX_VERIFY_ROUNDS) {
               return fail(`Verification ${verification.verdict} after ${MAX_VERIFY_ROUNDS} repair attempts: ${verification.findings.map((f) => f.message).slice(0, 3).join(" ")}`);
             }
-            this.enterPhase(runId, "repairing");
+            await this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
             // A second failed check means the current model is not getting there: climb one step.
             if (verification.verdict === "FAIL" && state.verifyRounds >= 2) this.escalateRoute(runId, state, `The independent check failed ${state.verifyRounds} times.`);
@@ -3181,13 +3181,13 @@ export class StreamingAgentRuntime {
             this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
           }
         }
-        this.enterPhase(runId, "repairing");
+        await this.enterPhase(runId, "repairing");
         this.store.setStatus(runId, "running");
         messages.push({ role: "user", content: gates.retryPrompt });
         return { kind: "retry", reason: `completion gate "${gates.failedGate}": ${gates.reasons.join("; ")}` };
       },
 
-      complete: (_turn, reply) => {
+      complete: async (_turn, reply) => {
         if (state.cancelled) return;
         // A nudge may have retracted the real answer and the model's last turn came back empty.
         const recovered = !String(reply.content ?? "").trim() && Boolean(state.lastAnswer);
@@ -3261,7 +3261,7 @@ export class StreamingAgentRuntime {
         } else {
           this.store.emit(runId, "run.error", { message: request.summary.slice(0, 500) || "The mission failed.", code: "MISSION_FAILED" });
         }
-        this.saveMissionCheckpoint(runId, state);
+        await this.saveMissionCheckpoint(runId, state);
         this.store.setStatus(runId, settled === "completed" ? "completed" : settled === "blocked" ? "blocked" : settled === "failed" ? "error" : "partial");
       },
 
@@ -3841,7 +3841,7 @@ export class StreamingAgentRuntime {
           const args = call.arguments as Record<string, unknown>;
           const artifactPath = String(args.path ?? args.to ?? args.from ?? "").trim();
           if (artifactPath && call.name !== "delete_file") {
-            this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
+            await this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
             const remembered = normalizeKnownFile(artifactPath);
             if (remembered) await state.onProjectFile?.(remembered);
           }
@@ -4250,7 +4250,7 @@ export class StreamingAgentRuntime {
    * preview_environments row — one record per run, written here so a preview
    * URL is never inferred from another run or project.
    */
-  private saveMissionCheckpoint(runId: string, state: RunState): void {
+  private async saveMissionCheckpoint(runId: string, state: RunState): Promise<void> {
     if (!this.memoryStore) return;
     try {
       const events = this.store.get(runId)?.events ?? [];
@@ -4276,14 +4276,14 @@ export class StreamingAgentRuntime {
           executionLocation: state.execution?.location,
         },
       });
-      this.memoryStore.saveMissionCheckpoint(runId, checkpoint, state.phase);
+      await this.memoryStore.saveMissionCheckpoint(runId, checkpoint, state.phase);
       const previewUrl = checkpoint.verificationEvidence.previewUrl;
       if (previewUrl) {
         // The canonical record is upserted every checkpoint (status may move
         // active → verified); the event fires only when the pair changes.
         const verified = events.some((e) => e.type === "preview.verified");
         const status = verified ? "verified" : "active";
-        this.memoryStore.savePreviewEnvironment({
+        await this.memoryStore.savePreviewEnvironment({
           id: previewEnvironmentKey(runId),
           organizationId: state.execution?.organizationId ?? null,
           projectId: state.execution?.projectId ?? null,
@@ -4300,11 +4300,12 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "mission.checkpoint", { phase: state.phase, filesChanged: checkpoint.filesChanged.length, errors: checkpoint.errors.length });
     } catch {
-      // Checkpointing is bookkeeping — it must never break a live run.
+      // Never announce an unacknowledged checkpoint as durable.
+      this.store.emit(runId, "mission.checkpoint.failed", { phase: state.phase, message: "Mission checkpoint could not be saved." });
     }
   }
 
-  private enterPhase(runId: string, phase: RunPhase): void {
+  private async enterPhase(runId: string, phase: RunPhase): Promise<void> {
     const state = this.runs.get(runId);
     if (!state || !canEnterPhase(state.phase, phase)) return;
     if (state.phase === phase) return;
@@ -4325,7 +4326,7 @@ export class StreamingAgentRuntime {
     });
     // A phase change is a meaningful step: the durable checkpoint follows it,
     // so a restarted control plane resumes the same mission at this point.
-    this.saveMissionCheckpoint(runId, state);
+    await this.saveMissionCheckpoint(runId, state);
   }
 
   private speak(runId: string, text: string): void {
