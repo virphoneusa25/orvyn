@@ -195,3 +195,21 @@ test("real PostgreSQL: missions acknowledge transitions and reconcile interrupte
     assert.equal((await store.loadMissions())[0].status, "FAILED");
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+test("real PostgreSQL: learning history survives restart and remains tenant isolated", { skip: !live }, async () => {
+  const { ExperienceStore } = await import("../learning/ExperienceStore");
+  const tenant = "learning-" + randomUUID(), other = "learning-other-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  const otherStore = await PostgresTenantStore.connect(url, other);
+  try {
+    const experience = new ExperienceStore(tenant, store);
+    const { RunStore } = await import("../agent/events");
+    const fixture = new RunStore().create("fixture-run", "/fixture", "completed");
+    const captured = await experience.captureFromRun(fixture);
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const restarted = new ExperienceStore(tenant, store);
+    assert.equal((await restarted.list())[0].id, captured.id);
+    assert.equal((await restarted.overview()).successfulRuns, 1);
+    assert.equal((await new ExperienceStore(other, otherStore).list()).length, 0);
+  } finally { await store.close(); await otherStore.close(); await cleanup(tenant); await cleanup(other); }
+});

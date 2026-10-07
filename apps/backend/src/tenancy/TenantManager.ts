@@ -358,7 +358,7 @@ export class TenantManager {
         harden.appendAudit("tool invocation", { serverId: cfg.id, tool, ok: out.ok, runId, executionLocation: out.executionLocation });
         return { ok: out.ok, output: out.output, error: out.error };
       },
-      onRunSettled: (runId) => {
+      onRunSettled:  async (runId) => {
         for (const s of tenant.mcpManager.listServers()) {
           if (s.scope === "run") tenant.mcpManager.setEnabled(s.id, false);
         }
@@ -366,10 +366,10 @@ export class TenantManager {
         try {
           const run = tenant.runStore.get(runId);
           if (!run) return;
-          tenant.experienceStore.captureFromRun(run);
-          const experiences = tenant.experienceStore.list("experience", 80);
-          persistSkillCandidates(tenant.localStore, experiences);
-          persistDataset(tenant.localStore, experiences);
+          (await tenant.experienceStore.captureFromRun(run));
+          const experiences = (await tenant.experienceStore.list("experience", 80));
+          (await persistSkillCandidates(tenant.localStore, experiences));
+          (await persistDataset(tenant.localStore, experiences));
         } catch {
           /* learning must never fail a run */
         }

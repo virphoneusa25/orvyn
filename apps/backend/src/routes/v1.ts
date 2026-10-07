@@ -1890,12 +1890,12 @@ v1Router.get("/artifacts/:id/preview", asyncHandler(async (req, res) => {
 }));
 
 /** A five-minute link the portal's preview frame loads (HTML/PDF need a real, sandboxed URL). No model, no credits. */
-v1Router.post("/artifacts/:id/preview-link",  async (req, res) => {
+v1Router.post("/artifacts/:id/preview-link", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const a = (await t.artifactService.getArtifact(String(req.params.id)));
   if (!a || a.status === "deleted") return res.status(404).json({ error: "Unknown artifact" });
   res.json({ url: `/api/v1/preview/${createPreviewLink(t.id, a.artifactId)}` });
-});
+}));
 
 v1Router.get("/artifacts/:id/download", asyncHandler(async (req, res) => {
   try {
@@ -2172,18 +2172,18 @@ import { getHostDesktopState, setHostDesktopAllowed, takeHostControl, returnHost
 const billing = new NullBillingProvider();
 const entitlements = new EntitlementService();
 
-v1Router.get("/learning", (req, res) => {
+v1Router.get("/learning", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   res.json({
     tenantId: t.id,
     trainingOptOut: DEFAULT_PRIVACY.trainingOptOut,
-    overview: t.experienceStore.overview(),
+    overview: (await t.experienceStore.overview()),
   });
-});
+}));
 
-v1Router.get("/learning/experiences", (req, res) => {
+v1Router.get("/learning/experiences", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const rows = t.experienceStore.list("experience", 80).filter((e) => {
+  const rows = (await t.experienceStore.list("experience", 80)).filter((e) => {
     try {
       bindTenantResource(t.id, e.tenantId);
       return true;
@@ -2192,7 +2192,7 @@ v1Router.get("/learning/experiences", (req, res) => {
     }
   });
   res.json({ experiences: rows });
-});
+}));
 
 v1Router.get("/learning/skills", (req, res) => {
   const t = requireTenant(req);
@@ -2277,21 +2277,21 @@ v1Router.get("/learning/datasets", (req, res) => {
   res.json({ datasets: t.localStore.listLearningRecords("dataset", 40).map((r) => r.payload) });
 });
 
-v1Router.get("/learning/evaluations", (req, res) => {
+v1Router.get("/learning/evaluations", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   res.json({
-    evaluations: t.experienceStore.list("experience", 80).map((e) => ({
+    evaluations: (await t.experienceStore.list("experience", 80)).map((e) => ({
       runId: e.runId,
       result: e.result,
       evaluation: e.evaluation,
     })),
   });
-});
+}));
 
-v1Router.get("/learning/failures", (req, res) => {
+v1Router.get("/learning/failures", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  res.json({ clusters: t.experienceStore.overview().failureClusters });
-});
+  res.json({ clusters: (await t.experienceStore.overview()).failureClusters });
+}));
 
 v1Router.get("/learning/models", (req, res) => {
   const t = requireTenant(req);
@@ -2321,16 +2321,16 @@ v1Router.post("/learning/models/:id/status", (req, res) => {
   }
 });
 
-v1Router.post("/learning/refresh", (req, res) => {
+v1Router.post("/learning/refresh", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   if (DEFAULT_PRIVACY.trainingOptOut) {
     return res.json({ ok: true, skipped: true, reason: "Training opt-out is on" });
   }
-  const experiences = t.experienceStore.list("experience", 80);
-  const skills = persistSkillCandidates(t.localStore, experiences);
-  const dataset = persistDataset(t.localStore, experiences);
+  const experiences = (await t.experienceStore.list("experience", 80));
+  const skills = (await persistSkillCandidates(t.localStore, experiences));
+  const dataset = (await persistDataset(t.localStore, experiences));
   res.json({ ok: true, skills: skills.length, dataset });
-});
+}));
 
 v1Router.get("/billing", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
