@@ -120,13 +120,30 @@ export class TenantManager {
   /** sha256(apiKey) -> tenantId. Raw keys are never stored. */
   private keyIndex = new Map<string, string>();
 
-  create(name: string, apiKey: string, id: string = randomUUID()): Tenant {
-    const localStore = new LocalStore(id);
+  private creating = new Map<string, Promise<Tenant>>();
+
+  constructor(private openStore: (id: string) => LocalStore = (id) => new LocalStore(id)) {}
+
+  create(name: string, apiKey: string, id: string = randomUUID()): Promise<Tenant> {
+    const existing = this.tenants.get(id);
+    if (existing) return Promise.resolve(existing);
+    const pending = this.creating.get(id);
+    if (pending) return pending;
+    const creation = Promise.resolve().then(() => this.buildTenant(name, apiKey, id));
+    this.creating.set(id, creation);
+    void creation.then(() => this.creating.delete(id), () => this.creating.delete(id));
+    return creation;
+  }
+
+  private async buildTenant(name: string, apiKey: string, id: string): Promise<Tenant> {
+    const localStore = this.openStore(id);
+    let sessionStore: WorkSessionPersistence | undefined;
+    try {
     const modelService = new ModelService();
     // Restore the customer's own models (keys are sealed at rest). On ORVYN
     // Cloud only "my:" models are the customer's: an old saved edit of one of
     // ORVYN's models is ignored, so ORVYN's model always stands.
-    for (const saved of localStore.loadModels()) {
+    for (const saved of await localStore.loadModels()) {
       try {
         const cfg = openModelConfig(saved, id);
         if (customerCatalogEnabled() && !isUserModelId(cfg.id)) {
@@ -139,10 +156,10 @@ export class TenantManager {
         console.warn(`Skipping persisted model "${saved.id}": ${err.message}`);
       }
     }
-    const preferred = localStore.getSetting("preferredModel");
+    const preferred = await localStore.getSetting("preferredModel");
     if (preferred && modelService.isUserModel(preferred)) modelService.preferredModel = preferred;
     // Every provider is metered; from here they're also durably recorded.
-    modelService.usage.attachStore(localStore);
+    await modelService.usage.attachStore(localStore);
     const billing = new TenantBilling(creditLedger, id, localStore);
     void modelService.huggingFaceReady.then(async () => {
       for (const p of modelService.registry.list()) {
@@ -183,7 +200,7 @@ export class TenantManager {
     // Restore the user's routing choices, the same way the autonomy profile is
     // restored. Without this, every restart silently reverted routing to the
     // env-seeded defaults — which may point at a provider with dead credits.
-    const savedRouting = localStore.getSetting("routing");
+    const savedRouting = await localStore.getSetting("routing");
     if (savedRouting) {
       try {
         for (const [task, modelId] of Object.entries(JSON.parse(savedRouting))) {
@@ -234,9 +251,9 @@ export class TenantManager {
       localStore,
       artifactService: new ArtifactService(id, localStore),
       experienceStore: new ExperienceStore(id, localStore),
-      sessions: new WorkSessionStore(id),
+      sessions: (sessionStore = new WorkSessionStore(id)),
     };
-    seedValidatedSkills(localStore);
+    (await seedValidatedSkills(localStore));
     // MCP host gets the now-constructed tenant's gateway.
     tenant.mcpManager = new McpManager({
       gateway: tenant.toolGateway,
@@ -266,7 +283,7 @@ export class TenantManager {
       }, decision.waitMs);
     });
     // Restore the autonomy profile the user last selected.
-    const savedProfile = localStore.getSetting("profile") as PermissionProfile | null;
+    const savedProfile = (await localStore.getSetting("profile")) as PermissionProfile | null;
     if (savedProfile && PROFILES[savedProfile]) tenant.toolGateway.profile = savedProfile;
     // Streaming runtime is per-tenant too, so runs and their event logs are
     // never visible across customers. The store gets a per-tenant directory:
@@ -305,6 +322,7 @@ export class TenantManager {
     });
     tenant.eventBus = new EventBus(tenant.runStore);
     tenant.taskEngine = new TaskEngine(tenant.eventBus, localStore);
+    await tenant.taskEngine.ready;
     tenant.contextEngine = new ContextEngine(tenant.toolGateway);
     tenant.agentRuntime = new StreamingAgentRuntime(
       tenant.modelService,
@@ -386,6 +404,11 @@ export class TenantManager {
     this.tenants.set(id, tenant);
     if (apiKey) this.keyIndex.set(hashKey(apiKey), id);
     return tenant;
+    } catch (error) {
+      try { await sessionStore?.close(); } catch {}
+      try { localStore.close(); } catch {}
+      throw error;
+    }
   }
 
   resolveByApiKey(apiKey: string): Tenant | undefined {
@@ -411,23 +434,23 @@ export class TenantManager {
   }
 
   /** Local unauthenticated mode: one tenant so routes still have req.tenant. */
-  ensureLocalDefault(): Tenant {
-    return this.get("default") ?? this.create("default", "", "default");
+   async ensureLocalDefault(): Promise<Tenant> {
+    return this.get("default") ?? (await this.create("default", "", "default"));
   }
 
   /**
    * Per-user tenant: each signed-in account gets its own isolated services
    * and its own SQLite store (user_<id>.db). Created lazily on first request.
    */
-  ensureUserTenant(userId: string, label: string): Tenant {
+   async ensureUserTenant(userId: string, label: string): Promise<Tenant> {
     const id = `user_${userId}`;
-    return this.get(id) ?? this.create(label, "", id);
+    return this.get(id) ?? (await this.create(label, "", id));
   }
 
   /** Session-resolved org tenant. Personal orgs keep user_<id> so existing stores stay valid. */
-  ensureOrgTenant(principal: Principal): Tenant {
+   async ensureOrgTenant(principal: Principal): Promise<Tenant> {
     const id = principal.tenantId || `user_${principal.userId}`;
-    return this.get(id) ?? this.create(principal.organizationName || principal.email, "", id);
+    return this.get(id) ?? (await this.create(principal.organizationName || principal.email, "", id));
   }
 
   revokeKey(apiKey: string): void {
@@ -445,10 +468,10 @@ export const tenantManager = new TenantManager();
 // Single-tenant convenience: when ORVYN_API_KEY is set (the existing
 // deployment shape), seed one "default" tenant with that key so nothing
 // breaks for current installs. Multi-tenant setups create tenants explicitly.
-export function bootstrapDefaultTenant(): Tenant | null {
+export async  function bootstrapDefaultTenant(): Promise<Tenant | null> {
   const key = process.env.ORVYN_API_KEY?.trim();
-  if (key) return tenantManager.create("default", key, "default");
-  return tenantManager.ensureLocalDefault();
+  if (key) return (await tenantManager.create("default", key, "default"));
+  return (await tenantManager.ensureLocalDefault());
 }
 
 /** Credits gate model calls on ORVYN Cloud (or when forced on for testing). */

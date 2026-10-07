@@ -133,7 +133,7 @@ function body(name: string): string {
   return `${skill!.instructions}\n${skill!.metadata.validation.rule}`;
 }
 
-test("systems, open source, and telecom built-ins load beside the existing 65 skills", () => {
+test("systems, open source, and telecom built-ins load beside the existing 65 skills",  async () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   assert.deepEqual(report.rejected, []);
   const ids = report.skills.map((skill) => skill.id);
@@ -186,10 +186,10 @@ test("systems, open source, and telecom built-ins load beside the existing 65 sk
     assert.match(text, /Coding Agent/);
   }
 
-  assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((skill) => skill.id), ["skill_deliver_file"]);
-  assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((skill) => skill.id), ["skill_code_with_tests"]);
-  assert.deepEqual(matchValidatedSkills("The dashboard layout overflows").map((skill) => skill.id), ["skill_visual_verify"]);
-  assert.deepEqual(matchValidatedSkills("What time is it?").map((skill) => skill.id), []);
+  assert.deepEqual((await matchValidatedSkills("Generate a virphone logo in png format")).map((skill) => skill.id), ["skill_deliver_file"]);
+  assert.deepEqual((await matchValidatedSkills("Fix the failing tests")).map((skill) => skill.id), ["skill_code_with_tests"]);
+  assert.deepEqual((await matchValidatedSkills("The dashboard layout overflows")).map((skill) => skill.id), ["skill_visual_verify"]);
+  assert.deepEqual((await matchValidatedSkills("What time is it?")).map((skill) => skill.id), []);
 });
 
 test("open source, build, patch, and linux install skills stay generic", () => {
@@ -234,13 +234,13 @@ test("open source, build, patch, and linux install skills stay generic", () => {
   }
 });
 
-test("an unfamiliar application does not require a product-specific skill", () => {
+test("an unfamiliar application does not require a product-specific skill",  async () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   for (const name of ["Coding Agent", "Test & Verify", "Linux Server Diagnostics", ...LANGUAGES]) {
     assert.ok(report.skills.some((skill) => skill.name === name), name);
   }
   const prompt = "Inspect this application, determine how it is built and configured, fix the startup failure, build it, run it, and verify it.";
-  const matched = matchValidatedSkills(prompt);
+  const matched = (await matchValidatedSkills(prompt));
   const ids = matched.map((skill) => skill.id).sort();
   assert.deepEqual(ids, [
     "skill_code_with_tests",
@@ -258,7 +258,7 @@ test("an unfamiliar application does not require a product-specific skill", () =
   assert.match(combined, /Python Application Engineering/);
 });
 
-test("freeswitch, kamailio, and sip skills stay selective", () => {
+test("freeswitch, kamailio, and sip skills stay selective",  async () => {
   const freeswitch = body("FreeSWITCH Engineering");
   assert.match(freeswitch, /SIP Troubleshooting/);
   assert.match(freeswitch, /RTP \/ Media Diagnosis/);
@@ -279,7 +279,7 @@ test("freeswitch, kamailio, and sip skills stay selective", () => {
   assert.match(sip, /do not blame a carrier, PBX, SBC, or endpoint without evidence/i);
 
   const prompt = "Diagnose a FreeSWITCH SIP call that rings but drops at answer.";
-  const matched = matchValidatedSkills(prompt);
+  const matched = (await matchValidatedSkills(prompt));
   const telecomIds = matched.map((skill) => skill.id).filter((id) => id.startsWith("skill_tel_")).sort();
   assert.deepEqual(telecomIds, ["skill_tel_freeswitch", "skill_tel_rtp", "skill_tel_sip"]);
   assert.ok(telecomIds.length < TELECOM.length);

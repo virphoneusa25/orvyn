@@ -64,7 +64,7 @@ export async function provisionAccount(userId: string): Promise<ProvisionStep[]>
   if (!user) return (await provisioningStatus(userId));
   if (verificationRequired() && !(await authService.isEmailVerified(userId))) return (await provisioningStatus(userId));
   const org = (await authService.ensurePersonalOrganization(user));
-  tenantManager.ensureUserTenant(userId, org.name || user.email);
+  (await tenantManager.ensureUserTenant(userId, org.name || user.email));
   // The wallet is created on the Free plan with its monthly credits exactly once.
   if (!(await creditLedger.planOf(org.tenantId))) (await creditLedger.ensureAccount(org.tenantId, DEFAULT_PLAN));
   (await onboardingStore().ensure(userId, "name"));

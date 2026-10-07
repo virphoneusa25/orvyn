@@ -210,7 +210,7 @@ app.get("/api/v1/public/shares/:token", ipRateLimit(120), asyncHandler(async (re
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
   const share = (await authService.resolveShare(String(req.params.token)));
   const as = share ? (await authService.principalFor(share.userId, share.organizationId)) : null;
-  const tenant = as ? tenantManager.ensureOrgTenant(as.principal) : null;
+  const tenant = as ? (await tenantManager.ensureOrgTenant(as.principal)) : null;
   const session = share && tenant ? (await tenant.sessions.get(share.sessionId)) : undefined;
   if (!share || !session || (session.userId && session.userId !== share.userId)) return res.status(404).json({ error: "This shared conversation isn't available. The link may have been turned off." });
   const messages = (await tenant!.sessions.messages(session.sessionId, 0))
@@ -530,16 +530,17 @@ try {
   process.exit(1);
 }
 
+async function startServer(): Promise<void> {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
 if (process.env.ORVYN_PG_URL) {
   void migratePostgresIdentity().catch((err) => {
     console.error("Postgres identity migration failed:", err?.message ?? err);
   });
 }
-bootstrapDefaultTenant();
+await bootstrapDefaultTenant();
 // Reconnect enabled MCP servers (best-effort; failures stay per-server).
 setTimeout(() => {
-  void (async () => { try { const t = tenantManager.ensureLocalDefault(); await t.mcpManager.startEnabled(); } catch {} })();
+  void (async () => { try { const t = (await tenantManager.ensureLocalDefault()); await t.mcpManager.startEnabled(); } catch {} })();
 }, 3000);
 
 server.listen(PORT, () => {
@@ -558,6 +559,8 @@ server.listen(PORT, () => {
   }
 });
 
+}
+
 /** The chat's own tools (web search, page reads, finding and installing MCP tools), usable before any project is open. */
 function chatOwnTool(tenant: any, name: string) {
   const market = () => chatMarketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id);
@@ -569,3 +572,5 @@ function chatOwnTool(tenant: any, name: string) {
     default: return null;
   }
 }
+
+void startServer().catch(() => { console.error("Tenant initialization failed; server was not started."); process.exit(1); });

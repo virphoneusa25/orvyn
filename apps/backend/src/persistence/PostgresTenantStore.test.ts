@@ -213,3 +213,22 @@ test("real PostgreSQL: learning history survives restart and remains tenant isol
     assert.equal((await new ExperienceStore(other, otherStore).list()).length, 0);
   } finally { await store.close(); await otherStore.close(); await cleanup(tenant); await cleanup(other); }
 });
+
+test("real PostgreSQL: validated skills and candidate model status survive restart", { skip: !live }, async () => {
+  const { seedValidatedSkills, skillsPromptFor } = await import("../learning/validatedSkills");
+  const { ModelRegistry } = await import("../learning/ModelRegistry");
+  const tenant = "skills-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const seeded = await seedValidatedSkills(store);
+    assert.ok(seeded.length > 0);
+    assert.match(await skillsPromptFor("Fix the failing tests", store), /validated/);
+    const registry = new ModelRegistry(store);
+    const model = await registry.register({ version: "fixture-version" });
+    await registry.setStatus(model.id, "staging");
+    await assert.rejects(registry.setStatus(model.id, "production"), /Refusing/);
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    assert.equal((await new ModelRegistry(store).list())[0].status, "staging");
+    assert.equal((await seedValidatedSkills(store)).length, seeded.length);
+  } finally { await store.close(); await cleanup(tenant); }
+});
