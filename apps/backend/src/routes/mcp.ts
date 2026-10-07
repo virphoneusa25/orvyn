@@ -245,27 +245,27 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     res.json({ configured: marketplaceFor(t.mcpManager, t.localStore, t.id).providerSecretStatus() });
   });
 
-  r.put("/marketplace/secrets", (req, res) => {
+  r.put("/marketplace/secrets", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const market = marketplaceFor(t.mcpManager, t.localStore, t.id);
     try {
-      if (req.body?.glama !== undefined) market.setProviderSecret("glama", String(req.body.glama ?? ""));
-      if (req.body?.smithery !== undefined) market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
+      if (req.body?.glama !== undefined) await market.setProviderSecret("glama", String(req.body.glama ?? ""));
+      if (req.body?.smithery !== undefined) await market.setProviderSecret("smithery", String(req.body.smithery ?? ""));
       res.json({ configured: market.providerSecretStatus() });
     } catch (err: any) {
       res.status(400).json({ error: err.message, configured: market.providerSecretStatus() });
     }
-  });
+  }));
 
   r.get("/marketplace/registries", (req, res) => {
     const t = requireTenant(req);
     res.json({ registries: marketplaceFor(t.mcpManager, t.localStore, t.id).listPrivateRegistries() });
   });
 
-  r.post("/marketplace/registries", (req, res) => {
+  r.post("/marketplace/registries", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const id = String(req.body.id ?? `reg_${Date.now()}`);
-    const cfg = marketplaceFor(t.mcpManager, t.localStore, t.id).upsertPrivateRegistry(
+    const cfg = await marketplaceFor(t.mcpManager, t.localStore, t.id).upsertPrivateRegistry(
       {
         id,
         name: String(req.body.name ?? "Private registry"),
@@ -276,7 +276,7 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
       req.body.token
     );
     res.status(201).json({ registry: cfg });
-  });
+  }));
 
   r.get("/marketplace/featured", asyncHandler(async (req, res) => {
     const t = requireTenant(req);

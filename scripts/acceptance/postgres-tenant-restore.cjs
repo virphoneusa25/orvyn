@@ -3,6 +3,8 @@ const assert=require('node:assert/strict');
 const {PostgresTenantStore}=require('../../apps/backend/dist/persistence/PostgresTenantStore');
 const {PostgresTenantStorage}=require('../../apps/backend/dist/persistence/PostgresTenantStorage');
 const {McpHardening}=require('../../apps/backend/dist/mcp/hardening/hardening');
+const {MarketplaceService}=require('../../apps/backend/dist/mcp/marketplace/service');
+const manager={listServers:()=>[],searchTools:()=>[],statuses:()=>[]};
 const {McpRegistry}=require('../../apps/backend/dist/mcp/McpRegistry');
 const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\0 and literal \\0';
 (async()=>{
@@ -20,6 +22,9 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
    const harden=new McpHardening({},store,tenant);await harden.ready;
    await harden.setPolicy({mode:'allowlist-only',allowlist:['mcp-fixture']});
    await harden.appendAudit('fixture',{serverId:'mcp-fixture',token:'redacted'});
+   const market=new MarketplaceService(manager,store,tenant);await market.ready;
+   await market.upsertPrivateRegistry({id:'fixture',name:'fixture',enabled:false,url:'https://fixture.invalid'});
+   market.cache.set('fixture',{name:'public listing'});await market.flushPersistence();
    await store.saveMemory({id:'memory',scope:'global',kind:'fixture',title:content,content});
    await store.saveArtifactStrict({id:'artifact',kind:'file',name:content,path:content,tenantId:tenant});
    await store.saveModel({id:'my:fixture',name:content});
@@ -30,7 +35,7 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
   }
   const snapshot=await migration.exportSnapshot();
   assert.equal(Object.keys(snapshot).length,11);
-  for(const [name,table] of Object.entries(snapshot))assert.equal(table.rows.length,name==='settings'?4:1);
+  for(const [name,table] of Object.entries(snapshot))assert.equal(table.rows.length,name==='settings'?6:1);
   assert.equal(await store.getSetting('fixture'),content);
   const restoredRegistry=new McpRegistry(store,tenant);await restoredRegistry.ready;
   assert.equal(restoredRegistry.list()[0].id,'mcp-fixture');
@@ -38,6 +43,9 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
   const harden=new McpHardening({},store,tenant);await harden.ready;
   assert.equal(harden.policy().mode,'allowlist-only');
   assert.equal(harden.readAudit()[0].token,'[redacted]');
+  const market=new MarketplaceService(manager,store,tenant);await market.ready;
+  assert.equal(market.listPrivateRegistries()[0].id,'fixture');
+  assert.deepEqual(market.cache.get('fixture').payload,{name:'public listing'});
   assert.equal((await store.getMemory('memory')).content,content);
   assert.equal((await store.getArtifact('artifact')).name,content);
   assert.deepEqual(await store.loadMissionCheckpoint('run'),{content});
