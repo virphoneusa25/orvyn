@@ -1,3 +1,4 @@
+import { adminService } from "../admin/AsyncAdminService";
 import { paymentStore as stripeStore } from "../billing/AsyncFinancialStores";
 import { staffStore } from "../auth/AsyncAccountStores";
 import { asyncHandler } from "../http/asyncHandler";
@@ -17,7 +18,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { authService } from "../auth/AsyncAuthService";
 import { can, STAFF_ROLES, SUSPEND_CATEGORIES, type StaffPermission, type StaffRole } from "../admin/staffStore";
-import { adminService, AUDIT_TITLES, CUSTOMER_FILTERS, CREDIT_VALUE_USD, type CustomerFilter } from "../admin/AdminService";
+import { AUDIT_TITLES, CUSTOMER_FILTERS, CREDIT_VALUE_USD, type CustomerFilter } from "../admin/AdminService";
 import { creditLedger } from "../billing/AsyncFinancialStores";
 import { BillingLimitError } from "../billing/CreditLedger";
 import { billingService, priceIdFor, purchasablePacks, StripeApiError } from "../billing/stripe";
@@ -77,9 +78,9 @@ async function audit(req: AdminRequest, action: string, tenantId: string | null,
 }
 
 /** The customer (tenant) in the path, or a 404. */
-function customerOr404(req: Request, res: Response): string | null {
+async function customerOr404(req: Request, res: Response): Promise<string | null> {
   const id = String(req.params.id ?? "");
-  if (!adminService().orgByTenant(id)) { res.status(404).json({ error: "No such customer." }); return null; }
+  if (!(await adminService().orgByTenant(id))) { res.status(404).json({ error: "No such customer." }); return null; }
   return id;
 }
 
@@ -118,7 +119,7 @@ adminRouter.get("/dashboard", need("read"), wrap(async (req, res) => {
 
 adminRouter.get("/search", need("read"), wrap(async (req, res) => {
   const q = String(req.query.q ?? "").trim();
-  const out: any = adminService().search(q);
+  const out: any = (await adminService().search(q));
   out.invoices = [];
   if (/^in_[A-Za-z0-9_]+$/.test(q) && billingService().enabled) {
     try {
@@ -133,9 +134,9 @@ adminRouter.get("/notifications", need("read"), wrap(async (_req, res) => {
   const items: { id: string; level: "warning" | "error" | "info"; title: string; detail: string; at: number; href?: string }[] = [];
   const since = Date.now() - 86_400_000;
   for (const e of (await stripeStore().failedEvents(since))) items.push({ id: `stripe:${e.id}`, level: "error", title: "Stripe webhook failed", detail: `${e.type}${e.error ? ` — ${e.error.slice(0, 80)}` : ""}`, at: e.received_at, href: "/admin/health" });
-  const counts = adminService().counts();
+  const counts = (await adminService().counts());
   if (counts.past_due) items.push({ id: "past_due", level: "warning", title: `${counts.past_due} past-due customer${counts.past_due === 1 ? "" : "s"}`, detail: "Payment failed; Stripe is retrying.", at: Date.now(), href: "/admin/customers?filter=past_due" });
-  for (const s of (await staffStore().pausedTenants()).slice(0, 5)) items.push({ id: `paused:${s.tenantId}`, level: "info", title: `${adminService().orgByTenant(s.tenantId)?.name ?? "A customer"} is paused`, detail: `${s.category} · ${s.reason.slice(0, 60)}`, at: s.at, href: `/admin/customers/${s.tenantId}` });
+  for (const s of (await staffStore().pausedTenants()).slice(0, 5)) items.push({ id: `paused:${s.tenantId}`, level: "info", title: `${(await adminService().orgByTenant(s.tenantId))?.name ?? "A customer"} is paused`, detail: `${s.category} · ${s.reason.slice(0, 60)}`, at: s.at, href: `/admin/customers/${s.tenantId}` });
   const health = await healthChecks();
   for (const h of health.checks) if (h.status === "down" || h.status === "degraded") items.push({ id: `health:${h.id}`, level: h.status === "down" ? "error" : "warning", title: `${h.name}: ${h.status}`, detail: h.detail, at: Date.now(), href: "/admin/health" });
   items.sort((a, b) => b.at - a.at);
@@ -171,64 +172,64 @@ adminRouter.post("/customers", need("support.write"), wrap(async (req, res) => {
 }));
 
 adminRouter.get("/customers/:id", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   res.json({ customer: (await adminService().customer(id)) });
 }));
 
-adminRouter.get("/customers/:id/usage", need("read"), wrap((req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+adminRouter.get("/customers/:id/usage", need("read"), wrap(async (req, res) => {
+  const id = (await customerOr404(req, res)); if (!id) return;
   const days = Math.min(90, Math.max(7, num(req.query.days, 30)));
-  const series = adminService().usageSeries(id, days);
+  const series = (await adminService().usageSeries(id, days));
   if (!can(req.staff!.role, "costs.read")) for (const d of series) (d as any).costUsd = null;
   res.json({ days, series });
 }));
 
 adminRouter.get("/customers/:id/invoices", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   if (!billingService().enabled) return res.json({ invoices: [], stripe: "not_configured" });
   res.json({ ...(await billingService().adminInvoices({ accountId: id, limit: num(req.query.limit, 25), startingAfter: req.query.startingAfter ? String(req.query.startingAfter) : undefined })), stripe: "ok" });
 }));
 
 adminRouter.get("/customers/:id/payment-method", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   if (!billingService().enabled) return res.json({ paymentMethod: null, stripe: "not_configured" });
   try { res.json({ paymentMethod: (await billingService().account(id)).paymentMethod, stripe: "ok" }); }
   catch { res.json({ paymentMethod: null, stripe: "unavailable" }); }
 }));
 
-adminRouter.get("/customers/:id/projects", need("read"), wrap((req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  res.json({ projects: adminService().projects(id) });
+adminRouter.get("/customers/:id/projects", need("read"), wrap(async (req, res) => {
+  const id = (await customerOr404(req, res)); if (!id) return;
+  res.json({ projects: (await adminService().projects(id)) });
 }));
 
-adminRouter.get("/customers/:id/workspaces", need("read"), wrap((req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  res.json({ workspaces: adminService().workspaces(id) });
+adminRouter.get("/customers/:id/workspaces", need("read"), wrap(async (req, res) => {
+  const id = (await customerOr404(req, res)); if (!id) return;
+  res.json({ workspaces: (await adminService().workspaces(id)) });
 }));
 
-adminRouter.get("/customers/:id/chats", need("read"), wrap((req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  res.json({ chats: adminService().chats(id, Math.min(200, num(req.query.limit, 50))) });
+adminRouter.get("/customers/:id/chats", need("read"), wrap(async (req, res) => {
+  const id = (await customerOr404(req, res)); if (!id) return;
+  res.json({ chats: (await adminService().chats(id, Math.min(200, num(req.query.limit, 50)))) });
 }));
 
 adminRouter.get("/customers/:id/activity", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   res.json({ activity: (await adminService().activity(id, Math.min(200, num(req.query.limit, 40)))) });
 }));
 
 adminRouter.get("/customers/:id/audit", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   res.json({ audit: (await staffStore().auditLog({ tenantId: id, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) })), titles: AUDIT_TITLES });
 }));
 
 adminRouter.get("/customers/:id/ledger", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   res.json({ entries: (await adminService().ledger(id, Math.min(500, num(req.query.limit, 100)))), verify: (await creditLedger.verify(id)) });
 }));
 
 /** The live Stripe subscription (read from Stripe, not guessed). */
 adminRouter.get("/customers/:id/subscription", need("read"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   const wallet = (await creditLedger.snapshot(id));
   const base = {
     plan: { id: wallet.plan.id, label: wallet.plan.label }, walletStatus: wallet.subscription?.status ?? "none",
@@ -250,7 +251,7 @@ adminRouter.get("/customers/:id/subscription", need("read"), wrap(async (req, re
 const ADJUST_CATEGORIES = ["promotional", "billing_correction", "refund_adjustment", "goodwill", "other"];
 
 adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   const credits = Number(req.body?.credits);
   const reason = String(req.body?.reason ?? "").trim();
   const category = ADJUST_CATEGORIES.includes(String(req.body?.category)) ? String(req.body.category) : "other";
@@ -281,8 +282,8 @@ adminRouter.post("/customers/:id/credits/adjust", need("billing.write"), wrap(as
 }));
 
 adminRouter.post("/customers/:id/password-reset", need("support.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  const owner = adminService().owner(id);
+  const id = (await customerOr404(req, res)); if (!id) return;
+  const owner = (await adminService().owner(id));
   if (!owner) return res.status(404).json({ error: "This customer has no contact to email." });
   const out = await sendPasswordReset(req, owner.email);
   if (!out.sent) return res.status(out.error?.includes("configured") ? 503 : 429).json({ error: out.error });
@@ -291,8 +292,8 @@ adminRouter.post("/customers/:id/password-reset", need("support.write"), wrap(as
 }));
 
 adminRouter.post("/customers/:id/resend-verification", need("support.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  const owner = adminService().owner(id);
+  const id = (await customerOr404(req, res)); if (!id) return;
+  const owner = (await adminService().owner(id));
   if (!owner) return res.status(404).json({ error: "This customer has no contact to email." });
   if ((await authService.isEmailVerified(owner.userId))) return res.status(409).json({ error: "Their email is already verified." });
   const out = await sendVerification(req, owner.userId, owner.name);
@@ -302,7 +303,7 @@ adminRouter.post("/customers/:id/resend-verification", need("support.write"), wr
 }));
 
 adminRouter.post("/customers/:id/suspend", need("account.suspend"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   if (req.body?.confirm !== true) return res.status(400).json({ error: "Confirm the pause." });
   const s = (await staffStore().suspend(id, { reason: String(req.body?.reason ?? ""), category: String(req.body?.category ?? "other") }, req.staff!.email));
   (await audit(req, "account.suspend", id, { reason: s.reason, category: s.category }));
@@ -310,21 +311,21 @@ adminRouter.post("/customers/:id/suspend", need("account.suspend"), wrap(async (
 }));
 
 adminRouter.post("/customers/:id/reactivate", need("account.suspend"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   if (!(await staffStore().reactivate(id, req.staff!.email))) return res.status(409).json({ error: "This account isn't paused." });
   (await audit(req, "account.reactivate", id, { reason: String(req.body?.reason ?? "").slice(0, 500) }));
   res.json({ ok: true });
 }));
 
 adminRouter.post("/customers/:id/support-note", need("support.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   const note = (await staffStore().addNote(id, { id: req.staff!.id, email: req.staff!.email }, String(req.body?.body ?? "")));
   (await audit(req, "support.note", id, { noteId: note.id }));
   res.status(201).json({ note });
 }));
 
 adminRouter.put("/customers/:id/profile", need("support.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   (await staffStore().saveProfile(id, { website: req.body?.website, industry: req.body?.industry, location: req.body?.location }, req.staff!.email));
   (await audit(req, "profile.update", id, { fields: Object.keys(req.body ?? {}).filter((k) => ["website", "industry", "location"].includes(k)) }));
   res.json({ profile: (await staffStore().profile(id)) });
@@ -332,7 +333,7 @@ adminRouter.put("/customers/:id/profile", need("support.write"), wrap(async (req
 
 /** Plan management. Paid changes go through Stripe (the webhook applies them); complimentary plans are super-admin only. */
 adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
+  const id = (await customerOr404(req, res)); if (!id) return;
   const action = String(req.body?.action ?? "");
   const planId = String(req.body?.planId ?? "") as PlanId;
   const period = req.body?.period === "yearly" ? "yearly" : "monthly";
@@ -360,7 +361,7 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
     }
     case "checkout_link": {
       if (!validPlan || planId === "free" || planId === "enterprise") return res.status(400).json({ error: "Choose a paid self-serve plan." });
-      const owner = adminService().owner(id);
+      const owner = (await adminService().owner(id));
       if (!owner) return res.status(404).json({ error: "This customer has no contact." });
       const origin = `${String(req.header("x-forwarded-proto") || req.protocol)}://${String(req.header("x-forwarded-host") || req.get("host"))}`;
       const out = await svc.checkout({ accountId: id, email: owner.email, name: owner.name, planId, period, origin, returnTo: "portal" });
@@ -394,8 +395,8 @@ adminRouter.post("/customers/:id/plan", need("billing.write"), wrap(async (req, 
 
 /** Read-only "View as customer": a 30-minute token that can only read (the customer API refuses writes). */
 adminRouter.post("/customers/:id/view-as", need("support.write"), wrap(async (req, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  const owner = adminService().owner(id);
+  const id = (await customerOr404(req, res)); if (!id) return;
+  const owner = (await adminService().owner(id));
   if (!owner) return res.status(404).json({ error: "This customer has no member to view as." });
   const out = (await staffStore().createViewAs({ id: req.staff!.id, email: req.staff!.email }, { userId: owner.userId, organizationId: owner.organizationId, tenantId: id }));
   (await audit(req, "support.view_as", id, { as: owner.email, expiresAt: out.expiresAt, reason: String(req.body?.reason ?? "").slice(0, 300) }));
@@ -412,23 +413,23 @@ adminRouter.get("/subscriptions", need("read"), wrap(async (req, res) => {
   res.json((await adminService().subscriptions({ status: req.query.status ? String(req.query.status) : undefined, page: num(req.query.page, 1), pageSize: num(req.query.pageSize, 25) })));
 }));
 
-adminRouter.get("/usage", need("read"), wrap((req, res) => {
+adminRouter.get("/usage", need("read"), wrap(async (req, res) => {
   const days = Math.min(90, Math.max(7, num(req.query.days, 30)));
-  res.json({ days, series: adminService().usageSeries(null, days).map((d) => ({ day: d.day, credits: d.credits, tokens: d.tokens, missions: d.missions, chat: d.chat })), top: adminService().topConsumers(days, num(req.query.page, 1)), adjustments: adminService().adjustments(30) });
+  res.json({ days, series: (await adminService().usageSeries(null, days)).map((d) => ({ day: d.day, credits: d.credits, tokens: d.tokens, missions: d.missions, chat: d.chat })), top: (await adminService().topConsumers(days, num(req.query.page, 1))), adjustments: (await adminService().adjustments(30)) });
 }));
 
 adminRouter.get("/invoices", need("read"), wrap(async (req, res) => {
   if (!billingService().enabled) return res.json({ invoices: [], hasMore: false, stripe: "not_configured" });
   const out = await billingService().adminInvoices({ limit: num(req.query.limit, 25), startingAfter: req.query.startingAfter ? String(req.query.startingAfter) : undefined });
-  res.json({ ...out, invoices: out.invoices.map((i) => ({ ...i, customer: i.accountId ? adminService().orgByTenant(i.accountId)?.name ?? null : null })), stripe: "ok" });
+  res.json({ ...out, invoices: (await Promise.all(out.invoices.map(async (i) => ({ ...i, customer: i.accountId ? (await adminService().orgByTenant(i.accountId))?.name ?? null : null })))), stripe: "ok" });
 }));
 
 adminRouter.get("/support", need("read"), wrap(async (_req, res) => {
-  const name = (t: string) => adminService().orgByTenant(t)?.name ?? t;
+  const name = async (t: string) => (await adminService().orgByTenant(t))?.name ?? t;
   res.json({
-    notes: (await staffStore().notes(undefined, 50)).map((n) => ({ ...n, customer: name(n.tenantId) })),
-    paused: (await staffStore().pausedTenants()).map((s) => ({ ...s, customer: name(s.tenantId) })),
-    actions: (await staffStore().auditLog({ action: "support.", limit: 50 })).map((a) => ({ ...a, customer: a.tenantId ? name(a.tenantId) : null, title: AUDIT_TITLES[a.action] ?? a.action })),
+    notes: (await Promise.all((await staffStore().notes(undefined, 50)).map(async (n) => ({ ...n, customer: (await name(n.tenantId)) })))),
+    paused: (await Promise.all((await staffStore().pausedTenants()).map(async (s) => ({ ...s, customer: (await name(s.tenantId)) })))),
+    actions: (await Promise.all((await staffStore().auditLog({ action: "support.", limit: 50 })).map(async (a) => ({ ...a, customer: a.tenantId ? (await name(a.tenantId)) : null, title: AUDIT_TITLES[a.action] ?? a.action })))),
   });
 }));
 
@@ -445,9 +446,9 @@ adminRouter.get("/plans", need("read"), wrap(async (_req, res) => {
   });
 }));
 
-adminRouter.get("/topups", need("read"), wrap((req, res) => {
+adminRouter.get("/topups", need("read"), wrap(async (req, res) => {
   const days = Math.min(365, Math.max(7, num(req.query.days, 30)));
-  const sales = adminService().topups(days);
+  const sales = (await adminService().topups(days));
   res.json({ days, packs: purchasablePacks().map((p) => ({ ...p, sales: sales.get(p.id) ?? { purchases: 0, credits: 0, revenueUsd: 0 } })) });
 }));
 
@@ -513,9 +514,9 @@ adminRouter.get("/email-templates/:id", need("read"), wrap((req, res) => {
   res.json({ id, ...TEMPLATE_INFO[id], subject: m.subject, text: m.text, html: m.html });
 }));
 
-adminRouter.get("/provider-costs", need("costs.read"), wrap((req, res) => {
+adminRouter.get("/provider-costs", need("costs.read"), wrap(async (req, res) => {
   const days = Math.min(365, Math.max(1, num(req.query.days, 30)));
-  res.json({ ...adminService().providerCosts(days), creditValueUsd: CREDIT_VALUE_USD, note: `Credit value is priced at $${CREDIT_VALUE_USD * 1000} per 1,000 credits.` });
+  res.json({ ...(await adminService().providerCosts(days)), creditValueUsd: CREDIT_VALUE_USD, note: `Credit value is priced at $${CREDIT_VALUE_USD * 1000} per 1,000 credits.` });
 }));
 
 // ---------- operations ----------
@@ -526,7 +527,7 @@ async function healthChecks(): Promise<{ status: "operational" | "degraded" | "d
   const checks: Check[] = [];
   checks.push({ id: "api", name: "API Server", status: "operational", detail: `up ${Math.round(process.uptime() / 60)} min · ${Math.round(process.memoryUsage().rss / 1048576)} MB` });
   try {
-    const p = adminService().ping();
+    const p = (await adminService().ping());
     checks.push({ id: "database", name: "Database", status: "operational", detail: "accounts, ledger and payments reachable", latencyMs: Math.max(p.auth, p.billing, p.payments) });
   } catch (err: any) {
     checks.push({ id: "database", name: "Database", status: "down", detail: "a database did not answer" });
@@ -603,13 +604,13 @@ adminRouter.get("/health", need("read"), wrap(async (req, res) => {
   res.json({ ...h, providers, checkedAt: Date.now() });
 }));
 
-adminRouter.get("/workers", need("read"), wrap((_req, res) => {
+adminRouter.get("/workers", need("read"), wrap(async (_req, res) => {
   const tenants = tenantManager.list();
   let running = 0, queued = 0;
   for (const t of tenants) {
     try { const q = (t as any).multiAgentRuntime?.queueStats?.(); running += Number(q?.running ?? 0); queued += Number(q?.queued ?? 0); } catch { /* not loaded */ }
   }
-  res.json({ workers: workerStats(), runs: { running, queued, loadedAccounts: tenants.length }, sessions: adminService().sessionStats() });
+  res.json({ workers: workerStats(), runs: { running, queued, loadedAccounts: tenants.length }, sessions: (await adminService().sessionStats()) });
 }));
 
 // ---------- execution runtime (sandboxes) ----------
@@ -618,8 +619,8 @@ adminRouter.get("/runtime", need("read"), wrap(async (_req, res) => {
   const reg = sandboxRegistry();
   const day = 86_400_000;
   const orgName = async (orgId: string) => (await authService.getOrganization(orgId))?.name ?? null;
-  const failures = (reg.db.prepare(`SELECT * FROM execution_sandboxes WHERE state = 'failed' OR fallback_reason IS NOT NULL ORDER BY updated_at DESC LIMIT 25`).all() as any[])
-    .map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenant_id, customer: adminService().orgByTenant(r.tenant_id)?.name ?? null, state: r.state, error: r.last_error, fallback: r.fallback_reason, at: r.updated_at }));
+  const failures = (await Promise.all((reg.db.prepare(`SELECT * FROM execution_sandboxes WHERE state = 'failed' OR fallback_reason IS NOT NULL ORDER BY updated_at DESC LIMIT 25`).all() as any[])
+    .map(async (r) => ({ id: r.id, provider: r.provider, tenantId: r.tenant_id, customer: (await adminService().orgByTenant(r.tenant_id))?.name ?? null, state: r.state, error: r.last_error, fallback: r.fallback_reason, at: r.updated_at }))));
   res.json({
     config: {
       mode: (process.env.ORVYN_EXECUTION_PROVIDER || "docker").toLowerCase(),
@@ -630,7 +631,7 @@ adminRouter.get("/runtime", need("read"), wrap(async (_req, res) => {
     },
     workers: workerRuntimeReports(),
     stats: reg.stats(day).byProvider,
-    active: reg.active().slice(0, 50).map((r) => ({ id: r.id, provider: r.provider, tenantId: r.tenantId, customer: adminService().orgByTenant(r.tenantId)?.name ?? null, state: r.state, policy: `${r.policyTemplate}.v${r.policyVersion}`, retention: r.retention, createdAt: r.createdAt })),
+    active: (await Promise.all(reg.active().slice(0, 50).map(async (r) => ({ id: r.id, provider: r.provider, tenantId: r.tenantId, customer: (await adminService().orgByTenant(r.tenantId))?.name ?? null, state: r.state, policy: `${r.policyTemplate}.v${r.policyVersion}`, retention: r.retention, createdAt: r.createdAt })))),
     failures,
     flags: (await Promise.all(reg.flags(OPENSHELL_FLAG).map(async (f) => ({ ...f, name: f.scope === "org" ? (await orgName(f.scopeId)) : null })))),
     pendingRequests: (await Promise.all(reg.policyRequests({ status: "pending", limit: 50 }).map(async (r) => ({ ...r, customer: (await orgName(r.organizationId)) })))),
@@ -664,9 +665,9 @@ adminRouter.post("/runtime/requests/:id", need("support.write"), wrap(async (req
 }));
 
 /** A customer's sandboxes. Viewing is itself audited (admin sandbox access). */
-adminRouter.get("/customers/:id/sandboxes", need("read"), wrap((req: AdminRequest, res) => {
-  const id = customerOr404(req, res); if (!id) return;
-  const org = adminService().orgByTenant(id)!;
+adminRouter.get("/customers/:id/sandboxes", need("read"), wrap(async (req: AdminRequest, res) => {
+  const id = (await customerOr404(req, res)); if (!id) return;
+  const org = (await adminService().orgByTenant(id))!;
   const reg = sandboxRegistry();
   reg.audit("admin.sandbox.access", `staff:${req.staff!.email}`, { organizationId: org.id, detail: { tenantId: id } });
   res.json({
@@ -690,7 +691,7 @@ adminRouter.get("/backups", need("read"), wrap((_req, res) => {
 
 adminRouter.get("/audit", need("read"), wrap(async (req, res) => {
   const rows = (await staffStore().auditLog({ action: req.query.action ? String(req.query.action) : undefined, actor: req.query.actor ? String(req.query.actor) : undefined, tenantId: req.query.tenant ? String(req.query.tenant) : undefined, before: req.query.before ? num(req.query.before, 0) : undefined, limit: num(req.query.limit, 50) }));
-  res.json({ audit: rows.map((r) => ({ ...r, title: AUDIT_TITLES[r.action] ?? r.action, customer: r.tenantId ? adminService().orgByTenant(r.tenantId)?.name ?? null : null })) });
+  res.json({ audit: (await Promise.all(rows.map(async (r) => ({ ...r, title: AUDIT_TITLES[r.action] ?? r.action, customer: r.tenantId ? (await adminService().orgByTenant(r.tenantId))?.name ?? null : null })))) });
 }));
 
 // ---------- staff ----------
