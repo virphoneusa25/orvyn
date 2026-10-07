@@ -306,3 +306,32 @@ test("real PostgreSQL: marketplace registries and optional catalog cache survive
     assert.equal(again.listPrivateRegistries().length, 7);
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+
+test("real PostgreSQL: tenant data HTTP endpoints persist memory and profile before responding", { skip: !live }, async () => {
+  const { default: express } = await import("express");
+  const { installTenantDataRoutes } = await import("../routes/tenantDataRoutes");
+  const { PROFILES } = await import("../gateway/PermissionProfiles");
+  const tenantId = "tenant-data-http-" + randomUUID();
+  const store = await PostgresTenantStore.connect(url, tenantId);
+  const profile = Object.keys(PROFILES)[0] as any;
+  const tenant = { currentProjectRoot: null, localStore: store, toolGateway: { profile } };
+  const app = express(); app.use(express.json()); installTenantDataRoutes(app, () => tenant);
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const origin = "http://127.0.0.1:" + (server.address() as { port: number }).port;
+  const request = (path: string, method = "GET", body?: unknown) => fetch(origin + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+  try {
+    assert.equal((await request("/memory", "POST", { id: "fixture", scope: "global", content: "original" })).status, 201);
+    assert.equal((await store.getMemory("fixture")).content, "original");
+    assert.equal((await (await request("/memory/fixture", "PATCH", { content: "updated" })).json()).memory.content, "updated");
+    assert.equal((await (await request("/memory")).json()).memories[0].content, "updated");
+    assert.equal((await request("/profile", "POST", { profile })).status, 200);
+    assert.equal(await store.getSetting("profile"), profile);
+    assert.equal((await request("/memory/fixture", "DELETE")).status, 204);
+    assert.equal(await store.getMemory("fixture"), null);
+  } finally {
+    server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()));
+    await store.close(); await cleanup(tenantId);
+  }
+});
