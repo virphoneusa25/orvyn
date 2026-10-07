@@ -118,15 +118,15 @@ export function mcpRouter(requireTenant: (req: any) => any): Router {
     res.json({ tools: t.mcpManager.searchTools(String(req.query.q ?? "")) });
   });
 
-  r.post("/servers/:id/permissions/tool", (req, res) => {
+  r.post("/servers/:id/permissions/tool",  async (req, res) => {
     const t = requireTenant(req);
-    t.mcpManager.setToolPermission(req.params.id, String(req.body.tool ?? ""), ["ALLOW", "ASK", "DENY"].includes(req.body.mode) ? req.body.mode : "ASK");
+    (await t.mcpManager.setToolPermission(req.params.id, String(req.body.tool ?? ""), ["ALLOW", "ASK", "DENY"].includes(req.body.mode) ? req.body.mode : "ASK"));
     res.json({ ok: true });
   });
 
-  r.post("/servers/:id/permissions/server", (req, res) => {
+  r.post("/servers/:id/permissions/server",  async (req, res) => {
     const t = requireTenant(req);
-    t.mcpManager.setServerDefaults(req.params.id, req.body.defaults ?? {});
+    (await t.mcpManager.setServerDefaults(req.params.id, req.body.defaults ?? {}));
     res.json({ ok: true });
   });
 

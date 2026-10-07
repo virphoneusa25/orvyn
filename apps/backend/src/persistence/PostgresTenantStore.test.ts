@@ -250,3 +250,21 @@ test("real PostgreSQL: tenant-bound MCP credentials reopen and delete after ackn
     assert.equal(await secrets.get("fixture.token"), null);
   } finally { await store.close(); await cleanup(tenant); if (previousVaultKey === undefined) delete process.env.ORVYN_VAULT_KEY; else process.env.ORVYN_VAULT_KEY = previousVaultKey; }
 });
+
+test("real PostgreSQL: MCP configuration and permissions reopen as one acknowledged document", { skip: !live }, async () => {
+  const { McpRegistry } = await import("../mcp/McpRegistry");
+  const tenant = "mcp-registry-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const registry = new McpRegistry(store, tenant); await registry.ready;
+    await registry.upsert({ id: "fixture", name: "fixture", enabled: false, transport: "http", url: "https://fixture.invalid", createdAt: 1, updatedAt: 1 }, store);
+    await registry.setPolicy("fixture", { serverDefaults: { READ: "DENY" }, toolOverrides: {} }, store);
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const reopened = new McpRegistry(store, tenant); await reopened.ready;
+    assert.equal(reopened.list()[0].id, "fixture");
+    assert.equal(reopened.policy("fixture").serverDefaults.READ, "DENY");
+    await reopened.remove("fixture", store);
+    const empty = new McpRegistry(store, tenant); await empty.ready;
+    assert.equal(empty.list().length, 0);
+  } finally { await store.close(); await cleanup(tenant); }
+});

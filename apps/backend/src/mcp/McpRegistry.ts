@@ -48,32 +48,40 @@ export class McpRegistry {
   private policies = new Map<string, McpPermissionPolicy>();
   private secrets: SecretStore;
 
-  constructor(
-    store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void; deleteSetting?(k: string): void },
-    tenantId = "local",
-  ) {
-    this.secrets = makeSecretStore(store, tenantId);
-    try {
-      const raw = store.getSetting(CONFIG_KEY);
-      const list = raw ? (JSON.parse(String(raw)) as McpServerConfig[]) : [];
-      for (const c of list) this.configs.set(c.id, c);
-    } catch {
-      /* corrupt config — start empty, never crash the app for it */
-    }
-    try {
-      const raw = store.getSetting(POLICY_KEY);
-      const obj = raw ? (JSON.parse(String(raw)) as Record<string, McpPermissionPolicy>) : {};
-      for (const [id, p] of Object.entries(obj)) this.policies.set(id, p);
-    } catch {
-      /* same */
-    }
-  }
 
-  private persist(store: { setSetting(k: string, v: string): void }): void {
-    // Secrets are filtered out defensively: config records never carry them.
-    const safe = [...this.configs.values()].map((c) => ({ ...c, headers: c.headers ? this.stripSecretValues(c.headers, c.headers) : undefined }));
-    store.setSetting(CONFIG_KEY, JSON.stringify(safe));
-    store.setSetting(POLICY_KEY, JSON.stringify(Object.fromEntries(this.policies)));
+  readonly ready: Promise<void>;
+  private initialized = false;
+  private writes: Promise<void> = Promise.resolve();
+  constructor(store: { getSetting(k: string): unknown; setSetting(k: string, v: string): void | Promise<void>; deleteSetting?(k: string): void | Promise<void> }, tenantId = "local") {
+    this.secrets = makeSecretStore(store, tenantId);
+    const values = [store.getSetting("mcp.registry.v2"), store.getSetting(CONFIG_KEY), store.getSetting(POLICY_KEY)];
+    if (values.some((value) => value instanceof Promise)) this.ready = Promise.all(values).then((rows) => this.hydrate(rows));
+    else { this.hydrate(values); this.ready = Promise.resolve(); }
+    void this.ready.catch(() => {});
+  }
+  private hydrate([document, configs, policies]: unknown[]): void {
+    if (document) {
+      const parsed = JSON.parse(String(document));
+      if (parsed.version !== 2 || !Array.isArray(parsed.configs) || !parsed.policies || typeof parsed.policies !== "object" || Array.isArray(parsed.policies)) throw new Error("Invalid MCP registry storage");
+      this.configs = new Map(parsed.configs.map((c: McpServerConfig) => [c.id, c]));
+      this.policies = new Map(Object.entries(parsed.policies));
+    } else {
+      try { for (const c of configs ? JSON.parse(String(configs)) : []) this.configs.set(c.id, c); } catch {}
+      try { for (const [id, policy] of Object.entries(policies ? JSON.parse(String(policies)) : {})) this.policies.set(id, policy as McpPermissionPolicy); } catch {}
+    }
+    this.initialized = true;
+  }
+  private requireReady(): void { if (!this.initialized) throw new Error("MCP registry initialization is incomplete"); }
+  private change<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writes.then(async () => { await this.ready; return operation(); });
+    this.writes = result.then(() => {}, () => {});
+    return result;
+  }
+  private async persist(store: { setSetting(k: string, v: string): void | Promise<void> }, configs: Map<string, McpServerConfig>, policies: Map<string, McpPermissionPolicy>): Promise<void> {
+    const safe = [...configs.values()].map((c) => ({ ...c, headers: c.headers ? this.stripSecretValues(c.headers, c.headers) : undefined }));
+    await store.setSetting("mcp.registry.v2", JSON.stringify({ version: 2, configs: safe, policies: Object.fromEntries(policies) }));
+    this.configs = new Map(safe.map((c) => [c.id, c]));
+    this.policies = policies;
   }
 
   private stripSecretValues(headers: Record<string, string>, keep: Record<string, string>): Record<string, string> {
@@ -88,35 +96,36 @@ export class McpRegistry {
   }
 
   list(): McpServerConfig[] {
-    return [...this.configs.values()].sort((a, b) => a.createdAt - b.createdAt);
+    this.requireReady();
+    return [...this.configs.values()].map((c) => structuredClone(c)).sort((a, b) => a.createdAt - b.createdAt);
   }
 
   get(id: string): McpServerConfig | undefined {
-    return this.configs.get(id);
+    this.requireReady();
+    const config = this.configs.get(id); return config && structuredClone(config);
   }
 
-  upsert(cfg: McpServerConfig, store: { setSetting(k: string, v: string): void }): McpServerConfig {
-    this.configs.set(cfg.id, cfg);
-    this.persist(store);
-    return cfg;
-  }
 
-  async remove(id: string, store: { setSetting(k: string, v: string): void }): Promise<void> {
-    // Best-effort secret cleanup when the server goes away.
-    const cfg = this.configs.get(id);
-    for (const s of cfg?.secretNames ?? []) await this.secrets.delete(`${id}.${s}`);
-    this.configs.delete(id);
-    this.policies.delete(id);
-    this.persist(store);
+  async upsert(cfg: McpServerConfig, store: { setSetting(k: string, v: string): void | Promise<void> }): Promise<McpServerConfig> {
+    return this.change(async () => { const configs = new Map(this.configs); configs.set(cfg.id, structuredClone(cfg)); await this.persist(store, configs, new Map(this.policies)); return structuredClone(cfg); });
   }
-
-  policy(id: string): McpPermissionPolicy {
-    return this.policies.get(id) ?? { serverDefaults: {}, toolOverrides: {} };
+  async remove(id: string, store: { setSetting(k: string, v: string): void | Promise<void> }): Promise<void> {
+    return this.change(async () => {
+      const cfg = this.configs.get(id); for (const name of cfg?.secretNames ?? []) await this.secrets.delete(`${id}.${name}`);
+      const configs = new Map(this.configs), policies = new Map(this.policies); configs.delete(id); policies.delete(id);
+      await this.persist(store, configs, policies);
+    });
   }
-
-  setPolicy(id: string, policy: McpPermissionPolicy, store: { setSetting(k: string, v: string): void }): void {
-    this.policies.set(id, policy);
-    this.persist(store);
+  policy(id: string): McpPermissionPolicy { this.requireReady(); return structuredClone(this.policies.get(id) ?? { serverDefaults: {}, toolOverrides: {} }); }
+  async updatePolicy(id: string, update: (policy: McpPermissionPolicy) => void, store: { setSetting(k: string, v: string): void | Promise<void> }): Promise<McpPermissionPolicy> {
+    return this.change(async () => {
+      const next = this.policy(id); update(next);
+      const policies = new Map(this.policies); policies.set(id, structuredClone(next));
+      await this.persist(store, new Map(this.configs), policies); return structuredClone(next);
+    });
+  }
+  async setPolicy(id: string, policy: McpPermissionPolicy, store: { setSetting(k: string, v: string): void | Promise<void> }): Promise<void> {
+    return this.change(async () => { const policies = new Map(this.policies); policies.set(id, structuredClone(policy)); await this.persist(store, new Map(this.configs), policies); });
   }
 
   async secret(id: string, name: string): Promise<string | null> {
