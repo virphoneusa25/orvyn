@@ -68,3 +68,15 @@ test("nudges and provider retries continue; the turn limit fails the run", async
   assert.deepEqual(out.records.map((r) => r.kind), ["retry", "continue", "continue"]);
   assert.deepEqual(p.log, ["limit"]);
 });
+
+test("completion waits for durable asynchronous bookkeeping and propagates failure", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let finished = false;
+  const run = runAgentTurns(policy([reply([], "done")], { complete: async () => { await gate; } })).then((outcome) => { finished = true; return outcome; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finished, false);
+  release();
+  assert.equal((await run).outcome, "completed");
+  await assert.rejects(runAgentTurns(policy([reply([], "done")], { complete: async () => { throw new Error("storage unavailable"); } })), /storage unavailable/);
+});

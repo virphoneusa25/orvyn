@@ -59,3 +59,25 @@ export function preferencesPrompt(store: unknown): string {
   if (p.primaryUse?.length) lines.push(`They mainly use ORVYN for ${p.primaryUse.map((u) => USES[u] ?? u).join(", ")}.`);
   return lines.length ? `User preferences (from onboarding):\n${lines.map((l) => `- ${l}`).join("\n")}` : "";
 }
+
+
+export interface AsyncSettingsLike {
+  getSetting?(key: string): string | null | Promise<string | null>;
+}
+
+/** Storage failures propagate; unavailable privacy preferences never default to learning. */
+export async function readPreferencesAsync(store: unknown): Promise<OrionPreferences> {
+  const raw = await (store as AsyncSettingsLike | undefined)?.getSetting?.(PREFERENCES_KEY);
+  if (!raw) return {};
+  try { const parsed = JSON.parse(raw); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; }
+  catch { return {}; }
+}
+
+export async function memoryEnabledAsync(store: unknown): Promise<boolean> {
+  return (await readPreferencesAsync(store)).memory !== false;
+}
+
+export async function preferencesPromptAsync(store: unknown): Promise<string> {
+  const preferences = await readPreferencesAsync(store);
+  return preferencesPrompt({ getSetting: () => JSON.stringify(preferences) });
+}
