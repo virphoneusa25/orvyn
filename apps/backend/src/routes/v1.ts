@@ -1,3 +1,4 @@
+import { installTenantDataRoutes } from "./tenantDataRoutes";
 import { randomUUID } from "node:crypto";
 import { asyncHandler } from "../http/asyncHandler";
 import { desktopReleaseStore } from "../releases/desktopReleaseStore";
@@ -1684,50 +1685,13 @@ v1Router.post("/agent/stream/runs/:id/feedback", (req, res) => {
 });
 
 // --- ORION Memory + durable artifact library ---
-v1Router.get("/memory", (req, res) => {
-  const t = requireTenant(req);
-  const root = String(req.query.projectRoot ?? t.currentProjectRoot ?? "").trim() || null;
-  res.json({ memories: t.localStore.listMemories(root) });
-});
 
-v1Router.post("/memory", (req, res) => {
-  const t = requireTenant(req);
-  const content = String(req.body.content ?? "").trim();
-  if (!content) return res.status(400).json({ error: "content is required" });
-  const scope = req.body.scope === "global" ? "global" : "project";
-  const projectRoot = scope === "project" ? String(req.body.projectRoot ?? t.currentProjectRoot ?? "").trim() : null;
-  if (scope === "project" && !projectRoot) return res.status(400).json({ error: "projectRoot is required for project memory" });
-  const id = String(req.body.id ?? `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
-  t.localStore.saveMemory({
-    id, scope, projectRoot, kind: String(req.body.kind ?? "knowledge"),
-    title: String(req.body.title ?? content.slice(0, 80)), content,
-    source: req.body.source ? String(req.body.source) : "user", pinned: req.body.pinned === true,
-  });
-  res.status(201).json({ id });
-});
 
-v1Router.patch("/memory/:id", (req, res) => {
-  const t = requireTenant(req);
-  const current = t.localStore.getMemory(req.params.id);
-  if (!current) return res.status(404).json({ error: "memory not found" });
-  const scope = req.body.scope === "global" ? "global" : (req.body.scope === "project" ? "project" : current.scope);
-  const projectRoot = scope === "project" ? String(req.body.projectRoot ?? current.projectRoot ?? t.currentProjectRoot ?? "").trim() : null;
-  if (scope === "project" && !projectRoot) return res.status(400).json({ error: "projectRoot is required for project memory" });
-  t.localStore.saveMemory({
-    id: current.id, scope, projectRoot,
-    kind: String(req.body.kind ?? current.kind),
-    title: String(req.body.title ?? current.title),
-    content: String(req.body.content ?? current.content),
-    source: String(req.body.source ?? current.source ?? "user"),
-    pinned: typeof req.body.pinned === "boolean" ? req.body.pinned : current.pinned,
-  });
-  res.json({ memory: t.localStore.getMemory(current.id) });
-});
 
-v1Router.delete("/memory/:id", (req, res) => {
-  requireTenant(req).localStore.deleteMemory(req.params.id);
-  res.status(204).end();
-});
+
+
+
+
 
 function publicArtifact(svc: { toPublic: (a: any) => unknown }, record: any) {
   return svc.toPublic(record);
@@ -2194,10 +2158,7 @@ v1Router.get("/learning/experiences", asyncHandler(async (req, res) => {
   res.json({ experiences: rows });
 }));
 
-v1Router.get("/learning/skills", (req, res) => {
-  const t = requireTenant(req);
-  res.json({ skills: t.localStore.listLearningRecords("skill", 80).map((r) => r.payload) });
-});
+
 
 v1Router.get("/skills/registry", (_req, res) => {
   res.json(skillRegistry.report());
@@ -2272,10 +2233,7 @@ v1Router.get("/agent/skills", asyncHandler(async (req, res) => {
   res.json({ skills: (await listValidatedSkills(t.localStore)) });
 }));
 
-v1Router.get("/learning/datasets", (req, res) => {
-  const t = requireTenant(req);
-  res.json({ datasets: t.localStore.listLearningRecords("dataset", 40).map((r) => r.payload) });
-});
+
 
 v1Router.get("/learning/evaluations", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
@@ -2483,13 +2441,7 @@ v1Router.get("/agent/stream/runs/:id/replay", (req, res) => {
 // --- Autonomy profile (spec §47: SAFE / BALANCED / AUTONOMOUS) ---
 import { PROFILES, PermissionProfile } from "../gateway/PermissionProfiles";
 
-v1Router.get("/profile", (req, res) => {
-  const t = requireTenant(req);
-  res.json({
-    profile: t.toolGateway.profile,
-    profiles: Object.entries(PROFILES).map(([id, p]) => ({ id, ...p })),
-  });
-});
+
 
 function requestPublicBase(req: { protocol?: string; get?: (h: string) => string | undefined; headers?: Record<string, unknown> }): string {
   const env = process.env.ORVYN_PUBLIC_URL || process.env.ORVYN_STAGING_URL;
@@ -2578,13 +2530,6 @@ v1Router.all("/ports/:id/proxy", (req, res) => {
   }
 });
 
-v1Router.post("/profile", (req, res) => {
-  const t = requireTenant(req);
-  const profile = String(req.body.profile ?? "").toUpperCase() as PermissionProfile;
-  if (!PROFILES[profile]) {
-    return res.status(400).json({ error: `Unknown profile "${req.body.profile}". Valid: ${Object.keys(PROFILES).join(", ")}` });
-  }
-  t.toolGateway.profile = profile;
-  t.localStore.setSetting("profile", profile);
-  res.json({ ok: true, profile });
-});
+
+
+installTenantDataRoutes(v1Router, requireTenant);
