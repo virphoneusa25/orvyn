@@ -48,7 +48,7 @@ export const v1Router = Router();
 v1Router.get("/storage/status", asyncHandler(async (req, res) => {
   const tenant = requireTenant(req);
   const postgres = await tenantPostgresMirror.status(tenant.id);
-  const sqlite = tenant.localStore.tenantMirrorCounts();
+  const sqlite = await tenant.localStore.tenantMirrorCounts();
   const parity = postgres.enabled && postgres.counts !== undefined &&
     Object.entries(sqlite).every(([key, count]) => postgres.counts![key] === count);
   res.status(!postgres.enabled || (postgres.ready && parity) ? 200 : 503).json({
@@ -1464,7 +1464,7 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
   if (missionQuota > 0) {
     const d = new Date();
     const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
-    const used = t.localStore.countMissionsSince(monthStart);
+    const used = await t.localStore.countMissionsSince(monthStart);
     if (used >= missionQuota) {
       return res.status(429).json({
         error: `Monthly mission quota exceeded (${used}/${missionQuota}). Resets at the start of next month (UTC).`,
@@ -1572,25 +1572,16 @@ v1Router.post("/agent/orchestrate/approvals/:callId", asyncHandler(async (req, r
 // --- Run feedback (thumbs up/down on a finished run) ---
 // Appended to a per-tenant log in the local store: enough to review later,
 // and the natural place to mine training signal from when that day comes.
-v1Router.post("/agent/stream/runs/:id/feedback", (req, res) => {
+v1Router.post("/agent/stream/runs/:id/feedback", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const run = t.runStore.get(req.params.id);
   if (!run) return res.status(404).json({ error: "Unknown run" });
   const kind = req.body.kind === "down" ? "down" : req.body.kind === "up" ? "up" : null;
   if (!kind) return res.status(400).json({ error: 'kind must be "up" or "down"' });
 
-  const key = "feedback";
-  let log: unknown[] = [];
-  try {
-    log = JSON.parse(t.localStore.getSetting(key) ?? "[]");
-    if (!Array.isArray(log)) log = [];
-  } catch {
-    log = [];
-  }
-  log.push({ runId: req.params.id, kind, at: new Date().toISOString() });
-  t.localStore.setSetting(key, JSON.stringify(log.slice(-500)));
+  await t.localStore.appendRunFeedback(req.params.id, kind);
   res.json({ ok: true });
-});
+}));
 
 // --- ORION Memory + durable artifact library ---
 

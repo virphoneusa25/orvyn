@@ -450,6 +450,18 @@ export class LocalStore {
 
   // ---------- ORION memory + artifact library ----------
 
+  /** A single operation so PostgreSQL can lock the full read-modify-write. */
+  appendRunFeedback(runId: string, kind: "up" | "down", at = new Date().toISOString()): void {
+    const raw = this.getSetting("feedback");
+    let log: unknown[] = [];
+    try {
+      const parsed = JSON.parse(raw ?? "[]");
+      if (Array.isArray(parsed)) log = parsed;
+    } catch { /* Preserve legacy recovery from malformed feedback JSON. */ }
+    log.push({ runId, kind, at });
+    this.setSetting("feedback", JSON.stringify(log.slice(-500)));
+  }
+
   saveMemory(input: { id: string; scope: "global" | "project"; projectRoot?: string | null; kind: string; title: string; content: string; source?: string | null; pinned?: boolean }): void {
     const now = Date.now();
     this.guard("saveMemory", () => this.db.prepare(

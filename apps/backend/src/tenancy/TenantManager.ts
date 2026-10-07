@@ -45,6 +45,7 @@ import { hardeningFor } from "../mcp/hardening/hardening";
 import { sanitizeToolName } from "../mcp/McpToolAdapter";
 import { ContextEngine } from "../context/ContextEngine";
 import { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence } from "../persistence/TenantPersistence";
 import { ArtifactService } from "../artifacts/ArtifactService";
 import { ExperienceStore } from "../learning/ExperienceStore";
 import { persistSkillCandidates } from "../learning/skillCandidates";
@@ -80,7 +81,7 @@ export interface Tenant {
   currentProjectRoot: string | null;
   usage: { requests: number; agentRuns: number; indexBuilds: number };
   /** Durable local storage (missions, usage, settings, models). */
-  localStore: LocalStore;
+  localStore: TenantPersistence;
   /** Tenant-scoped virtual workspace + generated-file store. */
   artifactService: ArtifactService;
   experienceStore: ExperienceStore;
@@ -122,7 +123,10 @@ export class TenantManager {
 
   private creating = new Map<string, Promise<Tenant>>();
 
-  constructor(private openStore: (id: string) => LocalStore = (id) => new LocalStore(id)) {}
+  constructor(
+    private openStore: (id: string) => TenantPersistence | Promise<TenantPersistence> = (id) => new LocalStore(id),
+    private openSessions: (id: string) => WorkSessionPersistence | Promise<WorkSessionPersistence> = (id) => new WorkSessionStore(id),
+  ) {}
 
   create(name: string, apiKey: string, id: string = randomUUID()): Promise<Tenant> {
     const existing = this.tenants.get(id);
@@ -136,7 +140,7 @@ export class TenantManager {
   }
 
   private async buildTenant(name: string, apiKey: string, id: string): Promise<Tenant> {
-    const localStore = this.openStore(id);
+    const localStore = await this.openStore(id);
     let sessionStore: WorkSessionPersistence | undefined;
     try {
     const modelService = new ModelService();
@@ -251,7 +255,7 @@ export class TenantManager {
       localStore,
       artifactService: new ArtifactService(id, localStore),
       experienceStore: new ExperienceStore(id, localStore),
-      sessions: (sessionStore = new WorkSessionStore(id)),
+      sessions: (sessionStore = await this.openSessions(id)),
     };
     (await seedValidatedSkills(localStore));
     // MCP host gets the now-constructed tenant's gateway.
@@ -409,7 +413,7 @@ export class TenantManager {
     return tenant;
     } catch (error) {
       try { await sessionStore?.close(); } catch {}
-      try { localStore.close(); } catch {}
+      try { await localStore.close(); } catch {}
       throw error;
     }
   }

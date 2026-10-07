@@ -426,3 +426,50 @@ test("real PostgreSQL: remembered tool approval is acknowledged before action an
     assert.deepEqual(await store.getToolApprovalGrants("subject", "session", "project"), []);
   } finally { await store.close(); await cleanup(tenant); }
 });
+
+
+test("real PostgreSQL: feedback appends serialize across independent stores and retain the latest 500 entries", { skip: !live }, async () => {
+  const tenant = "feedback-" + randomUUID();
+  const first = await PostgresTenantStore.connect(url, tenant);
+  const second = await PostgresTenantStore.connect(url, tenant);
+  try {
+    await Promise.all(Array.from({ length: 40 }, (_, i) => (i % 2 ? first : second).appendRunFeedback("run-" + i, "up", "fixture")));
+    const rows = JSON.parse((await first.getSetting("feedback"))!);
+    assert.equal(rows.length, 40); assert.equal(new Set(rows.map((row: any) => row.runId)).size, 40);
+    await first.setSetting("feedback", JSON.stringify(Array.from({ length: 500 }, (_, i) => ({ runId: "old-" + i }))));
+    await second.appendRunFeedback("latest", "down", "fixture");
+    const bounded = JSON.parse((await first.getSetting("feedback"))!);
+    assert.equal(bounded.length, 500); assert.equal(bounded[0].runId, "old-1"); assert.equal(bounded[499].runId, "latest");
+  } finally { await first.close(); await second.close(); await cleanup(tenant); }
+});
+
+test("real PostgreSQL: tenant bootstrap awaits an async store factory before publishing services", { skip: !live }, async () => {
+  const { TenantManager } = await import("../tenancy/TenantManager");
+  const { PostgresWorkSessionStore } = await import("../sessions/PostgresWorkSessionStore");
+  const { sessionSchema } = await import("../sessions/PostgresSessionDatabase");
+  const tenantId = "async-bootstrap-" + randomUUID();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let opens = 0;
+  const manager = new TenantManager(async (id) => { opens++; await gate; return PostgresTenantStore.connect(url, id); }, (id) => PostgresWorkSessionStore.connect(url, id));
+  try {
+    const pending = manager.create("fixture", "synthetic-key", tenantId);
+    const shared = manager.create("fixture", "synthetic-key", tenantId);
+    assert.equal(pending, shared); assert.equal(manager.get(tenantId), undefined);
+    assert.equal(manager.resolveByApiKey("synthetic-key"), undefined);
+    release(); const tenant = await pending;
+    assert.equal(opens, 1); assert.equal(manager.resolveByApiKey("synthetic-key"), tenant);
+    assert.ok(tenant.localStore instanceof PostgresTenantStore);
+    assert.ok(tenant.sessions instanceof PostgresWorkSessionStore);
+    const session = await tenant.sessions.create({ title: "fixture", userId: "fixture" });
+    assert.equal((await tenant.sessions.get(session.sessionId))?.title, "fixture");
+    assert.ok((await tenant.localStore.listLearningRecords("skill", 200)).length > 0);
+    await tenant.localStore.appendRunFeedback("fixture-run", "up", "fixture");
+    assert.equal(JSON.parse((await tenant.localStore.getSetting("feedback"))!)[0].runId, "fixture-run");
+  } finally {
+    for (const tenant of manager.list()) { await tenant.sessions.close(); await tenant.localStore.close(); }
+    await cleanup(tenantId);
+    const pool = new Pool({ connectionString: url });
+    try { await pool.query(`DROP SCHEMA IF EXISTS ${sessionSchema(tenantId)} CASCADE`); } finally { await pool.end(); }
+  }
+});

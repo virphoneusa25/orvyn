@@ -17,7 +17,7 @@ import * as os from "os";
 import * as path from "path";
 import { AITool, ToolResult } from "../ToolTypes";
 import { workspaceRootFor } from "../../execution/workspaceBinding";
-import type { LocalStore } from "../../persistence/LocalStore";
+import type { TenantPersistence } from "../../persistence/TenantPersistence";
 import {
   listResolvedHosts,
   materializeIdentity,
@@ -49,7 +49,7 @@ function expandHome(p: string): string {
 
 export function makeSshExecTool(
   projectRoot: string,
-  opts?: { tenantId?: string; localStore?: LocalStore }
+  opts?: { tenantId?: string; localStore?: Pick<TenantPersistence, "getSetting" | "setSetting"> }
 ): AITool {
   return {
     name: "ssh_exec",

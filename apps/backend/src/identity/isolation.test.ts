@@ -59,7 +59,7 @@ test("tenant A cannot read tenant B project, chat, or guessed ids", async () => 
   } finally {
     for (const tenant of tm?.list() ?? []) {
       tenant.sessions.close();
-      tenant.localStore.close();
+      await tenant.localStore.close();
     }
     if (prevData === undefined) delete process.env.ORVYN_DATA_DIR;
     else process.env.ORVYN_DATA_DIR = prevData;
@@ -130,9 +130,9 @@ test("simultaneous tenant requests share fully initialized services", async () =
     assert.equal(manager.list().length, 1);
     assert.equal(manager.resolveByApiKey("fixture-key"), a);
     await a.taskEngine.ready;
-    assert.ok(a.localStore.listLearningRecords("skill", 200).length > 0);
+    assert.ok((await a.localStore.listLearningRecords("skill", 200)).length > 0);
   } finally {
-    for (const tenant of manager.list()) { await tenant.sessions.close(); tenant.localStore.close(); }
+    for (const tenant of manager.list()) { await tenant.sessions.close(); await tenant.localStore.close(); }
     if (previous === undefined) delete process.env.ORVYN_DATA_DIR; else process.env.ORVYN_DATA_DIR = previous;
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -144,7 +144,7 @@ test("failed tenant initialization stays unpublished and can be retried", async 
   const previous = process.env.ORVYN_DATA_DIR;
   process.env.ORVYN_DATA_DIR = dir;
   let attempts = 0;
-  const manager = new TenantManager((id) => { if (++attempts === 1) throw new Error("synthetic storage unavailable"); return new LocalStore(id, dir); });
+  const manager = new TenantManager(async (id) => { if (++attempts === 1) throw new Error("synthetic storage unavailable"); return new LocalStore(id, dir); });
   try {
     await assert.rejects(manager.create("fixture", "fixture-key", "fixture-retry"), /storage unavailable/);
     assert.equal(manager.get("fixture-retry"), undefined);
@@ -153,7 +153,29 @@ test("failed tenant initialization stays unpublished and can be retried", async 
     assert.equal(attempts, 2);
     assert.equal(manager.resolveByApiKey("fixture-key"), tenant);
   } finally {
-    for (const tenant of manager.list()) { await tenant.sessions.close(); tenant.localStore.close(); }
+    for (const tenant of manager.list()) { await tenant.sessions.close(); await tenant.localStore.close(); }
+    if (previous === undefined) delete process.env.ORVYN_DATA_DIR; else process.env.ORVYN_DATA_DIR = previous;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("an async session-store failure closes the tenant store and leaves no published tenant", async () => {
+  const { LocalStore } = await import("../persistence/LocalStore");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-session-start-failure-"));
+  const previous = process.env.ORVYN_DATA_DIR;
+  process.env.ORVYN_DATA_DIR = dir;
+  let closed = false;
+  const manager = new TenantManager(async (id) => {
+    const store = new LocalStore(id, dir), close = store.close.bind(store);
+    store.close = () => { closed = true; close(); };
+    return store;
+  }, async () => { throw new Error("synthetic session storage unavailable"); });
+  try {
+    await assert.rejects(manager.create("fixture", "synthetic-key", "session-failure"), /session storage unavailable/);
+    assert.equal(closed, true); assert.equal(manager.get("session-failure"), undefined);
+    assert.equal(manager.resolveByApiKey("synthetic-key"), undefined);
+  } finally {
     if (previous === undefined) delete process.env.ORVYN_DATA_DIR; else process.env.ORVYN_DATA_DIR = previous;
     await fs.rm(dir, { recursive: true, force: true });
   }
