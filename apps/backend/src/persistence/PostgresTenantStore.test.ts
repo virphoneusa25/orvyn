@@ -175,3 +175,23 @@ test("real PostgreSQL: artifacts persist metadata before success and reopen with
     assert.equal(await reopened.getArtifact(record.artifactId), null);
   } finally { await store.close(); await cleanup(tenant); rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("real PostgreSQL: missions acknowledge transitions and reconcile interrupted history on restart", { skip: !live }, async () => {
+  const { TaskEngine } = await import("../agent/TaskEngine");
+  const { EventBus } = await import("../agent/EventBus");
+  const { RunStore } = await import("../agent/events");
+  const tenant = "mission-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const engine = new TaskEngine(new EventBus(new RunStore()), store);
+    const mission = await engine.createMission("fixture-run", "/fixture", "fixture mission");
+    const task = (await engine.addTask(mission.id, "fixture task", "coder"))!;
+    await engine.setMissionStatus(mission.id, "RUNNING");
+    await engine.transition(mission.id, task.id, "RUNNING");
+    assert.equal((await store.loadMissions())[0].tasks[0].status, "RUNNING");
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const restarted = new TaskEngine(new EventBus(new RunStore()), store);
+    assert.equal((await restarted.getMission(mission.id))!.status, "FAILED");
+    assert.equal((await store.loadMissions())[0].status, "FAILED");
+  } finally { await store.close(); await cleanup(tenant); }
+});

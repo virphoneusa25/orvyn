@@ -1991,20 +1991,20 @@ v1Router.delete("/checkpoints/:id", asyncHandler(async (req, res) => {
 }));
 
 // --- Missions (Task Engine state for Mission Control) ---
-v1Router.get("/missions", (req, res) => {
+v1Router.get("/missions", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const missions = t.taskEngine.listMissions().map((m) => t.taskEngine.serialize(m));
+  const missions = (await t.taskEngine.listMissions()).map((m) => t.taskEngine.serialize(m));
   const seen = new Set(missions.map((m) => m.runId));
   const runs = composerRunsAsMissions(t.runStore.list(), seen);
   res.json({ missions: [...missions, ...runs].sort((a, b) => b.createdAt - a.createdAt).slice(0, 50) });
-});
+}));
 
-v1Router.get("/missions/:id", (req, res) => {
+v1Router.get("/missions/:id", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  const m = t.taskEngine.getMission(req.params.id);
+  const m = (await t.taskEngine.getMission(req.params.id));
   if (!m) return res.status(404).json({ error: "Unknown mission" });
   res.json({ mission: t.taskEngine.serialize(m) });
-});
+}));
 
 // --- Servers (SSH connections from the project's .orvyn/ssh.json) ---
 // Lists aliases only — never key material. The renderer uses this for the
