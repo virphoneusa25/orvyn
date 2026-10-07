@@ -18,26 +18,26 @@ async function tenantOf(userId: string) {
 export async function saveGithubConnection(userId: string, conn: { token: string; login: string; scope: string }): Promise<void> {
   const tenant = (await tenantOf(userId));
   if (!tenant) throw new Error("No workspace for this account yet.");
-  tenant.localStore.setSetting("github.token", sealSecret(conn.token, tenant.id, "github.token"));
-  tenant.localStore.setSetting("github.connection", JSON.stringify({ login: conn.login, scope: conn.scope, connectedAt: Date.now() }));
+  await tenant.localStore.setSetting("github.token", sealSecret(conn.token, tenant.id, "github.token"));
+  await tenant.localStore.setSetting("github.connection", JSON.stringify({ login: conn.login, scope: conn.scope, connectedAt: Date.now() }));
 }
 
 export async function githubConnection(userId: string): Promise<{ connected: boolean; login?: string; scope?: string }> {
   const tenant = (await tenantOf(userId));
-  const meta = tenant?.localStore.getSetting("github.connection");
-  if (!tenant || !meta || !tenant.localStore.getSetting("github.token")) return { connected: false };
+  const meta = await tenant?.localStore.getSetting("github.connection");
+  if (!tenant || !meta || !(await tenant.localStore.getSetting("github.token"))) return { connected: false };
   try { const m = JSON.parse(meta); return { connected: true, login: m.login, scope: m.scope }; } catch { return { connected: true }; }
 }
 
 /** Server-side only: the token for git operations on the customer's repositories. */
-export function githubToken(tenantId: string): string | null {
+export async function githubToken(tenantId: string): Promise<string | null> {
   const tenant = tenantManager.get(tenantId);
-  const sealed = tenant?.localStore.getSetting("github.token");
+  const sealed = await tenant?.localStore.getSetting("github.token");
   return sealed ? openSecret(sealed, tenantId, "github.token") : null;
 }
 
 export async function disconnectGithub(userId: string): Promise<void> {
   const tenant = (await tenantOf(userId));
-  tenant?.localStore.setSetting("github.token", "");
-  tenant?.localStore.setSetting("github.connection", "");
+  await tenant?.localStore.setSetting("github.token", "");
+  await tenant?.localStore.setSetting("github.connection", "");
 }

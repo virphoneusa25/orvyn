@@ -373,3 +373,35 @@ test("real PostgreSQL: model settings HTTP writes persist before registry public
     if (previous === undefined) delete process.env.ORVYN_CUSTOMER_CATALOG; else process.env.ORVYN_CUSTOMER_CATALOG = previous;
   }
 });
+
+
+test("real PostgreSQL: integration credentials decrypt after reopening and acknowledged removal", { skip: !live }, async () => {
+  const { tenantManager } = await import("../tenancy/TenantManager");
+  const { saveDeploymentConnection, deploymentConnections, deploymentCredential, removeDeploymentConnection } = await import("../integrations/deploymentConnections");
+  const { githubToken } = await import("../integrations/githubConnection");
+  const { sealSecret } = await import("../secrets/vault");
+  const { upsertSshHost, materializeIdentity } = await import("../ssh/sshHostStore");
+  const tenantId = "integration-credentials-" + randomUUID();
+  let store = await PostgresTenantStore.connect(url, tenantId);
+  const previousGet = tenantManager.get, previousKey = process.env.ORVYN_VAULT_KEY;
+  if (!previousKey) process.env.ORVYN_VAULT_KEY = Buffer.alloc(32, 0x65).toString("base64");
+  tenantManager.get = ((id: string) => ({ id, localStore: store })) as any;
+  try {
+    await saveDeploymentConnection(tenantId, "vercel", "synthetic-provider-token");
+    await store.setSetting("github.token", sealSecret("synthetic-github-token", tenantId, "github.token"));
+    const host = await upsertSshHost({ tenantId, localStore: store, alias: tenantId, host: "fixture.invalid", user: "fixture", privateKey: "synthetic-private-key", scope: "session" });
+    await store.close(); store = await PostgresTenantStore.connect(url, tenantId);
+    assert.equal((await deploymentConnections(tenantId)).vercel.connected, true);
+    assert.deepEqual(await deploymentCredential(tenantId, "vercel"), { VERCEL_TOKEN: "synthetic-provider-token" });
+    assert.equal(await githubToken(tenantId), "synthetic-github-token");
+    assert.equal(await githubToken("foreign-tenant"), null);
+    const identity = await materializeIdentity({ tenantId, localStore: store, host });
+    try { assert.ok(identity.keyPath); } finally { await identity.cleanup(); }
+    await removeDeploymentConnection(tenantId, "vercel");
+    assert.equal(await deploymentCredential(tenantId, "vercel"), null);
+  } finally {
+    tenantManager.get = previousGet;
+    await store.close(); await cleanup(tenantId);
+    if (previousKey === undefined) delete process.env.ORVYN_VAULT_KEY; else process.env.ORVYN_VAULT_KEY = previousKey;
+  }
+});
