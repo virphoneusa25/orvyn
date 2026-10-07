@@ -10,21 +10,21 @@
 
 import type { Run, RunStore } from "../agent/events";
 import { finalAnswerOf } from "../agent/runThread";
-import type { SessionMessage, WorkSessionStore } from "./WorkSessionStore";
+import type { SessionMessage, WorkSessionPersistence as WorkSessionStore } from "./WorkSessionStore";
 import type { TurnDecision } from "@orvyn/ai-core";
 
 /** Stable ids, so a retry or a second writer updates instead of duplicating. */
 export const runAnswerMessageId = (runId: string) => `msg_answer_${runId}`;
 
-export function recordRunInstruction(
+export async function recordRunInstruction(
   sessions: WorkSessionStore,
   sessionId: string,
   runId: string,
   instruction: string,
   opts: { messageId?: string; mode?: string; turnDecision?: TurnDecision } = {},
-): SessionMessage | undefined {
+): Promise<SessionMessage | undefined> {
   if (!instruction.trim()) return undefined;
-  return sessions.appendMessage(sessionId, {
+  return await sessions.appendMessage(sessionId, {
     messageId: opts.messageId,
     role: "user",
     content: instruction,
@@ -50,7 +50,7 @@ function shouldPersistFinalAnswer(run: Run): boolean {
 
 /** Stores ORION's final answer once the run reaches a terminal state. */
 export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, sessionId: string, runId: string): void {
-  const save = () => {
+  const save = async () => {
     const run = store.get(runId);
     if (!run) return;
     // A blocked run's fallback carries the actual reason (missing resource,
@@ -66,7 +66,7 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
         : run.status === "partial" ? "The run finished with remaining gaps."
         : "");
     if (!answer) return;
-    sessions.appendMessage(sessionId, { messageId: runAnswerMessageId(runId), role: "assistant", content: answer, runId, mode: "agent" });
+    await sessions.appendMessage(sessionId, { messageId: runAnswerMessageId(runId), role: "assistant", content: answer, runId, mode: "agent" });
     const artifacts: { artifactId: string; name: string; mimeType: string }[] = [];
     const seen = new Set<string>();
     for (const e of run.events) {
@@ -80,11 +80,11 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
         mimeType: String(e.data?.mimeType ?? e.data?.mediaType ?? "application/octet-stream"),
       });
     }
-    if (artifacts.length) sessions.updateMessage(runAnswerMessageId(runId), { meta: { artifacts } });
+    if (artifacts.length) await sessions.updateMessage(runAnswerMessageId(runId), { meta: { artifacts } });
   };
   const run = store.get(runId);
   if (!run) return;
-  if (shouldPersistFinalAnswer(run)) { save(); return; }
+  if (shouldPersistFinalAnswer(run)) { void save().catch(() => console.warn("[sessions] final answer persistence failed")); return; }
   const unsubscribe = store.subscribe(runId, (e) => {
     // A mid-run block pauses for a resource — the answer isn't final yet.
     // Only a settlement-emitted (terminal) block ends the capture.
@@ -92,7 +92,7 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
     if (e.type === "run.completed" || e.type === "run.partial" || e.type === "run.error" || e.type === "run.cancelled" || terminalBlock) {
       unsubscribe();
       // After the event is in the log, so the answer includes the last words.
-      setImmediate(() => { try { save(); } catch { /* storage must never break a run */ } });
+      setImmediate(() => { void save().catch(() => console.warn("[sessions] final answer persistence failed")); });
     }
   });
 }
@@ -108,6 +108,22 @@ export class ChatTurnRecorder {
   private done = false;
   private replyId: string | null = null;
   static SAVE_EVERY_MS = 2000;
+  readonly ready: Promise<void>;
+  private pending: Promise<void> = Promise.resolve();
+  private failure: unknown;
+  private failed = false;
+
+  private write(operation: () => unknown | Promise<unknown>): void {
+    this.pending = this.pending.then(async () => {
+      if (this.failed) return;
+      try { await operation(); } catch (error) { this.failed = true; this.failure = error; }
+    });
+  }
+  private async drain(): Promise<void> {
+    let pending: Promise<void>;
+    do { pending = this.pending; await pending; } while (pending !== this.pending);
+    if (this.failed) throw this.failure;
+  }
 
   constructor(
     private readonly sessions: WorkSessionStore,
@@ -115,32 +131,40 @@ export class ChatTurnRecorder {
     input: { userMessage: string; userMessageId?: string; assistantMessageId?: string; userCreatedAt?: number; mode?: string; attachments?: unknown[]; turnDecision?: TurnDecision },
   ) {
     const mode = input.mode ?? "chat";
-    sessions.appendMessage(sessionId, {
-      messageId: input.userMessageId, role: "user", content: input.userMessage, mode, createdAt: input.userCreatedAt,
-      // The files the user attached (their stored artifact ids), so reopening the chat shows them.
-      ...(input.attachments?.length || input.turnDecision ? { meta: { ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.turnDecision ? { turnDecision: input.turnDecision } : {}) } } : {}),
+    this.write(async () => {
+      const user = await sessions.appendMessage(sessionId, {
+        messageId: input.userMessageId, role: "user", content: input.userMessage, mode, createdAt: input.userCreatedAt,
+        ...(input.attachments?.length || input.turnDecision ? { meta: { ...(input.attachments?.length ? { attachments: input.attachments } : {}), ...(input.turnDecision ? { turnDecision: input.turnDecision } : {}) } } : {}),
+      });
+      if (!user) throw new Error("Conversation instruction could not be stored");
+      const reply = await sessions.appendMessage(sessionId, { messageId: input.assistantMessageId, role: "assistant", content: "", mode, status: "streaming" });
+      if (!reply) throw new Error("Conversation reply could not be stored");
+      this.replyId = reply.messageId;
     });
-    const reply = sessions.appendMessage(sessionId, { messageId: input.assistantMessageId, role: "assistant", content: "", mode, status: "streaming" });
-    this.replyId = reply?.messageId ?? null;
+    this.ready = this.drain();
+    void this.ready.catch(() => {}); // caller awaits ready before paid inference
   }
 
   private activities: unknown[] = [];
 
   /** A web search or page read during the reply (kept with the reply, for restore). */
   activity(a: { id: string }): void {
-    if (this.done || !this.replyId) return;
+    if (this.done) return;
     const i = this.activities.findIndex((x) => (x as { id: string }).id === a.id);
     if (i >= 0) this.activities[i] = a; else this.activities.push(a);
-    this.sessions.updateMessage(this.replyId, { meta: { activity: this.activities } });
+    const activity = JSON.parse(JSON.stringify(this.activities));
+    this.write(() => this.sessions.updateMessage(this.replyId!, { meta: { activity } }));
   }
 
   /** Files the reply produced (e.g. a generated image), kept with the reply. */
   artifacts(list: unknown[]): void {
-    if (!this.replyId || !list.length) return;
-    this.sessions.updateMessage(this.replyId, { meta: { artifacts: list } });
+    if (this.done || !list.length) return;
+    const artifacts = JSON.parse(JSON.stringify(list));
+    this.write(() => this.sessions.updateMessage(this.replyId!, { meta: { artifacts } }));
   }
   routing(routing: { provider: string; modelId: string; reason: string }): void {
-    if (this.replyId) this.sessions.updateMessage(this.replyId, { meta: { routing } });
+    if (this.done) return;
+    this.write(() => this.sessions.updateMessage(this.replyId!, { meta: { routing: { ...routing } } }));
   }
 
   /** The reply so far was withdrawn (ORION researches first). The persisted
@@ -149,23 +173,24 @@ export class ChatTurnRecorder {
   retract(): void {
     if (this.done) return;
     this.text = "";
-    if (this.replyId) this.sessions.updateMessage(this.replyId, { content: "" });
+    this.write(() => this.sessions.updateMessage(this.replyId!, { content: "" }));
   }
 
   delta(chunk: string): void {
     if (this.done || !chunk) return;
     this.text += chunk;
-    if (this.replyId && Date.now() - this.lastSave > ChatTurnRecorder.SAVE_EVERY_MS) {
+    if (Date.now() - this.lastSave > ChatTurnRecorder.SAVE_EVERY_MS) {
       this.lastSave = Date.now();
-      this.sessions.updateMessage(this.replyId, { content: this.text });
+      const content = this.text;
+      this.write(() => this.sessions.updateMessage(this.replyId!, { content }));
     }
   }
 
-  finish(error?: string): void {
-    if (this.done) return;
+  async finish(error?: string): Promise<void> {
+    if (this.done) return this.drain();
     this.done = true;
-    if (!this.replyId) return;
     const content = error ? `${this.text}${this.text ? "\n\n" : ""}${error}` : this.text;
-    this.sessions.updateMessage(this.replyId, { content, status: "complete" });
+    this.write(() => this.sessions.updateMessage(this.replyId!, { content, status: "complete" }));
+    await this.drain();
   }
 }

@@ -76,7 +76,7 @@ app.get("/api/v1/health", (_req, res) =>
   })
 );
 
-app.get("/api/v1/health/detailed", async (_req, res) => {
+app.get("/api/v1/health/detailed", asyncHandler(async (_req, res) => {
   const checks: Record<string, { healthy: boolean; detail?: string }> = {
     api: { healthy: true },
   };
@@ -164,14 +164,14 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     },
     timestamp: new Date().toISOString(),
   });
-});
+}));
 
 // Accounts: register/login are reachable without credentials by design;
 // me/logout validate their own bearer token against the session store.
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
 // The portal's preview frame: one stored file by a five-minute link (no session), sandboxed.
-app.get("/api/v1/preview/:token", async (req, res) => {
+app.get("/api/v1/preview/:token", asyncHandler(async (req, res) => {
   const link = resolvePreviewLink(String(req.params.token));
   const tenant = link ? tenantManager.get(link.tenantId) : undefined;
   if (!link || !tenant) return res.status(404).type("text/plain").send("This preview link expired. Open the preview again.");
@@ -188,7 +188,7 @@ app.get("/api/v1/preview/:token", async (req, res) => {
   } catch {
     res.status(404).type("text/plain").send("That file is no longer available.");
   }
-});
+}));
 app.use("/api/v1/billing/return", billingReturnRouter);
 // ORVYN Admin Portal API: platform staff only (checked inside), never the customer chain.
 app.use("/api/v1/admin", ipRateLimit(Number(process.env.ORVYN_ADMIN_RATE_LIMIT_RPM) || 600), adminRouter);
@@ -211,9 +211,9 @@ app.get("/api/v1/public/shares/:token", ipRateLimit(120), asyncHandler(async (re
   const share = (await authService.resolveShare(String(req.params.token)));
   const as = share ? (await authService.principalFor(share.userId, share.organizationId)) : null;
   const tenant = as ? tenantManager.ensureOrgTenant(as.principal) : null;
-  const session = share && tenant ? tenant.sessions.get(share.sessionId) : undefined;
+  const session = share && tenant ? (await tenant.sessions.get(share.sessionId)) : undefined;
   if (!share || !session || (session.userId && session.userId !== share.userId)) return res.status(404).json({ error: "This shared conversation isn't available. The link may have been turned off." });
-  const messages = tenant!.sessions.messages(session.sessionId, 0)
+  const messages = (await tenant!.sessions.messages(session.sessionId, 0))
     .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
     .map((m: { role: string; content: string; createdAt: number }) => ({ role: m.role, content: String(m.content ?? ""), createdAt: m.createdAt }));
   res.json({ title: session.title, sharedAt: share.createdAt, author: as!.user.name?.split(" ")[0] ?? null, messages });
@@ -339,9 +339,10 @@ wss.on("connection", async (socket, req) => {
     at: Date.now(),
   }));
 
-  let recorder: ChatTurnRecorder | null = null;
+  const chatRecorders = new Set<ChatTurnRecorder>();
   const chatControllers = new Set<AbortController>();
   socket.on("message", async (raw) => {
+    let recorder: ChatTurnRecorder | null = null;
     let body;
     try {
       body = JSON.parse(raw.toString());
@@ -384,7 +385,7 @@ wss.on("connection", async (socket, req) => {
       const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
       // The turn is stored now, and the reply as it streams: the session is
       // the durable conversation, not the desktop's cache file.
-      const found = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      const found = typeof body?.sessionId === "string" ? (await tenant.sessions.get(body.sessionId)) : undefined;
       if (found && socketUserId && found.userId && found.userId !== socketUserId) {
         socket.send(JSON.stringify({ delta: "", done: true, error: "Unknown conversation" }));
         return;
@@ -398,7 +399,7 @@ wss.on("connection", async (socket, req) => {
         body.surface = "cloud";
         body.sessionId = session?.sessionId;
         if (session && !Array.isArray(body.history)) {
-          body.history = tenant.sessions.messages(session.sessionId)
+          body.history = (await tenant.sessions.messages(session.sessionId))
             .filter((m) => (m.role === "user" || m.role === "assistant") && m.status === "complete" && m.content.trim())
             .slice(-24)
             .map((m) => ({ role: m.role, content: m.content.slice(0, 12_000) }));
@@ -407,7 +408,7 @@ wss.on("connection", async (socket, req) => {
         body.task = "chat";
         if (body.context && typeof body.context === "object") delete body.context.projectRoot;
       }
-      const priorMessages = session ? tenant.sessions.messages(session.sessionId) : [];
+      const priorMessages = session ? (await tenant.sessions.messages(session.sessionId)) : [];
       const latestArtifact = priorMessages.slice().reverse().flatMap((message) => {
         const artifacts = message.meta?.artifacts;
         return Array.isArray(artifacts) ? artifacts : [];
@@ -432,7 +433,7 @@ wss.on("connection", async (socket, req) => {
       ].filter(Boolean);
       body.conversationContext = contextLines.join("\n");
       // Regenerate: the old reply is replaced by the one about to stream.
-      if (session && typeof body?.replacesMessageId === "string") tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId);
+      if (session && typeof body?.replacesMessageId === "string") (await tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId));
       recorder = session && typeof body?.userMessage === "string"
         ? new ChatTurnRecorder(tenant.sessions, session.sessionId, {
             userMessage: body.userMessage,
@@ -443,6 +444,8 @@ wss.on("connection", async (socket, req) => {
             attachments: Array.isArray(body.attachmentRefs) ? body.attachmentRefs.slice(0, 20).map((a: any) => ({ artifactId: String(a?.artifactId ?? ""), name: String(a?.name ?? ""), mimeType: String(a?.mimeType ?? "") })).filter((a: any) => a.artifactId) : undefined,
           })
         : null;
+      if (recorder) chatRecorders.add(recorder);
+      await recorder?.ready;
       // A turn never hangs: a heartbeat every 10s tells the desktop the turn is
       // alive (a reasoning model can think silently for a while), and if the
       // model sends nothing for CHAT_STALL_MS the turn ends with a plain error
@@ -464,15 +467,16 @@ wss.on("connection", async (socket, req) => {
       };
       try {
       for await (const chunk of guarded) {
-        socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
         if (chunk.routing) recorder?.routing(chunk.routing);
         if (Array.isArray((chunk as { artifacts?: unknown[] }).artifacts)) recorder?.artifacts((chunk as { artifacts: unknown[] }).artifacts);
         if (chunk.retract) recorder?.retract();
-        if (chunkError) recorder?.finish(String(chunkError));
+        if (chunkError) await recorder?.finish(String(chunkError));
         else recorder?.delta(String(chunk.delta ?? ""));
-        if (chunk.done) { recorder?.finish(); learn(); break; }
+        if (chunk.done) await recorder?.finish();
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(redactChunk(tenant, chunk)));
+        if (chunk.done) { learn(); break; }
         // Yield so each token can leave the process and paint in the UI
         // instead of arriving as one burst.
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -483,16 +487,18 @@ wss.on("connection", async (socket, req) => {
         clearInterval(beat);
         if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
-      recorder?.finish();
+      await recorder?.finish();
     } catch (err: any) {
-      recorder?.finish(err.message);
+      await recorder?.finish(err.message).catch(() => {});
       // A wallet/plan stop carries its code so the client can offer an upgrade or top-up.
       const code = (err as { billing?: boolean; code?: string })?.billing ? `CREDITS_${(err as { code?: string }).code ?? "LIMIT"}` : undefined;
-      socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message, ...(code ? { code } : {}) })));
+      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message, ...(code ? { code } : {}) })));
+    } finally {
+      if (recorder) chatRecorders.delete(recorder);
     }
   });
   // The app closed mid-reply: keep what arrived.
-  socket.on("close", () => { for (const controller of chatControllers) controller.abort(); recorder?.finish(); });
+  socket.on("close", () => { for (const controller of chatControllers) controller.abort(); for (const recorder of chatRecorders) void recorder.finish().catch(() => console.warn("[sessions] closed socket reply persistence failed")); });
   } catch {
     // Do not admit a socket or expose database details after authentication errors.
     if (socket.readyState === socket.OPEN) socket.close(1011, "Authentication unavailable");

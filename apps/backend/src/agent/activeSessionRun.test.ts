@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { activeRunForSession } from "./activeSessionRun";
+import { activeRunForSession, activeRunForSessionAsync } from "./activeSessionRun";
 
 const runs = [
   { id: "run-active-elsewhere", status: "running" },
@@ -23,4 +23,15 @@ test("a conversation without a run can start work while other conversations run"
 
 test("settled runs do not block their conversation", () => {
   assert.equal(activeRunForSession([runs[2]!], "chat-current", sessionOfRun), undefined);
+});
+
+
+test("asynchronous run ownership preserves chat isolation and propagates storage failures", async () => {
+  const lookup = async (id: string) => {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return sessionOfRun(id);
+  };
+  assert.equal((await activeRunForSessionAsync(runs, "chat-current", lookup))?.id, "run-same-chat");
+  assert.equal(await activeRunForSessionAsync([runs[0]!], "chat-current", lookup), undefined);
+  await assert.rejects(activeRunForSessionAsync(runs, "chat-current", async () => { throw new Error("unavailable"); }), /unavailable/);
 });

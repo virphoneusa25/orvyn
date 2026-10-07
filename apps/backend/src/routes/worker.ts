@@ -95,7 +95,7 @@ function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoin
  */
 async function recoverOrphanedRunsOnBoot(
   getStore: (tenantId?: string) => RunStore,
-  resumeRun?: (tenantId: string, runId: string) => void,
+  resumeRun?: (tenantId: string, runId: string) => void | Promise<void>,
 ): Promise<void> {
   try {
     const dataDir = process.env.ORVYN_DATA_DIR || "";
@@ -183,7 +183,7 @@ async function recoverOrphanedRunsOnBoot(
               });
               store.emit(runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Control plane restarted — reconnecting to the mission workspace" });
               try {
-                resumeRun?.(tenantId, runId);
+                await resumeRun?.(tenantId, runId);
               } catch (error: any) {
                 const queued = jobQueue.findIndex((job) => job.runId === runId);
                 if (queued >= 0) jobQueue.splice(queued, 1);
@@ -383,7 +383,7 @@ setInterval(pruneStaleWorkers, 15_000).unref();
 export function workerRouter(
   auth: (req: any) => any,
   getRunStore: (tenantId?: string) => RunStore,
-  resumeRun?: (tenantId: string, runId: string) => void,
+  resumeRun?: (tenantId: string, runId: string) => void | Promise<void>,
 ): Router {
   const r = Router();
 

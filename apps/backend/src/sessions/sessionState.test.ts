@@ -23,7 +23,7 @@ test("a session's outputs: changed files (newest op), artifacts, newest preview;
   assert.equal(previewSiteId("http://h/api/v1/sites/abc/index.html"), "abc");
 });
 
-test("project files remain after the preview publication is gone", () => {
+test("project files remain after the preview publication is gone",  async () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-state-"));
   const sessions = new WorkSessionStore("tenant_a", dir);
   const created = sessions.provisionWorkspace();
@@ -36,7 +36,7 @@ test("project files remain after the preview publication is gone", () => {
   store.emit(run.id, "preview.available", { url: "http://127.0.0.1:4570/api/v1/sites/missing/" });
   store.emit(run.id, "artifact.created", { artifactId: "art_1", name: "logo.png", mimeType: "image/png" });
   sessions.attachRun(opened.sessionId, run.id, created.projectRoot);
-  const state = sessionState(sessions, store, sessions.get(opened.sessionId)!);
+  const state = (await sessionState(sessions, store, sessions.get(opened.sessionId)!));
   assert.deepEqual(state.files.map((f) => f.path).sort(), ["index.html", "styles.css"]);
   assert.equal(state.preview?.available, false);
   assert.match(state.preview?.url ?? "", /missing/);

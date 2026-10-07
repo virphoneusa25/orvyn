@@ -336,7 +336,7 @@ interface RunState {
   capabilityQueries: Set<string>;
   capabilityNudges: number;
   /** Records a project file on the session workspace after a successful write. */
-  onProjectFile?: (relativePath: string) => void;
+  onProjectFile?: (relativePath: string) => void | Promise<void>;
   milestoneLayout?: boolean;
   milestoneStyle?: boolean;
   milestoneCheck?: boolean;
@@ -362,6 +362,8 @@ interface RunState {
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
 export interface RunOptions {
+  /** Server-generated id whose session admission was persisted before execution. */
+  admittedRunId?: string;
   reasoningEffort?: ReasoningEffort;
   accessMode?: AccessMode;
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
@@ -369,7 +371,7 @@ export interface RunOptions {
   /** Set when workspace preflight already bound this run. */
   workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] };
   /** Persists written paths onto the workspace so a later empty resolve is a mismatch. */
-  onProjectFile?: (relativePath: string) => void;
+  onProjectFile?: (relativePath: string) => void | Promise<void>;
   /** Durable workspace id. File tools resolve inside projectRoot, not a host path the model picks. */
   workspaceId?: string;
   /** Earlier runs of this conversation (oldest first): a follow-up starts with their site preview. */
@@ -851,7 +853,7 @@ export class StreamingAgentRuntime {
       const target = path.join(state.projectRoot, rel);
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, loaded.bytes);
-      state.onProjectFile?.(rel);
+      await state.onProjectFile?.(rel);
       return rel;
     } catch {
       /* the download card still exists; the next turn can recover project files that did land */
@@ -884,7 +886,7 @@ export class StreamingAgentRuntime {
         });
         if (!result.ok) continue;
         rememberSiteBinary(runId, rel, Buffer.from(att.b64, "base64"));
-        state.onProjectFile?.(rel);
+        await state.onProjectFile?.(rel);
         this.store.emit(runId, "files.ready", { name: clean + ext, path: rel, additions: 0, deletions: 0, location: "workspace", message: `Saved your ${clean + ext} to ${rel}` });
         saved.push({ name: att.name || clean + ext, path: rel });
       } catch { /* the model still sees the image itself */ }
@@ -1514,7 +1516,8 @@ export class StreamingAgentRuntime {
     options?: RunOptions
   ): string {
     const recovering = Boolean(options?.recoverRunId);
-    const runId = options?.recoverRunId ?? randomUUID();
+    const runId = options?.recoverRunId ?? options?.admittedRunId ?? randomUUID();
+    if (!recovering && this.store.get(runId)) throw new Error("Run id already exists");
     if (recovering && !this.store.get(runId)) throw new Error(`Cannot recover unknown run ${runId}`);
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
@@ -3840,7 +3843,7 @@ export class StreamingAgentRuntime {
           if (artifactPath && call.name !== "delete_file") {
             this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
             const remembered = normalizeKnownFile(artifactPath);
-            if (remembered) state.onProjectFile?.(remembered);
+            if (remembered) await state.onProjectFile?.(remembered);
           }
         }
         if (result.projectFileEvidence && !result.artifacts?.length) {
