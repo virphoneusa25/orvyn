@@ -185,3 +185,61 @@ test("a settlement failure is retried before another paid call can proceed", asy
   ready = true; await wrapped.generate({ messages: [] });
   assert.equal(calls, 2); assert.equal(new Set(delivered).size, 2);
 });
+
+
+test("database-backed usage waits for hydration and durable writes before returning a paid result", async () => {
+  const hydrate = deferred(), writing = deferred(), entered = deferred();
+  const usage = new UsageService();
+  let calls = 0, finished = false;
+  const stored: UsageEvent[] = [];
+  usage.attachStore({
+    async loadRecentUsage() { await hydrate.promise; return []; },
+    async countUsageSince() { return stored.length; },
+    async saveUsageEvent(event) { entered.resolve(); await writing.promise; stored.push(event); },
+  });
+  const provider = fakeProvider([]);
+  provider.generate = async () => { calls++; return { content: "paid reply" }; };
+  const result = usage.wrap(provider).generate({ messages: [] }).then(() => { finished = true; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(calls, 0);
+  hydrate.resolve(); await entered.promise;
+  assert.equal(calls, 1); assert.equal(finished, false);
+  writing.resolve(); await result;
+  assert.equal(stored.length, 1);
+  assert.equal((await usage.quotaAsync()).used, 1);
+});
+
+test("an asynchronous persisted quota refuses inference after restart", async () => {
+  const previous = process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH;
+  process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = "1";
+  try {
+    const usage = new UsageService();
+    await usage.attachStore({ async loadRecentUsage() { return []; }, async countUsageSince() { return 2; }, async saveUsageEvent() {} });
+    let reached = false;
+    const provider = fakeProvider([]); provider.generate = async () => { reached = true; return { content: "unexpected" }; };
+    await assert.rejects(usage.wrap(provider).generate({ messages: [] }), /quota/i);
+    assert.equal(reached, false); assert.equal((await usage.quotaAsync()).used, 2);
+  } finally { if (previous === undefined) delete process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH; else process.env.ORVYN_QUOTA_MODEL_REQUESTS_MONTH = previous; }
+});
+
+test("failed durable usage keeps one stable event and blocks another provider call until recovery", async () => {
+  const usage = new UsageService();
+  let available = false, calls = 0;
+  const attempts: string[] = [], persisted: UsageEvent[] = [], settled: UsageEvent[] = [];
+  await usage.attachStore({
+    async loadRecentUsage() { return []; }, async countUsageSince() { return persisted.length; },
+    async saveUsageEvent(event) { attempts.push(event.id); if (!available) throw new Error("outage"); persisted.push(event); },
+  });
+  usage.onRecord(event => { settled.push(event); });
+  const provider = fakeProvider([]); provider.generate = async () => { calls++; return { content: "paid reply" }; };
+  const wrapped = usage.wrap(provider);
+  await assert.rejects(wrapped.generate({ messages: [] }), /Usage storage/);
+  assert.equal(calls, 1); assert.equal(usage.recent().length, 1); assert.equal(usage.recent()[0].ok, true);
+  await assert.rejects(wrapped.generate({ messages: [] }), /Usage storage/);
+  assert.equal(calls, 1); assert.equal(settled.length, 0);
+  available = true;
+  await wrapped.generate({ messages: [] });
+  assert.equal(calls, 2); assert.equal(persisted.length, 2); assert.equal(settled.length, 2);
+  assert.equal(new Set(attempts.slice(0, 3)).size, 1);
+  assert.equal(new Set(persisted.map(event => event.id)).size, 2);
+});
