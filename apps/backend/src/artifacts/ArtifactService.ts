@@ -1,7 +1,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { createHmac, randomBytes, randomUUID } from "crypto";
-import { defaultDataDir, LocalStore } from "../persistence/LocalStore";
+import { defaultDataDir } from "../persistence/LocalStore";
+import type { TenantPersistence } from "../persistence/TenantPersistence";
 import { artifactStorageRoot, virtualWorkspaceRoot } from "../documents/workspace";
 import {
   assertNonEmpty,
@@ -153,7 +154,7 @@ export class ArtifactService {
 
   constructor(
     private tenantId: string,
-    private store: LocalStore,
+    private store: TenantPersistence,
     private dataDir: string = defaultDataDir()
   ) {}
 
@@ -193,9 +194,9 @@ export class ArtifactService {
     return path.join(this.artifactsRoot(), id, name);
   }
 
-  uniqueName(requested: string): string {
+   async uniqueName(requested: string): Promise<string> {
     const name = sanitizeArtifactName(requested);
-    const existing = new Set(this.store.listArtifacts(undefined, 800).map((r: any) => String(r.name ?? "").toLowerCase()));
+    const existing = new Set((await this.store.listArtifacts(undefined, 800)).map((r: any) => String(r.name ?? "").toLowerCase()));
     if (!existing.has(name.toLowerCase())) return name;
     const ext = path.extname(name);
     const stem = ext ? name.slice(0, -ext.length) : name;
@@ -274,7 +275,7 @@ export class ArtifactService {
     if (!health.healthy) throw new Error(`Artifact storage unavailable: ${health.detail ?? "degraded"}`);
     await this.ensureRoots();
     const requested = sanitizeArtifactName(input.name);
-    const name = input.keepName || input.overwrite ? requested : this.uniqueName(requested);
+    const name = input.keepName || input.overwrite ? requested : (await this.uniqueName(requested));
     const id = `art_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     const kind = asKind(input.kind ?? "file");
     const declared = input.mimeType ?? input.mediaType ?? mediaTypeForName(name);
@@ -291,7 +292,7 @@ export class ArtifactService {
       await fs.rename(tmp, diskPath);
     });
     try {
-      this.store.saveArtifactStrict({
+      (await this.store.saveArtifactStrict({
         id,
         tenantId: this.tenantId,
         projectRoot: input.projectRoot ?? null,
@@ -309,13 +310,13 @@ export class ArtifactService {
         status: "creating",
         previewable: isPreviewable(mimeType),
         downloadable: true,
-      });
+      }));
       const onDisk = await fs.readFile(diskPath);
       if (!onDisk.length || onDisk.length !== raw.length || sha256Hex(onDisk) !== sha256) {
         throw new Error("Artifact read-back failed: stored bytes do not match.");
       }
       validateBytes(name, mimeType, onDisk);
-      this.store.saveArtifactStrict({
+      (await this.store.saveArtifactStrict({
         id,
         tenantId: this.tenantId,
         projectRoot: input.projectRoot ?? null,
@@ -333,10 +334,10 @@ export class ArtifactService {
         status: "ready",
         previewable: isPreviewable(mimeType),
         downloadable: true,
-      });
+      }));
     } catch (err) {
       await fs.rm(path.dirname(diskPath), { recursive: true, force: true }).catch(() => undefined);
-      try { this.store.deleteArtifact(id); } catch { /* partial row */ }
+      try { (await this.store.deleteArtifact(id)); } catch { /* partial row */ }
       throw err instanceof Error ? err : new Error("Failed to register artifact metadata.");
     }
     if (kind === "generated") {
@@ -374,7 +375,7 @@ export class ArtifactService {
   }
 
   async writeArtifact(id: string, data: Buffer | string): Promise<ArtifactRecord> {
-    const current = this.store.getArtifact(id);
+    const current = (await this.store.getArtifact(id));
     if (!current) throw new Error(`Unknown artifact "${id}"`);
     const bytes = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
     assertNonEmpty(bytes);
@@ -389,7 +390,7 @@ export class ArtifactService {
       await fs.writeFile(tmp, bytes);
       await fs.rename(tmp, diskPath);
     });
-    this.store.saveArtifactStrict({
+    (await this.store.saveArtifactStrict({
       id,
       tenantId: this.tenantId,
       projectRoot: current.projectRoot,
@@ -405,7 +406,7 @@ export class ArtifactService {
       status: "ready",
       previewable: isPreviewable(mimeType),
       downloadable: true,
-    });
+    }));
     return this.toRecord({ ...current, id, name, path: diskPath, media_type: mimeType, sha256, size: bytes.length }, bytes.length);
   }
 
@@ -413,9 +414,9 @@ export class ArtifactService {
     return this.writeArtifact(id, data);
   }
 
-  registerArtifact(record: ArtifactRecord): ArtifactRecord {
+   async registerArtifact(record: ArtifactRecord): Promise<ArtifactRecord> {
     if (!record.artifactId && !record.id) throw new Error("Cannot register an artifact without artifactId.");
-    this.store.saveArtifactStrict({
+    (await this.store.saveArtifactStrict({
       id: record.artifactId || record.id,
       tenantId: this.tenantId,
       projectRoot: record.projectRoot,
@@ -431,20 +432,20 @@ export class ArtifactService {
       status: record.status,
       previewable: record.previewable,
       downloadable: record.downloadable,
-    });
+    }));
     return record;
   }
 
-  getArtifact(id: string): ArtifactRecord | null {
-    const row = this.store.getArtifact(id);
+   async getArtifact(id: string): Promise<ArtifactRecord | null> {
+    const row = (await this.store.getArtifact(id));
     if (!row) return null;
     const record = this.toRecord(row);
     if (record.tenantId && record.tenantId !== this.tenantId) return null;
     return record;
   }
 
-  listArtifacts(opts?: { kind?: string; projectRoot?: string | null; chatId?: string | null; runId?: string | null }): ArtifactRecord[] {
-    const rows = this.store.listArtifacts(undefined, 400);
+   async listArtifacts(opts?: { kind?: string; projectRoot?: string | null; chatId?: string | null; runId?: string | null }): Promise<ArtifactRecord[]> {
+    const rows = (await this.store.listArtifacts(undefined, 400));
     const now = Date.now();
     return rows
       .map((r) => this.toRecord(r))
@@ -457,14 +458,14 @@ export class ArtifactService {
       .filter((a) => (RETENTION_MS > 0 ? now - a.createdAt < RETENTION_MS : true));
   }
 
-  list(opts?: { kind?: string; projectRoot?: string | null }): ArtifactRecord[] {
-    return this.listArtifacts(opts);
+   async list(opts?: { kind?: string; projectRoot?: string | null }): Promise<ArtifactRecord[]> {
+    return (await this.listArtifacts(opts));
   }
 
-  search(query: string): ArtifactRecord[] {
+   async search(query: string): Promise<ArtifactRecord[]> {
     const q = String(query || "").trim().toLowerCase();
-    if (!q) return this.listArtifacts();
-    return this.listArtifacts().filter((a) =>
+    if (!q) return (await this.listArtifacts());
+    return (await this.listArtifacts()).filter((a) =>
       a.name.toLowerCase().includes(q) ||
       a.mimeType.toLowerCase().includes(q) ||
       (a.chatId ?? "").toLowerCase().includes(q) ||
@@ -474,12 +475,12 @@ export class ArtifactService {
     );
   }
 
-  recents(limit = 20): ArtifactRecord[] {
-    return this.listArtifacts().sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+   async recents(limit = 20): Promise<ArtifactRecord[]> {
+    return (await this.listArtifacts()).sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
   }
 
   async read(id: string): Promise<{ record: ArtifactRecord; bytes: Buffer }> {
-    const row = this.store.getArtifact(id);
+    const row = (await this.store.getArtifact(id));
     if (!row) throw new Error(`Unknown artifact "${id}"`);
     const record = this.toRecord(row);
     if (record.tenantId !== this.tenantId || record.status !== "ready") throw new Error(`Unknown artifact "${id}"`);
@@ -492,11 +493,11 @@ export class ArtifactService {
   }
 
   async deleteArtifact(id: string): Promise<void> {
-    const row = this.store.getArtifact(id);
+    const row = (await this.store.getArtifact(id));
     if (!row) throw new Error(`Unknown artifact "${id}"`);
     const record = this.toRecord(row);
     await fs.rm(path.dirname(record.diskPath!), { recursive: true, force: true }).catch(() => undefined);
-    this.store.deleteArtifact(id);
+    (await this.store.deleteArtifact(id));
   }
 
   async delete(id: string): Promise<void> {
@@ -515,8 +516,8 @@ export class ArtifactService {
     return { record, bytes, filename: record.name };
   }
 
-  createDownloadToken(artifactId: string, ttlMs = 15 * 60 * 1000): { token: string; expiresAt: number; url: string } {
-    if (!this.getArtifact(artifactId)) throw new Error(`Unknown artifact "${artifactId}"`);
+   async createDownloadToken(artifactId: string, ttlMs = 15 * 60 * 1000): Promise<{ token: string; expiresAt: number; url: string }> {
+    if (!(await this.getArtifact(artifactId))) throw new Error(`Unknown artifact "${artifactId}"`);
     const exp = Date.now() + ttlMs;
     const token = createHmac("sha256", this.tokenSecret).update(`${this.tenantId}:${artifactId}:${exp}`).digest("hex").slice(0, 32);
     this.tokens.set(token, { artifactId, exp });
@@ -625,7 +626,7 @@ export class ArtifactService {
   async filesTree(projectRoot?: string | null, scope: { runIds?: Set<string> } = {}): Promise<{ locations: FilesLocation[] }> {
     await this.ensureRoots();
     const inScope = (a: ArtifactRecord) => !scope.runIds || (Boolean(a.runId) && scope.runIds.has(String(a.runId))) || (a.kind === "upload" && !a.runId);
-    const all = (await Promise.all(this.listArtifacts().filter(inScope).map(async (a) => {
+    const all = (await Promise.all((await this.listArtifacts()).filter(inScope).map(async (a) => {
       try { await this.read(a.artifactId); return a; } catch { return null; }
     }))).filter((a): a is ArtifactRecord => a !== null);
     const generated = all.filter((a) => a.kind === "generated");

@@ -35,7 +35,7 @@ test("ArtifactService persist/list/read/delete, hash, files tree, restart", asyn
     assert.ok(!JSON.stringify(svc.toPublic(png)).includes(png.diskPath ?? "nope-disk"));
     const { bytes } = await svc.read(png.artifactId);
     assert.equal(bytes.subarray(0, 8).equals(MINIMAL_PNG.subarray(0, 8)), true);
-    const listed = svc.listArtifacts({ kind: "generated" });
+    const listed = (await svc.listArtifacts({ kind: "generated" }));
     assert.equal(listed.length, 1);
     const tree = await svc.filesTree();
     const generated = tree.locations.find((l) => l.id === "generated");
@@ -61,7 +61,7 @@ test("ArtifactService persist/list/read/delete, hash, files tree, restart", asyn
     const again = await svc2.read(png.artifactId);
     assert.equal(again.bytes.length, MINIMAL_PNG.length);
     await svc2.deleteArtifact(png.artifactId);
-    assert.equal(svc2.listArtifacts({ kind: "generated" }).length, 1);
+    assert.equal((await svc2.listArtifacts({ kind: "generated" })).length, 1);
     store2.close();
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
@@ -92,7 +92,7 @@ test("tenant isolation: tenant B cannot read tenant A bytes", async () => {
   const b = new ArtifactService("tenant-b", storeB, dir);
   try {
     const rec = await a.persistArtifact({ name: "secret.txt", content: "tenant-a-only", kind: "generated" });
-    assert.equal(b.getArtifact(rec.artifactId), null);
+    assert.equal((await b.getArtifact(rec.artifactId)), null);
     await assert.rejects(b.read(rec.artifactId), /Unknown artifact/);
   } finally {
     storeA.close();
@@ -126,7 +126,7 @@ test("storage unavailable cannot produce an artifactId", async () => {
     const orig = svc.health.bind(svc);
     (svc as any).health = async () => ({ healthy: false, detail: "forced down" });
     await assert.rejects(svc.persistArtifact({ name: "x.txt", content: "hello" }), /unavailable/);
-    assert.equal(svc.listArtifacts().length, 0);
+    assert.equal((await svc.listArtifacts()).length, 0);
     (svc as any).health = orig;
   } finally {
     store.close();
@@ -222,4 +222,37 @@ test("file-producing tools cannot return ok without artifactId", () => {
     output: JSON.stringify({ status: "success", artifactId: "art_1", name: "virphone-logo.png", artifacts: [{ artifactId: "art_1", name: "virphone-logo.png" }] }),
   });
   assert.equal(pass.ok, true);
+});
+
+
+test("asynchronous artifact metadata is committed before success and readable after restart", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-async-art-"));
+  const sqlite = new LocalStore("tenant-async", dir);
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const writing = new Promise<void>(resolve => { entered = resolve; });
+  const store = new Proxy(sqlite, {
+    get(target, property) {
+      const member = Reflect.get(target, property);
+      if (typeof member !== "function") return member;
+      return async (...args: any[]) => {
+        if (property === "saveArtifactStrict" && args[0]?.status === "ready") { entered(); await gate; }
+        return member.apply(target, args);
+      };
+    },
+  }) as unknown as import("../persistence/TenantPersistence").TenantPersistence;
+  const service = new ArtifactService("tenant-async", store, dir);
+  let completed = false;
+  try {
+    const persist = service.persistArtifact({ name: "fixture.png", kind: "generated", bytes: MINIMAL_PNG, mediaType: "image/png" }).then(record => { completed = true; return record; });
+    await writing; assert.equal(completed, false);
+    release(); const record = await persist;
+    assert.equal((await service.listArtifacts()).length, 1);
+    const restarted = new ArtifactService("tenant-async", store, dir);
+    assert.equal((await restarted.getArtifact(record.artifactId))?.sha256, record.sha256);
+    assert.equal((await restarted.read(record.artifactId)).bytes.equals(MINIMAL_PNG), true);
+    assert.equal(restarted.resolveDownload((await restarted.createDownloadToken(record.artifactId)).token), record.artifactId);
+    await restarted.deleteArtifact(record.artifactId);
+    assert.equal(await restarted.getArtifact(record.artifactId), null);
+  } finally { sqlite.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });

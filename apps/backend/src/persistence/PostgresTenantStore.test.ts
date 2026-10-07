@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Pool } from "pg";
+import { ArtifactService } from "../artifacts/ArtifactService";
+import { MINIMAL_PNG } from "../artifacts/bytes";
 import { UsageService } from "../services/UsageService";
 import { LocalStore } from "./LocalStore";
 import { PostgresTenantStore } from "./PostgresTenantStore";
@@ -155,4 +157,21 @@ test("real PostgreSQL: metered provider completion persists usage and restores q
     assert.equal(restarted.recent()[0].id, persisted[0].id);
     assert.equal((await restarted.quotaAsync()).used, 1);
   } finally { await store.close(); await cleanup(tenant); }
+});
+
+
+test("real PostgreSQL: artifacts persist metadata before success and reopen with verified bytes", { skip: !live }, async () => {
+  const tenant = "artifact-" + randomUUID(), directory = mkdtempSync(join(tmpdir(), "orvyn-pg-artifact-"));
+  let store = await PostgresTenantStore.connect(url, tenant);
+  try {
+    const service = new ArtifactService(tenant, store, directory);
+    const record = await service.persistArtifact({ name: "fixture.png", kind: "generated", bytes: MINIMAL_PNG, mediaType: "image/png" });
+    assert.equal((await service.listArtifacts()).length, 1);
+    await store.close(); store = await PostgresTenantStore.connect(url, tenant);
+    const reopened = new ArtifactService(tenant, store, directory);
+    assert.equal((await reopened.getArtifact(record.artifactId))?.sha256, record.sha256);
+    assert.equal((await reopened.read(record.artifactId)).bytes.equals(MINIMAL_PNG), true);
+    await reopened.deleteArtifact(record.artifactId);
+    assert.equal(await reopened.getArtifact(record.artifactId), null);
+  } finally { await store.close(); await cleanup(tenant); rmSync(directory, { recursive: true, force: true }); }
 });

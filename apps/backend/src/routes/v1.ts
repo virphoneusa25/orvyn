@@ -1739,7 +1739,7 @@ v1Router.get("/artifacts", asyncHandler(async (req, res) => {
   const q = typeof req.query.q === "string" ? req.query.q : "";
   const chatId = typeof req.query.chatId === "string" ? req.query.chatId : null;
   const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
-  const rows = (q ? t.artifactService.search(q) : t.artifactService.listArtifacts({ kind }))
+  const rows = (q ? (await t.artifactService.search(q)) : (await t.artifactService.listArtifacts({ kind })))
     .filter((a) => !chatId || a.chatId === chatId)
     .filter((a) => !projectId || a.projectId === projectId);
   const visible = [];
@@ -1843,7 +1843,7 @@ v1Router.post("/artifacts", asyncHandler(async (req, res) => {
 // A file from another member's conversation answers 404 (tenant isolation already holds below this).
 v1Router.use("/artifacts/:id",  asyncHandler(async (req, res, next) => {
   const t = requireTenant(req);
-  const a = t.artifactService.getArtifact(String(req.params.id));
+  const a = (await t.artifactService.getArtifact(String(req.params.id)));
   if (a?.chatId) {
     const s = (await t.sessions.get(a.chatId));
     if (s && !ownsSession(req, s)) return res.status(404).json({ error: "Unknown artifact" });
@@ -1890,9 +1890,9 @@ v1Router.get("/artifacts/:id/preview", asyncHandler(async (req, res) => {
 }));
 
 /** A five-minute link the portal's preview frame loads (HTML/PDF need a real, sandboxed URL). No model, no credits. */
-v1Router.post("/artifacts/:id/preview-link", (req, res) => {
+v1Router.post("/artifacts/:id/preview-link",  async (req, res) => {
   const t = requireTenant(req);
-  const a = t.artifactService.getArtifact(String(req.params.id));
+  const a = (await t.artifactService.getArtifact(String(req.params.id)));
   if (!a || a.status === "deleted") return res.status(404).json({ error: "Unknown artifact" });
   res.json({ url: `/api/v1/preview/${createPreviewLink(t.id, a.artifactId)}` });
 });
@@ -1916,11 +1916,11 @@ v1Router.get("/artifacts/:id/download", asyncHandler(async (req, res) => {
   }
 }));
 
-v1Router.get("/files/search", (req, res) => {
+v1Router.get("/files/search", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const q = String(req.query.q ?? "");
-  res.json({ artifacts: t.artifactService.search(q).map((a) => publicArtifact(t.artifactService, a)) });
-});
+  res.json({ artifacts: (await t.artifactService.search(q)).map((a) => publicArtifact(t.artifactService, a)) });
+}));
 
 v1Router.delete("/artifacts/:id", asyncHandler(async (req, res) => {
   try {
