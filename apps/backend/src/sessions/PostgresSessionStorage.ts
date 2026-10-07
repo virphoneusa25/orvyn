@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { readSqliteSnapshotRows } from "../persistence/SqliteSnapshotRows";
 import { existsSync, readFileSync } from "node:fs";
 import { PostgresSessionDatabase, SESSION_TABLES } from "./PostgresSessionDatabase";
 
@@ -19,9 +20,10 @@ export function readSessionSnapshot(file:string,tenantId:string):SessionSnapshot
   const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as {name:string}[];
   if(tables.length!==SESSION_TABLES.length||tables.some(row=>!SESSION_TABLES.includes(row.name as typeof SESSION_TABLES[number])))throw new Error("Unexpected session database tables");
   for(const table of SESSION_TABLES) {
-   const columns=(db.prepare(`PRAGMA table_info(${identifier(table)})`).all() as {name:string}[]).map(row=>row.name);
+   const info=db.prepare(`PRAGMA table_info(${identifier(table)})`).all() as {name:string;type:string}[];
+   const columns=info.map(row=>row.name);
    if(!columns.length)throw new Error("Incomplete session database schema");
-   const rows=db.prepare(`SELECT * FROM ${identifier(table)}`).all() as Record<string,unknown>[];
+   const rows=readSqliteSnapshotRows(db,table,info);
    for(const row of rows)for(const value of Object.values(row))if(typeof value==="bigint"||typeof value==="number"&&!Number.isSafeInteger(value))throw new Error("Session value exceeds supported range");
    snapshot[table]={columns,rows};
   }

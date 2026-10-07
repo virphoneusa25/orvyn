@@ -1,3 +1,4 @@
+import { readSqliteSnapshotRows } from "../persistence/SqliteSnapshotRows";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { STRIPE_TABLES, STRIPE_UNIQUE_KEYS } from "./stripeSchema";
@@ -27,7 +28,7 @@ export function readStripeSnapshot(file: string): StripeSnapshot {
         `PRAGMA index_info("${String(index.name).replace(/"/g, '""')}")`).all().map(column => String(column.name)));
       keys.push(columns.filter(column => column.pk).sort((a,b) => Number(a.pk) - Number(b.pk)).map(column => String(column.name)));
       if (canonicalKeys(keys) !== canonicalKeys(STRIPE_UNIQUE_KEYS[table.name])) throw new Error(`Stripe payment uniqueness differs: ${table.name}`);
-      snapshot[table.name] = db.prepare(`SELECT * FROM "${table.name}"`).all() as StripeRow[];
+      snapshot[table.name] = readSqliteSnapshotRows(db,table.name,table.columns) as StripeRow[];
     }
     validateStripeSnapshot(snapshot);
     db.exec("COMMIT");
