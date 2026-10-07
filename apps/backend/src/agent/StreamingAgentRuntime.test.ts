@@ -514,7 +514,7 @@ test("desktop tools emit the desktop.* lifecycle the Workbench derives its tab a
   for (let i = 0; i < 40; i++) {
     const evs = h.store.get(runId)?.events ?? [];
     const pending = evs.find((e) => e.type === "approval.required" && !h.store.get(runId)!.events.some((x) => x.type === "approval.resolved" && x.data.callId === e.data.callId));
-    if (pending) h.runtime.resolveApproval(String(pending.data.callId), true);
+    if (pending) await h.runtime.resolveApproval(String(pending.data.callId), true);
     if ((h.store.get(runId)?.status ?? "") === "completed") break;
     await new Promise((r) => setTimeout(r, 100));
   }

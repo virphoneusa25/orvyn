@@ -1,3 +1,4 @@
+import { persistToolPermission } from "../gateway/toolPermissionPersistence";
 import { installModelSettingsRoutes } from "./modelSettingsRoutes";
 import { installTenantDataRoutes } from "./tenantDataRoutes";
 import { randomUUID } from "node:crypto";
@@ -132,7 +133,7 @@ v1Router.use("/worker", workerRouter(requireTenant,  async (tenantId?: string) =
     tenant.runStore.setStatus(runId, "error");
     return;
   }
-  _regTools(tenant, run.projectRoot);
+  await _regTools(tenant, run.projectRoot);
   const previousRunIds = session?.runIds.filter((id) => id !== runId) ?? [];
   (await tenant.agentRuntime.start(
     run.projectRoot,
@@ -544,7 +545,7 @@ function serializeSession(session: import("../agent/AgentService").AgentSession)
 v1Router.post("/agent/runs", asyncHandler(async (req, res) => {
   try {
     const ta = requireTenant(req);
-    registerProjectToolsFor(ta, req.body.projectRoot);
+    await registerProjectToolsFor(ta, req.body.projectRoot);
     ta.usage.agentRuns++;
     const session = await new AgentService(ta.modelService, ta.toolRegistry, ta.agentSessions).start(req.body.projectRoot, req.body.instruction, req.body.rules);
     res.status(201).json({ session: serializeSession(session) });
@@ -578,7 +579,7 @@ v1Router.get("/tools", asyncHandler(async (req, res) => {
   // permission overrides (handled inside registerProjectToolsFor), so listing
   // tools never resets what the user configured.
   if (root && !tt.runStore.list().some(run => ["running", "queued", "awaiting_approval"].includes(run.status))) {
-    registerProjectToolsFor(tt, root);
+    await registerProjectToolsFor(tt, root);
   }
   res.json({
     tools: tt.toolGateway.list().map((t) => ({
@@ -592,18 +593,11 @@ v1Router.get("/tools", asyncHandler(async (req, res) => {
   } catch(e:any) { res.status(400).json({error:e.message}); }
 }));
 
-v1Router.post("/tools/:name/permission", (req, res) => {
+v1Router.post("/tools/:name/permission", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  t.toolRegistry.setPermission(req.params.name, req.body.permission);
-  // An explicit permission edit revokes remembered approval buttons for this
-  // tool so a user can switch back to being prompted.
-  t.localStore.clearToolApprovalGrants(req.principal?.userId ?? t.id, req.params.name);
-  // Explicit user choice — persist per project so it survives restarts.
-  if (t.currentProjectRoot) {
-    t.localStore.setToolOverride(t.currentProjectRoot, req.params.name, req.body.permission);
-  }
+  await persistToolPermission(t, req.principal?.userId ?? t.id, req.params.name, req.body.permission);
   res.json({ ok: true });
-});
+}));
 
 v1Router.post("/tools/:name/execute", asyncHandler(async (req, res) => {
   const tr = requireTenant(req).toolRegistry;
@@ -690,7 +684,7 @@ v1Router.post("/chat/completions", asyncHandler(async (req, res) => {
       if (!exposeProjectTools(preflight)) {
         return res.status(409).json({ error: "This task needs a workspace before file tools can run.", code: "WORKSPACE_REQUIRED" });
       }
-      _regTools(tc, preflight.projectRoot);
+      await _regTools(tc, preflight.projectRoot);
       await tc.modelService.huggingFaceReady;
       const runId = randomUUID();
       if (!await tc.sessions.attachRun(session.sessionId, runId, preflight.projectRoot)) throw new Error("Conversation admission could not be stored");
@@ -974,7 +968,7 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
     String(req.headers["x-forwarded-proto"] || req.protocol || "https"),
     String(req.headers["x-forwarded-host"] || req.get("host") || "")
   );
-  if (exposeProjectTools(preflight)) _regTools(t, boundRoot); else _regFreeTools(t);
+  if (exposeProjectTools(preflight)) await _regTools(t, boundRoot); else _regFreeTools(t);
   t.usage.agentRuns++;
   // A follow-up continues the conversation: the session's runs are its history.
   const history: {role: "user" | "assistant";content:string}[] = threadHistory(t.runStore, session.runIds);
@@ -1027,7 +1021,7 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
         : undefined,
       accessMode: isAccessMode(req.body.permissionMode) ? req.body.permissionMode : undefined,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
-      approvedTools: t.localStore.getToolApprovalGrants(
+      approvedTools: await t.localStore.getToolApprovalGrants(
         req.principal?.userId ?? t.id,
         session.sessionId,
         session.projectId ? `project:${session.projectId}` : boundRoot ? `root:${boundRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
@@ -1436,17 +1430,17 @@ v1Router.post("/agent/stream/runs/:id/undo", asyncHandler(async (req, res) => {
   }
 }));
 
-v1Router.post("/agent/stream/approvals/:callId", (req, res) => {
+v1Router.post("/agent/stream/approvals/:callId", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const scope = ["once", "mission", "session", "project", "always"].includes(req.body.scope) ? req.body.scope : "once";
   // The pending call may live in either runtime (clients cannot always know
   // which one owns the run). Resolve across both — approving is idempotent.
   const ok =
-    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope, { secrets: req.body.secrets }) ||
+    (await t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope, { secrets: req.body.secrets })) ||
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
   if (!ok) return res.status(404).json({ error: "No pending approval with that callId" });
   res.json({ ok: true });
-});
+}));
 
 v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
   const t = requireTenant(req);
@@ -1499,7 +1493,7 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
       projectRoot: preflight.projectRoot,
     });
   }
-  if (exposeProjectTools(preflight)) _regTools(t, preflight.projectRoot); else _regFreeTools(t);
+  if (exposeProjectTools(preflight)) await _regTools(t, preflight.projectRoot); else _regFreeTools(t);
   t.usage.agentRuns++;
   // One agent loop. Mission requests use the same runtime as chat runs.
   const reasoningEffort = ["auto", "fast", "standard", "deep", "max"].includes(req.body.reasoningEffort)
@@ -1525,7 +1519,7 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
       reasoningEffort,
       accessMode,
       composerMode: typeof req.body.composerMode === "string" ? req.body.composerMode : undefined,
-      approvedTools: t.localStore.getToolApprovalGrants(
+      approvedTools: await t.localStore.getToolApprovalGrants(
         req.principal?.userId ?? t.id,
         missionSession.sessionId,
         missionSession.projectId ? `project:${missionSession.projectId}` : missionRoot ? `root:${missionRoot}` : preflight.status === "resolved" ? `workspace:${preflight.workspaceId}` : "default",
@@ -1564,16 +1558,16 @@ v1Router.post("/agent/orchestrate",  asyncHandler(async (req, res) => {
   res.status(201).json({ runId, sessionId: joined.sessionId, queue: t.multiAgentRuntime.queueStats(), execution: "orion" });
 }));
 
-v1Router.post("/agent/orchestrate/approvals/:callId", (req, res) => {
+v1Router.post("/agent/orchestrate/approvals/:callId", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const scope = ["once", "mission", "session", "project", "always"].includes(req.body.scope) ? req.body.scope : "once";
   // Same cross-runtime resolution as the stream endpoint.
   const ok =
     t.multiAgentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope) ||
-    t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope);
+    (await t.agentRuntime.resolveApproval(req.params.callId, req.body.approved === true, scope));
   if (!ok) return res.status(404).json({ error: "No pending approval with that callId" });
   res.json({ ok: true });
-});
+}));
 
 // --- Run feedback (thumbs up/down on a finished run) ---
 // Appended to a per-tenant log in the local store: enough to review later,
