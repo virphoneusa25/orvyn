@@ -29,11 +29,11 @@ export function assertWorkerCredential(callerId: string): TenantResult {
   return { ok: true, tenantId: callerId };
 }
 
-export function resolveWorkerTenant(opts: {
+export async function resolveWorkerTenant(opts: {
   callerId: string;
   requestedTenantId?: string;
-  tenantExists: (id: string) => boolean;
-}): TenantResult {
+  tenantExists: (id: string) => boolean | Promise<boolean>;
+}): Promise<TenantResult> {
   const requested = opts.requestedTenantId?.trim() || undefined;
   if (!opts.callerId) return { ok: false, status: 401, error: "Unauthorized" };
 
@@ -45,7 +45,7 @@ export function resolveWorkerTenant(opts: {
   }
 
   const target = requested && requested !== opts.callerId ? requested : opts.callerId;
-  if (!opts.tenantExists(target)) {
+  if (!await opts.tenantExists(target)) {
     return { ok: false, status: 403, error: "Unknown tenant" };
   }
   return { ok: true, tenantId: target };
@@ -55,25 +55,25 @@ export function resolveWorkerTenant(opts: {
  * Event and cancel writes. A job's recorded tenant wins over the request
  * body so a worker cannot retarget the event after the job was queued.
  */
-export function resolveEventTenant(opts: {
+export async function resolveEventTenant(opts: {
   callerId: string;
   jobTenantId?: string;
   requestedTenantId?: string;
-  tenantExists: (id: string) => boolean;
-}): TenantResult {
+  tenantExists: (id: string) => boolean | Promise<boolean>;
+}): Promise<TenantResult> {
   if (opts.jobTenantId) {
     // The job's recorded tenant wins. A user session may touch only its own job.
     if (isUserTenant(opts.callerId) && opts.callerId !== opts.jobTenantId) {
       return { ok: false, status: 403, error: "Cannot address another tenant" };
     }
-    if (!opts.tenantExists(opts.jobTenantId)) {
+    if (!await opts.tenantExists(opts.jobTenantId)) {
       return { ok: false, status: 403, error: "Unknown tenant" };
     }
     return { ok: true, tenantId: opts.jobTenantId };
   }
-  return resolveWorkerTenant({
+  return (await resolveWorkerTenant({
     callerId: opts.callerId,
     requestedTenantId: opts.requestedTenantId,
     tenantExists: opts.tenantExists,
-  });
+  }));
 }

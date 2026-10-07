@@ -65,8 +65,8 @@ v1Router.use("/documents", documentRouter);
 v1Router.use("/desktop", desktopRouter());
 v1Router.use("/releases", releasesRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
-v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string) => {
-  const tenant = tenantManager.get(tenantId) ?? (tenantId === "default" ? tenantManager.ensureLocalDefault() : undefined);
+v1Router.use("/local-worker", localWorkerRouter(requireTenant,  async (tenantId: string) => {
+  const tenant = tenantManager.get(tenantId) ?? (tenantId === "default" ? (await tenantManager.ensureLocalDefault()) : undefined);
   if (!tenant) throw new Error(`Unknown tenant ${tenantId}`);
   return tenant.runStore;
 }));
@@ -104,14 +104,14 @@ v1Router.post("/services/:id/stop", (req, res) => {
   res.status(404).json({ error: "Unknown service" });
 });
 
-v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
+v1Router.use("/worker", workerRouter(requireTenant,  async (tenantId?: string) => {
   if (!tenantId) {
     if (process.env.ORVYN_CLOUD_MODE === "true") throw new Error("tenant required");
-    return tenantManager.ensureLocalDefault().runStore;
+    return (await tenantManager.ensureLocalDefault()).runStore;
   }
   // Boot recovery runs before a customer makes their first request. Recreate
   // the tenant services from their durable stores so live missions can resume.
-  const tenant = tenantManager.get(tenantId) ?? tenantManager.create(tenantId, "", tenantId);
+  const tenant = tenantManager.get(tenantId) ?? (await tenantManager.create(tenantId, "", tenantId));
   return tenant.runStore;
 },  async (tenantId, runId) => {
   const tenant = tenantManager.get(tenantId);
@@ -2260,17 +2260,17 @@ v1Router.patch("/skills/registry/:id", (req, res) => {
   }
 });
 
-v1Router.get("/skills", (req, res) => {
+v1Router.get("/skills", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  seedValidatedSkills(t.localStore);
-  res.json({ skills: listValidatedSkills(t.localStore) });
-});
+  (await seedValidatedSkills(t.localStore));
+  res.json({ skills: (await listValidatedSkills(t.localStore)) });
+}));
 
-v1Router.get("/agent/skills", (req, res) => {
+v1Router.get("/agent/skills", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  seedValidatedSkills(t.localStore);
-  res.json({ skills: listValidatedSkills(t.localStore) });
-});
+  (await seedValidatedSkills(t.localStore));
+  res.json({ skills: (await listValidatedSkills(t.localStore)) });
+}));
 
 v1Router.get("/learning/datasets", (req, res) => {
   const t = requireTenant(req);
@@ -2293,33 +2293,33 @@ v1Router.get("/learning/failures", asyncHandler(async (req, res) => {
   res.json({ clusters: (await t.experienceStore.overview()).failureClusters });
 }));
 
-v1Router.get("/learning/models", (req, res) => {
+v1Router.get("/learning/models", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
-  res.json({ models: new ModelRegistry(t.localStore).list() });
-});
+  res.json({ models: (await new ModelRegistry(t.localStore).list()) });
+}));
 
-v1Router.post("/learning/models", (req, res) => {
+v1Router.post("/learning/models", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   const version = String(req.body.version ?? "").trim();
   if (!version) return res.status(400).json({ error: "version is required" });
-  const row = new ModelRegistry(t.localStore).register({
+  const row = (await new ModelRegistry(t.localStore).register({
     version,
     datasetVersion: req.body.datasetVersion ? String(req.body.datasetVersion) : undefined,
     benchmark: req.body.benchmark,
-  });
+  }));
   res.status(201).json(row);
-});
+}));
 
-v1Router.post("/learning/models/:id/status", (req, res) => {
+v1Router.post("/learning/models/:id/status", asyncHandler(async (req, res) => {
   const t = requireTenant(req);
   try {
-    const row = new ModelRegistry(t.localStore).setStatus(req.params.id, req.body.status);
+    const row = (await new ModelRegistry(t.localStore).setStatus(req.params.id, req.body.status));
     if (!row) return res.status(404).json({ error: "Unknown model" });
     res.json(row);
   } catch (err: any) {
     res.status(409).json({ error: err.message });
   }
-});
+}));
 
 v1Router.post("/learning/refresh", asyncHandler(async (req, res) => {
   const t = requireTenant(req);

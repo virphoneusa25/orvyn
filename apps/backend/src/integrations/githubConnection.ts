@@ -12,7 +12,7 @@ async function tenantOf(userId: string) {
   const user = (await authService.getUser(userId));
   if (!user) return undefined;
   const personal = (await authService.ensurePersonalOrganization(user));
-  return tenantManager.get(personal.tenantId) ?? tenantManager.ensureUserTenant(userId, personal.name || user.email);
+  return tenantManager.get(personal.tenantId) ?? (await tenantManager.ensureUserTenant(userId, personal.name || user.email));
 }
 
 export async function saveGithubConnection(userId: string, conn: { token: string; login: string; scope: string }): Promise<void> {

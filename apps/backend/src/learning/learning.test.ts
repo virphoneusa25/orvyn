@@ -114,10 +114,10 @@ test("ModelRegistry refuses production auto-promote", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-mdl-"));
   const store = new LocalStore("tenant-a", dir);
   const reg = new ModelRegistry(store);
-  const row = reg.register({ version: "orvyn-ft-1", datasetVersion: "ds_current" });
+  const row = (await reg.register({ version: "orvyn-ft-1", datasetVersion: "ds_current" }));
   assert.equal(row.status, "candidate");
-  assert.throws(() => reg.setStatus(row.id, "production"), /Refusing to auto-promote/);
-  const staged = reg.setStatus(row.id, "staging");
+  (await assert.rejects( async () => (await reg.setStatus(row.id, "production")), /Refusing to auto-promote/));
+  const staged = (await reg.setStatus(row.id, "staging"));
   assert.equal(staged?.status, "staging");
 });
 

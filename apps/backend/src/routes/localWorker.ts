@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // User-scoped local worker: the desktop process registers as this tenant's
 // local_host executor. ToolGateway on the control plane still authorizes
 // every call; this only serves Tool RPC against the opened project root.
@@ -117,11 +118,11 @@ export function queueLocalHostJob(runId: string, projectRoot: string, tenantId: 
 
 export function localWorkerRouter(
   requireTenant: (req: any) => Tenant,
-  getRunStore: (tenantId: string) => RunStore
+  getRunStore: (tenantId: string) => RunStore | Promise<RunStore>
 ): Router {
   const r = Router();
 
-  r.post("/register", async (req, res) => {
+  r.post("/register", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const workerId = String(req.body.workerId ?? `local_${t.id}`);
     let environment = req.body.environment;
@@ -142,7 +143,7 @@ export function localWorkerRouter(
     });
     noteWorkbenchBrowser(t.id, Array.isArray(req.body.capabilities) && req.body.capabilities.includes("workbench-browser"));
     res.json({ ok: true, workerId, secretRequired: true });
-  });
+  }));
 
   r.post("/heartbeat", (req, res) => {
     const t = requireTenant(req);
@@ -178,7 +179,7 @@ export function localWorkerRouter(
     res.json({ job: job ?? null, stopServices: stops, browserCommands: browser ? takeWorkbenchBrowserCommands(t.id) : [] });
   });
 
-  r.get("/tools/:runId/next", (req, res) => {
+  r.get("/tools/:runId/next", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const job = jobs.find((j) => j.runId === req.params.runId);
     if (job && job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
@@ -186,21 +187,21 @@ export function localWorkerRouter(
     let finished = false;
     let cancelled = false;
     try {
-      const run = getRunStore(t.id).get(req.params.runId);
+      const run = (await getRunStore(t.id)).get(req.params.runId);
       finished = !!run && isRunSettled(run.status);
       cancelled = run?.status === "cancelled";
     } catch { /* keep serving */ }
     if (finished) toolRpc.cleanup(req.params.runId);
     res.json({ request, finished, cancelled, projectRoot: job?.projectRoot });
-  });
+  }));
 
-  r.get("/tools/:runId/state", (req, res) => {
+  r.get("/tools/:runId/state", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const job = jobs.find((j) => j.runId === req.params.runId);
     if (!job || job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
-    const run = getRunStore(t.id).get(req.params.runId);
+    const run = (await getRunStore(t.id)).get(req.params.runId);
     res.json({ cancelled: run?.status === "cancelled", finished: Boolean(run && isRunSettled(run.status)) });
-  });
+  }));
 
   r.post("/tools/:runId/result", (req, res) => {
     const t = requireTenant(req);
@@ -226,12 +227,12 @@ export function localWorkerRouter(
     res.json({ ok: resolved });
   });
 
-  r.post("/events/:runId", (req, res) => {
+  r.post("/events/:runId", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const { type, data } = req.body ?? {};
     if (!type) return res.status(400).json({ error: "type required" });
     try {
-      const store = getRunStore(t.id);
+      const store = (await getRunStore(t.id));
       // The run's project root comes from the JOB that owns this run (or the
       // event payload) — never the tenant-global currentProjectRoot, which can
       // point at a different project when runs overlap.
@@ -249,7 +250,7 @@ export function localWorkerRouter(
       console.warn(`[local-worker] event persist failed: ${err.message}`);
     }
     res.json({ ok: true });
-  });
+  }));
 
   // The desktop's answer to one browser command (see workbenchBrowserBridge).
   r.post("/browser/:id/result", (req, res) => {

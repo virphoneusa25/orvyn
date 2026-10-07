@@ -54,7 +54,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       res.status(401).json({ error: "Unauthorized — missing API key" });
       return;
     }
-    req.tenant = tenantManager.ensureLocalDefault();
+    req.tenant = (await tenantManager.ensureLocalDefault());
     next();
     return;
   }
@@ -72,7 +72,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       res.status(403).json({ error: "Support view is read-only.", code: "READ_ONLY_VIEW" });
       return;
     }
-    req.tenant = tenantManager.ensureOrgTenant(as.principal);
+    req.tenant = (await tenantManager.ensureOrgTenant(as.principal));
     req.principal = as.principal;
     (req as Request & { viewAs?: unknown }).viewAs = view;
     next();
@@ -92,7 +92,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       res.status(403).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
       return;
     }
-    req.tenant = tenantManager.ensureOrgTenant(k.principal);
+    req.tenant = (await tenantManager.ensureOrgTenant(k.principal));
     req.tenant.usage.requests++;
     req.principal = k.principal;
     (req as Request & { apiKeyId?: string }).apiKeyId = k.keyId;
@@ -114,7 +114,7 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
       res.status(err.status ?? 403).json({ error: err.message });
       return;
     }
-    const tenant = tenantManager.ensureOrgTenant(session.principal);
+    const tenant = (await tenantManager.ensureOrgTenant(session.principal));
     tenant.usage.requests++;
     req.tenant = tenant;
     req.principal = session.principal;
@@ -153,7 +153,7 @@ export function requirePrincipal(req: Request): Principal {
 export async function resolveTenantFromToken(token: string | null): Promise<Tenant | undefined> {
   if (!token) return undefined;
   const session = (await authService.verifyPrincipal(token));
-  if (session) return tenantManager.ensureOrgTenant(session.principal);
+  if (session) return (await tenantManager.ensureOrgTenant(session.principal));
   return tenantManager.resolveByApiKey(token);
 }
 
@@ -167,5 +167,5 @@ export async function authorizeSocket(token: string | null): Promise<{ ok: true;
   if (!unauthenticatedTenantAllowed()) {
     return { ok: false, error: "Unauthorized — missing or invalid token" };
   }
-  return { ok: true, tenant: tenantManager.ensureLocalDefault() };
+  return { ok: true, tenant: (await tenantManager.ensureLocalDefault()) };
 }

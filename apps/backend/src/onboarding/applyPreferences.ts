@@ -8,7 +8,7 @@ import { PREFERENCES_KEY, type OrionPreferences, type SettingsLike } from "./pre
 export async function applyPreferences(userId: string, answers: OnboardingAnswers): Promise<void> {
   const org = (await authService.listOrganizations(userId)).find((o) => o.kind === "personal");
   if (!org) return;
-  const tenant = tenantManager.ensureUserTenant(userId, org.name);
+  const tenant = (await tenantManager.ensureUserTenant(userId, org.name));
   const prefs: OrionPreferences = {
     name: answers.name,
     workStyle: answers.workStyle,

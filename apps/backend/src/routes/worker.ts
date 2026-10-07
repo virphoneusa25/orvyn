@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/worker.ts
 //
 // Worker-facing endpoints: registration, heartbeat, job polling, event
@@ -94,7 +95,7 @@ function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoin
  * so the next worker reattaches to the sandbox and workspace bytes.
  */
 async function recoverOrphanedRunsOnBoot(
-  getStore: (tenantId?: string) => RunStore,
+  getStore: (tenantId?: string) => RunStore | Promise<RunStore>,
   resumeRun?: (tenantId: string, runId: string) => void | Promise<void>,
 ): Promise<void> {
   try {
@@ -110,7 +111,7 @@ async function recoverOrphanedRunsOnBoot(
         for (const journal of journals) {
           const runId = journal.replace(/\.jsonl$/, "");
           try {
-            const store = getStore(tenantId);
+            const store = (await getStore(tenantId));
             const run = store.get(runId);
             if (!run) continue;
             if (isExecutionActive(run.status)) {
@@ -382,28 +383,28 @@ setInterval(pruneStaleWorkers, 15_000).unref();
 
 export function workerRouter(
   auth: (req: any) => any,
-  getRunStore: (tenantId?: string) => RunStore,
+  getRunStore: (tenantId?: string) => RunStore | Promise<RunStore>,
   resumeRun?: (tenantId: string, runId: string) => void | Promise<void>,
 ): Router {
   const r = Router();
 
-  const tenantExists = (id: string) => {
+  const tenantExists =  async (id: string) => {
     try {
-      getRunStore(id);
+      (await getRunStore(id));
       return true;
     } catch {
       return false;
     }
   };
 
-  const decide = (req: any, runId?: string, requested?: string): TenantResult => {
+  const decide =  async (req: any, runId?: string, requested?: string): Promise<TenantResult> => {
     const caller = auth(req) as { id?: string };
-    return resolveEventTenant({
+    return (await resolveEventTenant({
       callerId: String(caller?.id ?? ""),
       jobTenantId: runId ? tenantForRun(runId) : undefined,
       requestedTenantId: requested,
       tenantExists,
-    });
+    }));
   };
 
   const denyUnlessWorker = (req: any, res: any): boolean => {
@@ -424,7 +425,7 @@ export function workerRouter(
   // recover=true while its run is still active. The next worker reattaches
   // to the same sandbox (it outlives the worker process) and the same
   // workspace bytes. Tool calls the dead worker had taken fail truthfully.
-  const recoverOrphanedJobs = (): void => {
+  const recoverOrphanedJobs =  async (): Promise<void> => {
     pruneStaleWorkers();
     for (const job of jobQueue) {
       if (!job.assignedTo) continue;
@@ -432,7 +433,7 @@ export function workerRouter(
       if (w && isWorkerOnline(w)) continue;
       let active = false;
       try {
-        const run = getRunStore(job.tenantId).get(job.runId);
+        const run = (await getRunStore(job.tenantId)).get(job.runId);
         // Only an execution-active run gets a replacement worker. A settled
         // run (partial/error/cancelled) is done, and a blocked one is paused
         // awaiting its blocker — not something to reattach a worker to.
@@ -444,7 +445,7 @@ export function workerRouter(
       job.recover = true;
       const failed = toolRpc.failInFlight(job.runId, "The cloud worker running this step restarted before it finished. Check the workspace state (read the file / list the folder) before retrying.");
       try {
-        getRunStore(job.tenantId).emit(job.runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Reconnecting to the mission workspace" });
+        (await getRunStore(job.tenantId)).emit(job.runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Reconnecting to the mission workspace" });
         const rec = sandboxRegistry().forRun(job.runId);
         if (rec) {
           sandboxRegistry().report(rec.id, { state: "recovering" });
@@ -577,7 +578,7 @@ export function workerRouter(
   // The response also tells the worker when the control-plane run has
   // finished, so it can collect artifacts and clean the container up. The
   // WORKER never decides completion — it only observes it here.
-  r.get("/tools/:runId/next", (req, res) => {
+  r.get("/tools/:runId/next", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
       return res.status(404).json({ error: "Not found" });
@@ -592,7 +593,7 @@ export function workerRouter(
     let finished = false;
     try {
       const bound = tenantForRun(req.params.runId);
-      const run = getRunStore(bound).get(req.params.runId);
+      const run = (await getRunStore(bound)).get(req.params.runId);
       finished = run ? isRunSettled(run.status) : false;
     } catch { /* store unavailable — keep serving */ }
     if (finished) {
@@ -604,7 +605,7 @@ export function workerRouter(
       try { policyUpdate = pendingPolicyUpdate(sandboxRegistry(), req.params.runId); } catch { /* registry unavailable */ }
     }
     res.json({ request, finished, ...(policyUpdate ? { policyUpdate } : {}) });
-  });
+  }));
 
   // ── Tool RPC: worker submits the tool result ──────────────────────────
   r.post("/tools/:runId/result", (req, res) => {
@@ -640,17 +641,17 @@ export function workerRouter(
   // ── DURABLE event relay (workers push events → RunStore) ────────────
   // Events get authoritative sequence numbers, JSONL persistence, and
   // fan-out to SSE subscribers — identical to local run events.
-  r.post("/events/:runId", (req, res) => {
+  r.post("/events/:runId", asyncHandler(async (req, res) => {
     const { runId } = req.params;
     const { type, data } = req.body;
     if (!type) return res.status(400).json({ error: "type required" });
-    const decision = decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined);
+    const decision = (await decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined));
     if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
 
     // Persist through the RunStore — durable + sequenced + replayable.
     // The tenant is the one recorded on the job, never a forged body field.
     try {
-      const store = getRunStore(decision.tenantId);
+      const store = (await getRunStore(decision.tenantId));
       const run = store.get(runId);
       if (!run) {
         // Remote run not yet in the RunStore — create it so events persist.
@@ -668,18 +669,18 @@ export function workerRouter(
     }
 
     res.json({ ok: true });
-  });
+  }));
 
   // ── Job submission (internal: the OVH provider calls this) ──────────
-  r.post("/submit", (req, res) => {
+  r.post("/submit", asyncHandler(async (req, res) => {
     const { instruction, missionId, projectRoot, mode } = req.body;
     if (!instruction) return res.status(400).json({ error: "instruction required" });
     const caller = auth(req) as { id?: string };
-    const decision = resolveWorkerTenant({
+    const decision = (await resolveWorkerTenant({
       callerId: String(caller?.id ?? ""),
       requestedTenantId: typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined,
       tenantExists,
-    });
+    }));
     if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
     const tenantId = decision.tenantId;
     const runId = randomUUID();
@@ -694,7 +695,7 @@ export function workerRouter(
     rememberTenant(runId, tenantId, mission);
     const canonical = bindCanonicalRoot(runId, String(req.body?.canonicalProjectRoot ?? projectRoot ?? ""));
     try {
-      const store = getRunStore(tenantId);
+      const store = (await getRunStore(tenantId));
       if (!store.get(runId)) {
         store.create(runId, String(projectRoot ?? "/remote"));
         store.emit(runId, "run.started" as AgentEventType, { instruction, mode: mode || "agent", executionLocation: "OVH_WORKER" });
@@ -717,7 +718,7 @@ export function workerRouter(
     };
     jobQueue.push(job);
     res.status(201).json({ runId: job.runId, missionId: job.missionId, workspace: job.workspace, tenantId: mission.tenantId });
-  });
+  }));
 
   // ── Execution sandbox registry (worker reports; admin-only detail) ──
   r.post("/sandboxes/:runId/report", (req, res) => {
@@ -781,21 +782,23 @@ export function workerRouter(
   });
 
   /** Sandbox ids still in use, for the worker's reconciliation pass. */
-  r.get("/sandboxes/live", (req, res) => {
+  r.get("/sandboxes/live", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
     const now = Date.now();
-    const live = reg.active().filter((s) => {
+    const candidates = reg.active();
+    const keep = await Promise.all(candidates.map(async (s) => {
       if (s.retention === "retained") return !s.expiresAt || s.expiresAt > now;
       const job = s.runId ? jobQueue.find((j) => j.runId === s.runId) : undefined;
       if (job) return true;
       try {
-        const run = getRunStore(s.tenantId).get(s.runId ?? "");
+        const run = (await getRunStore(s.tenantId)).get(s.runId ?? "");
         return Boolean(run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled");
       } catch { return true; } // unknown → keep; never delete on doubt
-    }).map((s) => s.id);
+    }));
+    const live = candidates.filter((_s, i) => keep[i]).map((s) => s.id);
     res.json({ live });
-  });
+  }));
 
   r.post("/sandboxes/reconciled", (req, res) => {
     if (denyUnlessWorker(req, res)) return;
@@ -833,18 +836,18 @@ export function workerRouter(
   // run's authoritative status (set by the control-plane runtime) so it can
   // kill the container the moment the user stops the run. The POST form is
   // the desktop-initiated cancel.
-  r.get("/cancel/:runId", (req, res) => {
+  r.get("/cancel/:runId", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     let cancelled = false;
     try {
-      cancelled = getRunStore(tenantForRun(req.params.runId)).get(req.params.runId)?.status === "cancelled";
+      cancelled = (await getRunStore(tenantForRun(req.params.runId))).get(req.params.runId)?.status === "cancelled";
     } catch { /* store unavailable */ }
     res.json({ cancelled, stopRequested: cancelled });
-  });
+  }));
 
-  r.post("/cancel/:runId", (req, res) => {
+  r.post("/cancel/:runId", asyncHandler(async (req, res) => {
     const { runId } = req.params;
-    const decision = decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined);
+    const decision = (await decide(req, runId, typeof req.body?.tenantId === "string" ? req.body.tenantId : undefined));
     if (!decision.ok) return res.status(decision.status).json({ error: decision.error });
     const job = jobQueue.find((j) => j.runId === runId);
     if (job) {
@@ -854,7 +857,7 @@ export function workerRouter(
     // Mark the run cancelled in the RunStore (durable event) — unless the
     // control-plane runtime already reached a terminal state of its own.
     try {
-      const store = getRunStore(decision.tenantId);
+      const store = (await getRunStore(decision.tenantId));
       const run = store.get(runId);
       if (run && run.status !== "completed" && run.status !== "error" && run.status !== "cancelled") {
         store.emit(runId, "run.cancelled" as AgentEventType, { reason: "Stopped by user" });
@@ -862,7 +865,7 @@ export function workerRouter(
       }
     } catch { /* best-effort */ }
     res.json({ ok: true, cancelled: true });
-  });
+  }));
 
   return r;
 }
