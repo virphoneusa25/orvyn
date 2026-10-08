@@ -145,6 +145,13 @@ class WindowsDesktop {
   }
   [STAThread] static void Main() {
     if(String.IsNullOrEmpty(Environment.GetEnvironmentVariable("ORVYN_NATIVE_TOKEN"))) return;
+    // An ORVYN started as administrator must not create an elevated automation helper.
+    IntPtr ownToken;
+    using(var own=Process.GetCurrentProcess()) {
+      if(!OpenProcessToken(own.Handle,8,out ownToken)) return;
+      try { int elevated,length; if(!GetTokenInformation(ownToken,20,out elevated,4,out length) || elevated!=0) return; }
+      finally {CloseHandle(ownToken);}
+    }
     SetProcessDPIAware(); string line;
     while((line=Console.ReadLine())!=null) {
       object result; string id="";
