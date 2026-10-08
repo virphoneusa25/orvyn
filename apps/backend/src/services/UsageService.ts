@@ -12,6 +12,7 @@
 //   - Mission/task/agent attribution comes from AsyncLocalStorage context set
 //     by the runtimes; requests outside a mission simply have no missionId.
 
+import type { UsageRecoveryJournal } from "./UsageRecoveryJournal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { AIChunk, AIModelProvider, AIRequest, AIResponse, type ModelConfig } from "@orvyn/ai-core";
@@ -111,6 +112,7 @@ export class UsageService {
   private events: UsageEvent[] = [];
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
+  private journal?: UsageRecoveryJournal;
   private sinks: UsageSink[] = [];
   private pendingSinks: Array<{ event: UsageEvent; sink: UsageSink }> = [];
   private preflights: UsageGuard[] = [];
@@ -160,6 +162,7 @@ export class UsageService {
     await this.flushStorage();
     await Promise.all([...this.settling]);
     await this.retryPendingSinks();
+    try { await this.journal?.check(); } catch { throw new UsagePersistenceError(); }
     const ctx = this.als.getStore() ?? {};
     const releases: UsageRelease[] = [];
     const releaseAll = async () => {
@@ -206,8 +209,9 @@ export class UsageService {
     this.sinks.push(fn);
   }
 
-  attachStore(store: UsageStore): void | Promise<void> {
+  attachStore(store: UsageStore, journal?: UsageRecoveryJournal): void | Promise<void> {
     this.store = store;
+    this.journal = journal;
     const persisted = store.loadRecentUsage(MAX_EVENTS);
     const count = store.countUsageSince?.(this.monthStart);
     const hydrate = (events: UsageEvent[], total?: number) => {
@@ -215,11 +219,20 @@ export class UsageService {
       this.events = [...events.filter(event => !existing.has(event.id)), ...this.events].slice(-MAX_EVENTS);
       if (total !== undefined) this.monthCount = total;
     };
-    if (Array.isArray(persisted) && (count === undefined || typeof count === "number")) {
+    if (!journal && Array.isArray(persisted) && (count === undefined || typeof count === "number")) {
       hydrate(persisted, count);
       return;
     }
-    this.storeReady = Promise.all([persisted, count]).then(([events, total]) => { hydrate(events, total); });
+    this.storeReady = Promise.all([persisted, count]).then(async ([events, total]) => {
+      hydrate(events, total);
+      if (journal) {
+        const pending = await journal.pending();
+        const queued = new Set(this.pendingStorage.map(event => event.id));
+        this.pendingStorage.push(...pending.filter(event => !queued.has(event.id)));
+        await this.flushStorage();
+        hydrate(await store.loadRecentUsage(MAX_EVENTS), await store.countUsageSince?.(this.monthStart));
+      }
+    });
     void this.storeReady.catch(() => {});
     return this.storeReady;
   }
@@ -242,7 +255,11 @@ export class UsageService {
     if (!this.storing) this.storing = (async () => {
       while (this.pendingStorage.length) {
         const event = this.pendingStorage[0];
-        try { await this.store?.saveUsageEvent(event); }
+        try {
+          await this.journal?.put(event);
+          await this.store?.saveUsageEvent(event);
+          await this.journal?.remove(event.id);
+        }
         catch { throw new UsagePersistenceError(); }
         for (const sink of this.sinks) {
           try { await sink(event); } catch (err) {
