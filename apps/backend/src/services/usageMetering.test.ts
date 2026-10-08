@@ -243,3 +243,48 @@ test("failed durable usage keeps one stable event and blocks another provider ca
   assert.equal(new Set(attempts.slice(0, 3)).size, 1);
   assert.equal(new Set(persisted.map(event => event.id)).size, 2);
 });
+
+import { FileUsageRecoveryJournal } from "./UsageRecoveryJournal";
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+test("failed database usage survives a new service and replays before new admission",async()=>{
+ const dir=mkdtempSync(join(tmpdir(),"usage-recovery-"));
+ const records=new Map<string,UsageEvent>();let available=false;
+ const store={loadRecentUsage:()=>[...records.values()],countUsageSince:()=>records.size,
+   saveUsageEvent(event:UsageEvent){if(!available)throw new Error("database unavailable");records.set(event.id,event);}};
+ try{
+  const journal=new FileUsageRecoveryJournal(dir,"tenant");const first=new UsageService();await first.attachStore(store,journal);
+  await assert.rejects(first.record({modelId:"fixture",provider:"fixture",method:"generate",durationMs:1,ok:true,providerCostUsd:0.25}),/Usage storage/);
+  const original=journal.pending()[0];assert.equal(original.providerCostUsd,0.25);
+  const blocked=new UsageService();await assert.rejects(blocked.attachStore(store,new FileUsageRecoveryJournal(dir,"tenant")) as Promise<void>,/Usage storage/);
+  available=true;const restarted=new UsageService();await restarted.attachStore(store,new FileUsageRecoveryJournal(dir,"tenant"));
+  assert.equal(records.size,1);assert.deepEqual(records.get(original.id),original);
+  assert.equal(restarted.recent()[0].id,original.id);assert.equal((await restarted.quotaAsync()).used,1);
+  assert.deepEqual(journal.pending(),[]);
+  await new UsageService().attachStore(store,new FileUsageRecoveryJournal(dir,"tenant"));assert.equal(records.size,1);
+  assert.deepEqual(new FileUsageRecoveryJournal(dir,"other").pending(),[]);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test("recovery buffer retains unrenamed records and refuses corrupt or conflicting usage",()=>{
+ const dir=mkdtempSync(join(tmpdir(),"usage-journal-"));
+ const event:UsageEvent={id:"stable",timestamp:Date.now(),modelId:"fixture",provider:"fixture",method:"generate",durationMs:1,ok:true};
+ try{
+  const journal=new FileUsageRecoveryJournal(dir,"tenant");journal.put(event);
+  const tenantDir=join(dir,"usage-recovery",readdirSync(join(dir,"usage-recovery"))[0]);
+  const file=join(tenantDir,readdirSync(tenantDir)[0]);
+  renameSync(file,join(tenantDir,".pending-interrupted"));
+  assert.deepEqual(journal.pending(),[event]);assert.equal(readFileSync(file,"utf8"),JSON.stringify(event));
+  assert.throws(()=>journal.put({...event,ok:false}),/Conflicting/);
+  writeFileSync(file,"broken");assert.throws(()=>journal.pending());
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test("unavailable recovery disk blocks a provider before spending",async()=>{
+ const usage=new UsageService();let calls=0,available=true;
+ await usage.attachStore({loadRecentUsage:()=>[],saveUsageEvent(){}},{pending:()=>[],put(){},remove(){},check(){if(!available)throw new Error("disk unavailable");}});
+ available=false;const provider=fakeProvider([]);provider.generate=async()=>{calls++;return {content:"unexpected"};};
+ await assert.rejects(usage.wrap(provider).generate({messages:[]}),/Usage storage/);assert.equal(calls,0);
+});

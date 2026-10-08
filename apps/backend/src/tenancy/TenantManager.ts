@@ -1,3 +1,4 @@
+import { FileUsageRecoveryJournal } from "../services/UsageRecoveryJournal";
 // apps/backend/src/tenancy/TenantManager.ts
 //
 // Multi-tenancy foundation. Before this, every service was a module-level
@@ -167,7 +168,7 @@ export class TenantManager {
       loadRecentUsage: (limit) => localStore.loadRecentUsage(limit),
       countUsageSince: (since) => localStore.countUsageSince(since),
       saveUsageEvent: (event) => localStore.saveUsageEventAndQueueBilling(event, modelService.isUserModel(event.modelId)),
-    });
+    }, new FileUsageRecoveryJournal(defaultDataDir(), id));
     const billing = new TenantBilling(creditLedger, id, localStore);
     await billing.recover(creditsEnforced());
     void modelService.huggingFaceReady.then(async () => {
