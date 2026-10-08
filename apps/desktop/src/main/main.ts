@@ -1,5 +1,5 @@
 // apps/desktop/src/main/main.ts
-import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell, powerMonitor } from "electron";
 import { handleWindowAction, validateClipboardText, validateExternalUrl, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
 import * as path from "path";
 import * as os from "os";
@@ -16,6 +16,7 @@ import { sampleHostStats } from "./systemStats";
 import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
 import { localEngineEnvironment, packagedNode } from "./localEngineEnvironment";
 import { captureProviderCredentials } from "./providerEnvironment";
+import { nativeDesktop } from "./nativeDesktop";
 const backendProviderCredentials = captureProviderCredentials(process.env);
 
 let browserManager: WorkbenchBrowserManager | null = null;
@@ -56,7 +57,8 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
       process.env, backendProviderCredentials,
       process.env.ORVYN_DESKTOP_DATA_DIR?.trim() || path.join(os.homedir(), ".orvyn", "data"),
     );
-    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env});
+    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env});
+    bindNativeDesktop(localEngine);
     localEngine.stdout?.pipe(log, {end: false});
     localEngine.stderr?.pipe(log, {end: false});
     localEngine.once("error", () => {localEngine = null; log.end();});
@@ -77,6 +79,7 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
 
 app.on("before-quit", () => {
   quitting = true;
+  nativeDesktop.stop();
   updateService?.handleWillQuit();
   updateService?.stop();
   if (engineTimer) clearInterval(engineTimer);
@@ -168,6 +171,7 @@ function createWindow(): void {
     },
   });
 
+  nativeDesktop.bindWindow(mainWindow);
   mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximized", true));
   mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximized", false));
 
@@ -196,6 +200,10 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.whenReady().then(async () => {
+    nativeDesktop.register(() => mainWindow);
+    powerMonitor.on("lock-screen", () => nativeDesktop.stop());
+    powerMonitor.on("suspend", () => nativeDesktop.stop());
+    localWorkerManager.setDesktopHandler(command => nativeDesktop.request(command));
     await ensureDefaultWorkspace();
     const recent = (await loadRecents())[0];
     if (recent) { try { if ((await fs.stat(recent)).isDirectory()) currentProjectRoot = recent; } catch { /* missing folder falls back to workspace */ } }
@@ -207,7 +215,7 @@ if (!app.requestSingleInstanceLock()) {
       backendUrl: bootConfig.backendUrl,
       apiKey: bootConfig.apiKey,
       projectRoot: currentProjectRoot ?? defaultWorkspacePath(),
-      hostDesktopAllowed: await readHostDesktopAllowed(),
+      hostDesktopAllowed: true, // Capability advertisement only; main-process grants remain off.
     });
     void localWorkerManager.start();
     createWindow();
@@ -238,21 +246,13 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-function hostDesktopPath(): string {
-  return path.join(app.getPath("userData"), "host-desktop.json");
-}
-
-async function readHostDesktopAllowed(): Promise<boolean> {
-  try {
-    const raw = JSON.parse(await fs.readFile(hostDesktopPath(), "utf-8"));
-    return raw.allowed === true;
-  } catch {
-    return false;
-  }
-}
-
-async function writeHostDesktopAllowed(allowed: boolean): Promise<void> {
-  await fs.writeFile(hostDesktopPath(), JSON.stringify({ allowed }), "utf-8");
+function bindNativeDesktop(child: ChildProcess) {
+  child.on("message", (message: any) => {
+    if (message?.type !== "desktop.command" || typeof message.id !== "string" || message.id.length > 64) return;
+    void nativeDesktop.request(message.command).then(result => {
+      if (child.connected) child.send({type:"desktop.result",id:message.id,result});
+    }).catch(() => undefined);
+  });
 }
 
 function resolveInProject(relativePath: string): string {
@@ -653,11 +653,10 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("localWorker:status", () => localWorkerManager.getStatus());
+// Legacy checkbox cannot grant broad access. Only the window-scoped consent UI can.
 ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
-  const on = allowed === true;
-  await writeHostDesktopAllowed(on);
-  localWorkerManager.configure({ hostDesktopAllowed: on });
-  localWorkerManager.restartForHostDesktop();
+  if (allowed === true) throw new Error("Select a window in local desktop permissions instead.");
+  nativeDesktop.stop();
   return localWorkerManager.getStatus();
 });
 
@@ -745,6 +744,7 @@ ipcMain.handle("system:getAppInfo", () => ({
 }));
 
 ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: string }) => {
+  nativeDesktop.stop();
   return writeConfig({
     backendUrl: String(config?.backendUrl ?? DEFAULT_CONFIG.backendUrl),
     apiKey: String(config?.apiKey ?? ""),

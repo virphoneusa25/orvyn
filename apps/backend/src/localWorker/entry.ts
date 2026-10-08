@@ -170,6 +170,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       ok: result.ok,
       output: result.output,
       error: result.error,
+      meta: result.meta,
       durationMs: Date.now() - started,
     });
   }

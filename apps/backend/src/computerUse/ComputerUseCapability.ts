@@ -1,3 +1,4 @@
+import {hostAction} from "../desktop/hostDesktopActions";
 import { browserSessionService, BrowserSessionService } from "./BrowserSessionService";
 import { desktopSessionService, DesktopSessionService } from "./DesktopSessionService";
 import type { ComputerSurface, ComputerUseRequest, ComputerUseResult } from "./types";
@@ -33,6 +34,7 @@ export class ComputerUseCapability {
       await new Promise((r) => setTimeout(r, Math.min(8000, Number(req.ms ?? 600))));
       return { ok: true, output: "Waited.", desktopHealthy: true, surface, sessionId: this.sessionId(req, surface) };
     }
+    if (req.action === "open_app" && surface === "host") return {ok:false,error:"Open the application yourself and select its window in desktop permissions.",desktopHealthy:true,surface};
     if (req.action === "open_app") {
       const opened = await this.desktop.openApp(req.identity, String(req.app ?? "xterm"));
       return {
@@ -43,6 +45,10 @@ export class ComputerUseCapability {
         surface: "desktop",
         sessionId: opened.sessionId,
       };
+    }
+    if (req.action === "focus_window" && surface === "host") {
+      const result=await hostAction(req.identity.tenantId,{action:"focus"});
+      return {...result,desktopHealthy:true,surface};
     }
     if (req.action === "focus_window") {
       const windows = this.desktop.getWindows(req.identity);
@@ -65,6 +71,10 @@ export class ComputerUseCapability {
   }
 
   private async screenshot(req: ComputerUseRequest, surface: ComputerSurface): Promise<ComputerUseResult> {
+    if (surface === "host") {
+      const result=await hostAction(req.identity.tenantId,{action:"screenshot"});
+      return {...result,screenshot:result.screenshot,desktopHealthy:true,surface};
+    }
     if (surface === "browser") {
       try {
         await this.browser.ensureSession(req.identity.projectRoot);

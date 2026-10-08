@@ -2,6 +2,15 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("orvyn", {
+  nativeDesktop: {
+    status: () => ipcRenderer.invoke("nativeDesktop:status"),
+    windows: () => ipcRenderer.invoke("nativeDesktop:windows"),
+    preview: () => ipcRenderer.invoke("nativeDesktop:preview"),
+    start: (handle: string, input: boolean) => ipcRenderer.invoke("nativeDesktop:start", handle, input),
+    stop: () => ipcRenderer.invoke("nativeDesktop:stop"),
+    takeControl: () => ipcRenderer.invoke("nativeDesktop:takeControl"),
+    resume: () => ipcRenderer.invoke("nativeDesktop:resume"),
+  },
   system: {
     /** Live machine stats for the status bar — sampled in main, never guessed. */
     getStats: (): Promise<{

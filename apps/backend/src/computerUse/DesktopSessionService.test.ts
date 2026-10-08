@@ -99,7 +99,7 @@ test("host computer-use stays tenant-scoped and does not mark Desktop broken whe
   });
   assert.equal(result.desktopHealthy, true);
   assert.equal(result.ok, false);
-  assert.match(result.error ?? "", /Host desktop|not Windows/i);
+  assert.match(result.error ?? "", /Host desktop|not Windows|desktop application/i);
 });
 
 test("creating a session does not invent a hidden second desktop for another run on the same project", () => {

@@ -651,10 +651,11 @@ export class StreamingAgentRuntime {
     return this.gatewayFor(runId)
       .list()
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
+      .filter((t) => !t.name.startsWith("host_desktop_") || typeof process.send === "function" || this.runs.get(runId)?.execution?.location === "LOCAL_HOST")
       // Only runs whose sandbox can open network access ever see this tool.
       .filter((t) => t.name !== NETWORK_ACCESS_TOOL || Boolean(allow?.has(t.name)))
       // Only tools this run's role can actually execute: offering one the
-      // gateway will always refuse (host_desktop_* needs SYSTEM) sends the
+      // gateway will always refuse sends the
       // model down a dead end ("Role 'coder' lacks SYSTEM capability").
       .filter((t) => this.tools.permissions.checkRole(t.name, "coder").allowed)
       .filter((t) => !allow || allow.has(t.name))
@@ -2190,7 +2191,7 @@ export class StreamingAgentRuntime {
       "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
-    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
+    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST");
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
