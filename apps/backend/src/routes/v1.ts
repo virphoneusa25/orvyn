@@ -40,7 +40,7 @@ import { MODES } from "../agent/modes";
 import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
 import { promises as fsp } from "fs";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
 
 export const v1Router = Router();
 
@@ -51,9 +51,14 @@ v1Router.get("/storage/status", asyncHandler(async (req, res) => {
   if (selectedStorage().mode === "postgres") {
     const health = await (await postgresRuntime()).reports.ping();
     const counts = await tenant.localStore.tenantMirrorCounts();
+    const desktopPostgres=process.env.ORVYN_POSTGRES_DESKTOP_RELEASES==="1";
+    const executionPostgres=process.env.ORVYN_POSTGRES_EXECUTION==="1";
+    if(desktopPostgres)await desktopReleaseStore().current("stable");
+    if(executionPostgres)await sandboxRegistry().active();
     return res.json({mode:"postgres-primary",primaryReads:true,primaryWrites:true,sqliteFallback:false,
-      coverage:["identity","credits","subscriptions","missions","usage","settings","models","work-sessions","artifacts","memory"],
-      ready:true,health,tenantCounts:counts,parity:{completeCloudCutover:false}});
+      coverage:["identity","credits","subscriptions","missions","usage","settings","models","work-sessions","artifacts","memory",...(desktopPostgres?["desktop-releases"]:[]),...(executionPostgres?["execution-sandboxes","runtime-flags","network-approvals","sandbox-audit"]:[])],
+      additionalStorage:{desktopReleases:desktopPostgres?"postgres":"sqlite",execution:executionPostgres?"postgres":"sqlite"},
+      ready:true,health,tenantCounts:counts,parity:{completeCloudCutover:desktopPostgres&&executionPostgres}});
   }
   const postgres = await tenantPostgresMirror.status(tenant.id);
   const sqlite = await tenant.localStore.tenantMirrorCounts();
@@ -135,7 +140,7 @@ v1Router.use("/worker", workerRouter(requireTenant,  async (tenantId?: string) =
     tenant.runStore.setStatus(runId, "error");
     return;
   }
-  const record = sandboxRegistry().forRun(runId);
+  const record = (await sandboxRegistry().forRun(runId));
   if (!record) {
     tenant.runStore.emit(runId, "run.error", { message: "The control plane restarted, but the sandbox record was unavailable." });
     tenant.runStore.setStatus(runId, "error");

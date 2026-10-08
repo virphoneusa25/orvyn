@@ -16,9 +16,9 @@ import { toolRpc } from "../execution/ToolRpc";
 import { deleteWorkspacePaths, readWorkspaceTree, writeWorkspaceTree, type WorkspaceFile } from "../execution/workspaceSync";
 import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant, type TenantResult } from "./workerTenant";
 import { WORKER_STALE_MS, countOnlineWorkers, isWorkerOnline } from "./workerPresence";
-import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/SandboxRegistry";
-import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
-import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
+import { sandboxRegistry, type SandboxRecord } from "../execution/sandbox/AsyncSandboxRegistry";
+import { resourcesForPlan, selectSandboxAsync as selectSandbox, type PolicyTemplateId, type SandboxPlan } from "../execution/sandbox/selection";
+import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/asyncPolicyRequests";
 import { creditLedger } from "../billing/AsyncFinancialStores";
 import { WorkerAdmission } from "./workerAdmission";
 import { openTenantStorage } from "../persistence/PostgresRuntime";
@@ -116,7 +116,7 @@ async function recoverOrphanedRunsOnBoot(
             if (isExecutionActive(run.status)) {
               const already = jobQueue.some((j) => j.runId === runId);
               if (already) continue;
-              const record = sandboxRegistry().forRun(runId);
+              const record = (await sandboxRegistry().forRun(runId));
               // Recovery identity order — never fabricate org/user from the
               // tenant id: sandbox record → durable mission checkpoint →
               // block the run truthfully (it stays resumable via resume,
@@ -328,30 +328,30 @@ async function planSandbox(mission: MissionIdentity): Promise<SandboxPlan | unde
   // A failed financial read must block admission, never select a default resource plan.
   const planId = (await creditLedger.planOf(mission.tenantId)) ?? null;
   try {
-    const plan = selectSandbox({
+    const plan = (await selectSandbox({
       organizationId: mission.organizationId, tenantId: mission.tenantId, projectId: mission.projectId,
       planId, runId: mission.runId, workspaceId: String(mission.projectId ?? mission.runId),
-    }, sandboxRegistry());
-    sandboxRegistry().plan({
+    }, sandboxRegistry()));
+    (await sandboxRegistry().plan({
       id: plan.sandboxId, provider: plan.provider, organizationId: mission.organizationId, tenantId: mission.tenantId,
       userId: mission.userId, projectId: mission.projectId, workspaceId: String(mission.projectId ?? mission.runId),
       runId: mission.runId, missionId: `mission_${mission.runId.slice(0, 8)}`, policyTemplate: plan.policyTemplate,
       retention: plan.retention, expiresAt: Date.now() + plan.resources.maxLifetimeS * 1000,
-    });
-    sandboxRegistry().audit("sandbox.planned", "control-plane", { sandboxId: plan.sandboxId, organizationId: mission.organizationId, detail: { provider: plan.provider, reason: plan.reason, retention: plan.retention, runId: mission.runId } });
+    }));
+    (await sandboxRegistry().audit("sandbox.planned", "control-plane", { sandboxId: plan.sandboxId, organizationId: mission.organizationId, detail: { provider: plan.provider, reason: plan.reason, retention: plan.retention, runId: mission.runId } }));
     return plan;
   } catch (err: any) {
-    if (String(process.env.ORVYN_EXECUTION_PROVIDER).toLowerCase() === "openshell") throw err;
+    if (process.env.ORVYN_POSTGRES_EXECUTION === "1" || String(process.env.ORVYN_EXECUTION_PROVIDER).toLowerCase() === "openshell") throw err;
     console.warn(`[worker-registry] sandbox plan failed for ${mission.runId}: ${String(err?.message ?? err).slice(0, 200)}`);
     return undefined;
   }
 }
 
 /** Removes a finished run's job so it no longer counts against the tenant's concurrency. */
-function finishJob(runId: string): void {
+async function finishJob(runId: string): Promise<void> {
   const job = jobQueue.find((j) => j.runId === runId);
   if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
-  try { sandboxRegistry().expireRequests(runId); } catch { /* registry unavailable */ }
+  try { (await sandboxRegistry().expireRequests(runId)); } catch { /* registry unavailable */ }
   sandboxTerminalBroker.closeRun(runId);
 }
 
@@ -438,17 +438,17 @@ export function workerRouter(
         // awaiting its blocker — not something to reattach a worker to.
         active = Boolean(run && isExecutionActive(run.status));
       } catch { active = false; }
-      if (!active) { finishJob(job.runId); continue; }
+      if (!active) { (await finishJob(job.runId)); continue; }
       const lost = job.assignedTo;
       job.assignedTo = undefined;
       job.recover = true;
       const failed = toolRpc.failInFlight(job.runId, "The cloud worker running this step restarted before it finished. Check the workspace state (read the file / list the folder) before retrying.");
       try {
         (await getRunStore(job.tenantId)).emit(job.runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Reconnecting to the mission workspace" });
-        const rec = sandboxRegistry().forRun(job.runId);
+        const rec = (await sandboxRegistry().forRun(job.runId));
         if (rec) {
-          sandboxRegistry().report(rec.id, { state: "recovering" });
-          sandboxRegistry().audit("sandbox.recovering", "control-plane", { sandboxId: rec.id, organizationId: rec.organizationId, detail: { lostWorker: lost, failedToolCalls: failed } });
+          (await sandboxRegistry().report(rec.id, { state: "recovering" }));
+          (await sandboxRegistry().audit("sandbox.recovering", "control-plane", { sandboxId: rec.id, organizationId: rec.organizationId, detail: { lostWorker: lost, failedToolCalls: failed } }));
         }
       } catch { /* best effort */ }
       console.warn(`[worker-registry] worker ${lost} lost; re-queued ${job.runId} for recovery (${failed} in-flight tool call(s) failed)`);
@@ -597,11 +597,11 @@ export function workerRouter(
     } catch { /* store unavailable — keep serving */ }
     if (finished) {
       toolRpc.cleanup(req.params.runId);
-      finishJob(req.params.runId);
+      (await finishJob(req.params.runId));
     }
     let policyUpdate = null;
     if (!finished) {
-      try { policyUpdate = pendingPolicyUpdate(sandboxRegistry(), req.params.runId); } catch { /* registry unavailable */ }
+      try { policyUpdate = (await pendingPolicyUpdate(sandboxRegistry(), req.params.runId)); } catch { /* registry unavailable */ }
     }
     res.json({ request, finished, ...(policyUpdate ? { policyUpdate } : {}) });
   }));
@@ -720,22 +720,22 @@ export function workerRouter(
   }));
 
   // ── Execution sandbox registry (worker reports; admin-only detail) ──
-  r.post("/sandboxes/:runId/report", (req, res) => {
+  r.post("/sandboxes/:runId/report", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const runId = req.params.runId;
     if (!bindWorkerRun(runId) && !tenantForRun(runId)) return res.status(404).json({ error: "Not found" });
     const reg = sandboxRegistry();
     const b = req.body ?? {};
-    const rec = reg.get(String(b.sandboxId ?? ""));
+    const rec = (await reg.get(String(b.sandboxId ?? "")));
     // A report can only touch the sandbox recorded for this very run.
     if (!rec || rec.runId !== runId) return res.status(404).json({ error: "Not found" });
     if (b.fallbackTo === "docker" && rec.provider !== "docker") {
-      reg.recordFallback(rec.id, "docker", String(b.fallbackReason ?? "unavailable"));
-      reg.audit("sandbox.fallback", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { reason: String(b.fallbackReason ?? "").slice(0, 200) } });
+      (await reg.recordFallback(rec.id, "docker", String(b.fallbackReason ?? "unavailable")));
+      (await reg.audit("sandbox.fallback", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { reason: String(b.fallbackReason ?? "").slice(0, 200) } }));
     }
-    if (b.reconnect) { reg.bump(rec.id, "reconnects"); reg.audit("sandbox.reconnected", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId }); }
-    if (b.policyDenied) { reg.bump(rec.id, "policyDenials"); reg.audit("network.denied", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { kind: String(b.policyDenied) } }); }
-    if (typeof b.execMs === "number") reg.addExec(rec.id, b.execMs);
+    if (b.reconnect) { (await reg.bump(rec.id, "reconnects")); (await reg.audit("sandbox.reconnected", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId })); }
+    if (b.policyDenied) { (await reg.bump(rec.id, "policyDenials")); (await reg.audit("network.denied", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { kind: String(b.policyDenied) } })); }
+    if (typeof b.execMs === "number") (await reg.addExec(rec.id, b.execMs));
     const patch: Partial<SandboxRecord> = {};
     if (typeof b.state === "string") patch.state = b.state as SandboxRecord["state"];
     if (typeof b.providerSandboxId === "string") patch.providerSandboxId = b.providerSandboxId.slice(0, 120);
@@ -745,24 +745,24 @@ export function workerRouter(
     if (typeof b.policyVersion === "number") patch.policyVersion = b.policyVersion;
     if (typeof b.lastError === "string") patch.lastError = b.lastError;
     if (typeof b.destroyedAt === "number") patch.destroyedAt = b.destroyedAt;
-    if (Object.keys(patch).length) reg.report(rec.id, patch);
-    if (b.state === "ready" && !b.released) reg.audit("sandbox.ready", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { provisionMs: patch.provisionMs ?? null } });
-    if (b.state === "failed") reg.audit("sandbox.failed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { error: String(b.lastError ?? "").slice(0, 200) } });
-    if (typeof b.destroyedAt === "number") reg.audit("sandbox.destroyed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId });
+    if (Object.keys(patch).length) (await reg.report(rec.id, patch));
+    if (b.state === "ready" && !b.released) (await reg.audit("sandbox.ready", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { provisionMs: patch.provisionMs ?? null } }));
+    if (b.state === "failed") (await reg.audit("sandbox.failed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId, detail: { error: String(b.lastError ?? "").slice(0, 200) } }));
+    if (typeof b.destroyedAt === "number") (await reg.audit("sandbox.destroyed", `worker:${String(b.workerId ?? "")}`, { sandboxId: rec.id, organizationId: rec.organizationId }));
     res.json({ ok: true });
-  });
+  }));
 
-  r.post("/sandboxes/:runId/policy/:requestId", (req, res) => {
+  r.post("/sandboxes/:runId/policy/:requestId", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
-    const pr = reg.policyRequest(req.params.requestId);
+    const pr = (await reg.policyRequest(req.params.requestId));
     if (!pr || pr.runId !== req.params.runId) return res.status(404).json({ error: "Not found" });
     const ok = req.body?.ok === true;
-    reg.markPolicyApplied(pr.id, ok);
-    if (ok) reg.report(pr.sandboxId ?? "", { policyTemplate: pr.template });
-    reg.audit(ok ? "policy.expansion.applied" : "policy.expansion.failed", "worker", { sandboxId: pr.sandboxId, organizationId: pr.organizationId, detail: { requestId: pr.id, template: pr.template, error: ok ? undefined : String(req.body?.error ?? "").slice(0, 200) } });
+    (await reg.markPolicyApplied(pr.id, ok));
+    if (ok) (await reg.report(pr.sandboxId ?? "", { policyTemplate: pr.template }));
+    (await reg.audit(ok ? "policy.expansion.applied" : "policy.expansion.failed", "worker", { sandboxId: pr.sandboxId, organizationId: pr.organizationId, detail: { requestId: pr.id, template: pr.template, error: ok ? undefined : String(req.body?.error ?? "").slice(0, 200) } }));
     res.json({ ok: true });
-  });
+  }));
 
   // Brokered credential for one run + one integration. Only for an OpenShell
   // sandbox whose approved template needs it; the value goes straight into
@@ -770,13 +770,13 @@ export function workerRouter(
   r.get("/credentials/:runId/:integrationId", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
-    const allowed = credentialAllowed(reg, req.params.runId, req.params.integrationId);
+    const allowed = (await credentialAllowed(reg, req.params.runId, req.params.integrationId));
     if (!allowed.ok) return res.status(403).json({ error: "Not permitted" });
     const credentials = req.params.integrationId === "github"
       ? await (async () => { const token = await githubToken(allowed.tenantId); return token ? { GITHUB_TOKEN: token, GH_TOKEN: token } : null; })()
       : await deploymentCredential(allowed.tenantId, req.params.integrationId);
     if (!credentials) return res.json({ credentials: null });
-    reg.audit("credential.attached", "worker", { sandboxId: allowed.sandboxId, organizationId: allowed.organizationId, detail: { integrationId: req.params.integrationId } });
+    (await reg.audit("credential.attached", "worker", { sandboxId: allowed.sandboxId, organizationId: allowed.organizationId, detail: { integrationId: req.params.integrationId } }));
     res.json({ credentials });
   }));
 
@@ -785,7 +785,7 @@ export function workerRouter(
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
     const now = Date.now();
-    const candidates = reg.active();
+    const candidates = (await reg.active());
     const keep = await Promise.all(candidates.map(async (s) => {
       if (s.retention === "retained") return !s.expiresAt || s.expiresAt > now;
       const job = s.runId ? jobQueue.find((j) => j.runId === s.runId) : undefined;
@@ -799,22 +799,22 @@ export function workerRouter(
     res.json({ live });
   }));
 
-  r.post("/sandboxes/reconciled", (req, res) => {
+  r.post("/sandboxes/reconciled", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     const reg = sandboxRegistry();
     const removed: string[] = Array.isArray(req.body?.removed) ? req.body.removed.map(String).slice(0, 500) : [];
     for (const id of removed) {
-      const rec = reg.get(id);
-      if (rec && !["completed", "failed", "stopped"].includes(rec.state)) reg.report(id, { state: "stopped", destroyedAt: Date.now(), lastError: "removed by reconciliation" });
+      const rec = (await reg.get(id));
+      if (rec && !["completed", "failed", "stopped"].includes(rec.state)) (await reg.report(id, { state: "stopped", destroyedAt: Date.now(), lastError: "removed by reconciliation" }));
     }
     // Rows the worker never reported back on (a crash before destroy) are closed here.
-    for (const rec of reg.staleCandidates(6 * 3600_000)) {
+    for (const rec of (await reg.staleCandidates(6 * 3600_000))) {
       if (rec.retention === "retained" && rec.expiresAt && rec.expiresAt > Date.now()) continue;
-      reg.report(rec.id, { state: "stopped", lastError: "stale: no report for 6 h" });
+      (await reg.report(rec.id, { state: "stopped", lastError: "stale: no report for 6 h" }));
     }
-    if (removed.length) reg.audit("sandbox.reconciled", `worker:${String(req.body?.workerId ?? "")}`, { detail: { removed: removed.length, kept: Number(req.body?.kept ?? 0) } });
+    if (removed.length) (await reg.audit("sandbox.reconciled", `worker:${String(req.body?.workerId ?? "")}`, { detail: { removed: removed.length, kept: Number(req.body?.kept ?? 0) } }));
     res.json({ ok: true });
-  });
+  }));
 
   // ── Worker list (monitoring/debugging) ──────────────────────────────
   r.get("/list", (req, res) => {

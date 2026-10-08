@@ -19,8 +19,8 @@ import { mailConfigured, securityNoticeMail, sendMail, teamInviteMail } from "..
 import { requirePrincipal } from "../middleware/tenant";
 import { publicOrigin } from "./auth";
 import type { OrgRole, Principal } from "../identity/principal";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
-import { decideRequest, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
+import { decideRequest, TEMPLATE_LABELS } from "../execution/sandbox/asyncPolicyRequests";
 
 export const accountRouter = Router();
 
@@ -247,7 +247,7 @@ async function canManage(p: Principal): Promise<boolean> {
   return role === "owner" || role === "admin";
 }
 
-function requestView(r: ReturnType<ReturnType<typeof sandboxRegistry>["policyRequest"]>) {
+function requestView(r: Awaited<ReturnType<ReturnType<typeof sandboxRegistry>["policyRequest"]>>) {
   if (!r) return null;
   return {
     id: r.id, runId: r.runId, access: TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template,
@@ -258,7 +258,7 @@ function requestView(r: ReturnType<ReturnType<typeof sandboxRegistry>["policyReq
 accountRouter.get("/network-requests", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const rows = sandboxRegistry().policyRequests({ organizationId: p.organizationId, limit: 50 });
+  const rows = (await sandboxRegistry().policyRequests({ organizationId: p.organizationId, limit: 50 }));
   res.json({ canDecide: (await canManage(p)), requests: rows.map(requestView) });
 }));
 
@@ -268,7 +268,7 @@ accountRouter.post("/network-requests/:id", asyncHandler(async (req, res) => {
   if (!(await canManage(p))) return res.status(403).json({ error: "Only an owner or admin can decide network access." });
   if (typeof req.body?.approve !== "boolean") return res.status(400).json({ error: "approve must be true or false." });
   try {
-    const out = decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `user:${p.userId}`, { organizationId: p.organizationId });
+    const out = (await decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `user:${p.userId}`, { organizationId: p.organizationId }));
     if (!out) return res.status(404).json({ error: "Request not found." });
     res.json({ request: requestView(out) });
   } catch (err) { fail(res, err); }
@@ -296,7 +296,7 @@ accountRouter.get("/notifications", asyncHandler(async (req, res) => {
   }
   if ((await canManage(p))) {
     try {
-      for (const r of sandboxRegistry().policyRequests({ organizationId: p.organizationId, status: "pending", limit: 10 })) {
+      for (const r of (await sandboxRegistry().policyRequests({ organizationId: p.organizationId, status: "pending", limit: 10 }))) {
         const label = TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template;
         out.push({ id: `netreq-${r.id}`, kind: "warning", title: `A task is asking for network access: ${label}`, body: `${r.reason || "No reason given."}${r.params.host?.length ? ` (${r.params.host.join(", ")})` : ""}`, at: r.createdAt, networkRequestId: r.id } as any);
       }
