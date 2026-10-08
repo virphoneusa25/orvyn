@@ -1,3 +1,4 @@
+import { LEGACY_LEDGER_TABLES } from "./legacyLedgerSchema";
 import { Pool, type PoolClient } from "pg";
 import { LEDGER_INDEXES, LEDGER_TABLES, LEDGER_UNIQUE_KEYS } from "./ledgerSchema";
 import { ledgerSnapshotFingerprint, validateLedgerSnapshot, type LedgerSnapshot, type LedgerRow } from "./LedgerStorageSnapshot";
@@ -34,6 +35,9 @@ export class PostgresLedgerStorage {
       await client.query("CREATE TABLE IF NOT EXISTS orvyn_billing.migrations(version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())");
       const applied = await client.query("SELECT version FROM orvyn_billing.migrations ORDER BY version");
       if (applied.rows.some(row => row.version !== 1)) throw new Error("Unsupported ledger storage version");
+      // Historical balances are preserved as an archive, never replayed as grants.
+      await client.query("CREATE SCHEMA IF NOT EXISTS orvyn_billing_archive");
+      for (const legacy of LEGACY_LEDGER_TABLES) await client.query(`CREATE TABLE IF NOT EXISTS orvyn_billing_archive."${legacy.name}" (${legacy.columns.map(c => `"${c.name}" ${c.type === "INTEGER" ? "BIGINT" : c.type === "REAL" ? "DOUBLE PRECISION" : "TEXT"} ${c.name === legacy.key ? "PRIMARY KEY" : "NOT NULL"}`).join(",")})`);
       if (applied.rowCount) return;
       for (const table of LEDGER_TABLES) {
         // SQL comes exclusively from the checked-in contract, never from imported files.
@@ -86,6 +90,13 @@ export class PostgresLedgerStorage {
       WHERE n.nspname='orvyn_billing' AND c.relname='ledger_entries' AND t.tgname IN ('ledger_entries_append_only','ledger_entries_no_truncate') AND t.tgenabled='O'`);
     if (trigger.rowCount !== 2) throw new Error("PostgreSQL ledger ledger protections differ");
     const snapshot: LedgerSnapshot = {};
+    for (const legacy of LEGACY_LEDGER_TABLES) {
+      await client.query(`LOCK TABLE orvyn_billing_archive."${legacy.name}" IN SHARE ROW EXCLUSIVE MODE`);
+      const columns = await client.query("SELECT column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema='orvyn_billing_archive' AND table_name=$1", [legacy.name]);
+      if (columns.rows.length !== legacy.columns.length || legacy.columns.some(c => !columns.rows.some(row => row.column_name === c.name && row.data_type === (c.type === "INTEGER" ? "bigint" : c.type === "REAL" ? "double precision" : "text") && row.is_nullable === "NO"))) throw new Error("PostgreSQL archived ledger schema differs");
+      const archive = await client.query(`SELECT * FROM orvyn_billing_archive."${legacy.name}"`);
+      if (archive.rows.length) snapshot[`__legacy_${legacy.name}`] = archive.rows.map(row => Object.fromEntries(legacy.columns.map(c => [c.name, c.type === "TEXT" ? row[c.name] : Number(row[c.name])])));
+    }
     for (const table of LEDGER_TABLES) {
       const result = await client.query(`SELECT * FROM orvyn_billing."${table.name}"`);
       snapshot[table.name] = result.rows.map(row => {
@@ -122,7 +133,7 @@ export class PostgresLedgerStorage {
     return this.transaction(async client => {
       const current = await this.read(client);
       const imported = await client.query("SELECT 1 FROM orvyn_billing.imports LIMIT 1");
-      const occupied = imported.rowCount || current.__sequences.length || LEDGER_TABLES.some(table => current[table.name].length > 0);
+      const occupied = imported.rowCount || current.__sequences.length || LEGACY_LEDGER_TABLES.some(t => current[`__legacy_${t.name}`]?.length) || LEDGER_TABLES.some(table => current[table.name].length > 0);
       if (occupied) {
         if (ledgerSnapshotFingerprint(current) !== fingerprint) throw new Error("Credit ledger target differs; refusing to overwrite existing records");
         return { imported:false, fingerprint };
@@ -136,6 +147,8 @@ export class PostgresLedgerStorage {
       for (const row of snapshot.__sequences) {
         await client.query("INSERT INTO orvyn_billing.source_sequences(name,seq) VALUES ($1,$2)", [row.name,row.seq]);
       }
+      for (const legacy of LEGACY_LEDGER_TABLES) for (const row of snapshot[`__legacy_${legacy.name}`] ?? []) await client.query(
+        `INSERT INTO orvyn_billing_archive."${legacy.name}" (${legacy.columns.map(c => `"${c.name}"`).join(",")}) VALUES (${legacy.columns.map((_,i) => `$${i+1}`).join(",")})`, legacy.columns.map(c => row[c.name]));
       // RESTART is transactional, unlike setval/nextval: a failed import also restores
       // the counter. Explicit inserted ledger ids do not consume the identity sequence.
       const highWater = snapshot.__sequences.find(row => row.name === "ledger_entries")?.seq ?? 0;

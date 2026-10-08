@@ -1,3 +1,4 @@
+import { LEGACY_LEDGER_TABLES } from "./legacyLedgerSchema";
 import { readSqliteSnapshotRows } from "../persistence/SqliteSnapshotRows";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
@@ -5,6 +6,18 @@ import { LEDGER_TABLES, LEDGER_UNIQUE_KEYS, LEDGER_TRIGGERS } from "./ledgerSche
 
 export type LedgerRow = Record<string, string | number | null>;
 export type LedgerSnapshot = Record<string, LedgerRow[]>;
+function validateLegacyRows(table: typeof LEGACY_LEDGER_TABLES[number], rows: LedgerRow[]): void {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(table.columns.map(c => c.name).sort()) ||
+      table.columns.some(column => column.type === "TEXT"
+        ? typeof row[column.name] !== "string" || String(row[column.name]).includes("\u0000")
+        : typeof row[column.name] !== "number" || !(column.type === "INTEGER" ? Number.isSafeInteger(row[column.name]) : Number.isFinite(row[column.name]))) || ids.has(String(row[table.key]))) {
+      throw new Error("Unsupported archived v1 ledger record");
+    }
+    ids.add(String(row[table.key]));
+  }
+}
 
 const canonicalKeys = (keys: readonly (readonly string[])[]) => JSON.stringify(Array.from(new Set(keys.map(key => JSON.stringify(key)))).sort());
 
@@ -14,8 +27,18 @@ export function readLedgerSnapshot(file: string): LedgerSnapshot {
   try {
     db.exec("BEGIN");
     const tables = db.prepare("SELECT name,sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name:string; sql:string }[];
-    if (JSON.stringify(tables.map(t => t.name)) !== JSON.stringify(LEDGER_TABLES.map(t => t.name))) throw new Error("Credit ledger table inventory differs from migration contract");
+    if (JSON.stringify(tables.filter(t => !LEGACY_LEDGER_TABLES.some(legacy => legacy.name === t.name)).map(t => t.name)) !== JSON.stringify(LEDGER_TABLES.map(t => t.name))) throw new Error("Credit ledger table inventory differs from migration contract");
     const snapshot: LedgerSnapshot = {};
+    for (const legacy of LEGACY_LEDGER_TABLES.filter(legacy => tables.some(table => table.name === legacy.name))) {
+      const columns = db.prepare(`PRAGMA table_info("${legacy.name}")`).all();
+      if (columns.length !== legacy.columns.length || legacy.columns.some(column => !columns.some(actual =>
+        actual.name === column.name && actual.type === column.type && actual.pk === (column.name === legacy.key ? 1 : 0) &&
+        Boolean(actual.notnull) === (column.name !== legacy.key)))) throw new Error("Archived v1 ledger schema differs");
+      const archived = db.prepare(`SELECT * FROM "${legacy.name}"`).all() as LedgerRow[];
+      validateLegacyRows(legacy, archived);
+      if (legacy.name === "v1_accounts" && archived.some(row => !db.prepare("SELECT 1 FROM wallets WHERE account_id=?").get(row.user_id))) throw new Error("Archived v1 ledger account has no migrated wallet");
+      if (archived.length) snapshot[`__legacy_${legacy.name}`] = archived;
+    }
     for (const table of LEDGER_TABLES) {
       const columns = db.prepare(`PRAGMA table_info("${table.name}")`).all();
       if (columns.length !== table.columns.length || table.columns.some(column => !columns.some(actual =>
@@ -43,7 +66,14 @@ export function readLedgerSnapshot(file: string): LedgerSnapshot {
 }
 
 export function validateLedgerSnapshot(snapshot: LedgerSnapshot): void {
-  if (JSON.stringify(Object.keys(snapshot).sort()) !== JSON.stringify(["__sequences", ...LEDGER_TABLES.map(t => t.name)].sort())) throw new Error("Incomplete ledger snapshot");
+  const legacyKeys = LEGACY_LEDGER_TABLES.map(t => `__legacy_${t.name}`).filter(key => snapshot[key]);
+  if (JSON.stringify(Object.keys(snapshot).sort()) !== JSON.stringify(["__sequences", ...legacyKeys, ...LEDGER_TABLES.map(t => t.name)].sort())) throw new Error("Incomplete ledger snapshot");
+  for (const legacy of LEGACY_LEDGER_TABLES) {
+    const archived = snapshot[`__legacy_${legacy.name}`];
+    if (!archived) continue;
+    validateLegacyRows(legacy, archived);
+    if (!archived.length || legacy.name === "v1_accounts" && archived.some(row => !snapshot.wallets.some(wallet => wallet.account_id === row.user_id))) throw new Error("Archived v1 ledger account has no migrated wallet");
+  }
   const sequenceNames = new Set<string>();
   for (const row of snapshot.__sequences) {
     if (Object.keys(row).sort().join(",") !== "name,seq" || row.name !== "ledger_entries" || sequenceNames.has(row.name) ||
@@ -74,5 +104,9 @@ export function ledgerSnapshotFingerprint(snapshot: LedgerSnapshot): string {
   const canonical: [string,string[]][] = LEDGER_TABLES.map(table => [table.name, snapshot[table.name].map(row =>
     JSON.stringify(table.columns.map(column => row[column.name]))).sort()]);
   canonical.push(["__sequences", snapshot.__sequences.map(row => JSON.stringify([row.name,row.seq])).sort()]);
+  for (const legacy of LEGACY_LEDGER_TABLES) {
+    const key = `__legacy_${legacy.name}`;
+    if (snapshot[key]) canonical.push([key, snapshot[key].map(row => JSON.stringify(legacy.columns.map(c => row[c.name]))).sort()]);
+  }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
