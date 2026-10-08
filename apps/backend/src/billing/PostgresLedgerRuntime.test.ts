@@ -289,3 +289,18 @@ test("real PostgreSQL full ledger joins payment commits and recharge callbacks f
     await stores.ledger.autoRechargeFailed(account);await stores.ledger.disableAutoRecharge(account);unsubscribe();
   }finally{await stores.close();await other.close();}
 });
+
+test("PostgreSQL terminal reservations reconcile after reopening without releasing resumable or foreign runs",{skip:!integration},async()=>{
+ const account="reconcile-"+crypto.randomUUID(),other="foreign-"+crypto.randomUUID();
+ let owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+ try{
+  await owner.ledger.setPlan(account,"pro");
+  await owner.ledger.reserve(account,account+"-done",10);await owner.ledger.reserve(account,account+"-blocked",10);await owner.ledger.reserve(other,other+"-done",10);
+  await owner.close();owner=await PostgresFinancialStores.connect(process.env.ORVYN_PG_URL!);
+  const billing=new TenantBilling(owner.ledger,account,owner.outbox(account));
+  assert.deepEqual(await billing.reconcileRuns(id=>id.endsWith("-done")?"completed":"blocked"),{released:1,unresolved:0});
+  assert.deepEqual((await owner.ledger.heldRuns(account)).map(r=>r.runId),[account+"-blocked"]);
+  assert.equal((await owner.ledger.heldRuns(other)).length,1);
+  assert.deepEqual(await billing.reconcileRuns(()=>"blocked"),{released:0,unresolved:0});
+ }finally{await owner.close();}
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ChatTurnRecorder } from "./sessionMessages";
+import { ChatTurnRecorder, persistRunAnswer, runAnswerMessageId } from "./sessionMessages";
 import type { WorkSessionPersistence } from "./WorkSessionStore";
 
 function deferred() {
@@ -80,4 +80,16 @@ test("failed intermediate writes remain visible at final acknowledgment", async 
   recorder.delta("answer");
   await assert.rejects(recorder.finish(), (error) => error === failure);
   assert.equal(writes, 1);
+});
+
+
+test("terminal answer repair propagates failure and replays the stable message with artifact metadata",async()=>{
+ let available=false;const messages=new Map<string,any>();
+ const sessions={async appendMessage(_session:string,message:any){if(!available)throw new Error("session unavailable");messages.set(message.messageId,message);return message;},async updateMessage(id:string,patch:any){Object.assign(messages.get(id),patch);}} as unknown as WorkSessionPersistence;
+ const run={id:"replay-run",status:"completed",events:[{type:"message.grounded",data:{content:"Recovered answer"}},{type:"artifact.created",data:{artifactId:"artifact",name:"result.txt",mimeType:"text/plain"}}]};
+ const store={get:()=>run} as unknown as import("../agent/events").RunStore;
+ await assert.rejects(persistRunAnswer(sessions,store,"session",run.id),/session unavailable/);
+ available=true;await persistRunAnswer(sessions,store,"session",run.id);await persistRunAnswer(sessions,store,"session",run.id);
+ assert.equal(messages.size,1);const message=messages.get(runAnswerMessageId(run.id));assert.equal(message.content,"Recovered answer");assert.equal(message.meta.artifacts[0].artifactId,"artifact");
+ run.status="blocked";messages.clear();await persistRunAnswer(sessions,store,"session",run.id);assert.equal(messages.size,0);
 });

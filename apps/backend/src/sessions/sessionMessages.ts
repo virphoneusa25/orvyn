@@ -40,7 +40,7 @@ export async function recordRunInstruction(
  * block pauses for a resource and the run resumes — only a settlement-emitted
  * (`terminal: true`) block ends the capture.
  */
-function shouldPersistFinalAnswer(run: Run): boolean {
+export function shouldPersistFinalAnswer(run: Run): boolean {
   if (run.status === "completed" || run.status === "partial" || run.status === "error" || run.status === "cancelled") return true;
   if (run.status === "blocked") {
     return run.events.some((e) => e.type === "run.blocked" && e.data.terminal === true);
@@ -49,10 +49,9 @@ function shouldPersistFinalAnswer(run: Run): boolean {
 }
 
 /** Stores ORION's final answer once the run reaches a terminal state. */
-export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, sessionId: string, runId: string): void {
-  const save = async () => {
+export async function persistRunAnswer(sessions:WorkSessionStore,store:RunStore,sessionId:string,runId:string):Promise<void> {
     const run = store.get(runId);
-    if (!run) return;
+    if (!run || !shouldPersistFinalAnswer(run)) return;
     // A blocked run's fallback carries the actual reason (missing resource,
     // approval, policy) — "interrupted" is only one of the possible causes.
     const blockedReason = run.status === "blocked"
@@ -81,7 +80,10 @@ export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, ses
       });
     }
     if (artifacts.length) await sessions.updateMessage(runAnswerMessageId(runId), { meta: { artifacts } });
-  };
+}
+
+export function recordRunAnswer(sessions: WorkSessionStore, store: RunStore, sessionId: string, runId: string): void {
+  const save = () => persistRunAnswer(sessions,store,sessionId,runId);
   const run = store.get(runId);
   if (!run) return;
   if (shouldPersistFinalAnswer(run)) { void save().catch(() => console.warn("[sessions] final answer persistence failed")); return; }
