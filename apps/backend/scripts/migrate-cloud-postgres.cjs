@@ -45,7 +45,7 @@ function preflight(source,options={}){
  }
  for(const name of retained)if(!files.has(name))throw new Error('Retained database is not in the verified inventory');
  const summary={sourceVerified:true,databases:files.size,retainedOperationalDatabases:excluded.length,
-  identityRecords:rows(auth),ledgerRecords:rows(ledger),paymentRecords:rows(payments),tenantDatabases:tenants.length,sessionDatabases:sessions.length,
+  identityRecords:rows(auth),ledgerRecords:rows(ledger),legacyLedgerRecords:Object.entries(ledger).filter(([key])=>key.startsWith("__legacy_")).reduce((n,[,rows])=>n+rows.length,0),paymentRecords:rows(payments),tenantDatabases:tenants.length,sessionDatabases:sessions.length,
   tenantRecords:tenants.reduce((n,t)=>n+rows(t.snapshot),0),sessionRecords:sessions.reduce((n,t)=>n+rows(t.snapshot),0)};
  return {auth,ledger,payments,tenants,sessions,summary,files,manifest};
 }
