@@ -14,6 +14,7 @@ import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
 import { sampleHostStats } from "./systemStats";
 import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
+import { localEngineEnvironment, packagedNode } from "./localEngineEnvironment";
 import { captureProviderCredentials } from "./providerEnvironment";
 const backendProviderCredentials = captureProviderCredentials(process.env);
 
@@ -49,16 +50,20 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
     const backend = app.isPackaged ? path.join(process.resourcesPath, "backend") : path.resolve(__dirname, "../../../backend");
     const entry = path.join(backend, "dist/index.js");
     await fs.access(entry);
-    const executable = app.isPackaged ? path.join(backend, "node.exe") : "node";
+    const executable = app.isPackaged ? packagedNode(backend) : "node";
     const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
-    const env = { ...process.env, ...backendProviderCredentials, PORT: "4570" };
-    delete (env as { ORVYN_CLOUD_MODE?: string }).ORVYN_CLOUD_MODE;
+    const env = localEngineEnvironment(
+      process.env, backendProviderCredentials,
+      process.env.ORVYN_DESKTOP_DATA_DIR?.trim() || path.join(os.homedir(), ".orvyn", "data"),
+    );
     localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env});
     localEngine.stdout?.pipe(log, {end: false});
     localEngine.stderr?.pipe(log, {end: false});
     localEngine.once("error", () => {localEngine = null; log.end();});
     localEngine.once("exit", () => {localEngine = null; log.end();});
-    for (let i = 0; i < 20; i++) {
+    // Cold Windows installs may need time to load the bundled engine.
+    for (let i = 0; i < 240; i++) {
+      if (!localEngine) return false;
       await new Promise((r) => setTimeout(r, 250));
       try {
         const response = await fetch("http://127.0.0.1:4570/api/v1/health", { signal: AbortSignal.timeout(800) });
