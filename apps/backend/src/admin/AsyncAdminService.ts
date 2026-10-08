@@ -1,3 +1,4 @@
+import { selectedStorage, postgresRuntime } from "../persistence/PostgresRuntime";
 import type { AdminService } from "./AdminService";
 import { asyncOperations, type AsyncOperations } from "../auth/asyncOperations";
 
@@ -8,6 +9,6 @@ export function createAsyncAdminService(load: () => AdminService | AsyncOperatio
   return asyncOperations<AdminService>(ready);
 }
 
-// Retain SQLite until PostgreSQL cross-store reporting is implemented and verified.
-const reports = createAsyncAdminService(async () => (await import("./AdminService")).adminService());
+// Reporting follows the account/financial owner; local defaults retain SQLite.
+const reports = createAsyncAdminService(async () => selectedStorage().mode === "postgres" ? (await postgresRuntime()).reports : (await import("./AdminService")).adminService());
 export function adminService(): AsyncOperations<AdminService> { return reports; }

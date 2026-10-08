@@ -1,3 +1,4 @@
+import { selectedStorage, postgresRuntime } from "../persistence/PostgresRuntime";
 import type {CreditLedger} from "./CreditLedger";
 import type {StripeStore} from "./stripe";
 import type {AsyncOperations} from "../auth/asyncOperations";
@@ -37,8 +38,9 @@ export function createAsyncFinancialStores(load:()=>FinancialBackend|Promise<Fin
   return {ledger,payments,transaction:async operation=>{const backend=await ready();return backend.transaction?backend.transaction(operation):operation();}};
 }
 
-// PostgreSQL selection stays blocked until billing callers, reporting and recovery are complete.
+// Select the same PostgreSQL owner as identity, reporting and tenant factories.
 const configured=createAsyncFinancialStores(async()=>{
+  if(selectedStorage().mode==="postgres"){const owner=(await postgresRuntime()).financial;return {ledger:owner.ledger,payments:owner.payments,transaction:<T>(operation:()=>Promise<T>)=>owner.transaction(operation)};}
   const ledger=await import("./creditLedgerInstance");const stripe=await import("./stripe");
   return {ledger:ledger.creditLedger,payments:stripe.stripeStore()};
 });

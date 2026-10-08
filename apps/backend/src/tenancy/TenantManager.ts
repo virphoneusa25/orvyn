@@ -1,3 +1,4 @@
+import { openTenantStorage, openSessionStorage } from "../persistence/PostgresRuntime";
 import { FileUsageRecoveryJournal } from "../services/UsageRecoveryJournal";
 // apps/backend/src/tenancy/TenantManager.ts
 //
@@ -125,8 +126,8 @@ export class TenantManager {
   private creating = new Map<string, Promise<Tenant>>();
 
   constructor(
-    private openStore: (id: string) => TenantPersistence | Promise<TenantPersistence> = (id) => new LocalStore(id),
-    private openSessions: (id: string) => WorkSessionPersistence | Promise<WorkSessionPersistence> = (id) => new WorkSessionStore(id),
+    private openStore: (id: string) => TenantPersistence | Promise<TenantPersistence> = openTenantStorage,
+    private openSessions: (id: string) => WorkSessionPersistence | Promise<WorkSessionPersistence> = openSessionStorage,
   ) {}
 
   create(name: string, apiKey: string, id: string = randomUUID()): Promise<Tenant> {

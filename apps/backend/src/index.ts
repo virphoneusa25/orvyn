@@ -1,3 +1,4 @@
+import { selectedStorage, postgresRuntime } from "./persistence/PostgresRuntime";
 import { asyncHandler } from "./http/asyncHandler";
 import * as pathModule from "path";
 import * as fsModule from "fs";
@@ -81,11 +82,12 @@ app.get("/api/v1/health/detailed", asyncHandler(async (_req, res) => {
     api: { healthy: true },
   };
 
-  // PostgreSQL (when ORVYN_PG_URL is set — control-plane deployments)
-  if (process.env.ORVYN_PG_URL) {
+  const storage = selectedStorage();
+  const postgresUrl = storage.mode === "postgres" ? storage.url : process.env.ORVYN_PG_URL;
+  if (postgresUrl) {
     try {
       const { Client } = await import("pg");
-      const client = new Client({ connectionString: process.env.ORVYN_PG_URL, connectionTimeoutMillis: 3000 });
+      const client = new Client({ connectionString: postgresUrl, connectionTimeoutMillis: 3000 });
       await client.connect();
       const r = await client.query("SELECT version()");
       await client.end();
@@ -100,7 +102,10 @@ app.get("/api/v1/health/detailed", asyncHandler(async (_req, res) => {
   checks.redis = await redisHealth();
   checks.identity = { healthy: true, detail: "session + personal organization" };
 
-  if (process.env.ORVYN_PG_URL) {
+  if (selectedStorage().mode === "postgres") {
+    try { await (await postgresRuntime()).reports.ping(); checks.migrations = {healthy:true,detail:"PostgreSQL primary account, billing and payment stores ready"}; }
+    catch { checks.migrations = {healthy:false,detail:"PostgreSQL primary stores unavailable"}; }
+  } else if (process.env.ORVYN_PG_URL) {
     try {
       const migrated = await migratePostgresIdentity();
       checks.migrations = { healthy: true, detail: `${migrated.database} applied=${migrated.applied.join(",") || "none"}` };
@@ -532,7 +537,8 @@ try {
 
 async function startServer(): Promise<void> {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
-if (process.env.ORVYN_PG_URL) {
+if (selectedStorage().mode === "postgres") await postgresRuntime();
+if (selectedStorage().mode === "sqlite" && process.env.ORVYN_PG_URL) {
   void migratePostgresIdentity().catch((err) => {
     console.error("Postgres identity migration failed:", err?.message ?? err);
   });

@@ -1,3 +1,4 @@
+import { selectedStorage, postgresRuntime } from "../persistence/PostgresRuntime";
 import type { AuthService } from "./AuthService";
 import type { StaffStore } from "../admin/staffStore";
 import type { OnboardingStore } from "../onboarding/OnboardingStore";
@@ -21,9 +22,10 @@ export function createAsyncAccountStores(load:() => AccountBackend | Promise<Acc
   };
 }
 
-// PostgreSQL selection remains blocked until cross-store reporting/billing are ready.
+// All PostgreSQL interfaces resolve through the same process owner.
 // Lazy initialization retains SQLite behavior and creates no database on import.
 const accountStores=createAsyncAccountStores(async () => {
+  if(selectedStorage().mode==="postgres")return (await postgresRuntime()).accounts;
   const auth=await import("./AuthService");
   const staff=await import("../admin/staffStore");
   const onboarding=await import("../onboarding/OnboardingStore");

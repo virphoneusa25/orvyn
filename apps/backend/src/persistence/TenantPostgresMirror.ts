@@ -1,3 +1,4 @@
+import { storageConfiguration } from "./storageConfiguration";
 // Compatible tenant-data mirror for the deployed ORVYN application.
 // SQLite and the existing identity/credit stores remain authoritative.
 import { Pool, type PoolClient } from "pg";
@@ -38,9 +39,7 @@ INSERT INTO orvyn_storage.migrations(version) VALUES (1) ON CONFLICT DO NOTHING;
 `;
 
 export function validateTenantMirrorMode(env: NodeJS.ProcessEnv = process.env): void {
-  if (env.ORVYN_POSTGRES_PRIMARY_READS?.trim() === "1" || env.ORVYN_POSTGRES_PRIMARY_WRITES?.trim() === "1") {
-    throw new Error("Production compatibility integration supports PostgreSQL mirror only; primary reads/writes require identity and credit-ledger integration.");
-  }
+  storageConfiguration(env);
   if (env.ORVYN_POSTGRES_MIRROR?.trim() === "1" && !(env.DATABASE_URL?.trim() || env.ORVYN_PG_URL?.trim())) {
     throw new Error("PostgreSQL mirror requires DATABASE_URL or the existing ORVYN_PG_URL.");
   }
