@@ -109,7 +109,10 @@ export class NativeDesktop {
             this.finishPending('Native helper exited.');
         } };
         child.on('error', failed);
-        child.on('exit', failed);
+        child.on('exit', code => {
+            if(code===77 && this.child===child){this.finishPending('Run ORVYN without administrator privileges to use local desktop control.');}
+            failed();
+        });
         child.stdin.on('error', failed);
         // Drain diagnostics without logging screenshots or request contents.
         child.stderr.resume();
@@ -135,6 +138,7 @@ export class NativeDesktop {
         const generation = this.consentGeneration;
         try {
             const result = await this.windows();
+            if(!result.ok)return {ok:false,error:result.error ?? "Native desktop helper unavailable."};
             const target = (result.windows as NativeWindow[] | undefined)?.find(w => w.handle === handle);
             if (!target)
                 return { ok: false, error: 'The selected window is unavailable.' };

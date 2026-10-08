@@ -149,7 +149,7 @@ class WindowsDesktop {
     IntPtr ownToken;
     using(var own=Process.GetCurrentProcess()) {
       if(!OpenProcessToken(own.Handle,8,out ownToken)) return;
-      try { int elevated,length; if(!GetTokenInformation(ownToken,20,out elevated,4,out length) || elevated!=0) return; }
+      try { int elevated,length; if(!GetTokenInformation(ownToken,20,out elevated,4,out length)) return; if(elevated!=0) Environment.Exit(77); }
       finally {CloseHandle(ownToken);}
     }
     SetProcessDPIAware(); string line;

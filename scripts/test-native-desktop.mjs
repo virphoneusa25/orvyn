@@ -13,6 +13,7 @@ const dir=mkdtempSync(path.join(tmpdir(),'native-desktop-fixture-'));
 const token=randomBytes(32).toString('hex');
 const helper=spawn(path.join(root,'apps/desktop/resources/native/orvyn-native-desktop.exe'),[],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,ORVYN_NATIVE_TOKEN:token}});
 const pending=new Map();let sequence=0,fixture;
+helper.on('exit',code=>{for(const resolve of pending.values())resolve({ok:false,exitCode:code});pending.clear();});
 createInterface({input:helper.stdout}).on('line',line=>{const msg=JSON.parse(line);pending.get(msg.id)?.(msg.result);pending.delete(msg.id);});
 async function call(command,auth=token) {
  const id=String(++sequence);
@@ -24,7 +25,11 @@ async function call(command,auth=token) {
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 try {
- assert.equal((await call({action:'windows'},'wrong-token')).ok,false);
+ const authentication=await call({action:'windows'},'wrong-token');
+ assert.equal(authentication.ok,false);
+ if(authentication.exitCode===77) {
+  console.log('PASS: helper refuses inherited administrator privileges. Interactive helper checks require a non-elevated desktop.');
+ } else {
  assert.equal((await call({action:'screenshot',expiresAt:1})).ok,false);
  // Interactive fixture tests are opt-in so headless CI never manipulates a real desktop.
  if(process.argv.includes('--interactive-fixture')) {
@@ -66,4 +71,5 @@ class Fixture { [STAThread] static void Main(string[] args) {
   console.log('PASS: private fixture capture, accessibility redaction, identity/expiry/input bounds, literal Unicode input.');
  }
  console.log('PASS: helper authentication and missing/expired grant rejection.');
+ }
 } finally {fixture?.kill();helper.kill();await sleep(100);rmSync(dir,{recursive:true,force:true});}
