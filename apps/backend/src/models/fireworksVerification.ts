@@ -5,7 +5,11 @@ export const FIREWORKS_WRITING_MODEL = "accounts/fireworks/models/deepseek-v4-fl
 const checks = new Map<string, Promise<{ context: number; rate: NonNullable<ModelConfig["rate"]> }>>();
 
 /** This exact new route stays unavailable until current pricing, context and real tools verify. */
-export async function verifyFireworksWriting(config: ModelConfig): Promise<void> {
+export async function verifyFireworksWriting(config: ModelConfig, options: { allowPaidProbe?: boolean } = {}): Promise<void> {
+  if (options.allowPaidProbe !== true) {
+    config.routingVerification = { status: "failed", reason: "Automatic paid capability probes are disabled; metered verification is required" };
+    return;
+  }
   const key = createHash("sha256").update(JSON.stringify([config.endpoint, config.apiKey, config.apiModelId])).digest("hex");
   let pending = checks.get(key);
   if (!pending) {
