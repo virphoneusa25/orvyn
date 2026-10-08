@@ -103,10 +103,10 @@ export function UpdatesSettings() {
         <legend>Installation</legend>
         <label className="updates-radio">
           <input type="radio" name="install-mode" checked={!s?.installOnExit} onChange={() => void api.setInstallOnExit(false)} />
-          Ask before restart
+          Install only when I choose
         </label>
         <label className="updates-radio">
-          <input type="radio" name="install-mode" checked={s?.installOnExit !== false} onChange={() => void api.setInstallOnExit(true)} />
+          <input type="radio" name="install-mode" checked={s?.installOnExit === true} onChange={() => void api.setInstallOnExit(true)} />
           Install when ORVYN closes
         </label>
       </fieldset>
@@ -214,6 +214,7 @@ export function NavUpdateCard({
   const [state, setState] = useState<DesktopUpdateState | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [hiddenVersion, setHiddenVersion] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   useEffect(() => {
     if (!api) return;
@@ -226,12 +227,12 @@ export function NavUpdateCard({
   }, [api, missionActive]);
   const s = state;
   const ready = s && (s.status === "available" || s.status === "downloading" || s.status === "downloaded");
-  if (!api || !s || s.required || !ready) return null;
+  if (!api || !s || s.required || !ready || hiddenVersion === s.availableVersion) return null;
   const version = s.availableVersion ?? "";
   const subtitle =
     s.status === "downloading"
       ? `Downloading ORVYN v${version}… ${Math.round(s.progress?.percent ?? 0)}%`
-      : `ORVYN v${version} is ready to install`;
+      : s.status === "downloaded" ? `ORVYN v${version} is ready to install` : `ORVYN v${version} is available (optional)`;
 
   async function primary() {
     if (s!.status === "downloaded") {
@@ -252,13 +253,13 @@ export function NavUpdateCard({
       <div className="ov-update__row">
         <span className="ov-update__icon"><RefreshMark /></span>
         <span className="ov-update__copy">
-          <span className="ov-update__title">New Update Ready</span>
+          <span className="ov-update__title">{s.status === "downloading" ? "Downloading Update" : s.status === "downloaded" ? "Update Ready" : "Update Available"}</span>
           <span className="ov-update__sub">{subtitle}</span>
         </span>
       </div>
       <div className="ov-update__actions">
         <button type="button" className="ov-update__cta" disabled={s.status === "downloading"} onClick={() => void primary()}>
-          {s.status === "downloading" ? "Downloading…" : "Update Now"}
+          {s.status === "downloading" ? "Downloading…" : s.status === "downloaded" ? "Restart & Install" : "Download Update"}
         </button>
         <button
           type="button"
@@ -271,6 +272,15 @@ export function NavUpdateCard({
           View Notes
         </button>
       </div>
+      <button type="button" className="ov-update__ghost" onClick={async () => {
+        await api.setInstallOnExit(false);
+        setHiddenVersion(version);
+      }}>{s.status === "downloading" ? "Keep working" : "Later"}</button>
+      {s.status === "downloading" && s.progress ? <p className="ov-update__notes">
+        {(s.progress.transferred / 1e6).toFixed(1)} / {(s.progress.total / 1e6).toFixed(1)} MB
+        {s.progress.bytesPerSecond ? ` · ${Math.round(s.progress.bytesPerSecond / 1000)} KB/s` : ""}
+        {" · You can keep working. Installation requires your choice."}
+      </p> : null}
       {notesOpen && s.releaseNotes ? <p className="ov-update__notes">{s.releaseNotes}</p> : null}
       {message ? <p className="ov-update__notes">{message}</p> : null}
     </div>

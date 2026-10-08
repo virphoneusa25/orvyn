@@ -2,6 +2,7 @@
 // Talks to the control plane with the user's session (never 0.0.0.0).
 // Crash recovery uses bounded backoff. Multiple windows share one lock.
 
+import {packagedNode} from "./localEngineEnvironment";
 import { app } from "electron";
 import { spawn, ChildProcess } from "child_process";
 import { createWriteStream, openSync, readFileSync, writeFileSync, unlinkSync } from "fs";
@@ -191,7 +192,7 @@ export class LocalWorkerManager {
       try {
         await fs.access(script);
         return {
-          node: app.isPackaged ? path.join(backend, "node.exe") : "node",
+          node: app.isPackaged ? packagedNode(backend) : "node",
           script,
           cwd: backend,
         };

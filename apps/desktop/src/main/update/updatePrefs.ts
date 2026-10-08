@@ -8,6 +8,7 @@ export interface UpdatePrefs {
   autoCheck: boolean;
   autoDownload: boolean;
   installOnExit: boolean;
+  installOnExitOptIn?: boolean;
   installationId: string;
 }
 
@@ -15,7 +16,7 @@ const DEFAULTS: UpdatePrefs = {
   channel: "stable",
   autoCheck: true,
   autoDownload: false,
-  installOnExit: true,
+  installOnExit: false,
   installationId: "",
 };
 
@@ -31,7 +32,9 @@ export function normalizePrefs(raw: unknown): UpdatePrefs {
     channel,
     autoCheck: o.autoCheck !== false,
     autoDownload: o.autoDownload === true,
-    installOnExit: o.installOnExit !== false,
+    // Older versions enabled this by default, so a saved true is not consent.
+    installOnExit: o.installOnExit === true && o.installOnExitOptIn === true,
+    installOnExitOptIn: o.installOnExitOptIn === true,
     installationId,
   };
 }

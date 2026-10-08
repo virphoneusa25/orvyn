@@ -57,7 +57,7 @@ export function initialUpdateState(input: {
     channel: input.channel,
     autoCheck: true,
     autoDownload: false,
-    installOnExit: true,
+    installOnExit: false,
     packaged: input.packaged,
     required: false,
     installOnExitArmed: false,

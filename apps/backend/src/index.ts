@@ -549,7 +549,7 @@ setTimeout(() => {
   void (async () => { try { const t = (await tenantManager.ensureLocalDefault()); await t.mcpManager.startEnabled(); } catch {} })();
 }, 3000);
 
-server.listen(PORT, () => {
+server.listen(PORT, process.env.ORVYN_BIND_HOST || "0.0.0.0", () => {
   console.log(`ORVYN backend listening on http://localhost:${PORT}`);
   console.log(`  Fireworks configured: ${process.env.FIREWORKS_API_KEY?.trim() ? "yes" : "no"}`);
   console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const desktop = JSON.parse(readFileSync(path.join(root, "apps/desktop/package.json"), "utf8"));
-const tag = (process.env.GITHUB_REF_NAME || process.env.ORVYN_RELEASE_VERSION || "").replace(/^v/, "");
+const tag = (process.env.ORVYN_RELEASE_VERSION || (process.env.GITHUB_REF_TYPE === "tag" ? process.env.GITHUB_REF_NAME : "") || "").replace(/^v/, "");
 const envVersion = (process.env.ORVYN_DESKTOP_VERSION || "").trim();
 const pkg = String(desktop.version || "");
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg)) {
