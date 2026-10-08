@@ -38,7 +38,7 @@ import { customerCatalogEnabled } from "../models/customerCatalog";
 import { defaultDataDir } from "../persistence/LocalStore";
 import { artifactStorageRoot } from "../documents/workspace";
 import { adminHostMismatch } from "../http/hosts";
-import { desktopReleaseStore } from "../releases/desktopReleaseStore";
+import { desktopReleaseStore } from "../releases/AsyncDesktopReleaseStore";
 
 interface Staff { id: string; email: string; name: string | null; role: StaffRole }
 type AdminRequest = Request & { staff?: Staff };
@@ -716,12 +716,12 @@ adminRouter.delete("/staff/:userId", need("staff.manage"), wrap(async (req, res)
   res.json({ ok: true });
 }));
 
-adminRouter.get("/releases", need("read"), wrap((_req, res) => {
-  res.json(desktopReleaseStore().summary());
+adminRouter.get("/releases", need("read"), wrap(async (_req, res) => {
+  res.json((await desktopReleaseStore().summary()));
 }));
 
 adminRouter.post("/releases", need("staff.manage"), wrap(async (req, res) => {
-  const release = desktopReleaseStore().upsertFromPipeline({
+  const release = (await desktopReleaseStore().upsertFromPipeline({
     version: String(req.body?.version ?? ""),
     channel: req.body?.channel,
     title: req.body?.title,
@@ -729,14 +729,14 @@ adminRouter.post("/releases", need("staff.manage"), wrap(async (req, res) => {
     artifacts: Array.isArray(req.body?.artifacts) ? req.body.artifacts : [],
     gitSha: req.body?.gitSha,
     status: req.body?.status,
-  });
+  }));
   (await audit(req, "desktop.release.record", null, { version: release.version, channel: release.channel }));
   res.json({ release });
 }));
 
 adminRouter.post("/releases/installs", need("staff.manage"), wrap(async (req, res) => {
   const installationId = String(req.body?.installationId ?? `admin-${randomUUID()}`).slice(0, 80);
-  desktopReleaseStore().recordTelemetry({
+  (await desktopReleaseStore().recordTelemetry({
     installationId,
     accountId: req.body?.accountId ? String(req.body.accountId) : undefined,
     platform: req.body?.platform,
@@ -744,9 +744,9 @@ adminRouter.post("/releases/installs", need("staff.manage"), wrap(async (req, re
     version: req.body?.version,
     channel: req.body?.channel,
     event: req.body?.event ?? "app_started",
-  });
+  }));
   (await audit(req, "desktop.install.record", null, { version: String(req.body?.version ?? ""), channel: String(req.body?.channel ?? "") }));
-  res.json({ ok: true, installationId, summary: desktopReleaseStore().summary() });
+  res.json({ ok: true, installationId, summary: (await desktopReleaseStore().summary()) });
 }));
 
 adminRouter.patch("/releases/:id", need("support.write"), wrap(async (req, res) => {
@@ -755,7 +755,7 @@ adminRouter.patch("/releases/:id", need("support.write"), wrap(async (req, res) 
   if (requiredChange && !can(req.staff?.role, "staff.manage")) {
     return res.status(403).json({ error: "Marking a required update needs a super admin.", code: "FORBIDDEN" });
   }
-  const release = desktopReleaseStore().patch(String(req.params.id), {
+  const release = (await desktopReleaseStore().patch(String(req.params.id), {
     ...(body.notes !== undefined ? { notes: body.notes } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(body.rolloutPercent !== undefined ? { rolloutPercent: body.rolloutPercent } : {}),
@@ -763,7 +763,7 @@ adminRouter.patch("/releases/:id", need("support.write"), wrap(async (req, res) 
     ...(body.required !== undefined ? { required: body.required } : {}),
     ...(body.minimumSupportedVersion !== undefined ? { minimumSupportedVersion: body.minimumSupportedVersion } : {}),
     allowRequired: can(req.staff?.role, "staff.manage"),
-  });
+  }));
   (await audit(req, "desktop.release.patch", null, { id: release.id, status: release.status, rolloutPercent: release.rolloutPercent }));
   res.json({ release });
 }));

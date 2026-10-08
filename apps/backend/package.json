@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "node scripts/check-node-version.cjs",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "npm run build --prefix ../../packages/ai-core && node scripts/generate-postgres-auth.cjs --check && node scripts/generate-postgres-payments.cjs --check && node scripts/generate-postgres-ledger.cjs --check && node scripts/generate-postgres-sessions.cjs --check && node scripts/generate-postgres-tenant.cjs --check && node scripts/generate-postgres-admin.cjs --check && tsc -p . && node scripts/build-sandbox-tools.cjs",
+    "build": "npm run build --prefix ../../packages/ai-core && node scripts/generate-postgres-auth.cjs --check && node scripts/generate-postgres-payments.cjs --check && node scripts/generate-postgres-ledger.cjs --check && node scripts/generate-postgres-sessions.cjs --check && node scripts/generate-postgres-tenant.cjs --check && node scripts/generate-postgres-admin.cjs --check && node scripts/generate-postgres-desktop-releases.cjs --check && tsc -p . && node scripts/build-sandbox-tools.cjs",
     "start": "node scripts/start.cjs",
     "test": "node --test dist/**/*.test.js"
   },

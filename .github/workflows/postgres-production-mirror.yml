@@ -103,6 +103,14 @@ jobs:
         run: |
           docker run --rm --network host -e PGPASSWORD postgres:16-alpine psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE provider_controls_test'
           node --test apps/backend/dist/models/ProviderVerificationStore.test.js apps/backend/dist/models/MeteredProviderProbe.test.js apps/backend/dist/models/paidProviderProbes.test.js
+      - name: PostgreSQL desktop release migration and shared runtime
+        env:
+          PGPASSWORD: test-password
+          ORVYN_DESKTOP_STORAGE_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/desktop_storage_test
+        run: |
+          docker run --rm --network host -e PGPASSWORD postgres:16-alpine psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE desktop_storage_test'
+          node --test apps/backend/dist/releases/PostgresDesktopReleaseStore.test.js apps/backend/dist/releases/desktopReleaseStore.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         # Session runtime tests always execute with the integration switch on.
         # The retained synthetic fixture is covered by the same pg_dump drill.

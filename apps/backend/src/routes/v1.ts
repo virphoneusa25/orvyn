@@ -4,7 +4,7 @@ import { installModelSettingsRoutes } from "./modelSettingsRoutes";
 import { installTenantDataRoutes } from "./tenantDataRoutes";
 import { randomUUID } from "node:crypto";
 import { asyncHandler } from "../http/asyncHandler";
-import { desktopReleaseStore } from "../releases/desktopReleaseStore";
+import { desktopReleaseStore } from "../releases/AsyncDesktopReleaseStore";
 import { accountRouter } from "./account";
 import { publicOrigin } from "./auth";
 import { documentRouter } from "./documents";
@@ -2269,13 +2269,13 @@ v1Router.post("/billing/portal", asyncHandler(async (req, res) => {
 }));
 
 /** Where to get ORVYN Desktop (control-plane catalog; env links still win). */
-v1Router.get("/downloads/desktop", (req, res) => {
-  const d = desktopReleaseStore().publicDownloads();
+v1Router.get("/downloads/desktop", asyncHandler(async (req, res) => {
+  const d = (await desktopReleaseStore().publicDownloads());
   let installations: { platform: string; version: string; channel: string; current: boolean }[] | undefined;
   try {
     const t = requireTenant(req);
     const latest = d.version;
-    installations = desktopReleaseStore().installationsForAccount(t.id).map((i) => ({
+    installations = (await desktopReleaseStore().installationsForAccount(t.id)).map((i) => ({
       platform: i.platform,
       version: i.version,
       channel: i.channel,
@@ -2285,7 +2285,7 @@ v1Router.get("/downloads/desktop", (req, res) => {
     installations = undefined;
   }
   res.json({ ...d, installations });
-});
+}));
 
 /** Invoices, the card on file and the subscription's renewal (read from Stripe; the ledger stays the balance). */
 v1Router.get("/billing/account", asyncHandler(async (req, res) => {
