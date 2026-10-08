@@ -1,3 +1,5 @@
+import {savedVerification} from "./ProviderVerificationStore";
+import type {ProbeOptions} from "./MeteredProviderProbe";
 import { createHash } from "node:crypto";
 import { OpenAICompatibleAdapter, type ModelConfig } from "@orvyn/ai-core";
 import { publicPage } from "./providerRates";
@@ -33,8 +35,9 @@ export function deepSeekPeak(at: number): boolean {
 }
 
 const probes = new Map<string, { until: number; pending: Promise<void> }>();
-export async function refreshDeepSeekRates(config: ModelConfig, options: { allowPaidProbe?: boolean } = {}): Promise<void> {
-  if (options.allowPaidProbe !== true) {
+export async function refreshDeepSeekRates(config: ModelConfig, options: ProbeOptions = {}): Promise<void> {
+  const evidence=options.allowPaidProbe===true?undefined:await savedVerification(config);
+  if (options.allowPaidProbe !== true && !evidence) {
     config.routingVerification = { status: "failed", reason: "Automatic paid capability probes are disabled; metered verification is required" };
     return;
   }
@@ -56,10 +59,10 @@ export async function refreshDeepSeekRates(config: ModelConfig, options: { allow
       } catch { return undefined; }
     } });
     const key = createHash("sha256").update(JSON.stringify([config.endpoint, config.apiKey, id])).digest("hex");
-    let probe = probes.get(key);
-    if (!probe || probe.until <= Date.now()) {
+    let probe = options.allowPaidProbe === true ? undefined : probes.get(key);
+    if (!evidence && (!probe || probe.until <= Date.now())) {
       probe = { until: Date.now() + 60 * 60_000, pending: (async () => {
-        const adapter = new OpenAICompatibleAdapter(config);
+        const adapter = options.adapter?.(config) ?? new OpenAICompatibleAdapter(config);
         let called = false, done = false;
         for await (const chunk of adapter.stream({ messages: [{ role: "user", content: 'Call capability_probe with value "verified".' }], tools: [{ name: "capability_probe", description: "Verify tool calls", parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } }], stream: true, maxOutputTokens: 2048, signal: AbortSignal.timeout(45_000) })) {
           if (chunk.error) throw new Error("DeepSeek tool probe failed");
@@ -71,9 +74,9 @@ export async function refreshDeepSeekRates(config: ModelConfig, options: { allow
       probes.set(key, probe);
       probe.pending.catch(() => probes.delete(key));
     }
-    await probe.pending;
+    if (!evidence) await probe!.pending;
     config.contextWindow = 1_000_000;
-    config.routingVerification = { status: "verified", reason: "Exact current DeepSeek prices and streaming tool call verified" };
+    config.routingVerification = { status: "verified", reason: evidence ? "Current exact prices and saved metered streaming tool verification" : "Exact current DeepSeek prices and streaming tool call verified" };
   } catch (error) {
     // Expose only a known status, never raw provider responses or credentials.
     const insufficientBalance=error instanceof Error&&/\bHTTP 402\b/.test(error.message);

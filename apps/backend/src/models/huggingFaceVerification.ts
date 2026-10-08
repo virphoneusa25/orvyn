@@ -1,3 +1,5 @@
+import {savedVerification,type VerificationEvidence} from "./ProviderVerificationStore";
+import type {ProbeOptions} from "./MeteredProviderProbe";
 import { OpenAICompatibleAdapter, type ModelConfig } from "@orvyn/ai-core";
 import { createHash } from "node:crypto";
 
@@ -6,7 +8,7 @@ type Evidence = { context: number; tools: boolean; vision: boolean; streaming: b
 // Credentials are never persisted, returned to clients, or included in diagnostics.
 const checks = new Map<string, Promise<Evidence>>();
 
-async function check(config: ModelConfig): Promise<Evidence> {
+async function check(config: ModelConfig, options:ProbeOptions, evidence?:VerificationEvidence): Promise<Evidence> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45_000);
   try {
@@ -21,11 +23,14 @@ async function check(config: ModelConfig): Promise<Evidence> {
     const model = catalog.data?.find((m: any) => m.id === wire.slice(0, split));
     const provider = model?.providers?.find((p: any) => p.provider === wire.slice(split + 1) && p.status === "live");
     if (!provider || !Number.isSafeInteger(provider.context_length) || provider.context_length <= 0) throw new Error("provider/context absent from live catalog");
-    const tools = provider.supports_tools === true;
-    let vision = model.architecture?.input_modalities?.includes("image") === true;
+    const tools = provider.supports_tools === true && (!evidence || evidence.capabilities.tools);
+    let vision = model.architecture?.input_modalities?.includes("image") === true && (!evidence || evidence.capabilities.vision);
     let visionFailed = false;
-    const probeConfig = { ...config, streaming: true, capabilities: { ...config.capabilities, tools, vision } };
-    const adapter = new OpenAICompatibleAdapter(probeConfig);
+    if (!Number.isFinite(provider.pricing?.input) || !Number.isFinite(provider.pricing?.output) || provider.pricing.input < 0 || provider.pricing.output < 0) throw new Error("exact provider pricing unavailable");
+    const rate = { input: provider.pricing.input, output: provider.pricing.output, source: `${config.endpoint}/v1/models`, verifiedAt: Date.now(), expiresAt: Date.now() + 15 * 60_000 };
+    if (evidence) return {context:Math.min(provider.context_length,evidence.context),tools,vision,visionFailed:false,streaming:evidence.streaming,rate};
+    const probeConfig = { ...config, rate, streaming: true, capabilities: { ...config.capabilities, tools, vision } };
+    const adapter = options.adapter?.(probeConfig) ?? new OpenAICompatibleAdapter(probeConfig);
     let text = "", called = false, finished = false;
     for await (const chunk of adapter.stream({
       messages: [{ role: "user", content: tools ? 'Call capability_probe with value "verified". Do not answer in text.' : "Reply with OK." }],
@@ -54,19 +59,20 @@ async function check(config: ModelConfig): Promise<Evidence> {
   } finally { clearTimeout(timer); }
 }
 
-export async function verifyHuggingFace(config: ModelConfig, options: { allowPaidProbe?: boolean } = {}): Promise<void> {
-  if (options.allowPaidProbe !== true) {
+export async function verifyHuggingFace(config: ModelConfig, options: ProbeOptions = {}): Promise<void> {
+  const evidence=options.allowPaidProbe===true?undefined:await savedVerification(config);
+  if (options.allowPaidProbe !== true && !evidence) {
     config.routingVerification = { status: "failed", reason: "Automatic paid capability probes are disabled; metered verification is required" };
     return;
   }
   const key = createHash("sha256").update(JSON.stringify([config.endpoint, config.apiModelId, config.apiKey])).digest("hex");
-  let pending = checks.get(key);
+  let pending = options.allowPaidProbe===true?undefined:checks.get(key);
   if (!pending) {
     // A cold/transient provider failure must not poison every tenant for ten minutes.
-    pending = check(config).catch(async (error) => {
+    pending = check(config,options,evidence).catch(async (error) => {
       const retryable = error?.name === 'AbortError' || error?.name === 'TimeoutError' || /^(catalog HTTP (429|5\d\d)|stream probe failed|stream\/tool probe did not verify advertised capabilities)$/.test(error?.message ?? '');
       if (!retryable) throw error;
-      return check(config);
+      return check(config,options,evidence);
     });
     checks.set(key, pending);
     const expiry = setTimeout(() => checks.delete(key), 10 * 60_000);
@@ -79,7 +85,7 @@ export async function verifyHuggingFace(config: ModelConfig, options: { allowPai
     config.streaming = evidence.streaming;
     config.rate = evidence.rate;
     config.capabilities = { ...config.capabilities, chat: true, code: true, completion: true, agent: evidence.tools, tools: evidence.tools, vision: evidence.vision };
-    config.routingVerification = { status: "verified", reason: evidence.visionFailed ? "Catalog and streaming/tool probes verified; vision probe failed, images excluded" : "Live provider catalog and streaming/tool/vision probes verified" };
+    config.routingVerification = { status: "verified", reason: options.allowPaidProbe!==true ? "Live catalog and saved metered capability verification" : evidence.visionFailed ? "Catalog and streaming/tool probes verified; vision probe failed, images excluded" : "Live provider catalog and streaming/tool/vision probes verified" };
   } catch (error) {
     if (checks.get(key) === pending) checks.delete(key);
     // Only our bounded status codes/messages reach logs or the renderer. Raw provider errors can contain credentials.
