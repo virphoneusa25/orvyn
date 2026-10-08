@@ -1,3 +1,4 @@
+import { releasesResources, type RunStatus } from "../agent/events";
 import type {AsyncCreditLedger} from "./AsyncFinancialStores";
 import type {UsageEvent} from "../services/UsageService";
 import {settleProviderUsage} from "./providerSettlement";
@@ -33,13 +34,27 @@ export class TenantBilling {
 
   recover(strict:boolean):Promise<void> {
     if(!this.recovering)this.recovering=(async()=>{
-      for(const pending of await this.store.pendingBilling()) {
-        await this.settle(pending.event,pending.own,strict);
+      let pending=await this.store.pendingBilling();
+      while(pending.length) {
+        const attempted=new Set(pending.map(item=>item.event.id));
+        for(const item of pending)await this.settle(item.event,item.own,strict);
+        pending=await this.store.pendingBilling();
+        if(pending.some(item=>attempted.has(item.event.id)))throw new Error("Billing recovery is still pending.");
       }
-      if((await this.store.pendingBilling()).length)throw new Error("Billing recovery is still pending.");
       await this.store.recoverReleases?.(this.ledger);
     })().finally(()=>{this.recovering=undefined;});
     return this.recovering;
+  }
+
+  /** Release only holds whose durable journal proves the run ended. */
+  async reconcileRuns(statusOf:(runId:string)=>RunStatus|undefined):Promise<{released:number;unresolved:number}> {
+    let released=0,unresolved=0;
+    for(const held of await this.ledger.heldRuns(this.accountId)) {
+      const status=statusOf(held.runId);
+      if(status===undefined){unresolved++;continue;}
+      if(releasesResources(status)){await this.releaseRun(held.runId);released++;}
+    }
+    return {released,unresolved};
   }
 
   reserveRun(runId:string):Promise<void> {

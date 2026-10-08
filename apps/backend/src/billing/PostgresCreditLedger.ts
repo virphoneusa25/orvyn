@@ -414,6 +414,19 @@ export class PostgresCreditLedger implements AsyncLedgerContract {
             return (await this.entryByKey(key))!.id;
         });
     }
+    /** Authoritative remaining reservations for one account, including after restart. */
+    async heldRuns(accountId: string): Promise<Array<{
+        runId: string;
+        credits: number;
+    }>> {
+        return this.db.transaction(async () => {
+            const rows = (await this.db.prepare(`SELECT run_id, SUM(amount) AS n FROM ledger_entries WHERE account_id = ? AND bucket = 'hold' AND run_id IS NOT NULL GROUP BY run_id HAVING SUM(amount) > 0 ORDER BY run_id`).all(accountId)) as {
+                run_id: string;
+                n: number;
+            }[];
+            return rows.map(row => ({ runId: row.run_id, credits: Number(row.n) }));
+        });
+    }
     /** Returns what a finished run did not use. Safe to call more than once. */
     async release(runId: string, now = Date.now()): Promise<void> {
         return this.db.transaction(async () => {

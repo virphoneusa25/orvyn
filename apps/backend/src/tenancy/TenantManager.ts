@@ -1,3 +1,4 @@
+import { persistRunAnswer, shouldPersistFinalAnswer } from "../sessions/sessionMessages";
 import { openTenantStorage, openSessionStorage } from "../persistence/PostgresRuntime";
 import { FileUsageRecoveryJournal } from "../services/UsageRecoveryJournal";
 // apps/backend/src/tenancy/TenantManager.ts
@@ -302,6 +303,17 @@ export class TenantManager {
     // never visible across customers. The store gets a per-tenant directory:
     // events append to disk as they stream and replay after a restart.
     tenant.runStore = new RunStore(pathJoin(defaultDataDir(), `runs-${id}`));
+    // Replay metering before releasing only provably finished reservations.
+    const reconciled = creditsEnforced()
+      ? await billing.reconcileRuns(runId => tenant.runStore.get(runId)?.status)
+      : {released:0,unresolved:0};
+    if (reconciled.unresolved) console.warn(JSON.stringify({event:"credits.unresolved_run_holds",tenantId:id,count:reconciled.unresolved}));
+    for (const run of tenant.runStore.list()) {
+      if (!shouldPersistFinalAnswer(run)) continue;
+      const session = await tenant.sessions.sessionOfRun(run.id);
+      if (session) await persistRunAnswer(tenant.sessions,tenant.runStore,session.sessionId,run.id);
+    }
+
     // A finished run must not keep the desktop input-blocked: when the run
     // that held sandbox control ends, control returns to the user (the pane
     // reconciles within one 2s session poll; the event helps live viewers).

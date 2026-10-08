@@ -83,3 +83,21 @@ test("failed run admission prevents provider work and terminal cleanup still rel
   await assert.rejects(billing.awaitRun("fixture-run"),/fixture reservation unavailable/);
   await billing.releaseRun("fixture-run");assert.equal(released,true);
 });
+
+test("startup reconciliation releases only provably terminal holds and retries failed releases",async()=>{
+ const held=[{runId:"finished",credits:100},{runId:"blocked",credits:100},{runId:"running",credits:100},{runId:"unknown",credits:100}];
+ let available=false;const released:string[]=[];
+ const ledger={heldRuns:async()=>held,release:async(id:string)=>{if(!available)throw new Error("release unavailable");released.push(id);}} as unknown as AsyncCreditLedger;
+ const billing=new TenantBilling(ledger,"fixture",{pendingBilling:()=>[],enqueueBilling(){},completeBilling(){}});
+ const status=(id:string)=>id==="finished"?"completed" as const:id==="blocked"?"blocked" as const:id==="running"?"running" as const:undefined;
+ await assert.rejects(billing.reconcileRuns(status),/release unavailable/);
+ available=true;assert.deepEqual(await billing.reconcileRuns(status),{released:1,unresolved:1});assert.deepEqual(released,["finished"]);
+});
+
+test("startup billing recovery drains more than one database page and detects failed acknowledgements",async()=>{
+ const pending=new Map(Array.from({length:2050},(_,i)=>[String(i),{event:{...event,id:String(i)},own:true}]));
+ let acknowledge=true;
+ const billing=new TenantBilling({} as AsyncCreditLedger,"fixture",{pendingBilling:()=>[...pending.values()].slice(0,1000),enqueueBilling(){},completeBilling(){},settle:async(e)=>{if(acknowledge)pending.delete(e.id);}});
+ await billing.recover(true);assert.equal(pending.size,0);
+ pending.set(event.id,{event,own:true});acknowledge=false;await assert.rejects(billing.recover(true),/still pending/);assert.equal(pending.size,1);
+});

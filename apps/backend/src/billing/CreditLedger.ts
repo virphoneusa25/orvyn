@@ -486,6 +486,12 @@ export class CreditLedger {
     return this.entryByKey(key)!.id;
   }
 
+  /** Authoritative remaining reservations for one account, including after restart. */
+  heldRuns(accountId: string): Array<{runId:string;credits:number}> {
+    const rows = this.db.prepare(`SELECT run_id, SUM(amount) AS n FROM ledger_entries WHERE account_id = ? AND bucket = 'hold' AND run_id IS NOT NULL GROUP BY run_id HAVING SUM(amount) > 0 ORDER BY run_id`).all(accountId) as {run_id:string;n:number}[];
+    return rows.map(row => ({runId:row.run_id,credits:Number(row.n)}));
+  }
+
   /** Returns what a finished run did not use. Safe to call more than once. */
   release(runId: string, now = Date.now()): void {
     this.tx(() => {
