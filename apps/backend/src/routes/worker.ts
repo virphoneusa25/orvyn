@@ -21,7 +21,7 @@ import { resourcesForPlan, selectSandbox, type PolicyTemplateId, type SandboxPla
 import { credentialAllowed, pendingPolicyUpdate } from "../execution/sandbox/policyRequests";
 import { creditLedger } from "../billing/AsyncFinancialStores";
 import { WorkerAdmission } from "./workerAdmission";
-import { LocalStore } from "../persistence/LocalStore";
+import { openTenantStorage } from "../persistence/PostgresRuntime";
 import type { MissionCheckpoint } from "../agent/missionCheckpoint";
 import { githubToken } from "../integrations/githubConnection";
 import { deploymentCredential } from "../integrations/deploymentConnections";
@@ -82,13 +82,12 @@ const jobQueue: PendingJob[] = [];
 const jobAdmissions = new WorkerAdmission();
 
 /** The run's durable mission checkpoint, when one was persisted for it. */
-function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoint | null {
-  try {
-    return (new LocalStore(tenantId).loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null;
-  } catch {
-    return null;
-  }
+async function missionCheckpointFor(tenantId: string, runId: string): Promise<MissionCheckpoint | null> {
+  const store = await openTenantStorage(tenantId);
+  try { return (await store.loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null; }
+  finally { await store.close(); }
 }
+
 /**
  * Boot-time recovery: a backend restart lost the in-memory job queue. Runs
  * whose journals replay with a live status are re-queued with recover=true
@@ -122,7 +121,7 @@ async function recoverOrphanedRunsOnBoot(
               // tenant id: sandbox record → durable mission checkpoint →
               // block the run truthfully (it stays resumable via resume,
               // which re-derives real identity from the session).
-              const cp = missionCheckpointFor(tenantId, runId);
+              const cp = record ? null : await missionCheckpointFor(tenantId, runId);
               const source = record
                 ? { organizationId: record.organizationId, userId: record.userId, projectId: record.projectId }
                 : cp

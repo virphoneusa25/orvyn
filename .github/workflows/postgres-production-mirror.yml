@@ -109,6 +109,7 @@ jobs:
           ORVYN_SESSION_RUNTIME_TEST=1 node --test apps/backend/dist/sessions/PostgresWorkSessionStore.test.js
           ORVYN_TENANT_RUNTIME_TEST=1 node --test apps/backend/dist/persistence/PostgresTenantStore.test.js
           ORVYN_ADMIN_RUNTIME_TEST=1 node --test apps/backend/dist/admin/PostgresAdminService.test.js
+          ORVYN_PRIMARY_RUNTIME_TEST=1 node --test apps/backend/dist/persistence/PostgresRuntime.test.js
           node scripts/acceptance/postgres-tenant-restore.cjs
           node scripts/acceptance/postgres-sessions-restore.cjs
           pgclient() { docker run --rm --network host -e PGPASSWORD -v "$PWD/.tmp:/backup" postgres:16-alpine "$@"; }

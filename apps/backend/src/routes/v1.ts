@@ -1,3 +1,4 @@
+import { selectedStorage, postgresRuntime } from "../persistence/PostgresRuntime";
 import { persistToolPermission } from "../gateway/toolPermissionPersistence";
 import { installModelSettingsRoutes } from "./modelSettingsRoutes";
 import { installTenantDataRoutes } from "./tenantDataRoutes";
@@ -47,6 +48,13 @@ export const v1Router = Router();
 // is deliberately not inferred from these counts.
 v1Router.get("/storage/status", asyncHandler(async (req, res) => {
   const tenant = requireTenant(req);
+  if (selectedStorage().mode === "postgres") {
+    const health = await (await postgresRuntime()).reports.ping();
+    const counts = await tenant.localStore.tenantMirrorCounts();
+    return res.json({mode:"postgres-primary",primaryReads:true,primaryWrites:true,sqliteFallback:false,
+      coverage:["identity","credits","subscriptions","missions","usage","settings","models","work-sessions","artifacts","memory"],
+      ready:true,health,tenantCounts:counts,parity:{completeCloudCutover:false}});
+  }
   const postgres = await tenantPostgresMirror.status(tenant.id);
   const sqlite = await tenant.localStore.tenantMirrorCounts();
   const parity = postgres.enabled && postgres.counts !== undefined &&

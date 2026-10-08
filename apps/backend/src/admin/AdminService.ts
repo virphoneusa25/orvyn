@@ -1,4 +1,3 @@
-import { creditLedger as sqliteCreditLedger } from "../billing/creditLedgerInstance";
 import { stripeStore as sqliteStripeStore } from "../billing/stripe";
 import { paymentStore as stripeStore } from "../billing/AsyncFinancialStores";
 // apps/backend/src/admin/AdminService.ts
@@ -82,7 +81,7 @@ export class AdminService {
     this.dataDir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
     sqliteStaffStore(); // Local reporting still attaches the SQLite billing/payment stores.
-    void sqliteCreditLedger; // Keep the existing SQLite report schema initialized.
+    void require("../billing/creditLedgerInstance").creditLedger; // Keep the existing SQLite report schema initialized.
     sqliteStripeStore(); // Keep the attached payment schema initialized.
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
     this.db.exec("PRAGMA busy_timeout = 5000;");
