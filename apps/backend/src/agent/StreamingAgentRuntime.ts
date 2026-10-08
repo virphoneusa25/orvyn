@@ -131,8 +131,8 @@ import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
 import { sha256Hex } from "../artifacts/bytes";
 import { promises as fs } from "fs";
 import { resolveSafePath } from "../execution/pathSafety";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
-import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
+import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/asyncPolicyRequests";
 import { POLICY_TEMPLATES } from "../execution/sandbox/selection";
 import { creditLedger } from "../billing/AsyncFinancialStores";
 import { classifyExecutionHints } from "../execution/classifyExecution";
@@ -1992,7 +1992,7 @@ export class StreamingAgentRuntime {
         }
         if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
           const remote = await this.awaitRemoteReady(runId);
-          if (remote) this.mountRemoteTools(runId);
+          if (remote) await this.mountRemoteTools(runId);
         }
         // The facts the model plans against: which core tools this run has
         // (after remote tools were mounted), what permissions allow, which MCP
@@ -2176,7 +2176,7 @@ export class StreamingAgentRuntime {
    * tenant gateway is never touched, so no teardown restore is needed and
    * nothing can leak into another run.
    */
-  private mountRemoteTools(runId: string): void {
+  private async mountRemoteTools(runId: string): Promise<void> {
     const state = this.runs.get(runId);
     if (!state?.execution) return;
     const gateway = this.gatewayFor(runId);
@@ -2191,7 +2191,7 @@ export class StreamingAgentRuntime {
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
     registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot);
-    this.mountNetworkAccessTool(runId, state);
+    await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(gateway.registry, state.mode);
@@ -2214,9 +2214,9 @@ export class StreamingAgentRuntime {
    * deny-by-default policy that a person can widen. The tool files a request;
    * it never changes the policy. Approval happens in the portal.
    */
-  private mountNetworkAccessTool(runId: string, state: RunState): void {
+  private async mountNetworkAccessTool(runId: string, state: RunState): Promise<void> {
     let rec = null;
-    try { rec = state.execution?.location === "OVH_WORKER" ? sandboxRegistry().forRun(runId) : null; } catch { rec = null; }
+    try { rec = state.execution?.location === "OVH_WORKER" ? (await sandboxRegistry().forRun(runId)) : null; } catch { rec = null; }
     state.networkRequestable = rec?.provider === "openshell";
     if (!state.networkRequestable) return;
     const store = this.store;
@@ -2238,10 +2238,10 @@ export class StreamingAgentRuntime {
         const tenantId = context?.tenantId || state.execution?.tenantId || "";
         let planId: string | null = null;
         try { planId = (await creditLedger.planOf(tenantId)) ?? null; } catch { planId = null; }
-        const out = requestNetworkAccess(sandboxRegistry(), {
+        const out = (await requestNetworkAccess(sandboxRegistry(), {
           runId: id, template: String(args.access ?? ""), hosts: Array.isArray(args.hosts) ? args.hosts.map(String) : [],
           reason: String(args.reason ?? "").slice(0, 300), planId,
-        });
+        }));
         if (!out.ok) return { ok: false, error: out.message };
         store.emit(id, "sandbox.policy.requested", { requestId: out.request.id, access: TEMPLATE_LABELS[out.request.template as keyof typeof TEMPLATE_LABELS] ?? out.request.template, reason: out.request.reason });
         return { ok: true, output: out.message };
@@ -4255,7 +4255,7 @@ export class StreamingAgentRuntime {
     if (!this.memoryStore) return;
     try {
       const events = this.store.get(runId)?.events ?? [];
-      const sandbox = sandboxRegistry().forRun(runId);
+      const sandbox = (await sandboxRegistry().forRun(runId));
       const runExecution = this.store.get(runId)?.execution;
       const checkpoint = buildCheckpoint({
         runId,

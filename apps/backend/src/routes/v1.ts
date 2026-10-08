@@ -40,7 +40,7 @@ import { MODES } from "../agent/modes";
 import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
 import { promises as fsp } from "fs";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
 
 export const v1Router = Router();
 
@@ -135,7 +135,7 @@ v1Router.use("/worker", workerRouter(requireTenant,  async (tenantId?: string) =
     tenant.runStore.setStatus(runId, "error");
     return;
   }
-  const record = sandboxRegistry().forRun(runId);
+  const record = (await sandboxRegistry().forRun(runId));
   if (!record) {
     tenant.runStore.emit(runId, "run.error", { message: "The control plane restarted, but the sandbox record was unavailable." });
     tenant.runStore.setStatus(runId, "error");
