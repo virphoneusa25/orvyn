@@ -51,9 +51,14 @@ v1Router.get("/storage/status", asyncHandler(async (req, res) => {
   if (selectedStorage().mode === "postgres") {
     const health = await (await postgresRuntime()).reports.ping();
     const counts = await tenant.localStore.tenantMirrorCounts();
+    const desktopPostgres=process.env.ORVYN_POSTGRES_DESKTOP_RELEASES==="1";
+    const executionPostgres=process.env.ORVYN_POSTGRES_EXECUTION==="1";
+    if(desktopPostgres)await desktopReleaseStore().current("stable");
+    if(executionPostgres)await sandboxRegistry().active();
     return res.json({mode:"postgres-primary",primaryReads:true,primaryWrites:true,sqliteFallback:false,
-      coverage:["identity","credits","subscriptions","missions","usage","settings","models","work-sessions","artifacts","memory"],
-      ready:true,health,tenantCounts:counts,parity:{completeCloudCutover:false}});
+      coverage:["identity","credits","subscriptions","missions","usage","settings","models","work-sessions","artifacts","memory",...(desktopPostgres?["desktop-releases"]:[]),...(executionPostgres?["execution-sandboxes","runtime-flags","network-approvals","sandbox-audit"]:[])],
+      additionalStorage:{desktopReleases:desktopPostgres?"postgres":"sqlite",execution:executionPostgres?"postgres":"sqlite"},
+      ready:true,health,tenantCounts:counts,parity:{completeCloudCutover:desktopPostgres&&executionPostgres}});
   }
   const postgres = await tenantPostgresMirror.status(tenant.id);
   const sqlite = await tenant.localStore.tenantMirrorCounts();
