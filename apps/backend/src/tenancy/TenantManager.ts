@@ -163,8 +163,13 @@ export class TenantManager {
     const preferred = await localStore.getSetting("preferredModel");
     if (preferred && modelService.isUserModel(preferred)) modelService.preferredModel = preferred;
     // Every provider is metered; from here they're also durably recorded.
-    await modelService.usage.attachStore(localStore);
+    await modelService.usage.attachStore({
+      loadRecentUsage: (limit) => localStore.loadRecentUsage(limit),
+      countUsageSince: (since) => localStore.countUsageSince(since),
+      saveUsageEvent: (event) => localStore.saveUsageEventAndQueueBilling(event, modelService.isUserModel(event.modelId)),
+    });
     const billing = new TenantBilling(creditLedger, id, localStore);
+    await billing.recover(creditsEnforced());
     void modelService.huggingFaceReady.then(async () => {
       for (const p of modelService.registry.list()) {
         if (modelService.isUserModel(p.config.id)) continue;

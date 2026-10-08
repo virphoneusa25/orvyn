@@ -139,6 +139,10 @@ export class PostgresTenantStore implements AsyncTenantContract {
                 .run(e.id, e.timestamp, e.modelId, e.provider, e.method, e.durationMs, e.ok ? 1 : 0, e.error ?? null, e.promptTokens ?? null, e.completionTokens ?? null, e.outputChars ?? null, e.toolCalls ?? null, e.missionId ?? null, e.taskId ?? null, e.agent ?? null, e.source ?? null)))());
         });
     }
+    /** Commit metering and its billing obligation together; failures must reach admission. */
+    async saveUsageEventAndQueueBilling(e: UsageEvent, own: boolean): Promise<void> {
+        return this.db.transaction(async () => { await this.saveUsageEvent(e); await this.enqueueBilling(e, own); });
+    }
     /** Count of model requests since `ts` — the basis for monthly quotas. */
     async countUsageSince(ts: number): Promise<number> {
         return this.db.transaction(async () => {

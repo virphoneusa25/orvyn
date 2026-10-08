@@ -319,6 +319,43 @@ export class LocalStore {
     if (saved) tenantPostgresMirror.saveUsage(this.tenantId, e);
   }
 
+  /** Commit metering and its billing obligation together; failures must reach admission. */
+  saveUsageEventAndQueueBilling(e: UsageEvent, own: boolean): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO usage_events
+           (id, ts, model_id, provider, method, duration_ms, ok, error, prompt_tokens, completion_tokens, output_chars, tool_calls, mission_id, task_id, agent, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          e.id,
+          e.timestamp,
+          e.modelId,
+          e.provider,
+          e.method,
+          e.durationMs,
+          e.ok ? 1 : 0,
+          e.error ?? null,
+          e.promptTokens ?? null,
+          e.completionTokens ?? null,
+          e.outputChars ?? null,
+          e.toolCalls ?? null,
+          e.missionId ?? null,
+          e.taskId ?? null,
+          e.agent ?? null,
+          e.source ?? null
+        );
+      this.enqueueBilling(e, own);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* preserve original failure */ }
+      throw error;
+    }
+    tenantPostgresMirror.saveUsage(this.tenantId, e);
+  }
+
   /** Count of model requests since `ts` — the basis for monthly quotas. */
   countUsageSince(ts: number): number {
     return (

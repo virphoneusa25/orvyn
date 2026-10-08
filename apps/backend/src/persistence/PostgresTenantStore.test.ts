@@ -473,3 +473,38 @@ test("real PostgreSQL: tenant bootstrap awaits an async store factory before pub
     try { await pool.query(`DROP SCHEMA IF EXISTS ${sessionSchema(tenantId)} CASCADE`); } finally { await pool.end(); }
   }
 });
+
+test("local metering and billing obligation commit together and survive reopening",()=>{
+ const dir=mkdtempSync(join(tmpdir(),"atomic-usage-"));
+ let store=new LocalStore("fixture",dir);
+ const inspect=new DatabaseSync(join(dir,"fixture.db"));
+ try{
+  inspect.exec("CREATE TRIGGER fail_outbox BEFORE INSERT ON billing_outbox BEGIN SELECT RAISE(ABORT, 'forced outbox failure'); END");
+  assert.throws(()=>store.saveUsageEventAndQueueBilling(usage,false),/forced outbox failure/);
+  assert.equal(store.loadRecentUsage().length,0);
+  inspect.exec("DROP TRIGGER fail_outbox");
+  store.saveUsageEventAndQueueBilling(usage,false);
+  store.close();store=new LocalStore("fixture",dir);
+  assert.equal(store.loadRecentUsage().length,1);
+  assert.deepEqual(store.pendingBilling(),[{event:usage,own:false}]);
+  store.saveUsageEventAndQueueBilling(usage,false);
+  assert.equal(store.loadRecentUsage().length,1);assert.equal(store.pendingBilling().length,1);
+ }finally{inspect.close();store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test("real PostgreSQL: metering and billing queue roll back together and survive process recovery",{skip:!live},async()=>{
+ const tenant="atomic-usage-"+randomUUID();let store=await PostgresTenantStore.connect(url,tenant);
+ const pool=new Pool({connectionString:url}),schema=tenantDataSchema(tenant);
+ try{
+  await pool.query(`CREATE FUNCTION ${schema}.fail_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced outbox failure'; END; $$; CREATE TRIGGER fail_outbox BEFORE INSERT ON ${schema}.billing_outbox FOR EACH ROW EXECUTE FUNCTION ${schema}.fail_outbox()`);
+  await assert.rejects(store.saveUsageEventAndQueueBilling(usage,false),/forced outbox failure/);
+  assert.equal((await store.loadRecentUsage()).length,0);
+  await pool.query(`DROP TRIGGER fail_outbox ON ${schema}.billing_outbox; DROP FUNCTION ${schema}.fail_outbox()`);
+  await store.saveUsageEventAndQueueBilling(usage,false);
+  await store.close();store=await PostgresTenantStore.connect(url,tenant);
+  assert.equal((await store.loadRecentUsage()).length,1);
+  assert.deepEqual(await store.pendingBilling(),[{event:usage,own:false}]);
+  await store.saveUsageEventAndQueueBilling(usage,false);
+  assert.equal((await store.pendingBilling()).length,1);
+ }finally{await pool.end();await store.close();await cleanup(tenant);}
+});
