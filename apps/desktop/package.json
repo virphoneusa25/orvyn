@@ -1,13 +1,14 @@
 {
   "name": "@orvyn/desktop",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "npm run build && electron .",
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json && vite build",
     "build:renderer:dev": "vite build --mode development",
-    "dist:win": "node ../../scripts/dist-win.mjs"
+    "dist:win": "node ../../scripts/dist-win.mjs",
+    "build:native": "node ../../scripts/build-native-desktop.mjs"
   },
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",
@@ -61,7 +62,16 @@
         "nsis"
       ],
       "icon": "resources/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "resources/native",
+          "to": "native",
+          "filter": [
+            "orvyn-native-desktop.exe"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

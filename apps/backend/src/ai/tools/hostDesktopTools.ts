@@ -1,129 +1,86 @@
 /** Opt-in host Windows desktop control. Never merged with cloud Desktop. */
-
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { AITool } from "../ToolTypes";
-import { getHostDesktopState, isHostDesktopAllowed } from "../../desktop/hostDesktopSession";
-import { hostClick, hostMove, hostScroll, hostType, runHostAction } from "../../desktop/hostDesktopActions";
-
-const execFileAsync = promisify(execFile);
-
-async function powershell(script: string): Promise<{ ok: boolean; output: string; error?: string }> {
-  try {
-    const { stdout, stderr } = await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", script],
-      { timeout: 12_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 }
-    );
-    return { ok: true, output: String(stdout || stderr || "ok").slice(0, 4000) };
-  } catch (err: any) {
-    return { ok: false, output: "", error: String(err?.stderr || err?.message || err).slice(0, 400) };
-  }
-}
-
+import { hostAction, hostClick, hostMove, hostScroll, hostType, hostKey } from "../../desktop/hostDesktopActions";
 export function makeHostDesktopStatusTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_status",
-    description: "Status of opt-in host Windows desktop control. Separate from cloud Desktop and Browser.",
-    parameters: { type: "object", properties: {} },
-    defaultPermission: "allowed",
-    execute: async () => ({
-      ok: true,
-      output: JSON.stringify({ ...getHostDesktopState(tenantId), enabled: isHostDesktopAllowed(tenantId) }),
-    }),
-  };
+    return {
+        name: "host_desktop_status",
+        description: "Status of opt-in host Windows desktop control. Separate from cloud Desktop and Browser.",
+        parameters: { type: "object", properties: {} },
+        defaultPermission: "allowed",
+        execute: async () => hostAction(tenantId, { action: "status" }),
+    };
 }
-
 export function makeHostDesktopScreenshotTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_screenshot",
-    description: "Capture the user's actual Windows desktop. Requires Settings opt-in. Not the cloud Desktop.",
-    parameters: { type: "object", properties: {} },
-    defaultPermission: "ask",
-    execute: async () =>
-      runHostAction(tenantId, "screenshot", async () => {
-        const script = `
-Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-$path = Join-Path $env:TEMP 'orvyn-host-desktop.png'
-$bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-$g.Dispose(); $bmp.Dispose()
-Write-Output $path
-`;
-        const out = await powershell(script);
-        return out.ok
-          ? { ok: true, output: `Screenshot saved to ${out.output.trim()}` }
-          : { ok: false, error: out.error ?? "Screenshot failed" };
-      }),
-  };
+    return {
+        name: "host_desktop_screenshot",
+        description: "Capture only the locally approved application window. Coordinates are relative to the returned image.",
+        parameters: { type: "object", properties: {} },
+        defaultPermission: "ask",
+        execute: async () => {
+            const result = await hostAction(tenantId, { action: "screenshot" });
+            return { ok: result.ok, output: result.output, error: result.error, errorType: result.ok ? undefined : "PERMISSION_DENIED", meta: result.screenshot ? { screenshot: result.screenshot } : undefined };
+        },
+    };
 }
-
 export function makeHostDesktopMoveTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_move",
-    description: "Move the mouse on the host Windows desktop. Requires Settings opt-in.",
-    parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] },
-    defaultPermission: "ask",
-    execute: async (args) => hostMove(tenantId, Number(args.x ?? 0), Number(args.y ?? 0)),
-  };
+    return {
+        name: "host_desktop_move",
+        description: "Move within the approved local window, using screenshot-relative coordinates. Requires local action approval.",
+        parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" } }, required: ["x", "y"] },
+        defaultPermission: "ask",
+        execute: async (args) => hostMove(tenantId, Number(args.x ?? 0), Number(args.y ?? 0)),
+    };
 }
-
 export function makeHostDesktopClickTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_click",
-    description: "Click on the host Windows desktop. Requires Settings opt-in.",
-    parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, button: { type: "string" } } },
-    defaultPermission: "ask",
-    execute: async (args) => hostClick(tenantId, Number(args.x ?? 0), Number(args.y ?? 0)),
-  };
+    return {
+        name: "host_desktop_click",
+        description: "Click within the approved local window, using screenshot-relative coordinates. Left button only. Requires local action approval.",
+        parameters: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, button: { type: "string", enum: ["left"] } }, required: ["x", "y"] },
+        defaultPermission: "ask",
+        execute: async (args) => hostClick(tenantId, Number(args.x ?? 0), Number(args.y ?? 0)),
+    };
 }
-
 export function makeHostDesktopTypeTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_type",
-    description: "Type into the focused host window. Requires Settings opt-in.",
-    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
-    defaultPermission: "ask",
-    execute: async (args) => hostType(tenantId, String(args.text ?? "")),
-  };
+    return {
+        name: "host_desktop_type",
+        description: "Type into the focused host window. Requires Settings opt-in.",
+        parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+        defaultPermission: "ask",
+        execute: async (args) => hostType(tenantId, String(args.text ?? "")),
+    };
 }
-
 export function makeHostDesktopScrollTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_scroll",
-    description: "Scroll the host Windows desktop. Requires Settings opt-in.",
-    parameters: { type: "object", properties: { delta: { type: "number" } } },
-    defaultPermission: "ask",
-    execute: async (args) => hostScroll(tenantId, Number(args.delta ?? -120)),
-  };
+    return {
+        name: "host_desktop_scroll",
+        description: "Scroll the host Windows desktop. Requires Settings opt-in.",
+        parameters: { type: "object", properties: { delta: { type: "number" } } },
+        defaultPermission: "ask",
+        execute: async (args) => hostScroll(tenantId, Number(args.delta ?? -120)),
+    };
 }
-
 export function makeHostDesktopFocusTool(tenantId: string): AITool {
-  return {
-    name: "host_desktop_focus",
-    description: "Focus a host window by title. Requires Settings opt-in.",
-    parameters: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
-    defaultPermission: "ask",
-    execute: async (args) =>
-      runHostAction(tenantId, "focus", async () => {
-        const title = String(args.title ?? "").replace(/'/g, "''").slice(0, 120);
-        const out = await powershell(
-          `$w = Get-Process | Where-Object { $_.MainWindowTitle -like '*${title}*' } | Select-Object -First 1; if (-not $w) { throw 'Window not found' }; Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class H { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }'; [H]::SetForegroundWindow($w.MainWindowHandle)`
-        );
-        return out.ok ? { ok: true, output: `Focused window matching ${title}` } : { ok: false, error: out.error ?? "focus failed" };
-      }),
-  };
+    return {
+        name: "host_desktop_focus",
+        description: "Focus the locally approved window only; cannot select another application.",
+        parameters: { type: "object", properties: { title: { type: "string" } }, required: ["title"] },
+        defaultPermission: "ask",
+        execute: async () => hostAction(tenantId, { action: "focus" }),
+    };
 }
-
+export function makeHostDesktopKeyTool(tenantId: string): AITool {
+    return { name: "host_desktop_key", description: "Press a single navigation key in the approved local window. System shortcuts are blocked; every input requires local approval.", parameters: { type: "object", properties: { key: { type: "string", enum: ["Enter", "Tab", "Escape", "Backspace", "Delete", "Left", "Right", "Up", "Down", "Home", "End", "PageUp", "PageDown"] } }, required: ["key"] }, defaultPermission: "ask", execute: args => hostKey(tenantId, String(args.key)) };
+}
+export function makeHostDesktopInspectTool(tenantId: string): AITool {
+    return { name: "host_desktop_inspect", description: "Read accessibility controls of the locally approved window. Password fields are redacted.", parameters: { type: "object", properties: {} }, defaultPermission: "ask", execute: () => hostAction(tenantId, { action: "inspect" }) };
+}
 export function registerHostDesktopTools(register: (tool: AITool) => void, tenantId: string): void {
-  register(makeHostDesktopStatusTool(tenantId));
-  register(makeHostDesktopScreenshotTool(tenantId));
-  register(makeHostDesktopMoveTool(tenantId));
-  register(makeHostDesktopClickTool(tenantId));
-  register(makeHostDesktopTypeTool(tenantId));
-  register(makeHostDesktopScrollTool(tenantId));
-  register(makeHostDesktopFocusTool(tenantId));
+    register(makeHostDesktopInspectTool(tenantId));
+    register(makeHostDesktopKeyTool(tenantId));
+    register(makeHostDesktopStatusTool(tenantId));
+    register(makeHostDesktopScreenshotTool(tenantId));
+    register(makeHostDesktopMoveTool(tenantId));
+    register(makeHostDesktopClickTool(tenantId));
+    register(makeHostDesktopTypeTool(tenantId));
+    register(makeHostDesktopScrollTool(tenantId));
+    register(makeHostDesktopFocusTool(tenantId));
 }

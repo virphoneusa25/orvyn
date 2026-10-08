@@ -146,7 +146,7 @@ export class DesktopSessionService {
   }
 
   hostAllowed(tenantId: string): boolean {
-    return isHostDesktopAllowed(tenantId);
+    return typeof process.send === "function" && process.connected === true || isHostDesktopAllowed(tenantId);
   }
 
   beginHostAction(tenantId: string, action: string) {

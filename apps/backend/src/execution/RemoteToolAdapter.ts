@@ -1,3 +1,4 @@
+import {registerHostDesktopTools} from "../ai/tools/hostDesktopTools";
 // apps/backend/src/execution/RemoteToolAdapter.ts
 //
 // Maps ORION's existing tool names to remote execution via the ToolRpc
@@ -114,8 +115,12 @@ export function registerRemoteTools(
   gateway: { register(tool: AITool): void },
   rpc: ToolRpcChannel,
   runId: string,
-  projectRoot = "remote-workspace"
+  projectRoot = "remote-workspace",
+  nativeDesktop = false
 ): void {
+  // Only the explicitly selected local-host worker can receive native commands.
+  // Cloud and Docker workers never acquire a host-control adapter.
+  if(nativeDesktop) registerHostDesktopTools(tool=>gateway.register(makeRemoteTool(tool.name,tool.description,tool.parameters,tool.defaultPermission ?? "ask",rpc,runId)),"local");
   gateway.register(makeRemoteTool(
     "read_file",
     "Read a file from the remote workspace",

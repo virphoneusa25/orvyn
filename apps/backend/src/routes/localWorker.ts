@@ -214,6 +214,10 @@ export function localWorkerRouter(
     if (job?.assignedTo && workerId && job.assignedTo !== workerId) {
       return res.status(409).json({ error: "This run is assigned to another worker" });
     }
+    // Only bounded PNG evidence is relayed; arbitrary worker metadata is not trusted.
+    const candidate=req.body.meta?.screenshot;
+    const screenshot=candidate?.mediaType==="image/png" && typeof candidate.b64==="string" && candidate.b64.length<=9_000_000 && /^[A-Za-z0-9+/]*={0,2}$/.test(candidate.b64)
+      ? {b64:candidate.b64,mediaType:"image/png"} : undefined;
     const resolved = toolRpc.resolve({
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
@@ -223,6 +227,7 @@ export function localWorkerRouter(
       exitCode: Number(req.body.exitCode ?? 0),
       error: req.body.error ? String(req.body.error) : undefined,
       durationMs: Number(req.body.durationMs ?? 0),
+      ...(screenshot ? {meta:{screenshot}} : {}),
     });
     res.json({ ok: resolved });
   });

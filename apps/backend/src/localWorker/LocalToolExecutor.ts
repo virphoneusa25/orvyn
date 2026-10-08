@@ -19,6 +19,8 @@ import { isServiceCommand, runService, type ServiceRecord } from "../services/Se
 import { listServices, serviceLogs, stopService } from "../ai/tools/processTools";
 import type { ToolResult } from "../ai/ToolTypes";
 import {
+  makeHostDesktopInspectTool,
+  makeHostDesktopKeyTool,
   makeHostDesktopClickTool,
   makeHostDesktopFocusTool,
   makeHostDesktopMoveTool,
@@ -161,6 +163,8 @@ function bindTools(projectRoot: string, tenantId: string): Record<string, { exec
     git_checkout: makeGitCheckoutTool(projectRoot),
     git_commit: makeGitCommitTool(projectRoot),
     search_codebase: makeSearchCodeTool(projectRoot),
+    host_desktop_key: makeHostDesktopKeyTool(tenantId),
+    host_desktop_inspect: makeHostDesktopInspectTool(tenantId),
     host_desktop_status: makeHostDesktopStatusTool(tenantId),
     host_desktop_screenshot: makeHostDesktopScreenshotTool(tenantId),
     host_desktop_move: makeHostDesktopMoveTool(tenantId),

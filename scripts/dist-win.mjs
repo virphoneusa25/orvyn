@@ -50,6 +50,7 @@ console.log(`Packaging ORVYN desktop ${short}`);
 console.log(`Folder: ${repoRoot}`);
 console.log(`Installer name: ${installerName}`);
 
+run(["run", "build:native", "-w", "@orvyn/desktop"]);
 run(["run", "build", "-w", "@orvyn/desktop"]);
 run(["run", "build", "-w", "@orvyn/ai-core"]);
 run(["run", "build", "-w", "@orvyn/backend"]);

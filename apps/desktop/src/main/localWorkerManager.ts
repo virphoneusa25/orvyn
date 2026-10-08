@@ -58,6 +58,9 @@ export class LocalWorkerManager {
     void this.start();
   }
 
+  private desktopHandler: ((command: unknown) => Promise<unknown>) | null = null;
+  setDesktopHandler(handler: (command: unknown) => Promise<unknown>): void { this.desktopHandler = handler; }
+
   private browserHandler: ((command: unknown) => Promise<unknown>) | null = null;
 
   /** BrowserSessionManager.handle — answers the worker's browser commands. */
@@ -103,6 +106,12 @@ export class LocalWorkerManager {
     this.child.stderr?.pipe(log, { end: false });
     const child = this.child;
     child.on("message", (msg: any) => {
+      if (msg?.type === "desktop.command" && typeof msg.id === "string" && msg.id.length <= 64) {
+        const reply = (result: unknown) => { if (child.connected) child.send({type:"desktop.result",id:msg.id,result}); };
+        if (!this.desktopHandler) return reply({ok:false,error:"Native desktop permissions unavailable."});
+        this.desktopHandler(msg.command).then(reply, () => reply({ok:false,error:"Native desktop request failed."}));
+        return;
+      }
       if (!msg || msg.type !== "browser.command") return;
       const reply = (result: unknown) => {
         try { child.send({ type: "browser.result", id: msg.id, result }); } catch { /* worker gone */ }
