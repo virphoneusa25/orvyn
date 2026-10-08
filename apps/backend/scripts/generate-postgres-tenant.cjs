@@ -18,6 +18,8 @@ const helpers=ts.createSourceFile('helpers.ts',`class Helpers {
  async close():Promise<void>{await this.db.close();}
 }`,ts.ScriptTarget.Latest,true).statements[0];
 const overrides=ts.createSourceFile('overrides.ts',`class Overrides {
+ async saveUsageEventAndQueueBilling(e:UsageEvent,own:boolean):Promise<void>{await this.saveUsageEvent(e);await this.enqueueBilling(e,own);}
+
  async saveToolApprovalGrant(scope:"session"|"project"|"always",subjectId:string,tool:string,sessionId:string,projectKey:string):Promise<void>{
   const settingKey=\`toolApprovalGrants:\${subjectId}\`;
   const raw=await this.getSetting(settingKey);
