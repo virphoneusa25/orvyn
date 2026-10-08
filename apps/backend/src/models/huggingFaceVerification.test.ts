@@ -17,15 +17,15 @@ test("transient HF capability failures retry and do not poison subsequent sessio
   const config = (key: string) => ({ id: 'hf:fixture/model:deepinfra', apiModelId: 'fixture/model:deepinfra', endpoint: 'https://hf-probe.fixture.invalid', apiKey: key, maxOutputTokens: 2048, capabilities: { chat: false, code: false, tools: false } } as ModelConfig);
   try {
     const recovering = config('transient');
-    await verifyHuggingFace(recovering);
+    await verifyHuggingFace(recovering, { allowPaidProbe: true });
     assert.equal(recovering.routingVerification?.status, 'verified');
     assert.equal(calls, 3);
     const failed = config('initially-unavailable'); failures = 2;
-    await verifyHuggingFace(failed);
+    await verifyHuggingFace(failed, { allowPaidProbe: true });
     assert.equal(failed.routingVerification?.status, 'failed');
     assert.equal(failed.capabilities.tools, false);
     const nextSession = config('initially-unavailable'); failures = 0;
-    await verifyHuggingFace(nextSession);
+    await verifyHuggingFace(nextSession, { allowPaidProbe: true });
     assert.equal(nextSession.routingVerification?.status, 'verified');
     assert.equal(nextSession.capabilities.tools, true);
   } finally { globalThis.fetch = original; }

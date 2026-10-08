@@ -54,7 +54,11 @@ async function check(config: ModelConfig): Promise<Evidence> {
   } finally { clearTimeout(timer); }
 }
 
-export async function verifyHuggingFace(config: ModelConfig): Promise<void> {
+export async function verifyHuggingFace(config: ModelConfig, options: { allowPaidProbe?: boolean } = {}): Promise<void> {
+  if (options.allowPaidProbe !== true) {
+    config.routingVerification = { status: "failed", reason: "Automatic paid capability probes are disabled; metered verification is required" };
+    return;
+  }
   const key = createHash("sha256").update(JSON.stringify([config.endpoint, config.apiModelId, config.apiKey])).digest("hex");
   let pending = checks.get(key);
   if (!pending) {

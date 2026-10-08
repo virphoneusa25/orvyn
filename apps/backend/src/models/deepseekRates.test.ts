@@ -28,7 +28,7 @@ test("direct DeepSeek writing requires a real streaming tool call and a current 
   const original = globalThis.fetch;
   const config = { id: 'deepseek-flash', providerName: 'deepseek', provider: 'openai-compatible', apiKey: 'fixture', endpoint: 'https://api.deepseek.com', contextWindow: 128000, streaming: true, capabilities: { agent: true, chat: true, tools: true, vision: false }, maxOutputTokens: 2048 } as ModelConfig;
   globalThis.fetch = (async (_url, opts) => opts?.method ? new Response('data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'probe', function: { name: 'capability_probe', arguments: '{"value":"verified"}' } }] }, finish_reason: 'tool_calls' }] }) + '\n\ndata: [DONE]\n\n') : new Response(table)) as typeof fetch;
-  try { await refreshDeepSeekRates(config); } finally { globalThis.fetch = original; }
+  try { await refreshDeepSeekRates(config, { allowPaidProbe: true }); } finally { globalThis.fetch = original; }
   assert.equal(config.routingVerification?.status, 'verified');
   assert.equal(config.contextWindow, 1_000_000);
   assert.ok(config.rate?.expiresAt && config.rate.expiresAt > Date.now());
@@ -44,11 +44,11 @@ test("unfunded DeepSeek exposes a safe actionable reason and verifies again afte
   let funded=false;
   globalThis.fetch=(async(_url,opts)=>!opts?.method?new Response(table):!funded?new Response('private provider diagnostic',{status:402}):new Response('data: '+JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:'probe',function:{name:'capability_probe',arguments:'{"value":"verified"}'}}]},finish_reason:'tool_calls'}]})+'\n\ndata: [DONE]\n\n')) as typeof fetch;
   try {
-    await refreshDeepSeekRates(config);
+    await refreshDeepSeekRates(config, { allowPaidProbe: true });
     assert.equal(config.routingVerification?.status,'failed');
     assert.match(config.routingVerification!.reason,/insufficient balance/);
     assert.doesNotMatch(config.routingVerification!.reason,/private provider diagnostic|fixture-funding/);
-    funded=true;await refreshDeepSeekRates(config);
+    funded=true;await refreshDeepSeekRates(config, { allowPaidProbe: true });
     assert.equal(config.routingVerification?.status,'verified');
   }finally{globalThis.fetch=original;}
 });

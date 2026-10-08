@@ -33,7 +33,11 @@ export function deepSeekPeak(at: number): boolean {
 }
 
 const probes = new Map<string, { until: number; pending: Promise<void> }>();
-export async function refreshDeepSeekRates(config: ModelConfig): Promise<void> {
+export async function refreshDeepSeekRates(config: ModelConfig, options: { allowPaidProbe?: boolean } = {}): Promise<void> {
+  if (options.allowPaidProbe !== true) {
+    config.routingVerification = { status: "failed", reason: "Automatic paid capability probes are disabled; metered verification is required" };
+    return;
+  }
   try {
     if (new URL(config.endpoint!).origin !== "https://api.deepseek.com") throw new Error("Custom endpoint requires its own verified prices");
     const id = config.apiModelId ?? config.id;
