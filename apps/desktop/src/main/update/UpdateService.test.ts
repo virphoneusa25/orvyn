@@ -11,7 +11,7 @@ import type { AutoUpdaterLike } from "./UpdateService.ts";
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const { UpdateService } = require(path.join(here, "../../../dist/main/update/UpdateService.js"));
-const { loadUpdatePrefs } = require(path.join(here, "../../../dist/main/update/updatePrefs.js"));
+const { loadUpdatePrefs, normalizePrefs } = require(path.join(here, "../../../dist/main/update/updatePrefs.js"));
 
 class FakeUpdater extends EventEmitter implements AutoUpdaterLike {
   autoDownload = false;
@@ -105,8 +105,12 @@ test("available → download → install-on-exit and restart protection", async 
   const available = await svc.check();
   assert.equal(available.status, "available");
   assert.equal(available.availableVersion, "1.5.0");
+  assert.equal(updater.downloads, 0, "an update check never downloads by default");
+  assert.equal(updater.autoInstallOnAppQuit, false, "closing does not install without opt-in");
   const dl = await svc.download();
   assert.equal(dl.status, "downloaded");
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.equal(updater.installs, 0);
   svc.setWorkBusy(true);
   const blocked = await svc.restartAndInstall();
   assert.equal(blocked.ok, false);
@@ -114,6 +118,10 @@ test("available → download → install-on-exit and restart protection", async 
   svc.setWorkBusy(false);
   const armed = await svc.installOnExit();
   assert.equal(armed.installOnExitArmed, true);
+  await svc.setInstallOnExitPref(false);
+  svc.handleWillQuit();
+  assert.equal(updater.autoInstallOnAppQuit, false, "Later cancels an earlier install-on-exit choice");
+  assert.equal(svc.getState().installOnExitArmed, false);
   const inst = await svc.restartAndInstall();
   assert.equal(inst.ok, true);
   assert.equal(updater.installs, 1);
@@ -173,4 +181,11 @@ test("optional update can be dismissed; required policy cannot", async () => {
   const after = svc.dismiss();
   assert.equal(after.required, true);
   await rm(dir, { recursive: true, force: true });
+});
+
+test("legacy default install-on-exit is not explicit installation consent", () => {
+  assert.equal(normalizePrefs({}).installOnExit, false);
+  assert.equal(normalizePrefs({ installOnExit: true }).installOnExit, false);
+  assert.equal(normalizePrefs({ installOnExit: true, installOnExitOptIn: true }).installOnExit, true);
+  assert.equal(normalizePrefs({ installOnExit: false, installOnExitOptIn: true }).installOnExit, false);
 });
