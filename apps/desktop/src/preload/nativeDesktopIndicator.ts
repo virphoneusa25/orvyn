@@ -9,9 +9,9 @@ window.addEventListener('DOMContentLoaded', () => {
             const state = await ipcRenderer.invoke('nativeDesktop:status');
             const status = document.getElementById('status'), button = document.getElementById('take') as HTMLButtonElement | null;
             if (status)
-                status.textContent = state.input ? 'ORION can request control - ' + state.window : "You have control - ORION can view and assist";
+                status.textContent = state.input ? 'ORION asks before each action' : "You have control / ORION can view";
             if (button)
-                button.disabled = !state.input;
+                button.hidden = !state.input;
         }
         catch { /* main process closes the strip on revoke */ }
     };

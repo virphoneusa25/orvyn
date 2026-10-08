@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
 import { appendFileSync } from 'fs';
@@ -167,7 +167,8 @@ export class NativeDesktop {
     private showIndicator() {
         if (this.indicator && !this.indicator.isDestroyed())
             return;
-        const indicator = new BrowserWindow({ title: 'ORVYN desktop access', width: 540, height: 100, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false, show: false, backgroundColor: '#141b29', webPreferences: { preload: path.join(__dirname, '../preload/nativeDesktopIndicator.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
+        const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const indicator = new BrowserWindow({ title: 'ORVYN desktop access', x: area.x + Math.max(0, area.width - 456), y: area.y + Math.max(0, area.height - 132), width: 440, height: 116, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false, show: false, backgroundColor: '#141b29', webPreferences: { preload: path.join(__dirname, '../preload/nativeDesktopIndicator.js'), sandbox: true, contextIsolation: true, nodeIntegration: false } });
         this.indicator = indicator;
         indicator.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         indicator.webContents.on('will-navigate', event => event.preventDefault());
@@ -176,7 +177,7 @@ export class NativeDesktop {
             this.stop();
         } });
         indicator.once('ready-to-show', () => indicator.showInactive());
-        void indicator.loadURL('data:text/html,' + encodeURIComponent(`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{margin:0;padding:12px;background:#141b29;color:white;font:13px system-ui}header{-webkit-app-region:drag;margin-bottom:8px}button{margin-right:8px;padding:6px;cursor:pointer}#status{font-weight:600}</style></head><body><header id="status">ORVYN desktop access</header><button id="take">Take Control</button><button id="stop">Stop viewing and control</button><span>Ctrl+Alt+Shift+Esc</span></body></html>`));
+        void indicator.loadURL('data:text/html,' + encodeURIComponent(`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>*{box-sizing:border-box}body{margin:0;padding:12px 16px;background:linear-gradient(115deg,#302045,#142f40);color:#eef0ff;font:12px system-ui;border:1px solid #7660a5;border-radius:12px}header{-webkit-app-region:drag;display:flex;gap:8px;align-items:center;margin-bottom:10px}b{color:#8de3f3;font-size:11px;letter-spacing:.08em}#status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}button{font:inherit;border-radius:8px;padding:7px 12px;cursor:pointer;border:1px solid #8d78d4;color:#fff;background:#6045a0;margin-right:6px}button:focus-visible{outline:2px solid #80e0f2}#stop{background:#43243c;border-color:#8a536d;color:#ffd0dc}.hint{display:block;margin-top:7px;color:#bdc5e2;font-size:10px}</style></head><body><header><b>ORVYN</b><span id="status">App sharing active</span></header><button id="take">Take Control</button><button id="stop">Stop sharing</button><span class="hint">Drag this bar to move it / Emergency stop: Ctrl+Alt+Shift+Esc</span></body></html>`));
     }
     register(getWindow: () => BrowserWindow | null) {
         const trusted = (event: Electron.IpcMainInvokeEvent) => event.sender === getWindow()?.webContents && event.senderFrame === getWindow()?.webContents.mainFrame;

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import './nativeDesktop.css';
 export function HostDesktopBanner() {
     const [state, setState] = useState<{
         active: boolean;
@@ -17,11 +18,11 @@ export function HostDesktopBanner() {
     }, []);
     if (!state?.active)
         return null;
-    return <div role="status" style={{ padding: '8px 12px', background: '#473218', display: 'flex', gap: 12, alignItems: 'center' }}>
-    <strong>Local desktop access: {state.window}</strong>
-    <span>{state.input ? 'Agent inputs require approval' : 'You have control; ORVYN can view and assist'} | {Math.max(0, Math.ceil(((state.expiresAt ?? 0) - Date.now()) / 60000))} min left</span>
-    {state.input ? <button type="button" onClick={() => { void window.orvyn?.nativeDesktop?.takeControl(); setState({ ...state, input: false }); }}>Take control</button> : <button type="button" onClick={() => void window.orvyn?.nativeDesktop?.resume()}>Return control to ORVYN...</button>}
-    <button type="button" onClick={() => { void window.orvyn?.nativeDesktop?.stop(); setState(null); }}>Stop viewing and control</button>
-    <span>Ctrl+Alt+Shift+Escape</span>
+    return <div role="status" className="native-desktop nd-banner">
+    <strong>{state.input ? 'App sharing / ORION asks first' : 'App sharing / You have control'}</strong>
+    <span className="nd-window" title={state.window}>{state.window}</span>
+    <span className="nd-muted">{Math.max(0, Math.ceil(((state.expiresAt ?? 0) - Date.now()) / 60000))} min left</span>
+    {state.input && <button type="button" onClick={() => { void window.orvyn?.nativeDesktop?.takeControl(); setState({ ...state, input: false }); }}>Take Control</button>}
+    <button className="nd-stop" type="button" onClick={() => { void window.orvyn?.nativeDesktop?.stop(); setState(null); }}>Stop sharing</button>
   </div>;
 }

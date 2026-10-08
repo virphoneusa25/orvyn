@@ -14,7 +14,6 @@ export function NativeDesktopSession({ active }: {
     const [state, setState] = useState<State | null>(null);
     const [frame, setFrame] = useState<string | null>(null);
     const [note, setNote] = useState('');
-    const [settings, setSettings] = useState(false);
     const root = useRef<HTMLDivElement>(null);
     useEffect(() => {
         let alive = true, busy = false;
@@ -80,28 +79,27 @@ export function NativeDesktopSession({ active }: {
         anchor.download = `ORVYN-local-window-${Date.now()}.png`;
         anchor.click();
     }
-    return <div ref={root} style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--orvyn-bg)', overflow: 'auto' }}>
-    <header style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderBottom: '1px solid var(--orvyn-border)', flexWrap: 'wrap' }}>
-      <strong>Live Desktop Session</strong><span>Connection: This computer</span>
-      {state?.active && <><button type="button" onClick={() => void (state.input ? takeover() : resume())}>{state.input ? 'Take Control' : 'Return to ORION'}</button><button type="button" onClick={() => void stop()}>Stop Session</button></>}
-      <button type="button" onClick={() => setSettings(s => !s)}>Window permissions</button>
+    return <div ref={root} className="native-desktop nd-session">
+    <header className="nd-session-header">
+      <div><span className="nd-eyebrow">This computer</span><h3>{state?.active ? 'Shared app' : 'Work together on your desktop'}</h3><p className="nd-muted">One selected window. Your control, at any time.</p></div>
+      {state?.active && <div className="nd-actions"><button className="nd-primary" type="button" onClick={() => void (state.input ? takeover() : resume())}>{state.input ? 'Take Control' : 'Allow ORION actions...'}</button><button className="nd-stop" type="button" onClick={() => void stop()}>Stop sharing</button></div>}
     </header>
-    {(!state?.active || settings) && <div style={{ padding: 16 }}><NativeDesktopSettings /></div>}
+    {!state?.active && <div style={{ padding: 16 }}><NativeDesktopSettings /></div>}
     {state?.active && <>
-      <div role="status" style={{ padding: '8px 12px', background: state.input ? '#24354a' : '#473218' }}>
-        <strong>{state.input ? 'ORION can request control' : "You're in control"}</strong> · {state.window} · {state.input ? 'Every input asks first' : 'ORION can view and assist while you work'}
+      <div role="status" className="nd-status">
+        <strong>{state.input ? 'ORION asks before every action' : "You're in control"}</strong>
+        <div className="nd-window" title={state.window}>{state.window}</div>
+        <span className="nd-muted">{state.input ? 'Take Control to pause clicks and typing.' : 'Work in the actual app. ORION can view and assist.'} {Math.max(0, Math.ceil(((state.expiresAt ?? 0) - Date.now()) / 60000))} min left</span>
       </div>
-      <div style={{ flex: 1, minHeight: 220, display: 'grid', placeItems: 'center', overflow: 'hidden', background: '#080c14' }}>
-        {frame ? <img src={frame} alt="Live view of the locally approved application window" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}/> : <p>{note || 'Waiting for the selected window...'}</p>}
+      <div className="nd-frame">
+        {frame ? <img src={frame} alt="Live view of the locally approved application window"/> : <p className="nd-muted">{note || 'Connecting to your selected window...'}</p>}
       </div>
-      <footer style={{ padding: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span>Windows · Selected window only</span>
-        <button type="button" onClick={() => void screenshot()}>Screenshot</button>
-        <button type="button" onClick={() => void root.current?.requestFullscreen().catch(() => undefined)}>Full Screen</button>
-        <span>Stop: Ctrl+Alt+Shift+Escape</span>
+      <footer className="nd-footer">
+        <div className="nd-actions"><button type="button" onClick={() => void screenshot()}>Save screenshot</button><button type="button" onClick={() => void root.current?.requestFullscreen().catch(() => undefined)}>Full screen</button></div>
+        <p className="nd-muted">This is a preview. Use the app itself to click or type. Tell ORION your task in chat; sharing alone does not start work.</p>
+        <p className="nd-muted">Preview refreshes are local and use no AI credits. Emergency stop: Ctrl+Alt+Shift+Escape.</p>
       </footer>
-      <p style={{ margin: '0 12px 12px', fontSize: 12 }}>Use the actual application to work while ORION assists. Preview refreshes stay local and do not use AI credits.</p>
     </>}
-    {note && <p role="status" style={{ padding: 12 }}>{note}</p>}
+    {note && <p role="status" className="nd-note" style={{ margin: 12 }}>{note}</p>}
   </div>;
 }

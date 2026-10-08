@@ -801,10 +801,10 @@ function MenuItem({ label, onClick, danger }: { label: string; onClick: () => vo
 /** Explicit surface selection keeps the user's machine distinct from the cloud sandbox. */
 export function DesktopView(props:Parameters<typeof CloudDesktopView>[0]) {
   const [surface,setSurface]=useState<'cloud'|'local'>('cloud');
-  return <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
-    <div style={{display:'flex',gap:8,padding:8,borderBottom:'1px solid var(--orvyn-border)'}}>
-      <button type="button" aria-pressed={surface==='cloud'} onClick={()=>setSurface('cloud')}>Cloud Desktop</button>
-      <button type="button" aria-pressed={surface==='local'} onClick={()=>setSurface('local')}>This computer</button>
+  return <div className="native-desktop" style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
+    <div className="nd-surface" role="group" aria-label="Desktop location">
+      <button type="button" aria-pressed={surface==='cloud'} onClick={()=>setSurface('cloud')}>Cloud Desktop<small>Separate cloud computer</small></button>
+      <button type="button" aria-pressed={surface==='local'} onClick={()=>setSurface('local')}>This computer<small>Share one of your apps</small></button>
     </div>
     <div style={{flex:1,minHeight:0}}>{surface==='local'?<NativeDesktopSession active={props.active ?? true}/>:<CloudDesktopView {...props}/>}</div>
   </div>;
