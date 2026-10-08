@@ -43,3 +43,12 @@ staging.orvyn.40.160.11.123.sslip.io {
 	reverse_proxy backend-staging:4570
 	encode gzip
 }
+
+# Optional desktop feed. Publish immutable artifacts before atomically replacing latest.yml.
+updates.kernelailabs.com {
+    root * /srv/orvyn-updates
+    @manifest path *.yml
+    header @manifest Cache-Control "no-store"
+    header X-Content-Type-Options "nosniff"
+    file_server
+}
