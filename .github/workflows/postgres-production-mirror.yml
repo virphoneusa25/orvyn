@@ -95,6 +95,14 @@ jobs:
           ORVYN_LEDGER_RUNTIME_TEST: "1"
           ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/production_compatibility_test
         run: node --test apps/backend/dist/billing/PostgresLedgerRuntime.test.js
+      - name: Persistent provider verification budgets and restart safety
+        env:
+          PGPASSWORD: test-password
+          ORVYN_PROVIDER_VERIFICATION_TEST: "1"
+          ORVYN_PG_URL: postgresql://orvyn:test-password@127.0.0.1:5432/provider_controls_test
+        run: |
+          docker run --rm --network host -e PGPASSWORD postgres:16-alpine psql -h 127.0.0.1 -U orvyn -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE provider_controls_test'
+          node --test apps/backend/dist/models/ProviderVerificationStore.test.js apps/backend/dist/models/MeteredProviderProbe.test.js apps/backend/dist/models/paidProviderProbes.test.js
       - name: Backup and restore tenant mirror alongside identity schema
         # Session runtime tests always execute with the integration switch on.
         # The retained synthetic fixture is covered by the same pg_dump drill.
