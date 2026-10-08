@@ -102,4 +102,3 @@ test("publicUpdateState never forwards raw exception text", () => {
   assert.equal(pub.error?.includes("pfx"), false);
   assert.equal(pub.error?.includes("hunter2"), false);
 });
-
