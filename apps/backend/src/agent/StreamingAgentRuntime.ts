@@ -1,4 +1,6 @@
 import { incompatibility } from "@orvyn/ai-core";
+import {surfaceToolAllowed} from "../computerUse/taskSurface";
+import { nativeDesktopRequest } from "../desktop/nativeDesktopBridge";
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { budgetFinalNote, budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
@@ -159,6 +161,8 @@ export interface ExecutionSpec {
   executionLabel?: string;
   /** The OS the terminal runs on for this run ("win32" on a Windows Local run). */
   hostPlatform?: string;
+  clientKind?: "desktop" | "cloud";
+  computerSurface?: "host" | "desktop" | "browser" | "none";
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -554,6 +558,7 @@ export class StreamingAgentRuntime {
           if (callMs > modelCallTimeoutMs() + 15_000) {
             state.stallAbort = `The model stopped responding — the call was stopped after ${Math.round(callMs / 1000)}s with no data. This task can be retried.`;
             this.store.emit(runId, "run.diagnostics", { stalled: "model-call", ms: callMs });
+            if (typeof process.send === "function") void runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot:state.projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
             state.controller.abort();
             continue;
           }
@@ -650,13 +655,15 @@ export class StreamingAgentRuntime {
   private toolDefinitions(runId: string, allow: Set<string> | null = null): ToolDefinition[] {
     return this.gatewayFor(runId)
       .list()
+      .filter(t=>surfaceToolAllowed(t.name,this.runs.get(runId)?.execution?.clientKind,this.runs.get(runId)?.execution?.computerSurface))
+      .filter((t) => !t.name.startsWith("host_desktop_") || (this.runs.get(runId)?.execution?.computerSurface === "host" && (this.runs.get(runId)?.execution?.location === "LOCAL_HOST" || (typeof process.send === "function" && this.runs.get(runId)?.execution?.location === "LOCAL"))))
+      .filter((t) => !(this.runs.get(runId)?.execution?.computerSurface === 'host' && (t.name.startsWith('desktop_') || t.name.startsWith('computer_'))))
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
       .filter((t) => !t.name.startsWith("host_desktop_") || typeof process.send === "function" || this.runs.get(runId)?.execution?.location === "LOCAL_HOST")
       // Only runs whose sandbox can open network access ever see this tool.
       .filter((t) => t.name !== NETWORK_ACCESS_TOOL || Boolean(allow?.has(t.name)))
       // Only tools this run's role can actually execute: offering one the
-      // gateway will always refuse sends the
-      // model down a dead end ("Role 'coder' lacks SYSTEM capability").
+      // gateway will always refuse sends the model down a dead end.
       .filter((t) => this.tools.permissions.checkRole(t.name, "coder").allowed)
       .filter((t) => !allow || allow.has(t.name))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
@@ -1774,6 +1781,7 @@ export class StreamingAgentRuntime {
       });
     }
 
+    if (execution?.computerSurface && execution.computerSurface !== 'none') this.store.emit(runId, 'desktop.target', {surface:execution.computerSurface,label:execution.computerSurface === 'host' ? 'Local computer active' : 'Cloud sandbox active'});
     // Snapshot the dirty tree before the agent touches anything, so a
     // one-click Undo can put it back. Best-effort: a non-git folder simply
     // has no undo (gitHead is null there — an empty snapshot would make Undo
@@ -2117,6 +2125,7 @@ export class StreamingAgentRuntime {
           this.store.setStatus(runId, "error");
         }
       } finally {
+        if (typeof process.send === "function") await runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
         this.teardownRemote(runId);
         try {
           await this.onRunSettled?.(runId);
@@ -2191,7 +2200,7 @@ export class StreamingAgentRuntime {
       "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
-    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST");
+    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST" && state.execution.computerSurface === "host");
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
@@ -2300,6 +2309,7 @@ export class StreamingAgentRuntime {
     const state = this.runs.get(runId);
     if (!state || state.cancelled) return false;
     state.cancelled = true;
+    if (typeof process.send === "function") void runWithComputerContext({tenantId:state.execution?.tenantId||"local",projectRoot:state.projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
 
     // Remote runs: reject in-flight tool RPCs and drop the worker job /
     // container immediately — the worker observes the cancelled status on
@@ -2722,15 +2732,13 @@ export class StreamingAgentRuntime {
                     reasoningEffort: state.reasoningEffort,
                   });
                   const text = String(retry?.content ?? "");
-                  for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
-                    this.store.emit(runId, "message.delta", { content: piece });
-                  }
+                  this.store.emit(runId, "message.delta", { content: text });
                   content = text;
                   streamedText = text.length > 0;
                   for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
                   break;
                 }
-                if (langBuffer) this.store.emit(runId, "message.delta", { content: langBuffer });
+                if (langBuffer) { this.store.emit(runId, "message.delta", { content: langBuffer }); await new Promise<void>(resolve => setImmediate(resolve)); }
                 content += langBuffer;
                 streamedText = true;
               }
@@ -2743,6 +2751,7 @@ export class StreamingAgentRuntime {
               content += chunk.delta;
               streamedText = true;
               this.store.emit(runId, "message.delta", { content: chunk.delta });
+              await new Promise<void>(resolve => setImmediate(resolve));
             }
           }
           if (chunk.toolCall) streamedCalls.push(chunk.toolCall);
@@ -3408,6 +3417,11 @@ export class StreamingAgentRuntime {
         continue;
       }
 
+      if(!surfaceToolAllowed(call.name,state.execution?.clientKind,state.execution?.computerSurface)){
+        const message="This computer tool is not authorized for this task's selected surface.";
+        this.store.emit(runId,"tool.failed",{callId:call.id,tool:call.name,error:message,errorType:"PERMISSION_DENIED"});
+        replies.set(call.id,message);continue;
+      }
       const internalRefusal = internalPathRefusal(call.name, (call.arguments ?? {}) as Record<string, unknown>, { dataDir: defaultDataDir(), projectRoot: state.projectRoot });
       if (internalRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: internalRefusal, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, internalRefusal) });
@@ -3675,6 +3689,7 @@ export class StreamingAgentRuntime {
             projectId: state.execution?.projectId ?? null,
             projectRoot: state.projectRoot,
             runId,
+            computerSurface: state.execution?.computerSurface,
           },
           () =>
             this.gatewayFor(runId).execute(call.name, call.arguments, "coder", projectToolContext(state, {

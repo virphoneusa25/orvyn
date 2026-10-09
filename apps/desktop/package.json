@@ -55,6 +55,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/native",
+        "to": "native",
+        "filter": [
+          "orvyn-native-desktop.exe"
+        ]
       }
     ],
     "win": {

@@ -1,9 +1,8 @@
 /** Native input is authorized and executed by the installed desktop app. */
 import { nativeDesktopRequest } from './nativeDesktopBridge';
-import { getHostDesktopState } from './hostDesktopSession';
+import { currentComputerContext } from '../computerUse/context';
 export async function hostAction(tenantId: string, command: Record<string, unknown>) {
-    if (getHostDesktopState(tenantId).controlOwner === 'user')
-        return { ok: false, error: 'The user has taken control. Grant a new local session to continue.' };
+    if (currentComputerContext()?.computerSurface === 'none') return {ok:false,error:'This task has no local screen permission.'};
     const result = await nativeDesktopRequest(command);
     return result.ok ? result : { ...result, error: `Permission denied: ${result.error ?? 'Native desktop action blocked.'}`, errorType: 'PERMISSION_DENIED' as const };
 }

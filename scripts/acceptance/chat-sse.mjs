@@ -1,3 +1,4 @@
+// Real HTTP SSE integration; delayed mock provider, no paid inference or native input.
 // scripts/acceptance/chat-live.mjs
 //
 // PHASE 1 follow-up — the chat shows the work WHILE it happens:
@@ -21,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const PORT = 4681, MODEL_PORT = 4682, BASE = `http://127.0.0.1:${PORT}`;
+const PORT = 4683, MODEL_PORT = 4684, BASE = `http://127.0.0.1:${PORT}`;
 const repoRoot = resolve(new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "..", "..");
 const INTRO = "I'll run the slow counter and report what it prints.";
 const SLOW = `node -e "let i=0;const t=setInterval(()=>{console.log('tick '+(++i));if(i===5)clearInterval(t)},600)"`;
@@ -40,7 +41,7 @@ function nextTurn(body) {
 let seq = 0;
 const model = createServer((req, res) => {
   let raw = ""; req.on("data", (d) => (raw += d));
-  req.on("end", () => {
+  req.on("end", async () => {
     if (req.url?.endsWith("/models")) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ data: [{ id: "scripted-agent" }] })); }
     let body = {}; try { body = JSON.parse(raw || "{}"); } catch {}
     const turn = nextTurn(body);
@@ -48,7 +49,7 @@ const model = createServer((req, res) => {
     if (!body.stream) { res.writeHead(200, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: turn.text, tool_calls: calls }, finish_reason: calls ? "tool_calls" : "stop" }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } })); }
     res.writeHead(200, { "Content-Type": "text/event-stream" });
     const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
-    for (const p of turn.text.match(/[\s\S]{1,10}/g) ?? []) send({ choices: [{ index: 0, delta: { content: p } }] });
+    for (const p of turn.text.match(/[\s\S]{1,10}/g) ?? []) { send({ choices: [{ index: 0, delta: { content: p } }] }); await new Promise(r => setTimeout(r, 75)); }
     if (calls) send({ choices: [{ index: 0, delta: { tool_calls: calls } }] });
     send({ choices: [{ index: 0, delta: {}, finish_reason: calls ? "tool_calls" : "stop" }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } });
     res.write("data: [DONE]\n\n"); res.end();
@@ -66,7 +67,7 @@ async function main() {
   execSync("git init -q", { cwd: projectDir });
   const server = spawn(process.execPath, ["dist/index.js"], {
     cwd: join(repoRoot, "apps", "backend"),
-    env: { ...process.env, ...neutral, MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", ORVYN_DATA_DIR: mkdtempSync(join(tmpdir(), "orvyn-live-data-")), PORT: String(PORT) },
+    env: { ...process.env, ...neutral, MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", ORVYN_DATA_DIR: mkdtempSync(join(tmpdir(), "orvyn-live-data-")), PORT: String(PORT), ORVYN_CLOUD_MODE: "false", ORVYN_PROJECTS_DIR: "" },
     stdio: ["ignore","pipe","pipe"],
   });
   let backendLog="";
@@ -74,28 +75,37 @@ async function main() {
   server.stderr.on("data", chunk=>{backendLog=(backendLog+chunk.toString()).slice(-8000)});
   try {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
-    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "auto", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
+    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "local_host", clientKind: "desktop", composerMode: "code", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
     const runId = started.runId;
     const events = [];
     const seen = {}; // event type -> client time first seen
     let snapshotAtFirstOutput = null;
     let after = 0, status = "running";
     const t0 = Date.now();
-    while (Date.now() - t0 < 60_000) {
-      const data = await (await fetch(`${BASE}/api/v1/agent/stream/runs/${runId}/events.json?after=${after}`)).json();
-      for (const e of data.events ?? []) {
-        events.push(e);
-        after = Math.max(after, Number(e.sequence ?? after));
-        seen[e.type] ??= Date.now();
-        if (e.type === "terminal.output" && !snapshotAtFirstOutput) snapshotAtFirstOutput = reducePresentation([...events], "running");
+    const { readSseStream } = await import(pathToFileURL(join(repoRoot, "apps/web/src/lib/sse.ts")).href);
+    const response = await fetch(`${BASE}/api/v1/agent/stream/runs/${runId}/events`, { signal: AbortSignal.timeout(60_000) });
+    ok(response.ok && response.headers.get("content-type")?.includes("text/event-stream"), "real SSE response");
+    let partialText = "", firstPartialAt = 0, fullIntroAt = 0;
+    await readSseStream(response.body, e => {
+      if (!e.type || !Number.isFinite(e.sequence) || e.sequence <= after) return;
+      events.push(e); after = e.sequence; seen[e.type] ??= Date.now();
+      if (e.type === "message.delta") {
+        partialText += String(e.data?.content ?? "");
+        if (!firstPartialAt) firstPartialAt = Date.now();
+        if (!fullIntroAt && partialText.includes(INTRO)) fullIntroAt = Date.now();
       }
-      status = data.status;
-      if (!["running", "queued", "awaiting_approval", "verifying"].includes(status)) break;
-      await new Promise((r) => setTimeout(r, 80));
-    }
+      if (e.type === "terminal.output" && !snapshotAtFirstOutput) snapshotAtFirstOutput = reducePresentation([...events], "running");
+      if (e.type === "run.completed") status = "completed";
+      if (/^run\.(error|cancelled|partial)$/.test(e.type)) status = e.type.slice(4);
+    });
+    ok(fullIntroAt - firstPartialAt >= 150, "partial provider text reaches SSE client before full sentence", `${fullIntroAt-firstPartialAt} ms`);
+    const replay = [];
+    const resumed = await fetch(`${BASE}/api/v1/agent/stream/runs/${runId}/events?after=${after}`, { signal: AbortSignal.timeout(10_000) });
+    await readSseStream(resumed.body, e => { if (Number.isFinite(e.sequence)) replay.push(e); });
+    ok(replay.every(e => e.sequence > after), "reconnect cursor does not replay consumed events");
     const text = events.filter((e) => e.type === "message.delta").map((e) => String(e.data?.content ?? "")).join("");
     const outputs = events.filter((e) => e.type === "terminal.output");
-    ok(status === "completed", "run completes", `status=${status}`);
+    ok(status === "completed", "run completes", `status=${status}; ${JSON.stringify(events.filter(e=>e.type.includes("blocked")||e.type.includes("failed")).map(e=>e.data))}`);
     ok(text.startsWith(INTRO), "ORION's own opening sentence comes first", text.slice(0, 120));
     const firstIdx = (t) => events.findIndex((e) => e.type === t);
     ok(firstIdx("message.delta") >= 0 && firstIdx("message.delta") < firstIdx("tool.started"), "ORION speaks before the tool starts");
@@ -114,7 +124,8 @@ async function main() {
   } catch (err) {
     failures++; console.error("HARNESS ERROR:", err.message); console.error(backendLog);
   } finally { server.kill(); model.close(); }
-  console.log(failures === 0 ? "\nCHAT LIVE: PASS" : `\nCHAT LIVE: FAIL (${failures})`);
+  console.log(failures === 0 ? "\nCHAT SSE: PASS" : `\nCHAT SSE: FAIL (${failures})`);
   process.exit(failures === 0 ? 0 : 1);
 }
 main();
+

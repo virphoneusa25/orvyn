@@ -60,10 +60,10 @@ export function AgentProgress({ events, status, onApprove }: {
 
   return (
     <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
-      {live ? <p className="agent-progress__live">{summary}</p> : null}
+      <details open={live}><summary className="agent-progress__live">{summary}</summary>
       <ol className="agent-progress__steps">
         {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
-      </ol>
+      </ol></details>
     </section>
   );
 }

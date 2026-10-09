@@ -79,10 +79,10 @@ export function hasOnlineLocalWorker(tenantId: string): boolean {
   return !!w && w.status !== "offline" && Date.now() - w.lastHeartbeat < 45_000;
 }
 
-export function localWorkerHealth(tenantId: string): { state: LocalWorkerHealth; detail?: string; environment?: Record<string, string | undefined> } {
+export function localWorkerHealth(tenantId: string): { state: LocalWorkerHealth; detail?: string; environment?: Record<string, string | undefined>; hostDesktopAllowed?: boolean } {
   const w = workers.get(tenantId);
   if (!w || Date.now() - w.lastHeartbeat >= 45_000) return { state: "offline", detail: "Local worker is not connected" };
-  return { state: w.status, environment: w.environment };
+  return { state: w.status, environment: w.environment, hostDesktopAllowed:w.hostDesktopAllowed };
 }
 
 const COMMAND_TOOLS = new Set(["terminal", "run_command", "run_tests", "run_build", "run_typecheck", "run_linter"]);
@@ -179,11 +179,18 @@ export function localWorkerRouter(
     res.json({ job: job ?? null, stopServices: stops, browserCommands: browser ? takeWorkbenchBrowserCommands(t.id) : [] });
   });
 
+  r.get("/tools/:runId/status", asyncHandler(async (req,res)=>{
+    const t=requireTenant(req),job=jobs.find(j=>j.runId===req.params.runId);
+    if(!job || job.tenantId!==t.id)return res.status(404).json({error:"Run not found"});
+    const run=(await getRunStore(t.id)).get(req.params.runId);
+    res.json({finished:!run || isRunSettled(run.status)});
+  }));
+
   r.get("/tools/:runId/next", asyncHandler(async (req, res) => {
     const t = requireTenant(req);
     const job = jobs.find((j) => j.runId === req.params.runId);
-    if (job && job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
-    const request = toolRpc.poll(req.params.runId);
+    if (!job || job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
+    let request = null;
     let finished = false;
     let cancelled = false;
     try {
@@ -192,6 +199,7 @@ export function localWorkerRouter(
       cancelled = run?.status === "cancelled";
     } catch { /* keep serving */ }
     if (finished) toolRpc.cleanup(req.params.runId);
+    else request = toolRpc.poll(req.params.runId);
     res.json({ request, finished, cancelled, projectRoot: job?.projectRoot });
   }));
 
@@ -206,7 +214,7 @@ export function localWorkerRouter(
   r.post("/tools/:runId/result", (req, res) => {
     const t = requireTenant(req);
     const job = jobs.find((j) => j.runId === req.params.runId);
-    if (job && job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
+    if (!job || job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
     // Fence late results: only the worker this job was assigned to may
     // resolve its ToolRPC — a re-registered process must not answer for a
     // stale assignment (same rule the cloud worker route enforces).

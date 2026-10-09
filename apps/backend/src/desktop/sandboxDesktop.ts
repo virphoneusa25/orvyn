@@ -205,20 +205,19 @@ export async function startSandboxDesktop(opts: {
   width?: number;
   height?: number;
 }): Promise<SandboxDesktopSession> {
-  const existing = findSandboxSession(opts.tenantId);
+  const startKey = JSON.stringify([opts.tenantId, opts.projectRoot ?? ""]);
+  const pending = startsInFlight.get(startKey);
+  if (pending) {await pending; return startSandboxDesktop(opts)}
+  const existing = findSandboxSession(opts.tenantId, opts.projectRoot);
   if (existing && existing.status !== "error" && reusesSandboxRun(existing.runId, opts.runId)) {
-    // Reuse only a LIVE container: a crashed or out-of-band-removed desktop
-    // must not strand every later mission on a dead session record.
     if (existing.containerId && (await containerAlive(existing.containerId))) return existing;
     sessions.delete(existing.id);
   }
-  const pending = startsInFlight.get(opts.tenantId);
-  if (pending) return pending;
   const job = (async () => {
     if (existing && existing.status !== "ended") await stopSandboxDesktop(existing);
     return createSandboxDesktop(opts);
-  })().finally(() => startsInFlight.delete(opts.tenantId));
-  startsInFlight.set(opts.tenantId, job);
+  })().finally(() => startsInFlight.delete(startKey));
+  startsInFlight.set(startKey, job);
   return job;
 }
 
@@ -239,7 +238,7 @@ async function createSandboxDesktop(opts: {
   width?: number;
   height?: number;
 }): Promise<SandboxDesktopSession> {
-  const stale = findSandboxSession(opts.tenantId);
+  const stale = findSandboxSession(opts.tenantId, opts.projectRoot);
   if (stale?.status === "error") sessions.delete(stale.id);
   const id = `desk_${randomUUID().slice(0, 12)}`;
   const containerName = `orvyn-desktop-${id.slice(5)}`;

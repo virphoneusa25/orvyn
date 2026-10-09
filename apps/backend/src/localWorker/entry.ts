@@ -1,3 +1,5 @@
+import { nativeDesktopRequest } from '../desktop/nativeDesktopBridge';
+import { runWithComputerContext } from '../computerUse/context';
 // Desktop Local Worker process. Registers with the control plane as this
 // user's local_host executor and serves Tool RPC against the opened project.
 
@@ -57,7 +59,7 @@ async function register(): Promise<void> {
     capabilities: ["local_host", ...(environment.docker ? ["local_sandbox"] : []), "stdio-mcp", ...(typeof process.send === "function" ? ["workbench-browser"] : [])],
     environment,
     services: serviceManager.list(),
-    hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
+    hostDesktopAllowed: (await nativeDesktopRequest({action:'status'})).active === true,
   });
   const status = res?.__status ?? 0;
   const ok = status >= 200 && status < 300 && res?.ok !== false;
@@ -85,7 +87,7 @@ async function heartbeat(): Promise<void> {
     const res = await cp("/api/v1/local-worker/heartbeat", "POST", {
       workerId: WORKER_ID,
       projectRoot: process.env.ORVYN_PROJECT_ROOT || "",
-      hostDesktopAllowed: process.env.ORVYN_HOST_DESKTOP === "1",
+      hostDesktopAllowed: (await nativeDesktopRequest({action:'status'})).active === true,
       services: serviceManager.list(),
     });
     if (needsRegister(res)) { registered = false; await register(); }
@@ -113,6 +115,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
     const next = await cp(`/api/v1/local-worker/tools/${job.runId}/next`);
     if (next.finished) {
       if (isolated) await isolated.finish(projectRoot, !next.cancelled);
+      await runWithComputerContext({tenantId:job.tenantId || "local",projectRoot,runId:job.runId}, () => nativeDesktopRequest({action:"end_task"}));
       // Services belong to the project, not the run: a dev server ORION
       // started keeps running after the run ends, until someone stops it.
       const kept = serviceManager.list({ runId: job.runId, active: true });
@@ -133,7 +136,13 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       });
     }
     const invoke = isolated ? isolated.execute.bind(isolated) : executeLocalTool;
-    const result = await invoke({
+    // Observe cancellation while an input approval is pending, without consuming the RPC queue.
+    const toolController=new AbortController();
+    const cancellationWatch=setInterval(()=>{void cp(`/api/v1/local-worker/tools/${job.runId}/status`).then(status=>{
+      if(status.finished){toolController.abort();void runWithComputerContext({tenantId:job.tenantId||'local',projectRoot,runId:job.runId},()=>nativeDesktopRequest({action:'end_task'}));}
+    }).catch(()=>undefined)},500);
+    const result = await Promise.resolve(runWithComputerContext({tenantId:job.tenantId || 'local',projectRoot,runId:job.runId,computerSurface:req.tool.startsWith('host_desktop_')?'host':undefined}, () => invoke({
+      signal:toolController.signal,
       tool: req.tool,
       arguments: req.arguments ?? {},
       runId: job.runId,
@@ -145,7 +154,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
           data: { data: String(chunk).slice(0, 4000) },
         });
       },
-    });
+    }))).finally(()=>clearInterval(cancellationWatch));
     if (req.tool === "terminal" || req.tool === "run_command" || req.tool === "run_tests") {
       await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {
         type: "terminal.completed",
@@ -169,8 +178,8 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       workerId: WORKER_ID,
       ok: result.ok,
       output: result.output,
-      error: result.error,
       meta: result.meta,
+      error: result.error,
       durationMs: Date.now() - started,
     });
   }
