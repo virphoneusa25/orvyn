@@ -93,7 +93,7 @@ export class ToolRpcChannel {
   /** Worker calls this with the result. Resolves the pending Promise. */
   resolve(response: ToolResponse): boolean {
     const pending = this.pending.get(response.requestId);
-    if (!pending) return false;
+    if (!pending || pending.request.runId !== response.runId) return false;
     this.pending.delete(response.requestId);
     clearTimeout(pending.timer);
     pending.resolve(response);

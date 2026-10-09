@@ -24,6 +24,7 @@ export function trustedIdentity(
   const tenantId = ctx?.tenantId || bound.tenantId;
   return {
     tenantId,
+    computerSurface: ctx?.computerSurface,
     projectRoot: ctx?.projectRoot || bound.projectRoot,
     userId: ctx?.userId ?? null,
     organizationId: ctx?.organizationId ?? null,

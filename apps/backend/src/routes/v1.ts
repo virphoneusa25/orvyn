@@ -1,3 +1,6 @@
+import {nativeDesktopRequest} from "../desktop/nativeDesktopBridge";
+import { cloudWorkbenchRouter } from "./cloudWorkbench";
+import { resolveTaskSurface } from '../computerUse/taskSurface';
 import { desktopReleaseStore } from "../releases/desktopReleaseStore";
 import { accountRouter } from "./account";
 import { publicOrigin } from "./auth";
@@ -43,6 +46,7 @@ v1Router.use("/account", accountRouter);
 v1Router.use(customerRedaction);
 v1Router.use("/documents", documentRouter);
 v1Router.use("/desktop", desktopRouter());
+v1Router.use("/cloud-workbench", cloudWorkbenchRouter());
 v1Router.use("/releases", releasesRouter);
 v1Router.use("/mcp", mcpRouter(requireTenant));
 v1Router.use("/local-worker", localWorkerRouter(requireTenant, (tenantId: string) => {
@@ -863,7 +867,8 @@ import { notePublicOrigin } from "../agent/sitePreview";
 // Start a run. Returns a runId immediately; the client then opens the SSE
 // stream below. Kept separate from the stream so a dropped connection never
 // aborts the run itself.
-v1Router.post("/agent/stream/runs", (req, res) => {
+v1Router.post("/agent/stream/runs", (req, res, next) => {
+  void (async () => {
   const t = requireTenant(req);
   // One owner per turn: an answer-only prompt is a chat turn — no run, no
   // workspace preflight, no resource resolution, no worker scheduling. The
@@ -958,8 +963,16 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   const virtualWorkspace = managedWorkspace || (Boolean(resolvedRoot) && isVirtualWorkspace(resolvedRoot, t.id));
   const hasLocalProject = Boolean(desktopProjectRoot) || (Boolean(resolvedRoot) && !virtualWorkspace);
   const hints = classifyExecutionHints(String(req.body.instruction ?? req.body.goal ?? ""), String(req.body.composerMode ?? req.body.mode ?? "auto"));
+  const clientKind = req.body.clientKind === 'desktop' ? 'desktop' : req.body.clientKind === 'cloud' ? 'cloud' : cloudHost ? 'cloud' : 'desktop';
+  const nativeStatus = !cloudHost && typeof process.send === 'function' ? await nativeDesktopRequest({action:'status'}) : undefined;
+  const priorComputerRun = previousById ?? [...session.runIds].reverse().map(id=>t.runStore.get(id)).find(Boolean);
+  const surfaceInstruction = /^(continue|resume|try again|try now|go ahead)[.! ]*$/i.test(instruction.trim()) && priorComputerRun ? `${instructionOf(priorComputerRun)}\n${instruction}` : instruction;
+  const computer = resolveTaskSurface({intent: inferTaskIntent(surfaceInstruction, composerMode), instruction:surfaceInstruction, client: clientKind,
+    requested: requestedTarget, localSupported: (localWorkerHealth(t.id).environment?.os ?? process.platform) === 'win32',
+    localAuthorized: nativeStatus?.active === true || localWorkerHealth(t.id).hostDesktopAllowed === true});
+  if (!computer.allowed) return res.status(409).json({error:computer.message,code:'COMPUTER_PERMISSION_REQUIRED',actions:['open_local_desktop']});
   const routed = routeExecutionTarget({
-    requested: requestedTarget,
+    requested: computer.executionTarget ?? requestedTarget,
     mode: String(req.body.composerMode ?? req.body.mode ?? "auto"),
     hasLocalProject,
     isRisky: req.body.isRisky === true || hints.isRisky,
@@ -980,13 +993,13 @@ v1Router.post("/agent/stream/runs", (req, res) => {
   // Local Worker that may be offline.
   const noWorkspaceTask = cloudHost && preflight.status === "skipped" && !desktopProjectRoot && !hasLocalProject;
   const controlPlaneVirtual =
-    requestedTarget === "auto" &&
+    !computer.executionTarget && requestedTarget === "auto" &&
     !desktopProjectRoot &&
     (virtualWorkspace || noWorkspaceTask || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
     if (!hasOnlineWorker()) {
-      if (routed.requested === "auto") {
+      if (routed.requested === "auto" && clientKind === "desktop" && !computer.executionTarget) {
         routed.actual = "local_host";
         routed.fallbackReason = "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
       } else {
@@ -1004,7 +1017,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       // run falls back to the ORVYN Cloud worker — the mirror image of the
       // cloud→local fallback above. An EXPLICITLY requested local target
       // still 409s: the user asked for their computer, not a silent switch.
-      if (routed.requested === "auto" && hasOnlineWorker()) {
+      if (routed.requested === "auto" && !computer.executionTarget && hasOnlineWorker()) {
         routed.actual = "ovh_worker";
         routed.fallbackReason = "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
       } else {
@@ -1068,6 +1081,8 @@ v1Router.post("/agent/stream/runs", (req, res) => {
       targetRequested: routed.requested,
       targetActual: routed.actual,
       executionLabel,
+      clientKind,
+      computerSurface: computer.surface === 'local_computer' ? 'host' : computer.surface === 'cloud_desktop' ? 'desktop' : computer.surface === 'cloud_browser' ? 'browser' : 'none',
       // Local runs execute on the user's computer: tell the model its shell.
       hostPlatform: location === "LOCAL_HOST" || location === "LOCAL_SANDBOX"
         ? (localWorkerHealth(t.id).environment?.os ?? undefined)
@@ -1140,6 +1155,7 @@ v1Router.post("/agent/stream/runs", (req, res) => {
     executionTargetActual: routed.actual,
     executionLabel,
   });
+  })().catch(next);
 });
 
 // List runs (newest first) so panels like Agent Activity and Review can find
@@ -1174,11 +1190,12 @@ v1Router.get("/agent/stream/runs/:id/events", (req, res) => {
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
 
+  res.flushHeaders?.();
   const send = (payload: string) => {
     if (res.writableEnded || res.destroyed) return;
     res.write(payload);

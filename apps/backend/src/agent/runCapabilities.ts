@@ -69,7 +69,7 @@ export function summarizeCapabilities(
     git: anyUsable(tools, GIT),
     browser: anyUsable(tools, new Set(), "browser_"),
     desktop: tools.some(
-      (t) => usable(t.permission) && (t.name.startsWith("desktop_") || t.name.startsWith("computer_"))
+      (t) => usable(t.permission) && (t.name.startsWith("desktop_") || t.name.startsWith("host_desktop_") || t.name.startsWith("computer_"))
     ),
     artifacts: anyUsable(tools, ARTIFACTS),
     mcp: anyUsable(tools, MCP) || tools.some((t) => usable(t.permission) && t.name.startsWith("mcp.")),

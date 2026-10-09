@@ -92,6 +92,15 @@ export interface OrvynBridge {
     get(): Promise<{ backendUrl: string; apiKey: string }>;
     set(config: { backendUrl: string; apiKey: string }): Promise<{ backendUrl: string; apiKey: string }>;
   };
+  nativeDesktop?: {
+    status(): Promise<{active:boolean; supported:boolean; window?:string; expiresAt?:number; input:boolean; stopShortcut:string}>;
+    windows(): Promise<{ok:boolean;error?:string;windows?:Array<{handle:string;title:string;path:string}>}>;
+    preview(): Promise<{ok:boolean;error?:string;screenshot?:{b64:string;mediaType:string}}>;
+    start(handle:string,input:boolean): Promise<{ok:boolean;error?:string}>;
+    takeControl(): Promise<unknown>;
+    resume(): Promise<{ok:boolean;error?:string}>;
+    stop(): Promise<unknown>;
+  };
   localWorker?: {
     status(): Promise<{ state: "ready" | "degraded" | "offline"; detail?: string; hostDesktopAllowed: boolean }>;
     setHostDesktop(allowed: boolean): Promise<{ state: "ready" | "degraded" | "offline"; detail?: string; hostDesktopAllowed: boolean }>;

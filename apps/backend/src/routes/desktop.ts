@@ -41,11 +41,8 @@ async function hasDocker(): Promise<boolean> {
   return dockerAvailable();
 }
 
-function sandboxSessionFor(tenantId: string, _projectRoot: string) {
-  // Cross-path lookup: the client's local path (C:/...) NEVER matches the
-  // server's resolved workspace path. Find by tenant only — the sandbox is
-  // per-tenant, so this is correct and safe.
-  return findSandboxSession(tenantId);
+function sandboxSessionFor(tenantId: string, projectRoot: string) {
+  return projectRoot ? findSandboxSession(tenantId, projectRoot) : undefined;
 }
 
 /** Public wire shape for a sandbox session — includes truthful resource
@@ -72,6 +69,24 @@ function frameQuality(raw: unknown): FrameQuality {
 
 export function desktopRouter(): Router {
   const router = Router();
+  // A run-bound view uses the authenticated tenant's durable workspace, never a client path.
+  router.use((req, res, next) => {
+    const runId = String(req.body?.runId ?? req.query.runId ?? "");
+    if (!runId) {
+      if(process.env.ORVYN_CLOUD_MODE === "true" && !["/capabilities","/metrics"].includes(req.path)) return res.status(400).json({error:"Select a Cloud task before opening its desktop."});
+      return next();
+    }
+    const tenant = requireTenant(req);
+    const run = tenant.runStore.get(runId);
+    if (!run) return res.status(404).json({error:"Run not found"});
+    const execution = [...run.events].reverse().find(e => e.type === "run.execution");
+    if (execution?.data?.executionTargetActual === "local_host" || execution?.data?.executionTargetActual === "local_sandbox") return res.status(409).json({error:"This run belongs to a local computer, not the Cloud desktop."});
+    const sandbox=findSandboxSession(tenant.id,run.projectRoot);
+    if(sandbox && sandbox.runId!==runId && !(req.method==="POST" && req.path==="/session")) return res.status(404).json({error:"No desktop for this task."});
+    req.query.projectRoot = run.projectRoot;
+    if (req.body) req.body.projectRoot = run.projectRoot;
+    next();
+  });
 
   // Desktop capability check — the UI uses this to distinguish
   // "signed out" (needs Cloud) from "connected but no worker" (specific error).
@@ -99,12 +114,6 @@ export function desktopRouter(): Router {
       });
     }
 
-    // Desktop sessions exist ONLY as sandbox containers — never browser pages.
-    // Cross-path: the client path does not exist on the server - look by tenant.
-    const anySandbox = findSandboxSession(t.id);
-    if (anySandbox && anySandbox.status !== "ended") {
-      return res.json({ session: publicSandbox(anySandbox), sandbox: docker });
-    }
     return res.json({ session: null, sandbox: docker });
   });
 
@@ -125,7 +134,7 @@ export function desktopRouter(): Router {
       // basename() on Linux doesn't split Windows \ separators — split on
       // BOTH / and \ and take the last non-empty segment, so
       // "C:\Users\rmckn\myproject" yields "myproject", not the full path.
-      const serverRoot = fsMod.existsSync(projectRoot)
+      const serverRoot = runId ? projectRoot : fsMod.existsSync(projectRoot)
         ? projectRoot
         : "/opt/orvyn/workspaces/" + (projectRoot.split(/[\\/]/).filter(Boolean).pop() || "default");
       try {
@@ -187,7 +196,7 @@ export function desktopRouter(): Router {
   // cannot stream; the client keeps polling /frame.
   router.get("/stream", (req, res) => {
     const t = requireTenant(req);
-    const sandbox = findSandboxSession(t.id);
+    const sandbox = sandboxSessionFor(t.id, String(req.query.projectRoot ?? t.currentProjectRoot ?? ""));
     if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "user_control")) {
       return res.status(404).json({ error: "No live Desktop session." });
     }

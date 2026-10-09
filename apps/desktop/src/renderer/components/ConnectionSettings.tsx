@@ -1,3 +1,4 @@
+import { NativeDesktopSettings } from './NativeDesktopSettings';
 import React, { useEffect, useState } from "react";
 import { getConnectionConfig, loadConnectionConfig, saveConnectionConfig, apiUrl, authHeaders, isSessionToken, ORVYN_CLOUD_URL } from "../connection";
 import { onConnectionFacts, signInWithCredentials, signOutOfCloud } from "../connectionRuntime";
@@ -286,42 +287,7 @@ export function ConnectionSettings() {
         </div>
       )}
 
-      <div style={{ marginTop: 28, fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Host computer-use</div>
-      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 12 }}>
-        Off by default. When on, ORION may move the mouse, click, type, scroll, screenshot, and focus windows on this Windows desktop through ToolGateway. This is not the cloud Linux Desktop and not the Browser Workbench.
-      </div>
-      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 10px", borderRadius: 6, border: "1px solid #1c2330" }}>
-        <input
-          type="checkbox"
-          checked={hostDesktop}
-          onChange={async (e) => {
-            const allowed = e.target.checked;
-            setHostDesktop(allowed);
-            setHostDesktopDetail("");
-            try {
-              await window.orvyn?.localWorker?.setHostDesktop?.(allowed);
-              await fetch(apiUrl("/host-desktop/allow"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json", ...authHeaders() },
-                body: JSON.stringify({ allowed }),
-              });
-              setHostDesktopDetail(allowed ? "ORION may control this computer. A banner appears when it does." : "Host desktop control is off.");
-            } catch (err: any) {
-              setHostDesktopDetail(err.message || "Could not save host desktop setting");
-            }
-          }}
-          style={{ marginTop: 2 }}
-        />
-        <span>
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Allow ORION to control this computer</span>
-          <span style={{ display: "block", fontSize: 11, opacity: 0.6, marginTop: 2 }}>
-            You can Take Control or Stop at any time. Return to ORION resumes from the current screen.
-          </span>
-        </span>
-      </label>
-      {hostDesktopDetail && (
-        <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>{hostDesktopDetail}</div>
-      )}
+      <NativeDesktopSettings />
     </div>
   );
 }

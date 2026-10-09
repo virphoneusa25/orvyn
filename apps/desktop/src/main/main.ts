@@ -1,5 +1,6 @@
+import { NativeDesktop } from './nativeDesktop';
 // apps/desktop/src/main/main.ts
-import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell, powerMonitor } from "electron";
 import { handleWindowAction, validateClipboardText, validateExternalUrl, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
 import * as path from "path";
 import * as os from "os";
@@ -23,6 +24,7 @@ let currentProjectRoot: string | null = null;
 let localEngine: ChildProcess | null = null;
 let engineStarting = false;
 let quitting = false;
+const nativeDesktop = new NativeDesktop();
 let engineTimer: ReturnType<typeof setInterval> | undefined;
 let updateService: ReturnType<typeof createDesktopUpdateService> | null = null;
 
@@ -51,7 +53,12 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
     const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
     const env = { ...process.env, PORT: "4570" };
     delete (env as { ORVYN_CLOUD_MODE?: string }).ORVYN_CLOUD_MODE;
-    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env});
+    localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env});
+    const engineChild = localEngine;
+    engineChild.on('message', (msg: any) => {
+      if (msg?.type !== 'desktop.command') return;
+      void nativeDesktop.request(msg.command).then(result => { try { engineChild.send?.({type:'desktop.result',id:msg.id,result}); } catch {} });
+    });
     localEngine.stdout?.pipe(log, {end: false});
     localEngine.stderr?.pipe(log, {end: false});
     localEngine.once("error", () => {localEngine = null; log.end();});
@@ -70,6 +77,7 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
 
 app.on("before-quit", () => {
   quitting = true;
+  nativeDesktop.stop();
   updateService?.handleWillQuit();
   updateService?.stop();
   if (engineTimer) clearInterval(engineTimer);
@@ -189,6 +197,10 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
   app.whenReady().then(async () => {
+    nativeDesktop.register(() => mainWindow);
+    localWorkerManager.setDesktopHandler(command => nativeDesktop.request(command));
+    powerMonitor.on('lock-screen', () => nativeDesktop.stop());
+    powerMonitor.on('suspend', () => nativeDesktop.stop());
     await ensureDefaultWorkspace();
     const recent = (await loadRecents())[0];
     if (recent) { try { if ((await fs.stat(recent)).isDirectory()) currentProjectRoot = recent; } catch { /* missing folder falls back to workspace */ } }
@@ -200,10 +212,11 @@ if (!app.requestSingleInstanceLock()) {
       backendUrl: bootConfig.backendUrl,
       apiKey: bootConfig.apiKey,
       projectRoot: currentProjectRoot ?? defaultWorkspacePath(),
-      hostDesktopAllowed: await readHostDesktopAllowed(),
+      hostDesktopAllowed: false,
     });
     void localWorkerManager.start();
     createWindow();
+    if (mainWindow) nativeDesktop.bindWindow(mainWindow);
     browserManager = createWorkbenchBrowserManager(() => mainWindow);
     await browserManager.start();
     if (mainWindow) browserManager.bindWindow(mainWindow);
@@ -228,7 +241,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) { createWindow(); if (mainWindow) nativeDesktop.bindWindow(mainWindow); }
 });
 
 function hostDesktopPath(): string {
@@ -647,7 +660,8 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 
 ipcMain.handle("localWorker:status", () => localWorkerManager.getStatus());
 ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
-  const on = allowed === true;
+  const on = false;
+  if (allowed === false) nativeDesktop.stop();
   await writeHostDesktopAllowed(on);
   localWorkerManager.configure({ hostDesktopAllowed: on });
   localWorkerManager.restartForHostDesktop();
@@ -738,6 +752,7 @@ ipcMain.handle("system:getAppInfo", () => ({
 }));
 
 ipcMain.handle("config:set", async (_evt, config: { backendUrl: string; apiKey: string }) => {
+  nativeDesktop.stop();
   return writeConfig({
     backendUrl: String(config?.backendUrl ?? DEFAULT_CONFIG.backendUrl),
     apiKey: String(config?.apiKey ?? ""),

@@ -88,8 +88,8 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     // "screenshot" alone is not a browser signal — desktop screenshots exist.
     has(goal, /\b(browser|homepage|webpage|website|web app|open the (app|site|page)|viewport|mobile view)\b/i) ||
     // "Open example.com", "go to https://…": a site to look at, not a file.
-    has(goal, /\b(open|visit|go to|navigate to|browse to|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
-  const desktop = has(goal, /\b(desktop|on screen|settings dialog|computer-use)\b/i);
+    has(goal, /\b(open|visit|go to|navigate to|browse(?: to)?|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
+  const desktop = has(goal, /\b(desktop|on screen|my screen|this window|this computer|notepad|calculator|native application|settings dialog|computer-use)\b/i);
   // A deliverable file, not a keyword in passing: needs a produce verb AND an
   // artifact type — "Explain PDF compression" is not an artifact request.
   const artifact =
@@ -123,7 +123,8 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const howTo = /^how\s+(do|can|should|would|to)\b/i.test(goal);
   // Informational intent is independent of the domain: "What is PostgreSQL?"
   // is a question even though it touches the database category.
-  const informational = greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo));
+  const screenObservation=/\bwhat(?:'s| is| can you see)?\b.{0,45}\b(on (?:my |this )?screen|on my desktop|in notepad|in this window)\b/i.test(goal) || /\b(read|describe|look at)\b.{0,30}\b(my screen|this window)\b/i.test(goal);
+  const informational = !screenObservation && (greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo)));
 
   // The action outranks the resource: "deploy to my server" is a deploy task
   // that happens to use a server, not server administration.
@@ -196,6 +197,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
       (category === "code" ||
         category === "deploy" ||
         frontend ||
+        (terminal && !server && !desktop && !browser) ||
         database ||
         has(goal, /\b(file|repo|workspace|project|codebase)\b/i)),
     requiresRemoteResource:

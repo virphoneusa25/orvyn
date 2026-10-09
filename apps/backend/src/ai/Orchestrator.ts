@@ -47,6 +47,7 @@ export interface ChatContext {
 }
 
 export interface ChatTurnRequest {
+  signal?: AbortSignal;
   task: TaskType;
   history: AIMessage[];
   userMessage: string;
@@ -455,6 +456,7 @@ export class Orchestrator {
     };
     try {
       for (let round = 0; round < maxRounds + 1; round++) {
+        if (req.signal?.aborted) return;
         const offerTools = web && round < maxRounds && toolCallsUsed < maxCalls ? web : undefined;
         let text = "";
         const calls: ToolCall[] = [];
@@ -465,7 +467,7 @@ export class Orchestrator {
         let received = false;
         for (let attempt = 0; ; attempt++) {
         try {
-        for await (const chunk of provider.stream({ messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools })) {
+        for await (const chunk of provider.stream({ signal:req.signal, messages, stream: true, temperature, reasoningEffort: req.reasoningEffort, tools: offerTools })) {
           if (chunk.toolCall || chunk.delta) received = true;
           if (chunk.toolCall) { calls.push(chunk.toolCall); continue; }
           if (chunk.done) break;
@@ -480,10 +482,7 @@ export class Orchestrator {
             if (isMostlyChinese(buffered)) {
               const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature });
               const english = String(retry?.content ?? "");
-              for (const piece of english.match(/[\s\S]{1,24}/g) ?? []) {
-                yield { delta: piece, done: false };
-                await new Promise<void>((resolve) => setImmediate(resolve));
-              }
+              yield { delta: english, done: false };
               yield { delta: "", done: true };
               return;
             }
@@ -495,6 +494,7 @@ export class Orchestrator {
         markProviderSuccess(provider.config.id);
         break;
         } catch (err) {
+          if(req.signal?.aborted) return;
           const kind = classifyModelFailure(err);
           const next = !received && kind && attempt < 3 ? this.chatFailover(provider, kind, err) : undefined;
           if (!next) throw err;
@@ -530,6 +530,7 @@ export class Orchestrator {
         const skipFetchIds = new Set(skippedFetches.map((c) => c.id));
         messages.push({ role: "assistant", content: text, toolCalls: turnCalls });
         for (const call of turnCalls) {
+          if (req.signal?.aborted) return;
           toolCallsUsed++;
           if (call.name === "fetch_url") {
             const args = (call.arguments ??= {}) as Record<string, unknown>;
@@ -610,6 +611,7 @@ export class Orchestrator {
       }
       yield { delta: "", done: true };
     } catch (err: any) {
+      if(req.signal?.aborted) return;
       // The model does not exist for this account: skip it and answer with another one.
       if (isModelNotFound(err) && !(req as any).__modelFallback) {
         markModelUnavailable(provider.config.id, String(err?.message ?? err));

@@ -12,6 +12,7 @@ export type ComputerActionName =
 
 export interface ComputerUseIdentity {
   tenantId: string;
+  computerSurface?: "host" | "desktop" | "browser" | "none";
   userId?: string | null;
   organizationId?: string | null;
   projectId?: string | null;

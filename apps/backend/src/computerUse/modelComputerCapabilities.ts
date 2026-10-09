@@ -34,5 +34,8 @@ export function isVisualComputerCompatible(provider: AIModelProvider): boolean {
 
 /** Capability search hit — computer_use is an ORVYN capability, not MCP. */
 export function builtinComputerUseHit(query: string): boolean {
-  return /\b(computer([ _-]?use)?|desktop|visual qa|click through|screenshot|xdotool)\b/i.test(query);
+  const native = /\b(computer[ _-]?(?:use|screenshot)|desktop|installer window|native application|xdotool)\b/i.test(query);
+  if(native)return true;
+  if(/\b(website|webpage|landing page|browser|web page)\b/i.test(query))return false;
+  return /\b(computer|visual qa|click through|screenshot)\b/i.test(query);
 }

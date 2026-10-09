@@ -1,3 +1,6 @@
+import { execFileSync as buildNativeExec } from 'node:child_process';
+import { fileURLToPath as nativeFilePath } from 'node:url';
+buildNativeExec(process.execPath, [nativeFilePath(new URL('./build-native-desktop.mjs', import.meta.url))], {stdio:'inherit'});
 // Builds the Windows installer from this repo and names the exe with the
 // commit that was compiled. The status bar shows the same seven characters.
 import { execSync, spawnSync } from "node:child_process";

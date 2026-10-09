@@ -57,7 +57,7 @@ const model = createServer((req, res) => {
 
 let failures = 0;
 const ok = (c, label, detail = "") => { console.log(`${c ? "  PASS" : "  FAIL"}  ${label}${!c && detail ? `\n        ${detail}` : ""}`); if (!c) failures++; };
-const neutral = ["ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
+const neutral = ["NEBIUS_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "HF_TOKEN", "HUGGINGFACE_API_KEY", "ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
 const { reducePresentation } = await import(pathToFileURL(join(repoRoot, "apps", "desktop", "src", "renderer", "presentationReducer.ts")).href);
 
 async function main() {
@@ -67,8 +67,11 @@ async function main() {
   const server = spawn(process.execPath, ["dist/index.js"], {
     cwd: join(repoRoot, "apps", "backend"),
     env: { ...process.env, ...neutral, MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", ORVYN_DATA_DIR: mkdtempSync(join(tmpdir(), "orvyn-live-data-")), PORT: String(PORT) },
-    stdio: "ignore",
+    stdio: ["ignore","pipe","pipe"],
   });
+  let backendLog="";
+  server.stdout.on("data", chunk=>{backendLog=(backendLog+chunk.toString()).slice(-8000)});
+  server.stderr.on("data", chunk=>{backendLog=(backendLog+chunk.toString()).slice(-8000)});
   try {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
     const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "auto", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
@@ -97,7 +100,7 @@ async function main() {
     const firstIdx = (t) => events.findIndex((e) => e.type === t);
     ok(firstIdx("message.delta") >= 0 && firstIdx("message.delta") < firstIdx("tool.started"), "ORION speaks before the tool starts");
     ok(!/active environment|first files in place/i.test(text) && !events.some((e) => e.type === "conversation.message"), "no scripted sentences from the app");
-    ok(outputs.length >= 3, "the command's output streamed in pieces", `${outputs.length} output events`);
+    ok(outputs.length >= 3, "the command's output streamed in pieces", `${outputs.length} output events; ${JSON.stringify(events.filter(e=>e.type==="tool.failed"||e.type==="terminal.completed").map(e=>e.data))}`);
     const lead = (seen["tool.completed"] ?? 0) - (seen["terminal.output"] ?? Infinity);
     ok(lead >= 1500, "output reached the app while the command was still running", `first output ${lead} ms before the command finished`);
     const rows = (snapshotAtFirstOutput ?? []).flatMap((i) => (i.kind === "workgroup" ? i.items : i.kind === "tool" ? [i] : []));
@@ -109,7 +112,7 @@ async function main() {
     const afterTool = final.slice(lastTool + 1).filter((i) => i.kind === "assistant");
     ok(afterTool.length === 1 && /tick 5/.test(afterTool[0].content), "exactly one final answer after the last tool", JSON.stringify(afterTool.map((a) => a.content)));
   } catch (err) {
-    failures++; console.error("HARNESS ERROR:", err.message);
+    failures++; console.error("HARNESS ERROR:", err.message); console.error(backendLog);
   } finally { server.kill(); model.close(); }
   console.log(failures === 0 ? "\nCHAT LIVE: PASS" : `\nCHAT LIVE: FAIL (${failures})`);
   process.exit(failures === 0 ? 0 : 1);

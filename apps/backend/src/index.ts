@@ -327,8 +327,13 @@ wss.on("connection", (socket, req) => {
     at: Date.now(),
   }));
 
-  let recorder: ChatTurnRecorder | null = null;
+  let activeRecorder: ChatTurnRecorder | null = null;
+  let chatController: AbortController | null = null;
   socket.on("message", async (raw) => {
+    chatController?.abort();
+    const turnController = new AbortController();
+    chatController = turnController;
+    let recorder: ChatTurnRecorder | null = null;
     let body;
     try {
       body = JSON.parse(raw.toString());
@@ -430,6 +435,7 @@ wss.on("connection", (socket, req) => {
             attachments: Array.isArray(body.attachmentRefs) ? body.attachmentRefs.slice(0, 20).map((a: any) => ({ artifactId: String(a?.artifactId ?? ""), name: String(a?.name ?? ""), mimeType: String(a?.mimeType ?? "") })).filter((a: any) => a.artifactId) : undefined,
           })
         : null;
+      activeRecorder = recorder;
       // A turn never hangs: a heartbeat every 10s tells the desktop the turn is
       // alive (a reasoning model can think silently for a while), and if the
       // model sends nothing for CHAT_STALL_MS the turn ends with a plain error
@@ -438,7 +444,7 @@ wss.on("connection", (socket, req) => {
       const beat = setInterval(() => { if (socket.readyState === 1) socket.send(JSON.stringify({ delta: "", heartbeat: true, done: false })); }, 10_000);
       beat.unref?.();
       let stalled = false;
-      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt })[Symbol.asyncIterator]();
+      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt, signal:turnController.signal })[Symbol.asyncIterator]();
       const guarded = {
         [Symbol.asyncIterator]() { return this; },
         async next(): Promise<IteratorResult<any>> {
@@ -449,6 +455,7 @@ wss.on("connection", (socket, req) => {
       };
       try {
       for await (const chunk of guarded) {
+        if (turnController.signal.aborted || socket.readyState !== 1) break;
         socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
@@ -463,10 +470,12 @@ wss.on("connection", (socket, req) => {
       }
       } finally {
         clearInterval(beat);
+        if (turnController.signal.aborted) void iterator.return?.(undefined).catch(()=>undefined);
         if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
       recorder?.finish();
     } catch (err: any) {
+      if(turnController.signal.aborted || socket.readyState !== 1){recorder?.finish();return;}
       recorder?.finish(err.message);
       // A wallet/plan stop carries its code so the client can offer an upgrade or top-up.
       const code = (err as { billing?: boolean; code?: string })?.billing ? `CREDITS_${(err as { code?: string }).code ?? "LIMIT"}` : undefined;
@@ -474,7 +483,7 @@ wss.on("connection", (socket, req) => {
     }
   });
   // The app closed mid-reply: keep what arrived.
-  socket.on("close", () => recorder?.finish());
+  socket.on("close", () => { chatController?.abort(); activeRecorder?.finish(); });
 });
 
 // Liveness heartbeat for desktop/cloud clients. A half-open socket must not

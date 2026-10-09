@@ -1,3 +1,5 @@
+import {checkBrowserAction,markBrowserFrame} from "../computerUse/cloudBrowserControl";
+import * as hostTools from '../ai/tools/hostDesktopTools';
 // apps/backend/src/execution/RemoteToolAdapter.ts
 //
 // Maps ORION's existing tool names to remote execution via the ToolRpc
@@ -56,13 +58,17 @@ function makeRemoteTool(
     parameters,
     defaultPermission,
     async execute(args): Promise<ToolResult> {
+      const blocked=checkBrowserAction(runId,name);
+      if(blocked) return {ok:false,error:blocked};
       const start = Date.now();
       try {
         if (execute) return await execute(args, async () => {
           const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
-          return rpcResponseToResult(name, response);
+          if(name === "browser_screenshot" && response.ok) markBrowserFrame(runId);
+        return rpcResponseToResult(name, response);
         });
         const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
+        if(name === "browser_screenshot" && response.ok) markBrowserFrame(runId);
         return rpcResponseToResult(name, response);
       } catch (err: any) {
         return { ok: false, error: `Remote execution error: ${err.message}` };
@@ -114,8 +120,14 @@ export function registerRemoteTools(
   gateway: { register(tool: AITool): void },
   rpc: ToolRpcChannel,
   runId: string,
-  projectRoot = "remote-workspace"
+  projectRoot = "remote-workspace",
+  nativeDesktop = false
 ): void {
+  if (nativeDesktop) {
+    const native = [hostTools.makeHostDesktopStatusTool(''),hostTools.makeHostDesktopScreenshotTool(''),hostTools.makeHostDesktopClickTool(''),hostTools.makeHostDesktopTypeTool(''),hostTools.makeHostDesktopMoveTool(''),hostTools.makeHostDesktopScrollTool(''),hostTools.makeHostDesktopFocusTool(''),hostTools.makeHostDesktopKeyTool(''),hostTools.makeHostDesktopInspectTool('')];
+    for (const tool of native) gateway.register(makeRemoteTool(tool.name,tool.description,tool.parameters,tool.defaultPermission,rpc,runId));
+  }
+
   gateway.register(makeRemoteTool(
     "read_file",
     "Read a file from the remote workspace",

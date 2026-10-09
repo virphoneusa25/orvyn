@@ -58,7 +58,8 @@ test("Return to ORION restores agent control on the same session", async () => {
   assert.equal(back.ok, true);
   assert.equal(back.returned, true);
   const sent = await svc.sendInput(id(), "type", { text: "ok" });
-  assert.equal(sent.ok, true);
+  assert.equal(sent.ok, false, "An in-memory session has no native input adapter");
+  assert.match(sent.error ?? "", /adapter|unavailable/i);
   assert.equal(sent.sessionId, session.id);
 });
 
@@ -99,7 +100,7 @@ test("host computer-use stays tenant-scoped and does not mark Desktop broken whe
   });
   assert.equal(result.desktopHealthy, true);
   assert.equal(result.ok, false);
-  assert.match(result.error ?? "", /Host desktop|not Windows/i);
+  assert.match(result.error ?? "", /desktop application|local window access/i);
 });
 
 test("creating a session does not invent a hidden second desktop for another run on the same project", () => {

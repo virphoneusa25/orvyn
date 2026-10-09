@@ -1,3 +1,5 @@
+import { CloudWorkbench } from "./CloudWorkbench";
+import { followRun } from "../lib/followRun";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
@@ -10,7 +12,6 @@ import { EventLog, FileEditList } from "./StreamCards";
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
 import { useRevealedText } from "../lib/streamReveal";
-import { readSseStream } from "../lib/sse";
 import { navigate } from "../lib/router";
 import { useStore } from "../lib/store";
 import { signal } from "../lib/events";
@@ -221,14 +222,24 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     }
   }, [messages]);
 
-  // A reply still streaming when the page opened: follow the stored copy until it completes.
+  // Reopened runs resume the real event log, rather than polling complete messages.
+  const restoredRun = !busy ? messages.find(m=>m.streaming && m.runId)?.runId : undefined;
   useEffect(() => {
-    if (!sessionId || busy || !messages.some((m) => m.streaming)) return;
-    const t = window.setTimeout(async () => {
-      try { const r = await api<{ messages: any[] }>(`/sessions/${encodeURIComponent(sessionId)}/messages`); setMessages(r.messages.map(toMsg).filter(Boolean) as Msg[]); } catch { /* retry next tick */ }
-    }, 2500);
-    return () => window.clearTimeout(t);
-  }, [sessionId, busy, messages]);
+    if (!restoredRun) return;
+    const controller=new AbortController();
+    const message=messages.find(m=>m.role==='assistant' && m.runId===restoredRun);
+    const after=Math.max(0,...(message?.agentEvents??[]).map(e=>e.sequence??0));
+    void followRun(restoredRun,getToken(),controller.signal,after,event=>{
+      setMessages(all=>all.map(m=>{
+        if(m.runId!==restoredRun || m.role!=='assistant') return m;
+        const events=[...(m.agentEvents??[]),event as AgentProgressEvent];
+        const status=event.type==='run.blocked' && event.data?.terminal!==true?'awaiting_approval':/^run\.(completed|partial|error|cancelled|blocked)$/.test(event.type)?event.type.slice(4):m.runStatus;
+        return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?m.content+String(event.data?.content??''):m.content,runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
+      }));
+    }).catch(error=>toast(error.message));
+    stopRun.current=()=>{void api(`/agent/stream/runs/${encodeURIComponent(restoredRun)}/cancel`,{method:'POST',body:{}}).catch(error=>toast(error.message))};
+    return ()=>{controller.abort();stopRun.current=null};
+  }, [restoredRun, sessionId]);
 
   // Follow the reply as it streams — unless the reader scrolled up to read.
   useEffect(() => { const el = stream.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [messages]);
@@ -306,7 +317,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       // fall back to the existing chat socket, preserving live text chunks.
       const routed = await api<{ routed?: string; runId?: string; sessionId?: string }>("/agent/stream/runs", {
         method: "POST",
-        body: { sessionId: sid, projectId, instruction: userMessage, composerMode: "auto", mode: "agent", requestedModelId: model, messageId: userId, attachments: forModel },
+        body: { sessionId: sid, projectId, instruction: userMessage, clientKind: "cloud", composerMode: "auto", mode: "agent", requestedModelId: model, messageId: userId, attachments: forModel },
       });
       if (routed.runId) {
         const runId = routed.runId;
@@ -319,8 +330,13 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         let after = 0;
         let runStatus = "running";
         const onEvent = (event: AgentProgressEvent) => {
+          if (controller.signal.aborted) return;
           const seq = Number(event.sequence ?? 0);
-          if (Number.isFinite(seq)) after = Math.max(after, seq);
+          if (event.runId && event.runId !== runId) return;
+          if (!Number.isFinite(seq) || seq <= after) return;
+          after = seq;
+          const nextStatus = event.type === 'run.blocked' && event.data?.terminal !== true ? 'awaiting_approval' : event.type.startsWith('run.') && ['completed','partial','error','cancelled','blocked'].includes(event.type.slice(4)) ? event.type.slice(4) : runStatus;
+          runStatus = nextStatus;
           patch(replyId, (m) => {
             const agentEvents = [...(m.agentEvents ?? []), event];
             let content = m.content;
@@ -334,25 +350,12 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
               : event.type === "run.error" ? "error"
               : event.type === "run.cancelled" ? "cancelled"
               : event.type === "run.blocked" ? "blocked" : m.runStatus ?? "running";
-            runStatus = next;
+            if (event.type === 'run.blocked' && event.data?.terminal !== true) return {...m,content,agentEvents,runStatus:'awaiting_approval',streaming:true};
             const error = ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
             return { ...m, content, agentEvents, artifacts, runStatus: next, streaming: !terminalRunStatus(next), error };
           });
         };
-        let round = 0;
-        while (!controller.signal.aborted && !terminalRunStatus(runStatus) && round < 24) {
-          const response = await fetch(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-            signal: controller.signal,
-            cache: "no-store",
-          });
-          if (!response.ok || !response.body) throw new Error(`Could not follow agent progress (${response.status})`);
-          await readSseStream(response.body, (raw) => onEvent(raw as AgentProgressEvent));
-          round += 1;
-          if (!terminalRunStatus(runStatus) && !controller.signal.aborted) {
-            await new Promise((resolve) => window.setTimeout(resolve, 400));
-          }
-        }
+        await followRun(runId, token, controller.signal, after, event => onEvent(event as AgentProgressEvent));
         const saved = await api<{ messages: any[] }>(`/sessions/${encodeURIComponent(sid!)}/messages`);
         const answer = saved.messages.map(toMsg).find((m) => m?.runId === runId && m.role === "assistant");
         if (answer?.content || answer?.artifacts?.length) {
@@ -400,6 +403,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
   const viewAs = Boolean(me?.viewAs);
 
   return (
+    <div className={compact ? undefined : "cloud-chat-layout"}>
     <div className={`chat${compact ? " chat--compact" : ""}`}
       onDragEnter={(e) => { if (e.dataTransfer.types.includes("Files")) setDragging(true); }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
@@ -498,6 +502,8 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         </form>
         {!compact ? <div className="composer__hint">ORVYN can make mistakes — check important details. Shift + Enter for a new line.</div> : null}
       </div>
+    </div>
+    {!compact && <CloudWorkbench runId={[...messages].reverse().find(m=>m.runId)?.runId} events={[...messages].reverse().find(m=>m.runId)?.agentEvents??[]}/>}
     </div>
   );
 }

@@ -64,6 +64,8 @@ export class LocalWorkerManager {
     this.browserHandler = handler;
   }
 
+  private desktopHandler?: (command: unknown) => Promise<unknown>;
+  setDesktopHandler(handler: (command: unknown) => Promise<unknown>) { this.desktopHandler = handler; }
   getStatus(): LocalWorkerStatus {
     return { ...this.status };
   }
@@ -102,6 +104,12 @@ export class LocalWorkerManager {
     this.child.stderr?.pipe(log, { end: false });
     const child = this.child;
     child.on("message", (msg: any) => {
+      if (msg?.type === 'desktop.command') {
+        const reply = (result: unknown) => { try { child.send({type:'desktop.result',id:msg.id,result}); } catch {} };
+        if (!this.desktopHandler) return reply({ok:false,error:'Local desktop unavailable.'});
+        this.desktopHandler(msg.command).then(reply, () => reply({ok:false,error:'Local desktop unavailable.'}));
+        return;
+      }
       if (!msg || msg.type !== "browser.command") return;
       const reply = (result: unknown) => {
         try { child.send({ type: "browser.result", id: msg.id, result }); } catch { /* worker gone */ }

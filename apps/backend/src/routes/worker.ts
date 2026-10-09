@@ -94,6 +94,7 @@ function missionCheckpointFor(tenantId: string, runId: string): MissionCheckpoin
 function recoverOrphanedRunsOnBoot(
   getStore: (tenantId?: string) => RunStore,
   resumeRun?: (tenantId: string, runId: string) => void,
+  bootStartedAt = Date.now() - process.uptime() * 1000,
 ): void {
   try {
     const dataDir = process.env.ORVYN_DATA_DIR || "";
@@ -110,7 +111,8 @@ function recoverOrphanedRunsOnBoot(
           try {
             const store = getStore(tenantId);
             const run = store.get(runId);
-            if (!run) continue;
+            // A delayed boot scan must never recover runs created by this process.
+            if (!run || run.createdAt >= bootStartedAt) continue;
             if (isExecutionActive(run.status)) {
               const already = jobQueue.some((j) => j.runId === runId);
               if (already) continue;

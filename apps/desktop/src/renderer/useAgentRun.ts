@@ -104,6 +104,9 @@ export function useAgentRun(
   }
 
   function applyEvent(e: AgentEvent) {
+    if (runIdRef.current && e.runId !== runIdRef.current) return;
+    if (stoppedRef.current && !['run.cancelled','run.completed','run.partial','run.error'].includes(e.type)) return;
+
     lastSeq.current = Math.max(lastSeq.current, e.sequence);
     setLastEventAt(Date.now());
     setEvents((prev) => {
@@ -310,7 +313,7 @@ export function useAgentRun(
     const id = runIdRef.current;
     if (!id || !text.trim()) return false;
     try {
-      const res = await fetch(apiUrl(`/agent/stream/runs/${id}/steer`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ text: text.trim() }) });
+      const res = await fetch(apiUrl(`/agent/stream/runs/${id}/steer`), { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ clientKind: "desktop", text: text.trim() }) });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Failed to steer run");
       return true;
     } catch (err: any) { setError(err.message); return false; }
@@ -330,7 +333,7 @@ export function useAgentRun(
         const res = await fetch(apiUrl(p), {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders() },
-          body: JSON.stringify({ approved, scope, ...(secrets ? { secrets } : {}) }),
+          body: JSON.stringify({ clientKind: "desktop", approved, scope, ...(secrets ? { secrets } : {}) }),
         });
         if (res.ok) {
           if (runId) attachStream(runId);

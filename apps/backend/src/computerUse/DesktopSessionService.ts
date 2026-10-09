@@ -82,14 +82,15 @@ export class DesktopSessionService {
         ? { ok: true, sessionId: sb.id }
         : { ok: false, error: "Desktop did not accept input.", sessionId: sb.id };
     }
-    const session = this.ensureSession(identity);
+    const session = this.getSession(identity);
+    if (!session) return {ok:false,error:"No live cloud desktop session."};
     if (!canAgentAct(session)) {
       return { ok: false, error: "User has taken control. ORION input is paused.", sessionId: session.id };
     }
     const lock = beginAgentAction(session);
     if (!lock.ok) return { ok: false, error: lock.reason, sessionId: session.id };
     endAgentAction(session);
-    return { ok: true, sessionId: session.id };
+    return { ok: false, error:"No native input adapter is attached to this session.", sessionId: session.id };
   }
 
   getWindows(identity: ComputerUseIdentity): { id: string; status: string; controlOwner: string }[] {

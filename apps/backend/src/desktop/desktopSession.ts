@@ -123,6 +123,7 @@ export function getDesktopSession(tenantId: string, runId?: string, projectRoot?
   if (projectRoot) {
     const byRoot = sessions.get(sessionKey(tenantId, undefined, projectRoot));
     if (byRoot) return byRoot;
+    return undefined;
   }
   return [...sessions.values()].find((s) => s.tenantId === tenantId && s.status !== "ended" && s.status !== "error");
 }

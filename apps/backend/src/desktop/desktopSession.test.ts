@@ -111,3 +111,5 @@ test("ended sessions reject both owners", () => {
   assert.equal(canUserAct(s), false);
   assert.equal(requestControl(s, "user").ok, false);
 });
+
+test("a requested project never falls back to another project of the same tenant",()=>{resetDesktopSessionsForTests();const session=createDesktopSession({tenantId:"same",projectRoot:"/project-a",runId:"a"});markDesktopReady(session);assert.equal(getDesktopSession("same","b","/project-b"),undefined)});
