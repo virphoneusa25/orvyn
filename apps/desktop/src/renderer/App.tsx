@@ -315,15 +315,10 @@ export function App() {
       });
     }
   }, [agentRun.events]);
-  // Auto-open the Workbench when a run is active or desktop events flow —
-  // the user should never have to hunt for the panel toggle when ORION works.
   const runIsActive = agentRun.status === "running" || agentRun.status === "awaiting_approval" || agentRun.status === "queued";
-  const hasDesktopEvents = agentRun.events.some((e) => String(e.type).startsWith("desktop."));
-  // If the user was last on the Desktop tab, they want to see it — open
-  // the panel. Between runs the user's explicit close still wins UNLESS
-  // the last tab they were viewing was Desktop (they came back for it).
-  const lastTabWasDesktop = chrome.layout.activeTabId === "desktop";
-  const effectiveRightPanel = chrome.layout.rightPanelOpen || runIsActive || hasDesktopEvents || lastTabWasDesktop;
+  // The saved open state is authoritative. A running task must never trap the
+  // user in the Workbench after they collapse it; they can reopen it any time
+  // from the title bar.
   // Code view: the right side is the same ORION chat as the main screen
   // (not the Workbench launcher), so the user can read code and talk to
   // ORION side by side, like Cursor. Open by default; the title-bar toggle
@@ -331,7 +326,7 @@ export function App() {
   const chatInCode = view === "editor";
   const showRightChrome = chatInCode
     ? codeChatOpen && fitsDockedWorkbench(viewportWidth)
-    : workbenchAllowedForView(view) && effectiveRightPanel && fitsDockedWorkbench(viewportWidth);
+    : workbenchAllowedForView(view) && chrome.layout.rightPanelOpen && fitsDockedWorkbench(viewportWidth);
   const overlayAgentPanel = showRightChrome && shouldOverlayAgentPanel(viewportWidth);
 
   // ORION opened (or resized) its browser session: show that same tab in the

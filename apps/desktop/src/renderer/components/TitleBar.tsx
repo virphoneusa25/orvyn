@@ -35,6 +35,8 @@ export function TitleBar({
   onOpenCommand,
   onOpenSettings,
   onSwitchWorkspace,
+  rightPanelOpen,
+  onToggleRightPanel,
 }: {
   menus: Menu[];
   title?: string;
@@ -334,6 +336,32 @@ export function TitleBar({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: 6 }} className="no-drag">
+        <button
+          type="button"
+          data-testid="toggle-workbench"
+          aria-label={rightPanelOpen ? "Collapse Workbench" : "Open Workbench"}
+          aria-pressed={rightPanelOpen === true}
+          title={rightPanelOpen ? "Collapse Workbench" : "Open Workbench"}
+          onClick={onToggleRightPanel}
+          style={{
+            width: 30,
+            height: 30,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "1px solid var(--orvyn-border-soft)",
+            borderRadius: 7,
+            background: rightPanelOpen ? "rgba(124,92,255,0.16)" : "transparent",
+            color: rightPanelOpen ? "var(--orvyn-purple, #a78bfa)" : "var(--orvyn-text-secondary)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+            <path d="M15 4.5v15" />
+          </svg>
+        </button>
         <AccountCluster onOpenSettings={onOpenSettings} onSwitchWorkspace={onSwitchWorkspace} />
         {(accountPlan || planLabel) && (
           <span

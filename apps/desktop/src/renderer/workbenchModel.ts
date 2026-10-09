@@ -404,6 +404,14 @@ export function reconcileWorkbenchTabs(input: {
   return { tabs, activeId, openTabIds: tabs.map((tab) => tab.id) };
 }
 
+/** Changes remains an always-available destination while dynamic tabs open. */
+export function reconcileWorkbenchTabsWithChanges(input: Parameters<typeof reconcileWorkbenchTabs>[0]): ReconciledWorkbenchTabs {
+  return reconcileWorkbenchTabs({
+    ...input,
+    openTabIds: input.openTabIds.includes("changes") ? input.openTabIds : [...input.openTabIds, "changes"],
+  });
+}
+
 export function assembleWorkbenchTabs(input: {
   openTabIds: string[];
   activeTabId?: string;

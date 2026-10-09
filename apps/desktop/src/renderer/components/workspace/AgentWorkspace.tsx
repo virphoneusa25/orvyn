@@ -32,6 +32,7 @@ import {
   parseWorkbenchTab,
   previewTabId,
   reconcileWorkbenchTabs,
+  reconcileWorkbenchTabsWithChanges,
   upsertTab,
   urlsMatch,
   WORKBENCH_TABBAR_TEST_ID,
@@ -49,7 +50,7 @@ import { DocumentsPanel } from "../DocumentsPanel";
 import { MissionPlan } from "../MissionPlan";
 import {
   IconCheck,
-  IconClose,
+  IconChevronRight,
   IconCrosshair,
   IconExpand,
   IconFile,
@@ -154,7 +155,7 @@ export function AgentWorkspace({
   const previewUrl = (surface.previewOpensAutomatically ? surface.previewUrl : null)
     || (surface.status === "none" ? undefined : derived.previews[derived.previews.length - 1]?.url)
     || undefined;
-  const reconciled = useMemo(() => reconcileWorkbenchTabs({
+  const reconciled = useMemo(() => reconcileWorkbenchTabsWithChanges({
     openTabIds: layout.openTabIds,
     activeTabId: layout.activeTabId,
     previewUrl,
@@ -434,7 +435,9 @@ export function AgentWorkspace({
       browserTabs: browserState.tabs,
     });
     onLayout({
-      rightPanelOpen: true,
+      // Agent-follow updates may change the tab without undoing an explicit
+      // collapse. Selecting a tab yourself still opens the Workbench.
+      rightPanelOpen: manual || layout.rightPanelOpen,
       activeTabId: merged.activeId,
       activeTab: tab.kind === "file" || tab.kind === "artifact" || tab.kind === "preview" ? (tab.kind === "preview" ? "preview" : "files") : (tab.kind as DesktopLayoutState["activeTab"]),
       openTabIds: merged.openTabIds,
@@ -533,7 +536,7 @@ export function AgentWorkspace({
               const native = matchingNativeTab(browserState, t);
               const selected = t.id === activeId;
               const face = tabFace(t);
-              const showClose = true;
+              const showClose = t.id !== "changes";
               return (
                 <button
                   key={t.id}
@@ -658,13 +661,15 @@ export function AgentWorkspace({
             <button
               data-testid="workbench-close"
               className="wb-icon"
-              title="Close panel"
+              title="Collapse Workbench"
+              aria-label="Collapse Workbench"
+              aria-expanded="true"
               onClick={() => {
                 void window.orvyn.browser?.setVisible(false);
                 onLayout({ rightPanelOpen: false });
               }}
             >
-              <IconClose size={15} />
+              <IconChevronRight size={15} />
             </button>
           </span>
         </div>

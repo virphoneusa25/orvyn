@@ -12,6 +12,7 @@ import {
   parseWorkbenchTab,
   previewTabId,
   reconcileWorkbenchTabs,
+  reconcileWorkbenchTabsWithChanges,
   rememberUrl,
   resolveActiveWorkbenchTabId,
   truncateTabTitle,
@@ -47,6 +48,16 @@ test("closing the active tab selects the adjacent tab, never a second pane", () 
   const first = closeTab(tabs, "browser", "browser");
   assert.equal(first.activeId, "file:a.html");
   assert.equal(first.tabs.some((t) => t.kind === "browser"), false);
+});
+
+test("Changes stays available beside dynamic Workbench tabs without changing the active tab", () => {
+  const result = reconcileWorkbenchTabsWithChanges({
+    openTabIds: ["browser", "desktop", "files", "terminal"],
+    activeTabId: "browser",
+  });
+  assert.equal(result.tabs.some((tab) => tab.id === "changes"), true);
+  assert.equal(result.activeId, "browser");
+  assert.deepEqual(result.openTabIds, ["desktop", "files", "changes", "terminal", "browser"]);
 });
 
 test("Follow ORION maps events onto one workbench tab", () => {
