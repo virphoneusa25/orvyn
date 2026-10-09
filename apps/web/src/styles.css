@@ -857,3 +857,13 @@ body:has(.viewas-banner) .app { padding-top: 40px; }
 }
 
 .thumb-loading { display: inline-block; border-radius: 8px; background: linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,.1), rgba(255,255,255,.04)); background-size: 200% 100%; animation: shimmer 1.4s infinite linear; }
+
+/* Keep recent conversations within reach while giving the open chat more space. */
+.chats__list-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 10px; color: var(--text-2); font-size: 13px; }
+@media (min-width: 821px) {
+  .chats--recent-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .chats--recent-collapsed .chats__list { display: none; }
+}
+@media (max-width: 820px) {
+  .chats__collapse, .chats__reopen { display: none; }
+}
