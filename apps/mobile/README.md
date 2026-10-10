@@ -25,10 +25,10 @@ npm run open:ios
 
 The nested shell has its own dependency installation so ordinary repository
 `npm ci` and Desktop/Cloud builds retain their existing lockfile and dependencies.
-Generate and commit the shell's package-lock.json after its first successful
-installation. Capacitor generates the Android Gradle and iOS Xcode projects;
-review and commit them after SDK builds pass. Existing projects use `sync`
-instead of repeating `add`.
+The recovery workflow generates the shell lockfile and native Android/iOS
+projects, checks iOS simulator compilation, and saves them on the recovery branch.
+If the native directories are already present, use `sync` instead of repeating
+`add`. Android SDK compilation and on-device checks remain separate requirements.
 
 Use Node >=22.13.0 and the Capacitor 8 Android Studio/JDK/SDK and macOS/Xcode
 requirements. iOS packaging requires macOS, Apple signing and provisioning.

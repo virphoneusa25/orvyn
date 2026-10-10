@@ -1,0 +1,60 @@
+name: Reconstructed native platform sources
+
+on:
+  push:
+    branches:
+      - publish/recovered-pending-fixes
+    paths:
+      - apps/mobile/shell/**
+      - .github/workflows/recovery-native-source.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovered-native-sources
+  cancel-in-progress: true
+
+jobs:
+  native-sources:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - name: Install isolated mobile shell and generate lock
+        working-directory: apps/mobile/shell
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --workspaces=false
+          else
+            npm install --workspaces=false
+          fi
+      - name: Generate native source projects
+        working-directory: apps/mobile/shell
+        run: |
+          npm run build
+          if [ ! -d android ]; then npx cap add android; fi
+          if [ ! -d ios ]; then npx cap add ios; fi
+          npx cap sync
+      - name: Verify iOS simulator compilation
+        working-directory: apps/mobile/shell
+        run: xcodebuild -project ios/App/App.xcodeproj -scheme App -sdk iphonesimulator -configuration Debug -derivedDataPath /tmp/orvyn-ios-build CODE_SIGNING_ALLOWED=NO build
+      - name: Preserve native source and lock in the recovery branch
+        if: github.ref == 'refs/heads/publish/recovered-pending-fixes'
+        run: |
+          git fetch origin publish/recovered-pending-fixes
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git add apps/mobile/shell/android apps/mobile/shell/ios apps/mobile/shell/package-lock.json
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "build(mobile): preserve generated native projects and dependency lock"
+          git push origin HEAD:publish/recovered-pending-fixes
