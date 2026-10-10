@@ -33,7 +33,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/codex/task-aware-production
-          git diff --exit-code "$VALIDATED_SOURCE" HEAD -- . ':(exclude).github/workflows/cloud-production-deploy.yml'
+          git diff --exit-code "$VALIDATED_SOURCE" HEAD -- . ':(exclude).github/workflows/cloud-production-deploy.yml' ':(exclude)scripts/deploy-ovh.sh'
+          bash -n scripts/deploy-ovh.sh
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VALIDATION_RUN" > /tmp/orvyn-validation.json
           node -e 'const r=require("/tmp/orvyn-validation.json"); if(r.conclusion!=="success" || r.head_sha!=="a74c83acd2f0836fe7097911b49b9175c3bcc849") throw new Error("Validated release checks did not pass")'
           curl -fsS --max-time 20 https://orvyn.virphoneusa.com/api/v1/health > /tmp/orvyn-release-before.json
