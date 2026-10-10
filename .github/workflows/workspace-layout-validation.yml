@@ -1,0 +1,41 @@
+name: Cloud workspace and mobile layout validation
+on:
+  push:
+    branches: [publish/mobile-layout-fix, publish/cloud-workbench-mobile]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - name: Web unit tests, typecheck and production bundle
+        run: |
+          npm run test -w apps/web
+          npm run typecheck -w apps/web
+          npm run build -w apps/web
+      - name: Existing Cloud workspace API tests
+        run: |
+          if test -f apps/backend/src/routes/cloudWorkbench.test.ts; then
+            npm run build -w apps/backend
+            node --test apps/backend/dist/routes/cloudWorkbench.test.js
+          fi
+      - run: npx playwright install --with-deps chromium
+      - name: Real browser responsive and workspace regression checks
+        env:
+          ORVYN_RESPONSIVE_SCREENSHOTS: artifacts/responsive
+        run: |
+          if test -f apps/web/src/components/CloudWorkbench.tsx; then export ORVYN_EXPECT_WORKBENCH=1; fi
+          node scripts/acceptance/web-responsive.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portal-responsive-screenshots
+          path: artifacts/responsive

@@ -33,9 +33,19 @@ function responseFor(url) {
   if (p === "/models") return { models: [{ id: "auto", name: "AUTO", description: "ORVYN chooses the best route.", kind: "orvyn", available: true }] };
   if (p === "/sessions" || p.startsWith("/sessions?")) return { sessions: [session] };
   if (p === "/sessions/alpha/messages") return { messages: [
-    { messageId: "m1", role: "user", content: "Generate an image of a sunrise over snowy mountains, cinematic light.", createdAt: now - 30_000 },
-    { messageId: "m2", role: "assistant", content: "I created the image and kept the composition suitable for a wide hero banner.", createdAt: now - 20_000 },
+    { messageId: "m1", role: "user", content: "Review the website and update src/app.ts.", runId: "run-layout", createdAt: now - 30_000 },
+    { messageId: "m2", role: "assistant", content: "Layout regression conversation.\n\n".repeat(60), runId: "run-layout", createdAt: now - 20_000 },
   ] };
+  if (p === "/agent/stream/runs/run-layout/events.json") return { status: "completed", events: [
+    { type: "run.execution", data: { executionTargetActual: "ovh_worker" } },
+    { type: "tool.started", data: { tool: "browser_open" } },
+    { type: "file.edit", data: { path: "src/app.ts", preview: { kind: "modify", additions: 1, deletions: 1, diff: [{ type: "remove", content: "old" }, { type: "add", content: "new" }] } } },
+    { type: "terminal.started", data: { command: "npm test" } },
+    { type: "terminal.output", data: { data: "All tests passed" } },
+    { type: "terminal.completed", data: { exitOk: true } },
+    { type: "run.completed", data: {} },
+  ] };
+  if (p === "/cloud-workbench/run-layout/files") return { ok: true, output: u.searchParams.has("path") ? u.searchParams.get("list") === "1" ? "app.ts\nassets/" : 'export const application = "ORVYN";\n' : "src/\nREADME.md" };
   if (p === "/projects" || p.startsWith("/projects?")) return { projects: [project] };
   if (p === "/projects/p1") return { project };
   if (p === "/artifacts" || p.startsWith("/artifacts?")) return { artifacts };
@@ -106,6 +116,83 @@ try {
         await page.screenshot({ path: path.join(screenshotDir, `${name}-${width}x${height}.png`), fullPage: false });
       }
     }
+
+    await page.goto(`${origin}/chats/alpha`, { waitUntil: "domcontentloaded" });
+    await page.getByLabel("Message", { exact: true }).waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector(".chat__stream")?.textContent?.includes("Layout regression conversation"));
+    await page.getByLabel("Message", { exact: true }).fill("Draft preserved while inspecting workspace.");
+    async function composerFits(label) {
+      const rect = await page.locator(".composer").boundingBox();
+      const viewport = page.viewportSize();
+      assert.ok(rect && rect.y >= 0 && rect.y + rect.height <= viewport.height + 1 && rect.x + rect.width <= viewport.width + 1, `${label}: composer outside viewport at ${width}x${height}: ${JSON.stringify(rect)}`);
+      const scroll = await page.locator(".chat__stream").evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+      assert.ok(scroll.client > 30 && scroll.scroll > scroll.client, `${label}: chat must scroll independently: ${JSON.stringify(scroll)}`);
+    }
+    await composerFits("long conversation");
+    if (width <= 820) {
+      await page.setViewportSize({ width, height: Math.max(360, height - 300) });
+      await page.waitForFunction(() => Math.abs(document.querySelector(".main").getBoundingClientRect().height - window.visualViewport.height) < 2);
+      await composerFits("keyboard-sized viewport");
+      await page.setViewportSize({ width, height });
+      await page.waitForFunction(() => Math.abs(document.querySelector(".main").getBoundingClientRect().height - window.visualViewport.height) < 2);
+      // Simulate iOS: visual viewport changes without a layout viewport resize.
+      await page.evaluate(() => {
+        Object.defineProperty(window.visualViewport, "height", { value: window.innerHeight - 280, configurable: true });
+        window.visualViewport.dispatchEvent(new Event("resize"));
+      });
+      await page.waitForFunction(() => Math.abs(document.querySelector(".main").getBoundingClientRect().height - window.visualViewport.height) < 2);
+      const keyboardRect = await page.locator(".composer").boundingBox();
+      const available = await page.evaluate(() => window.visualViewport.height);
+      assert.ok(keyboardRect.y + keyboardRect.height <= available + 1, "iOS keyboard must leave composer visible");
+      await page.evaluate(() => { delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event("resize")); });
+    }
+    if (process.env.ORVYN_EXPECT_WORKBENCH === "1") {
+      const pane = page.getByRole("complementary", { name: "Cloud workspace", exact: true });
+      const toggle = page.getByRole("button", { name: /Open workspace|Back to chat/ });
+      if (width <= 1050) assert.equal(await pane.isVisible(), false, "mobile workspace starts collapsed");
+      if (!(await pane.isVisible())) await toggle.click();
+      await pane.waitFor({ state: "visible" });
+      if (width <= 1050) assert.equal(await page.locator(".chat").isVisible(), false, "workspace must replace, rather than stack below, mobile chat");
+      await pane.getByRole("tab", { name: "Browser", exact: true }).click();
+      await pane.getByText("This task has finished", { exact: true }).waitFor();
+      assert.equal(await pane.getByRole("button", { name: "Take control" }).isEnabled(), false, "finished task cannot expose input controls");
+      await pane.getByRole("tab", { name: /Changes/ }).click();
+      await pane.getByText("1 file changed in this task", { exact: true }).waitFor();
+      await pane.getByRole("tab", { name: "Terminal", exact: true }).click();
+      await pane.locator(".cloud-workbench__terminal").waitFor();
+      assert.match(await pane.locator(".cloud-workbench__terminal").innerText(), /npm test[\s\S]*All tests passed[\s\S]*Command finished/);
+      await pane.getByRole("tab", { name: "Files", exact: true }).click();
+      await pane.getByRole("button", { name: "src/", exact: true }).click();
+      await pane.getByRole("button", { name: "app.ts", exact: true }).click();
+      await pane.locator(".cloud-workbench__code").waitFor();
+      assert.match(await pane.locator(".cloud-workbench__code").innerText(), /export const application/);
+      if (width > 1050) {
+        await pane.getByRole("button", { name: "Expand workspace" }).click();
+        assert.equal(await page.locator(".chat").isVisible(), false);
+        await pane.getByRole("button", { name: "Restore split view" }).click();
+        assert.equal(await page.locator(".chat").isVisible(), true);
+      }
+      const bounds = await pane.boundingBox();
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= height + 1, "workspace stays inside the viewport");
+      if (screenshotDir && [390, 768, 1440].includes(width)) await page.screenshot({ path: path.join(screenshotDir, `workspace-${width}x${height}.png`) });
+      await pane.getByRole("button", { name: "Close workspace" }).click();
+      assert.equal(await pane.isVisible(), false);
+      assert.equal(await page.getByLabel("Message", { exact: true }).inputValue(), "Draft preserved while inspecting workspace.");
+      await composerFits("after closing workspace");
+      await toggle.click();
+      await pane.waitFor({ state: "visible" });
+      await pane.getByRole("button", { name: "Close workspace" }).click();
+      if (width <= 1050) {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await toggle.click();
+        await pane.waitFor({ state: "visible" });
+        await page.setViewportSize({ width, height });
+        await pane.waitFor({ state: "hidden" });
+        await composerFits("after rotating to mobile");
+      }
+    }
+    if (screenshotDir && [390, 768, 1440].includes(width)) await page.screenshot({ path: path.join(screenshotDir, `chat-fixed-${width}x${height}.png`) });
+
     await context.close();
   }
   console.log(`Responsive portal acceptance passed: ${pages.length} routes across ${viewports.length} viewports.`);
