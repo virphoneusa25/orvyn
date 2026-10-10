@@ -23,6 +23,8 @@ jobs:
           npm run test -w apps/web
           npm run typecheck -w apps/web
           npm run build -w apps/web
+      - name: Existing backend and desktop regression suite
+        run: npm test
       - name: Existing Cloud workspace API tests
         run: |
           if test -f apps/backend/src/routes/cloudWorkbench.test.ts; then
@@ -40,3 +42,21 @@ jobs:
         with:
           name: portal-responsive-screenshots
           path: artifacts/responsive
+
+  packaged-browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Build the actual pinned mission sandbox browser image
+        run: docker build -t orvyn-browser-acceptance infrastructure/openshell/sandbox-image
+      - name: Exercise the actual worker browser helper against a rendered website
+        run: node scripts/acceptance/cloud-browser-helper.mjs
+      - name: Build the packaged backend and Cloud portal
+        run: docker build -f apps/backend/Dockerfile -t orvyn-backend-acceptance .
+      - name: Verify packaged Playwright and Chromium are usable
+        run: |
+          docker run --rm --entrypoint node orvyn-backend-acceptance -e 'const {chromium}=require("playwright"); (async()=>{const browser=await chromium.launch({args:["--no-sandbox"]}); try {const page=await browser.newPage(); await page.setContent("<title>ORVYN packaged browser</title>"); if(await page.title()!=="ORVYN packaged browser") throw new Error("Browser failed"); console.log("Packaged Chromium passed");} finally {await browser.close();}})().catch(error=>{console.error(error);process.exit(1)})'

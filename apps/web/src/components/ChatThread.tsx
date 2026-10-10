@@ -261,7 +261,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
             const exists = all.some((item) => item.runId === message.runId && item.role === "assistant");
             const assistant: Msg = { id: assistantId, role: "assistant", content: imageJob ? "" : content, createdAt: message.createdAt, runId: message.runId, runStatus: result.status, agentEvents: events, artifacts: imageJob ? imageAssets : fromEvents, streaming: !terminalRunStatus(result.status), ...(imageJob ? { imageJob } : {}) };
             return exists
-              ? all.map((item) => item.runId === message.runId && item.role === "assistant" ? { ...item, runStatus: result.status, agentEvents: events, artifacts: imageJob ? imageAssets : item.artifacts?.length ? item.artifacts : fromEvents, ...(imageJob ? { imageJob, content: "" } : content ? { content } : {}) } : item)
+              ? all.map((item) => item.runId === message.runId && item.role === "assistant" ? { ...item, runStatus: result.status, streaming: !terminalRunStatus(result.status), agentEvents: events, artifacts: imageJob ? imageAssets : item.artifacts?.length ? item.artifacts : fromEvents, ...(imageJob ? { imageJob, content: "" } : content ? { content } : {}) } : item)
               : [...all, assistant];
           });
         })

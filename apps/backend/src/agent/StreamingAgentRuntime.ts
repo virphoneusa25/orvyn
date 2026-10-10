@@ -1,3 +1,4 @@
+import { isWebsiteInspection, WEBSITE_INSPECTION_HINT } from "./websiteInspection";
 import { incompatibility } from "@orvyn/ai-core";
 import {surfaceToolAllowed} from "../computerUse/taskSurface";
 import { nativeDesktopRequest } from "../desktop/nativeDesktopBridge";
@@ -1529,13 +1530,14 @@ export class StreamingAgentRuntime {
     if (!recovering && this.store.get(runId)) throw new Error("Run id already exists");
     if (recovering && !this.store.get(runId)) throw new Error(`Cannot recover unknown run ${runId}`);
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const needsVision = isWebsiteInspection(instruction) || (attachments ?? []).some((attachment) => attachment.kind === "image" && attachment.b64);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     // "Auto" with the customer's own model set as default: their model runs the task.
     requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId, "agent");
     const registered = this.modelService.registry.list();
     const choice = selectAgentModel({
       providers: registered,
-      requirements: { vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) },
+      requirements: { vision: needsVision },
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
@@ -1548,14 +1550,14 @@ export class StreamingAgentRuntime {
       ? (() => {
           const p = this.modelService.registry.get(choice.registryId ?? "");
           if (!p) throw new Error(`Requested model "${choice.registryId}" is not configured.`);
-          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
+          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: needsVision });
           if (unsupported) throw new Error(`Requested model "${choice.registryId}": ${unsupported}.`);
           return p;
         })()
       : (() => {
           const picked = choice.registryId ? this.modelService.registry.get(choice.registryId) : undefined;
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
-          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
+          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: needsVision });
         })();
     if (!recovering) this.store.create(runId, projectRoot);
     else {
@@ -1567,9 +1569,8 @@ export class StreamingAgentRuntime {
     // to a note about a file the model can never look at. Route the run to
     // a vision-capable model. Field data keeps the internals; the customer
     // card stays vendor-free ("ORION switched to a compatible vision model").
-    const hasImageAttachment = (attachments ?? []).some((a) => a.kind === "image" && a.b64);
-    if (hasImageAttachment && !provider.supportsVision()) {
-      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot process image attachments.`);
+    if (needsVision && !provider.supportsVision()) {
+      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot inspect images for this task. Choose a vision-capable model.`);
       const visionProvider = pickVisionFallback(registered.filter((p) => !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: true }) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))), provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
       if (visionProvider) {
         const previousModel = provider.config.id;
@@ -1578,7 +1579,7 @@ export class StreamingAgentRuntime {
           requestedModel: requestedModelId ?? "auto",
           actualModel: visionProvider.config.id,
           previousModel,
-          fallbackReason: "image attachment: routing to a vision-capable model",
+          fallbackReason: "Image or website inspection: routing to a vision-capable model",
           reason: "vision attachment",
         });
       }
@@ -1659,7 +1660,7 @@ export class StreamingAgentRuntime {
       runGateway.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: runGateway.getPermission(t.name) })),
       { modelTools: def.toolsEnabled && provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", isWebsiteInspection(instruction) ? WEBSITE_INSPECTION_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     // A recovered run resumes from its durable checkpoint, not from scratch:
@@ -1671,7 +1672,7 @@ export class StreamingAgentRuntime {
 
     this.runs.set(runId, {
       controller: new AbortController(),
-      requireVision: hasImageAttachment,
+      requireVision: needsVision,
       toolsEnabled: def.toolsEnabled,
       projectRoot,
       ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
