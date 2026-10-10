@@ -9,6 +9,7 @@ import { needsExternalTool } from "../agent/capabilityGap";
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityForToolName, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "../agent/capabilityGap";
 import { CHAT_CAPABILITY_TOOL, CHAT_MANIFEST, CLOUD_CHAT_MANIFEST, CHAT_TASK_TOOL, CHAT_RESEARCH_PROMPT, CHAT_WEB_TOOLS, CLOUD_CHAT_TOOLS, CLOUD_CHAT_TOOL_NAMES, artifactsFromChatResult, finishActivity, startActivity, toolResultForModel, type ChatActivity, type WebToolRunner } from "./chatResearch";
 import { fetchHostKey, normalizePublicHttpUrl } from "./tools/netTools";
+import { extractLeakedToolMarkup, visibleAssistantDelta } from "./leakedToolMarkup";
 import { FetchAttemptMemory, firstFetchUrlPerHost, isFetchProxyUrl, modelFetchRecovery, sanitizeToolErrorForUser } from "../agent/webFetchRecovery";
 import { needsWebResearch, RESEARCH_NUDGE } from "../agent/researchIntent";
 const MAX_RESEARCH_ROUNDS = 6;
@@ -486,6 +487,7 @@ export class Orchestrator {
         let text = "";
         const calls: ToolCall[] = [];
         let buffered = "";
+        let shown = "";
         let decided = round > 0;
         // A provider failure before anything was shown retries this round on
         // the same model elsewhere (or an equivalent); nothing is repeated.
@@ -510,15 +512,19 @@ export class Orchestrator {
             decided = true;
             if (isMostlyChinese(buffered)) {
               const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature, signal: req.signal });
-              const english = String(retry?.content ?? "");
+              const english = extractLeakedToolMarkup(String(retry?.content ?? "")).text;
               yield { delta: english, done: false };
               yield { delta: "", done: true };
               return;
             }
-            yield { delta: buffered, done: false };
+            const first = visibleAssistantDelta("", text);
+            shown = first.visible;
+            if (first.delta) yield { delta: first.delta, done: false };
             continue;
           }
-          yield { delta: chunk.delta, done: false };
+          const next = visibleAssistantDelta(shown, text);
+          shown = next.visible;
+          if (next.delta) yield { delta: next.delta, done: false };
         }
         markProviderSuccess(provider.config.id);
         break;
@@ -542,7 +548,14 @@ export class Orchestrator {
           buffered = "";
         }
         }
-        if (!decided && buffered) yield { delta: buffered, done: false };
+        if (!decided && buffered) {
+          const first = visibleAssistantDelta(shown, text || buffered);
+          shown = first.visible;
+          if (first.delta) yield { delta: first.delta, done: false };
+        }
+        const leaked = extractLeakedToolMarkup(text);
+        text = leaked.text;
+        if (!calls.length && leaked.calls.length) calls.push(...leaked.calls);
 
         if (!calls.length) {
           // Answered from memory a question that needs current facts: research first (once).

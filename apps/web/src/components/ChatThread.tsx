@@ -1,5 +1,6 @@
 import { CloudWorkbench } from "./CloudWorkbench";
 import { followRun } from "../lib/followRun";
+import { stripLeakedToolMarkup } from "../lib/leakedToolMarkup";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
@@ -203,6 +204,11 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     try { localStorage.setItem("orvyn.cloudWorkspace", "closed"); } catch { /* storage unavailable */ }
     workbenchToggle.current?.focus();
   }
+  function openWorkbench() {
+    if (window.innerWidth <= 1050) return;
+    setWorkbenchOpen(true);
+    try { localStorage.setItem("orvyn.cloudWorkspace", "open"); } catch { /* storage unavailable */ }
+  }
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 1050px)");
     const changed = () => { if (narrow.matches) { setWorkbenchOpen(false); setWorkbenchExpanded(false); } };
@@ -251,7 +257,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
           let content = "";
           for (const event of events) {
             if (event.type === "message.retracted") content = "";
-            if (event.type === "message.delta") content += String(event.data?.content ?? "");
+            if (event.type === "message.delta") content = stripLeakedToolMarkup(content + String(event.data?.content ?? ""));
           }
           const fromEvents = artifactsFromEvents(events);
           const assistantId = `cloud-run-${message.runId}`;
@@ -281,7 +287,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         if(m.runId!==restoredRun || m.role!=='assistant') return m;
         const events=[...(m.agentEvents??[]),event as AgentProgressEvent];
         const status=event.type==='run.blocked' && event.data?.terminal!==true?'awaiting_approval':/^run\.(completed|partial|error|cancelled|blocked)$/.test(event.type)?event.type.slice(4):m.runStatus;
-        return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?m.content+String(event.data?.content??''):m.content,runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
+        return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?stripLeakedToolMarkup(m.content+String(event.data?.content??'')):stripLeakedToolMarkup(m.content),runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
       }));
     }).catch(error=>toast(error.message));
     stopRun.current=()=>{void api(`/agent/stream/runs/${encodeURIComponent(restoredRun)}/cancel`,{method:'POST',body:{}}).catch(error=>toast(error.message))};
@@ -371,6 +377,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       if (routed.runId) {
         const runId = routed.runId;
         hydratedRuns.current.add(runId);
+        openWorkbench();
         patch(replyId, (m) => ({ ...m, runId, runStatus: "running", agentEvents: [] }));
         const controller = new AbortController();
         cancel.current = () => controller.abort();
@@ -390,7 +397,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
             const agentEvents = [...(m.agentEvents ?? []), event];
             let content = m.imageJob ? "" : m.content;
             if (event.type === "message.retracted" && !m.imageJob) content = "";
-            if (event.type === "message.delta" && !m.imageJob) content += String(event.data?.content ?? "");
+            if (event.type === "message.delta" && !m.imageJob) content = stripLeakedToolMarkup(content + String(event.data?.content ?? ""));
             let imageJob = m.imageJob;
             const data = event.data ?? {};
             if (imageJob && event.type === "tool.started" && data.tool === "generate_image") imageJob = { ...imageJob, status: "generating", error: undefined };
@@ -434,7 +441,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         if (c.routing) patch(replyId, (m) => ({ ...m, routing: c.routing }));
         if (c.retract) patch(replyId, (m) => ({ ...m, content: "" }));
         if (c.activity) patch(replyId, (m) => ({ ...m, activities: upsertActivity(m.activities ?? [], c.activity!) }));
-        if (c.delta && !imageJob) patch(replyId, (m) => ({ ...m, content: m.content + c.delta }));
+        if (c.delta && !imageJob) patch(replyId, (m) => ({ ...m, content: stripLeakedToolMarkup(m.content + c.delta) }));
         if (c.imageGeneration && imageJob) patch(replyId, (m) => ({ ...m, imageJob: { ...m.imageJob!, status: c.imageGeneration!.status, ...(c.imageGeneration?.error ? { error: c.imageGeneration.error } : {}) } }));
         if (c.artifacts?.length) {
           patch(replyId, (m) => ({ ...m, artifacts: [...(m.artifacts ?? []), ...c.artifacts!], ...(imageJob ? { imageJob: { ...m.imageJob!, status: "provider-completed", assets: c.artifacts!.filter((a) => a.mimeType.startsWith("image/")) } } : {}) }));
@@ -521,7 +528,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                     onRetry={(request) => void send(request.prompt, { userMessageId: m.imageJob!.userMessageId ?? m.id, modelId: request.modelId })}
                   /> : <>
                     {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}
-                    {m.role === "assistant" ? <StreamedMarkdown text={m.content} live={Boolean(m.streaming)} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
+                    {m.role === "assistant" ? <StreamedMarkdown text={stripLeakedToolMarkup(m.content)} live={Boolean(m.streaming)} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
                   </>}
                 </div>
                 {m.attachments?.length ? (

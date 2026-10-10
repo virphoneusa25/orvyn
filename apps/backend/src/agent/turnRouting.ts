@@ -11,10 +11,14 @@ import { looksLikeCloudArtifactRequest } from "../ai/coreCapabilityHits";
 export type TurnRoute = "chat" | "run";
 
 export function routeTurn(instruction: string, composerMode?: string, context: TurnDecisionContext = {}): TurnRoute {
+  const intent = inferTaskIntent(instruction, composerMode);
+  // Looking at a live URL belongs in the cloud workspace even when phrased as
+  // a question ("can you view snch.com and tell me what it is"). Chat-only
+  // research never binds a runId, so the Browser pane stays empty.
+  if (intent.requiresBrowser || intent.requiresDesktop) return "run";
   const decision = decideTurn(instruction, context);
   if (!decision.requiresExecution) return "chat";
   if (decision.disposition === "continue_execution") return "run";
-  const intent = inferTaskIntent(instruction, composerMode);
   // Pictures, PDFs, spreadsheets, and zips on Cloud (no project) use chat
   // tools — never an engineering run that hunts MCP for a missing generator.
   if (looksLikeCloudArtifactRequest(instruction) && !intent.requiresWorkspace && !intent.requiresFrontend) {

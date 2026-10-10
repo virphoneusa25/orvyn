@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isWebsiteInspection, websiteInspectionEvidence } from "./websiteInspection";
 import { inferTaskIntent } from "./taskIntent";
+import { routeTurn } from "./turnRouting";
 import { selectToolNames } from "./toolPolicy";
 import { evaluatePreflight } from "./runPreflight";
 import { evaluateCompletionGates } from "./completionGates";
@@ -26,6 +27,16 @@ test("URL and natural-language website reviews are browser observation, without 
     assert.equal(intent.requiresTerminal, false, prompt);
     assert.deepEqual(intent.resourceRequirements, ["browser_session"], prompt);
     assert.equal(evaluatePreflight({ intent, workspace: { repositoryDetected: false } as any, servers: [] }).status, "ok");
+    assert.equal(routeTurn(prompt, "auto"), "run", prompt);
+  }
+  for (const prompt of [
+    "can you view snch.com and tell me what it is",
+    "Can you view https://example.com and tell me what it is?",
+    "What do you think of https://example.com?",
+  ]) {
+    assert.equal(isWebsiteInspection(prompt), true, prompt);
+    assert.equal(inferTaskIntent(prompt).requiresBrowser, true, prompt);
+    assert.equal(routeTurn(prompt, "auto"), "run", prompt);
   }
 });
 

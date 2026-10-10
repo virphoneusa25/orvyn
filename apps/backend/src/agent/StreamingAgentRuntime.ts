@@ -21,6 +21,7 @@ import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelp
 import { userMemoryPromptAsync, type AsyncMemoryStoreLike as MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
+import { extractLeakedToolMarkup, visibleAssistantDelta } from "../ai/leakedToolMarkup";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { asksForVerification, evaluateCompletionGates, TEST_COMMAND } from "./completionGates";
@@ -2706,6 +2707,7 @@ export class StreamingAgentRuntime {
         // task for 74KB). Cut it, retract the ramble, correct the model once.
         const RAMBLE_LIMIT = 6000;
         let rambled = false;
+        let shown = "";
         try {
         for await (const chunk of provider.stream({
           messages,
@@ -2732,16 +2734,22 @@ export class StreamingAgentRuntime {
                     tools: tools(),
                     reasoningEffort: state.reasoningEffort,
                   });
-                  const text = String(retry?.content ?? "");
+                  const text = extractLeakedToolMarkup(String(retry?.content ?? "")).text;
                   this.store.emit(runId, "message.delta", { content: text });
                   content = text;
+                  shown = text;
                   streamedText = text.length > 0;
                   for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
                   break;
                 }
-                if (langBuffer) { this.store.emit(runId, "message.delta", { content: langBuffer }); await new Promise<void>(resolve => setImmediate(resolve)); }
-                content += langBuffer;
-                streamedText = true;
+                if (langBuffer) {
+                  content += langBuffer;
+                  const first = visibleAssistantDelta("", content);
+                  shown = first.visible;
+                  if (first.delta) this.store.emit(runId, "message.delta", { content: first.delta });
+                  await new Promise<void>(resolve => setImmediate(resolve));
+                }
+                streamedText = shown.length > 0;
               }
               if (!rambled && content.length > RAMBLE_LIMIT && streamedCalls.length === 0 && !(provider.stream as { rambleGuardOff?: boolean }).rambleGuardOff) {
                 rambled = true;
@@ -2750,8 +2758,10 @@ export class StreamingAgentRuntime {
               }
             } else {
               content += chunk.delta;
-              streamedText = true;
-              this.store.emit(runId, "message.delta", { content: chunk.delta });
+              const next = visibleAssistantDelta(shown, content);
+              shown = next.visible;
+              streamedText = shown.length > 0;
+              if (next.delta) this.store.emit(runId, "message.delta", { content: next.delta });
               await new Promise<void>(resolve => setImmediate(resolve));
             }
           }
@@ -2829,6 +2839,9 @@ export class StreamingAgentRuntime {
         markProviderSuccess(provider.config.id);
 
         if (state.cancelled) return cancelled();
+        const leaked = extractLeakedToolMarkup(content);
+        content = leaked.text;
+        if (leaked.calls.length) streamedCalls.push(...leaked.calls);
 
         // Drop malformed calls rather than sending the model a reply to a tool
         // it never named; keep duplicates out so one id is answered once.
