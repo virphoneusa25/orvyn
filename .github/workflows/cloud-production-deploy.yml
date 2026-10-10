@@ -37,7 +37,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VALIDATION_RUN" > /tmp/orvyn-validation.json
           node -e 'const r=require("/tmp/orvyn-validation.json"); if(r.conclusion!=="success" || r.head_sha!=="a74c83acd2f0836fe7097911b49b9175c3bcc849") throw new Error("Validated release checks did not pass")'
           curl -fsS --max-time 20 https://orvyn.virphoneusa.com/api/v1/health > /tmp/orvyn-release-before.json
-          live_commit=$(node -e 'const h=require("/tmp/orvyn-release-before.json"); if(h.status!=="ok" || !/^[a-f0-9]{40}$/.test(h.commit)) throw new Error("Production health or commit is unavailable"); process.stdout.write(h.commit)')
+          live_commit=$(node -e 'const h=require("/tmp/orvyn-release-before.json"); if(h.status!=="ok" || !/^[a-f0-9]{7,40}$/.test(h.commit)) { console.error(JSON.stringify({status:h.status,commit:h.commit,builtAt:h.builtAt})); throw new Error("Production health or commit is unavailable"); } process.stdout.write(h.commit)')
+          live_commit=$(git rev-parse "$live_commit^{commit}")
           echo "Production before: $live_commit"
           git cat-file -e "$live_commit^{commit}"
           git merge-base --is-ancestor "$live_commit" "$VALIDATED_SOURCE" || { echo "::error::Production contains a different release; integrate it before deployment."; exit 1; }
@@ -71,6 +72,7 @@ jobs:
           ssh-keygen -y -f "$OVH_SSH_KEY" > /dev/null
           unset OVH_SSH_PRIVATE_KEY
           live_commit=$(curl -fsS --max-time 20 "$OVH_HEALTH_URL" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).commit))')
+          live_commit=$(git rev-parse "$live_commit^{commit}")
           test "$live_commit" = "$EXPECTED_LIVE_COMMIT" || { echo "::error::Production changed after preflight; refusing overwrite."; exit 1; }
           ssh -i "$OVH_SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$OVH_HOST" bash -s -- "$OVH_REMOTE_DIR" "$EXPECTED_LIVE_COMMIT" <<'REMOTE'
           set -euo pipefail
