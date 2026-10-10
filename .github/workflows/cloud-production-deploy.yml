@@ -1,0 +1,94 @@
+name: Deploy validated Cloud workspace release
+on:
+  push:
+    branches: [codex/task-aware-production]
+    paths: [.github/workflows/cloud-production-deploy.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: orvyn-production-release
+  cancel-in-progress: false
+env:
+  VALIDATED_SOURCE: c4940dd7362d301d022641be89b3498802ddca0f
+  VALIDATION_RUN: "38059830335"
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      live_commit: ${{ steps.release.outputs.live_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Check validated source and current production release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/codex/task-aware-production
+          git diff --exit-code "$VALIDATED_SOURCE" HEAD -- . ':(exclude).github/workflows/cloud-production-deploy.yml'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VALIDATION_RUN" > /tmp/orvyn-validation.json
+          node -e 'const r=require("/tmp/orvyn-validation.json"); if(r.conclusion!=="success" || r.head_sha!=="a74c83acd2f0836fe7097911b49b9175c3bcc849") throw new Error("Validated release checks did not pass")'
+          curl -fsS --max-time 20 https://orvyn.virphoneusa.com/api/v1/health > /tmp/orvyn-release-before.json
+          live_commit=$(node -e 'const h=require("/tmp/orvyn-release-before.json"); if(h.status!=="ok" || !/^[a-f0-9]{40}$/.test(h.commit)) throw new Error("Production health or commit is unavailable"); process.stdout.write(h.commit)')
+          echo "Production before: $live_commit"
+          git cat-file -e "$live_commit^{commit}"
+          git merge-base --is-ancestor "$live_commit" "$VALIDATED_SOURCE" || { echo "::error::Production contains a different release; integrate it before deployment."; exit 1; }
+          echo "live_commit=$live_commit" >> "$GITHUB_OUTPUT"
+  production:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+      - name: Deploy through the existing OVH release script
+        env:
+          OVH_HOST: ubuntu@40.160.11.123
+          OVH_REMOTE_DIR: /home/ubuntu/orvyn
+          OVH_HEALTH_URL: https://orvyn.virphoneusa.com/api/v1/health
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          EXPECTED_LIVE_COMMIT: ${{ needs.preflight.outputs.live_commit }}
+        run: |
+          set -euo pipefail
+          test -n "$OVH_SSH_PRIVATE_KEY" || { echo "::error::OVH deploy credential is missing."; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/orvyn_release"
+          chmod 600 "$HOME/.ssh/orvyn_release"
+          export OVH_SSH_KEY="$HOME/.ssh/orvyn_release"
+          trap 'rm -f "$OVH_SSH_KEY"' EXIT
+          ssh-keygen -y -f "$OVH_SSH_KEY" > /dev/null
+          unset OVH_SSH_PRIVATE_KEY
+          live_commit=$(curl -fsS --max-time 20 "$OVH_HEALTH_URL" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).commit))')
+          test "$live_commit" = "$EXPECTED_LIVE_COMMIT" || { echo "::error::Production changed after preflight; refusing overwrite."; exit 1; }
+          ssh -i "$OVH_SSH_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$OVH_HOST" bash -s -- "$OVH_REMOTE_DIR" "$EXPECTED_LIVE_COMMIT" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          previous="$2"
+          rollback=".deploy-releases/$previous"
+          mkdir -p "$rollback"
+          docker image tag "$(docker inspect orvyn-backend-1 --format '{{.Image}}')" "orvyn-backend:rollback-$previous"
+          docker image tag "$(docker inspect orvyn-worker-1 --format '{{.Image}}')" "orvyn-worker:rollback-$previous"
+          tar -cf "$rollback/config.tar" docker-compose.yml infrastructure/ovh infrastructure/docker infrastructure/openshell
+          echo "Previous backend and worker images retained for rollback"
+          REMOTE
+          # No provider, billing, OAuth or SMTP values are sent: keep production .env.
+          bash scripts/deploy-ovh.sh
+      - name: Confirm both public Cloud hosts serve this release
+        run: |
+          set -euo pipefail
+          for host in orvyn.virphoneusa.com app.kernelailabs.com; do
+            curl -fsS --max-time 20 "https://$host/api/v1/health" > /tmp/orvyn-release-health.json
+            node -e 'const h=require("/tmp/orvyn-release-health.json"); if(h.status!=="ok" || h.commit!==process.env.GITHUB_SHA) throw new Error("Live release SHA mismatch"); console.log("Verified live release "+h.commit)'
+          done
