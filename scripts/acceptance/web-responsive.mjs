@@ -195,6 +195,112 @@ try {
 
     await context.close();
   }
+
+  if (process.env.ORVYN_EXPECT_WORKBENCH === "1") {
+    for (const [width, height] of [[390, 844], [1440, 900]]) {
+      const context = await browser.newContext({ viewport: { width, height } });
+      await context.addInitScript(() => {
+        localStorage.setItem("orvyn.session", "responsive-test");
+        window.__previewStarts = 0; window.__previewAborts = 0; window.__desktopAborts = 0;
+        const original = window.fetch.bind(window);
+        window.fetch = async (input, options) => {
+          const url = typeof input === "string" ? input : input.url;
+          let channel;
+          if (/\/cloud-workbench\/run-layout\/browser\/stream/.test(url)) channel = "browser";
+          if (/\/desktop\/stream\?runId=run-layout/.test(url)) channel = "desktop";
+          if (/\/agent\/stream\/runs\/run-layout\/events\?/.test(url)) channel = "progress";
+          if (!channel) return original(input, options);
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              if (channel === "browser") {
+                window.__previewStream = controller; window.__previewStarts++;
+                const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450"><rect width="800" height="450" fill="#10172a"/><text x="60" y="100" fill="#eceefa" font-size="30">ORVYN live browser fixture</text></svg>';
+                controller.enqueue(encoder.encode('data: ' + JSON.stringify({ok:true,screenshot:{b64:btoa(svg),mediaType:"image/svg+xml"},control:{owner:"orion"}}) + '\n\n'));
+              } else if (channel === "desktop") {
+                window.__desktopStream = controller;
+                const canvas = document.createElement("canvas"); canvas.width = 800; canvas.height = 450;
+                const ctx = canvas.getContext("2d"); ctx.fillStyle = "#10172a"; ctx.fillRect(0,0,800,450); ctx.fillStyle = "#eceefa"; ctx.font = "30px sans-serif"; ctx.fillText("ORVYN cloud desktop fixture",60,100);
+                controller.enqueue(encoder.encode('event: frame\ndata: ' + canvas.toDataURL("image/jpeg").split(",")[1] + '\n\nevent: state\ndata: {"controlOwner":"orion"}\n\n'));
+              } else { window.__progressStream = controller; controller.enqueue(encoder.encode(': heartbeat\n\n')); }
+              options?.signal?.addEventListener("abort", () => {
+                if (channel === "browser") window.__previewAborts++;
+                if (channel === "desktop") window.__desktopAborts++;
+                try { controller.error(new DOMException("Aborted", "AbortError")); } catch { /* already closed */ }
+              }, { once: true });
+            },
+          });
+          return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+        };
+      });
+      const page = await context.newPage();
+      const inputs = [];
+      let failInput = true;
+      await page.route("**/api/v1/**", async (route) => {
+        const url = new URL(route.request().url()), method = route.request().method();
+        let result = responseFor(url.href);
+        if (url.pathname.endsWith("/run-layout/events.json")) result = { ...result, status: "running", events: [
+          {type:"run.execution",data:{executionTargetActual:"ovh_worker"}},
+          {type:"desktop.target",data:{surface:"desktop"}},
+          {type:"tool.started",data:{tool:"browser_open"}},
+        ] };
+        if (url.pathname.endsWith("/desktop/session")) result = { session: { live: true, controlOwner: "orion", width: 800, height: 450 } };
+        if (method === "POST" && url.pathname.endsWith("/control")) {
+          const owner = route.request().postDataJSON().owner;
+          result = url.pathname.includes("/browser/") ? { owner } : { session: { controlOwner: owner } };
+        }
+        if (method === "POST" && url.pathname.endsWith("/input")) {
+          inputs.push({ path: url.pathname, ...route.request().postDataJSON() });
+          result = failInput ? { ok: false, error: "Input blocked by fixture" } : { ok: true };
+        }
+        if (method === "POST" && url.pathname.endsWith("/stop")) {
+          result = { ok: true };
+          await page.evaluate(() => window.__progressStream.enqueue(new TextEncoder().encode('data: {"runId":"run-layout","sequence":100,"type":"run.cancelled","data":{}}\n\n')));
+        }
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(result) });
+      });
+      await page.goto(`${origin}/chats/alpha`, {waitUntil:"domcontentloaded"});
+      const pane = page.getByRole("complementary", {name:"Cloud workspace",exact:true});
+      await page.getByLabel("Message", {exact:true}).waitFor();
+      if (!(await pane.isVisible())) await page.getByRole("button",{name:"Open workspace"}).click();
+      await pane.waitFor();
+      await pane.getByRole("tab",{name:"Browser",exact:true}).click();
+      await page.waitForFunction(() => !document.querySelector(".cloud-workbench__preview-bar button").disabled);
+      await pane.getByRole("button",{name:"Take control"}).click();
+      await pane.getByText("You have control",{exact:true}).waitFor();
+      await pane.locator(".cloud-workbench__screen").click();
+      await pane.getByRole("alert").filter({hasText:"Input blocked by fixture"}).waitFor();
+      failInput = false;
+      const inputDone = page.waitForResponse(response => response.url().endsWith("/browser/input"));
+      await pane.locator(".cloud-workbench__screen").click();
+      await inputDone;
+      assert.ok(inputs.length >= 2 && inputs[0].x >= 0 && inputs[0].x <= 800 && inputs[0].y >= 0 && inputs[0].y <= 450, "browser coordinates map to the real frame");
+      if (screenshotDir) await page.screenshot({path:path.join(screenshotDir,`workspace-live-browser-${width}.png`)});
+      await pane.getByRole("button",{name:"Close workspace"}).click();
+      await page.waitForFunction(() => window.__previewAborts > 0);
+      await page.getByRole("button",{name:"Open workspace"}).click();
+      await page.waitForFunction(() => window.__previewStarts > 1 && !document.querySelector(".cloud-workbench__preview-bar button").disabled);
+      await page.evaluate(() => window.__previewStream.close());
+      await pane.getByText("Session ended",{exact:true}).waitFor();
+      assert.equal(await pane.getByRole("button",{name:"Take control"}).isEnabled(),false,"closed stream disables takeover");
+      await pane.getByRole("button",{name:"Reconnect preview"}).click();
+      await page.waitForFunction(() => window.__previewStarts > 2 && !document.querySelector(".cloud-workbench__preview-bar button").disabled);
+      await pane.getByRole("tab",{name:"Desktop",exact:true}).click();
+      await page.waitForFunction(() => !document.querySelector(".cloud-workbench__preview-bar button").disabled);
+      await pane.getByRole("button",{name:"Take control"}).click();
+      await pane.getByText("You have control",{exact:true}).waitFor();
+      await pane.locator(".cloud-workbench__screen").click();
+      await pane.getByRole("button",{name:"Return to ORVYN"}).click();
+      if (screenshotDir) await page.screenshot({path:path.join(screenshotDir,`workspace-live-desktop-${width}.png`)});
+      await pane.getByRole("button",{name:"Stop task",exact:true}).click();
+      await pane.getByText("Task finished",{exact:true}).waitFor();
+      assert.equal(await pane.getByRole("button",{name:"Take control"}).isEnabled(),false,"cancelled task cannot accept input");
+      await page.waitForFunction(() => window.__desktopAborts > 0);
+      await context.close();
+    }
+    console.log("Live Cloud workspace acceptance passed: browser and desktop SSE, takeover, input failures, reconnect, collapse cleanup and stop on mobile and desktop widths.");
+  }
+
   console.log(`Responsive portal acceptance passed: ${pages.length} routes across ${viewports.length} viewports.`);
 } finally {
   await browser.close();
