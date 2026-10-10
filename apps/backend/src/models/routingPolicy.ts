@@ -43,7 +43,7 @@ export const TIERS: Record<Tier, TierDef> = {
   utility: { tier: "utility", weight: 1, label: "Utility", candidates: ["mistral:mistral-small-4-0-26-03", "ci:gpt-5.6-luna", "ci:deepseek-v4-flash", "fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:nvidia/Nemotron-3_5-Lightning"] },
   "code-helper": { tier: "code-helper", weight: 1, label: "Code helper", candidates: ["mistral:codestral-25-08", "nebius:Qwen/Qwen3-30B-A3B-Instruct-2507"] },
   auto: { tier: "auto", weight: 1, label: "Auto", candidates: ["nebius:zai-org/GLM-5.3-Flash", "fw:accounts/fireworks/models/glm-5p3-flash", "ci:glm-5.3-flash", "hf:zai-org/GLM-5.3-Flash:deepinfra"] },
-  agent: { tier: "agent", weight: 3, label: "Advanced Auto", candidates: ["nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "openrouter:minimax/minimax-m2.5", "nebius:Qwen/Qwen3.5-397B-A17B", "hf:zai-org/GLM-5.3:deepinfra"] },
+  agent: { tier: "agent", weight: 3, label: "Advanced Auto", candidates: ["fw:accounts/fireworks/models/deepseek-v4p1-flash", "nebius:zai-org/GLM-5.3", "fw:accounts/fireworks/models/glm-5p3", "mistral:zai-glm-5-3", "ci:glm-5.3", "openrouter:minimax/minimax-m2.5", "nebius:Qwen/Qwen3.5-397B-A17B", "hf:zai-org/GLM-5.3:deepinfra"] },
   code: { tier: "code", weight: 4, label: "Code", candidates: ["fw:accounts/fireworks/models/kimi-k2p7-code", "nebius:moonshotai/Kimi-K2.7-Code"] },
   server: { tier: "server", weight: 2, label: "Server diagnosis", candidates: ["ci:google/gemini-3.5-flash-lite", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },
   research: { tier: "research", weight: 3, label: "Research", candidates: ["nebius:Qwen/Qwen3.5-397B-A17B", "ci:gemini-3.7-flash", "gemini:gemini-3.8-flash"] },

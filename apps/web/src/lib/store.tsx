@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { signal } from "./events";
 import { api, ApiError, getToken, getViewAsToken, onUnauthorized, setToken, setViewAsToken } from "./api";
 
 /** Leave a read-only support view: this tab forgets the view token and closes (or returns to the Admin Portal). */
@@ -106,6 +107,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => onUnauthorized(() => { if (getViewAsToken()) { endViewAs(); return; } setToken(null); setMe(null); setStatus("signed-out"); }), []);
+  // Refresh account data after switching devices or returning from native sign-in.
+  useEffect(() => {
+    const resume = () => {
+      if (!getToken()) return;
+      void refresh();
+      for (const name of ["sessions", "projects", "files", "notifications"] as const) signal(name);
+    };
+    const visible = () => { if (document.visibilityState === "visible") resume(); };
+    window.addEventListener("focus", resume);
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.removeEventListener("focus", resume); document.removeEventListener("visibilitychange", visible); };
+  }, [refresh]);
   // The balance moves as the account is used (here, on Desktop, or by a payment).
   useEffect(() => {
     if (status !== "ready") return;

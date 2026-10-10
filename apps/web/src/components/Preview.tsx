@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { api, blobUrl, downloadArtifact, imageLink } from "../lib/api";
+import { api, apiUrl, blobUrl, downloadArtifact, imageLink } from "../lib/api";
 import { fileKind, previewMode } from "../lib/fileKinds";
 import { FileIcon } from "./FileVisual";
 import { Icon } from "./Icons";
@@ -45,7 +45,7 @@ function PreviewPane({ target, onClose }: { target: PreviewTarget; onClose: () =
         } else if (mode === "html" || mode === "pdf") {
           // A real (sandboxed) URL: a blob frame would inherit the portal's CSP and its scripts could not run.
           const r = await api<{ url: string }>(`/artifacts/${encodeURIComponent(target.artifactId)}/preview-link`, { method: "POST", body: {} });
-          if (alive) setUrl(r.url);
+          if (alive) setUrl(apiUrl(r.url));
         } else if (mode === "image" && !viaBlob) {
           // A direct link: the browser streams and decodes the image itself.
           const link = await imageLink(target.artifactId);

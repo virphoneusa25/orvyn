@@ -57,7 +57,7 @@ const model = createServer((req, res) => {
 
 let failures = 0;
 const ok = (c, label, detail = "") => { console.log(`${c ? "  PASS" : "  FAIL"}  ${label}${!c && detail ? `\n        ${detail}` : ""}`); if (!c) failures++; };
-const neutral = ["ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
+const neutral = ["ORVYN_API_KEY", "OPENAI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "FIREWORKS_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_ROUTING_ENABLED", "NEBIUS_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST", "ASTRA_MODEL_ID", "ORCHESTRATOR_MODEL", "OPENAI_CODE_MODEL"].reduce((a, k) => ({ ...a, [k]: "" }), {});
 const { reducePresentation } = await import(pathToFileURL(join(repoRoot, "apps", "desktop", "src", "renderer", "presentationReducer.ts")).href);
 
 async function main() {
@@ -66,11 +66,18 @@ async function main() {
   execSync("git init -q", { cwd: projectDir });
   const server = spawn(process.execPath, ["dist/index.js"], {
     cwd: join(repoRoot, "apps", "backend"),
-    env: { ...process.env, ...neutral, MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", ORVYN_DATA_DIR: mkdtempSync(join(tmpdir(), "orvyn-live-data-")), PORT: String(PORT) },
+    env: { ...process.env, ...neutral, ORVYN_CLOUD_MODE: "false", ORVYN_AUTH_REQUIRED: "false", MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted-agent", ORVYN_DATA_DIR: mkdtempSync(join(tmpdir(), "orvyn-live-data-")), PORT: String(PORT) },
     stdio: "ignore",
   });
   try {
-    for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
+    let ready = false;
+    for (let i = 0; i < 80; i++) {
+      if (server.exitCode !== null) throw new Error(`Acceptance backend exited before becoming ready (code ${server.exitCode}). Run the backend build first.`);
+      try { if ((await fetch(`${BASE}/api/v1/health`)).ok) { ready = true; break; } } catch {}
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!ready) throw new Error("Acceptance backend did not become healthy within 20 seconds.");
+
     const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "auto", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
     const runId = started.runId;
     const events = [];

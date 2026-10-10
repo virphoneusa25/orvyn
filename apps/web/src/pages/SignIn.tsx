@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { navigate, useLocation } from "../lib/router";
@@ -6,6 +6,8 @@ import { Orb } from "../components/Orb";
 import { surface } from "../lib/surface";
 import { Icon } from "../components/Icons";
 import { Markdown } from "../lib/markdown";
+import { mobilePlatform } from "../lib/mobilePlatform";
+import { mobileSignIn } from "../lib/mobileAuth";
 
 // Sign in / create account / reset password. Google and GitHub finish through a
 // handoff: the portal keeps a secret verifier in this tab and claims the
@@ -46,6 +48,8 @@ async function startProvider(provider: "google" | "github") {
 
 export function SignIn() {
   const { signIn } = useStore();
+  const nativeClaim = useRef<AbortController | null>(null);
+  useEffect(() => () => nativeClaim.current?.abort(), []);
   const { query } = useLocation();
   const [mode, setMode] = useState<Mode>(query.get("mode") === "register" ? "register" : "login");
   const [email, setEmail] = useState("");
@@ -85,6 +89,21 @@ export function SignIn() {
       .finally(() => setBusy(false));
   }, [complete, signIn]);
 
+  const beginProvider = async (provider: "google" | "github") => {
+    setError(null);
+    if (!mobilePlatform()) {
+      try { await startProvider(provider); } catch (err) { setError(err instanceof Error ? err.message : "Sign-in could not start."); }
+      return;
+    }
+    nativeClaim.current?.abort();
+    const controller = new AbortController();
+    nativeClaim.current = controller;
+    setBusy(true);
+    try { await signIn(await mobileSignIn(provider, controller.signal)); }
+    catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Sign-in failed."); }
+    finally { if (!controller.signal.aborted) setBusy(false); }
+  };
+
   const strength = passwordStrength(password);
   const registerProblem = (): string | null => {
     if (!first.trim() || !last.trim()) return "Enter your first and last name.";
@@ -105,7 +124,7 @@ export function SignIn() {
         const r = await api<{ message: string }>("/auth/password/forgot", { method: "POST", body: { email } });
         setNotice(r.message);
       } else {
-        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email: email.trim(), password, name: `${first.trim()} ${last.trim()}`, organization: company.trim() || undefined, legalAccepted: terms, legalVersion: legal!.version, acceptTerms: terms, client: "web" } });
+        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email: email.trim(), password, name: `${first.trim()} ${last.trim()}`, organization: company.trim() || undefined, legalAccepted: terms, legalVersion: legal!.version, acceptTerms: terms, client: mobilePlatform() ? "mobile" : "web" } });
         await signIn(r.token);
       }
     } catch (err: any) {
@@ -121,12 +140,12 @@ export function SignIn() {
       <div className="card auth__card">
         <div className="auth__orb"><Orb /></div>
         <h1>{title}</h1>
-        <p className="sub">{mode === "forgot" ? "We'll email you a link to choose a new password." : surface === "admin" ? "Staff sign-in. Access is limited to ORVYN staff." : "One account for ORVYN Cloud and ORVYN Desktop."}</p>
+        <p className="sub">{mode === "forgot" ? "We'll email you a link to choose a new password." : surface === "admin" ? "Staff sign-in. Access is limited to ORVYN staff." : "One account for ORVYN Cloud, Desktop, and Mobile."}</p>
         {mode !== "forgot" && surface !== "admin" ? (
           <>
             <div className="auth__social">
-              <button className="btn" onClick={() => void startProvider("google")} disabled={busy || !providers.google} title={providers.google ? undefined : "Google sign-in isn't switched on for this server yet"} data-testid="oauth-google"><Icon.google /> Continue with Google</button>
-              <button className="btn" onClick={() => void startProvider("github")} disabled={busy || !providers.github} title={providers.github ? undefined : "GitHub sign-in isn't switched on for this server yet"} data-testid="oauth-github"><Icon.github /> Continue with GitHub</button>
+              <button className="btn" onClick={() => void beginProvider("google")} disabled={busy || !providers.google} title={providers.google ? undefined : "Google sign-in isn't switched on for this server yet"} data-testid="oauth-google"><Icon.google /> Continue with Google</button>
+              <button className="btn" onClick={() => void beginProvider("github")} disabled={busy || !providers.github} title={providers.github ? undefined : "GitHub sign-in isn't switched on for this server yet"} data-testid="oauth-github"><Icon.github /> Continue with GitHub</button>
               {!providers.google || !providers.github ? <div className="faint" style={{ fontSize: 12, textAlign: "center" }}>{!providers.google && !providers.github ? "Google and GitHub sign-in aren't switched on for this server yet." : `${!providers.google ? "Google" : "GitHub"} sign-in isn't switched on for this server yet.`}</div> : null}
             </div>
             <div className="auth__or">or with email</div>

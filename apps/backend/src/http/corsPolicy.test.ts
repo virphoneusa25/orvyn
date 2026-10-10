@@ -23,3 +23,9 @@ test("cloud mode denies an arbitrary browser origin", () => {
 test("local mode allows any origin", () => {
   assert.equal(originAllowed("https://evil.example", false, pub), true);
 });
+
+test("cloud accepts the bundled Android and iOS shell origins", () => {
+  assert.equal(originAllowed("https://localhost", true, pub), true);
+  assert.equal(originAllowed("capacitor://localhost", true, pub), true);
+  assert.equal(originAllowed("capacitor://evil.example", true, pub), false);
+});

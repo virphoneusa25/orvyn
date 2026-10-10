@@ -1,0 +1,30 @@
+{
+  "name": "@orvyn/native-shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "add:android": "npm run build && cap add android",
+    "add:ios": "npm run build && cap add ios",
+    "sync": "npm run build && cap sync",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.0.0",
+    "@capacitor/app": "8.0.0",
+    "@capacitor/browser": "8.0.0",
+    "@capacitor/filesystem": "8.0.0",
+    "@capacitor/share": "8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.0.0",
+    "@capacitor/android": "8.0.0",
+    "@capacitor/ios": "8.0.0"
+  }
+}

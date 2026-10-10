@@ -2,6 +2,9 @@
 // kept in this browser's storage and sent as a bearer header — never in a URL.
 // (The chat socket uses a one-minute single-use ticket instead.)
 
+import { apiUrl, mobilePlatform } from "./mobilePlatform";
+export { apiUrl } from "./mobilePlatform";
+
 const KEY = "orvyn.session";
 
 const VIEW_KEY = "orvyn.viewas";
@@ -34,7 +37,7 @@ export function onUnauthorized(fn: Listener): () => void { unauthorized.add(fn);
 
 export async function api<T = any>(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const token = getToken();
-  const res = await fetch(`/api/v1${path}`, {
+  const res = await fetch(apiUrl(`/api/v1${path}`), {
     method: init.method ?? "GET",
     headers: { ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
@@ -57,7 +60,7 @@ export async function blobUrl(path: string, timeoutMs = 45_000): Promise<{ url: 
   const ctl = new AbortController();
   const timer = window.setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(`/api/v1${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: ctl.signal });
+    const res = await fetch(apiUrl(`/api/v1${path}`), { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: ctl.signal });
     if (!res.ok) throw new ApiError(res.status, `Could not load the file (${res.status})`);
     const blob = await res.blob();
     return { url: URL.createObjectURL(blob), type: blob.type, blob };
@@ -80,13 +83,19 @@ export async function imageLink(artifactId: string, options: { refresh?: boolean
   const hit = imageLinks.get(artifactId);
   if (!options.refresh && hit && hit.exp > Date.now()) return hit.url;
   const r = await api<{ url: string }>(`/artifacts/${encodeURIComponent(artifactId)}/preview-link`, { method: "POST", body: {} });
-  imageLinks.set(artifactId, { url: r.url, exp: Date.now() + 4 * 60_000 });
-  return r.url;
+  const url = apiUrl(r.url);
+  imageLinks.set(artifactId, { url, exp: Date.now() + 4 * 60_000 });
+  return url;
 }
 
 /** Saves a file to the user's computer (no model involved, no credits). */
 export async function downloadArtifact(artifactId: string, name: string): Promise<void> {
-  const { url } = await blobUrl(`/artifacts/${encodeURIComponent(artifactId)}/download`);
+  const { url, blob } = await blobUrl(`/artifacts/${encodeURIComponent(artifactId)}/download`);
+  const mobile = mobilePlatform();
+  if (mobile) {
+    try { await mobile.saveFile(blob, name); } finally { URL.revokeObjectURL(url); }
+    return;
+  }
   const a = document.createElement("a");
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);

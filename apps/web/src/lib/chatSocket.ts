@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { chatSocketUrl } from "./mobilePlatform";
 
 // One chat turn over the ORVYN chat socket. The socket is opened with a
 // one-minute single-use ticket (the session token never rides a URL).
@@ -31,9 +32,8 @@ export function streamTurn(input: TurnInput, onChunk: (c: ChatChunk) => void): {
   let cancelled = false;
   const done = (async () => {
     const { ticket } = await api<{ ticket: string }>("/auth/ws-ticket", { method: "POST", body: {} });
-    const proto = location.protocol === "https:" ? "wss" : "ws";
     await new Promise<void>((resolve, reject) => {
-      socket = new WebSocket(`${proto}://${location.host}/ws/chat?ticket=${encodeURIComponent(ticket)}`);
+      socket = new WebSocket(chatSocketUrl(ticket));
       let sent = false;
       let finished = false;
       const finish = () => { if (!finished) { finished = true; resolve(); try { socket?.close(); } catch { /* closed */ } } };

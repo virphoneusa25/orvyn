@@ -33,22 +33,28 @@ test("Hugging Face routes register only with a server key and preserve the provi
     let requestedUrl = "";
     let requestedAuthorization = "";
     let requestedModel = "";
+    let requestedTools: any[] = [];
     globalThis.fetch = (async (input, init) => {
       requestedUrl = String(input);
       requestedAuthorization = new Headers(init?.headers).get("authorization") ?? "";
-      requestedModel = JSON.parse(String(init?.body)).model;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }), {
+      const body = JSON.parse(String(init?.body));
+      requestedModel = body.model;
+      requestedTools = body.tools ?? [];
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: [{ id: "call_hf", type: "function", function: { name: "read_file", arguments: '{"path":"README.md"}' } }] }, finish_reason: "tool_calls" }] }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     }) as typeof fetch;
     try {
       const provider = withKey.registry.get("hf:zai-org/GLM-5.3:deepinfra")!;
-      const response = await provider.generate({ messages: [{ role: "user", content: "hello" }] } as any);
+      const response = await provider.generate({ messages: [{ role: "user", content: "Read README.md" }], tools: [{ name: "read_file", description: "Read a project file", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } }] });
       assert.equal(response.content, "ok");
+      assert.equal(response.toolCalls?.[0]?.name, "read_file");
+      assert.deepEqual(response.toolCalls?.[0]?.arguments, { path: "README.md" });
       assert.equal(requestedUrl, "https://router.huggingface.co/v1/chat/completions");
       assert.equal(requestedAuthorization, "Bearer hf_test_server_secret");
       assert.equal(requestedModel, "zai-org/GLM-5.3:deepinfra");
+      assert.equal(requestedTools[0]?.function?.name, "read_file");
     } finally {
       globalThis.fetch = originalFetch;
     }

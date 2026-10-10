@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, setToken } from "../lib/api";
+import { api, apiUrl, setToken } from "../lib/api";
 import { date } from "../lib/format";
 import { Markdown } from "../lib/markdown";
 import { navigate, useLocation } from "../lib/router";
@@ -19,7 +19,7 @@ export function SharedChat({ token }: { token: string }) {
   const [data, setData] = useState<{ title: string; sharedAt: number; author: string | null; messages: { role: string; content: string; createdAt: number }[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    fetch(`/api/v1/public/shares/${encodeURIComponent(token)}`).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || "This shared conversation isn't available."); setData(j); }).catch((e) => setErr(e.message));
+    fetch(apiUrl(`/api/v1/public/shares/${encodeURIComponent(token)}`)).then(async (r) => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || "This shared conversation isn't available."); setData(j); }).catch((e) => setErr(e.message));
   }, [token]);
   return (
     <div className="standalone" data-testid="shared-chat">

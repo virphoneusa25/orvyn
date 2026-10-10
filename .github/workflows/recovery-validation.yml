@@ -1,0 +1,54 @@
+name: Reconstructed changes validation
+
+on:
+  push:
+    branches:
+      - publish/recovered-pending-fixes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Router, provider and native-origin regressions
+        run: node --test apps/backend/dist/models/routingPolicy.test.js apps/backend/dist/models/selectModel.test.js apps/backend/dist/models/huggingFaceRouting.test.js apps/backend/dist/http/corsPolicy.test.js
+      - name: Web unit tests and typecheck
+        run: |
+          npm run test -w apps/web
+          npm run typecheck -w apps/web
+      - name: Full existing test suite
+        run: npm test
+      - name: Live streaming acceptance
+        run: npm run accept:chat-live
+
+  mobile-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - name: Install isolated mobile shell dependencies
+        working-directory: apps/mobile/shell
+        run: npm install --workspaces=false
+      - name: Build native shared UI bundle
+        working-directory: apps/mobile/shell
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orvyn-mobile-web-bundle
+          path: apps/mobile/shell/dist

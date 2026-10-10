@@ -74,7 +74,7 @@ test("escalation climbs Kimi → GLM-5.3 → Claude Sonnet 5, never to GPT-5.6 S
 test("an unhealthy model is skipped", () => {
   const intent = inferTaskIntent("Create hello.txt with the text hi");
   const choice = selectAgentModel({ intent, requestedModelId: "auto", availableIds: ids, health: [{ registryId: laneModel("auto").registryId, failureRate: 0.8 }] });
-  assert.equal(choice.registryId, laneModel("engineering").registryId, "Auto → (agent tier shares the unhealthy model) → heavy");
+  assert.equal(choice.registryId, laneModel("fast-secondary").registryId, "An unhealthy Auto model falls back to the registered Fireworks tool model");
 });
 
 test("Premium (requested) puts Kimi K3 first and keeps Sol exceptional", () => {

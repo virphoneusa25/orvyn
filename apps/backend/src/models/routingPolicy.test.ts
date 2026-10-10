@@ -78,3 +78,24 @@ test("credits: weight × tokens / 1000; budgets per profile, configurable", () =
   assert.equal(isSmallEdit("Fix the typo in the footer"), true);
   assert.equal(isSmallEdit("Build a dashboard with charts and auth"), false);
 });
+
+test("Auto recovers through a registered Fireworks route when Flash is unhealthy", () => {
+  const flash = "ci:glm-5.3-flash";
+  const fallback = "fw:accounts/fireworks/models/deepseek-v4p1-flash";
+  const route = startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: [flash, fallback], health: [{ registryId: flash, failureRate: 0.8 }] });
+  assert.equal(route.tier, "agent");
+  assert.equal(route.registryId, fallback);
+});
+
+test("Hugging Face enabled does not invent routes absent from the registry", () => {
+  const old = process.env.HUGGINGFACE_ROUTING_ENABLED;
+  try {
+    process.env.HUGGINGFACE_ROUTING_ENABLED = "1";
+    const fallback = "fw:accounts/fireworks/models/deepseek-v4p1-flash";
+    assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: [fallback] }).registryId, fallback);
+    assert.equal(startRoute({ profile: "auto", instruction: "Create hello.txt", availableIds: [] }).registryId, null);
+  } finally {
+    if (old === undefined) delete process.env.HUGGINGFACE_ROUTING_ENABLED;
+    else process.env.HUGGINGFACE_ROUTING_ENABLED = old;
+  }
+});

@@ -70,7 +70,7 @@ function bearerToken(req: Request): string | null {
 
 authRouter.post("/register", async (req, res) => {
   // The web sign-up asks for a full name and agreement to the Terms (the desktop app collects its own).
-  const web = req.body?.client === "web";
+  const web = req.body?.client === "web" || req.body?.client === "mobile";
   if (web && String(req.body?.name ?? "").trim().split(/\s+/).filter(Boolean).length < 2) return res.status(400).json({ error: "Enter your first and last name." });
   if (web && (req.body?.legalAccepted !== true || String(req.body?.legalVersion ?? "") !== LEGAL_VERSION)) {
     return res.status(400).json({ error: "Review and accept the current ORVYN Software License, Privacy Policy, Acceptable Use Policy, and AI & Agent Disclosure to create an account.", code: "LEGAL_ACCEPTANCE_REQUIRED" });
@@ -82,7 +82,7 @@ authRouter.post("/register", async (req, res) => {
       req.body.name ? String(req.body.name) : undefined,
       deviceOf(req),
     );
-    if (web) authService.acceptLegal(user.id, LEGAL_VERSION, "web-signup");
+    if (web) authService.acceptLegal(user.id, LEGAL_VERSION, req.body?.client === "mobile" ? "mobile-signup" : "web-signup");
     else if (req.body?.acceptTerms === true) authService.acceptTerms(user.id, Date.now(), String(req.body?.client ?? "client"));
     if (typeof req.body?.organization === "string" && req.body.organization.trim() && organization?.id) authService.nameOrganization(organization.id, req.body.organization);
     const session = authService.verifyPrincipal(token);
@@ -379,11 +379,11 @@ authRouter.get("/oauth/:provider/start", (req, res) => {
   const provider = String(req.params.provider);
   const p = oauthProvider(provider);
   if (!p || !oauthConfigured(provider)) return res.status(404).type("html").send(page("Not available", `<p>Sign-in with ${escapeHtml(provider)} isn't switched on.</p>`));
-  const client = req.query.client === "desktop" ? "desktop" : "web";
+  const client = req.query.client === "desktop" ? "desktop" : req.query.client === "mobile" ? "mobile" : "web";
   let handoffId: string | undefined;
   try {
     // Desktop and the Cloud portal both hand the session over by claim (id + secret verifier).
-    if (client === "desktop" || req.query.hid) {
+    if (client === "desktop" || client === "mobile" || req.query.hid) {
       handoffId = String(req.query.hid ?? "");
       authService.startHandoff(handoffId, String(req.query.challenge ?? ""));
     }
@@ -419,7 +419,7 @@ authRouter.get("/oauth/:provider/callback", async (req, res) => {
     const profile = await exchangeCode(p, { code: String(req.query.code ?? ""), redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/${provider}/callback`, verifier: saved.verifier });
     const user = authService.userForOAuth({ provider, subject: profile.subject, email: profile.email, emailVerified: profile.emailVerified, name: profile.name });
     onboardingStore().track(user.id, "signup_completed", { method: provider });
-    if (saved.client === "desktop" && saved.handoffId) {
+    if ((saved.client === "desktop" || saved.client === "mobile") && saved.handoffId) {
       if (!authService.completeHandoff(saved.handoffId, user.id)) return fail("This sign-in request expired.");
       return res.type("html").send(page("You're signed in", "<p>Go back to ORVYN — it continues on its own. You can close this tab.</p>"));
     }

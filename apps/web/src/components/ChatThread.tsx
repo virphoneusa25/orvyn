@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, downloadArtifact, getToken } from "../lib/api";
+import { api, apiUrl, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
 import { AgentProgress } from "./AgentProgress";
 import { terminalRunStatus, type AgentProgressEvent } from "../lib/agentProgress";
@@ -384,7 +384,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         };
         let round = 0;
         while (!controller.signal.aborted && !terminalRunStatus(runStatus) && round < 24) {
-          const response = await fetch(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events?after=${after}`, {
+          const response = await fetch(apiUrl(`/api/v1/agent/stream/runs/${encodeURIComponent(runId)}/events?after=${after}`), {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
             signal: controller.signal,
             cache: "no-store",
