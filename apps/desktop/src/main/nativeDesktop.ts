@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
-import { appendFileSync } from 'fs';
+import { appendFileSync, existsSync } from 'fs';
 import path from 'path';
 import { createInterface } from 'readline';
 import { NativeDesktopPolicy, type NativeWindow, type NativeResult } from './nativeDesktopPolicy';
@@ -16,6 +16,7 @@ export class NativeDesktop {
     private consentBusy = false;
     private indicator: BrowserWindow | null = null;
     private emergencyReady = false;
+    private taskId: string | null = null;
     private consentGeneration = 0;
     private approvalController: AbortController | null = null;
     readonly policy = new NativeDesktopPolicy(r => this.call(r), async (window, command) => {
@@ -39,8 +40,10 @@ export class NativeDesktop {
         }
         catch { /* no content or secrets in the audit */ }
     });
-    status() { return { ...this.policy.status(), supported: process.platform === 'win32', stopShortcut: 'Ctrl+Alt+Shift+Escape' }; }
+    private helperPath() {return app.isPackaged ? path.join(process.resourcesPath, 'native/orvyn-native-desktop.exe') : path.resolve(__dirname, '../../resources/native/orvyn-native-desktop.exe')}
+    status() { return { ...this.policy.status(), supported: process.platform === 'win32' && existsSync(this.helperPath()), stopShortcut: 'Ctrl+Alt+Shift+Escape' }; }
     stop() {
+        this.taskId = null;
         this.consentGeneration++;
         this.approvalController?.abort();
         clearTimeout(this.timer);
@@ -81,7 +84,7 @@ export class NativeDesktop {
         if (process.platform !== 'win32')
             throw new Error('Native desktop control currently supports Windows only.');
         this.token = randomBytes(32).toString('hex');
-        const executable = app.isPackaged ? path.join(process.resourcesPath, 'native/orvyn-native-desktop.exe') : path.resolve(__dirname, '../../resources/native/orvyn-native-desktop.exe');
+        const executable = this.helperPath();
         const child = spawn(executable, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, ORVYN_NATIVE_TOKEN: this.token } });
         this.child = child;
         const reader = createInterface({ input: child.stdout });
@@ -146,6 +149,7 @@ export class NativeDesktop {
             if (answer.response !== 1 || generation !== this.consentGeneration)
                 return { ok: false, error: 'Permission was not granted.' };
             clearTimeout(this.timer);
+            this.taskId = null;
             const status = this.policy.start(target, input);
             this.timer = setTimeout(() => this.stop(), 5 * 60000);
             this.showIndicator();
@@ -158,7 +162,16 @@ export class NativeDesktop {
             this.consentBusy = false;
         }
     }
-    request(command: unknown) { return this.policy.request(command); }
+    request(command: unknown): Promise<NativeResult> {
+        const c = command as {action?:string;runId?:string} | null;
+        if (c?.action === 'status') return Promise.resolve({ok:true,...this.status()});
+        if (!c?.runId || !/^[a-zA-Z0-9_-]{1,100}$/.test(c.runId)) return Promise.resolve({ok:false,error:'Native access requires an active task.'});
+        if (c.action === 'end_task') { if (this.taskId === c.runId) {this.taskId=null;this.approvalController?.abort();this.policy.endTask();const child=this.child;this.child=null;child?.kill();this.finishPending('Task ended; pending desktop action cancelled.');} return Promise.resolve({ok:true}); }
+        if (this.taskId && this.taskId !== c.runId) return Promise.resolve({ok:false,error:'Another task owns this window session.'});
+        if (!this.policy.status().active) return Promise.resolve({ok:false,error:'Choose an app window and allow local sharing first.'});
+        this.taskId = c.runId;
+        return this.policy.request(command);
+    }
     bindWindow(window: BrowserWindow) {
         window.webContents.on('did-start-navigation', (_e, _url, _inPlace, main) => { if (main)
             this.stop(); });

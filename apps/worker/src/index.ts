@@ -849,7 +849,7 @@ async function pollForToolRequests(runId: string): Promise<void> {
             result = { ok: r.ok, output: r.output, stderr: r.stderr, exitCode: r.exitCode };
             break;
           }
-          case "browser_open": case "browser_navigate": case "browser_set_viewport": case "browser_click": case "browser_type": case "browser_scroll": case "browser_console_errors": case "browser_screenshot": case "browser_evidence": {
+          case "browser_input": case "browser_open": case "browser_navigate": case "browser_set_viewport": case "browser_click": case "browser_type": case "browser_scroll": case "browser_console_errors": case "browser_screenshot": case "browser_evidence": {
             try {
               const op = req.tool.replace(/^browser_/, "").replace("set_viewport", "viewport").replace("console_errors", "errors");
               const reply = await (await helperFor(runId, "browser")).request(op, req.arguments);

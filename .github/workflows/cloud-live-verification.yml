@@ -1,0 +1,40 @@
+name: Verify live Cloud workspace release
+on:
+  push:
+    branches: [codex/task-aware-production]
+    paths: [.github/workflows/cloud-live-verification.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live-cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - name: Verify deployed commit and an available Cloud worker
+        run: |
+          set -euo pipefail
+          for host in orvyn.virphoneusa.com app.kernelailabs.com; do
+            curl -fsS --max-time 20 "https://$host/api/v1/health" > /tmp/orvyn-live-health.json
+            node -e 'const h=require("/tmp/orvyn-live-health.json"); if(h.status!=="ok" || h.commit!=="6af152573c43724a53063dd16708e342429de786") throw new Error("Expected Cloud release is not live"); console.log("Live release verified: "+h.commit)'
+          done
+          curl -fsS --max-time 30 https://orvyn.virphoneusa.com/api/v1/health/detailed > /tmp/orvyn-live-services.json
+          node -e 'const h=require("/tmp/orvyn-live-services.json"); console.log(JSON.stringify({status:h.status,workers:h.checks?.workers})); if(h.checks?.workers?.healthy!==true) throw new Error("No healthy Cloud execution worker")'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Verify actually served Cloud UI with isolated browser-only API fixtures
+        env:
+          ORVYN_WEB_URL: https://app.kernelailabs.com
+          ORVYN_EXPECT_WORKBENCH: "1"
+          ORVYN_RESPONSIVE_SCREENSHOTS: artifacts/live-cloud
+        run: node scripts/acceptance/web-responsive.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-cloud-responsive-evidence
+          path: artifacts/live-cloud

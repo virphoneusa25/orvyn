@@ -96,6 +96,7 @@ async function missionCheckpointFor(tenantId: string, runId: string): Promise<Mi
 async function recoverOrphanedRunsOnBoot(
   getStore: (tenantId?: string) => RunStore | Promise<RunStore>,
   resumeRun?: (tenantId: string, runId: string) => void | Promise<void>,
+  bootStartedAt = Date.now() - process.uptime() * 1000,
 ): Promise<void> {
   try {
     const dataDir = process.env.ORVYN_DATA_DIR || "";
@@ -112,7 +113,8 @@ async function recoverOrphanedRunsOnBoot(
           try {
             const store = (await getStore(tenantId));
             const run = store.get(runId);
-            if (!run) continue;
+            // A delayed boot scan must never recover runs created by this process.
+            if (!run || run.createdAt >= bootStartedAt) continue;
             if (isExecutionActive(run.status)) {
               const already = jobQueue.some((j) => j.runId === runId);
               if (already) continue;

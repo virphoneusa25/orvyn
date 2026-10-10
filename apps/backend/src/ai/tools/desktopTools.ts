@@ -1,3 +1,4 @@
+import {currentComputerContext} from "../../computerUse/context";
 // Desktop tools: ORION operates the SAME desktop the user sees.
 //
 // When a Docker sandbox desktop exists for the tenant, every tool drives
@@ -53,7 +54,10 @@ function withAgentLock(session: DesktopSession, run: () => Promise<ToolResult>):
 }
 
 function sandboxFor(tenantId: string): SandboxDesktopSession | undefined {
-  const s = findSandboxSession(tenantId);
+  const context=currentComputerContext();
+  if(!context?.projectRoot || context.tenantId!==tenantId) return undefined;
+  const s = findSandboxSession(tenantId,context.projectRoot);
+  if(s?.runId && context.runId && s.runId!==context.runId) return undefined;
   return s && s.status !== "ended" ? s : undefined;
 }
 

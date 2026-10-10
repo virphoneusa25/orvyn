@@ -1,3 +1,4 @@
+import { NativeDesktop } from './nativeDesktop';
 // apps/desktop/src/main/main.ts
 import { app, BrowserWindow, clipboard, ipcMain, dialog, safeStorage, shell, powerMonitor } from "electron";
 import { handleWindowAction, validateClipboardText, validateExternalUrl, validateSaveTextPayload, WINDOW_IPC } from "./windowIpc";
@@ -16,7 +17,6 @@ import { sampleHostStats } from "./systemStats";
 import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
 import { localEngineEnvironment, packagedNode } from "./localEngineEnvironment";
 import { captureProviderCredentials } from "./providerEnvironment";
-import { nativeDesktop } from "./nativeDesktop";
 const backendProviderCredentials = captureProviderCredentials(process.env);
 
 let browserManager: WorkbenchBrowserManager | null = null;
@@ -27,6 +27,7 @@ let currentProjectRoot: string | null = null;
 let localEngine: ChildProcess | null = null;
 let engineStarting = false;
 let quitting = false;
+const nativeDesktop = new NativeDesktop();
 let engineTimer: ReturnType<typeof setInterval> | undefined;
 let updateService: ReturnType<typeof createDesktopUpdateService> | null = null;
 
@@ -219,6 +220,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     void localWorkerManager.start();
     createWindow();
+    if (mainWindow) nativeDesktop.bindWindow(mainWindow);
     browserManager = createWorkbenchBrowserManager(() => mainWindow);
     await browserManager.start();
     if (mainWindow) browserManager.bindWindow(mainWindow);
@@ -243,7 +245,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) { createWindow(); if (mainWindow) nativeDesktop.bindWindow(mainWindow); }
 });
 
 function bindNativeDesktop(child: ChildProcess) {

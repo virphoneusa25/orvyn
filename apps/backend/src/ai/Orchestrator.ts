@@ -481,6 +481,7 @@ export class Orchestrator {
     };
     try {
       for (let round = 0; round < maxRounds + 1; round++) {
+        if (req.signal?.aborted) return;
         const offerTools = web && round < maxRounds && toolCallsUsed < maxCalls ? web : undefined;
         let text = "";
         const calls: ToolCall[] = [];
@@ -510,10 +511,7 @@ export class Orchestrator {
             if (isMostlyChinese(buffered)) {
               const retry = await generateEnglish(provider, { messages: [...messages, { role: "system", content: RETRY_RULE }], temperature, signal: req.signal });
               const english = String(retry?.content ?? "");
-              for (const piece of english.match(/[\s\S]{1,24}/g) ?? []) {
-                yield { delta: piece, done: false };
-                await new Promise<void>((resolve) => setImmediate(resolve));
-              }
+              yield { delta: english, done: false };
               yield { delta: "", done: true };
               return;
             }
@@ -526,6 +524,7 @@ export class Orchestrator {
         break;
         } catch (err) {
           const visionRejected = this.chatRequirements(req).vision && /HTTP (400|422)\b/.test(String((err as Error)?.message)) && /image|multimodal|messages\.\d+\..*content|content\.str|valid string/i.test(String((err as Error)?.message));
+          if(req.signal?.aborted) return;
           const kind = classifyModelFailure(err);
           let next: AIModelProvider | undefined;
           const explicitlySelected = Boolean((req.requestedModelId && req.requestedModelId !== "auto" && !isCustomerModelId(req.requestedModelId)) || this.modelService.router.getExplicitOverrides()[req.task]);
@@ -575,6 +574,7 @@ export class Orchestrator {
             messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: "Tool budget reached. Answer using the results already obtained and state any unresolved uncertainty." });
             continue;
           }
+          if (req.signal?.aborted) return;
           toolCallsUsed++;
           if (call.name === "web_search") {
             const query = String((call.arguments as any)?.query ?? (call.arguments as any)?.q ?? "").toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
@@ -663,6 +663,7 @@ export class Orchestrator {
       }
       yield { delta: "", done: true };
     } catch (err: any) {
+      if(req.signal?.aborted) return;
       // The model does not exist for this account: skip it and answer with another one.
       if (isModelNotFound(err) && !(req as any).__modelFallback
         && !(req.requestedModelId && req.requestedModelId !== "auto" && !isCustomerModelId(req.requestedModelId))

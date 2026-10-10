@@ -490,6 +490,7 @@ wss.on("connection", async (socket, req) => {
         controller.abort();
         chatControllers.delete(controller);
         clearInterval(beat);
+        if (controller.signal.aborted) void iterator.return?.(undefined).catch(()=>undefined);
         if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
       await recorder?.finish();

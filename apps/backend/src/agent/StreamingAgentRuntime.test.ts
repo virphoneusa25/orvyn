@@ -721,3 +721,26 @@ test("persisted admission uses its server-generated id and cannot replace an exi
   (await assert.rejects( async () => (await h.runtime.start(root, "duplicate", undefined, "ask", undefined, [], undefined, undefined, { admittedRunId: id })), /already exists/));
   await waitForStatus(h.store, id);
 });
+
+test("website review executes browser tools and sends the captured frame to a vision model", async () => {
+  const screenshot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+  const vision = new FakeProvider([
+    [{delta:"",toolCall:{id:"open-site",name:"browser_open",arguments:{url:"https://example.com"}},done:false},{delta:"",done:true}],
+    [{delta:"",toolCall:{id:"inspect-site",name:"browser_screenshot",arguments:{}},done:false},{delta:"",done:true}],
+    [{delta:"I inspected the rendered website. The header and main content are visible.",done:true}],
+  ],undefined,{id:"vision-website-fixture",capabilities:{...CONFIG.capabilities,vision:true}});
+  vision.supportsVision = () => true;
+  const h = harness([],{provider:vision});
+  h.registry.register({name:"browser_open",description:"Open website",parameters:{type:"object",properties:{url:{type:"string"}},required:["url"]},defaultPermission:"allowed",
+    async execute(){return {ok:true,output:"Opened the website",meta:{url:"https://example.com",browserSessionId:"browser-fixture"}};}});
+  h.registry.register({name:"browser_screenshot",description:"Capture rendered website",parameters:{type:"object",properties:{}},defaultPermission:"allowed",
+    async execute(){return {ok:true,output:"Captured screenshot",meta:{screenshot:{b64:screenshot,mediaType:"image/png"},browserSessionId:"browser-fixture"}};}});
+  const root=mkdtempSync(join(tmpdir(),"orvyn-website-review-"));
+  const runId=await h.runtime.start(root,"Review https://example.com",undefined,"agent",undefined,[],undefined,undefined,{approvedTools:["browser_open","browser_screenshot"]});
+  const status=await waitForStatus(h.store,runId,8000);
+  const events=h.store.get(runId)!.events;
+  assert.equal(status,"completed",JSON.stringify(events.filter(event=>/error|blocked|outcome/.test(event.type))));
+  for(const tool of ["browser_open","browser_screenshot"]) assert.ok(events.some(event=>event.type==="tool.completed"&&event.data?.tool===tool),tool);
+  assert.ok(vision.requests.some(request=>request.messages.some(message=>message.attachments?.some(asset=>asset.kind==="image"&&asset.b64===screenshot))),"the screenshot must reach the model, not just the UI");
+  assert.ok(!events.some(event=>event.type==="file.created"||event.type==="file.edit"||event.type==="terminal.started"),"review must not create a replacement website");
+});

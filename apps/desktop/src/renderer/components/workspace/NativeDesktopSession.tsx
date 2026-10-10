@@ -82,21 +82,21 @@ export function NativeDesktopSession({ active }: {
     return <div ref={root} className="native-desktop nd-session">
     <header className="nd-session-header">
       <div><span className="nd-eyebrow">This computer</span><h3>{state?.active ? 'Shared app' : 'Work together on your desktop'}</h3><p className="nd-muted">One selected window. Your control, at any time.</p></div>
-      {state?.active && <div className="nd-actions"><button className="nd-primary" type="button" onClick={() => void (state.input ? takeover() : resume())}>{state.input ? 'Take Control' : 'Allow ORION actions...'}</button><button className="nd-stop" type="button" onClick={() => void stop()}>Stop sharing</button></div>}
+      {state?.active && <div className="nd-actions"><button className="nd-primary" type="button" onClick={() => void (state.input ? takeover() : resume())}>{state.input ? 'Take Control' : 'Allow ORVYN actions...'}</button><button className="nd-stop" type="button" onClick={() => void stop()}>Stop sharing</button></div>}
     </header>
     {!state?.active && <div style={{ padding: 16 }}><NativeDesktopSettings /></div>}
     {state?.active && <>
       <div role="status" className="nd-status">
-        <strong>{state.input ? 'ORION asks before every action' : "You're in control"}</strong>
+        <strong>{state.input ? 'ORVYN asks before every action' : "You're in control"}</strong>
         <div className="nd-window" title={state.window}>{state.window}</div>
-        <span className="nd-muted">{state.input ? 'Take Control to pause clicks and typing.' : 'Work in the actual app. ORION can view and assist.'} {Math.max(0, Math.ceil(((state.expiresAt ?? 0) - Date.now()) / 60000))} min left</span>
+        <span className="nd-muted">{state.input ? 'Take Control to pause clicks and typing.' : 'Work in the actual app. ORVYN can view and assist.'} {Math.max(0, Math.ceil(((state.expiresAt ?? 0) - Date.now()) / 60000))} min left</span>
       </div>
       <div className="nd-frame">
         {frame ? <img src={frame} alt="Live view of the locally approved application window"/> : <p className="nd-muted">{note || 'Connecting to your selected window...'}</p>}
       </div>
       <footer className="nd-footer">
         <div className="nd-actions"><button type="button" onClick={() => void screenshot()}>Save screenshot</button><button type="button" onClick={() => void root.current?.requestFullscreen().catch(() => undefined)}>Full screen</button></div>
-        <p className="nd-muted">This is a preview. Use the app itself to click or type. Tell ORION your task in chat; sharing alone does not start work.</p>
+        <p className="nd-muted">This is a preview. Use the app itself to click or type. Tell ORVYN your task in chat; sharing alone does not start work.</p>
         <p className="nd-muted">Preview refreshes are local and use no AI credits. Emergency stop: Ctrl+Alt+Shift+Escape.</p>
       </footer>
     </>}

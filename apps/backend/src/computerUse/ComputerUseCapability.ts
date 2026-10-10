@@ -1,4 +1,4 @@
-import {hostAction} from "../desktop/hostDesktopActions";
+import { hostAction } from '../desktop/hostDesktopActions';
 import { browserSessionService, BrowserSessionService } from "./BrowserSessionService";
 import { desktopSessionService, DesktopSessionService } from "./DesktopSessionService";
 import type { ComputerSurface, ComputerUseRequest, ComputerUseResult } from "./types";
@@ -14,6 +14,7 @@ export class ComputerUseCapability {
   ) {}
 
   resolveSurface(req: ComputerUseRequest): ComputerSurface {
+    if (req.identity.computerSurface && req.identity.computerSurface !== 'none') return req.identity.computerSurface;
     if (req.surface && req.surface !== "auto") return req.surface;
     if (req.identity.browserSessionId) return "browser";
     if (this.desktop.sandbox(req.identity) || req.identity.desktopSessionId) return "desktop";
@@ -29,12 +30,14 @@ export class ComputerUseCapability {
 
   async act(req: ComputerUseRequest): Promise<ComputerUseResult> {
     const surface = this.resolveSurface(req);
+    if (req.identity.computerSurface === "none" && surface === "host") return {ok:false,error:"This task does not have local computer access.",surface,desktopHealthy:false};
     if (req.action === "screenshot") return this.screenshot(req, surface);
     if (req.action === "wait") {
       await new Promise((r) => setTimeout(r, Math.min(8000, Number(req.ms ?? 600))));
       return { ok: true, output: "Waited.", desktopHealthy: true, surface, sessionId: this.sessionId(req, surface) };
     }
-    if (req.action === "open_app" && surface === "host") return {ok:false,error:"Open the application yourself and select its window in desktop permissions.",desktopHealthy:true,surface};
+    if (surface === 'host' && req.action === 'open_app') return {ok:false,error:'Open the app yourself and select its window in Desktop. App launching is not granted.',surface,desktopHealthy:true};
+    if (surface === 'host' && req.action === 'focus_window') { const result = await hostAction(req.identity.tenantId,{action:'focus'}); return {...result,surface,desktopHealthy:true}; }
     if (req.action === "open_app") {
       const opened = await this.desktop.openApp(req.identity, String(req.app ?? "xterm"));
       return {
@@ -53,9 +56,9 @@ export class ComputerUseCapability {
     if (req.action === "focus_window") {
       const windows = this.desktop.getWindows(req.identity);
       return {
-        ok: windows.length > 0,
-        output: windows.length ? `Focused ${windows[0].id}` : undefined,
-        error: windows.length ? undefined : "No window in this session.",
+        ok: false,
+        output: undefined,
+        error: "Focus is not supported by the cloud session adapter.",
         desktopHealthy: true,
         surface,
         sessionId: windows[0]?.id,

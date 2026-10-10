@@ -1,4 +1,7 @@
+import { isWebsiteInspection, WEBSITE_INSPECTION_HINT } from "./websiteInspection";
 import { incompatibility } from "@orvyn/ai-core";
+import {surfaceToolAllowed} from "../computerUse/taskSurface";
+import { nativeDesktopRequest } from "../desktop/nativeDesktopBridge";
 import { CONVERSATION_STYLE } from "./conversationStyle";
 import { budgetFinalNote, budgetWarnLevel, budgetWrapNote, pickVisionFallback } from "../models/runBudget";
 import { discoverTestCommands, type DiscoveredCommands } from "./testDiscovery";
@@ -159,6 +162,8 @@ export interface ExecutionSpec {
   executionLabel?: string;
   /** The OS the terminal runs on for this run ("win32" on a Windows Local run). */
   hostPlatform?: string;
+  clientKind?: "desktop" | "cloud";
+  computerSurface?: "host" | "desktop" | "browser" | "none";
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -554,6 +559,7 @@ export class StreamingAgentRuntime {
           if (callMs > modelCallTimeoutMs() + 15_000) {
             state.stallAbort = `The model stopped responding — the call was stopped after ${Math.round(callMs / 1000)}s with no data. This task can be retried.`;
             this.store.emit(runId, "run.diagnostics", { stalled: "model-call", ms: callMs });
+            if (typeof process.send === "function") void runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot:state.projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
             state.controller.abort();
             continue;
           }
@@ -650,13 +656,15 @@ export class StreamingAgentRuntime {
   private toolDefinitions(runId: string, allow: Set<string> | null = null): ToolDefinition[] {
     return this.gatewayFor(runId)
       .list()
+      .filter(t=>surfaceToolAllowed(t.name,this.runs.get(runId)?.execution?.clientKind,this.runs.get(runId)?.execution?.computerSurface))
+      .filter((t) => !t.name.startsWith("host_desktop_") || (this.runs.get(runId)?.execution?.computerSurface === "host" && (this.runs.get(runId)?.execution?.location === "LOCAL_HOST" || (typeof process.send === "function" && this.runs.get(runId)?.execution?.location === "LOCAL"))))
+      .filter((t) => !(this.runs.get(runId)?.execution?.computerSurface === 'host' && (t.name.startsWith('desktop_') || t.name.startsWith('computer_'))))
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
       .filter((t) => !t.name.startsWith("host_desktop_") || typeof process.send === "function" || this.runs.get(runId)?.execution?.location === "LOCAL_HOST")
       // Only runs whose sandbox can open network access ever see this tool.
       .filter((t) => t.name !== NETWORK_ACCESS_TOOL || Boolean(allow?.has(t.name)))
       // Only tools this run's role can actually execute: offering one the
-      // gateway will always refuse sends the
-      // model down a dead end ("Role 'coder' lacks SYSTEM capability").
+      // gateway will always refuse sends the model down a dead end.
       .filter((t) => this.tools.permissions.checkRole(t.name, "coder").allowed)
       .filter((t) => !allow || allow.has(t.name))
       .map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
@@ -1522,13 +1530,14 @@ export class StreamingAgentRuntime {
     if (!recovering && this.store.get(runId)) throw new Error("Run id already exists");
     if (recovering && !this.store.get(runId)) throw new Error(`Cannot recover unknown run ${runId}`);
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const needsVision = isWebsiteInspection(instruction) || (attachments ?? []).some((attachment) => attachment.kind === "image" && attachment.b64);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     // "Auto" with the customer's own model set as default: their model runs the task.
     requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId, "agent");
     const registered = this.modelService.registry.list();
     const choice = selectAgentModel({
       providers: registered,
-      requirements: { vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) },
+      requirements: { vision: needsVision },
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
@@ -1541,14 +1550,14 @@ export class StreamingAgentRuntime {
       ? (() => {
           const p = this.modelService.registry.get(choice.registryId ?? "");
           if (!p) throw new Error(`Requested model "${choice.registryId}" is not configured.`);
-          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
+          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: needsVision });
           if (unsupported) throw new Error(`Requested model "${choice.registryId}": ${unsupported}.`);
           return p;
         })()
       : (() => {
           const picked = choice.registryId ? this.modelService.registry.get(choice.registryId) : undefined;
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
-          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: (attachments ?? []).some((a) => a.kind === "image" && a.b64) });
+          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: needsVision });
         })();
     if (!recovering) this.store.create(runId, projectRoot);
     else {
@@ -1560,9 +1569,8 @@ export class StreamingAgentRuntime {
     // to a note about a file the model can never look at. Route the run to
     // a vision-capable model. Field data keeps the internals; the customer
     // card stays vendor-free ("ORION switched to a compatible vision model").
-    const hasImageAttachment = (attachments ?? []).some((a) => a.kind === "image" && a.b64);
-    if (hasImageAttachment && !provider.supportsVision()) {
-      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot process image attachments.`);
+    if (needsVision && !provider.supportsVision()) {
+      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot inspect images for this task. Choose a vision-capable model.`);
       const visionProvider = pickVisionFallback(registered.filter((p) => !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: true }) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))), provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
       if (visionProvider) {
         const previousModel = provider.config.id;
@@ -1571,7 +1579,7 @@ export class StreamingAgentRuntime {
           requestedModel: requestedModelId ?? "auto",
           actualModel: visionProvider.config.id,
           previousModel,
-          fallbackReason: "image attachment: routing to a vision-capable model",
+          fallbackReason: "Image or website inspection: routing to a vision-capable model",
           reason: "vision attachment",
         });
       }
@@ -1652,7 +1660,7 @@ export class StreamingAgentRuntime {
       runGateway.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: runGateway.getPermission(t.name) })),
       { modelTools: def.toolsEnabled && provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", isWebsiteInspection(instruction) ? WEBSITE_INSPECTION_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     // A recovered run resumes from its durable checkpoint, not from scratch:
@@ -1664,7 +1672,7 @@ export class StreamingAgentRuntime {
 
     this.runs.set(runId, {
       controller: new AbortController(),
-      requireVision: hasImageAttachment,
+      requireVision: needsVision,
       toolsEnabled: def.toolsEnabled,
       projectRoot,
       ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
@@ -1774,6 +1782,7 @@ export class StreamingAgentRuntime {
       });
     }
 
+    if (execution?.computerSurface && execution.computerSurface !== 'none') this.store.emit(runId, 'desktop.target', {surface:execution.computerSurface,label:execution.computerSurface === 'host' ? 'Local computer active' : 'Cloud sandbox active'});
     // Snapshot the dirty tree before the agent touches anything, so a
     // one-click Undo can put it back. Best-effort: a non-git folder simply
     // has no undo (gitHead is null there — an empty snapshot would make Undo
@@ -2117,6 +2126,7 @@ export class StreamingAgentRuntime {
           this.store.setStatus(runId, "error");
         }
       } finally {
+        if (typeof process.send === "function") await runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
         this.teardownRemote(runId);
         try {
           await this.onRunSettled?.(runId);
@@ -2191,7 +2201,7 @@ export class StreamingAgentRuntime {
       "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
-    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST");
+    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST" && state.execution.computerSurface === "host");
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
@@ -2300,6 +2310,7 @@ export class StreamingAgentRuntime {
     const state = this.runs.get(runId);
     if (!state || state.cancelled) return false;
     state.cancelled = true;
+    if (typeof process.send === "function") void runWithComputerContext({tenantId:state.execution?.tenantId||"local",projectRoot:state.projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
 
     // Remote runs: reject in-flight tool RPCs and drop the worker job /
     // container immediately — the worker observes the cancelled status on
@@ -2722,15 +2733,13 @@ export class StreamingAgentRuntime {
                     reasoningEffort: state.reasoningEffort,
                   });
                   const text = String(retry?.content ?? "");
-                  for (const piece of text.match(/[\s\S]{1,48}/g) ?? []) {
-                    this.store.emit(runId, "message.delta", { content: piece });
-                  }
+                  this.store.emit(runId, "message.delta", { content: text });
                   content = text;
                   streamedText = text.length > 0;
                   for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
                   break;
                 }
-                if (langBuffer) this.store.emit(runId, "message.delta", { content: langBuffer });
+                if (langBuffer) { this.store.emit(runId, "message.delta", { content: langBuffer }); await new Promise<void>(resolve => setImmediate(resolve)); }
                 content += langBuffer;
                 streamedText = true;
               }
@@ -2743,6 +2752,7 @@ export class StreamingAgentRuntime {
               content += chunk.delta;
               streamedText = true;
               this.store.emit(runId, "message.delta", { content: chunk.delta });
+              await new Promise<void>(resolve => setImmediate(resolve));
             }
           }
           if (chunk.toolCall) streamedCalls.push(chunk.toolCall);
@@ -3408,6 +3418,11 @@ export class StreamingAgentRuntime {
         continue;
       }
 
+      if(!surfaceToolAllowed(call.name,state.execution?.clientKind,state.execution?.computerSurface)){
+        const message="This computer tool is not authorized for this task's selected surface.";
+        this.store.emit(runId,"tool.failed",{callId:call.id,tool:call.name,error:message,errorType:"PERMISSION_DENIED"});
+        replies.set(call.id,message);continue;
+      }
       const internalRefusal = internalPathRefusal(call.name, (call.arguments ?? {}) as Record<string, unknown>, { dataDir: defaultDataDir(), projectRoot: state.projectRoot });
       if (internalRefusal) {
         this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error: internalRefusal, errorType: "PERMISSION_DENIED", retryable: false, envelope: this.refusalEnvelope(state, call, internalRefusal) });
@@ -3675,6 +3690,7 @@ export class StreamingAgentRuntime {
             projectId: state.execution?.projectId ?? null,
             projectRoot: state.projectRoot,
             runId,
+            computerSurface: state.execution?.computerSurface,
           },
           () =>
             this.gatewayFor(runId).execute(call.name, call.arguments, "coder", projectToolContext(state, {

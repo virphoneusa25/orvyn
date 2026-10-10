@@ -214,6 +214,7 @@ async function startPlanRun(cmd: OrvynCommand, mode: "agent" | "plan" | "researc
       projectRoot: cmd.projectRoot,
       remoteProjectRoot: cmd.projectRoot ?? remoteRoot,
       executionTarget,
+      clientKind: "desktop",
       composerMode: cmd.mode,
       executionLocation: executionTarget === "ovh_worker" ? "OVH_WORKER" : undefined,
       instruction: cmd.prompt,

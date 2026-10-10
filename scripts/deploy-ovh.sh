@@ -136,8 +136,7 @@ if [[ "${ORVYN_SKIP_PREDEPLOY_BACKUP:-}" != "1" ]]; then
   if ! "${SSH[@]}" "$HOST" "set -euo pipefail
 cd '$REMOTE'
 if docker compose -f docker-compose.yml -f infrastructure/ovh/compose.prod.yml ps --services --status running | grep -qx backend; then
-  set -a; [ -f .backup.env ] && . ./.backup.env; set +a
-  sudo -E infrastructure/ovh/backup.sh --tag predeploy
+  sudo -n bash -c 'set -euo pipefail; set -a; if [ -f .backup.env ]; then . ./.backup.env; fi; set +a; exec infrastructure/ovh/backup.sh --tag predeploy'
 else
   echo 'backend not running: nothing to back up'
 fi"; then

@@ -35,6 +35,23 @@ function snapshot() {
 async function run(message) {
   const op = String(message.op ?? "");
   const a = message.args ?? {};
+  if (op === "input") {
+    if(a.type==='click'){
+      const size=page.viewportSize();
+      if(!Number.isFinite(a.x)||!Number.isFinite(a.y)||a.x<0||a.y<0||a.x>=size.width||a.y>=size.height)throw new Error('Click outside viewport');
+      await page.mouse.click(a.x,a.y);
+    }else if(a.type==='type'){
+      if(typeof a.text!=='string'||a.text.length>4000)throw new Error('Text too long');
+      await page.keyboard.insertText(a.text);
+    }else if(a.type==='key'){
+      if(!['Enter','Tab','Escape','Backspace','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(a.key))throw new Error('Unsupported key');
+      await page.keyboard.press(a.key);
+    }else if(a.type==='scroll'){
+      if(!Number.isFinite(a.deltaY)||Math.abs(a.deltaY)>2000)throw new Error('Invalid scroll');
+      await page.mouse.wheel(0,a.deltaY);
+    }else throw new Error('Unsupported input');
+    return {output:'User input applied.',meta:snapshot()};
+  }
   if (op === "open" || op === "navigate") {
     consoleErrors.length = 0;
     networkErrors.length = 0;

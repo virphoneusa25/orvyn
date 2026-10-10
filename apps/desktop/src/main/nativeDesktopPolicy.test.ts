@@ -129,3 +129,5 @@ test('takeover remains viewing-only when an aborted native approval rejects', as
     assert.equal(f.policy.status().active, true);
     assert.equal(f.policy.status().input, false);
 });
+
+test('task end cancels old approval but retains the original scoped grant and expiry',async()=>{let resolve!:(value:boolean)=>void;const f=fixture(()=>new Promise(r=>resolve=r));await grant(f);const expiry=f.policy.status().expiresAt;const pending=f.policy.request({action:'click',x:1,y:1});f.policy.endTask();resolve(true);assert.equal((await pending).ok,false);assert.equal(f.executed.length,0);assert.equal(f.policy.status().active,true);assert.equal(f.policy.status().expiresAt,expiry);assert.equal((await f.policy.request({action:'click',x:1,y:1})).ok,false);});

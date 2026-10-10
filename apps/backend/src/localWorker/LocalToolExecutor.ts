@@ -17,7 +17,7 @@ import { resolveSafePath, resolveSafeRealpath } from "../execution/pathSafety";
 import { acquireFileLock, fileHash, releaseFileLock } from "./fileLock";
 import { isServiceCommand, runService, type ServiceRecord } from "../services/ServiceManager";
 import { listServices, serviceLogs, stopService } from "../ai/tools/processTools";
-import type { ToolResult } from "../ai/ToolTypes";
+import type { ToolResult, ToolExecutionContext } from "../ai/ToolTypes";
 import {
   makeHostDesktopInspectTool,
   makeHostDesktopKeyTool,
@@ -37,6 +37,7 @@ export interface LocalToolRequest {
   tenantId?: string;
   projectRoot: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onOutput?: (chunk: string) => void;
 }
 
@@ -96,7 +97,7 @@ export async function executeLocalTool(req: LocalToolRequest): Promise<LocalTool
     // A dev server becomes a service: it outlives this run and this tool call.
     const finalCommand = process.platform === "win32" ? normalizeWindowsCommand(command) : command;
     if (isServiceCommand(finalCommand)) return startLocalService(req, root, finalCommand);
-    return tools.terminal.execute({ command }, { onOutput: req.onOutput });
+    return tools.terminal.execute({ command }, { onOutput: req.onOutput, signal:req.signal, workspaceRoot:root,runId:req.runId });
   }
 
   if (req.tool === "start_process" || req.tool === "start_dev_server") {
@@ -117,7 +118,7 @@ export async function executeLocalTool(req: LocalToolRequest): Promise<LocalTool
 
   const tool = tools[req.tool];
   if (!tool) return { ok: false, error: `Unknown local tool: ${req.tool}` };
-  return tool.execute(args);
+  return tool.execute(args,{signal:req.signal,onOutput:req.onOutput,workspaceRoot:root,runId:req.runId});
 }
 
 async function startLocalService(req: LocalToolRequest, root: string, command: string): Promise<LocalToolResponse> {
@@ -142,7 +143,7 @@ export function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-function bindTools(projectRoot: string, tenantId: string): Record<string, { execute: (args: Record<string, unknown>, context?: { onOutput?: (chunk: string) => void }) => Promise<ToolResult> }> {
+function bindTools(projectRoot: string, tenantId: string): Record<string, { execute: (args: Record<string, unknown>, context?: ToolExecutionContext) => Promise<ToolResult> }> {
   return {
     read_file: makeReadFileTool(projectRoot),
     write_file: makeWriteFileTool(projectRoot),
@@ -154,7 +155,7 @@ function bindTools(projectRoot: string, tenantId: string): Record<string, { exec
     terminal: makeTerminalTool(projectRoot),
     run_command: makeTerminalTool(projectRoot),
     run_tests: makeRunTestsTool(projectRoot),
-    run_build: { execute: (args) => makeTerminalTool(projectRoot).execute({ command: String(args.command ?? "npm run build") }) },
+    run_build: { execute: (args, context) => makeTerminalTool(projectRoot).execute({ command: String(args.command ?? "npm run build") },context) },
     run_typecheck: makeRunTypecheckTool(projectRoot),
     git_status: makeGitStatusTool(projectRoot),
     git_diff: makeGitDiffTool(projectRoot),

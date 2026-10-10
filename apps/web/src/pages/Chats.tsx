@@ -65,6 +65,14 @@ export function Chats({ id }: { id?: string }) {
   const { data, reload, loading } = useApi<{ sessions: SessionRow[] }>("/sessions");
   const projects = useApi<{ projects: Project[] }>("/projects");
   const [q, setQ] = useState("");
+  const [recentCollapsed, setRecentCollapsed] = useState(() => {
+    try { return localStorage.getItem("orvyn.recentChats.collapsed") === "true"; } catch { return false; }
+  });
+  const toggleRecent = () => setRecentCollapsed(previous => {
+    const next = !previous;
+    try { localStorage.setItem("orvyn.recentChats.collapsed", String(next)); } catch { /* Keep the control usable when storage is unavailable. */ }
+    return next;
+  });
   const [ask] = useState(() => query.get("q") ?? "");
   const composing = query.get("new") === "1";
   const actions = useChatActions(reload, id);
@@ -83,8 +91,9 @@ export function Chats({ id }: { id?: string }) {
   const current = data?.sessions.find((s) => s.sessionId === id);
 
   return (
-    <div className={`chats${id || ask || composing ? " chats--thread" : ""}`}>
-      <section className="chats__list" aria-label="Conversations">
+    <div className={`chats${id || ask || composing ? " chats--thread" : ""}${recentCollapsed ? " chats--recent-collapsed" : ""}`}>
+      <section id="recent-chats-panel" className="chats__list" aria-label="Recent chats">
+        <div className="chats__list-head"><b>Recent chats</b><button className="iconbtn chats__collapse" onClick={toggleRecent} aria-label="Collapse recent chats" title="Collapse recent chats" aria-expanded={!recentCollapsed} aria-controls="recent-chats-panel"><Icon.back size={18} /></button></div>
         <div className="chats__tools">
           <label className="search">
             <Icon.search size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
@@ -115,6 +124,7 @@ export function Chats({ id }: { id?: string }) {
       </section>
       <section className="chat-pane">
         <div className="chat-pane__head">
+          {recentCollapsed && <button className="btn btn--sm btn--ghost chats__reopen" onClick={toggleRecent} aria-label="Open recent chats" title="Open recent chats" aria-expanded={false} aria-controls="recent-chats-panel"><Icon.chat size={16} /> Recent chats</button>}
           <button className="iconbtn mobile-only" onClick={() => navigate("/chats")} aria-label="Back to conversations"><Icon.back size={19} /></button>
           <h2 title={current?.title}>{current?.title ?? (id ? "Conversation" : "New chat")}</h2>
           {current ? (

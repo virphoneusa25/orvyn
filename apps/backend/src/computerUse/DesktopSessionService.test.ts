@@ -58,7 +58,8 @@ test("Return to ORION restores agent control on the same session", async () => {
   assert.equal(back.ok, true);
   assert.equal(back.returned, true);
   const sent = await svc.sendInput(id(), "type", { text: "ok" });
-  assert.equal(sent.ok, true);
+  assert.equal(sent.ok, false, "An in-memory session has no native input adapter");
+  assert.match(sent.error ?? "", /adapter|unavailable/i);
   assert.equal(sent.sessionId, session.id);
 });
 

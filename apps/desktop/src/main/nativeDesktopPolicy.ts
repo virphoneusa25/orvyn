@@ -37,6 +37,7 @@ export class NativeDesktopPolicy {
     private now: () => number;
     constructor(execute: (request: Record<string, unknown>) => Promise<NativeResult>, approve: (window: NativeWindow, command: DesktopCommand) => Promise<boolean>, audit: (action: string, outcome: string, pid?: number) => void, now = Date.now) { this.execute = execute; this.approve = approve; this.audit = audit; this.now = now; }
     selectedWindow() { this.status(); return this.grant ? { ...this.grant.window } : null; }
+    endTask() {this.generation++;this.frameGeneration=-1;this.audit("task","released",this.grant?.window.pid);}
     takeControl() {
         this.generation++;
         this.status();
