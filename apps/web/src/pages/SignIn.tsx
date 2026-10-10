@@ -195,6 +195,7 @@ export function SignIn() {
           <button className="btn btn--primary btn--big" type="submit" disabled={busy} data-testid="auth-submit">
             {busy ? "Please wait…" : mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"}
           </button>
+          {busy && mobilePlatform() && nativeClaim.current ? <button type="button" className="btn btn--big" onClick={() => { nativeClaim.current?.abort(); nativeClaim.current = null; setBusy(false); }}>Cancel sign-in</button> : null}
         </form>
         <div className="auth__links">
           {mode === "login" ? <button className="linkbtn" onClick={() => { setMode("forgot"); setError(null); }}>Forgot password?</button> : <button className="linkbtn" onClick={() => { setMode("login"); setError(null); setNotice(null); }}>Back to sign in</button>}

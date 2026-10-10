@@ -1064,6 +1064,7 @@ export class AuthService {
 export function cleanDevice(device?: string | null): string {
   const d = String(device ?? "").replace(/[^\w .,()/;:+-]/g, "").trim();
   if (!d) return "Unknown device";
+  if (/ORVYN Mobile/i.test(d)) return "ORVYN Mobile";
   if (/Electron|ORVYN/i.test(d)) return /Windows/i.test(d) ? "ORVYN Desktop · Windows" : /Mac OS/i.test(d) ? "ORVYN Desktop · macOS" : /Linux/i.test(d) ? "ORVYN Desktop · Linux" : "ORVYN Desktop";
   const browser = /Edg\//.test(d) ? "Edge" : /Chrome\//.test(d) ? "Chrome" : /Firefox\//.test(d) ? "Firefox" : /Safari\//.test(d) ? "Safari" : "";
   const os = /Windows/i.test(d) ? "Windows" : /iPhone|iPad/i.test(d) ? "iOS" : /Android/i.test(d) ? "Android" : /Mac OS/i.test(d) ? "macOS" : /Linux/i.test(d) ? "Linux" : "";

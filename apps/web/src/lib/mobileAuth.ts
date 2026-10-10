@@ -13,7 +13,9 @@ export async function mobileSignIn(provider: "google" | "github", signal: AbortS
   const hid = randomId(24), verifier = randomId(32);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   if (signal.aborted) throw new DOMException("Sign-in cancelled.", "AbortError");
-  const url = apiUrl(mobileOAuthPath(provider, hid, b64url(new Uint8Array(digest))));
+  const challenge = b64url(new Uint8Array(digest));
+  await api("/auth/handoff/start", { method: "POST", body: { hid, challenge }, signal });
+  const url = apiUrl(mobileOAuthPath(provider, hid, challenge));
   await mobile.openBrowser(url);
   try {
     return await pollMobileHandoff(() => api<{ status: string; token?: string }>("/auth/handoff/claim", { method: "POST", body: { hid, verifier, device: "ORVYN Mobile" }, signal }), signal);

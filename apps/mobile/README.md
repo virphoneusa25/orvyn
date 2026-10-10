@@ -43,7 +43,7 @@ is bundled locally; do not set a remote Capacitor server URL for a release.
 ## Sign-in and files
 
 Google/GitHub open the system browser. The app claims the existing verifier-bound
-one-time handoff; session tokens and the secret verifier never appear in browser
+one-time handoff, initialized via POST /api/v1/auth/handoff/start before opening the browser; session tokens and the secret verifier never appear in browser
 URLs. Return to ORVYN after signing in. Polling stops on cancellation, provider
 errors or the ten-minute handoff expiry. Email registration uses the same current
 legal acceptance and onboarding requirements as Cloud.

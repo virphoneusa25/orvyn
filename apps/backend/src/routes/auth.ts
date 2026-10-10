@@ -456,6 +456,16 @@ authRouter.get("/github/connect", (req, res) => {
   res.redirect(302, authorizeUrl(p, { redirectUri: `${publicOrigin(req)}/api/v1/auth/oauth/github/callback`, state, challenge: b64url(createHash("sha256").update(verifier).digest()), scope: "repo read:user user:email" }));
 });
 
+/** Start the verifier-bound native handoff before opening the external browser. */
+authRouter.post("/handoff/start", (req, res) => {
+  try {
+    authService.startHandoff(String(req.body?.hid ?? ""), String(req.body?.challenge ?? ""));
+    res.status(201).json({ status: "pending" });
+  } catch {
+    res.status(400).json({ error: "Invalid sign-in request." });
+  }
+});
+
 /** The desktop claims its session with the secret verifier: "pending" until the browser finishes; the token exactly once. */
 authRouter.post("/handoff/claim", (req, res) => {
   const out = authService.claimHandoff(String(req.body?.hid ?? ""), String(req.body?.verifier ?? ""), deviceOf(req));
