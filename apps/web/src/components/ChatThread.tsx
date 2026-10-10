@@ -192,6 +192,23 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
 }) {
   const { me, model, refreshBilling, toast } = useStore();
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [workbenchOpen, setWorkbenchOpen] = useState(() => {
+    if (window.innerWidth <= 1050) return false;
+    try { return localStorage.getItem("orvyn.cloudWorkspace") !== "closed"; } catch { return true; }
+  });
+  const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
+  const workbenchToggle = useRef<HTMLButtonElement>(null);
+  function closeWorkbench() {
+    setWorkbenchOpen(false); setWorkbenchExpanded(false);
+    try { localStorage.setItem("orvyn.cloudWorkspace", "closed"); } catch { /* storage unavailable */ }
+    workbenchToggle.current?.focus();
+  }
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 1050px)");
+    const changed = () => { if (narrow.matches) { setWorkbenchOpen(false); setWorkbenchExpanded(false); } };
+    narrow.addEventListener("change", changed);
+    return () => narrow.removeEventListener("change", changed);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -453,9 +470,19 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
 
   const empty = !loading && !messages.length;
   const viewAs = Boolean(me?.viewAs);
+  const workspaceMessage = [...messages].reverse().find((message) => message.runId);
 
   return (
-    <div className={compact ? undefined : "cloud-chat-layout"}>
+    <div className={compact ? undefined : `cloud-chat-layout${workbenchOpen ? " is-workspace-open" : ""}${workbenchExpanded && workbenchOpen ? " is-workspace-expanded" : ""}`}>
+    {!compact ? <div className="cloud-chat-layout__toolbar">
+      <button ref={workbenchToggle} className="cloud-chat-layout__toggle" aria-expanded={workbenchOpen} aria-controls="cloud-workbench" onClick={() => {
+        if (workbenchOpen) closeWorkbench();
+        else {
+          setWorkbenchOpen(true);
+          try { localStorage.setItem("orvyn.cloudWorkspace", "open"); } catch { /* storage unavailable */ }
+        }
+      }}><Icon.layers size={14} /><span>{workbenchOpen ? "Back to chat" : "Open workspace"}</span></button>
+    </div> : null}
     <div className={`chat${compact ? " chat--compact" : ""}`}
       onDragEnter={(e) => { if (e.dataTransfer.types.includes("Files")) setDragging(true); }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
@@ -562,7 +589,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         {!compact ? <div className="composer__hint">ORVYN can make mistakes — check important details. Shift + Enter for a new line.</div> : null}
       </div>
     </div>
-    {!compact && <CloudWorkbench runId={[...messages].reverse().find(m=>m.runId)?.runId} events={[...messages].reverse().find(m=>m.runId)?.agentEvents??[]}/>}
+    {!compact && <CloudWorkbench key={workspaceMessage?.runId ?? "no-run"} runId={workspaceMessage?.runId} runStatus={workspaceMessage?.runStatus} events={workspaceMessage?.agentEvents ?? []} active={workbenchOpen} expanded={workbenchExpanded} readOnly={viewAs} onClose={closeWorkbench} onExpand={() => setWorkbenchExpanded((value) => !value)} />}
     </div>
   );
 }

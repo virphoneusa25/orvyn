@@ -46,7 +46,7 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
  });
  router.get('/:runId/files',async(req,res)=>{
    const run=res.locals.run;
-   const name=req.query.path===undefined?'list_directory':'read_file';
+   const name=req.query.path===undefined || req.query.list==='1'?'list_directory':'read_file';
    const args={path:String(req.query.path??'.')};
    try{
      const active=!['completed','cancelled','error','partial'].includes(run.status);
