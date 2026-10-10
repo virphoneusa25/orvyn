@@ -29,6 +29,8 @@ jobs:
           npm run typecheck -w apps/web
       - name: Full existing test suite
         run: npm test
+      - name: Account and native sign-in acceptance
+        run: node scripts/acceptance/auth-security.mjs
       - name: Live streaming acceptance
         run: npm run accept:chat-live
 

@@ -181,6 +181,28 @@ async function main() {
     const replayState = await browser(flow.trail[flow.trail.length - 1]);
     ok(replayState.status === 400, "replaying the callback URL does nothing");
 
+
+    console.log("\n4b. Native mobile sign-in");
+    const mobileHid = b64url(randomBytes(24));
+    const mobileVerifier = b64url(randomBytes(32));
+    const mobileChallenge = b64url(createHash("sha256").update(mobileVerifier).digest());
+    const invalidStart = await call("/auth/handoff/start", "POST", { hid: "bad", challenge: "bad" });
+    ok(invalidStart.status === 400, "native handoff rejects invalid id and challenge");
+    const mobileStart = await call("/auth/handoff/start", "POST", { hid: mobileHid, challenge: mobileChallenge });
+    const pendingMobile = await call("/auth/handoff/claim", "POST", { hid: mobileHid, verifier: mobileVerifier });
+    ok(mobileStart.status === 201 && pendingMobile.status === 202, "mobile may poll safely before the system browser navigates");
+    // Opening the browser repeats initialization but must preserve this handoff.
+    const mobileFlow = await browser(`${BASE}/api/v1/auth/oauth/google/start?client=mobile&hid=${mobileHid}&challenge=${mobileChallenge}`);
+    ok(mobileFlow.status === 200 && /signed in/.test(mobileFlow.text), "mobile Google sign-in completes in the system browser");
+    ok(mobileFlow.trail.every((url) => !url.includes(mobileVerifier) && !/orvsess_/.test(url)) && !/orvsess_/.test(mobileFlow.text), "native browser URLs never carry the secret verifier or session");
+    const mobileWrong = await call("/auth/handoff/claim", "POST", { hid: mobileHid, verifier: b64url(randomBytes(32)), device: "ORVYN Mobile" });
+    ok(mobileWrong.status === 400, "mobile also rejects the wrong verifier");
+    const mobileClaim = await call("/auth/handoff/claim", "POST", { hid: mobileHid, verifier: mobileVerifier, device: "ORVYN Mobile" });
+    ok(mobileClaim.status === 200 && mobileClaim.json.user?.id === existingId && mobileClaim.json.token?.startsWith("orvsess_"), "mobile uses the same existing account");
+    ok((await call("/auth/handoff/claim", "POST", { hid: mobileHid, verifier: mobileVerifier })).status === 400, "mobile session is claimed exactly once");
+    const mobileDevices = await call("/auth/sessions", "GET", null, mobileClaim.json.token);
+    ok(mobileDevices.json.sessions?.some((device) => device.current && device.device === "ORVYN Mobile"), "the mobile session has the correct device label");
+
     console.log("\n5. GitHub without a verified email");
     nextUser = { sub: "gh-9", email: "unverified@example.com", verified: false, name: "U" };
     const hid2 = b64url(randomBytes(24)); const v2 = b64url(randomBytes(32));

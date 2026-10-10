@@ -78,7 +78,10 @@ async function main() {
     }
     if (!ready) throw new Error("Acceptance backend did not become healthy within 20 seconds.");
 
-    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "auto", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
+    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "code", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
+    // This fixture tests a command inside its temporary project, so explicitly
+    // request Code mode; Auto may classify the generic counter prompt as workspace-free.
+    ok(Boolean(started.runId) && Boolean(started.workspaceId), "command fixture binds the temporary workspace", JSON.stringify(started));
     const runId = started.runId;
     const events = [];
     const seen = {}; // event type -> client time first seen
@@ -105,6 +108,7 @@ async function main() {
     const firstIdx = (t) => events.findIndex((e) => e.type === t);
     ok(firstIdx("message.delta") >= 0 && firstIdx("message.delta") < firstIdx("tool.started"), "ORION speaks before the tool starts");
     ok(!/active environment|first files in place/i.test(text) && !events.some((e) => e.type === "conversation.message"), "no scripted sentences from the app");
+    ok(events.some((e) => e.type === "tool.completed" && e.data?.tool === "terminal") && !events.some((e) => e.type === "tool.failed"), "counter actually executed successfully");
     ok(outputs.length >= 3, "the command's output streamed in pieces", `${outputs.length} output events`);
     const lead = (seen["tool.completed"] ?? 0) - (seen["terminal.output"] ?? Infinity);
     ok(lead >= 1500, "output reached the app while the command was still running", `first output ${lead} ms before the command finished`);

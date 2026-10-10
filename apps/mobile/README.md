@@ -12,7 +12,7 @@ Install the repository's dependencies from its root with `npm ci`, then:
 
 ```sh
 cd apps/mobile/shell
-npm install --workspaces=false
+npm ci --workspaces=false
 npm run build
 npm run add:android
 # On macOS with Xcode:
@@ -28,7 +28,8 @@ The nested shell has its own dependency installation so ordinary repository
 The recovery workflow generates the shell lockfile and native Android/iOS
 projects, checks iOS simulator compilation, and saves them on the recovery branch.
 If the native directories are already present, use `sync` instead of repeating
-`add`. Android SDK compilation and on-device checks remain separate requirements.
+`add`. The validation workflow also compiles the Android debug APK. On-device
+checks and signed store packaging remain separate requirements.
 
 Use Node >=22.13.0 and the Capacitor 8 Android Studio/JDK/SDK and macOS/Xcode
 requirements. iOS packaging requires macOS, Apple signing and provisioning.
