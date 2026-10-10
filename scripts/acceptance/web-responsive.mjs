@@ -167,6 +167,23 @@ try {
       await pane.locator(".cloud-workbench__code").waitFor();
       assert.match(await pane.locator(".cloud-workbench__code").innerText(), /export const application/);
       if (width > 1050) {
+        const divider=page.getByRole("separator",{name:"Resize workspace"});
+        const originalWidth=(await pane.boundingBox()).width;
+        const grip=await divider.boundingBox();
+        await page.mouse.move(grip.x+grip.width/2,grip.y+80);
+        await page.mouse.down();await page.mouse.move(grip.x-100,grip.y+80,{steps:10});await page.mouse.up();
+        assert.ok((await pane.boundingBox()).width>originalWidth+70,"drag expands workspace while retaining chat");
+        await composerFits("after pane resize");
+        await divider.focus();await page.keyboard.press("Home");
+        assert.ok((await pane.boundingBox()).width<=301,"Home restores minimum pane width");
+        await page.keyboard.press("End");await composerFits("maximum pane width");
+        await divider.dblclick();assert.ok(Math.abs((await pane.boundingBox()).width-originalWidth)<3,"double click resets split");
+        const beforeReload=(await pane.boundingBox()).width;
+        await divider.focus();await page.keyboard.press("ArrowLeft");
+        const savedWidth=(await pane.boundingBox()).width;
+        assert.ok(savedWidth>beforeReload);
+        await page.reload({waitUntil:"domcontentloaded"});await pane.waitFor();
+        assert.ok(Math.abs((await pane.boundingBox()).width-savedWidth)<3,"width persists across reload");
         await pane.getByRole("button", { name: "Expand workspace" }).click();
         assert.equal(await page.locator(".chat").isVisible(), false);
         await pane.getByRole("button", { name: "Restore split view" }).click();

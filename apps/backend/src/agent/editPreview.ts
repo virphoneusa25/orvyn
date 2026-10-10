@@ -100,12 +100,14 @@ export async function previewToolEdit(
   args: Record<string, unknown>
 ): Promise<EditPreview | undefined> {
   try {
-    switch (toolName) {
+    switch (canonicalFileTool(toolName)) {
       case "write_file": {
         const rel = String(args.path ?? "");
         if (!rel) return undefined;
         const target = resolveSafe(projectRoot, rel);
-        return build(rel, await readIfExists(target), String(args.content ?? ""));
+        const before = await readIfExists(target);
+        const content = String(args.content ?? args.patch ?? "");
+        return build(rel, before, args.append === true ? (before ?? "") + content : content);
       }
 
       case "edit_file": {
@@ -141,7 +143,7 @@ export async function previewToolEdit(
         const from = String(args.from ?? "");
         const to = String(args.to ?? "");
         if (!from || !to) return undefined;
-        return { path: `${from} → ${to}`, kind: "move", additions: 0, deletions: 0 };
+        return { path: from, kind: "move", additions: 0, deletions: 0 };
       }
 
       default:
@@ -153,6 +155,11 @@ export async function previewToolEdit(
 }
 
 /** True for tools whose approval card should render a diff. */
+export function canonicalFileTool(name: string): string {
+  return name === "create_file" || name === "apply_patch" ? "write_file" : name;
+}
+
 export function isFileMutatingTool(name: string): boolean {
+  name = canonicalFileTool(name);
   return name === "write_file" || name === "edit_file" || name === "delete_file" || name === "move_file";
 }

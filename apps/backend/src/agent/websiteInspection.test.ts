@@ -82,3 +82,25 @@ test("automatic website review routes to available vision models; escalation can
   const pinned = selectAgentModel({intent:inferTaskIntent("Review https://example.com"),requestedModelId:text,availableIds:[text,vision],visionIds:[vision]});
   assert.equal(pinned.registryId,text,"runtime validates explicit choices rather than silently replacing them");
 });
+
+test("the real customer site prompts reach a browser run in both shared and server routing", async () => {
+  const { decideTurn } = await import("@orvyn/ai-core");
+  const { routeTurn } = await import("./turnRouting");
+  for (const prompt of [
+    "can you view sinch.com and tell me what it is?",
+    "can you veiw sinch.com and tell me what it is?",
+    "View sinch.com",
+    "Read https://example.com and explain what they offer",
+    "Open example.com and tell me what you see",
+    "What do you think of https://example.com?",
+  ]) {
+    assert.equal(isWebsiteInspection(prompt), true, prompt);
+    assert.equal(decideTurn(prompt).requiresExecution, true, prompt);
+    assert.equal(routeTurn(prompt, "auto"), "run", prompt);
+    assert.equal(inferTaskIntent(prompt).requiresBrowserVerification, true, prompt);
+  }
+  for (const prompt of ["What is Sinch?", "How can I view sinch.com?", "What is a browser?", "Explain website design"]) {
+    assert.equal(isWebsiteInspection(prompt), false, prompt);
+    assert.equal(routeTurn(prompt, "auto"), "chat", prompt);
+  }
+});

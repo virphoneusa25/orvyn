@@ -910,6 +910,20 @@ async function pollForToolRequests(runId: string): Promise<void> {
               : { ok: false, error: (r.output || r.stderr || "git branch failed"), exitCode: r.exitCode };
             break;
           }
+          case "move_file": {
+            const from = workspacePath(runId, String(req.arguments.from ?? ""));
+            const to = workspacePath(runId, String(req.arguments.to ?? ""));
+            const root = workspacePath(runId, "");
+            if (!from || !to || from === root || to === root) { result = { ok: false, error: "path escapes the workspace", exitCode: 1 }; break; }
+            try {
+              const st = fs.lstatSync(from);
+              if (!st.isFile()) { result = { ok: false, error: "move_file moves regular files, not directories or symlinks", exitCode: 1 }; break; }
+              fs.mkdirSync(path.dirname(to), { recursive: true });
+              fs.renameSync(from, to);
+              result = { ok: true, output: "Moved " + String(req.arguments.from) + " to " + String(req.arguments.to), exitCode: 0 };
+            } catch (e: any) { result = { ok: false, error: e.message, exitCode: 1 }; }
+            break;
+          }
           case "delete_file": {
             const target = workspacePath(runId, String(req.arguments.path ?? ""));
             if (!target || target === workspacePath(runId, "")) { result = { ok: false, error: "path escapes the workspace", exitCode: 1 }; break; }

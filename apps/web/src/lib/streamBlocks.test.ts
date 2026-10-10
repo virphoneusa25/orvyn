@@ -34,3 +34,26 @@ test("repeated failed page reads on one host collapse to one public error", () =
   assert.equal(collapsed.length, 2);
   assert.doesNotMatch(String(collapsed[0]?.error), /OpenShell|host \*/);
 });
+
+test("failed or cancelled edits are not documented as completed changes", () => {
+  const start = [{type:"tool.started",data:{callId:"bad",tool:"edit_file"}},{type:"tool.input",data:{callId:"bad",input:{path:"a.ts"}}}];
+  assert.equal(fileEditsFromEvents(start)[0]?.pending,true);
+  assert.deepEqual(fileEditsFromEvents([...start,{type:"tool.failed",data:{callId:"bad",error:"anchor not found"}}]),[]);
+  assert.deepEqual(fileEditsFromEvents([...start,{type:"run.cancelled",data:{}}]),[]);
+  const previous={type:"file.edit",data:{path:"a.ts",preview:{kind:"modify",additions:1,diff:[{type:"add",content:"verified"}]}}};
+  const edits=fileEditsFromEvents([previous,...start,{type:"tool.failed",data:{callId:"bad"}}]);
+  assert.equal(edits[0]?.pending,false);
+  assert.equal(edits[0]?.diff[0]?.content,"verified");
+});
+test("aliases, overwrite, rename destinations and restored persisted events show real changes", () => {
+  for (const tool of ["create_file","apply_patch","write_file"]) {
+    const events=[{type:"tool.started",data:{callId:"w",tool}},{type:"tool.input",data:{callId:"w",input:{path:"a.ts"}}},
+      {type:"file.edit",data:{path:"a.ts",preview:{kind:"modify",additions:1,deletions:1,diff:[{type:"add",content:"new"}]}}},
+      {type:"tool.completed",data:{callId:"w",tool}}];
+    assert.equal(fileEditsFromEvents(events)[0]?.status,"modified");
+    assert.deepEqual(fileEditsFromEvents(JSON.parse(JSON.stringify(events))),fileEditsFromEvents(events));
+  }
+  const moved=fileEditsFromEvents([{type:"file.edit",data:{path:"old.ts",to:"new.ts",preview:{path:"old.ts → new.ts",kind:"move"}}}]);
+  assert.equal(moved[0]?.path,"old.ts");
+  assert.equal(moved[0]?.openPath,"new.ts");
+});

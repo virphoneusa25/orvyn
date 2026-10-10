@@ -1,3 +1,5 @@
+import { isWebsiteInspection } from "./websiteInspection";
+
 /**
  * The conversation/runtime boundary shared by the web, desktop and backend.
  * This is deliberately deterministic and does not contain model reasoning.
@@ -61,6 +63,13 @@ function capabilities(text: string): string[] {
 /** Resolve the turn before selecting a model, resource, worker or tool. */
 export function decideTurn(text: string, context: TurnDecisionContext = {}): TurnDecision {
   const prompt = String(text ?? "").trim();
+  if (isWebsiteInspection(prompt)) {
+    return {
+      disposition: "inspect", continuation: "new_topic", requiresExecution: true, requiresTool: true,
+      references: [], capabilities: ["browser"], confidence: 0.95, reasonCode: "explicit_action", responseOwner: "single_agent",
+      ...(context.activeProjectId ? { targetProjectId: context.activeProjectId } : {}),
+    };
+  }
   const pendingWork = Boolean(context.pendingProposal?.trim())
     || /\b(do you want me to|would you like(?: me)? to|shall i|want me to|i can (?:update|fix|add|change|make|edit))\b/i.test(String(context.lastAssistantText ?? ""));
   const affirmation = /^(yes|yeah|yep|yup|sure|ok|okay|please do|do it|go ahead|go for it|yeah do (?:that|it)|yes(?:,)? (?:please|do (?:that|it)))[.!]*$/i.test(prompt)

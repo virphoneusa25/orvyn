@@ -52,11 +52,14 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   const terminal = useRef<HTMLPreElement>(null);
   const stick = useRef(true);
   const edits = fileEditsFromEvents(events);
+  const completedEdits = edits.filter(edit => !edit.pending);
+  const pendingEdits = edits.filter(edit => edit.pending);
   const transcript = terminalTranscript(events);
   const ended = !!runStatus && ["completed", "cancelled", "error", "partial", "blocked"].includes(runStatus);
   const liveView = tab === "Browser" || tab === "Desktop";
   const browserStarted = events.some((event) => event.type === "tool.started" && String(event.data?.tool ?? "").startsWith("browser_"));
   const desktopStarted = events.some((event) => event.type.startsWith("desktop.") || (event.type === "tool.started" && /^(desktop_|computer_)/.test(String(event.data?.tool ?? ""))));
+  const savedBrowserFrame = [...events].reverse().find(event => event.type === "browser.frame")?.data?.artifactId;
   const inputEnabled = remoteInputAllowed(connection, owner, pictureReady, !readOnly && !ended);
   const canControl = connection === "live" && pictureReady && !!owner && !readOnly && !ended;
 
@@ -143,6 +146,18 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
     return () => { controller.abort(); if (streamAbort.current === controller) streamAbort.current = null; };
   }, [active, runId, tab, liveView, ended, browserStarted, desktopStarted, retry]);
 
+  // Completed and reopened runs replay the actual saved screenshot.
+  useEffect(() => {
+    if (!active || !runId || tab !== "Browser" || !ended || !savedBrowserFrame || receivedFrames.current[`${runId}:Browser`]) return;
+    const controller = new AbortController();
+    void api<{ screenshot: { b64: string; mediaType: string } }>(`/cloud-workbench/${encodeURIComponent(runId)}/browser/frame`, { signal: controller.signal }).then(result => {
+      if (controller.signal.aborted || !result.screenshot?.b64) return;
+      const url = `data:${result.screenshot.mediaType};base64,${result.screenshot.b64}`;
+      receivedFrames.current[`${runId}:Browser`] = url; setPictureReady(false); setPicture(url); setConnection("ended");
+    }).catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
+    return () => controller.abort();
+  }, [active, runId, tab, ended, savedBrowserFrame]);
+
   async function control(next: "user" | "orion") {
     if (!runId || !canControl || pending) return;
     const requested = { ...binding.current };
@@ -212,7 +227,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
           event.preventDefault(); const index = TABS.findIndex(([value]) => value === name);
           const next = event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + TABS.length) % TABS.length;
           select(TABS[next]![0]); document.getElementById(`workspace-tab-${TABS[next]![0]}`)?.focus();
-        }}><Glyph size={15} /><span>{name}</span>{name === "Changes" && edits.length > 0 ? <small>{edits.length}</small> : null}</button>)}
+        }}><Glyph size={15} /><span>{name}</span>{name === "Changes" && completedEdits.length > 0 ? <small>{completedEdits.length}</small> : null}</button>)}
       </div>
       <div className="cloud-workbench__context">
         <span className={`cloud-workbench__status ${connection === "live" && pictureReady && liveView ? "is-live" : ""}`}><i />{!runId ? "No task selected" : liveView ? previewStatus : ended ? "Task finished" : "Task workspace"}</span>
@@ -238,7 +253,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
             <div className="cloud-workbench__file-bar"><Icon.folder size={15} /><span>{directory || "Project files"}</span>{directory ? <button className="btn btn--sm" disabled={fileBusy} onClick={() => void read()}>Project root</button> : null}<button className="iconbtn" aria-label="Refresh files" disabled={fileBusy} onClick={() => void read(directory || undefined, true)}><Icon.retry size={15} /></button></div>
             <div className="cloud-workbench__file-list">{entries.length ? entries.map((entry) => <button key={entry} disabled={fileBusy} onClick={() => { const path = directory ? `${directory.replace(/\/$/, "")}/${entry}` : entry; void read(path, entry.endsWith("/")); }}>{entry.endsWith("/") ? <Icon.folder size={16} /> : <Icon.file size={16} />}<span>{entry}</span><Icon.chev size={14} /></button>) : <div className="cloud-workbench__empty"><Icon.folder size={32} /><h3>{fileBusy ? "Loading project files…" : "No project files to show"}</h3><p>Files created by this task appear here.</p></div>}</div>
           </> : null}
-          {tab === "Changes" ? edits.length ? <div className="cloud-workbench__changes"><p>{edits.length} {edits.length === 1 ? "file" : "files"} changed in this task</p><FileEditList edits={edits} /><div className="cloud-workbench__changed-files">{edits.filter((edit) => edit.status !== "deleted").map((edit) => <button className="btn btn--sm" key={edit.path} onClick={() => void read(edit.path)}><Icon.code size={14} /> Open {edit.path}</button>)}</div></div> : <div className="cloud-workbench__empty"><Icon.pen size={32} /><h3>No changes yet</h3><p>File edits and diffs appear here as ORVYN works.</p></div> : null}
+          {tab === "Changes" ? edits.length ? <div className="cloud-workbench__changes"><p>{completedEdits.length} {completedEdits.length === 1 ? "file" : "files"} changed in this task{pendingEdits.length ? ` · Editing ${pendingEdits.length} ${pendingEdits.length === 1 ? "file" : "files"}` : ""}</p><FileEditList edits={edits} /><div className="cloud-workbench__changed-files">{completedEdits.filter((edit) => edit.status !== "deleted").map((edit) => <button className="btn btn--sm" key={edit.path} onClick={() => void read(edit.openPath ?? edit.path)}><Icon.code size={14} /> Open {edit.openPath ?? edit.path}</button>)}</div></div> : <div className="cloud-workbench__empty"><Icon.pen size={32} /><h3>No changes yet</h3><p>File edits and diffs appear here as ORVYN works.</p></div> : null}
           {tab === "Terminal" ? transcript ? <pre ref={terminal} className="cloud-workbench__terminal" onScroll={(event) => { const node = event.currentTarget; stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48; }}>{transcript}</pre> : <div className="cloud-workbench__empty"><Icon.terminal size={32} /><h3>No command output yet</h3><p>Commands and their output appear here when ORVYN runs them.</p></div> : null}
           {fileBusy && tab !== "Files" ? <p className="cloud-workbench__notice" role="status">Loading file…</p> : null}
           {fileError ? <p className="cloud-workbench__notice" role="alert">{fileError}</p> : null}

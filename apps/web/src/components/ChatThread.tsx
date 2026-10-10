@@ -1,6 +1,7 @@
+import { workspaceBounds, workspaceWidth, storedWorkspaceShare, DEFAULT_WORKSPACE_SHARE } from "../lib/workspaceSplit";
 import { CloudWorkbench } from "./CloudWorkbench";
 import { followRun } from "../lib/followRun";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
 import { AgentProgress } from "./AgentProgress";
@@ -197,6 +198,28 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     try { return localStorage.getItem("orvyn.cloudWorkspace") !== "closed"; } catch { return true; }
   });
   const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
+  const split = useRef<HTMLDivElement>(null);
+  const [splitWidth, setSplitWidth] = useState(0);
+  const [workspaceShare, setWorkspaceShare] = useState(() => {
+    try { return storedWorkspaceShare(localStorage.getItem("orvyn.cloudWorkspaceShare")); } catch { return DEFAULT_WORKSPACE_SHARE; }
+  });
+  const [resizing, setResizing] = useState(false);
+  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  useEffect(() => {
+    if (compact || !split.current) return;
+    const node = split.current;
+    const observer = new ResizeObserver(() => setSplitWidth(node.getBoundingClientRect().width));
+    observer.observe(node); setSplitWidth(node.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, [compact]);
+  const paneWidth = workspaceWidth(splitWidth, workspaceShare);
+  const bounds = workspaceBounds(splitWidth);
+  function resizePane(width: number) {
+    if (!splitWidth) return;
+    const share = workspaceWidth(splitWidth, width / splitWidth) / splitWidth;
+    setWorkspaceShare(share);
+    try { localStorage.setItem("orvyn.cloudWorkspaceShare", String(share)); } catch { /* storage unavailable */ }
+  }
   const workbenchToggle = useRef<HTMLButtonElement>(null);
   function closeWorkbench() {
     setWorkbenchOpen(false); setWorkbenchExpanded(false);
@@ -471,9 +494,17 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
   const empty = !loading && !messages.length;
   const viewAs = Boolean(me?.viewAs);
   const workspaceMessage = [...messages].reverse().find((message) => message.runId);
+  const previewOpenedRuns = useRef(new Set<string>());
+  useEffect(() => {
+    const runId = workspaceMessage?.runId;
+    if (!runId || previewOpenedRuns.current.has(runId) || !workspaceMessage?.streaming) return;
+    if (!(workspaceMessage.agentEvents ?? []).some(event => event.type === "tool.started" && /^(browser_|desktop_|computer_)/.test(String(event.data?.tool ?? "")))) return;
+    previewOpenedRuns.current.add(runId);
+    if (!compact && window.innerWidth > 1050) setWorkbenchOpen(true);
+  }, [workspaceMessage, compact]);
 
   return (
-    <div className={compact ? undefined : `cloud-chat-layout${workbenchOpen ? " is-workspace-open" : ""}${workbenchExpanded && workbenchOpen ? " is-workspace-expanded" : ""}`}>
+    <div ref={split} style={!compact && splitWidth ? { "--workspace-width": `${paneWidth}px` } as CSSProperties : undefined} className={compact ? undefined : `cloud-chat-layout${workbenchOpen ? " is-workspace-open" : ""}${workbenchExpanded && workbenchOpen ? " is-workspace-expanded" : ""}${resizing ? " is-resizing" : ""}`}>
     {!compact ? <div className="cloud-chat-layout__toolbar">
       <button ref={workbenchToggle} className="cloud-chat-layout__toggle" aria-expanded={workbenchOpen} aria-controls="cloud-workbench" onClick={() => {
         if (workbenchOpen) closeWorkbench();
@@ -589,6 +620,21 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         {!compact ? <div className="composer__hint">ORVYN can make mistakes — check important details. Shift + Enter for a new line.</div> : null}
       </div>
     </div>
+    {!compact && workbenchOpen && !workbenchExpanded ? <div className="cloud-chat-layout__divider" role="separator" aria-label="Resize workspace" aria-orientation="vertical" aria-controls="cloud-workbench" aria-valuemin={Math.round(bounds.min)} aria-valuemax={Math.round(bounds.max)} aria-valuenow={paneWidth} aria-valuetext={`Workspace width ${paneWidth} pixels`} tabIndex={0}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
+        dragStart.current = { x: event.clientX, width: paneWidth }; setResizing(true);
+      }}
+      onPointerMove={(event) => { if (dragStart.current) resizePane(dragStart.current.width + dragStart.current.x - event.clientX); }}
+      onPointerUp={(event) => { dragStart.current = null; setResizing(false); if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+      onPointerCancel={() => { dragStart.current = null; setResizing(false); }}
+      onLostPointerCapture={() => { dragStart.current = null; setResizing(false); }}
+      onDoubleClick={() => { setWorkspaceShare(DEFAULT_WORKSPACE_SHARE); try { localStorage.removeItem("orvyn.cloudWorkspaceShare"); } catch { /* storage unavailable */ } }}
+      onKeyDown={(event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault(); resizePane(event.key === "Home" ? bounds.min : event.key === "End" ? bounds.max : paneWidth + (event.key === "ArrowLeft" ? 1 : -1) * (event.shiftKey ? 80 : 24));
+      }} /> : null}
     {!compact && <CloudWorkbench key={workspaceMessage?.runId ?? "no-run"} runId={workspaceMessage?.runId} runStatus={workspaceMessage?.runStatus} events={workspaceMessage?.agentEvents ?? []} active={workbenchOpen} expanded={workbenchExpanded} readOnly={viewAs} onClose={closeWorkbench} onExpand={() => setWorkbenchExpanded((value) => !value)} />}
     </div>
   );

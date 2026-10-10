@@ -561,7 +561,7 @@ export function makeBrowserScreenshotTool(projectRoot: string): AITool {
         s.screenshots.push(file);
         s.actions.push({ action: "screenshot", url: page.url(), timestamp: Date.now(), result: file });
       }
-      return { ok: true, output: `Screenshot saved: ${file}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+      return { ok: true, output: `Screenshot saved: ${file}\n${BACKGROUND_NOTE}`, meta: { ...backgroundMeta(projectRoot), screenshot: { b64: (await fs.readFile(file)).toString("base64"), mediaType: "image/png" } } };
     }),
   };
 }

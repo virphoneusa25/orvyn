@@ -23,6 +23,7 @@ export function selectToolNames(
   const inspection = isWebsiteInspection(intent.goal);
   const gitAllowed = options?.repositoryDetected !== false;
   return names.filter((name) => {
+    if (name === "mcp_list") return true; // discovery stays available even on short follow-ups
     if (inspection && /^(write_file|edit_file|delete_file|move_file|apply_edit|apply_patch|create_file|rename_file|terminal|run_command|run_tests|run_typecheck|run_linter|start_process|stop_process|git_commit|git_checkout)$/.test(name)) return false;
     if (GIT.test(name) && !gitAllowed) return false;
     if (SERVER.test(name) && !intent.requiresRemoteResource && intent.category !== "server" && intent.category !== "deploy") {

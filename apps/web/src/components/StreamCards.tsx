@@ -49,6 +49,8 @@ export function FileEditAccordion({ edit }: { edit: FileEditCard }) {
         </span>
         {hasDiff ? <span className="file-edit__chevron">{open ? "Hide" : "Expand"}</span> : null}
       </button>
+      {edit.openPath && edit.openPath !== edit.path ? <p className="file-edit__note">Moved to {edit.openPath}</p> : null}
+      {edit.note ? <p className="file-edit__note">{edit.note}</p> : null}
       {open && hasDiff ? (
         <pre className="file-edit__diff" data-testid="file-edit-diff">
           {edit.diff.map((line, i) => (

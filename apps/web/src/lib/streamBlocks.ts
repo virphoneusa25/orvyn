@@ -24,9 +24,10 @@ export interface FileEditCard {
   diff: DiffLine[];
   pending: boolean;
   note?: string;
+  openPath?: string;
 }
 
-const FILE_TOOLS = new Set(["write_file", "edit_file", "delete_file", "move_file"]);
+const FILE_TOOLS = new Set(["write_file", "create_file", "apply_patch", "edit_file", "delete_file", "move_file"]);
 
 export function upsertActivity(list: ChatActivity[], next: ChatActivity): ChatActivity[] {
   const i = list.findIndex((a) => a.id === next.id);
@@ -77,6 +78,8 @@ export function activityLabel(a: ChatActivity): string {
 export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[] {
   const byPath = new Map<string, FileEditCard>();
   const callPath = new Map<string, string>();
+  const previousEdit = new Map<string, FileEditCard | undefined>();
+  const callTool = new Map<string, string>();
   const put = (path: string, patch: Partial<FileEditCard>) => {
     const key = path.replace(/\\/g, "/");
     if (!key) return;
@@ -89,12 +92,14 @@ export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[
     const callId = String(data.callId ?? "");
     const tool = String(data.tool ?? data.name ?? "");
     const args = (data.args ?? data.input ?? {}) as Record<string, unknown>;
-    const argPath = String(args.path ?? args.to ?? args.from ?? data.path ?? "");
+    const argPath = String(args.path ?? args.from ?? args.to ?? data.path ?? "");
 
     if (event.type === "tool.started" && FILE_TOOLS.has(tool) && callId) {
+      callTool.set(callId, tool);
       if (argPath) {
         callPath.set(callId, argPath);
-        put(argPath, { pending: true, status: tool === "write_file" ? "created" : tool === "delete_file" ? "deleted" : tool === "move_file" ? "moved" : "editing" });
+        if (!previousEdit.has(callId)) previousEdit.set(callId, byPath.get(argPath.replace(/\\/g, "/")));
+        put(argPath, { pending: true, status: "editing" });
       } else {
         callPath.set(callId, "");
       }
@@ -104,7 +109,8 @@ export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[
         const previous = callPath.get(callId);
         if (previous && previous !== argPath) byPath.delete(previous);
         callPath.set(callId, argPath);
-        put(argPath, { pending: true });
+        if (!previousEdit.has(callId)) previousEdit.set(callId, byPath.get(argPath.replace(/\\/g, "/")));
+        put(argPath, { pending: true, status: "editing", openPath: typeof args.to === "string" ? args.to : undefined });
       }
     }
     if (event.type === "file.created" && data.path) {
@@ -112,10 +118,11 @@ export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[
     }
     if (event.type === "file.edit") {
       const preview = (data.preview ?? {}) as { path?: string; kind?: string; additions?: number; deletions?: number; diff?: DiffLine[]; note?: string };
-      const path = String(preview.path || data.path || "");
+      const path = String(data.path || preview.path || "");
       const kind = String(preview.kind || data.op || "modify");
       put(path, {
         pending: false,
+        openPath: typeof data.to === "string" ? data.to : path,
         status: kind === "create" ? "created" : kind === "delete" ? "deleted" : kind === "move" ? "moved" : "modified",
         additions: Number(preview.additions ?? 0) || 0,
         deletions: Number(preview.deletions ?? 0) || 0,
@@ -124,7 +131,23 @@ export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[
       });
     }
     if ((event.type === "tool.completed" || event.type === "tool.failed") && callId && callPath.has(callId)) {
-      put(callPath.get(callId)!, { pending: event.type === "tool.failed" ? false : false });
+      const path = callPath.get(callId)!.replace(/\\/g, "/");
+      if (event.type === "tool.failed") {
+        const previous = previousEdit.get(callId);
+        if (previous) byPath.set(path, previous); else byPath.delete(path);
+      } else if (byPath.get(path)?.pending) {
+        const name = callTool.get(callId);
+        put(path, { pending: false, status: name === "delete_file" ? "deleted" : name === "move_file" ? "moved" : "modified", note: "File operation completed; an inline diff was not supplied." });
+      }
+      callPath.delete(callId); previousEdit.delete(callId); callTool.delete(callId);
+    }
+  }
+  if (events.some(event => /^run\.(completed|partial|error|cancelled)$/.test(event.type))) {
+    for (const [id, path] of callPath) {
+      const key = path.replace(/\\/g, "/");
+      if (!byPath.get(key)?.pending) continue;
+      const previous = previousEdit.get(id);
+      if (previous) byPath.set(key, previous); else byPath.delete(key);
     }
   }
   return [...byPath.values()];

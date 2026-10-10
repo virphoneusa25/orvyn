@@ -15,6 +15,16 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    if(execution?.data?.executionTargetActual!=='ovh_worker')return res.status(409).json({error:'This run has no isolated cloud worker workspace.'});
    res.locals.run=run;next();
  });
+ router.get('/:runId/browser/frame',async(req,res)=>{
+   const frame=[...res.locals.run.events].reverse().find((event:any)=>event.type==='browser.frame' && typeof event.data?.artifactId==='string');
+   if(!frame)return res.status(404).json({error:'This task has no saved browser frame.'});
+   try{
+     const {record,bytes}=await requireTenant(req).artifactService.read(frame.data.artifactId);
+     if(record.runId!==req.params.runId || !record.mimeType?.startsWith('image/'))return res.status(404).json({error:'Browser frame not found.'});
+     res.set('Cache-Control','no-store');
+     res.json({ok:true,screenshot:{b64:bytes.toString('base64'),mediaType:record.mimeType}});
+   }catch{res.status(404).json({error:'The saved browser frame is no longer available.'})}
+ });
  router.get('/:runId/browser/stream',async(req,res)=>{
    const run=res.locals.run;
    const browserStarted=run.events.some((e:any)=>e.type==='tool.started' && String(e.data?.tool??'').startsWith('browser_'));

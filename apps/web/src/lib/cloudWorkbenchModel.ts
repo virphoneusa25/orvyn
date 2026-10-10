@@ -18,7 +18,7 @@ export function latestWorkspaceTab(events: AgentProgressEvent[]): WorkspaceTab |
     if (event.type === "tool.started") {
       if (tool.startsWith("browser_")) return "Browser";
       if (tool.startsWith("desktop_") || tool.startsWith("computer_")) return "Desktop";
-      if (["write_file", "edit_file", "delete_file", "move_file"].includes(tool)) return "Changes";
+      if (["write_file", "create_file", "apply_patch", "edit_file", "delete_file", "move_file"].includes(tool)) return "Changes";
       if (tool === "read_file") return "Code";
       if (tool === "list_directory") return "Files";
     }

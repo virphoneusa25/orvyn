@@ -136,7 +136,7 @@ export function registerRemoteTools(
     rpc, runId
   ));
 
-  gateway.register(makeRemoteTool(
+  const remoteWrite = makeRemoteTool(
     "write_file",
     WRITE_FILE_DESCRIPTION,
     WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
@@ -146,16 +146,27 @@ export function registerRemoteTools(
     // content, not just a path.
     async (args, raw) => {
       const append = args.append === true;
-      const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""))) ?? "" : "";
+      const before = await readRemote(rpc, runId, String(args.path ?? ""));
       const result = await raw();
       if (!result.ok) return result;
       const after = await readRemote(rpc, runId, String(args.path ?? ""));
-      if (after === null || after !== before + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
+      if (after === null || after !== (append ? before ?? "" : "") + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
       try {
-        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, after) };
+        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), before === null ? "create" : "modify", before ?? "", after) };
       } catch (err: any) { return { ok: false, error: err.message }; }
     }
-  ));
+  );
+  gateway.register(remoteWrite);
+  gateway.register({ ...remoteWrite, name: "create_file" });
+  gateway.register({
+    ...remoteWrite, name: "apply_patch",
+    parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, patch: { type: "string" } }, required: ["path"] },
+    async execute(args, context) {
+      const content = args.content ?? args.patch;
+      if (typeof content !== "string" || !content) return { ok: false, error: "apply_patch needs content or patch.", errorType: "INVALID_ARGUMENTS" };
+      return remoteWrite.execute({ ...args, content, append: false }, context);
+    },
+  });
 
   gateway.register(makeRemoteTool(
     "edit_file",
@@ -230,6 +241,7 @@ export function registerRemoteTools(
   gateway.register(makeRemoteTool("git_branch", "git branch in the execution workspace", gitRead, "allowed", rpc, runId));
   gateway.register(makeRemoteTool("git_checkout", "Switch branch in the execution workspace", { type: "object", properties: { branch: { type: "string" }, create: { type: "boolean" } }, required: ["branch"] }, "ask", rpc, runId));
   gateway.register(makeRemoteTool("git_commit", "Commit in the execution workspace (never automatic)", { type: "object", properties: { message: { type: "string" } }, required: ["message"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("move_file", "Move a file inside the remote workspace", { type: "object", properties: { from: { type: "string" }, to: { type: "string" } }, required: ["from", "to"] }, "ask", rpc, runId));
   gateway.register(makeRemoteTool("delete_file", "Delete a file in the execution workspace", { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, "ask", rpc, runId));
   gateway.register(makeRemoteTool("start_process", "Start a long-running local process / dev server", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }, "ask", rpc, runId));
   gateway.register(makeRemoteTool("stop_process", "Stop a process this run started", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "ask", rpc, runId));

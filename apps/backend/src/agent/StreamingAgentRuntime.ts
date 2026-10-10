@@ -112,7 +112,7 @@ import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gate
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINUATION_NUDGES } from "./continuation";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
-import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
+import { EditPreview, canonicalFileTool, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
 import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import type { IndexService } from "../indexing/IndexService";
@@ -1181,6 +1181,7 @@ export class StreamingAgentRuntime {
     const need = resolveCapabilityNeed(query, manifest, (n) => this.isKnownTool(runId, n), { filesChanged: this.filesChangedCount(runId) });
     this.store.emit(runId, "capability.resolved", { query, kind: need.kind, tools: "tools" in need ? need.tools : [] });
     if (need.kind === "native") {
+      for (const tool of need.tools) state.exposedTools?.add(tool);
       return `You already have ORVYN's core tools for this: ${need.tools.join(", ")}. They are not MCP tools and need no install. Do not look for another tool. Do the task with them now.`;
     }
     if (need.kind === "permission") {
@@ -1188,6 +1189,7 @@ export class StreamingAgentRuntime {
       return `${need.message} Tell the user exactly that in one sentence (not that a tool is missing), then stop.`;
     }
     if (need.kind === "installed") {
+      for (const tool of need.tools) state.exposedTools?.add(tool);
       return `Installed MCP tools already cover this: ${need.tools.join(", ")}. Use them now.`;
     }
     type Candidate = { name?: string; server?: string; canonicalId?: string; description?: string; freeInstall?: boolean; secrets?: string[]; oauth?: boolean; connect?: string; secretsProvided?: string[] };
@@ -1384,15 +1386,15 @@ export class StreamingAgentRuntime {
   // so the frontend doesn't have to special-case tool names itself.
   private emitDomainEvent(runId: string, call: ToolCall, preview?: EditPreview): void {
     const args = call.arguments as Record<string, unknown>;
-    switch (call.name) {
+    switch (canonicalFileTool(call.name)) {
       case "read_file":
         this.store.emit(runId, "file.read", { path: args.path });
         break;
       case "write_file":
-        this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
+        if (preview?.kind === "create") this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
         // A part appended to a large file: the preview holds the whole file so far.
-        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? "")}` : args.content);
+        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? args.patch ?? "")}` : args.content ?? args.patch);
         break;
       case "edit_file":
         this.store.emit(runId, "file.edit", { path: args.path, preview, op: "modify" });
@@ -1866,6 +1868,16 @@ export class StreamingAgentRuntime {
       rejectedByScore: routed.rejectedByScore.map((item) => item.id),
       reasonSummary: routed.reasonSummary,
     });
+    // A selected playbook must be able to call its registered dependencies.
+    // Exposure adds schemas only; mode, role and approvals remain authoritative.
+    const skillTools: string[] = [];
+    const skillState = this.runs.get(runId);
+    for (const skill of routed.selected) for (const name of skill.metadata.requiredTools ?? []) {
+      if (toolNames.has(name) && runGateway.getPermission(name) !== "denied") {
+        skillState?.exposedTools?.add(name); skillTools.push(name);
+      }
+    }
+    if (skillTools.length) this.store.emit(runId, "skills.tools", { tools: [...new Set(skillTools)] });
     const skillsPrompt = routed.prompt;
     // Context composition, measured at assembly time. These estimates feed
     // the live context-usage breakdown; provider-reported totals (when the
@@ -3629,7 +3641,7 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-      if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
+      if (!isFileMutatingTool(call.name) && !["terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
       // REMOTE runs: the worker relays terminal.started/output/completed through
@@ -3640,7 +3652,7 @@ export class StreamingAgentRuntime {
       // Remote writes carry the runtime's write-safety facts (task scope +
       // read evidence) so the worker's guard grades them identically to the
       // control plane's. Authorization is runtime policy, never the model's say-so.
-      if (remoteRun && (call.name === "write_file" || call.name === "edit_file")) {
+      if (remoteRun && (canonicalFileTool(call.name) === "write_file" || call.name === "edit_file")) {
         const writePath = String((call.arguments as { path?: unknown })?.path ?? "");
         (call.arguments as Record<string, unknown>).__orvynGuard = {
           scope: state.taskScope,
@@ -3852,7 +3864,7 @@ export class StreamingAgentRuntime {
             if (/\.html?$/i.test(readPath)) await this.completeSiteAssets(runId);
           }
         }
-        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
+        if (isFileMutatingTool(call.name)) {
           // Remote tools carry the REAL before/after diff back with the
           // result; local runs use the pre-execution preview.
           this.emitDomainEvent(runId, call, (result.edit as EditPreview | undefined) ?? previews.get(call.id));
@@ -3952,6 +3964,19 @@ export class StreamingAgentRuntime {
         }
         const shot = result.meta?.screenshot as { b64?: string; mediaType?: string } | undefined;
         if (shot?.b64) {
+          if (call.name === "browser_screenshot" && this.artifacts) {
+            try {
+              const frame = await this.artifacts.persistArtifact({
+                name: `browser-${runId}-${call.id}.${shot.mediaType === "image/jpeg" ? "jpg" : "png"}`,
+                bytes: Buffer.from(shot.b64, "base64"), mimeType: shot.mediaType || "image/png", kind: "run", sourceTool: call.name,
+                runId, projectRoot: state.projectRoot,
+              });
+              await this.artifacts.read(frame.artifactId);
+              this.store.emit(runId, "browser.frame", { artifactId: frame.artifactId, mediaType: frame.mimeType, url: String(result.meta?.url ?? (result.meta?.browserSession as {url?:string} | undefined)?.url ?? "") });
+            } catch {
+              this.store.emit(runId, "browser.frame.failed", { message: "The browser screenshot could not be saved for replay." });
+            }
+          }
           screenshots.push({ b64: shot.b64, mediaType: shot.mediaType || "image/png", name: `${call.name}.jpg` });
           if (result.meta?.sessionId) {
             this.store.emit(runId, "desktop.screenshot", { tool: call.name, sessionId: result.meta.sessionId, surface: result.meta.surface });
