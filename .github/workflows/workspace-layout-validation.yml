@@ -16,6 +16,8 @@ jobs:
           node-version: 22.13.0
           cache: npm
       - run: npm ci
+      - name: Build backend dependencies used by existing web tests
+        run: npm run build -w apps/backend
       - name: Web unit tests, typecheck and production bundle
         run: |
           npm run test -w apps/web
@@ -24,7 +26,6 @@ jobs:
       - name: Existing Cloud workspace API tests
         run: |
           if test -f apps/backend/src/routes/cloudWorkbench.test.ts; then
-            npm run build -w apps/backend
             node --test apps/backend/dist/routes/cloudWorkbench.test.js
           fi
       - run: npx playwright install --with-deps chromium

@@ -35,6 +35,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   const [pending, setPending] = useState(false);
   const [file, setFile] = useState("");
   const [code, setCode] = useState("");
+  const [openedFile, setOpenedFile] = useState(false);
   const [entries, setEntries] = useState<string[]>([]);
   const [directory, setDirectory] = useState("");
   const [fileBusy, setFileBusy] = useState(false);
@@ -57,7 +58,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   const canControl = connection === "live" && pictureReady && !!owner && !readOnly && !ended;
 
   useEffect(() => {
-    setTab("Browser"); setFollow(true); setFile(""); setCode(""); setEntries([]); setDirectory("");
+    setTab("Browser"); setFollow(true); setFile(""); setCode(""); setOpenedFile(false); setEntries([]); setDirectory("");
     setFileError(""); setOperationError(""); setPending(false);
   }, [runId]);
   useEffect(() => {
@@ -83,7 +84,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
     const token = getToken(); if (token) headers.Authorization = `Bearer ${token}`;
     const acceptPicture = (url: string) => {
       if (controller.signal.aborted) return;
-      setPicture((previous) => { if (!previous) setPictureReady(false); return url; });
+      setPictureReady(false); setPicture(url);
       setConnection("live"); setError("");
     };
     void (async () => {
@@ -149,7 +150,8 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
     if (!runId || !inputEnabled || pending) return;
     const requested = { ...binding.current };
     try {
-      await api(tab === "Browser" ? `/cloud-workbench/${encodeURIComponent(runId)}/browser/input` : "/desktop/input", { method: "POST", body: { runId, ...body } });
+      const result = await api(tab === "Browser" ? `/cloud-workbench/${encodeURIComponent(runId)}/browser/input` : "/desktop/input", { method: "POST", body: { runId, ...body } });
+      if (result.ok === false) throw new Error(result.error || "The input could not be sent.");
     } catch (failure: any) {
       if (binding.current.runId === requested.runId && binding.current.tab === requested.tab) setOperationError(failure.message);
     }
@@ -176,7 +178,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
       if (list || path === undefined) {
         setDirectory(path ?? "");
         setEntries(String(result.output ?? "").split(/\r?\n/).filter(Boolean));
-      } else { setFile(path); setCode(String(result.output ?? "")); setTab("Code"); setFollow(false); }
+      } else { setFile(path); setCode(String(result.output ?? "")); setOpenedFile(true); setTab("Code"); setFollow(false); }
     } catch (failure: any) { if (!controller.signal.aborted && fileSequence.current === sequence) setFileError(failure.message); }
     finally { if (!controller.signal.aborted && fileSequence.current === sequence) setFileBusy(false); }
   }
@@ -223,7 +225,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
           </> : null}
           {tab === "Code" ? <>
             <form className="cloud-workbench__file-bar" onSubmit={(event) => { event.preventDefault(); if (file.trim()) void read(file.trim()); }}><Icon.file size={15} /><input aria-label="Project file path" value={file} onChange={(event) => setFile(event.target.value)} placeholder="src/app.ts" /><button className="btn btn--sm" disabled={fileBusy || !file.trim()}>Open</button></form>
-            {code ? <pre className="cloud-workbench__code">{code}</pre> : <div className="cloud-workbench__empty"><Icon.code size={32} /><h3>Inspect a project file</h3><p>Choose a file in Files or enter its path above.</p><button className="btn btn--sm" onClick={() => select("Files")}>Browse files</button></div>}
+            {openedFile ? <pre className="cloud-workbench__code">{code || "// This file is empty."}</pre> : <div className="cloud-workbench__empty"><Icon.code size={32} /><h3>Inspect a project file</h3><p>Choose a file in Files or enter its path above.</p><button className="btn btn--sm" onClick={() => select("Files")}>Browse files</button></div>}
           </> : null}
           {tab === "Files" ? <>
             <div className="cloud-workbench__file-bar"><Icon.folder size={15} /><span>{directory || "Project files"}</span>{directory ? <button className="btn btn--sm" disabled={fileBusy} onClick={() => void read()}>Project root</button> : null}<button className="iconbtn" aria-label="Refresh files" disabled={fileBusy} onClick={() => void read(directory || undefined, true)}><Icon.retry size={15} /></button></div>
