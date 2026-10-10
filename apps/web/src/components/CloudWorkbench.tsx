@@ -28,6 +28,8 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   const [follow, setFollow] = useState(true);
   const [picture, setPicture] = useState("");
   const [pictureReady, setPictureReady] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
+  const lastPicture = useRef("");
   const [connection, setConnection] = useState<WorkspaceConnection>("idle");
   const [owner, setOwner] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -73,18 +75,18 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   }, [transcript, tab]);
 
   useEffect(() => {
-    setPicture(""); setPictureReady(false); setError(""); setOwner(null);
+    lastPicture.current = ""; setPicture(""); setPictureReady(false); setError(""); setOwner(null);
     if (!active || !runId || !liveView || ended || (tab === "Browser" ? !browserStarted : !desktopStarted)) {
       setConnection("idle"); return;
     }
     const controller = new AbortController();
     streamAbort.current = controller;
-    setConnection("connecting");
+    setConnection("connecting"); setStreamVersion((value) => value + 1);
     const headers: Record<string, string> = {};
     const token = getToken(); if (token) headers.Authorization = `Bearer ${token}`;
     const acceptPicture = (url: string) => {
-      if (controller.signal.aborted) return;
-      setPictureReady(false); setPicture(url);
+      if (controller.signal.aborted || lastPicture.current === url) return;
+      lastPicture.current = url; setPictureReady(false); setPicture(url);
       setConnection("live"); setError("");
     };
     void (async () => {
@@ -215,7 +217,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
         {!runId ? <div className="cloud-workbench__empty"><Icon.layers size={32} /><h3>Your task workspace</h3><p>Ask ORVYN to browse, code, or use its cloud desktop. Watch the work here while the conversation stays in chat.</p></div> : <>
           {liveView ? <>
             <div className="cloud-workbench__preview-bar"><Icon.lock size={14} /><span title={typeof lastUrl === "string" ? lastUrl : undefined}>{tab === "Browser" && typeof lastUrl === "string" ? lastUrl : "Isolated cloud computer"}</span><button className="btn btn--sm" disabled={!canControl || pending} onClick={() => void control(owner === "user" ? "orion" : "user")}>{owner === "user" ? "Return to ORVYN" : "Take control"}</button></div>
-            {picture ? <div className="cloud-workbench__preview"><img className="cloud-workbench__screen" src={picture} alt={`Cloud ${tab.toLowerCase()} preview`} tabIndex={inputEnabled ? 0 : -1} onLoad={() => setPictureReady(true)} onError={() => { setPictureReady(false); setPicture(""); setConnection("error"); setError("The preview frame couldn't be displayed. Reconnect to try again."); }} onClick={(event) => {
+            {picture ? <div className="cloud-workbench__preview"><img key={streamVersion} className="cloud-workbench__screen" src={picture} alt={`Cloud ${tab.toLowerCase()} preview`} tabIndex={inputEnabled ? 0 : -1} onLoad={() => setPictureReady(true)} onError={() => { setPictureReady(false); setPicture(""); setConnection("error"); setError("The preview frame couldn't be displayed. Reconnect to try again."); }} onClick={(event) => {
               if (!inputEnabled) return; event.currentTarget.focus();
               const rect = event.currentTarget.getBoundingClientRect();
               void input({ type: "click", x: Math.round((event.clientX - rect.left) * event.currentTarget.naturalWidth / rect.width), y: Math.round((event.clientY - rect.top) * event.currentTarget.naturalHeight / rect.height), viewWidth: event.currentTarget.naturalWidth, viewHeight: event.currentTarget.naturalHeight });
