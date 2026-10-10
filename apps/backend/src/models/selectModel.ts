@@ -1,3 +1,4 @@
+import { isWebsiteInspection } from "../agent/websiteInspection";
 // Picks a certified model for a task. A pinned id is never replaced.
 // A model that is not registered is skipped; the caller keeps its previous route.
 
@@ -52,24 +53,26 @@ export function selectAgentModel(input: {
   if (pinned) {
     return { registryId: requested, lane: "pinned", reason: "User pinned this model.", pinned: true };
   }
-  const needs: RoutingRequirements = { capability: "agent", tools: true, streaming: true, ...input.requirements };
+  const needs: RoutingRequirements = { capability: "agent", tools: true, streaming: true, ...input.requirements, vision: Boolean(input.requirements?.vision || isWebsiteInspection(input.intent.goal)) };
   if (input.providers) {
     const eligible = new Set(input.providers.filter((p) => !incompatibility(p.config, needs) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))).map((p) => p.config.id));
     input = { ...input, availableIds: input.availableIds.filter((id) => eligible.has(id)) };
   }
   const health = input.health ?? [];
   const mode = (input.composerMode ?? "").toLowerCase();
-  let profile: RouteProfile = input.intent.requiresFrontend && mode !== "server" && mode !== "deploy"
+  let profile: RouteProfile = isWebsiteInspection(input.intent.goal) ? "auto" : input.intent.requiresFrontend && mode !== "server" && mode !== "deploy"
     ? "code"
     : profileFor({ composerMode: laneRequest === "code" ? "code" : mode, category: input.intent.category, instruction: input.intent.goal ?? "", deep: input.deep });
   let route = startRoute({ profile, instruction: input.intent.goal ?? "", availableIds: input.availableIds, health });
-  if (laneRequest === "reasoning" || laneRequest === "research" || laneRequest === "vision") {
+  if (laneRequest === "reasoning" || laneRequest === "research" || laneRequest === "vision" || (laneRequest === "auto" && needs.vision)) {
     // ORVYN's named models (customer catalog): a fixed ladder per model.
-    const tiers: Tier[] = laneRequest === "reasoning" ? ["deep"] : laneRequest === "research" ? ["research", "deep"] : ["vision", "server", "auto"];
-    const pool = laneRequest === "vision" ? (input.visionIds ?? []).filter((id) => input.availableIds.includes(id)) : input.availableIds;
+    const visionRoute = laneRequest === "vision" || (laneRequest === "auto" && needs.vision);
+    const tiers: Tier[] = visionRoute ? ["vision", "research", "agent"] : laneRequest === "reasoning" ? ["deep"] : ["research", "deep"];
+    const pool = visionRoute ? (input.visionIds ?? input.providers?.filter((provider) => provider.supportsVision()).map((provider) => provider.config.id) ?? TIERS.vision.candidates).filter((id) => input.availableIds.includes(id)) : input.availableIds;
+    if (visionRoute) input = { ...input, availableIds: pool };
     const hit = stepFrom(tiers, 0, pool, health);
-    const fallbackVision = laneRequest === "vision" && !hit ? pool[0] ?? null : null;
-    route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? tiers[0]!, registryId: hit?.registryId ?? fallbackVision, weight: TIERS[hit?.tier ?? tiers[0]!].weight, reason: `${laneRequest[0]!.toUpperCase()}${laneRequest.slice(1)} (requested).` };
+    const fallbackVision = visionRoute && !hit ? pool[0] ?? null : null;
+    route = { profile, tiers, step: hit?.step ?? 0, tier: hit?.tier ?? tiers[0]!, registryId: hit?.registryId ?? fallbackVision, weight: TIERS[hit?.tier ?? tiers[0]!].weight, reason: visionRoute && laneRequest === "auto" ? "Website or image inspection requires a tool-capable vision model." : `${laneRequest[0]!.toUpperCase()}${laneRequest.slice(1)} (requested).` };
   } else if (laneRequest === "premium") {
     // Premium long-horizon work starts on Kimi K3. Ultra remains a separate,
     // explicitly enabled exceptional escalation and is never selected here.

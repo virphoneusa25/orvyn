@@ -17,3 +17,27 @@ test('cloud view refuses another tenant run and all physical execution targets',
 test('browser view streams the actual mocked worker frame for the owned run',async()=>{const f=await fixture();try{const response=await fetch(f.url+'/owned/browser/stream');assert.equal(response.headers.get('content-type')?.includes('text/event-stream'),true);const text=await response.text();assert.match(text,/Zml4dHVyZQ==/);assert.deepEqual(f.calls[0],['owned','browser_screenshot',{fullPage:false}])}finally{await f.close()}});
 test('view cannot start a browser for a task that did not use one',async()=>{const f=await fixture();f.run.events.pop();try{assert.equal((await fetch(f.url+'/owned/browser/stream')).status,409);assert.equal(f.calls.length,0)}finally{await f.close()}});
 test('input requires takeover; file reads and stop stay bound to the selected run',async()=>{const f=await fixture();const post=(path:string,body:unknown)=>fetch(f.url+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});try{assert.equal((await post('/owned/browser/input',{type:'click',x:1,y:1})).status,409);assert.equal((await post('/owned/browser/control',{owner:'user'})).status,200);assert.equal((await post('/owned/browser/input',{type:'click',x:1,y:1})).status,200);assert.equal((await fetch(f.url+'/owned/files?path=src%2Fapp.ts&projectRoot=%2Fother')).status,200);assert.deepEqual(f.calls.find(c=>c[1]==='read_file'),['owned','read_file',{path:'src/app.ts'}]);assert.equal((await post('/owned/stop',{})).status,200);assert.ok(f.calls.some(c=>c[0]==='cancel'&&c[1]==='owned'))}finally{clearBrowserControl('owned');await f.close()}});
+
+test('nested listings use the selected run workspace without changing existing file reads', async () => {
+ const f = await fixture();
+ try {
+  assert.equal((await fetch(f.url + '/owned/files?path=src&list=1&projectRoot=%2Fother')).status, 200);
+  assert.deepEqual(f.calls[0], ['owned', 'list_directory', { path: 'src' }]);
+  assert.equal((await fetch(f.url + '/owned/files?path=src%2Fapp.ts')).status, 200);
+  assert.deepEqual(f.calls[1], ['owned', 'read_file', { path: 'src/app.ts' }]);
+ } finally { await f.close(); }
+});
+
+test('finished cloud runs reject browser control and input before reaching the worker', async () => {
+ const f=await fixture();
+ const post=(path:string,body:unknown)=>fetch(f.url+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ try {
+  for(const status of ['completed','cancelled','error','partial','blocked']) {
+   f.run.status=status;
+   assert.equal((await post('/owned/browser/control',{owner:'user'})).status,409,status);
+   assert.equal((await post('/owned/browser/input',{type:'click',x:1,y:1})).status,409,status);
+   assert.equal((await fetch(f.url+'/owned/browser/stream')).status,409,status);
+  }
+  assert.equal(f.calls.length,0);
+ } finally {clearBrowserControl('owned');await f.close()}
+});

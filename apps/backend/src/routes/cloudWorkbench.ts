@@ -1,4 +1,5 @@
 import {Router} from 'express';
+import {isTerminal} from '../agent/events';
 import {requireTenant} from '../middleware/tenant';
 import {toolRpc} from '../execution/ToolRpc';
 import {browserControl,setBrowserControl,clearBrowserControl} from '../computerUse/cloudBrowserControl';
@@ -18,12 +19,12 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    const run=res.locals.run;
    const browserStarted=run.events.some((e:any)=>e.type==='tool.started' && String(e.data?.tool??'').startsWith('browser_'));
    if(!browserStarted)return res.status(409).json({error:'No browser has been started by this task.'});
-   if(['completed','cancelled','error','partial'].includes(run.status))return res.status(409).json({error:'The cloud browser ended with this run.'});
+   if(isTerminal(run.status))return res.status(409).json({error:'The cloud browser ended with this run.'});
    res.set({'Content-Type':'text/event-stream','Cache-Control':'no-store, no-transform','X-Accel-Buffering':'no'});res.flushHeaders();
    let closed=false;res.on('close',()=>{closed=true});
    while(!closed){
      const current=requireTenant(req).runStore.get(run.id ?? req.params.runId);
-     if(!current || ['completed','cancelled','error','partial'].includes(current.status))break;
+     if(!current || isTerminal(current.status))break;
      try{
        const result=await rpc.execute(req.params.runId,'browser_screenshot',{fullPage:false},10000);
        if(closed)break;
@@ -34,11 +35,13 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    if(!closed)res.end();
  });
  router.post('/:runId/browser/control',(req,res)=>{
+   if(isTerminal(res.locals.run.status))return res.status(409).json({error:'The cloud browser ended with this run.'});
    const owner=req.body?.owner;
    if(owner!=='user' && owner!=='orion')return res.status(400).json({error:'Choose user or orion'});
    setBrowserControl(req.params.runId,owner);res.json(browserControl(req.params.runId));
  });
  router.post('/:runId/browser/input',async(req,res)=>{
+   if(isTerminal(res.locals.run.status))return res.status(409).json({error:'The cloud browser ended with this run.'});
    if(browserControl(req.params.runId).owner!=='user')return res.status(409).json({error:'Take control first'});
    const body=req.body??{};
    if(!['click','type','key','scroll'].includes(body.type))return res.status(400).json({error:'Unsupported browser input'});
@@ -46,10 +49,10 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
  });
  router.get('/:runId/files',async(req,res)=>{
    const run=res.locals.run;
-   const name=req.query.path===undefined?'list_directory':'read_file';
+   const name=req.query.path===undefined || req.query.list==='1'?'list_directory':'read_file';
    const args={path:String(req.query.path??'.')};
    try{
-     const active=!['completed','cancelled','error','partial'].includes(run.status);
+     const active=!isTerminal(run.status);
      const result=active?await rpc.execute(req.params.runId,name,args,15000):await (name==='read_file'?makeReadFileTool(run.projectRoot):makeListDirectoryTool(run.projectRoot)).execute(args);
      res.status(result.ok?200:409).json(result);
    }catch(error){res.status(409).json({error:String(error)})}

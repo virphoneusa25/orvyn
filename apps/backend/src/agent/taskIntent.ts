@@ -1,3 +1,5 @@
+import { isWebsiteInspection } from "./websiteInspection";
+
 // Structured intent for one user instruction. Customer products and hostnames
 // are resources, not categories — this module must stay tenant-neutral.
 
@@ -84,7 +86,9 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     mode === "server";
   const database = has(goal, /\b(database|postgres|mysql|sqlite|sql query|schema)\b/i);
   const deploy = has(goal, /\b(deploy|release|rollout|ship to production)\b/i) || mode === "deploy";
+  const inspection = isWebsiteInspection(goal);
   const browser =
+    inspection ||
     // "screenshot" alone is not a browser signal — desktop screenshots exist.
     has(goal, /\b(browser|homepage|webpage|website|web app|open the (app|site|page)|viewport|mobile view)\b/i) ||
     // "Open example.com", "go to https://…": a site to look at, not a file.
@@ -101,18 +105,18 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   const cloud = has(goal, /\b(cloud account|cloud mission|worker)\b/i);
   const automation = mode === "automate" || has(goal, /\b(workflow|automate|every time)\b/i);
   const research = mode === "research" || mode === "plan";
-  const frontend = has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server|hero (?:image|animation|background|section)|(?:site|page) background)\b/i);
+  const frontend = !inspection && has(goal, /\b(website|web site|web app|landing page|homepage|joomla|dashboard|frontend|react|next\.?js|vue|vite|svelte|angular|astro|html|css|responsive|component|dev server|hero (?:image|animation|background|section)|(?:site|page) background)\b/i);
   // Frontend implementation verbs make a frontend task engineering work —
   // "Redesign the dashboard" is a code task even without the word "code".
   const frontendAction = has(goal, /\b(create|build|redesign|change|update|add|remove|implement|fix|modify|replace|restyle|retheme|theme|layout|design|polish|animate|make|rename|reorder|resize|improve)\b/i);
   // "My configured test server" is a server, not the word "test" implying
   // code work — that one adjective pair is neutralized for the code signal.
   const codeText = remoteText.replace(/\btest\s+server\b/gi, "server");
-  const code =
+  const code = !inspection && (
     mode === "code" ||
     (frontend && frontendAction) ||
-    has(codeText, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|class|component|endpoint|route|module|file|code|codebase)\b/i);
-  const terminal = has(goal, /\b(npm |node |pytest|terminal|run the|run tests|build|dev server|start it|keep it running|serve)\b/i) || code || server || deploy;
+    has(codeText, /\b(test|bug|fix|refactor|compile|typecheck|lint|src\/|function|class|component|endpoint|route|module|file|code|codebase)\b/i));
+  const terminal = !inspection && (has(goal, /\b(npm |node |pytest|terminal|run the|run tests|build|dev server|start it|keep it running|serve)\b/i) || code || server || deploy);
 
   const action = has(
     goal,
@@ -124,12 +128,13 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
   // Informational intent is independent of the domain: "What is PostgreSQL?"
   // is a question even though it touches the database category.
   const screenObservation=/\bwhat(?:'s| is| can you see)?\b.{0,45}\b(on (?:my |this )?screen|on my desktop|in notepad|in this window)\b/i.test(goal) || /\b(read|describe|look at)\b.{0,30}\b(my screen|this window)\b/i.test(goal);
-  const informational = !screenObservation && (greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo)));
+  const informational = !inspection && !screenObservation && (greeting || (goal.length > 0 && INFO.test(goal) && (!action || howTo)));
 
   // The action outranks the resource: "deploy to my server" is a deploy task
   // that happens to use a server, not server administration.
   let category: TaskCategory = "general";
-  if (research && !action) category = "research";
+  if (inspection) category = "browser";
+  else if (research && !action) category = "research";
   else if (artifact && !code) category = "artifact";
   else if (automation && !code && !deploy) category = "automation";
   else if (deploy) category = "deploy";
@@ -193,7 +198,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     goal,
     requiresWorkspace:
       !informational &&
-      !githubInspect &&
+      !githubInspect && !inspection &&
       (category === "code" ||
         category === "deploy" ||
         frontend ||
@@ -213,9 +218,9 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     requiresExternalIntegration: !informational && (integration || githubInspect),
     requiresGitHub: !informational && githubInspect,
     requiresFrontend: frontend && !informational,
-    requiresBrowserVerification: frontend && !informational,
+    requiresBrowserVerification: (frontend || inspection) && !informational,
     resourceRequirements: [
-      ...(!informational && !githubInspect && (category === "code" || category === "deploy" || frontend || database || has(goal, /\b(file|repo|workspace|project|codebase)\b/i))
+      ...(!informational && !githubInspect && !inspection && (category === "code" || category === "deploy" || frontend || database || has(goal, /\b(file|repo|workspace|project|codebase)\b/i))
         ? (["workspace"] as const)
         : []),
       ...(!informational && githubInspect ? (["github_connection"] as const) : []),

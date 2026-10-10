@@ -1,3 +1,4 @@
+import { isWebsiteInspection, websiteInspectionEvidence, WEBSITE_INSPECTION_HINT } from "./websiteInspection";
 import { usesGivenFile } from "./taskIntent";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 import { decideCompletion } from "./agentRunState";
@@ -92,10 +93,11 @@ function visualVerified(events: CompletionGateInput["events"]): boolean {
  */
 export function evaluateCompletionGates(input: CompletionGateInput): CompletionGateResult {
   const hints = classifyExecutionHints(input.instruction);
+  const inspection = isWebsiteInspection(input.instruction);
   const reasons: string[] = [];
   let failedGate: CompletionGateId | undefined;
 
-  const workspaceFile = looksLikeWorkspaceFileTask(input.instruction);
+  const workspaceFile = !inspection && looksLikeWorkspaceFileTask(input.instruction);
   if (workspaceFile) {
     const wrote = workspaceWriteSucceeded(input.events);
     const needsRead = asksToReadFileBack(input.instruction);
@@ -108,7 +110,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && !usesGivenFile(input.instruction) && (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact)) {
+  if (!failedGate && !inspection && !usesGivenFile(input.instruction) && (looksLikeFileDeliverableRequest(input.instruction) || hints.isArtifact)) {
     const ready = input.artifacts.filter((a) => a.artifactId && a.name);
     if (ready.length === 0) {
       failedGate = "artifact";
@@ -116,7 +118,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
-  if (!failedGate && /\bhero\b[^.\n]{0,80}\bimage\b|\bimage\b[^.\n]{0,80}\bhero\b/i.test(input.instruction)) {
+  if (!failedGate && !inspection && /\bhero\b[^.\n]{0,80}\bimage\b|\bimage\b[^.\n]{0,80}\bhero\b/i.test(input.instruction)) {
     const imageFile = input.events.some((e) => e.type === "file.evidence" &&
       /^image\//.test(String(e.data?.mimeType ?? "")) && Number(e.data?.size ?? 0) > 0 &&
       e.data?.exists === true && e.data?.readable === true);
@@ -129,7 +131,7 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
   // Keyword checks read the request's words, not its file names: "Create
   // local-test.txt" does not ask for a test run.
   const prose = input.instruction.replace(/[\w./\\-]+\.[A-Za-z0-9]{1,8}\b/g, " ");
-  if (!failedGate && hints.isLocalCoding && asksForVerification(prose)) {
+  if (!failedGate && !inspection && hints.isLocalCoding && asksForVerification(prose)) {
     const tests = testsRan(input.events);
     if (!tests.ran || !tests.passed) {
       failedGate = "code";
@@ -170,6 +172,14 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     }
   }
 
+  if (!failedGate && inspection) {
+    const evidence = websiteInspectionEvidence(input.events);
+    if (!evidence.opened || !evidence.screenshot) {
+      failedGate = "visual";
+      reasons.push(!evidence.opened ? "The requested website was not opened in the browser." : "The rendered website was not inspected with a browser screenshot.");
+    }
+  }
+
   const visualTask =
     (!input.category && hints.isVisual && !hints.isArtifact) ||
     ((input.category === "browser" || input.category === "desktop") &&
@@ -190,7 +200,9 @@ export function evaluateCompletionGates(input: CompletionGateInput): CompletionG
     (asksToReadFileBack(input.instruction) && !workspaceReadSucceeded(input.events))
   );
   const retry =
-    failedGate === "artifact"
+    inspection && failedGate === "visual"
+      ? `COMPLETION GATE — WEBSITE REVIEW: ${WEBSITE_INSPECTION_HINT}`
+      : failedGate === "artifact"
       ? "COMPLETION GATE — ARTIFACT: Do not say the file exists. For a picture call generate_image (not artifact_create). For a PDF/DOCX/XLSX call create_document. For other text files call artifact_create. Wait for artifactId, then tell the user the file is ready in Files → Generated."
       : fileIncomplete
         ? workspaceWriteSucceeded(input.events)
