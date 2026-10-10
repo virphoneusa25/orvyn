@@ -23,6 +23,8 @@ jobs:
           npm run test -w apps/web
           npm run typecheck -w apps/web
           npm run build -w apps/web
+      - name: Build Desktop files required by its existing regression tests
+        run: npm run build -w apps/desktop
       - name: Existing backend and desktop regression suite
         run: npm test
       - name: Existing Cloud workspace API tests
