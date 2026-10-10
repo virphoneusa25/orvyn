@@ -99,6 +99,7 @@ async function main() {
     }
     const text = events.filter((e) => e.type === "message.delta").map((e) => String(e.data?.content ?? "")).join("");
     const outputs = events.filter((e) => e.type === "terminal.output");
+    if (!outputs.length) console.error("TERMINAL DIAGNOSTICS:", JSON.stringify({ started, events: events.filter((e) => /^(tool\.|terminal\.|workspace\.|run\.execution|run\.error)/.test(e.type)) }, null, 2));
     ok(status === "completed", "run completes", `status=${status}`);
     ok(text.startsWith(INTRO), "ORION's own opening sentence comes first", text.slice(0, 120));
     const firstIdx = (t) => events.findIndex((e) => e.type === t);

@@ -44,7 +44,7 @@ jobs:
       - run: npm ci
       - name: Install isolated mobile shell dependencies
         working-directory: apps/mobile/shell
-        run: npm install --workspaces=false
+        run: npm ci --workspaces=false
       - name: Build native shared UI bundle
         working-directory: apps/mobile/shell
         run: npm run build
@@ -52,3 +52,27 @@ jobs:
         with:
           name: orvyn-mobile-web-bundle
           path: apps/mobile/shell/dist
+
+  android-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - name: Build shared UI and synchronize native assets
+        working-directory: apps/mobile/shell
+        run: |
+          npm ci --workspaces=false
+          npm run build
+          npx cap sync android
+      - name: Compile Android debug APK
+        working-directory: apps/mobile/shell/android
+        run: bash gradlew assembleDebug --no-daemon
