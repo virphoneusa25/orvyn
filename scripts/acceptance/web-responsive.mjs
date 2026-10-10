@@ -294,6 +294,10 @@ try {
       if (screenshotDir) await page.screenshot({path:path.join(screenshotDir,`workspace-live-desktop-${width}.png`)});
       await pane.getByRole("button",{name:"Stop task",exact:true}).click();
       await pane.getByText("Task finished",{exact:true}).waitFor();
+      assert.equal(await pane.locator(".cloud-workbench__screen").isVisible(),true,"completed task keeps its last received frame");
+      await pane.getByRole("button",{name:"Close workspace"}).click();
+      await page.getByRole("button",{name:"Open workspace"}).click();
+      assert.equal(await pane.locator(".cloud-workbench__screen").isVisible(),true,"completed preview survives collapsing and reopening");
       assert.equal(await pane.getByRole("button",{name:"Take control"}).isEnabled(),false,"cancelled task cannot accept input");
       await page.waitForFunction(() => window.__desktopAborts > 0);
       await context.close();

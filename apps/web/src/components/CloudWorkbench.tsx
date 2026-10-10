@@ -30,6 +30,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   const [pictureReady, setPictureReady] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
   const lastPicture = useRef("");
+  const receivedFrames = useRef<Record<string, string>>({});
   const [connection, setConnection] = useState<WorkspaceConnection>("idle");
   const [owner, setOwner] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -75,6 +76,10 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   }, [transcript, tab]);
 
   useEffect(() => {
+    if (ended && runId && liveView) {
+      setPicture(receivedFrames.current[`${runId}:${tab}`] ?? ""); setOwner(null); setError(""); setConnection("ended");
+      return;
+    }
     lastPicture.current = ""; setPicture(""); setPictureReady(false); setError(""); setOwner(null);
     if (!active || !runId || !liveView || ended || (tab === "Browser" ? !browserStarted : !desktopStarted)) {
       setConnection("idle"); return;
@@ -86,7 +91,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
     const token = getToken(); if (token) headers.Authorization = `Bearer ${token}`;
     const acceptPicture = (url: string) => {
       if (controller.signal.aborted || lastPicture.current === url) return;
-      lastPicture.current = url; setPictureReady(false); setPicture(url);
+      lastPicture.current = url; receivedFrames.current[`${runId}:${tab}`] = url; setPictureReady(false); setPicture(url);
       setConnection("live"); setError("");
     };
     void (async () => {
@@ -189,7 +194,7 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   }
   useEffect(() => { if (active && runId && tab === "Files") void read(); }, [active, runId, tab]);
 
-  const previewStatus = connection === "live" && pictureReady ? (owner === "user" ? "You have control" : owner === "orion" ? "ORVYN has control" : "Live preview") : connection === "connecting" ? "Connecting" : connection === "error" ? "Preview unavailable" : connection === "ended" ? "Session ended" : ended ? "Task finished" : "Not started";
+  const previewStatus = ended ? "Task finished" : connection === "live" && pictureReady ? (owner === "user" ? "You have control" : owner === "orion" ? "ORVYN has control" : "Live preview") : connection === "connecting" ? "Connecting" : connection === "error" ? "Preview unavailable" : connection === "ended" ? "Session ended" : ended ? "Task finished" : "Not started";
   const lastUrl = [...events].reverse().find((event) => event.data?.url)?.data?.url;
 
   return (
@@ -217,12 +222,12 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
         {!runId ? <div className="cloud-workbench__empty"><Icon.layers size={32} /><h3>Your task workspace</h3><p>Ask ORVYN to browse, code, or use its cloud desktop. Watch the work here while the conversation stays in chat.</p></div> : <>
           {liveView ? <>
             <div className="cloud-workbench__preview-bar"><Icon.lock size={14} /><span title={typeof lastUrl === "string" ? lastUrl : undefined}>{tab === "Browser" && typeof lastUrl === "string" ? lastUrl : "Isolated cloud computer"}</span><button className="btn btn--sm" disabled={!canControl || pending} onClick={() => void control(owner === "user" ? "orion" : "user")}>{owner === "user" ? "Return to ORVYN" : "Take control"}</button></div>
-            {picture ? <div className="cloud-workbench__preview"><img key={streamVersion} className="cloud-workbench__screen" src={picture} alt={`Cloud ${tab.toLowerCase()} preview`} tabIndex={inputEnabled ? 0 : -1} onLoad={() => setPictureReady(true)} onError={() => { setPictureReady(false); setPicture(""); setConnection("error"); setError("The preview frame couldn't be displayed. Reconnect to try again."); }} onClick={(event) => {
+            {picture ? <div className="cloud-workbench__preview"><img key={streamVersion} className="cloud-workbench__screen" src={picture} alt={`Cloud ${tab.toLowerCase()} preview`} tabIndex={inputEnabled ? 0 : -1} onLoad={() => setPictureReady(true)} onError={() => { if (runId) delete receivedFrames.current[`${runId}:${tab}`]; setPictureReady(false); setPicture(""); setConnection("error"); setError("The preview frame couldn't be displayed. Reconnect to try again."); }} onClick={(event) => {
               if (!inputEnabled) return; event.currentTarget.focus();
               const rect = event.currentTarget.getBoundingClientRect();
               void input({ type: "click", x: Math.round((event.clientX - rect.left) * event.currentTarget.naturalWidth / rect.width), y: Math.round((event.clientY - rect.top) * event.currentTarget.naturalHeight / rect.height), viewWidth: event.currentTarget.naturalWidth, viewHeight: event.currentTarget.naturalHeight });
             }} onKeyDown={(event) => { if (!inputEnabled) return; event.preventDefault(); void input(event.key.length === 1 ? { type: "type", text: event.key } : { type: "key", key: event.key }); }} onWheel={(event) => void input({ type: "scroll", deltaY: Math.max(-2000, Math.min(2000, event.deltaY)) })} /></div> : <div className="cloud-workbench__empty"><Icon.monitor size={32} /><h3>{connection === "connecting" ? "Opening live preview…" : connection === "error" ? "Preview unavailable" : ended ? "This task has finished" : `No ${tab.toLowerCase()} session yet`}</h3><p>{error || (ended ? "Files, changes, and command output remain available in the other tabs." : `Ask ORVYN in chat to use its cloud ${tab.toLowerCase()}. The preview opens when the session starts.`)}</p></div>}
-            {picture && (connection === "ended" || connection === "error") ? <p className="cloud-workbench__notice" role="status">{error || "Session ended. This is the last received frame."}</p> : null}
+            {picture && (connection === "ended" || connection === "error") ? <p className="cloud-workbench__notice" role="status">{error || (ended ? "Task finished. This is the last received frame." : "Session ended. This is the last received frame.")}</p> : null}
             {(connection === "error" || connection === "ended") && !ended ? <button className="btn btn--sm cloud-workbench__reconnect" onClick={() => setRetry((value) => value + 1)}><Icon.retry size={14} /> Reconnect preview</button> : null}
           </> : null}
           {tab === "Code" ? <>

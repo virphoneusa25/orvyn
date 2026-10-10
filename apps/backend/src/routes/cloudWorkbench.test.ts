@@ -27,3 +27,17 @@ test('nested listings use the selected run workspace without changing existing f
   assert.deepEqual(f.calls[1], ['owned', 'read_file', { path: 'src/app.ts' }]);
  } finally { await f.close(); }
 });
+
+test('finished cloud runs reject browser control and input before reaching the worker', async () => {
+ const f=await fixture();
+ const post=(path:string,body:unknown)=>fetch(f.url+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ try {
+  for(const status of ['completed','cancelled','error','partial','blocked']) {
+   f.run.status=status;
+   assert.equal((await post('/owned/browser/control',{owner:'user'})).status,409,status);
+   assert.equal((await post('/owned/browser/input',{type:'click',x:1,y:1})).status,409,status);
+   assert.equal((await fetch(f.url+'/owned/browser/stream')).status,409,status);
+  }
+  assert.equal(f.calls.length,0);
+ } finally {clearBrowserControl('owned');await f.close()}
+});
