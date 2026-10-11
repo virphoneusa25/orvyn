@@ -1,4 +1,4 @@
-import { isWebsiteInspection, WEBSITE_INSPECTION_HINT } from "./websiteInspection";
+import { inspectionUrl, isWebsiteInspection, rewriteInspectionToolCall, WEBSITE_INSPECTION_HINT, websiteInspectionEvidence } from "./websiteInspection";
 import { incompatibility } from "@orvyn/ai-core";
 import {surfaceToolAllowed} from "../computerUse/taskSurface";
 import { nativeDesktopRequest } from "../desktop/nativeDesktopBridge";
@@ -2005,6 +2005,10 @@ export class StreamingAgentRuntime {
           const remote = await this.awaitRemoteReady(runId);
           if (remote) await this.mountRemoteTools(runId);
         }
+        const inspectUrl = inspectionUrl(instruction);
+        if (inspectUrl && isWebsiteInspection(instruction)) {
+          await this.openInspectionBrowser(runId, messages, inspectUrl);
+        }
         // The facts the model plans against: which core tools this run has
         // (after remote tools were mounted), what permissions allow, which MCP
         // tools are installed. Never guessed from tool names.
@@ -3406,6 +3410,19 @@ export class StreamingAgentRuntime {
         const n = normalizePublicHttpUrl(args.url);
         if (n.ok) args.url = n.url.toString();
       }
+      if (isWebsiteInspection(state.instruction)) {
+        const rewritten = rewriteInspectionToolCall(
+          state.instruction,
+          call,
+          {
+            opened:
+              websiteInspectionEvidence(this.store.get(runId)?.events ?? []).opened
+              || runnable.some((item) => item.name === "browser_open" || item.name === "browser_navigate"),
+          },
+        );
+        call.name = rewritten.name;
+        call.arguments = rewritten.arguments;
+      }
 
       const fingerprint =
         call.name === "fetch_url"
@@ -4334,6 +4351,57 @@ export class StreamingAgentRuntime {
       // Never announce an unacknowledged checkpoint as durable.
       this.store.emit(runId, "mission.checkpoint.failed", { phase: state.phase, message: "Mission checkpoint could not be saved." });
     }
+  }
+
+  /** Open the named live URL in the Cloud Browser before the model starts searching. */
+  private async openInspectionBrowser(runId: string, messages: AIMessage[], url: string): Promise<void> {
+    const state = this.runs.get(runId);
+    if (!state || state.cancelled || !this.isKnownTool(runId, "browser_open")) return;
+    const call: ToolCall = { id: `inspect_open_${runId.slice(0, 8)}`, name: "browser_open", arguments: { url } };
+    this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
+    this.emitDomainEvent(runId, call);
+    let result: ToolResult;
+    try {
+      result = await runWithComputerContext(
+        {
+          tenantId: state.execution?.tenantId || "",
+          userId: state.execution?.userId ?? null,
+          organizationId: state.execution?.organizationId ?? null,
+          projectId: state.execution?.projectId ?? null,
+          projectRoot: state.projectRoot,
+          runId,
+          computerSurface: state.execution?.computerSurface,
+        },
+        () =>
+          this.gatewayFor(runId).execute("browser_open", { url }, "coder", projectToolContext(state, {
+            signal: state.controller.signal,
+            executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+            toolUseId: call.id,
+            runId,
+            tenantId: state.execution?.tenantId || undefined,
+            approval: { granted: true, scope: "internal", approvalId: call.id, grantedBy: "runtime" },
+          })),
+      );
+    } catch (err: any) {
+      result = { ok: false, error: String(err?.message ?? err).slice(0, 300) };
+    }
+    const output = result.ok ? String(result.output ?? `Opened ${url} in the Cloud Browser.`) : "";
+    if (result.ok) {
+      this.store.emit(runId, "tool.completed", { callId: call.id, tool: "browser_open", preview: output.slice(0, 400) });
+      this.store.emit(runId, "browser.completed", { tool: "browser_open", url });
+      state.pendingNotes.push(`The Cloud workspace Browser is already open on ${url}. Call browser_screenshot next and describe the live page. Do not web_search or fetch_url as a substitute.`);
+    } else {
+      this.store.emit(runId, "tool.failed", { callId: call.id, tool: "browser_open", error: result.error });
+      state.pendingNotes.push(`Open ${url} with browser_open now so the user can watch it in the Cloud workspace Browser. Do not start with web_search or fetch_url.`);
+    }
+    messages.push({ role: "assistant", content: "", toolCalls: [call] });
+    messages.push({
+      role: "tool",
+      name: "browser_open",
+      toolCallId: call.id,
+      content: result.ok ? output : `Could not open ${url}: ${result.error ?? "unknown error"}`,
+    });
+    state.toolCalls += 1;
   }
 
   private async enterPhase(runId: string, phase: RunPhase): Promise<void> {

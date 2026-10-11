@@ -92,7 +92,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
     // "screenshot" alone is not a browser signal — desktop screenshots exist.
     has(goal, /\b(browser|homepage|webpage|website|web app|open the (app|site|page)|viewport|mobile view)\b/i) ||
     // "Open example.com", "go to https://…": a site to look at, not a file.
-    has(goal, /\b(open|visit|go to|navigate to|browse(?: to)?|load)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de)\b)/i);
+    has(goal, /\b(open|visit|go to|navigate to|browse(?: to)?|load|view|veiw|see|look at)\s+(https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|dev|app|ai|co|edu|gov|us|uk|de|xyz)\b)/i);
   const desktop = has(goal, /\b(desktop|on screen|my screen|this window|this computer|notepad|calculator|native application|settings dialog|computer-use)\b/i);
   // A deliverable file, not a keyword in passing: needs a produce verb AND an
   // artifact type — "Explain PDF compression" is not an artifact request.

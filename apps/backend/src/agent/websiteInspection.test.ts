@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isWebsiteInspection, websiteInspectionEvidence } from "./websiteInspection";
+import { isWebsiteInspection, publicSiteUrls, rewriteInspectionToolCall, websiteInspectionEvidence } from "./websiteInspection";
 import { inferTaskIntent } from "./taskIntent";
 import { routeTurn } from "./turnRouting";
 import { selectToolNames } from "./toolPolicy";
@@ -31,13 +31,28 @@ test("URL and natural-language website reviews are browser observation, without 
   }
   for (const prompt of [
     "can you view snch.com and tell me what it is",
+    "can you veiw sinch.com and tell me what it is?",
     "Can you view https://example.com and tell me what it is?",
     "What do you think of https://example.com?",
+    "tell me what sinch.com is",
+    "What is sinch.com?",
   ]) {
     assert.equal(isWebsiteInspection(prompt), true, prompt);
     assert.equal(inferTaskIntent(prompt).requiresBrowser, true, prompt);
     assert.equal(routeTurn(prompt, "auto"), "run", prompt);
   }
+  assert.deepEqual(publicSiteUrls("can you veiw sinch.com and tell me what it is?"), ["https://sinch.com"]);
+});
+
+test("research tools are rewritten to browser_open until the live page is open", () => {
+  const instruction = "can you veiw sinch.com and tell me what it is?";
+  const search = rewriteInspectionToolCall(instruction, { name: "web_search", arguments: { query: "sinch voip" } }, { opened: false });
+  assert.equal(search.name, "browser_open");
+  assert.equal(search.arguments.url, "https://sinch.com");
+  const fetch = rewriteInspectionToolCall(instruction, { name: "fetch_url", arguments: { url: "https://mordorintelligence.com" } }, { opened: false });
+  assert.equal(fetch.name, "browser_open");
+  const after = rewriteInspectionToolCall(instruction, { name: "web_search", arguments: { query: "pricing" } }, { opened: true });
+  assert.equal(after.name, "web_search");
 });
 
 test("website edits, repository reviews and conceptual questions retain their existing intent", () => {
@@ -46,6 +61,8 @@ test("website edits, repository reviews and conceptual questions retain their ex
   }
   assert.equal(inferTaskIntent("Build a responsive website").requiresFrontend, true);
   assert.equal(inferTaskIntent("How can I review my website?").informational, true);
+  assert.equal(isWebsiteInspection("What is a website?"), false);
+  assert.equal(routeTurn("What is a website?", "auto"), "chat");
 });
 
 test("website reviews expose browser tools and exclude implementation tools without bypassing permissions", () => {
