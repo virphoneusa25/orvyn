@@ -104,6 +104,21 @@ async function snapshot(projectRoot: string): Promise<{ dir: string; data: Buffe
     for (const name of EXCLUDES) args.push("--exclude", name);
     args.push("-C", projectRoot, ".");
     await localExec("tar", args);
+
+    // The sandbox MCP runtime reads project MCP configuration from
+    // .orvyn/mcp.json. Keep the rest of .orvyn excluded so checkpoints,
+    // generated artifacts, screenshots, SSH aliases, and other internal
+    // control-plane state are not copied into the execution sandbox.
+    const mcpConfig = path.join(projectRoot, ".orvyn", "mcp.json");
+    try {
+      const stat = await fs.stat(mcpConfig);
+      if (stat.isFile()) {
+        await localExec("tar", ["rf", archive, "-C", projectRoot, ".orvyn/mcp.json"]);
+      }
+    } catch {
+      // MCP is optional. Projects without .orvyn/mcp.json need no extra file.
+    }
+
     const data = await fs.readFile(archive);
     if (data.byteLength > MAX_SYNC_MB * 1024 * 1024) {
       throw new Error("Workspace exceeds ORVYN_VERCEL_SYNC_MAX_MB=" + MAX_SYNC_MB + "MB");
