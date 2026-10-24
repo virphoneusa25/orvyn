@@ -98,7 +98,13 @@ export class VercelExecutionProvider implements ExecutionProvider {
     const rel = String(opts.cwd ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
     if (rel.split("/").includes("..")) return { ok: false, output: "cwd escapes the workspace.", exitCode: -1 };
     const cwd = rel ? WORKSPACE + "/" + rel : WORKSPACE;
-    const timeoutS = Math.max(1, Math.floor(opts.timeoutS ?? Number(process.env.ORVYN_SANDBOX_COMMAND_TIMEOUT_S) || 300));
+    const timeoutS = Math.max(
+      1,
+      Math.floor(
+        opts.timeoutS ??
+          (Number(process.env.ORVYN_SANDBOX_COMMAND_TIMEOUT_S) || 300)
+      )
+    );
 
     try {
       const result = await entry.sandbox.runCommand({
