@@ -244,9 +244,11 @@ function toolIdentity(name: string, args?: Record<string, any>): Partial<ToolIte
     // Open on a written/edited file shows the FILE (Files tab, new lines
     // highlighted); the diff stays one click away as "Changes".
     case "write_file":
+    case "create_file":
       return { op: "create", ...fileArg(), ctx: "files" };
     case "edit_file":
     case "apply_edit":
+    case "apply_patch":
       return { op: "edit", ...fileArg(), ctx: "files" };
     case "delete_file":
       return { op: "delete", ...fileArg(), ctx: "files" };

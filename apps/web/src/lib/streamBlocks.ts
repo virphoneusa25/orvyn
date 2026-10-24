@@ -26,7 +26,7 @@ export interface FileEditCard {
   note?: string;
 }
 
-const FILE_TOOLS = new Set(["write_file", "edit_file", "delete_file", "move_file"]);
+const FILE_TOOLS = new Set(["write_file", "create_file", "edit_file", "apply_patch", "delete_file", "move_file"]);
 
 export function upsertActivity(list: ChatActivity[], next: ChatActivity): ChatActivity[] {
   const i = list.findIndex((a) => a.id === next.id);
@@ -94,7 +94,7 @@ export function fileEditsFromEvents(events: AgentProgressEvent[]): FileEditCard[
     if (event.type === "tool.started" && FILE_TOOLS.has(tool) && callId) {
       if (argPath) {
         callPath.set(callId, argPath);
-        put(argPath, { pending: true, status: tool === "write_file" ? "created" : tool === "delete_file" ? "deleted" : tool === "move_file" ? "moved" : "editing" });
+        put(argPath, { pending: true, status: tool === "write_file" || tool === "create_file" ? "created" : tool === "delete_file" ? "deleted" : tool === "move_file" ? "moved" : "editing" });
       } else {
         callPath.set(callId, "");
       }

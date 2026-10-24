@@ -112,7 +112,7 @@ function remoteFileEvidence(projectRoot: string, filePath: string, content: stri
 
 /**
  * Registers remote versions of ORION's core coding tools into the
- * ToolGateway. Called when executionLocation is OVH_WORKER.
+ * ToolGateway. Called when executionLocation is OVH_WORKER or VERCEL_CLOUD.
  * These REPLACE the local tools for the duration of the run; the runtime
  * restores the originals when the run settles.
  */
@@ -136,24 +136,38 @@ export function registerRemoteTools(
     rpc, runId
   ));
 
+  const remoteWriteExecute = async (args: Record<string, unknown>, raw: () => Promise<ToolResult>): Promise<ToolResult> => {
+    const append = args.append === true;
+    const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""))) ?? "" : "";
+    const result = await raw();
+    if (!result.ok) return result;
+    const after = await readRemote(rpc, runId, String(args.path ?? ""));
+    if (after === null || after !== before + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
+    try {
+      return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, after) };
+    } catch (err: any) { return { ok: false, error: err.message }; }
+  };
+
   gateway.register(makeRemoteTool(
     "write_file",
     WRITE_FILE_DESCRIPTION,
     WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
     "ask",
     rpc, runId,
-    // Create diffs ride back with the result so file.edit events show real
-    // content, not just a path.
-    async (args, raw) => {
-      const append = args.append === true;
-      const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""))) ?? "" : "";
-      const result = await raw();
-      if (!result.ok) return result;
-      const after = await readRemote(rpc, runId, String(args.path ?? ""));
-      if (after === null || after !== before + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
-      try {
-        return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, after) };
-      } catch (err: any) { return { ok: false, error: err.message }; }
+    remoteWriteExecute
+  ));
+
+  gateway.register(makeRemoteTool(
+    "create_file",
+    `${WRITE_FILE_DESCRIPTION} (alias of write_file)`,
+    WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
+    "ask",
+    rpc, runId,
+    async (args) => {
+      return remoteWriteExecute(args, async () => {
+        const response = await rpc.execute(runId, "write_file", args, remoteToolTimeoutMs());
+        return rpcResponseToResult("write_file", response);
+      });
     }
   ));
 
@@ -189,6 +203,46 @@ export function registerRemoteTools(
   ));
 
   gateway.register(makeRemoteTool(
+    "apply_patch",
+    "Replace a file inside this run's remote workspace. The path is relative to the workspace.",
+    {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string", description: "Full new contents of the file" },
+        patch: { type: "string", description: "Full new contents when content is omitted" },
+      },
+      required: ["path"],
+    },
+    "ask",
+    rpc, runId,
+    async (args) => {
+      const path = String(args.path ?? "");
+      const body = args.content != null ? String(args.content) : args.patch != null ? String(args.patch) : "";
+      if (!body) return { ok: false, error: "apply_patch needs content or patch, and the path must stay inside the workspace." };
+      if (/(^|\n)(?:\+\+\+|---)\s+\S*\.\.([\\/]|$)/.test(body)) {
+        return { ok: false, error: "Patch escapes the project root — refused" };
+      }
+      const before = await readRemote(rpc, runId, path);
+      const response = await rpc.execute(runId, "write_file", { path, content: body, append: false }, remoteToolTimeoutMs());
+      const result = rpcResponseToResult("apply_patch", response);
+      if (!result.ok) return result;
+      const after = await readRemote(rpc, runId, path);
+      if (after === null || after !== body) return { ok: false, error: "Remote project file read-back failed." };
+      try {
+        return {
+          ...result,
+          output: `REPLACED ${path}`,
+          projectFileEvidence: remoteFileEvidence(projectRoot, path, after),
+          edit: toToolResultEdit(path, before === null ? "create" : "modify", before ?? "", after),
+        };
+      } catch (err: any) {
+        return { ok: false, error: err.message };
+      }
+    }
+  ));
+
+  gateway.register(makeRemoteTool(
     "list_directory",
     "List files in a directory in the remote workspace",
     { type: "object", properties: { path: { type: "string" } } },
@@ -218,6 +272,14 @@ export function registerRemoteTools(
   gateway.register(makeRemoteTool(
     "run_typecheck",
     "Run the project's typecheck in the remote container",
+    { type: "object", properties: {} },
+    "ask",
+    rpc, runId
+  ));
+
+  gateway.register(makeRemoteTool(
+    "run_linter",
+    "Run the project's linter in the remote container",
     { type: "object", properties: {} },
     "ask",
     rpc, runId

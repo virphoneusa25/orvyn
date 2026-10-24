@@ -462,3 +462,60 @@ test("generated deliverables in history do not force a workspace state mismatch"
   assert.equal(follow.workspaceId, created.workspaceId);
   assert.equal(existsSync(follow.projectRoot), true);
 });
+
+
+test("project-scoped chats share the project workspace and preserve projectId while keeping tenants isolated", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-proj-iso-"));
+  const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-proj-iso-"));
+  const t1Sessions = new WorkSessionStore("tenant_alpha", dir);
+  const chat1 = t1Sessions.create({ title: "Chat 1", projectId: "proj_shared", projectRoot: null });
+  const first = await resolveRunWorkspace({
+    sessions: t1Sessions,
+    tenantId: "tenant_alpha",
+    session: chat1,
+    instruction: "Create math.js with an add function.",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(first.status, "resolved");
+  if (first.status !== "resolved") return;
+  assert.equal(first.projectId, "proj_shared");
+  assert.equal(t1Sessions.get(chat1.sessionId)?.projectId, "proj_shared");
+  writeFileSync(join(first.projectRoot, "math.js"), "module.exports = { add: (a, b) => a + b };\n");
+  t1Sessions.rememberFiles(first.workspaceId, ["math.js"]);
+
+  // A second chat inside the same project reuses the bound project workspace
+  const chat2 = t1Sessions.create({ title: "Chat 2", projectId: "proj_shared", projectRoot: null });
+  const second = await resolveRunWorkspace({
+    sessions: t1Sessions,
+    tenantId: "tenant_alpha",
+    session: chat2,
+    instruction: "Add a subtract function to math.js.",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(second.status, "resolved");
+  if (second.status !== "resolved") return;
+  assert.equal(second.projectId, "proj_shared");
+  assert.equal(second.workspaceId, first.workspaceId);
+  assert.equal(second.projectRoot, first.projectRoot);
+  assert.equal(second.created, false);
+  assert.equal(second.restored, true);
+
+  // Another tenant with the same projectId string gets a completely isolated tenant workspace root
+  const t2Sessions = new WorkSessionStore("tenant_beta", dir);
+  const t2Chat = t2Sessions.create({ title: "Tenant Beta Chat", projectId: "proj_shared", projectRoot: null });
+  const beta = await resolveRunWorkspace({
+    sessions: t2Sessions,
+    tenantId: "tenant_beta",
+    session: t2Chat,
+    instruction: "Create math.js for beta.",
+    clientRoot: "",
+    cwd,
+  });
+  assert.equal(beta.status, "resolved");
+  if (beta.status !== "resolved") return;
+  assert.notEqual(beta.projectRoot, first.projectRoot);
+  assert.equal(beta.projectRoot.includes(join("tenants", "tenant_beta", "workspaces")), true);
+  assert.equal(existsSync(join(beta.projectRoot, "math.js")), false);
+});

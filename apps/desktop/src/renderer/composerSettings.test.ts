@@ -41,7 +41,7 @@ test("defaults: garbage values fall back to Auto/Auto Read, never crash", () => 
   assert.equal(d.mode, "auto");
 });
 
-test("payload: composer selections map 1:1 onto the run payload fields", () => {
+test("payload: composer selections map 1:1 onto the run payload fields and reject invalid permissionMode", () => {
   assert.deepEqual(
     toRunPayloadSettings({ modelId: "ci:glm-5.3", reasoningEffort: "deep", permissionMode: "auto_workspace" }),
     { requestedModelId: "ci:glm-5.3", reasoningEffort: "deep", permissionMode: "auto_workspace" }
@@ -49,6 +49,10 @@ test("payload: composer selections map 1:1 onto the run payload fields", () => {
   assert.deepEqual(
     toRunPayloadSettings({ modelId: "ci:glm-5.3", executionTarget: "local_host" }),
     { requestedModelId: "ci:glm-5.3", reasoningEffort: undefined, permissionMode: undefined, executionTarget: "local_host" }
+  );
+  assert.deepEqual(
+    toRunPayloadSettings({ modelId: "auto", permissionMode: "invalid" as any }),
+    { requestedModelId: "auto", reasoningEffort: undefined, permissionMode: undefined }
   );
 });
 

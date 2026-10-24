@@ -704,10 +704,12 @@ export class VercelToolRunner {
         result = await this.readFile(runId, args.path, args.encoding === "base64");
         break;
       case "write_file":
+      case "create_file":
+      case "apply_patch":
         result = await this.writeFile(
           runId,
           args.path,
-          String(args.content ?? ""),
+          String(args.content ?? args.patch ?? ""),
           args.append === true
         );
         break;
@@ -793,6 +795,7 @@ export class VercelToolRunner {
           : { ok: false, error: r.output, output: r.output, exitCode: r.exitCode };
         break;
       }
+      case "run_linter": { const r = await this.command(runId, "npm run lint --if-present", "", Math.max(60, Math.ceil(request.timeoutMs / 1000))); result = r.ok ? { ok: true, output: r.output, exitCode: r.exitCode } : { ok: false, error: r.output, output: r.output, exitCode: r.exitCode }; break; }
       case "git_status": {
         const r = await this.command(runId, "git status --porcelain=v1 -b");
         result = { ok: r.ok, output: r.output, error: r.ok ? undefined : r.output, exitCode: r.exitCode };

@@ -101,11 +101,13 @@ export async function previewToolEdit(
 ): Promise<EditPreview | undefined> {
   try {
     switch (toolName) {
-      case "write_file": {
+      case "write_file":
+      case "create_file":
+      case "apply_patch": {
         const rel = String(args.path ?? "");
         if (!rel) return undefined;
         const target = resolveSafe(projectRoot, rel);
-        return build(rel, await readIfExists(target), String(args.content ?? ""));
+        return build(rel, await readIfExists(target), String(args.content ?? args.patch ?? ""));
       }
 
       case "edit_file": {
@@ -154,5 +156,12 @@ export async function previewToolEdit(
 
 /** True for tools whose approval card should render a diff. */
 export function isFileMutatingTool(name: string): boolean {
-  return name === "write_file" || name === "edit_file" || name === "delete_file" || name === "move_file";
+  return (
+    name === "write_file" ||
+    name === "create_file" ||
+    name === "edit_file" ||
+    name === "apply_patch" ||
+    name === "delete_file" ||
+    name === "move_file"
+  );
 }

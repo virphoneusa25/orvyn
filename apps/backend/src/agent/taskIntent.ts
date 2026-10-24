@@ -74,9 +74,12 @@ export function usesGivenFile(text: string): boolean {
 export function inferTaskIntent(instruction: string, composerMode?: string): TaskIntent {
   const goal = String(instruction ?? "").trim();
   const mode = String(composerMode ?? "").toLowerCase();
-  // "Start the dev server" is a local service in the project, not a remote
-  // machine to log into. Only what is left after removing those counts.
-  const remoteText = goal.replace(/\b(?:dev|development|local|vite|next(?:\.js)?|preview|web|http|static|node|express|api)\s+server\b/gi, "");
+  // "Start the dev server" or "configure an MCP server" is a local service/tool
+  // in the project, not a remote SSH machine to log into. Only what is left
+  // after removing those counts toward an SSH server requirement.
+  const remoteText = goal
+    .replace(/\b(?:dev|development|local|vite|next(?:\.js)?|preview|web|http|static|node|express|api|mcp|model\s+context\s+protocol|language|lsp|mock|stdio|fixture|json-?rpc)\s+servers?\b/gi, "")
+    .replace(/\bmcp[_\s-]*(?:call|list|server|tool)[^.;\n]*?\bservers?\b/gi, "");
   const githubInspect =
     /\bgithub\b/i.test(goal) &&
     /\b(inspect|read-only|issues?|pull requests?|\bprs?\b|workflows?|repository|repo)\b/i.test(goal) &&
@@ -209,8 +212,8 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
       !informational &&
       !githubInspect &&
       (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|remote host)\b/i) ||
-        (has(remoteText, /\bserver\b/i) && !/\bmcp\s+server\b/i.test(goal)) ||
-        (deploy && has(goal, /\b(server|remote|ssh)\b/i))),
+        has(remoteText, /\bserver\b/i) ||
+        (deploy && has(remoteText, /\b(server|remote|ssh)\b/i))),
     requiresTerminal: terminal && !informational && !githubInspect,
     requiresBrowser: !informational && (browser || frontend),
     requiresDesktop: !informational && desktop,
@@ -224,7 +227,7 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
         ? (["workspace"] as const)
         : []),
       ...(!informational && githubInspect ? (["github_connection"] as const) : []),
-      ...(!informational && !githubInspect && (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|remote host)\b/i) || (has(remoteText, /\bserver\b/i) && !/\bmcp\s+server\b/i.test(goal)) || (deploy && has(goal, /\b(server|remote|ssh)\b/i)))
+      ...(!informational && !githubInspect && (has(remoteText, /\b(ssh|log into|login to|hostname|uptime|remote host)\b/i) || has(remoteText, /\bserver\b/i) || (deploy && has(remoteText, /\b(server|remote|ssh)\b/i)))
         ? (["server"] as const)
         : []),
       ...(!informational && category === "database" ? (["database"] as const) : []),

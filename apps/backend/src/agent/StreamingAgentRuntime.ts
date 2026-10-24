@@ -109,7 +109,7 @@ import { previewEnvironmentKey } from "../persistence/LocalStore";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
-import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
+import { AccessMode, ACCESS_MODES, applyAccessMode, applyToolOverrides, effectivePermissionInfo, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINUATION_NUDGES } from "./continuation";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
@@ -244,6 +244,8 @@ interface RunState {
    *  Undefined for callers that did not send one — the tenant autonomy
    *  profile applies unchanged for those, preserving legacy behavior. */
   accessMode?: AccessMode;
+  toolOverrides?: Record<string, import("../ai/ToolTypes").ToolPermission>;
+  baseDeniedTools?: Set<string>;
   /** Persisted artifacts created this run — the only names ORION may claim. */
   createdArtifacts: GroundedArtifact[];
   projectFileEvidence: ProjectFileEvidence[];
@@ -382,6 +384,8 @@ export interface RunOptions {
   admittedRunId?: string;
   reasoningEffort?: ReasoningEffort;
   accessMode?: AccessMode;
+  toolOverrides?: Record<string, import("../ai/ToolTypes").ToolPermission>;
+  baseDeniedTools?: Set<string>;
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
   composerMode?: string;
   /** Set when workspace preflight already bound this run. */
@@ -1400,10 +1404,12 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "file.read", { path: args.path });
         break;
       case "write_file":
+      case "create_file":
+      case "apply_patch":
         this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
         // A part appended to a large file: the preview holds the whole file so far.
-        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? "")}` : args.content);
+        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? args.patch ?? "")}` : (args.content ?? args.patch));
         break;
       case "edit_file":
         this.store.emit(runId, "file.edit", { path: args.path, preview, op: "modify" });
@@ -1609,6 +1615,8 @@ export class StreamingAgentRuntime {
     // mode genuinely cannot write even if the model tries. All of it is
     // applied to this run's SCOPED gateway — the shared tenant registry is
     // never mutated by a run.
+    const baseDeniedTools = new Set(this.tools.list().filter((t) => this.tools.getPermission(t.name) === "denied" && t.defaultPermission !== "denied").map((t) => t.name));
+    const toolOverrides = Boolean(projectRoot) && this.memoryStore?.getToolOverrides ? await Promise.resolve(this.memoryStore.getToolOverrides(projectRoot)).catch(() => ({})) : {};
     const runGateway = this.scopedGateway();
     this.runTools.set(runId, runGateway);
     const def = applyMode(runGateway.registry, mode);
@@ -1621,6 +1629,7 @@ export class StreamingAgentRuntime {
     const accessMode = options?.accessMode && isAccessMode(options.accessMode) ? options.accessMode : undefined;
     if (accessMode) applyAccessMode(runGateway.registry, accessMode);
     else runGateway.applyProfile();
+    applyToolOverrides(runGateway.registry, def.permissions, def.toolsEnabled, toolOverrides, baseDeniedTools);
 
     let toolModelError: string | undefined;
     let toolFallbackReason: string | undefined;
@@ -1706,6 +1715,8 @@ export class StreamingAgentRuntime {
       cachedTokensSum: 0,
       promptTokensSum: 0,
       ...(accessMode ? { accessMode } : {}),
+      toolOverrides,
+      baseDeniedTools,
       createdArtifacts: [],
       projectFileEvidence: [],
       instruction,
@@ -2248,8 +2259,8 @@ export class StreamingAgentRuntime {
     if (!state?.execution) return;
     const gateway = this.gatewayFor(runId);
     const remoteNames = new Set([
-      "read_file", "write_file", "edit_file", "list_directory", "search_code", "search_files",
-      "terminal", "run_command", "run_tests", "run_typecheck",
+      "read_file", "write_file", "create_file", "edit_file", "apply_patch", "list_directory", "search_code", "search_files",
+      "terminal", "run_command", "run_tests", "run_typecheck", "run_linter",
       "git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit",
       "start_process", "stop_process", "read_process_logs", "list_processes",
       "delete_file",
@@ -2261,9 +2272,10 @@ export class StreamingAgentRuntime {
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
-    applyMode(gateway.registry, state.mode);
+    const remoteModeDef = applyMode(gateway.registry, state.mode);
     if (state.accessMode) applyAccessMode(gateway.registry, state.accessMode);
     else gateway.applyProfile();
+    applyToolOverrides(gateway.registry, remoteModeDef.permissions, remoteModeDef.toolsEnabled, state.toolOverrides, state.baseDeniedTools);
     // Tools with no remote variant must not run on the control plane while
     // the model believes it is inside the mission container. Remote variants
     // (write_file, terminal, git, start_process) keep the run's access mode.
@@ -2606,7 +2618,7 @@ export class StreamingAgentRuntime {
       provider: provider.config.providerName ?? provider.config.provider,
       reasoningEffortRequested: state.reasoningEffort,
       reasoningEffortApplied: reasoningApplied,
-      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode } : {}),
+      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode, effectiveProfile: ACCESS_MODES[state.accessMode].profile } : { permissionMode: effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).label, effectiveProfile: effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).profile }),
       tenantId: state.execution?.tenantId ?? "",
       projectId: state.execution?.projectId ?? null,
       executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
@@ -2624,7 +2636,8 @@ export class StreamingAgentRuntime {
       projectId: state.execution?.projectId ?? null,
       mode,
       executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
-      permissionMode: state.accessMode ?? "",
+      permissionMode: state.accessMode ?? effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).modeKey,
+      effectiveProfile: effectivePermissionInfo(state.accessMode, this.gatewayFor(runId).profile).profile,
       selectedModel: provider.config.id,
       toolCount: toolDefs.length,
       toolNames: toolDefs.map((tool) => tool.name),
@@ -3713,7 +3726,7 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-      if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
+      if (!["write_file", "create_file", "edit_file", "apply_patch", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
       // REMOTE runs: the worker relays terminal.started/output/completed through
@@ -3724,7 +3737,7 @@ export class StreamingAgentRuntime {
       // Remote writes carry the runtime's write-safety facts (task scope +
       // read evidence) so the worker's guard grades them identically to the
       // control plane's. Authorization is runtime policy, never the model's say-so.
-      if (remoteRun && (call.name === "write_file" || call.name === "edit_file")) {
+      if (remoteRun && (call.name === "write_file" || call.name === "create_file" || call.name === "edit_file" || call.name === "apply_patch")) {
         const writePath = String((call.arguments as { path?: unknown })?.path ?? "");
         (call.arguments as Record<string, unknown>).__orvynGuard = {
           scope: state.taskScope,
@@ -3850,10 +3863,10 @@ export class StreamingAgentRuntime {
       }
       const desktopTarget = (result.meta as { desktopTarget?: Record<string, unknown> } | undefined)?.desktopTarget;
       if (desktopTarget) this.store.emit(runId, "desktop.target", { callId: call.id, tool: call.name, ...desktopTarget });
-      if (result.ok && (call.name === "write_file" || call.name === "edit_file") && result.projectFileEvidence &&
+      if (result.ok && (call.name === "write_file" || call.name === "create_file" || call.name === "edit_file" || call.name === "apply_patch") && result.projectFileEvidence &&
           /\.(svg|png|jpe?g|webp)$/i.test(result.projectFileEvidence.name) && this.artifacts) {
         let bytes: Buffer | null = null;
-        if (call.name === "write_file") bytes = Buffer.from(String((call.arguments as Record<string, unknown>).content ?? ""), "utf-8");
+        if (call.name === "write_file" || call.name === "create_file" || call.name === "apply_patch") bytes = Buffer.from(String((call.arguments as Record<string, unknown>).content ?? (call.arguments as Record<string, unknown>).patch ?? ""), "utf-8");
         else if (
           state.execution?.location === "LOCAL_HOST" ||
           state.execution?.location === "LOCAL_SANDBOX" ||
@@ -3940,7 +3953,7 @@ export class StreamingAgentRuntime {
             if (/\.html?$/i.test(readPath)) await this.completeSiteAssets(runId);
           }
         }
-        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
+        if (["write_file", "create_file", "edit_file", "apply_patch", "delete_file", "move_file"].includes(call.name)) {
           // Remote tools carry the REAL before/after diff back with the
           // result; local runs use the pre-execution preview.
           this.emitDomainEvent(runId, call, (result.edit as EditPreview | undefined) ?? previews.get(call.id));
@@ -4015,8 +4028,8 @@ export class StreamingAgentRuntime {
         const forModel = shouldCondense(call.name, raw) ? await this.condenseForModel(runId, state, call, raw, command) : raw;
         const { text, truncated } = clampToolOutput(forModel, MAX_TOOL_OUTPUT_CHARS);
         const first = persisted[0];
-        const written = call.name === "write_file" && typeof toolArgs.content === "string" && toolArgs.content && String(toolArgs.path ?? "")
-          ? await this.offerWrittenFileDownload(runId, state, String(toolArgs.path), toolArgs.content)
+        const written = (call.name === "write_file" || call.name === "create_file" || call.name === "apply_patch") && typeof (toolArgs.content ?? toolArgs.patch) === "string" && String(toolArgs.content ?? toolArgs.patch) && String(toolArgs.path ?? "")
+          ? await this.offerWrittenFileDownload(runId, state, String(toolArgs.path), String(toolArgs.content ?? toolArgs.patch))
           : null;
         const download = written ?? first;
         this.store.emit(runId, "tool.completed", {

@@ -1,5 +1,5 @@
 import { Icon } from "./Icons";
-import { liveStatusLabel, progressRows, terminalRunStatus, type AgentProgressEvent, type ProgressRow } from "../lib/agentProgress";
+import { liveStatusLabel, progressRows, runPermissionLabel, terminalRunStatus, type AgentProgressEvent, type ProgressRow } from "../lib/agentProgress";
 
 function typeIcon(row: ProgressRow) {
   if (row.integration === "github") return <Icon.github />;
@@ -51,6 +51,7 @@ export function AgentProgress({ events, status, onApprove }: {
   onApprove?: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => void;
 }) {
   const rows = progressRows(events, status);
+  const permLabel = runPermissionLabel(events);
   const live = !terminalRunStatus(status);
   if (!rows.length && !live) return null;
   const current = [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting");
@@ -60,7 +61,7 @@ export function AgentProgress({ events, status, onApprove }: {
 
   return (
     <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
-      <details open={live}><summary className="agent-progress__live">{summary}</summary>
+      <details open={live}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
       <ol className="agent-progress__steps">
         {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
       </ol></details>

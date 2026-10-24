@@ -65,7 +65,7 @@ export function toRunPayloadSettings(settings?: {
   const payload: { requestedModelId?: string; reasoningEffort?: ReasoningEffort; permissionMode?: AccessMode; executionTarget?: ExecutionTargetSetting } = {
     requestedModelId: settings.modelId?.trim() || undefined,
     reasoningEffort: settings.reasoningEffort || undefined,
-    permissionMode: settings.permissionMode || undefined,
+    permissionMode: (["ask", "auto_read", "auto_workspace", "full_access"].includes(settings.permissionMode ?? "") ? settings.permissionMode : undefined),
   };
   if (settings.executionTarget) payload.executionTarget = settings.executionTarget;
   return payload;

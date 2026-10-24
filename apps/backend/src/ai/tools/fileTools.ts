@@ -368,7 +368,8 @@ export function makeApplyPatchTool(projectRoot: string): AITool {
           await fs.mkdir(path.dirname(target), { recursive: true });
           await fs.writeFile(target, body, "utf-8");
         }
-        return { ok: true, output: `REPLACED ${args.path}` };
+        const projectFileEvidence = await verifyProjectFile(rootFor(projectRoot, context), String(args.path), Buffer.from(body, "utf-8"));
+        return { ok: true, output: `REPLACED ${args.path}`, projectFileEvidence };
       } catch (err: any) {
         return { ok: false, error: err.message };
       }
