@@ -140,7 +140,7 @@ async function httpRpc(name, spec, method, params) {
     ?.includes("text/event-stream")
     ? JSON.parse(
         text
-          .split(/\\r?\n/)
+          .split(/\r?\n/)
           .filter((x) => x.startsWith("data:"))
           .pop()
           .slice(5)
