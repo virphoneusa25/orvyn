@@ -1,0 +1,49 @@
+name: Live Vercel Cloud Smoke Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate required Vercel credentials
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        shell: bash
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::Missing VERCEL_TOKEN secret"; exit 1; }
+          test -n "$VERCEL_TEAM_ID" || { echo "::error::Missing VERCEL_TEAM_ID secret"; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo "::error::Missing VERCEL_PROJECT_ID secret"; exit 1; }
+
+      - name: Install dependencies
+        run: npm ci --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Build ai-core
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        run: npm run build -w @orvyn/backend
+
+      - name: Run real Vercel Sandbox parity smoke test
+        env:
+          ORVYN_VERCEL_LIVE_TEST: "1"
+          ORVYN_CLOUD_EXECUTION_PROVIDER: vercel
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          ORVYN_SANDBOX_TIMEOUT_MIN: "20"
+          ORVYN_SANDBOX_COMMAND_TIMEOUT_S: "180"
+          ORVYN_VERCEL_SANDBOX_PORTS: "3000,5173"
+          ORVYN_VERCEL_SYNC_MAX_MB: "64"
+        run: node --test apps/backend/dist/execution/VercelLive.integration.test.js
