@@ -37,6 +37,7 @@ import { chatCapabilityPrompt } from "../agent/runCapabilities";
 import path from "path";
 import { promises as fsp } from "fs";
 import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
+import { vercelToolRunner } from "../execution/VercelToolRunner";
 
 export const v1Router = Router();
 
@@ -125,15 +126,15 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
     threadHistory(tenant.runStore, previousRunIds),
     undefined,
     {
-      location: "OVH_WORKER",
+      location: record.provider === "vercel" ? "VERCEL_CLOUD" : "OVH_WORKER",
       remoteProjectRoot: "",
       tenantId,
       organizationId: record.organizationId,
       userId: record.userId,
       projectId: record.projectId,
       workspaceId: record.workspaceId,
-      targetRequested: "ovh_worker",
-      targetActual: "ovh_worker",
+      targetRequested: record.provider === "vercel" ? "vercel_cloud" : "ovh_worker",
+      targetActual: record.provider === "vercel" ? "vercel_cloud" : "ovh_worker",
       executionLabel: "ORVYN Cloud",
       hostPlatform: "linux",
       fallbackReason: "control plane restart recovery",
@@ -154,7 +155,9 @@ v1Router.use("/worker", workerRouter(requireTenant, (tenantId?: string) => {
 v1Router.use(async (req, res, next) => {
   try {
     const forcedRemote = req.body?.executionLocation === "OVH_WORKER"
+      || req.body?.executionLocation === "VERCEL_CLOUD"
       || req.body?.executionTarget === "ovh_worker"
+      || req.body?.executionTarget === "vercel_cloud"
       || req.body?.executionTarget === "local_host"
       || req.body?.executionTarget === "local_sandbox";
     // Phase 2: a run started from the desktop with its own machine path (e.g.
@@ -986,6 +989,17 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
 
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
   const inProcessLocal = !cloudHost;
+  const cloudProvider =
+    process.env.ORVYN_CLOUD_EXECUTION_PROVIDER?.trim().toLowerCase() === "vercel"
+      ? "vercel"
+      : "ovh";
+  let vercelCloudHealthy = false;
+  let vercelCloudDetail = "";
+  if (cloudProvider === "vercel") {
+    const health = await vercelToolRunner.health();
+    vercelCloudHealthy = health.healthy;
+    vercelCloudDetail = health.detail ?? "";
+  }
   // Virtual workspace + generated-file work lives on the Cloud control plane.
   // Auto must not demand the desktop Local Worker or an OVH sandbox for a logo.
   // A question or research task with no workspace (the preflight skipped it)
@@ -998,15 +1012,24 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
     (virtualWorkspace || noWorkspaceTask || (cloudHost && hints.isArtifact && !hasLocalProject));
 
   if (routed.actual === "ovh_worker" && !controlPlaneVirtual) {
-    if (!hasOnlineWorker()) {
+    const cloudReady =
+      cloudProvider === "vercel" ? vercelCloudHealthy : hasOnlineWorker();
+    if (!cloudReady) {
       if (routed.requested === "auto" && clientKind === "desktop" && !computer.executionTarget) {
         routed.actual = "local_host";
-        routed.fallbackReason = "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
+        routed.fallbackReason =
+          cloudProvider === "vercel"
+            ? "Auto chose Cloud but Vercel Sandbox is unavailable — running Local instead"
+            : "Auto chose Cloud but no ORVYN Cloud worker is online — running Local instead";
       } else {
         return res.status(409).json({
-          error: "ORVYN Cloud has no worker available right now — the Cloud run was not started. It is never moved to your computer silently.",
+          error:
+            cloudProvider === "vercel"
+              ? `ORVYN Cloud Sandbox is unavailable right now${vercelCloudDetail ? ` (${vercelCloudDetail})` : ""}. The Cloud run was not started and was not moved to your computer.`
+              : "ORVYN Cloud has no worker available right now — the Cloud run was not started. It is never moved to your computer silently.",
           executionTargetRequested: routed.requested,
-          executionTargetActual: routed.actual,
+          executionTargetActual:
+            cloudProvider === "vercel" ? "vercel_cloud" : routed.actual,
         });
       }
     }
@@ -1017,9 +1040,12 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
       // run falls back to the ORVYN Cloud worker — the mirror image of the
       // cloud→local fallback above. An EXPLICITLY requested local target
       // still 409s: the user asked for their computer, not a silent switch.
-      if (routed.requested === "auto" && !computer.executionTarget && hasOnlineWorker()) {
+      const cloudReady =
+        cloudProvider === "vercel" ? vercelCloudHealthy : hasOnlineWorker();
+      if (routed.requested === "auto" && !computer.executionTarget && cloudReady) {
         routed.actual = "ovh_worker";
-        routed.fallbackReason = "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
+        routed.fallbackReason =
+          "Auto chose Local but the desktop Local Worker is offline — running on ORVYN Cloud instead";
       } else {
         return res.status(409).json({
           error: routed.actual === "local_sandbox"
@@ -1032,15 +1058,27 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
     }
   }
 
+  const semanticCloud = routed.actual === "ovh_worker" && !controlPlaneVirtual;
   const location = controlPlaneVirtual
     ? "LOCAL"
-    : runtimeLocation(routed.actual, { inProcessLocal: routed.actual === "local_host" && inProcessLocal && !localWorkerOnline });
+    : semanticCloud && cloudProvider === "vercel"
+      ? "VERCEL_CLOUD"
+      : runtimeLocation(routed.actual, {
+          inProcessLocal:
+            routed.actual === "local_host" &&
+            inProcessLocal &&
+            !localWorkerOnline,
+        });
+  const actualExecutionTarget =
+    semanticCloud && cloudProvider === "vercel" ? "vercel_cloud" : routed.actual;
   const clientProjectRoot = String(req.body.remoteProjectRoot ?? req.body.projectRoot ?? "");
   const remoteProjectRoot = location === "OVH_WORKER"
     ? cloudWorkerSourcePath(clientProjectRoot)
-    : (location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && desktopProjectRoot
-      ? desktopProjectRoot
-      : boundRoot;
+    : location === "VERCEL_CLOUD"
+      ? boundRoot
+      : (location === "LOCAL_HOST" || location === "LOCAL_SANDBOX") && desktopProjectRoot
+        ? desktopProjectRoot
+        : boundRoot;
   const executionLabel = controlPlaneVirtual && cloudHost
     ? "Cloud"
     : routed.actual === "local_host" ? "Local" : routed.actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud";
@@ -1079,14 +1117,14 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
       userId: req.principal?.userId ?? "",
       projectId: preflight.status === "resolved" ? preflight.projectId : (typeof req.body.projectId === "string" ? req.body.projectId : null),
       targetRequested: routed.requested,
-      targetActual: routed.actual,
+      targetActual: actualExecutionTarget,
       executionLabel,
       clientKind,
       computerSurface: computer.surface === 'local_computer' ? 'host' : computer.surface === 'cloud_desktop' ? 'desktop' : computer.surface === 'cloud_browser' ? 'browser' : 'none',
       // Local runs execute on the user's computer: tell the model its shell.
       hostPlatform: location === "LOCAL_HOST" || location === "LOCAL_SANDBOX"
         ? (localWorkerHealth(t.id).environment?.os ?? undefined)
-        : location === "OVH_WORKER" ? "linux" : process.platform,
+        : location === "OVH_WORKER" || location === "VERCEL_CLOUD" ? "linux" : process.platform,
       fallbackReason: routed.fallbackReason ?? (location === "LOCAL" && routed.actual === "local_host" && !controlPlaneVirtual ? "in-process local backend (same host)" : undefined),
     },
     {
@@ -1152,7 +1190,7 @@ v1Router.post("/agent/stream/runs", (req, res, next) => {
     projectId: attached.projectId,
     executionLocation: location,
     executionTargetRequested: routed.requested,
-    executionTargetActual: routed.actual,
+    executionTargetActual: actualExecutionTarget,
     executionLabel,
   });
   })().catch(next);
