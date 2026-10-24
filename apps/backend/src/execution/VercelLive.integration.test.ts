@@ -104,6 +104,10 @@ test(
         workspaceId: "workspace-vercel-live",
       });
 
+      const firstSandboxName = vercelToolRunner.provider.sandboxName(runId);
+      assert.equal(vercelToolRunner.provider.isPersistent(runId), true);
+      assert.ok(firstSandboxName, "live Vercel run should use a named persistent sandbox");
+
       const pwd = await toolRpc.execute(runId, "terminal", {
         command: "pwd",
       });
@@ -201,6 +205,12 @@ test(
       await stopVercelDesktop(desktop);
       desktop = undefined;
 
+      const probe = await vercelToolRunner.execRaw(
+        runId,
+        "printf %s persistent-ok > /vercel/sandbox/.orvyn-persistence-probe"
+      );
+      assert.equal(probe.ok, true);
+
       store.setStatus(runId, "completed");
       await vercelToolRunner.stop(runId, "live smoke complete");
 
@@ -208,6 +218,42 @@ test(
         readFileSync(join(root, "created-by-vercel.txt"), "utf8"),
         /hello from ORVYN Vercel cloud/
       );
+
+      // Resume a second ORVYN mission against the same durable workspace.
+      // The sandbox-level probe must survive, while project files are rebuilt
+      // from canonical ORVYN state before the new mission begins.
+      writeFileSync(join(root, "seed.txt"), "seed updated locally\n");
+      const resumeRunId = runId + "_resume";
+      store.create(resumeRunId, root, "running");
+      await vercelToolRunner.start(resumeRunId, root, store, {
+        tenantId,
+        organizationId: "org-vercel-live",
+        userId: "user-vercel-live",
+        projectId: "project-vercel-live",
+        workspaceId: "workspace-vercel-live",
+      });
+
+      assert.equal(vercelToolRunner.provider.isPersistent(resumeRunId), true);
+      assert.equal(
+        vercelToolRunner.provider.sandboxName(resumeRunId),
+        firstSandboxName
+      );
+
+      const resumedProbe = await vercelToolRunner.execRaw(
+        resumeRunId,
+        "cat /vercel/sandbox/.orvyn-persistence-probe"
+      );
+      assert.equal(resumedProbe.ok, true);
+      assert.match(resumedProbe.output, /persistent-ok/);
+
+      const canonicalSeed = await toolRpc.execute(resumeRunId, "read_file", {
+        path: "seed.txt",
+      });
+      assert.equal(canonicalSeed.ok, true);
+      assert.match(canonicalSeed.output ?? "", /seed updated locally/);
+
+      store.setStatus(resumeRunId, "completed");
+      await vercelToolRunner.stop(resumeRunId, "live resume smoke complete");
     } finally {
       if (desktop) {
         await stopVercelDesktop(desktop).catch(() => undefined);
