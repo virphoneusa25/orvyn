@@ -30,7 +30,8 @@
     "pdfjs-dist": "^6.3.289",
     "pg": "^8.23.0",
     "pptxgenjs": "^4.0.1",
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "@vercel/sandbox": "^3.9.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
