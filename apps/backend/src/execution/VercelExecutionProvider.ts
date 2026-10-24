@@ -90,6 +90,86 @@ async function output(result: any): Promise<{ stdout: string; stderr: string }> 
   return { stdout, stderr };
 }
 
+async function collectRelativeFiles(root: string, rel = ""): Promise<Set<string>> {
+  const files = new Set<string>();
+  const dir = rel ? path.join(root, ...rel.split("/")) : root;
+  for (const item of await fs.readdir(dir, { withFileTypes: true })) {
+    if (EXCLUDES.includes(item.name)) continue;
+    const child = rel ? rel + "/" + item.name : item.name;
+    if (item.isDirectory()) {
+      const nested = await collectRelativeFiles(root, child);
+      for (const name of nested) files.add(name);
+    } else if (item.isFile()) {
+      files.add(child);
+    }
+  }
+  return files;
+}
+
+async function removeEmptyDirectories(root: string, rel = ""): Promise<void> {
+  const dir = rel ? path.join(root, ...rel.split("/")) : root;
+  for (const item of await fs.readdir(dir, { withFileTypes: true })) {
+    if (!item.isDirectory() || EXCLUDES.includes(item.name)) continue;
+    const child = rel ? rel + "/" + item.name : item.name;
+    await removeEmptyDirectories(root, child);
+    const childDir = path.join(root, ...child.split("/"));
+    const remaining = await fs.readdir(childDir).catch(() => ["keep"]);
+    if (remaining.length === 0) {
+      await fs.rmdir(childDir).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Reconcile a downloaded Vercel workspace with the durable local project.
+ * This intentionally removes files that existed before the run but were
+ * deleted inside the sandbox; without this step ORION deletions silently
+ * reappear after sync-back.
+ */
+export async function reconcileDownloadedWorkspace(
+  projectRoot: string,
+  extractedRoot: string
+): Promise<string[]> {
+  const before = await collectRelativeFiles(projectRoot);
+  const after = await collectRelativeFiles(extractedRoot);
+
+  for (const rel of before) {
+    if (after.has(rel)) continue;
+    const target = path.join(projectRoot, ...rel.split("/"));
+    await fs.rm(target, { force: true }).catch(() => undefined);
+  }
+  await removeEmptyDirectories(projectRoot);
+
+  const copied: string[] = [];
+  const walk = async (src: string, rel = ""): Promise<void> => {
+    for (const item of await fs.readdir(src, { withFileTypes: true })) {
+      if (EXCLUDES.includes(item.name)) continue;
+      const child = rel ? rel + "/" + item.name : item.name;
+      const from = path.join(src, item.name);
+      const to = path.join(projectRoot, ...child.split("/"));
+      if (item.isDirectory()) {
+        const stat = await fs.lstat(to).catch(() => null);
+        if (stat && !stat.isDirectory()) {
+          await fs.rm(to, { recursive: true, force: true });
+        }
+        await fs.mkdir(to, { recursive: true });
+        await walk(from, child);
+      } else if (item.isFile()) {
+        const stat = await fs.lstat(to).catch(() => null);
+        if (stat?.isDirectory()) {
+          await fs.rm(to, { recursive: true, force: true });
+        }
+        await fs.mkdir(path.dirname(to), { recursive: true });
+        await fs.copyFile(from, to);
+        copied.push(child);
+      }
+    }
+  };
+
+  await walk(extractedRoot);
+  return copied;
+}
+
 export class VercelExecutionProvider implements ExecutionProvider {
   readonly location = "VERCEL_CLOUD" as const;
   private runs = new Map<string, Entry>();
@@ -218,23 +298,7 @@ export class VercelExecutionProvider implements ExecutionProvider {
       await fs.writeFile(archive, data);
       await fs.mkdir(extracted, { recursive: true });
       await localExec("tar", ["xf", archive, "--no-same-owner", "-C", extracted]);
-      const walk = async (src: string, rel = ""): Promise<void> => {
-        for (const item of await fs.readdir(src, { withFileTypes: true })) {
-          if (EXCLUDES.includes(item.name)) continue;
-          const child = rel ? rel + "/" + item.name : item.name;
-          const from = path.join(src, item.name);
-          const to = path.join(entry.projectRoot, ...child.split("/"));
-          if (item.isDirectory()) {
-            await fs.mkdir(to, { recursive: true });
-            await walk(from, child);
-          } else if (item.isFile()) {
-            await fs.mkdir(path.dirname(to), { recursive: true });
-            await fs.copyFile(from, to);
-            files.push(child);
-          }
-        }
-      };
-      await walk(extracted);
+      files.push(...(await reconcileDownloadedWorkspace(entry.projectRoot, extracted)));
       return { files };
     } finally {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
