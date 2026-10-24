@@ -31,6 +31,7 @@ import {
   cloudDesktopInput,
   cloudDesktopNavigate,
   findCloudDesktopSession,
+  isVercelDesktop,
   startCloudDesktop,
   stopCloudDesktop,
   type CloudDesktopSession,
@@ -103,7 +104,7 @@ async function sbStart(tenantId: string, projectRoot: string, runId?: string, ur
     return { ok: false, error: "no-sandbox" };
   }
   try {
-    if (url) {
+    if (url && !vercel) {
       const unhealthy = await waitForHealthyPreview(url);
       if (unhealthy) return unhealthy;
     }
@@ -198,8 +199,10 @@ export function makeDesktopOpenUrlTool(projectRoot: string, tenantId: string, ru
         const blocked = sandboxOwnerError(s);
         if (blocked) return blocked;
         const url = String(args.url);
-        const unhealthy = await waitForHealthyPreview(url);
-        if (unhealthy) return unhealthy;
+        if (!isVercelDesktop(s)) {
+          const unhealthy = await waitForHealthyPreview(url);
+          if (unhealthy) return unhealthy;
+        }
         const nav = await cloudDesktopNavigate(s, url);
         return nav.ok
           ? { ok: true, output: `Desktop opened ${url} — the window shows "${nav.pageTitle}" (matches the page's title).`, meta: { desktopTarget: nav.target } }
