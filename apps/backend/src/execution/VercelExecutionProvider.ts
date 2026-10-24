@@ -13,6 +13,7 @@ const UPLOAD = "/vercel/sandbox/orvyn-workspace.tar";
 // tools operate on the real repository inside the cloud microVM. Large repos
 // should move to direct Git clone hydration in the next optimization phase.
 const EXCLUDES = ["node_modules", ".orvyn", "dist", "release", ".cache"];
+const DELETE_PROTECTED_PREFIXES = [".git"];
 const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
 
 type Entry = { sandbox: any; sandboxId: string; projectRoot: string; cancelled: boolean };
@@ -135,6 +136,13 @@ export async function reconcileDownloadedWorkspace(
 
   for (const rel of before) {
     if (after.has(rel)) continue;
+    if (
+      DELETE_PROTECTED_PREFIXES.some(
+        (prefix) => rel === prefix || rel.startsWith(prefix + "/")
+      )
+    ) {
+      continue;
+    }
     const target = path.join(projectRoot, ...rel.split("/"));
     await fs.rm(target, { force: true }).catch(() => undefined);
   }
