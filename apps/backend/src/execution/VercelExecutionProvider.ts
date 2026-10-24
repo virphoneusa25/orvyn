@@ -2,6 +2,7 @@
 // Managed Vercel Sandbox execution behind ORVYN Cloud.
 
 import { execFile } from "child_process";
+import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -15,6 +16,19 @@ const UPLOAD = "/vercel/sandbox/orvyn-workspace.tar";
 const EXCLUDES = ["node_modules", ".orvyn", "dist", "release", ".cache"];
 const DELETE_PROTECTED_PREFIXES = [".git"];
 const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
+const WORKSPACE_FINGERPRINT = "/vercel/sandbox/.orvyn-workspace-fingerprint";
+
+function persistentWorkspacesEnabled(): boolean {
+  return process.env.ORVYN_VERCEL_PERSISTENT_WORKSPACES === "1";
+}
+
+export function vercelWorkspaceName(projectRoot: string): string {
+  const digest = createHash("sha256")
+    .update(path.resolve(projectRoot))
+    .digest("hex")
+    .slice(0, 24);
+  return "orvyn-" + digest;
+}
 
 type Entry = { sandbox: any; sandboxId: string; projectRoot: string; cancelled: boolean };
 
@@ -80,6 +94,52 @@ async function snapshot(projectRoot: string): Promise<{ dir: string; data: Buffe
   } catch (err) {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
     throw err;
+  }
+}
+
+export async function workspaceFingerprint(
+  projectRoot: string
+): Promise<string> {
+  const hash = createHash("sha256");
+
+  const walk = async (root: string, rel = ""): Promise<void> => {
+    const dir = rel ? path.join(root, ...rel.split("/")) : root;
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const item of entries) {
+      if (EXCLUDES.includes(item.name) || item.name === ".git") continue;
+      const child = rel ? rel + "/" + item.name : item.name;
+      const full = path.join(root, ...child.split("/"));
+
+      if (item.isDirectory()) {
+        hash.update("d\0" + child + "\0");
+        await walk(root, child);
+      } else if (item.isFile()) {
+        const data = await fs.readFile(full);
+        hash.update("f\0" + child + "\0");
+        hash.update(data);
+        hash.update("\0");
+      }
+    }
+  };
+
+  await walk(projectRoot);
+  return hash.digest("hex");
+}
+
+async function readRemoteFingerprint(sandbox: any): Promise<string | null> {
+  try {
+    const result = await sandbox.runCommand({
+      cmd: "sh",
+      args: ["-lc", "test -f " + sh(WORKSPACE_FINGERPRINT) + " && cat " + sh(WORKSPACE_FINGERPRINT)],
+    });
+    if (Number(result.exitCode ?? 1) !== 0) return null;
+    const streams = await output(result);
+    const value = streams.stdout.trim();
+    return value || null;
+  } catch {
+    return null;
   }
 }
 
@@ -196,16 +256,15 @@ export class VercelExecutionProvider implements ExecutionProvider {
     const mod = await import("@vercel/sandbox");
     const ports = String(process.env.ORVYN_VERCEL_SANDBOX_PORTS || "3000,5173")
       .split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0);
-    const sandbox: any = await (mod.Sandbox as any).create({
+    const persistent = persistentWorkspacesEnabled();
+    const createOptions = {
       ...auth.createOptions,
       // Pin the current Ubuntu-based managed image so X11/browser package
       // provisioning is deterministic instead of depending on Vercel's
       // changing default image generation.
       image: "vercel/sandbox/universal:latest",
-      // ORVYN already owns durable mission/project state and explicitly syncs
-      // the workspace back. Keep per-run sandboxes ephemeral until resume via
-      // Vercel snapshots is implemented intentionally.
-      persistent: false,
+      persistent,
+      ...(persistent ? { name: vercelWorkspaceName(projectRoot) } : {}),
       timeout:
         (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60000,
       ports,
@@ -213,7 +272,12 @@ export class VercelExecutionProvider implements ExecutionProvider {
         ORVYN_RUN_ID: runId,
         ORVYN_EXECUTION_LOCATION: "VERCEL_CLOUD",
       },
-    });
+    };
+    const Sandbox: any = mod.Sandbox as any;
+    const sandbox: any =
+      persistent && typeof Sandbox.getOrCreate === "function"
+        ? await Sandbox.getOrCreate(createOptions)
+        : await Sandbox.create(createOptions);
     const sandboxId = String(sandbox.sandboxId ?? sandbox.id ?? runId);
     this.runs.set(runId, { sandbox, sandboxId, projectRoot, cancelled: false });
     try {
@@ -269,12 +333,30 @@ export class VercelExecutionProvider implements ExecutionProvider {
   async uploadWorkspace(runId: string): Promise<void> {
     const entry = this.runs.get(runId);
     if (!entry) throw new Error("No Vercel Sandbox exists for this run.");
+
+    const fingerprint = await workspaceFingerprint(entry.projectRoot);
+    if (persistentWorkspacesEnabled()) {
+      const remote = await readRemoteFingerprint(entry.sandbox);
+      if (remote === fingerprint) {
+        return;
+      }
+    }
+
     const snap = await snapshot(entry.projectRoot);
     try {
       await entry.sandbox.writeFiles([{ path: UPLOAD, content: snap.data }]);
       const result = await entry.sandbox.runCommand({
         cmd: "sh",
-        args: ["-lc", "rm -rf " + sh(WORKSPACE) + " && mkdir -p " + sh(WORKSPACE) + " && tar xf " + sh(UPLOAD) + " --no-same-owner -C " + sh(WORKSPACE) + " && rm -f " + sh(UPLOAD)],
+        args: [
+          "-lc",
+          "rm -rf " + sh(WORKSPACE) +
+            " && mkdir -p " + sh(WORKSPACE) +
+            " && tar xf " + sh(UPLOAD) +
+            " --no-same-owner -C " + sh(WORKSPACE) +
+            " && printf %s " + sh(fingerprint) +
+            " > " + sh(WORKSPACE_FINGERPRINT) +
+            " && rm -f " + sh(UPLOAD),
+        ],
       });
       if (Number(result.exitCode ?? 1) !== 0) {
         const streams = await output(result);
