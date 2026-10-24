@@ -251,12 +251,15 @@ export class VercelToolRunner {
 
     entry.stopping = true;
     entry.stopPromise = (async () => {
+      let syncError: Error | undefined;
       try {
         await this.provider.downloadArtifacts(runId);
       } catch (err: any) {
+        syncError =
+          err instanceof Error ? err : new Error(String(err?.message ?? err));
         entry.store.emit(runId, "sandbox.sync.failed", {
           provider: "vercel",
-          error: String(err?.message ?? err).slice(0, 500),
+          error: syncError.message.slice(0, 500),
         });
       }
 
@@ -267,21 +270,33 @@ export class VercelToolRunner {
       const rec = registry.forRun(runId);
       if (rec?.provider === "vercel") {
         registry.report(rec.id, {
-          state: reason === "run ended" ? "completed" : "stopped",
+          state: syncError
+            ? "failed"
+            : reason === "run ended"
+              ? "completed"
+              : "stopped",
           destroyedAt: Date.now(),
         });
         registry.audit("sandbox.destroyed", "vercel-runner", {
           sandboxId: rec.id,
           organizationId: rec.organizationId,
-          detail: { reason },
+          detail: {
+            reason,
+            ...(syncError ? { syncError: syncError.message.slice(0, 500) } : {}),
+          },
         });
       }
 
       entry.store.emit(runId, "sandbox.stopped", {
         provider: "vercel",
         reason,
+        syncOk: !syncError,
       });
       this.runs.delete(runId);
+
+      if (syncError) {
+        throw new Error("Vercel durable sync-back failed: " + syncError.message);
+      }
     })();
 
     await entry.stopPromise;
