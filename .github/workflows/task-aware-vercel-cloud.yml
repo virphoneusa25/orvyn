@@ -9,7 +9,11 @@ on:
     paths:
       - "apps/backend/src/execution/**"
       - "apps/backend/src/agent/**"
+      - "apps/backend/src/desktop/**"
+      - "apps/backend/src/computerUse/**"
+      - "apps/backend/src/ai/tools/desktopTools.ts"
       - "apps/backend/src/routes/cloudWorkbench.ts"
+      - "apps/backend/src/routes/desktop.ts"
       - "apps/backend/package.json"
       - "package-lock.json"
       - ".env.example"
