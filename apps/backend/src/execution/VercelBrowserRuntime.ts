@@ -1,8 +1,9 @@
 // apps/backend/src/execution/VercelBrowserRuntime.ts
 //
 // Source for the run-scoped browser helper installed inside a Vercel Sandbox.
-// It mirrors the existing OpenShell browser helper response contract, but uses
-// a localhost-only HTTP bridge because Vercel's SDK command API is non-TTY.
+// Keep this as literal JavaScript source: do not use nested template
+// interpolation inside the helper or the backend TypeScript compiler will try
+// to resolve sandbox-local variables.
 
 export const VERCEL_BROWSER_PORT = 9229;
 
@@ -21,17 +22,20 @@ const consoleErrors = [];
 const networkErrors = [];
 const actions = [];
 
-page.on("console", (m) => {
-  if (m.type() === "error") consoleErrors.push(m.text().slice(0, 1000));
+page.on("console", (message) => {
+  if (message.type() === "error") {
+    consoleErrors.push(message.text().slice(0, 1000));
+  }
 });
-page.on("pageerror", (e) =>
-  consoleErrors.push(String(e.message ?? e).slice(0, 1000))
-);
-page.on("requestfailed", (r) =>
+page.on("pageerror", (error) => {
+  consoleErrors.push(String(error?.message ?? error).slice(0, 1000));
+});
+page.on("requestfailed", (request) => {
+  const failure = request.failure()?.errorText ?? "failed";
   networkErrors.push(
-    \`${r.method()} ${r.url()} ${r.failure()?.errorText ?? "failed"}\`.slice(0, 1200)
-  )
-);
+    (request.method() + " " + request.url() + " " + failure).slice(0, 1200)
+  );
+});
 
 function snapshot() {
   return {
@@ -45,13 +49,14 @@ function snapshot() {
 }
 
 async function run(message) {
-  const op = String(message.op ?? "");
-  const a = message.args ?? {};
+  const op = String(message?.op ?? "");
+  const a = message?.args ?? {};
 
   if (op === "input") {
     if (a.type === "click") {
       const size = page.viewportSize();
       if (
+        !size ||
         !Number.isFinite(a.x) ||
         !Number.isFinite(a.y) ||
         a.x < 0 ||
@@ -61,26 +66,27 @@ async function run(message) {
       ) throw new Error("Click outside viewport");
       await page.mouse.click(a.x, a.y);
     } else if (a.type === "type") {
-      if (typeof a.text !== "string" || a.text.length > 4000)
+      if (typeof a.text !== "string" || a.text.length > 4000) {
         throw new Error("Text too long");
+      }
       await page.keyboard.insertText(a.text);
     } else if (a.type === "key") {
-      if (
-        ![
-          "Enter",
-          "Tab",
-          "Escape",
-          "Backspace",
-          "ArrowUp",
-          "ArrowDown",
-          "ArrowLeft",
-          "ArrowRight",
-        ].includes(a.key)
-      ) throw new Error("Unsupported key");
+      const allowed = [
+        "Enter",
+        "Tab",
+        "Escape",
+        "Backspace",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+      ];
+      if (!allowed.includes(a.key)) throw new Error("Unsupported key");
       await page.keyboard.press(a.key);
     } else if (a.type === "scroll") {
-      if (!Number.isFinite(a.deltaY) || Math.abs(a.deltaY) > 2000)
+      if (!Number.isFinite(a.deltaY) || Math.abs(a.deltaY) > 2000) {
         throw new Error("Invalid scroll");
+      }
       await page.mouse.wheel(0, a.deltaY);
     } else {
       throw new Error("Unsupported input");
@@ -94,12 +100,12 @@ async function run(message) {
     if (a.url) {
       await page.goto(String(a.url), {
         waitUntil: "domcontentloaded",
-        timeout: 30_000,
+        timeout: 30000,
       });
     }
     actions.push({ action: op, url: page.url(), timestamp: Date.now() });
     return {
-      output: \`Now at ${page.url()} — title: ${await page.title()}\`,
+      output: "Now at " + page.url() + " — title: " + (await page.title()),
       meta: snapshot(),
     };
   }
@@ -110,20 +116,20 @@ async function run(message) {
       tablet: [820, 1180],
       mobile: [390, 844],
     };
-    const [width, height] =
-      presets[String(a.preset ?? "")] ??
-      [Number(a.width) || 1280, Number(a.height) || 800];
+    const selected = presets[String(a.preset ?? "")];
+    const width = selected ? selected[0] : Number(a.width) || 1280;
+    const height = selected ? selected[1] : Number(a.height) || 800;
     await page.setViewportSize({ width, height });
     actions.push({ action: op, width, height, timestamp: Date.now() });
     return {
-      output: \`Viewport set to ${width}×${height}.\`,
+      output: "Viewport set to " + width + "×" + height + ".",
       meta: snapshot(),
     };
   }
 
   if (op === "click") {
     const selector = String(a.selector ?? "");
-    await page.click(selector, { timeout: 10_000 });
+    await page.click(selector, { timeout: 10000 });
     actions.push({
       action: op,
       selector,
@@ -131,18 +137,22 @@ async function run(message) {
       timestamp: Date.now(),
     });
     return {
-      output: \`Clicked ${selector}. URL now ${page.url()}\`,
+      output: "Clicked " + selector + ". URL now " + page.url(),
       meta: snapshot(),
     };
   }
 
   if (op === "type") {
     const selector = String(a.selector ?? "");
-    await page.fill(selector, String(a.text ?? ""), { timeout: 10_000 });
+    await page.fill(selector, String(a.text ?? ""), { timeout: 10000 });
     if (a.submit === true) await page.press(selector, "Enter");
     actions.push({ action: op, selector, timestamp: Date.now() });
     return {
-      output: \`Typed into ${selector}${a.submit ? " and submitted" : ""}.\`,
+      output:
+        "Typed into " +
+        selector +
+        (a.submit ? " and submitted" : "") +
+        ".",
       meta: snapshot(),
     };
   }
@@ -151,7 +161,10 @@ async function run(message) {
     const deltaY = Number(a.deltaY ?? 400);
     await page.mouse.wheel(0, deltaY);
     actions.push({ action: op, deltaY, timestamp: Date.now() });
-    return { output: \`Scrolled by ${deltaY}px.\`, meta: snapshot() };
+    return {
+      output: "Scrolled by " + deltaY + "px.",
+      meta: snapshot(),
+    };
   }
 
   if (op === "screenshot") {
@@ -161,10 +174,10 @@ async function run(message) {
       width: document.documentElement.clientWidth,
       height: document.documentElement.clientHeight,
     }));
-    const screenshotId = \`shot_${Date.now().toString(36)}\`;
+    const screenshotId = "shot_" + Date.now().toString(36);
     actions.push({ action: op, screenshotId, timestamp: Date.now() });
     return {
-      output: \`Screenshot ${screenshotId} taken.\`,
+      output: "Screenshot " + screenshotId + " taken.",
       meta: {
         ...snapshot(),
         screenshot: { b64, mediaType: "image/png" },
@@ -180,8 +193,8 @@ async function run(message) {
 
   if (op === "errors") {
     const all = [
-      ...consoleErrors.map((x) => \`[console] ${x}\`),
-      ...networkErrors.map((x) => \`[network] ${x}\`),
+      ...consoleErrors.map((value) => "[console] " + value),
+      ...networkErrors.map((value) => "[network] " + value),
     ];
     return {
       output: all.length
@@ -195,7 +208,7 @@ async function run(message) {
     return { output: JSON.stringify(snapshot()), meta: snapshot() };
   }
 
-  throw new Error(\`Unknown browser operation: ${op}\`);
+  throw new Error("Unknown browser operation: " + op);
 }
 
 const server = http.createServer(async (req, res) => {
