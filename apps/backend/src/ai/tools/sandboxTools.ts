@@ -36,7 +36,7 @@ export function makeSandboxTerminalTool(sandbox: SandboxSession): AITool {
       if (!command) return { ok: false, error: "command is required" };
 
       const cwd = String(args.cwd ?? "").trim();
-      const base = sandbox.workspacePath.replace(/\/$/, "");
+      const base = (sandbox.workspacePath || "/workspace").replace(/\/$/, "");
       const target = cwd
         ? base + "/" + cwd.replace(/^\/+/, "")
         : base;
