@@ -271,7 +271,7 @@ export class VercelToolRunner {
       if (rec?.provider === "vercel") {
         registry.report(rec.id, {
           state: syncError
-            ? "error"
+            ? "failed"
             : reason === "run ended"
               ? "completed"
               : "stopped",
