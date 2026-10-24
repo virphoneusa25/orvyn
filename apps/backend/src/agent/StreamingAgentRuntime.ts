@@ -1817,19 +1817,27 @@ export class StreamingAgentRuntime {
       execution.location === "LOCAL" ||
       isCloudExecution(execution.location);
     const queueRemoteRun = (): void => {
-      if (!isCloudExecution(execution?.location)) return;
+      const remoteExecution = execution;
+      if (!remoteExecution || !isCloudExecution(remoteExecution.location)) {
+        return;
+      }
 
-      if (execution?.location === "VERCEL_CLOUD") {
+      if (remoteExecution.location === "VERCEL_CLOUD") {
         void vercelToolRunner.start(
           runId,
           projectRoot,
           this.store,
           {
-            tenantId: execution.tenantId ?? "",
-            organizationId: execution.organizationId ?? execution.tenantId ?? "",
-            userId: execution.userId ?? execution.tenantId ?? "",
-            projectId: execution.projectId ?? null,
-            workspaceId: execution.workspaceId ?? "run:" + runId,
+            tenantId: remoteExecution.tenantId ?? "",
+            organizationId:
+              remoteExecution.organizationId ??
+              remoteExecution.tenantId ??
+              "",
+            userId:
+              remoteExecution.userId ?? remoteExecution.tenantId ?? "",
+            projectId: remoteExecution.projectId ?? null,
+            workspaceId:
+              remoteExecution.workspaceId ?? "run:" + runId,
           }
         ).catch((err: any) => {
           this.store.emit(runId, "run.blocked", {
@@ -1843,11 +1851,11 @@ export class StreamingAgentRuntime {
       }
 
       try {
-        queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
-          tenantId: execution.tenantId ?? "",
-          organizationId: execution.organizationId ?? "",
-          userId: execution.userId ?? "",
-          projectId: execution.projectId ?? null,
+        queueExecutorJob(runId, remoteExecution.remoteProjectRoot ?? "", {
+          tenantId: remoteExecution.tenantId ?? "",
+          organizationId: remoteExecution.organizationId ?? "",
+          userId: remoteExecution.userId ?? "",
+          projectId: remoteExecution.projectId ?? null,
           runId,
         }, projectRoot, recovering);
       } catch (err: any) {
