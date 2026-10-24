@@ -79,9 +79,21 @@ export class VercelExecutionProvider implements ExecutionProvider {
       .split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0);
     const sandbox: any = await (mod.Sandbox as any).create({
       ...auth,
-      timeout: (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60000,
+      // Pin the current Ubuntu-based managed image so X11/browser package
+      // provisioning is deterministic instead of depending on Vercel's
+      // changing default image generation.
+      image: "vercel/sandbox/universal:latest",
+      // ORVYN already owns durable mission/project state and explicitly syncs
+      // the workspace back. Keep per-run sandboxes ephemeral until resume via
+      // Vercel snapshots is implemented intentionally.
+      persistent: false,
+      timeout:
+        (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60000,
       ports,
-      env: { ORVYN_RUN_ID: runId, ORVYN_EXECUTION_LOCATION: "VERCEL_CLOUD" },
+      env: {
+        ORVYN_RUN_ID: runId,
+        ORVYN_EXECUTION_LOCATION: "VERCEL_CLOUD",
+      },
     });
     const sandboxId = String(sandbox.sandboxId ?? sandbox.id ?? runId);
     this.runs.set(runId, { sandbox, sandboxId, projectRoot, cancelled: false });
