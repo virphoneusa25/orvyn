@@ -12,6 +12,10 @@ import {
   VERCEL_BROWSER_PORT,
   VERCEL_BROWSER_SERVER_SOURCE,
 } from "./VercelBrowserRuntime";
+import {
+  VERCEL_MCP_PORT,
+  VERCEL_MCP_SERVER_SOURCE,
+} from "./VercelMcpRuntime";
 
 const WORKSPACE = "/vercel/sandbox/workspace";
 const POLL_MS = 100;
@@ -41,6 +45,8 @@ type RunEntry = {
   processes: Map<string, ProcessEntry>;
   browserReady: boolean;
   browserProvisioning?: Promise<void>;
+  mcpReady: boolean;
+  mcpProvisioning?: Promise<void>;
   loop: Promise<void>;
 };
 
@@ -150,6 +156,7 @@ export class VercelToolRunner {
         stopping: false,
         processes: new Map(),
         browserReady: false,
+        mcpReady: false,
         loop: Promise.resolve(),
       };
       this.runs.set(runId, entry);
@@ -512,6 +519,118 @@ export class VercelToolRunner {
     };
   }
 
+  private async ensureMcp(runId: string, entry: RunEntry): Promise<void> {
+    if (entry.mcpReady) return;
+    if (entry.mcpProvisioning) return entry.mcpProvisioning;
+
+    entry.mcpProvisioning = (async () => {
+      const root = "/tmp/orvyn-mcp";
+      const scriptPath = root + "/server.mjs";
+      const encoded = Buffer.from(
+        VERCEL_MCP_SERVER_SOURCE,
+        "utf8"
+      ).toString("base64");
+
+      const prepare = [
+        "mkdir -p " + shellQuote(root),
+        "printf %s " + shellQuote(encoded) + " | base64 -d > " + shellQuote(scriptPath),
+        "test -f " + shellQuote(WORKSPACE + "/.orvyn/mcp.json"),
+      ].join(" && ");
+
+      const prepared = await this.command(runId, prepare, "", 30);
+      if (!prepared.ok) {
+        throw new Error(
+          "No sandbox MCP configuration is available for this workspace."
+        );
+      }
+
+      const launch = await this.command(
+        runId,
+        "nohup node " +
+          shellQuote(scriptPath) +
+          " >/tmp/orvyn-mcp.log 2>&1 </dev/null & echo $!"
+      );
+      if (!launch.ok) {
+        throw new Error("Could not start ORVYN Cloud MCP runtime: " + launch.output);
+      }
+
+      const wait = await this.command(
+        runId,
+        "for i in $(seq 1 40); do " +
+          "curl -fsS http://127.0.0.1:" +
+          VERCEL_MCP_PORT +
+          "/health >/dev/null && exit 0; sleep 1; done; " +
+          "tail -n 120 /tmp/orvyn-mcp.log 2>/dev/null; exit 1",
+        "",
+        60
+      );
+      if (!wait.ok) {
+        throw new Error(
+          "ORVYN Cloud MCP runtime did not become ready: " +
+            wait.output.slice(0, 2000)
+        );
+      }
+
+      entry.mcpReady = true;
+      entry.store.emit(runId, "mcp.ready", { provider: "vercel" });
+    })();
+
+    try {
+      await entry.mcpProvisioning;
+    } finally {
+      entry.mcpProvisioning = undefined;
+    }
+  }
+
+  private async mcpTool(
+    runId: string,
+    entry: RunEntry,
+    request: ToolRequest
+  ) {
+    await this.ensureMcp(runId, entry);
+    const payload = Buffer.from(
+      JSON.stringify({
+        op: request.tool === "mcp_list" ? "list" : "call",
+        args: request.arguments,
+      }),
+      "utf8"
+    ).toString("base64");
+
+    const command =
+      "printf %s " +
+      shellQuote(payload) +
+      " | base64 -d | curl -fsS " +
+      "-H 'content-type: application/json' --data-binary @- " +
+      "http://127.0.0.1:" +
+      VERCEL_MCP_PORT +
+      "/";
+
+    const r = await this.command(runId, command, "", 45);
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: r.output || "ORVYN Cloud MCP request failed",
+        exitCode: r.exitCode ?? 1,
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(r.output);
+      return {
+        ok: parsed.ok === true,
+        output: parsed.output,
+        error: parsed.error,
+        exitCode: parsed.ok === true ? 0 : 1,
+      };
+    } catch {
+      return {
+        ok: false,
+        error: "ORVYN Cloud MCP runtime returned an invalid response",
+        exitCode: 1,
+      };
+    }
+  }
+
   private async execute(request: ToolRequest, entry: RunEntry): Promise<ToolResponse> {
     const started = Date.now();
     const runId = request.runId;
@@ -691,12 +810,7 @@ export class VercelToolRunner {
         break;
       case "mcp_list":
       case "mcp_call":
-        result = {
-          ok: false,
-          error: "Vercel MCP runtime is not provisioned yet for this run.",
-          exitCode: 1,
-          meta: { code: "CAPABILITY_UNAVAILABLE", provider: "vercel" },
-        };
+        result = await this.mcpTool(runId, entry, request);
         break;
       default:
         result = {
