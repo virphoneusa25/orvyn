@@ -104,6 +104,29 @@ export class VercelToolRunner {
     return this.provider.health();
   }
 
+  hasRun(runId: string): boolean {
+    return this.runs.has(runId);
+  }
+
+  projectRoot(runId: string): string | undefined {
+    return this.runs.get(runId)?.projectRoot;
+  }
+
+  async execRaw(
+    runId: string,
+    command: string,
+    opts: { cwd?: string; timeoutS?: number } = {}
+  ) {
+    if (!this.runs.has(runId)) {
+      return {
+        ok: false,
+        output: "No Vercel Sandbox exists for this run.",
+        exitCode: -1,
+      };
+    }
+    return this.command(runId, command, opts.cwd, opts.timeoutS);
+  }
+
   async start(
     runId: string,
     projectRoot: string,
