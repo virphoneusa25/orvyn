@@ -12,13 +12,15 @@
 // allow-listed servers is its own feature, not project code execution).
 
 import { AITool, ToolResult } from "../ToolTypes";
-import { DockerSandbox } from "../../sandbox/DockerSandbox";
+import type { SandboxSession } from "../../sandbox/SandboxProvider";
 
-export function makeSandboxTerminalTool(sandbox: DockerSandbox): AITool {
+export function makeSandboxTerminalTool(sandbox: SandboxSession): AITool {
   return {
     name: "terminal",
     description:
-      "Run a shell command inside the mission's isolated Docker sandbox (no network, resource-limited). The project files are in /workspace. Always requires user approval.",
+      "Run a shell command inside the mission's isolated cloud sandbox. The project files are in " +
+        sandbox.workspacePath +
+        ". Always requires user approval.",
     parameters: {
       type: "object",
       properties: {
@@ -34,7 +36,16 @@ export function makeSandboxTerminalTool(sandbox: DockerSandbox): AITool {
       if (!command) return { ok: false, error: "command is required" };
 
       const cwd = String(args.cwd ?? "").trim();
-      const full = cwd ? `cd /workspace/${cwd.replace(/^\/+/, "")} && (${command})` : `cd /workspace && (${command})`;
+      const base = (sandbox.workspacePath || "/workspace").replace(/\/$/, "");
+      const target = cwd
+        ? base + "/" + cwd.replace(/^\/+/, "")
+        : base;
+      // Preserve the legacy Docker command string for ordinary POSIX paths,
+      // while still quoting unusual provider/cwd paths safely.
+      const shellPath = /^[A-Za-z0-9_./-]+$/.test(target)
+        ? target
+        : JSON.stringify(target);
+      const full = "cd " + shellPath + " && (" + command + ")";
 
       const result = await sandbox.exec(full);
       if (result.timedOut) {

@@ -20,7 +20,8 @@ import { AIMessage, AIModelProvider, Attachment, ToolDefinition } from "@orvyn/a
 import { ModelService } from "../services/ModelService";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { AITool, ToolPermission } from "../ai/ToolTypes";
-import { DockerSandbox } from "../sandbox/DockerSandbox";
+import type { SandboxSession } from "../sandbox/SandboxProvider";
+import { startMissionSandbox } from "../sandbox/SandboxFactory";
 import { makeSandboxTerminalTool, SANDBOX_DENIED_TOOLS, sandboxDenialMessage } from "../ai/tools/sandboxTools";
 import { ModelGateway } from "../gateway/ModelGateway";
 import type { AgentRole } from "../gateway/PermissionEngine";
@@ -267,18 +268,22 @@ export class MultiAgentRuntime {
     this.store.emit(runId, "run.started", { instruction: goal, mode: "multitask" });
     const mission = await this.taskEngine.createMissionDurable(runId, projectRoot, goal);
 
-    // Sandbox mode: command-class tools execute inside a per-mission Docker
-    // container, never on the API host (master spec §31). Enabled per
-    // environment — cloud deployments set ORVYN_MISSION_EXECUTION=sandbox.
-    let sandbox: DockerSandbox | undefined;
+    // Sandbox mode: command-class tools execute inside a provider-neutral
+    // per-mission sandbox, never on the API host. ORVYN_SANDBOX_PROVIDER
+    // selects Docker (legacy/self-hosted) or Vercel (managed microVM).
+    let sandbox: SandboxSession | undefined;
     const sandboxMode = process.env.ORVYN_MISSION_EXECUTION?.trim() === "sandbox";
     let originalTerminal: AITool | undefined;
     let originalRunCommand: AITool | undefined;
     const savedPermissions = new Map<string, ToolPermission>();
 
     if (sandboxMode) {
-      sandbox = await DockerSandbox.start(mission.id, projectRoot);
-      this.store.emit(runId, "sandbox.started", { container: sandbox.containerId, image: "isolated", network: "none" });
+      sandbox = await startMissionSandbox(mission.id, projectRoot);
+      this.store.emit(runId, "sandbox.started", {
+        sandboxId: sandbox.id,
+        provider: sandbox.provider,
+        workspacePath: sandbox.workspacePath,
+      });
       // Swap the command tools for sandbox-backed equivalents; the swap is
       // undone in the finally below so later host runs are unaffected.
       originalTerminal = this.tools.list().find((t) => t.name === "terminal");
