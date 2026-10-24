@@ -15,6 +15,7 @@ const UPLOAD = "/vercel/sandbox/orvyn-workspace.tar";
 // should move to direct Git clone hydration in the next optimization phase.
 const EXCLUDES = ["node_modules", ".orvyn", "dist", "release", ".cache"];
 const DELETE_PROTECTED_PREFIXES = [".git"];
+const SYNC_EXCLUDES = [...EXCLUDES, ".git"];
 const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
 
 export interface VercelWorkspaceIdentity {
@@ -142,7 +143,7 @@ async function collectRelativeFiles(root: string, rel = ""): Promise<Set<string>
   const files = new Set<string>();
   const dir = rel ? path.join(root, ...rel.split("/")) : root;
   for (const item of await fs.readdir(dir, { withFileTypes: true })) {
-    if (EXCLUDES.includes(item.name)) continue;
+    if (SYNC_EXCLUDES.includes(item.name)) continue;
     const child = rel ? rel + "/" + item.name : item.name;
     if (item.isDirectory()) {
       const nested = await collectRelativeFiles(root, child);
@@ -198,7 +199,7 @@ export async function reconcileDownloadedWorkspace(
   const copied: string[] = [];
   const walk = async (src: string, rel = ""): Promise<void> => {
     for (const item of await fs.readdir(src, { withFileTypes: true })) {
-      if (EXCLUDES.includes(item.name)) continue;
+      if (SYNC_EXCLUDES.includes(item.name)) continue;
       const child = rel ? rel + "/" + item.name : item.name;
       const from = path.join(src, item.name);
       const to = path.join(projectRoot, ...child.split("/"));
@@ -397,7 +398,7 @@ export class VercelExecutionProvider implements ExecutionProvider {
   async downloadArtifacts(runId: string): Promise<{ files: string[] }> {
     const entry = this.runs.get(runId);
     if (!entry) return { files: [] };
-    const excludes = EXCLUDES.map((name) => "--exclude=" + sh(name)).join(" ");
+    const excludes = SYNC_EXCLUDES.map((name) => "--exclude=" + sh(name)).join(" ");
     const result = await entry.sandbox.runCommand({
       cmd: "sh",
       args: ["-lc", "tar cf /tmp/orvyn-out.tar " + excludes + " -C " + sh(WORKSPACE) + " . && base64 -w0 /tmp/orvyn-out.tar"],
