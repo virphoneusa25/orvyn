@@ -8,6 +8,10 @@ import type { RunStore } from "../agent/events";
 import { toolRpc, type ToolRequest, type ToolResponse } from "./ToolRpc";
 import { sandboxRegistry } from "./sandbox/SandboxRegistry";
 import { VercelExecutionProvider } from "./VercelExecutionProvider";
+import {
+  VERCEL_BROWSER_PORT,
+  VERCEL_BROWSER_SERVER_SOURCE,
+} from "./VercelBrowserRuntime";
 
 const WORKSPACE = "/vercel/sandbox/workspace";
 const POLL_MS = 100;
@@ -35,6 +39,8 @@ type RunEntry = {
   identity: Identity;
   stopping: boolean;
   processes: Map<string, ProcessEntry>;
+  browserReady: boolean;
+  browserProvisioning?: Promise<void>;
   loop: Promise<void>;
 };
 
@@ -143,6 +149,7 @@ export class VercelToolRunner {
         identity,
         stopping: false,
         processes: new Map(),
+        browserReady: false,
         loop: Promise.resolve(),
       };
       this.runs.set(runId, entry);
@@ -369,6 +376,142 @@ export class VercelToolRunner {
     return { ok: false, error: "Unsupported process operation", exitCode: 1 };
   }
 
+  private async ensureBrowser(runId: string, entry: RunEntry): Promise<void> {
+    if (entry.browserReady) return;
+    if (entry.browserProvisioning) return entry.browserProvisioning;
+
+    entry.browserProvisioning = (async () => {
+      entry.store.emit(runId, "browser.provisioning", {
+        provider: "vercel",
+        note: "Preparing the run-scoped ORVYN Cloud browser",
+      });
+
+      const root = "/tmp/orvyn-browser";
+      const scriptPath = root + "/server.mjs";
+      const encoded = Buffer.from(
+        VERCEL_BROWSER_SERVER_SOURCE,
+        "utf8"
+      ).toString("base64");
+
+      const install = [
+        "mkdir -p " + shellQuote(root),
+        "printf %s " + shellQuote(encoded) + " | base64 -d > " + shellQuote(scriptPath),
+        "cd " + shellQuote(root),
+        "test -f package.json || npm init -y >/dev/null 2>&1",
+        "test -d node_modules/playwright || npm install --silent --no-audit --no-fund playwright@1.63.0",
+        "npx playwright install --with-deps chromium >/tmp/orvyn-playwright-install.log 2>&1",
+      ].join(" && ");
+
+      const installed = await this.command(runId, install, "", 300);
+      if (!installed.ok) {
+        const logs = await this.command(
+          runId,
+          "tail -n 120 /tmp/orvyn-playwright-install.log 2>/dev/null || true"
+        );
+        throw new Error(
+          "Could not provision ORVYN Cloud browser: " +
+            (logs.output || installed.output).slice(0, 3000)
+        );
+      }
+
+      const launch = await this.command(
+        runId,
+        "cd " +
+          shellQuote(root) +
+          " && nohup node " +
+          shellQuote(scriptPath) +
+          " >/tmp/orvyn-browser.log 2>&1 </dev/null & echo $!"
+      );
+      if (!launch.ok) {
+        throw new Error("Could not start ORVYN Cloud browser: " + launch.output);
+      }
+
+      const wait = await this.command(
+        runId,
+        "for i in $(seq 1 90); do " +
+          "curl -fsS http://127.0.0.1:" +
+          VERCEL_BROWSER_PORT +
+          "/health >/dev/null && exit 0; " +
+          "sleep 1; " +
+          "done; tail -n 160 /tmp/orvyn-browser.log 2>/dev/null; exit 1",
+        "",
+        120
+      );
+      if (!wait.ok) {
+        throw new Error(
+          "ORVYN Cloud browser did not become ready: " +
+            wait.output.slice(0, 3000)
+        );
+      }
+
+      entry.browserReady = true;
+      entry.store.emit(runId, "browser.ready", {
+        provider: "vercel",
+        browserSessionId: "vercel-browser",
+      });
+    })();
+
+    try {
+      await entry.browserProvisioning;
+    } finally {
+      entry.browserProvisioning = undefined;
+    }
+  }
+
+  private async browserTool(
+    runId: string,
+    entry: RunEntry,
+    request: ToolRequest
+  ) {
+    await this.ensureBrowser(runId, entry);
+
+    const op = request.tool
+      .replace(/^browser_/, "")
+      .replace("set_viewport", "viewport")
+      .replace("console_errors", "errors");
+    const payload = Buffer.from(
+      JSON.stringify({ op, args: request.arguments }),
+      "utf8"
+    ).toString("base64");
+
+    const command =
+      "printf %s " +
+      shellQuote(payload) +
+      " | base64 -d | curl -fsS " +
+      "-H 'content-type: application/json' --data-binary @- " +
+      "http://127.0.0.1:" +
+      VERCEL_BROWSER_PORT +
+      "/";
+
+    const r = await this.command(runId, command, "", 45);
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: r.output || "ORVYN Cloud browser request failed",
+        exitCode: r.exitCode ?? 1,
+      };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(r.output);
+    } catch {
+      return {
+        ok: false,
+        error: "ORVYN Cloud browser returned an invalid response",
+        exitCode: 1,
+      };
+    }
+
+    return {
+      ok: parsed.ok === true,
+      output: parsed.output,
+      error: parsed.error,
+      exitCode: parsed.ok === true ? 0 : 1,
+      meta: parsed.meta,
+    };
+  }
+
   private async execute(request: ToolRequest, entry: RunEntry): Promise<ToolResponse> {
     const started = Date.now();
     const runId = request.runId;
@@ -544,12 +687,7 @@ export class VercelToolRunner {
       case "browser_screenshot":
       case "browser_evidence":
       case "browser_input":
-        result = {
-          ok: false,
-          error: "Vercel browser runtime is not provisioned yet for this run.",
-          exitCode: 1,
-          meta: { code: "CAPABILITY_UNAVAILABLE", provider: "vercel" },
-        };
+        result = await this.browserTool(runId, entry, request);
         break;
       case "mcp_list":
       case "mcp_call":
