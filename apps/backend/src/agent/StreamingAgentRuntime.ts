@@ -117,6 +117,7 @@ import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
 import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
+import { vercelToolRunner } from "../execution/VercelToolRunner";
 import { dropLocalJob, hasOnlineLocalWorker, localJobUnclaimed } from "../routes/localWorker";
 
 /** How long a queued local job may wait for a worker before a local engine runs it itself. */
@@ -145,7 +146,7 @@ const NETWORK_ACCESS_TOOL = "request_network_access";
  *  remote execution with NO local fallback — if the worker cannot serve the
  *  run, the run fails truthfully. */
 export interface ExecutionSpec {
-  location: "LOCAL" | "LOCAL_HOST" | "LOCAL_SANDBOX" | "OVH_WORKER";
+  location: "LOCAL" | "LOCAL_HOST" | "LOCAL_SANDBOX" | "OVH_WORKER" | "VERCEL_CLOUD";
   /** Worker-side path of the project to stage into the mission container. */
   remoteProjectRoot?: string;
   /** Tenant that owns the run. Worker events must land here, never the default tenant. */
@@ -154,8 +155,8 @@ export interface ExecutionSpec {
   userId?: string;
   projectId?: string | null;
   workspaceId?: string | null;
-  targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
-  targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
+  targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker" | "vercel_cloud";
+  targetActual?: "local_host" | "local_sandbox" | "ovh_worker" | "vercel_cloud";
   fallbackReason?: string;
   executionLabel?: string;
   /** The OS the terminal runs on for this run ("win32" on a Windows Local run). */
@@ -167,6 +168,15 @@ export interface ExecutionSpec {
 /** How long the runtime waits for the worker to prepare the mission
  *  container (sandbox.started event) before failing the run. */
 const REMOTE_READY_TIMEOUT_MS = Number(process.env.ORVYN_REMOTE_READY_TIMEOUT_MS) || 90_000;
+
+function isCloudExecution(location: ExecutionSpec["location"] | undefined): boolean {
+  return location === "OVH_WORKER" || location === "VERCEL_CLOUD";
+}
+
+function isRemoteToolExecution(location: ExecutionSpec["location"] | undefined): boolean {
+  return isCloudExecution(location) || location === "LOCAL_HOST" || location === "LOCAL_SANDBOX";
+}
+
 
 interface PendingApproval {
   call: ToolCall;
@@ -397,8 +407,8 @@ function workspaceAnchor(
   execution: ExecutionSpec | undefined,
   identity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] }
 ): string {
-  if (execution?.location === "OVH_WORKER") {
-    return "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
+  if (isCloudExecution(execution?.location)) {
+    return "Project root: /workspace\nFile tools take paths relative to the isolated ORVYN Cloud workspace. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
   }
   if (identity) return workspaceModelNote(identity);
   return "File tools take paths relative to this chat's workspace. Do not invent another project folder.";
@@ -748,7 +758,7 @@ export class StreamingAgentRuntime {
     // Tenant + workspace: one preview address per workspace, never shared
     // across customers, never derivable from ids a client has seen.
     const siteKey = state?.workspaceId ? `ws:${tenantId}:${state.workspaceId}` : undefined;
-    const remote = state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
+    const remote = isRemoteToolExecution(state?.execution?.location);
     return {
       siteKey,
       sourceRoot: !remote && state?.projectRoot ? state.projectRoot : undefined,
@@ -1780,7 +1790,31 @@ export class StreamingAgentRuntime {
     // the customer's computer and must never be opened here.
     const checkpointVisibleHere = !execution || execution.location === "LOCAL" || execution.location === "OVH_WORKER";
     const queueRemoteRun = (): void => {
-      if (execution?.location !== "OVH_WORKER") return;
+      if (!isCloudExecution(execution?.location)) return;
+
+      if (execution?.location === "VERCEL_CLOUD") {
+        void vercelToolRunner.start(
+          runId,
+          projectRoot,
+          this.store,
+          {
+            tenantId: execution.tenantId ?? "",
+            organizationId: execution.organizationId ?? execution.tenantId ?? "",
+            userId: execution.userId ?? execution.tenantId ?? "",
+            projectId: execution.projectId ?? null,
+            workspaceId: execution.workspaceId ?? "run:" + runId,
+          }
+        ).catch((err: any) => {
+          this.store.emit(runId, "run.blocked", {
+            message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`,
+            resumable: true,
+            reason: "sandbox_unavailable",
+          });
+          this.store.setStatus(runId, "blocked");
+        });
+        return;
+      }
+
       try {
         queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
           tenantId: execution.tenantId ?? "",
@@ -1790,10 +1824,11 @@ export class StreamingAgentRuntime {
           runId,
         }, projectRoot, recovering);
       } catch (err: any) {
-        // A sandbox that cannot be planned under a mandatory provider (e.g.
-        // ORVYN_EXECUTION_PROVIDER=openshell with the run ineligible) must not
-        // degrade to a weaker executor — the run blocks truthfully.
-        this.store.emit(runId, "run.blocked", { message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`, resumable: true, reason: "sandbox_unavailable" });
+        this.store.emit(runId, "run.blocked", {
+          message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`,
+          resumable: true,
+          reason: "sandbox_unavailable",
+        });
         this.store.setStatus(runId, "blocked");
       }
     };
@@ -1985,7 +2020,7 @@ export class StreamingAgentRuntime {
             runId,
           });
         }
-        if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
+        if (isRemoteToolExecution(state?.execution?.location)) {
           const remote = await this.awaitRemoteReady(runId);
           if (remote) this.mountRemoteTools(runId);
         }
@@ -2196,7 +2231,7 @@ export class StreamingAgentRuntime {
     // Tools with no remote variant must not run on the control plane while
     // the model believes it is inside the mission container. Remote variants
     // (write_file, terminal, git, start_process) keep the run's access mode.
-    if (state.execution.location === "OVH_WORKER") {
+    if (isCloudExecution(state.execution.location)) {
       const localOnlyStateful = new Set(["move_file", "ssh_exec"]);
       for (const t of gateway.list()) {
         if (localOnlyStateful.has(t.name) && !remoteNames.has(t.name)) gateway.setPermission(t.name, "denied");
@@ -2212,7 +2247,7 @@ export class StreamingAgentRuntime {
    */
   private mountNetworkAccessTool(runId: string, state: RunState): void {
     let rec = null;
-    try { rec = state.execution?.location === "OVH_WORKER" ? sandboxRegistry().forRun(runId) : null; } catch { rec = null; }
+    try { rec = isCloudExecution(state.execution?.location) ? sandboxRegistry().forRun(runId) : null; } catch { rec = null; }
     state.networkRequestable = rec?.provider === "openshell";
     if (!state.networkRequestable) return;
     const store = this.store;
@@ -2301,6 +2336,9 @@ export class StreamingAgentRuntime {
     // container immediately — the worker observes the cancelled status on
     // its next poll and kills the mission container.
     if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
+    if (state.execution?.location === "VERCEL_CLOUD") {
+      void vercelToolRunner.stop(runId, "cancelled");
+    }
 
     // Release the loop if it is parked on an approval, otherwise it would hang
     // forever holding the abort it can no longer observe.
