@@ -105,25 +105,57 @@ test(
       });
 
       const firstSandboxName = vercelToolRunner.provider.sandboxName(runId);
-      assert.equal(vercelToolRunner.provider.isPersistent(runId), true);
+      assert.equal(
+        vercelToolRunner.provider.isPersistent(runId),
+        true,
+        "expected persistent Vercel sandbox; sandboxName=" +
+          String(firstSandboxName ?? "(none)")
+      );
       assert.ok(firstSandboxName, "live Vercel run should use a named persistent sandbox");
 
       const pwd = await toolRpc.execute(runId, "terminal", {
         command: "pwd",
       });
-      assert.equal(pwd.ok, true);
+      assert.equal(
+        pwd.ok,
+        true,
+        "terminal pwd failed: " + JSON.stringify({
+          output: pwd.output,
+          error: pwd.error,
+          stderr: pwd.stderr,
+          exitCode: pwd.exitCode,
+        })
+      );
       assert.match(pwd.output ?? "", /\/vercel\/sandbox\/workspace/);
 
       const write = await toolRpc.execute(runId, "write_file", {
         path: "created-by-vercel.txt",
         content: "hello from ORVYN Vercel cloud\n",
       });
-      assert.equal(write.ok, true);
+      assert.equal(
+        write.ok,
+        true,
+        "write_file failed: " + JSON.stringify({
+          output: write.output,
+          error: write.error,
+          stderr: write.stderr,
+          exitCode: write.exitCode,
+        })
+      );
 
       const read = await toolRpc.execute(runId, "read_file", {
         path: "created-by-vercel.txt",
       });
-      assert.equal(read.ok, true);
+      assert.equal(
+        read.ok,
+        true,
+        "read_file failed: " + JSON.stringify({
+          output: read.output,
+          error: read.error,
+          stderr: read.stderr,
+          exitCode: read.exitCode,
+        })
+      );
       assert.match(read.output ?? "", /hello from ORVYN Vercel cloud/);
 
       const git = await toolRpc.execute(runId, "git_status", {});
