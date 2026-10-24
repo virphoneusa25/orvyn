@@ -6,7 +6,7 @@
 // identical. The DockerSandbox already implements this shape; it adapts
 // rather than being rewritten.
 
-export type ExecutionLocation = "LOCAL" | "DOCKER_LOCAL" | "OVH_WORKER";
+export type ExecutionLocation = "LOCAL" | "DOCKER_LOCAL" | "OVH_WORKER" | "VERCEL_CLOUD";
 
 export interface CommandResult {
   ok: boolean;
@@ -51,6 +51,8 @@ export interface ExecutionInfo {
   executionLocation: ExecutionLocation;
   workerId?: string;
   containerId?: string;
+  /** Provider-native Vercel Sandbox id when executionLocation=VERCEL_CLOUD. */
+  sandboxId?: string;
   startedAt?: number;
   lastHeartbeat?: number;
   checkpoint?: string;
