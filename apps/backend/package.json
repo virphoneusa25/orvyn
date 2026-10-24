@@ -25,7 +25,8 @@
     "ws": "^8.17.0",
     "bullmq": "^5.81.5",
     "ioredis": "^5.11.1",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "@vercel/sandbox": "^3.9.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
