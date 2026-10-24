@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence } from "../persistence/TenantPersistence";
 import { openSecret, sealSecret } from "../secrets/vault";
 export type SshCredentialScope = "session" | "mission" | "reusable";
 
@@ -108,7 +108,7 @@ export async function listResolvedHosts(opts: {
 
 export async function upsertSshHost(opts: {
   tenantId: string;
-  localStore: LocalStore;
+  localStore: Pick<TenantPersistence, "getSetting" | "setSetting">;
   projectRoot?: string | null;
   runId?: string;
   alias: string;
@@ -136,7 +136,7 @@ export async function upsertSshHost(opts: {
   const keyMaterial = opts.privateKey?.trim();
   if (keyMaterial) {
     const name = vaultNameFor(alias);
-    opts.localStore.setSetting(name, sealSecret(keyMaterial, opts.tenantId, name));
+    await opts.localStore.setSetting(name, sealSecret(keyMaterial, opts.tenantId, name));
     host.vaultKeyName = name;
   }
   if (opts.scope === "session") rememberSessionHost(opts.tenantId, host);
@@ -156,13 +156,13 @@ export async function upsertSshHost(opts: {
 
 export async function materializeIdentity(opts: {
   tenantId: string;
-  localStore: LocalStore;
+  localStore: Pick<TenantPersistence, "getSetting" | "setSetting">;
   host: SshHostConfig;
 }): Promise<{ keyPath?: string; cleanup: () => Promise<void> }> {
   if (opts.host.keyPath) return { keyPath: opts.host.keyPath, cleanup: async () => undefined };
   const name = opts.host.vaultKeyName;
   if (!name) return { cleanup: async () => undefined };
-  const sealed = opts.localStore.getSetting(name);
+  const sealed = await opts.localStore.getSetting(name);
   if (!sealed) return { cleanup: async () => undefined };
   const key = openSecret(sealed, opts.tenantId, name);
   if (!key) return { cleanup: async () => undefined };

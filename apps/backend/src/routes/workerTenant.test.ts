@@ -4,52 +4,52 @@ import { assertWorkerCredential, resolveEventTenant, resolveWorkerTenant } from 
 
 const exists = (id: string) => id === "default" || id === "user_a" || id === "user_b";
 
-test("a user session cannot address another tenant", () => {
-  const denied = resolveWorkerTenant({
+test("a user session cannot address another tenant",  async () => {
+  const denied = (await resolveWorkerTenant({
     callerId: "user_a",
     requestedTenantId: "user_b",
     tenantExists: exists,
-  });
+  }));
   assert.equal(denied.ok, false);
   if (!denied.ok) assert.equal(denied.status, 403);
 });
 
-test("a user session is bound to itself even when the body is empty", () => {
-  const ok = resolveWorkerTenant({ callerId: "user_a", tenantExists: exists });
+test("a user session is bound to itself even when the body is empty",  async () => {
+  const ok = (await resolveWorkerTenant({ callerId: "user_a", tenantExists: exists }));
   assert.equal(ok.ok, true);
   if (ok.ok) assert.equal(ok.tenantId, "user_a");
 });
 
-test("control-plane key may target an existing user tenant and not an invented one", () => {
-  const ok = resolveWorkerTenant({
+test("control-plane key may target an existing user tenant and not an invented one",  async () => {
+  const ok = (await resolveWorkerTenant({
     callerId: "default",
     requestedTenantId: "user_b",
     tenantExists: exists,
-  });
+  }));
   assert.equal(ok.ok, true);
   if (ok.ok) assert.equal(ok.tenantId, "user_b");
-  const missing = resolveWorkerTenant({
+  const missing = (await resolveWorkerTenant({
     callerId: "default",
     requestedTenantId: "user_missing",
     tenantExists: exists,
-  });
+  }));
   assert.equal(missing.ok, false);
 });
 
-test("event writes follow the job tenant, not a forged body", () => {
-  const ok = resolveEventTenant({
+test("event writes follow the job tenant, not a forged body",  async () => {
+  const ok = (await resolveEventTenant({
     callerId: "default",
     jobTenantId: "user_a",
     requestedTenantId: "user_b",
     tenantExists: exists,
-  });
+  }));
   assert.equal(ok.ok, true);
   if (ok.ok) assert.equal(ok.tenantId, "user_a");
-  const cross = resolveEventTenant({
+  const cross = (await resolveEventTenant({
     callerId: "user_b",
     jobTenantId: "user_a",
     tenantExists: exists,
-  });
+  }));
   assert.equal(cross.ok, false);
 });
 

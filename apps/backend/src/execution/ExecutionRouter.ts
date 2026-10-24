@@ -134,7 +134,7 @@ export class ExecutionRouter {
       if (dockerHealth.healthy) {
         return { provider: this.docker, location: "DOCKER_LOCAL", reason: "code-modifying task — Docker sandbox for isolation" };
       }
-      return { provider: this.local, location: "LOCAL", reason: `code-modifying task but Docker unavailable (${dockerHealth.detail}) — local execution with approvals` };
+      throw new Error(`Project sandbox unavailable (${dockerHealth.detail ?? "Docker is not running"}); select Host explicitly to run on this machine.`);
     }
     return { provider: this.local, location: "LOCAL", reason: "simple task — local execution" };
   }

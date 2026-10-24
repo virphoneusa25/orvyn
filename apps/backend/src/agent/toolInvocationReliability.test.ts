@@ -106,7 +106,7 @@ test("a write that omits content is corrected in the same run without escalation
     [call("w2", { path: "index.html", content: "Hello World" }), { delta: "", done: true }],
     [{ delta: "Created index.html with Hello World.", done: true }],
   ]);
-  const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(h.store, runId), "partial");
 
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
@@ -142,7 +142,7 @@ test("a write that omits path names path and then retries with both fields", asy
     [call("w2", { path: "index.html", content: "Hello World" }), { delta: "", done: true }],
     [{ delta: "Created index.html.", done: true }],
   ]);
-  const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(h.store, runId), "partial");
 
   const failed = h.store.get(runId)!.events.find((e) => e.type === "tool.failed")!;
@@ -167,7 +167,7 @@ test("invalid argument calls do not escalate; an identical repeat is blocked, re
     ],
     [{ delta: "I still need the file contents.", done: true }],
   ]);
-  const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(h.store, runId), "completed");
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(failed.length, 3);
@@ -183,7 +183,7 @@ test("invalid argument calls do not escalate; an identical repeat is blocked, re
     [call("c", same), { delta: "", done: true }],
     [{ delta: "should not be asked again", done: true }],
   ]);
-  const stopped = loop.runtime.start(loop.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const stopped = (await loop.runtime.start(loop.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(loop.store, stopped), "error");
   const errors = loop.store.get(stopped)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(errors.length, 3);
@@ -207,7 +207,7 @@ test("permission denial is not an argument error and repairs via note, not a mod
   const h = harness([
     [call("a", args), call("b", args), call("c", args), { delta: "", done: true }],
   ]);
-  const runId = h.runtime.start(h.root, PROMPT, undefined, "plan");
+  const runId = (await h.runtime.start(h.root, PROMPT, undefined, "plan"));
   assert.equal(await settle(h.store, runId), "completed");
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(failed.length, 3);
@@ -233,7 +233,7 @@ test("a missing workspace file is RESOURCE_MISSING and names the real entries", 
   ]);
   const { writeFileSync } = await import("fs");
   writeFileSync(join(h.root, "notes.txt"), "keep");
-  const runId = h.runtime.start(h.root, "Read the file missing.txt", undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(h.root, "Read the file missing.txt", undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(h.store, runId), "completed");
   const failed = h.store.get(runId)!.events.find((e) => e.type === "tool.failed")!;
   assert.equal(failed.data.errorType, "RESOURCE_MISSING");
@@ -267,7 +267,7 @@ test("an executed failure three in a row gets a tool-repair note, not a model sw
   // coder role cannot run them. Declare it read-only so the failure comes
   // from the tool itself, not the capability boundary.
   h.gateway.permissions.declareCapabilities("probe_disk", ["READ"]);
-  const runId = h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(h.root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await settle(h.store, runId), "completed");
   const failed = h.store.get(runId)!.events.filter((e) => e.type === "tool.failed");
   assert.equal(failed.length, 3);

@@ -59,7 +59,7 @@ test("a cloud website with no local folder targets the cloud worker", () => {
   assert.equal(result.relevantTools.includes("mcp_list"), false);
 });
 
-test("a local repository keeps git tools and stays on the host", () => {
+test("a local repository keeps git tools and defaults to its sandbox", () => {
   const root = mkdtempSync(join(tmpdir(), "orvyn-repo-"));
   mkdirSync(join(root, ".git"));
   writeFileSync(join(root, "README"), "x");
@@ -76,7 +76,7 @@ test("a local repository keeps git tools and stays on the host", () => {
     cloudWorkspaceAvailable: false,
   });
   assert.equal(result.workspace.repositoryDetected, true);
-  assert.equal(result.executionTarget, "local_host");
+  assert.equal(result.executionTarget, "local_sandbox");
   assert.equal(result.relevantTools.includes("git_status"), true);
   assert.equal(result.relevantTools.includes("mcp_list"), false);
 });

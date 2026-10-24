@@ -104,7 +104,7 @@ function fingerprint() {
   };
 }
 
-test("an external skill becomes a pending untrusted ORVYN package", () => {
+test("an external skill becomes a pending untrusted ORVYN package",  async () => {
   const before = fingerprint();
   assert.equal(before.skills.length, 105);
   assert.deepEqual(before.rejected, []);
@@ -174,10 +174,10 @@ test("an external skill becomes a pending untrusted ORVYN package", () => {
 
   const after = fingerprint();
   assert.deepEqual(after, before);
-  assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((item) => item.id), ["skill_deliver_file"]);
-  assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((item) => item.id), ["skill_code_with_tests"]);
-  assert.deepEqual(matchValidatedSkills("The dashboard layout overflows").map((item) => item.id), ["skill_visual_verify"]);
-  assert.deepEqual(matchValidatedSkills("What time is it?").map((item) => item.id), []);
+  assert.deepEqual((await matchValidatedSkills("Generate a virphone logo in png format")).map((item) => item.id), ["skill_deliver_file"]);
+  assert.deepEqual((await matchValidatedSkills("Fix the failing tests")).map((item) => item.id), ["skill_code_with_tests"]);
+  assert.deepEqual((await matchValidatedSkills("The dashboard layout overflows")).map((item) => item.id), ["skill_visual_verify"]);
+  assert.deepEqual((await matchValidatedSkills("What time is it?")).map((item) => item.id), []);
 
   fs.rmSync(source, { recursive: true, force: true });
   fs.rmSync(output, { recursive: true, force: true });

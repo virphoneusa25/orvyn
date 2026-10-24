@@ -146,8 +146,8 @@ export function planById(id: string): PlanDef {
   return PLANS[DEFAULT_PLAN];
 }
 
-export function laneForUsage(event: { method?: string; source?: string; agent?: string }): Lane {
-  if (event.method === "image") return "image";
+export function laneForUsage(event: { method?: string; source?: string; agent?: string; imagePremium?: boolean; modelId?: string }): Lane {
+  if (event.method === "image") return event.imagePremium || /flux-kontext-max$/.test(event.modelId ?? "") ? "image_pro" : "image";
   const blob = `${event.source ?? ""} ${event.agent ?? ""}`.toLowerCase();
   if (/ssh|server/.test(blob)) return "server";
   if (/code|composer|build/.test(blob)) return "build";

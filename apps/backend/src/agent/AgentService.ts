@@ -97,7 +97,8 @@ export class AgentService {
 
     session.stepCount++;
 
-    const provider = this.modelService.router.resolve("agent");
+    await this.modelService.huggingFaceReady;
+    const provider = this.modelService.router.resolve("agent", { tools: true });
     let response;
     try {
       response = await provider.generate({

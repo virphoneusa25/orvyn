@@ -1,0 +1,13 @@
+.image-generation { width: 100%; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.image-generation__message { margin: 0 0 10px; color: var(--text); line-height: 1.55; }
+.image-generation__loading { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); color: var(--text-2); }
+.image-generation__orb { width: 38px; height: 38px; flex: 0 0 38px; overflow: hidden; border-radius: 50%; box-shadow: 0 0 18px rgba(139,92,246,.35); }
+.image-generation__orb video, .image-generation__orb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.image-generation__copy { display: grid; gap: 3px; min-width: 0; }
+.image-generation__copy strong { color: var(--text); font-size: 13px; }
+.image-generation__copy small { color: var(--muted); font-size: 12px; }
+.image-generation__result { width: min(460px, 100%); max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.image-generation__image { display: block; width: 100%; height: auto; max-width: 100%; object-fit: contain; }
+.image-generation__actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }
+.image-generation__failure { display: grid; justify-items: start; gap: 10px; min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line)); border-radius: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+@media (max-width: 640px) { .image-generation__loading { padding: 10px; gap: 9px; } .image-generation__actions { gap: 6px; } }

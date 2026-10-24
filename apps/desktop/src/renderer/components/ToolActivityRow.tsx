@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { GroupItem, ToolItem, ToolOp, WorkGroupItem } from "../presentationReducer";
 import { openArtifactInContext } from "../contextOpen";
 import { FileTypeIcon as BrandFileTypeIcon } from "./FileTypeIcon";
@@ -31,58 +31,6 @@ function ActivityIcon({ op, toolName }: { op: ToolOp; toolName?: string }) {
   if (/^mcp\.(?:[^.]*github[^.]*)\./i.test(toolName ?? "")) return <IntegrationIcon provider="github" size={17} />;
   return op === "terminal" || op === "test" ? <IconTerminal size={16} /> : op === "search" ? <IconSearch size={16} /> : op === "browser" || op === "web" ? <IconGlobe size={16} /> : op === "edit" || op === "create" ? <IconWrench size={16} /> : <IconFile size={16} />;
 }
-function ImageSketch({ name }: { name?: string }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    let frame = 0;
-    let raf = 0;
-    const paint = () => {
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.fillStyle = "#101218";
-      ctx.fillRect(0, 0, w, h);
-      for (let i = 0; i < 6; i++) {
-        const x = w * (0.15 + 0.7 * (0.5 + 0.5 * Math.sin(frame / 48 + i)));
-        const y = h * (0.18 + 0.64 * (0.5 + 0.5 * Math.cos(frame / 62 + i * 1.2)));
-        const g = ctx.createRadialGradient(x, y, 0, x, y, 110);
-        g.addColorStop(0, `rgba(${140 + i * 12}, ${150 + i * 8}, 190, 0.22)`);
-        g.addColorStop(1, "rgba(16,18,24,0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(x, y, 110, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.strokeStyle = "rgba(230,234,242,0.22)";
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let x = 12; x < w - 12; x += 6) {
-        const y = h * 0.55 + Math.sin(x / 22 + frame / 18) * 22 + Math.sin(x / 8 + iPhase(frame)) * 6;
-        if (x === 12) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      if (!reduce) raf = requestAnimationFrame(paint);
-      frame += 1;
-    };
-    paint();
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  return (
-    <div className="image-sketch" role="status" aria-live="polite" aria-label={name ? `Drawing ${name}` : "Drawing image"}>
-      <canvas ref={ref} width={640} height={400} />
-      <div className="image-sketch-caption">Drawing{name ? ` ${name}` : " the image"}</div>
-    </div>
-  );
-}
-
-function iPhase(frame: number): number {
-  return frame / 30;
-}
-
 /** The last lines of a running command's output. */
 export function liveTail(output: string, lines = 12): string {
   const all = output.replace(/\r\n?/g, "\n").split("\n");
@@ -146,7 +94,6 @@ export function ToolActivityRow({ item }: { item: ToolItem }) {
       {(failed || warn) && <span className="tool-line__state" title={item.error || meta}><StateIcon status={item.status} warn={warn} /></span>}
       {open && <span className="tool-line__open" role="button" aria-label="Open" onClick={(e) => { e.stopPropagation(); open(); }}>↗</span>}
     </div>
-    {item.toolName === "generate_image" && running && <ImageSketch name={item.fileName} />}
     {item.output && running && (
       <pre className="tool-line__live" aria-live="polite">{liveTail(item.output)}</pre>
     )}

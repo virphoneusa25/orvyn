@@ -81,7 +81,7 @@ test("token refresh: skew, missing refresh, backoff on failure", async () => {
   await assert.rejects(() => refreshTokens(meta, { refreshToken: "r", clientId: "c" }, fetchImpl as any));
 });
 
-test("secure token refs: parsed tokens never written as config plaintext", () => {
+test("secure token refs: parsed tokens never written as config plaintext",  async () => {
   const store = fakeStore();
   const gateway = new ToolGateway(new ToolRegistry(), new PermissionEngine());
   const mgr = new McpManager({ gateway, store });
@@ -91,13 +91,13 @@ test("secure token refs: parsed tokens never written as config plaintext", () =>
     json: async () => ({ access_token: "AT", refresh_token: "RT", expires_in: 3600 }),
     text: async () => "",
   })) as any);
-  mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" });
+  (await mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" }));
   const id = mgr.listServers()[0].id;
-  (harden as any).storeTokens(id, { access_token: "AT_LIVE", refresh_token: "RT_LIVE", expires_at: Date.now() + 1000 });
+  await (harden as any).storeTokens(id, { access_token: "AT_LIVE", refresh_token: "RT_LIVE", expires_at: Date.now() + 1000 });
   const dumped = [...store.dump().entries()];
   assert.ok(!JSON.stringify(mgr.listServers()).includes("AT_LIVE"));
   assert.ok(dumped.some(([k, v]) => k.includes("mcp.secret.") && v.startsWith("orvyn:v1:") && !v.includes("AT_LIVE")));
-  const stored = parseStoredTokens(mgr.secret(id, "oauth"));
+  const stored = parseStoredTokens((await mgr.secret(id, "oauth")));
   assert.equal(stored?.access_token, "AT_LIVE");
   assert.equal(stored?.refresh_token, "RT_LIVE");
   assert.ok(stored?.expires_at && stored.expires_at > Date.now());
@@ -123,7 +123,7 @@ test("gateway tenant binding rejects cross-tenant invoke", async () => {
 test("gateway: local stdio is Local Only on cloud runs", async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
-  const cfg = mgr.addServer({ name: "echo", transport: "stdio", command: "node", args: ["-e", ""], executionLocation: "local" });
+  const cfg = (await mgr.addServer({ name: "echo", transport: "stdio", command: "node", args: ["-e", ""], executionLocation: "local" }));
   const gw = new McpCloudGateway(mgr, () => ({ ...DEFAULT_POLICY }), new McpObservability());
   const out = await gw.invoke({
     tenantId: "t",
@@ -167,11 +167,11 @@ test("package provenance: pin required, scripts surfaced, checksum recorded", ()
   assert.ok(flagRepositoryMismatch("https://github.com/acme/safe", "https://github.com/evil/safe"));
 });
 
-test("scope: project servers are not visible to another project", () => {
+test("scope: project servers are not visible to another project",  async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
   const harden = new McpHardening(mgr, store, "t");
-  const cfg = mgr.addServer({ name: "db", transport: "stdio", command: "npx", cwd: "/proj-a", scope: "project" });
+  const cfg = (await mgr.addServer({ name: "db", transport: "stdio", command: "npx", cwd: "/proj-a", scope: "project" }));
   assert.equal(harden.inScope(cfg, "/proj-a"), true);
   assert.equal(harden.inScope(cfg, "/proj-b"), false);
   assert.equal(harden.inScope({ scope: "global" }, "/proj-b"), true);
@@ -243,9 +243,9 @@ test("replay metadata shape for mcp.activation / capability.required", () => {
 test("OAuth start refuses blocked servers", async () => {
   const store = fakeStore();
   const mgr = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
-  const cfg = mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" });
+  const cfg = (await mgr.addServer({ name: "remote", transport: "http", url: "https://mcp.example/mcp", authKind: "oauth" }));
   const harden = new McpHardening(mgr, store, "t");
-  harden.setPolicy({ blocklist: [cfg.id] });
+  await harden.setPolicy({ blocklist: [cfg.id] });
   await assert.rejects(() => harden.startOAuth({ serverId: cfg.id, resource: "https://mcp.example/mcp" }), /Blocked/);
 });
 
@@ -254,4 +254,57 @@ test("generateState is unique and unguessable", () => {
   const b = generateState();
   assert.notEqual(a, b);
   assert.ok(a.length >= 16);
+});
+
+
+test("enterprise persistence waits for hydration and acknowledgement, preserving policy on failed writes", async () => {
+  const map = new Map<string, string>([["mcp.enterprise.policy.v1", JSON.stringify({ mode: "allowlist-only", allowlist: ["approved"] })]]);
+  let hydrate!: () => void;
+  const hydration = new Promise<void>((resolve) => { hydrate = resolve; });
+  let acknowledge!: () => void;
+  let gate: Promise<void> = Promise.resolve();
+  let fail = false;
+  const store = {
+    getSetting: async (key: string) => { await hydration; return map.get(key) ?? null; },
+    setSetting: async (key: string, value: string) => {
+      await gate;
+      if (fail) throw new Error("storage unavailable");
+      map.set(key, value);
+    },
+  };
+  const manager = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
+  const harden = new McpHardening(manager, store, "fixture");
+  assert.throws(() => harden.policy(), /not ready/);
+  hydrate();
+  await harden.ready;
+  assert.equal(harden.policy().mode, "allowlist-only");
+  gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const pending = harden.setPolicy({ mode: "verified-only" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(harden.policy().mode, "allowlist-only");
+  acknowledge();
+  await pending;
+  fail = true;
+  await assert.rejects(harden.setPolicy({ mode: "open" }), /storage unavailable/);
+  assert.equal(harden.policy().mode, "verified-only");
+  fail = false;
+  await Promise.all(Array.from({ length: 8 }, (_, index) => harden.appendAudit("fixture", { index, token: "private" })));
+  assert.equal(harden.readAudit().length, 8);
+  assert.ok(harden.readAudit().every((entry) => entry.token === "[redacted]"));
+  const reopened = new McpHardening(manager, store, "fixture");
+  await reopened.ready;
+  assert.equal(reopened.policy().mode, "verified-only");
+  assert.equal(reopened.readAudit().length, 8);
+  const copy = harden.policy();
+  copy.allowlist.push("accidental");
+  assert.deepEqual(harden.policy().allowlist, ["approved"]);
+});
+
+test("enterprise hydration failures reject startup and guards remain unavailable", async () => {
+  const store = { getSetting: async () => { throw new Error("database offline"); }, setSetting: async () => {} };
+  const manager = new McpManager({ gateway: new ToolGateway(new ToolRegistry(), new PermissionEngine()), store });
+  const harden = new McpHardening(manager, store, "fixture");
+  await assert.rejects(harden.ready, /database offline/);
+  assert.throws(() => harden.denyServer({ id: "fixture" }), /not ready/);
+  await assert.rejects(harden.setPolicy({ mode: "open" }), /database offline/);
 });

@@ -61,9 +61,13 @@ CREATE INDEX IF NOT EXISTS idx_identity_sessions_user ON identity_sessions (user
 
 export async function migratePostgresIdentity(url = process.env.ORVYN_PG_URL): Promise<{ applied: string[]; database: string }> {
   if (!url) return { applied: [], database: "not_configured" };
-  const client = new Client({ connectionString: url, connectionTimeoutMillis: 8000 });
+  const client = new Client({ connectionString: url, connectionTimeoutMillis: 8000,
+    statement_timeout: 10000, lock_timeout: 5000 });
   await client.connect();
   try {
+    await client.query("BEGIN");
+    // Serialize startup and administrative migrations before checking any schema state.
+    await client.query("SELECT pg_advisory_xact_lock(730021, 1)");
     await client.query(`CREATE TABLE IF NOT EXISTS identity_migrations (
       id TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -72,14 +76,16 @@ export async function migratePostgresIdentity(url = process.env.ORVYN_PG_URL): P
     for (const m of MIGRATIONS) {
       const exists = await client.query(`SELECT 1 FROM identity_migrations WHERE id = $1`, [m.id]);
       if (exists.rowCount) continue;
-      await client.query("BEGIN");
       await client.query(m.sql);
       await client.query(`INSERT INTO identity_migrations (id) VALUES ($1)`, [m.id]);
-      await client.query("COMMIT");
       applied.push(m.id);
     }
     const db = await client.query("SELECT current_database() AS name");
+    await client.query("COMMIT");
     return { applied, database: String(db.rows[0]?.name ?? "unknown") };
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* Preserve the migration failure. */ }
+    throw error;
   } finally {
     await client.end();
   }

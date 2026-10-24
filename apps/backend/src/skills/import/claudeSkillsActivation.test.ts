@@ -109,7 +109,7 @@ license: MIT
   fs.rmSync(builtins, { recursive: true, force: true });
 });
 
-test("certified and partially supported claude skills are active and blocked skills are not", () => {
+test("certified and partially supported claude skills are active and blocked skills are not",  async () => {
   const manifestPath = path.join(path.dirname(builtinSkillsRoot()), "imported-skills", "claude-skills", "import-manifest.json");
   assert.equal(fs.existsSync(manifestPath), true, "import manifest");
   const noticesDir = path.dirname(path.dirname(builtinSkillsRoot()));
@@ -138,43 +138,43 @@ test("certified and partially supported claude skills are active and blocked ski
     assert.equal(skill.enabled, false);
   }
 
-  const engineering = matchValidatedSkills("Review this TypeScript API, fix the issue, run tests, and verify it.");
+  const engineering = (await matchValidatedSkills("Review this TypeScript API, fix the issue, run tests, and verify it."));
   assert.ok(engineering.length >= 2 && engineering.length <= 5);
   assert.ok(engineering.some((skill) => skill.id === "skill_code_with_tests"));
   assert.ok(engineering.some((skill) => skill.id === "skill_cs_code_reviewer"));
 
-  const browser = matchValidatedSkills("Test this page with Playwright-style browser checks and find broken flows.");
+  const browser = (await matchValidatedSkills("Test this page with Playwright-style browser checks and find broken flows."));
   assert.ok(browser.length >= 1 && browser.length <= 5);
   const browserSkill = browser.find((skill) => skill.id === "skill_cs_pw_review");
   assert.ok(browserSkill);
   assert.match(browserSkill!.steps.join("\n"), /browser_open/);
   assert.match(browserSkill!.steps.join("\n"), /Do not create a second browser/);
 
-  const infra = matchValidatedSkills("Inspect this Terraform configuration and find the deployment problem.");
+  const infra = (await matchValidatedSkills("Inspect this Terraform configuration and find the deployment problem."));
   assert.ok(infra.length >= 1 && infra.length <= 5);
   assert.ok(infra.some((skill) => skill.id === "skill_cs_terraform_patterns"));
 
-  const research = matchValidatedSkills("Research this technical topic and compare the approaches.");
+  const research = (await matchValidatedSkills("Research this technical topic and compare the approaches."));
   assert.ok(research.length >= 2 && research.length <= 5);
   assert.ok(research.some((skill) => skill.id === "skill_cs_research"));
   assert.ok(research.some((skill) => skill.id === "skill_cs_deep_research"));
 
   const blockedSkill = blocked.find((skill) => skill.metadata.slug === "browserstack");
   assert.ok(blockedSkill);
-  const blockedMatch = matchValidatedSkills(blockedSkill!.metadata.triggers[0] ?? blockedSkill!.name);
+  const blockedMatch = (await matchValidatedSkills(blockedSkill!.metadata.triggers[0] ?? blockedSkill!.name));
   assert.equal(blockedMatch.some((skill) => skill.id === blockedSkill!.id), false);
 
   const partialSkill = partial.find((skill) => skill.metadata.slug === "litreview");
   assert.ok(partialSkill);
   assert.equal(partialSkill!.enabled, true);
-  const partialMatch = matchValidatedSkills(partialSkill!.metadata.triggers[0] ?? partialSkill!.name);
+  const partialMatch = (await matchValidatedSkills(partialSkill!.metadata.triggers[0] ?? partialSkill!.name));
   assert.ok(partialMatch.some((skill) => skill.id === partialSkill!.id));
   assert.match(partialSkill!.steps.join("\n"), /Omit unsupported capabilities/);
   assert.match(partialSkill!.instructions, /Consensus MCP/);
   assert.match(partialSkill!.steps.join("\n"), /optional Consensus|optional MCP|Consensus/);
 
-  assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((skill) => skill.id), ["skill_deliver_file"]);
-  assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((skill) => skill.id), ["skill_code_with_tests"]);
-  assert.deepEqual(matchValidatedSkills("The dashboard layout overflows").map((skill) => skill.id), ["skill_visual_verify"]);
-  assert.deepEqual(matchValidatedSkills("What time is it?").map((skill) => skill.id), []);
+  assert.deepEqual((await matchValidatedSkills("Generate a virphone logo in png format")).map((skill) => skill.id), ["skill_deliver_file"]);
+  assert.deepEqual((await matchValidatedSkills("Fix the failing tests")).map((skill) => skill.id), ["skill_code_with_tests"]);
+  assert.deepEqual((await matchValidatedSkills("The dashboard layout overflows")).map((skill) => skill.id), ["skill_visual_verify"]);
+  assert.deepEqual((await matchValidatedSkills("What time is it?")).map((skill) => skill.id), []);
 });

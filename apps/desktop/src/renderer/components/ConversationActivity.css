@@ -31,9 +31,6 @@
 .site-progress__mark { width: 14px; color: var(--success, #6ee7b7); font-size: 12px; }
 .preview-updated { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-style: normal; color: var(--text-secondary); margin: 4px 0; }
 .activity-pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: activity-breathe 1.6s ease-in-out infinite; }
-.image-sketch { position: relative; margin: 10px 0 4px; max-width: 420px; border-radius: 16px; overflow: hidden; background: #101218; border: 1px solid var(--border); }
-.image-sketch canvas { display: block; width: 100%; height: auto; filter: blur(0.3px); }
-.image-sketch-caption { position: absolute; left: 14px; bottom: 12px; color: rgba(255,255,255,0.86); font-size: 13px; font-weight: 550; text-shadow: 0 1px 8px rgba(0,0,0,0.6); }
 .agent-progress { margin: 10px 0 14px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--bg-elevated); }
 .agent-progress__head { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
 .agent-progress__head:hover { background: color-mix(in srgb, var(--bg-hover, #fff) 6%, transparent); }

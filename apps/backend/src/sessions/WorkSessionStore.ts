@@ -518,3 +518,9 @@ export class WorkSessionStore {
     return r ? messageFromRow(r) : undefined;
   }
 }
+
+/** Public session behavior, independent of synchronous local or async cloud storage. */
+export type WorkSessionPersistence = {
+  [K in keyof WorkSessionStore]: WorkSessionStore[K] extends (...args:infer A)=>infer R
+    ? (...args:A)=>R|Promise<R> : WorkSessionStore[K];
+};

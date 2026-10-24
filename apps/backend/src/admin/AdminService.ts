@@ -1,3 +1,5 @@
+import { stripeStore as sqliteStripeStore } from "../billing/stripe";
+import { paymentStore as stripeStore } from "../billing/AsyncFinancialStores";
 // apps/backend/src/admin/AdminService.ts
 //
 // Read models for the ORVYN Admin Portal. Nothing here writes customer data:
@@ -11,10 +13,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { defaultDataDir } from "../persistence/LocalStore";
-import { creditLedger } from "../billing/creditLedgerInstance";
-import { stripeStore } from "../billing/stripe";
+import { creditLedger } from "../billing/AsyncFinancialStores";
+
 import { PLANS, planById, type PlanId } from "../billing/plans";
-import { staffStore } from "./staffStore";
+import { staffStore as sqliteStaffStore } from "./staffStore";
+import { staffStore } from "../auth/AsyncAccountStores";
 
 const DAY = 86_400_000;
 export type CustomerStatus = "active" | "past_due" | "trial" | "cancelled" | "paused";
@@ -77,9 +80,9 @@ export class AdminService {
   constructor(dataDir: string = defaultDataDir()) {
     this.dataDir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
-    staffStore(); // tables exist
-    void creditLedger; // billing.sqlite exists (opened at import)
-    stripeStore(); // payments.sqlite exists
+    sqliteStaffStore(); // Local reporting still attaches the SQLite billing/payment stores.
+    void require("../billing/creditLedgerInstance").creditLedger; // Keep the existing SQLite report schema initialized.
+    sqliteStripeStore(); // Keep the attached payment schema initialized.
     this.db = new DatabaseSync(path.join(dataDir, "auth.db"));
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(`ATTACH DATABASE '${path.join(dataDir, "billing.sqlite").replace(/'/g, "''")}' AS b`);
@@ -88,7 +91,7 @@ export class AdminService {
 
   // ---------- customers (paged) ----------
 
-  customers(opts: { q?: string; filter?: CustomerFilter; page?: number; pageSize?: number; sort?: string }) {
+  async customers(opts: { q?: string; filter?: CustomerFilter; page?: number; pageSize?: number; sort?: string }) {
     const filter = CUSTOMER_FILTERS.includes(opts.filter as CustomerFilter) ? (opts.filter as CustomerFilter) : "all";
     const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? 25));
     const page = Math.max(1, opts.page ?? 1);
@@ -109,7 +112,7 @@ export class AdminService {
         w.plan_id, w.subscription_status, w.subscription_id, w.cycle_end, s.at AS paused_at,
         (SELECT COUNT(*) FROM organization_members m WHERE m.organization_id = o.id) AS members
       ${from} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize) as any[];
-    return { total, page, pageSize, customers: rows.map((r) => this.row(r)), counts: this.counts() };
+    return { total, page, pageSize, customers: (await Promise.all(rows.map(async (r) => (await this.row(r))))), counts: this.counts() };
   }
 
   private contact(orgId: string): { userId: string; email: string; name: string | null } | null {
@@ -118,8 +121,8 @@ export class AdminService {
     return r ? { userId: r.id, email: r.email, name: r.name ?? null } : null;
   }
 
-  private row(r: any) {
-    const w = creditLedger.snapshot(r.tenant_id);
+  private async row(r: any) {
+    const w = (await creditLedger.snapshot(r.tenant_id));
     const plan = planById(r.plan_id ?? w.plan.id);
     const status = statusOf(Boolean(r.paused_at), r.subscription_status ?? w.subscription?.status);
     const manual = String(r.subscription_id ?? "").startsWith("manual:");
@@ -157,27 +160,27 @@ export class AdminService {
 
   // ---------- one customer ----------
 
-  customer(tenantId: string) {
+  async customer(tenantId: string) {
     const r = this.db.prepare(`SELECT o.id AS org_id, o.name, o.kind, o.tenant_id, o.created_at, w.plan_id, w.subscription_status, w.subscription_id, w.cycle_end, s.at AS paused_at,
       (SELECT COUNT(*) FROM organization_members m WHERE m.organization_id = o.id) AS members
       FROM organizations o LEFT JOIN b.wallets w ON w.account_id = o.tenant_id LEFT JOIN account_suspensions s ON s.tenant_id = o.tenant_id AND s.lifted_at IS NULL
       WHERE o.tenant_id = ?`).get(tenantId) as any;
     if (!r) return null;
-    const base = this.row(r);
-    const wallet = creditLedger.snapshot(tenantId);
+    const base = (await this.row(r));
+    const wallet = (await creditLedger.snapshot(tenantId));
     const members = (this.db.prepare(`SELECT u.id, u.email, u.name, u.created_at, u.email_verified_at, m.role, m.created_at AS joined,
         (SELECT MAX(COALESCE(last_used_at, created_at)) FROM sessions se WHERE se.user_id = u.id) AS last_seen
       FROM organization_members m JOIN users u ON u.id = m.user_id WHERE m.organization_id = ? ORDER BY m.created_at`).all(r.org_id) as any[])
       .map((m) => ({ userId: m.id, email: m.email, name: m.name ?? null, role: m.role, joinedAt: m.joined, verified: m.email_verified_at != null, lastSeenAt: m.last_seen ?? null }));
     const store = stripeStore();
-    const sub = store.latestSubscription(tenantId);
+    const sub = (await store.latestSubscription(tenantId));
     const now = Date.now();
     const sum = (from: number, to: number) => Number((this.db.prepare(`SELECT COALESCE(SUM(credits_charged),0) AS n FROM b.usage_events WHERE user_id = ? AND ok = 1 AND created_at >= ? AND created_at < ?`).get(tenantId, from, to) as { n: number }).n);
     const cycleStart = wallet.subscription?.cycleStart ?? now - 30 * DAY;
     const cycleLen = Math.max(DAY, (wallet.subscription?.cycleEnd ?? now) - cycleStart);
     const topups = this.db.prepare(`SELECT meta FROM b.ledger_entries WHERE account_id = ? AND type = 'topup_purchase'`).all(tenantId) as { meta: string }[];
     const topupUsd = topups.reduce((s, t) => { try { return s + Number(JSON.parse(t.meta).priceUsd ?? 0); } catch { return s; } }, 0);
-    const suspension = staffStore().suspension(tenantId);
+    const suspension = (await staffStore().suspension(tenantId));
     const plan = planById(wallet.plan.id);
     const tags: string[] = [];
     if (plan.id === "enterprise" || plan.id === "team") tags.push("Enterprise Customer");
@@ -189,7 +192,7 @@ export class AdminService {
       ...base,
       tags,
       since: Number(r.created_at),
-      profile: staffStore().profile(tenantId),
+      profile: (await staffStore().profile(tenantId)),
       team: members,
       wallet: {
         planId: wallet.plan.id, included: wallet.includedBalance, purchased: wallet.purchasedBalance, reserved: wallet.reservedBalance, available: wallet.availableBalance,
@@ -201,16 +204,16 @@ export class AdminService {
         sevenDay: { now: sum(now - 7 * DAY, now), before: sum(now - 14 * DAY, now - 7 * DAY) },
       },
       stripe: {
-        customerId: store.customerOf(tenantId),
+        customerId: (await store.customerOf(tenantId)),
         subscriptionId: sub?.subscription_id ?? (String(r.subscription_id ?? "").startsWith("manual:") ? null : r.subscription_id ?? null),
         subscriptionStatus: sub?.status ?? null,
         cancelAtPeriodEnd: Boolean(sub?.cancel_at_period_end),
-        period: sub ? store.periodOf(sub.subscription_id) : null,
+        period: sub ? (await store.periodOf(sub.subscription_id)) : null,
       },
       topupSpendUsd: Math.round(topupUsd * 100) / 100,
       suspension,
-      notes: staffStore().notes(tenantId, 20),
-      supportNotesCount: staffStore().notes(tenantId, 500).length,
+      notes: (await staffStore().notes(tenantId, 20)),
+      supportNotesCount: (await staffStore().notes(tenantId, 500)).length,
     };
   }
 
@@ -267,7 +270,7 @@ export class AdminService {
   }
 
   /** Account activity timeline (credits, projects, payments, plan, team, staff actions). */
-  activity(tenantId: string | null, limit = 30) {
+  async activity(tenantId: string | null, limit = 30) {
     type Item = { at: number; kind: string; title: string; detail: string; tenantId?: string | null; customer?: string | null };
     const items: Item[] = [];
     const t = tenantId ? "AND account_id = ?" : "";
@@ -283,7 +286,7 @@ export class AdminService {
     for (const u of usage) if (Number(u.n) > 0) items.push({ at: u.at, kind: "usage", title: "Credits used", detail: `${Number(u.n).toLocaleString("en-US")} credits on ${u.day}`, tenantId: u.user_id });
     for (const p of this.db.prepare(`SELECT tenant_id, name, created_at FROM tenant_projects ${tenantId ? "WHERE tenant_id = ?" : ""} ORDER BY created_at DESC LIMIT 30`).all(...a) as any[]) items.push({ at: p.created_at, kind: "project", title: "New project created", detail: p.name, tenantId: p.tenant_id });
     for (const m of this.db.prepare(`SELECT o.tenant_id, u.email, m.created_at, m.role FROM organization_members m JOIN organizations o ON o.id = m.organization_id JOIN users u ON u.id = m.user_id ${tenantId ? "WHERE o.tenant_id = ?" : ""} ORDER BY m.created_at DESC LIMIT 30`).all(...a) as any[]) items.push({ at: m.created_at, kind: "team", title: m.role === "owner" ? "Account created" : "Team member added", detail: m.email, tenantId: m.tenant_id });
-    for (const x of staffStore().auditLog({ tenantId: tenantId ?? undefined, limit: 40 })) if (x.tenantId) items.push({ at: x.at, kind: "support", title: AUDIT_TITLES[x.action] ?? x.action, detail: `${x.actorEmail}${x.detail?.reason ? ` · ${String(x.detail.reason).slice(0, 80)}` : ""}`, tenantId: x.tenantId });
+    for (const x of (await staffStore().auditLog({ tenantId: tenantId ?? undefined, limit: 40 }))) if (x.tenantId) items.push({ at: x.at, kind: "support", title: AUDIT_TITLES[x.action] ?? x.action, detail: `${x.actorEmail}${x.detail?.reason ? ` · ${String(x.detail.reason).slice(0, 80)}` : ""}`, tenantId: x.tenantId });
     items.sort((x, y) => y.at - x.at);
     const out = items.slice(0, limit);
     if (!tenantId) for (const i of out) i.customer = i.tenantId ? this.orgByTenant(i.tenantId)?.name ?? null : null;
@@ -292,7 +295,7 @@ export class AdminService {
 
   // ---------- platform metrics ----------
 
-  dashboard(now = Date.now()) {
+  async dashboard(now = Date.now()) {
     const n = (sql: string, ...args: (string | number)[]) => Number((this.db.prepare(sql).get(...args) as { n: number }).n ?? 0);
     const users = n(`SELECT COUNT(*) AS n FROM users`);
     const users30 = n(`SELECT COUNT(*) AS n FROM users WHERE created_at >= ?`, now - 30 * DAY);
@@ -304,7 +307,7 @@ export class AdminService {
     const byPlan = new Map<string, { plan: string; label: string; customers: number; mrr: number }>();
     let mrr = 0;
     for (const r of paidRows) {
-      const v = monthlyPriceUsd(r.plan_id, store.periodOf(r.subscription_id));
+      const v = monthlyPriceUsd(r.plan_id, (await store.periodOf(r.subscription_id)));
       mrr += v;
       const k = byPlan.get(r.plan_id) ?? { plan: r.plan_id, label: planById(r.plan_id).label, customers: 0, mrr: 0 };
       k.customers++; k.mrr += v;
@@ -333,7 +336,7 @@ export class AdminService {
       creditTrend: this.usageSeries(null, 30, now).map((d) => ({ day: d.day, credits: d.credits })),
       signups: { total30d: users30, change: pctChange(users30, usersPrev), days: days(30, now).map((d) => ({ day: d, count: signupRows.get(d) ?? 0 })) },
       providerCosts: { totalUsd: costs.totalUsd, byClass: costs.byClass },
-      activity: this.activity(null, 8),
+      activity: (await this.activity(null, 8)),
     };
   }
 
@@ -381,11 +384,11 @@ export class AdminService {
       .map((e) => { let meta: any = {}; try { meta = JSON.parse(e.meta); } catch { /* */ } return { tenantId: e.account_id, customer: this.orgByTenant(e.account_id)?.name ?? e.account_id, credits: Number(e.amount), bucket: e.bucket, actor: e.actor, reason: meta.reason ?? "", category: meta.category ?? null, at: e.created_at }; });
   }
 
-  ledger(tenantId: string, limit = 100) {
-    return creditLedger.entries(tenantId, limit).map((e) => ({ ...e }));
+  async ledger(tenantId: string, limit = 100) {
+    return (await creditLedger.entries(tenantId, limit)).map((e) => ({ ...e }));
   }
 
-  subscriptions(opts: { status?: string; page?: number; pageSize?: number }) {
+  async subscriptions(opts: { status?: string; page?: number; pageSize?: number }) {
     const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? 25));
     const page = Math.max(1, opts.page ?? 1);
     const where = ["w.subscription_id IS NOT NULL"];
@@ -394,13 +397,13 @@ export class AdminService {
     else if (opts.status) { where.push("w.subscription_status = ? AND w.subscription_id NOT LIKE 'manual:%'"); args.push(opts.status); }
     const total = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM b.wallets w WHERE ${where.join(" AND ")}`).get(...args) as { n: number }).n);
     const store = stripeStore();
-    const rows = (this.db.prepare(`SELECT w.*, o.name, ps.cancel_at_period_end FROM b.wallets w LEFT JOIN organizations o ON o.tenant_id = w.account_id LEFT JOIN p.stripe_subscriptions ps ON ps.subscription_id = w.subscription_id
+    const rows = (await Promise.all((this.db.prepare(`SELECT w.*, o.name, ps.cancel_at_period_end FROM b.wallets w LEFT JOIN organizations o ON o.tenant_id = w.account_id LEFT JOIN p.stripe_subscriptions ps ON ps.subscription_id = w.subscription_id
       WHERE ${where.map((x) => x.replace(/\bw\./g, "w.")).join(" AND ")} ORDER BY w.cycle_end ASC LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize) as any[])
-      .map((r) => {
+      .map(async (r) => {
         const manual = String(r.subscription_id).startsWith("manual:");
-        const period = manual ? null : store.periodOf(r.subscription_id);
+        const period = manual ? null : (await store.periodOf(r.subscription_id));
         return { tenantId: r.account_id, customer: r.name ?? r.account_id, planId: r.plan_id, plan: planById(r.plan_id).label, subscriptionId: manual ? null : r.subscription_id, complimentary: manual, status: r.subscription_status, period, mrr: manual ? 0 : Math.round(monthlyPriceUsd(r.plan_id, period) * 100) / 100, renewsAt: r.cycle_end, cancelAtPeriodEnd: Boolean(r.cancel_at_period_end) };
-      });
+      })));
     return { total, page, pageSize, subscriptions: rows };
   }
 

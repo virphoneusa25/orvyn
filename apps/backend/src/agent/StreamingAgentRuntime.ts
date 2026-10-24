@@ -1,3 +1,5 @@
+import { inspectionUrl, isWebsiteInspection, rewriteInspectionToolCall, WEBSITE_INSPECTION_HINT, websiteInspectionEvidence } from "./websiteInspection";
+import { incompatibility } from "@orvyn/ai-core";
 import {surfaceToolAllowed} from "../computerUse/taskSurface";
 import { nativeDesktopRequest } from "../desktop/nativeDesktopBridge";
 import { CONVERSATION_STYLE } from "./conversationStyle";
@@ -12,13 +14,14 @@ import { condenseOutput, shouldCondense } from "./outputCondenser";
 import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "./capabilityGap";
-import { preferencesPrompt } from "../onboarding/preferences";
+import { preferencesPromptAsync } from "../onboarding/preferences";
 export { builtInToolsFor };
 import { CAPABILITY_NUDGE, CAPABILITY_RULE, capabilityGapFor, claimsToolUnavailable, emptySearchResult, unwrapParallelCalls } from "./capabilityGap";
 import { acceptHelperStep, helperFor, HELPER_NOTE, isReadOnlyCall, shouldUseHelper } from "../models/stepRouting";
-import { userMemoryPrompt, type MemoryStoreLike } from "../memory/userMemory";
+import { userMemoryPromptAsync, type AsyncMemoryStoreLike as MemoryStoreLike } from "../memory/userMemory";
 import { ADVISOR_STYLE, isDeepQuestion } from "./advisorStyle";
 import { needsWebResearch, RESEARCH_HINT, RESEARCH_NUDGE } from "./researchIntent";
+import { extractLeakedToolMarkup, visibleAssistantDelta } from "../ai/leakedToolMarkup";
 import { availableArtifactsPrompt, filesGeneratedCopy, groundAssistantClaims, groundSuccessClaims, looksLikeFileDeliverableRequest, looksLikeWorkspaceFileTask, type GroundedArtifact } from "../artifacts/claimValidator";
 import { FILE_PRODUCING_TOOLS, parsePersistedArtifacts, requirePersistedArtifacts } from "../artifacts/artifactContract";
 import { asksForVerification, evaluateCompletionGates, TEST_COMMAND } from "./completionGates";
@@ -112,7 +115,7 @@ import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINU
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
 import { EditPreview, isFileMutatingTool, previewToolEdit } from "./editPreview";
 import { CheckpointEngine } from "../checkpoint/CheckpointEngine";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
@@ -133,10 +136,10 @@ import type { ProjectFileEvidence } from "../artifacts/projectFileEvidence";
 import { sha256Hex } from "../artifacts/bytes";
 import { promises as fs } from "fs";
 import { resolveSafePath } from "../execution/pathSafety";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
-import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
+import { requestNetworkAccess, TEMPLATE_LABELS } from "../execution/sandbox/asyncPolicyRequests";
 import { POLICY_TEMPLATES } from "../execution/sandbox/selection";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { classifyExecutionHints } from "../execution/classifyExecution";
 
 /** Asks a person to widen this run's sandbox network policy. Never widens it itself. */
@@ -193,6 +196,7 @@ export type ApprovalScope = "once" | "mission" | "session" | "project" | "always
  * runs in different modes silently shared one another's settings.
  */
 interface RunState {
+  requireVision?: boolean;
   controller: AbortController;
   toolsEnabled: boolean;
   projectRoot: string;
@@ -200,7 +204,7 @@ interface RunState {
   /** Tools the user approved for the rest of this run. */
   approvedTools: Set<string>;
   /** Persist session/project/always grants; run-scoped approvals stay in memory. */
-  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void;
+  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void | Promise<void>;
   cancelled: boolean;
   /** Tool executions this run, for the runaway guard. */
   toolCalls: number;
@@ -348,7 +352,7 @@ interface RunState {
   capabilityQueries: Set<string>;
   capabilityNudges: number;
   /** Records a project file on the session workspace after a successful write. */
-  onProjectFile?: (relativePath: string) => void;
+  onProjectFile?: (relativePath: string) => void | Promise<void>;
   milestoneLayout?: boolean;
   milestoneStyle?: boolean;
   milestoneCheck?: boolean;
@@ -374,6 +378,8 @@ interface RunState {
 
 /** Per-run composer options — everything optional so existing callers are unaffected. */
 export interface RunOptions {
+  /** Server-generated id whose session admission was persisted before execution. */
+  admittedRunId?: string;
   reasoningEffort?: ReasoningEffort;
   accessMode?: AccessMode;
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
@@ -381,7 +387,7 @@ export interface RunOptions {
   /** Set when workspace preflight already bound this run. */
   workspaceIdentity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] };
   /** Persists written paths onto the workspace so a later empty resolve is a mismatch. */
-  onProjectFile?: (relativePath: string) => void;
+  onProjectFile?: (relativePath: string) => void | Promise<void>;
   /** Durable workspace id. File tools resolve inside projectRoot, not a host path the model picks. */
   workspaceId?: string;
   /** Earlier runs of this conversation (oldest first): a follow-up starts with their site preview. */
@@ -391,7 +397,7 @@ export interface RunOptions {
   /** Tools already granted at session/project/always scope for this user. */
   approvedTools?: string[];
   /** Remember a grant beyond this run. */
-  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void;
+  onApprovalGrant?: (scope: "session" | "project" | "always", tool: string) => void | Promise<void>;
 }
 
 /**
@@ -531,6 +537,7 @@ export function userFacingRunError(err: unknown): { message: string; code: strin
 
 export class StreamingAgentRuntime {
   private pending = new Map<string, PendingApproval>();
+  private resolvingApprovals = new Set<string>();
   /** What the user typed into an approval (an MCP server's API key), by callId. Used once, then dropped. */
   private approvalInputs = new Map<string, Record<string, string>>();
   private runs = new Map<string, RunState>();
@@ -616,12 +623,12 @@ export class StreamingAgentRuntime {
     args: Record<string, unknown>;
     projectRoot: string;
   }) => Promise<{ ok: boolean; output?: string; error?: string; meta?: Record<string, unknown> }>;
-  private onRunSettled?: (runId: string) => void;
+  private onRunSettled?: (runId: string) => void | Promise<void>;
   private artifacts?: import("../artifacts/ArtifactService").ArtifactService;
 
   setHardeningHooks(hooks: {
     cloudMcpInvoke?: StreamingAgentRuntime["cloudMcpInvoke"];
-    onRunSettled?: (runId: string) => void;
+    onRunSettled?: (runId: string) => void | Promise<void>;
     artifacts?: import("../artifacts/ArtifactService").ArtifactService;
   }): void {
     this.cloudMcpInvoke = hooks.cloudMcpInvoke;
@@ -634,7 +641,7 @@ export class StreamingAgentRuntime {
     if (!this.artifacts) return [];
     const ready: import("../artifacts/artifactContract").ToolArtifactResult[] = [];
     for (const art of parsed) {
-      const rec = this.artifacts.getArtifact(art.artifactId);
+      const rec = (await this.artifacts.getArtifact(art.artifactId));
       if (!rec || rec.status !== "ready") continue;
       try {
         const { bytes, record } = await this.artifacts.read(art.artifactId);
@@ -664,6 +671,7 @@ export class StreamingAgentRuntime {
       .filter((t) => !t.name.startsWith("host_desktop_") || (this.runs.get(runId)?.execution?.computerSurface === "host" && (this.runs.get(runId)?.execution?.location === "LOCAL_HOST" || (typeof process.send === "function" && this.runs.get(runId)?.execution?.location === "LOCAL"))))
       .filter((t) => !(this.runs.get(runId)?.execution?.computerSurface === 'host' && (t.name.startsWith('desktop_') || t.name.startsWith('computer_'))))
       .filter((t) => this.exposeTool(t.name) && !t.name.startsWith("computer."))
+      .filter((t) => !t.name.startsWith("host_desktop_") || typeof process.send === "function" || this.runs.get(runId)?.execution?.location === "LOCAL_HOST")
       // Only runs whose sandbox can open network access ever see this tool.
       .filter((t) => t.name !== NETWORK_ACCESS_TOOL || Boolean(allow?.has(t.name)))
       // Only tools this run's role can actually execute: offering one the
@@ -866,7 +874,7 @@ export class StreamingAgentRuntime {
       const target = path.join(state.projectRoot, rel);
       mkdirSync(path.dirname(target), { recursive: true });
       writeFileSync(target, loaded.bytes);
-      state.onProjectFile?.(rel);
+      await state.onProjectFile?.(rel);
       return rel;
     } catch {
       /* the download card still exists; the next turn can recover project files that did land */
@@ -899,7 +907,7 @@ export class StreamingAgentRuntime {
         });
         if (!result.ok) continue;
         rememberSiteBinary(runId, rel, Buffer.from(att.b64, "base64"));
-        state.onProjectFile?.(rel);
+        await state.onProjectFile?.(rel);
         this.store.emit(runId, "files.ready", { name: clean + ext, path: rel, additions: 0, deletions: 0, location: "workspace", message: `Saved your ${clean + ext} to ${rel}` });
         saved.push({ name: att.name || clean + ext, path: rel });
       } catch { /* the model still sees the image itself */ }
@@ -1048,7 +1056,7 @@ export class StreamingAgentRuntime {
    */
   private escalateRoute(runId: string, state: RunState, reason: string): boolean {
     if (state.modelPinned || !state.route || state.creditWarned) return false;
-    const next = escalateStep(state.route, this.modelService.registry.list().map((p) => p.config.id), [], reason);
+    const next = escalateStep(state.route, this.routingProviders(state).map((p) => p.config.id), [], reason);
     if (!next?.registryId) return false;
     const provider = this.modelService.registry.get(next.registryId);
     if (!provider?.config.capabilities.agent || !provider.supportsTools()) return false;
@@ -1093,9 +1101,9 @@ export class StreamingAgentRuntime {
     if (kind === "model") markModelUnavailable(current.config.id, reason);
     else markProviderFailure(current.config.id, kind, reason);
     const registry = this.modelService.registry;
-    const ids = registry.list().map((p) => p.config.id);
+    const ids = this.routingProviders(state).map((p) => p.config.id);
     const usable = (p: AIModelProvider | undefined): p is AIModelProvider =>
-      Boolean(p && p.config.id !== current.config.id && p.config.capabilities.agent && p.supportsTools() && !isRouteBlocked(p.config.id));
+      Boolean(p && p.config.id !== current.config.id && ids.includes(p.config.id));
     let next: AIModelProvider | undefined;
     let how: "same-model" | "same-tier" | "next-tier" | "emergency" | "last-resort" = "same-model";
     // Level 1: the same model on another provider.
@@ -1128,15 +1136,7 @@ export class StreamingAgentRuntime {
     // registered model was considered. Route blocks are heuristic cooldowns
     // (a 404 six hours ago, a provider blip minutes ago) — a dying run may
     // retry past them rather than give up. Never a customer's own model.
-    if (!next) {
-      next = registry.list().find((p) =>
-        p.config.id !== current.config.id &&
-        p.config.capabilities.agent &&
-        p.supportsTools() &&
-        !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id)
-      );
-      if (next) how = "last-resort";
-    }
+    // Exhaustion is preferable to bypassing verified capabilities or disabled routing.
     if (!next) return null;
     if (state.billAtWeight === undefined) state.billAtWeight = state.route?.weight ?? weightFor(current.config.id);
     state.failoverReason = `${kind}: ${current.config.id} → ${next.config.id}`;
@@ -1145,6 +1145,14 @@ export class StreamingAgentRuntime {
     this.store.emit(runId, kind === "model" ? "model.unavailable" : "model.failover", detail);
     console.warn(JSON.stringify({ event: "model.failover", runId, ...detail }));
     return next;
+  }
+
+  private routingProviders(state?: RunState): AIModelProvider[] {
+    return this.modelService.registry.list().filter((p) =>
+      !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: state?.requireVision }) &&
+      !isRouteBlocked(p.config.id) &&
+      (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? "")) &&
+      !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id));
   }
 
   /** The capability manifest from the tools this run really has (remote tools included). */
@@ -1296,7 +1304,7 @@ export class StreamingAgentRuntime {
   private async tryHelperStep(runId: string, state: RunState, provider: AIModelProvider, messages: AIMessage[], tools: any): Promise<{ content: string; calls: ToolCall[]; reasoning: string; streamedText: boolean } | null> {
     const currentId = provider.config.id;
     if (!shouldUseHelper({ route: state.route, readOnlyStreak: state.readOnlyStreak, helperRejects: state.helperRejects, currentModelId: currentId, pinned: state.modelPinned })) return null;
-    const helperId = helperFor(state.route, currentId, this.modelService.registry.list().map((p) => p.config.id));
+    const helperId = helperFor(state.route, currentId, this.routingProviders(state).map((p) => p.config.id));
     const helper = helperId ? this.modelService.registry.get(helperId) : undefined;
     if (!helper || !helper.supportsTools() || !helper.config.capabilities.agent) return null;
     let reply: any;
@@ -1517,7 +1525,7 @@ export class StreamingAgentRuntime {
   }
 
   /** Starts a run and returns immediately; the loop continues in the background. */
-  start(
+  async start(
     projectRoot: string,
     instruction: string,
     rules?: string,
@@ -1527,16 +1535,20 @@ export class StreamingAgentRuntime {
     requestedModelId?: string,
     execution?: ExecutionSpec,
     options?: RunOptions
-  ): string {
+  ): Promise<string> {
     const recovering = Boolean(options?.recoverRunId);
-    const runId = options?.recoverRunId ?? randomUUID();
+    const runId = options?.recoverRunId ?? options?.admittedRunId ?? randomUUID();
+    if (!recovering && this.store.get(runId)) throw new Error("Run id already exists");
     if (recovering && !this.store.get(runId)) throw new Error(`Cannot recover unknown run ${runId}`);
     const routeIntent = inferTaskIntent(instruction, options?.composerMode ?? mode);
+    const needsVision = isWebsiteInspection(instruction) || (attachments ?? []).some((attachment) => attachment.kind === "image" && attachment.b64);
     const deep = isDeepQuestion(instruction, options?.reasoningEffort);
     // "Auto" with the customer's own model set as default: their model runs the task.
-    requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId);
+    requestedModelId = (this.modelService.effectiveRequest?.bind(this.modelService) ?? ((r?: string) => r))(requestedModelId, "agent");
     const registered = this.modelService.registry.list();
     const choice = selectAgentModel({
+      providers: registered,
+      requirements: { vision: needsVision },
       intent: routeIntent,
       composerMode: options?.composerMode,
       requestedModelId,
@@ -1549,13 +1561,14 @@ export class StreamingAgentRuntime {
       ? (() => {
           const p = this.modelService.registry.get(choice.registryId ?? "");
           if (!p) throw new Error(`Requested model "${choice.registryId}" is not configured.`);
-          if (!p.config.capabilities.agent) throw new Error(`Requested model "${choice.registryId}" does not support agent runs.`);
+          const unsupported = incompatibility(p.config, { capability: "agent", tools: mode !== "ask", streaming: true, vision: needsVision });
+          if (unsupported) throw new Error(`Requested model "${choice.registryId}": ${unsupported}.`);
           return p;
         })()
       : (() => {
           const picked = choice.registryId ? this.modelService.registry.get(choice.registryId) : undefined;
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
-          return this.modelService.router.resolve("agent");
+          return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: needsVision });
         })();
     if (!recovering) this.store.create(runId, projectRoot);
     else {
@@ -1567,9 +1580,9 @@ export class StreamingAgentRuntime {
     // to a note about a file the model can never look at. Route the run to
     // a vision-capable model. Field data keeps the internals; the customer
     // card stays vendor-free ("ORION switched to a compatible vision model").
-    const hasImageAttachment = (attachments ?? []).some((a) => a.kind === "image" && a.b64);
-    if (hasImageAttachment && !provider.supportsVision()) {
-      const visionProvider = pickVisionFallback(registered, provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
+    if (needsVision && !provider.supportsVision()) {
+      if (choice.pinned) throw new Error(`Requested model "${provider.config.id}" cannot inspect images for this task. Choose a vision-capable model.`);
+      const visionProvider = pickVisionFallback(registered.filter((p) => !incompatibility(p.config, { capability: "agent", tools: true, streaming: true, vision: true }) && !isRouteBlocked(p.config.id) && (!p.config.id.startsWith("hf:") || /^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED ?? ""))), provider.config.id, (id) => (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(id));
       if (visionProvider) {
         const previousModel = provider.config.id;
         provider = visionProvider;
@@ -1577,7 +1590,7 @@ export class StreamingAgentRuntime {
           requestedModel: requestedModelId ?? "auto",
           actualModel: visionProvider.config.id,
           previousModel,
-          fallbackReason: "image attachment: routing to a vision-capable model",
+          fallbackReason: "Image or website inspection: routing to a vision-capable model",
           reason: "vision attachment",
         });
       }
@@ -1658,18 +1671,19 @@ export class StreamingAgentRuntime {
       runGateway.list().filter((t) => exposed?.has(t.name) ?? false).map((t) => ({ name: t.name, permission: runGateway.getPermission(t.name) })),
       { modelTools: def.toolsEnabled && provider.supportsTools(), executionLabel: executionLabelFor(execution) }
     );
-    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
+    const capabilityPrompt = [renderCapabilityPrompt(runCaps), shellHint(execution?.hostPlatform), this.webResearchAvailable(runId) ? RESEARCH_HINT : "", isWebsiteInspection(instruction) ? WEBSITE_INSPECTION_HINT : "", CAPABILITY_RULE, deep || mode === "research" || routeIntent.informational ? ADVISOR_STYLE + "\nThis overrides the short final-reply rule for this task." : ""].filter(Boolean).join("\n");
     const gapNotes = capabilityGapNotes(instruction, runCaps);
 
     // A recovered run resumes from its durable checkpoint, not from scratch:
     // the checkpoint carries the plan, files changed, errors and verification
     // evidence the new execution needs to continue the SAME mission.
     const restored = recovering
-      ? ((this.memoryStore?.loadMissionCheckpoint(runId) ?? null) as MissionCheckpoint | null)
+      ? (((await this.memoryStore?.loadMissionCheckpoint(runId)) ?? null) as MissionCheckpoint | null)
       : null;
 
     this.runs.set(runId, {
       controller: new AbortController(),
+      requireVision: needsVision,
       toolsEnabled: def.toolsEnabled,
       projectRoot,
       ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
@@ -1816,48 +1830,29 @@ export class StreamingAgentRuntime {
       !execution ||
       execution.location === "LOCAL" ||
       isCloudExecution(execution.location);
-    const queueRemoteRun = (): void => {
+    const queueRemoteRun = async (): Promise<void> => {
       const remoteExecution = execution;
       if (!remoteExecution || !isCloudExecution(remoteExecution.location)) {
         return;
       }
-
-      if (remoteExecution.location === "VERCEL_CLOUD") {
-        void vercelToolRunner.start(
-          runId,
-          projectRoot,
-          this.store,
-          {
-            tenantId: remoteExecution.tenantId ?? "",
-            organizationId:
-              remoteExecution.organizationId ??
-              remoteExecution.tenantId ??
-              "",
-            userId:
-              remoteExecution.userId ?? remoteExecution.tenantId ?? "",
-            projectId: remoteExecution.projectId ?? null,
-            workspaceId:
-              remoteExecution.workspaceId ?? "run:" + runId,
-          }
-        ).catch((err: any) => {
-          this.store.emit(runId, "run.blocked", {
-            message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`,
-            resumable: true,
-            reason: "sandbox_unavailable",
-          });
-          this.store.setStatus(runId, "blocked");
-        });
-        return;
-      }
-
       try {
-        queueExecutorJob(runId, remoteExecution.remoteProjectRoot ?? "", {
-          tenantId: remoteExecution.tenantId ?? "",
-          organizationId: remoteExecution.organizationId ?? "",
-          userId: remoteExecution.userId ?? "",
-          projectId: remoteExecution.projectId ?? null,
-          runId,
-        }, projectRoot, recovering);
+        if (remoteExecution.location === "VERCEL_CLOUD") {
+          await vercelToolRunner.start(runId, projectRoot, this.store, {
+            tenantId: remoteExecution.tenantId ?? "",
+            organizationId: remoteExecution.organizationId ?? remoteExecution.tenantId ?? "",
+            userId: remoteExecution.userId ?? remoteExecution.tenantId ?? "",
+            projectId: remoteExecution.projectId ?? null,
+            workspaceId: remoteExecution.workspaceId ?? "run:" + runId,
+          });
+        } else {
+          await queueExecutorJob(runId, remoteExecution.remoteProjectRoot ?? "", {
+            tenantId: remoteExecution.tenantId ?? "",
+            organizationId: remoteExecution.organizationId ?? "",
+            userId: remoteExecution.userId ?? "",
+            projectId: remoteExecution.projectId ?? null,
+            runId,
+          }, projectRoot, recovering);
+        }
       } catch (err: any) {
         this.store.emit(runId, "run.blocked", {
           message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`,
@@ -1870,7 +1865,7 @@ export class StreamingAgentRuntime {
     if (recovering) {
       // Preserve the original pre-run checkpoint. Recovery continues from the
       // durable workspace instead of replacing Undo with a mid-run snapshot.
-      queueRemoteRun();
+      void queueRemoteRun();
     } else if (this.checkpoints && checkpointVisibleHere) {
       void this.checkpoints
         .create(projectRoot, {
@@ -1899,10 +1894,10 @@ export class StreamingAgentRuntime {
         // it simply has no Undo button.
         .finally(queueRemoteRun);
     } else {
-      queueRemoteRun();
+      void queueRemoteRun();
     }
 
-    const memoryContext = this.relevantMemory(projectRoot, instruction);
+    const memoryContext = await this.relevantMemory(projectRoot, instruction);
     const toolNames = new Set(runGateway.list().map((tool) => tool.name));
     const routed = routeSkills({
       instruction,
@@ -1990,6 +1985,8 @@ export class StreamingAgentRuntime {
     void (async () => {
       const state = this.runs.get(runId);
       try {
+        const userMessage = messages.find((message) => message.role === "user" && message.attachments);
+        if (userMessage) userMessage.attachments = await (await import("../ai/visionAttachments")).normalizeVisionAttachments(userMessage.attachments ?? []);
             const toolNames = this.toolDefinitions(runId, state?.exposedTools ?? null).map((t) => t.name);
         // §17: the capability registry learns this run's real tool surface.
         seedCapabilities(toolNames);
@@ -2057,7 +2054,11 @@ export class StreamingAgentRuntime {
         }
         if (isRemoteToolExecution(state?.execution?.location)) {
           const remote = await this.awaitRemoteReady(runId);
-          if (remote) this.mountRemoteTools(runId);
+          if (remote) await this.mountRemoteTools(runId);
+        }
+        const inspectUrl = inspectionUrl(instruction);
+        if (inspectUrl && isWebsiteInspection(instruction)) {
+          await this.openInspectionBrowser(runId, messages, inspectUrl);
         }
         // The facts the model plans against: which core tools this run has
         // (after remote tools were mounted), what permissions allow, which MCP
@@ -2071,7 +2072,7 @@ export class StreamingAgentRuntime {
         // verified project images from durable artifact storage so existing
         // CSS background URLs keep resolving after the first run or a restart.
         if (this.artifacts) {
-          const priorImages = this.artifacts.listArtifacts({ projectRoot })
+          const priorImages = (await this.artifacts.listArtifacts({ projectRoot }))
             .filter((a) => a.projectRoot === projectRoot && a.kind === "generated" && a.mimeType.startsWith("image/"));
           for (const image of priorImages) {
             try {
@@ -2160,7 +2161,7 @@ export class StreamingAgentRuntime {
         });
         if (!prepared.canExecute) {
           const message = prepared.blockers[0] ?? "This run cannot start.";
-          this.enterPhase(runId, "blocked");
+          await this.enterPhase(runId, "blocked");
           this.store.emit(runId, "run.blocked", { message, code: "PREFLIGHT", terminal: true });
           this.store.setStatus(runId, "blocked");
           if (state) {
@@ -2184,7 +2185,7 @@ export class StreamingAgentRuntime {
         if (typeof process.send === "function") await runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
         this.teardownRemote(runId);
         try {
-          this.onRunSettled?.(runId);
+          await this.onRunSettled?.(runId);
         } catch {
           /* run-scope cleanup must not fail the settle */
         }
@@ -2242,7 +2243,7 @@ export class StreamingAgentRuntime {
    * tenant gateway is never touched, so no teardown restore is needed and
    * nothing can leak into another run.
    */
-  private mountRemoteTools(runId: string): void {
+  private async mountRemoteTools(runId: string): Promise<void> {
     const state = this.runs.get(runId);
     if (!state?.execution) return;
     const gateway = this.gatewayFor(runId);
@@ -2257,7 +2258,7 @@ export class StreamingAgentRuntime {
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
     registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST" && state.execution.computerSurface === "host");
-    this.mountNetworkAccessTool(runId, state);
+    await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
     applyMode(gateway.registry, state.mode);
@@ -2280,9 +2281,9 @@ export class StreamingAgentRuntime {
    * deny-by-default policy that a person can widen. The tool files a request;
    * it never changes the policy. Approval happens in the portal.
    */
-  private mountNetworkAccessTool(runId: string, state: RunState): void {
+  private async mountNetworkAccessTool(runId: string, state: RunState): Promise<void> {
     let rec = null;
-    try { rec = isCloudExecution(state.execution?.location) ? sandboxRegistry().forRun(runId) : null; } catch { rec = null; }
+    try { rec = state.execution?.location === "OVH_WORKER" ? (await sandboxRegistry().forRun(runId)) : null; } catch { rec = null; }
     state.networkRequestable = rec?.provider === "openshell";
     if (!state.networkRequestable) return;
     const store = this.store;
@@ -2303,11 +2304,11 @@ export class StreamingAgentRuntime {
         const id = context?.runId || runId;
         const tenantId = context?.tenantId || state.execution?.tenantId || "";
         let planId: string | null = null;
-        try { planId = creditLedger.planOf(tenantId) ?? null; } catch { planId = null; }
-        const out = requestNetworkAccess(sandboxRegistry(), {
+        try { planId = (await creditLedger.planOf(tenantId)) ?? null; } catch { planId = null; }
+        const out = (await requestNetworkAccess(sandboxRegistry(), {
           runId: id, template: String(args.access ?? ""), hosts: Array.isArray(args.hosts) ? args.hosts.map(String) : [],
           reason: String(args.reason ?? "").slice(0, 300), planId,
-        });
+        }));
         if (!out.ok) return { ok: false, error: out.message };
         store.emit(id, "sandbox.policy.requested", { requestId: out.request.id, access: TEMPLATE_LABELS[out.request.template as keyof typeof TEMPLATE_LABELS] ?? out.request.template, reason: out.request.reason });
         return { ok: true, output: out.message };
@@ -2328,10 +2329,10 @@ export class StreamingAgentRuntime {
     if (this.store.get(runId)?.status !== "blocked") this.runTools.delete(runId);
   }
 
-  private relevantMemory(projectRoot: string, instruction: string): string {
+  private async relevantMemory(projectRoot: string, instruction: string): Promise<string> {
     // What ORION knows about the user (every run), plus notes relevant to this task.
-    const prefs = preferencesPrompt(this.memoryStore);
-    const memory = userMemoryPrompt(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
+    const prefs = await preferencesPromptAsync(this.memoryStore);
+    const memory = await userMemoryPromptAsync(this.memoryStore as unknown as MemoryStoreLike, instruction, projectRoot);
     return [prefs, memory].filter(Boolean).join("\n\n");
   }
 
@@ -2585,7 +2586,7 @@ export class StreamingAgentRuntime {
     if (!state.introSpoken) {
       state.introSpoken = true;
       state.spokenEvidence = collectRunEvidence([]);
-      this.enterPhase(runId, "introducing");
+      await this.enterPhase(runId, "introducing");
       // ORION introduces the work in its own words (see CONVERSATION_STYLE);
       // the app no longer inserts a scripted sentence here.
       if (introductionFor(state.instruction, state.intent.informational)) {
@@ -2595,14 +2596,14 @@ export class StreamingAgentRuntime {
           this.store.emit(runId, "website.phase", { phase: state.website.phase });
         }
       }
-      this.enterPhase(runId, "acting");
+      await this.enterPhase(runId, "acting");
     }
     this.store.emit(runId, "run.started", {
       instruction, mode, maxSteps: MAX_STEPS,
       requiresFrontend: state.intent.requiresFrontend,
       requestedModelId: state.requestedModelId ?? "auto",
       actualModelId: provider.config.id,
-      provider: provider.config.provider,
+      provider: provider.config.providerName ?? provider.config.provider,
       reasoningEffortRequested: state.reasoningEffort,
       reasoningEffortApplied: reasoningApplied,
       ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode } : {}),
@@ -2764,6 +2765,7 @@ export class StreamingAgentRuntime {
         // task for 74KB). Cut it, retract the ramble, correct the model once.
         const RAMBLE_LIMIT = 6000;
         let rambled = false;
+        let shown = "";
         try {
         for await (const chunk of provider.stream({
           messages,
@@ -2790,16 +2792,22 @@ export class StreamingAgentRuntime {
                     tools: tools(),
                     reasoningEffort: state.reasoningEffort,
                   });
-                  const text = String(retry?.content ?? "");
+                  const text = extractLeakedToolMarkup(String(retry?.content ?? "")).text;
                   this.store.emit(runId, "message.delta", { content: text });
                   content = text;
+                  shown = text;
                   streamedText = text.length > 0;
                   for (const tc of retry?.toolCalls ?? []) streamedCalls.push(tc);
                   break;
                 }
-                if (langBuffer) { this.store.emit(runId, "message.delta", { content: langBuffer }); await new Promise<void>(resolve => setImmediate(resolve)); }
-                content += langBuffer;
-                streamedText = true;
+                if (langBuffer) {
+                  content += langBuffer;
+                  const first = visibleAssistantDelta("", content);
+                  shown = first.visible;
+                  if (first.delta) this.store.emit(runId, "message.delta", { content: first.delta });
+                  await new Promise<void>(resolve => setImmediate(resolve));
+                }
+                streamedText = shown.length > 0;
               }
               if (!rambled && content.length > RAMBLE_LIMIT && streamedCalls.length === 0 && !(provider.stream as { rambleGuardOff?: boolean }).rambleGuardOff) {
                 rambled = true;
@@ -2808,8 +2816,10 @@ export class StreamingAgentRuntime {
               }
             } else {
               content += chunk.delta;
-              streamedText = true;
-              this.store.emit(runId, "message.delta", { content: chunk.delta });
+              const next = visibleAssistantDelta(shown, content);
+              shown = next.visible;
+              streamedText = shown.length > 0;
+              if (next.delta) this.store.emit(runId, "message.delta", { content: next.delta });
               await new Promise<void>(resolve => setImmediate(resolve));
             }
           }
@@ -2887,6 +2897,9 @@ export class StreamingAgentRuntime {
         markProviderSuccess(provider.config.id);
 
         if (state.cancelled) return cancelled();
+        const leaked = extractLeakedToolMarkup(content);
+        content = leaked.text;
+        if (leaked.calls.length) streamedCalls.push(...leaked.calls);
 
         // Drop malformed calls rather than sending the model a reply to a tool
         // it never named; keep duplicates out so one id is answered once.
@@ -2998,12 +3011,12 @@ export class StreamingAgentRuntime {
           }
           state.handoffModelId = undefined;
         }
-        this.enterPhase(runId, "observing");
+        await this.enterPhase(runId, "observing");
         this.noteWebsiteProgress(runId, state);
         this.speakProgress(runId);
         // A finished tool batch is a meaningful step: checkpoint the mission
         // so a crash or restart resumes here instead of starting over.
-        this.saveMissionCheckpoint(runId, state);
+        await this.saveMissionCheckpoint(runId, state);
         if (outcome === "cancelled") return cancelled();
         if (state.createdArtifacts.length > 0 && messages[0]?.role === "system") {
           const grounded = availableArtifactsPrompt(state.createdArtifacts);
@@ -3171,7 +3184,7 @@ export class StreamingAgentRuntime {
         // report_result call; complete() re-derives them fresh, so this turn
         // only produces the user-facing summary.
         if (state.resultRequest) return { kind: "approved" };
-        this.enterPhase(runId, "verifying");
+        await this.enterPhase(runId, "verifying");
         this.store.setStatus(runId, "verifying");
         // The site changed and has a live preview: it must load as the styled
         // site (page, stylesheets, scripts, images → 200 with the right type)
@@ -3184,7 +3197,7 @@ export class StreamingAgentRuntime {
           if (pv && !pv.passed && (state.previewRepairs ?? 0) < 2) {
             state.previewRepairs = (state.previewRepairs ?? 0) + 1;
             this.store.emit(runId, "completion.blocked", { gate: "preview", reasons: pv.issues, retries: state.previewRepairs });
-            this.enterPhase(runId, "repairing");
+            await this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
             messages.push({ role: "assistant", content: reply.content || "" });
             messages.push({ role: "user", content: `PREVIEW CHECK FAILED — the live preview does not load as the styled site:\n- ${pv.issues.slice(0, 8).join("\n- ")}\nFix the cause in the project files (a wrong path or file name in a <link>/<script>/<img>/url(), a file that was never written, a typo). Use your file tools; do not start a server. Then finish.` });
@@ -3205,7 +3218,7 @@ export class StreamingAgentRuntime {
             if (state.verifyRounds > MAX_VERIFY_ROUNDS) {
               return fail(`Verification ${verification.verdict} after ${MAX_VERIFY_ROUNDS} repair attempts: ${verification.findings.map((f) => f.message).slice(0, 3).join(" ")}`);
             }
-            this.enterPhase(runId, "repairing");
+            await this.enterPhase(runId, "repairing");
             this.store.setStatus(runId, "running");
             // A second failed check means the current model is not getting there: climb one step.
             if (verification.verdict === "FAIL" && state.verifyRounds >= 2) this.escalateRoute(runId, state, `The independent check failed ${state.verifyRounds} times.`);
@@ -3238,10 +3251,11 @@ export class StreamingAgentRuntime {
         state.gateRetries += 1;
         if (!state.modelPinned) {
           const escalated = selectAgentModel({
+            providers: this.routingProviders(state),
             intent: state.intent,
             composerMode: state.composerMode,
             requestedModelId: state.requestedModelId,
-            availableIds: this.modelService.registry.list().map((p) => p.config.id),
+            availableIds: this.routingProviders(state).map((p) => p.config.id),
             escalate: Math.min(state.gateRetries, 2),
           });
           const next = escalated.registryId ? this.modelService.registry.get(escalated.registryId) : undefined;
@@ -3250,13 +3264,13 @@ export class StreamingAgentRuntime {
             this.store.emit(runId, "run.diagnostics", { modelId: next.config.id, reason: escalated.reason, escalate: state.gateRetries });
           }
         }
-        this.enterPhase(runId, "repairing");
+        await this.enterPhase(runId, "repairing");
         this.store.setStatus(runId, "running");
         messages.push({ role: "user", content: gates.retryPrompt });
         return { kind: "retry", reason: `completion gate "${gates.failedGate}": ${gates.reasons.join("; ")}` };
       },
 
-      complete: (_turn, reply) => {
+      complete: async (_turn, reply) => {
         if (state.cancelled) return;
         // A nudge may have retracted the real answer and the model's last turn came back empty.
         const recovered = !String(reply.content ?? "").trim() && Boolean(state.lastAnswer);
@@ -3330,7 +3344,7 @@ export class StreamingAgentRuntime {
         } else {
           this.store.emit(runId, "run.error", { message: request.summary.slice(0, 500) || "The mission failed.", code: "MISSION_FAILED" });
         }
-        this.saveMissionCheckpoint(runId, state);
+        await this.saveMissionCheckpoint(runId, state);
         this.store.setStatus(runId, settled === "completed" ? "completed" : settled === "blocked" ? "blocked" : settled === "failed" ? "error" : "partial");
       },
 
@@ -3346,7 +3360,7 @@ export class StreamingAgentRuntime {
       },
 
       onTurn: (record) => {
-        this.store.emit(runId, "agent.turn", { ...record, modelId: provider.config.id });
+        this.store.emit(runId, "agent.turn", { ...record, modelId: provider.config.id, routing: { provider: provider.config.providerName ?? provider.config.id.split(":")[0], modelId: provider.config.id, reason: state.failoverReason ?? state.route?.reason ?? "Explicit model selection" } });
       },
     };
 
@@ -3449,6 +3463,19 @@ export class StreamingAgentRuntime {
         const args = call.arguments as Record<string, unknown>;
         const n = normalizePublicHttpUrl(args.url);
         if (n.ok) args.url = n.url.toString();
+      }
+      if (isWebsiteInspection(state.instruction)) {
+        const rewritten = rewriteInspectionToolCall(
+          state.instruction,
+          call,
+          {
+            opened:
+              websiteInspectionEvidence(this.store.get(runId)?.events ?? []).opened
+              || runnable.some((item) => item.name === "browser_open" || item.name === "browser_navigate"),
+          },
+        );
+        call.name = rewritten.name;
+        call.arguments = rewritten.arguments;
       }
 
       const fingerprint =
@@ -3920,9 +3947,9 @@ export class StreamingAgentRuntime {
           const args = call.arguments as Record<string, unknown>;
           const artifactPath = String(args.path ?? args.to ?? args.from ?? "").trim();
           if (artifactPath && call.name !== "delete_file") {
-            this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
+            await this.memoryStore?.saveArtifact({ id: `artifact_${runId}_${call.id}`, projectRoot: state.projectRoot, runId, kind: "file", name: artifactPath.split(/[\\/]/).pop() || artifactPath, path: artifactPath });
             const remembered = normalizeKnownFile(artifactPath);
-            if (remembered) state.onProjectFile?.(remembered);
+            if (remembered) await state.onProjectFile?.(remembered);
           }
         }
         if (result.projectFileEvidence && !result.artifacts?.length) {
@@ -4269,10 +4296,11 @@ export class StreamingAgentRuntime {
     }
     if (decision.escalate > 0 && !state.modelPinned) {
       const escalated = selectAgentModel({
+      providers: this.routingProviders(state),
         intent: state.intent,
         composerMode: state.composerMode,
         requestedModelId: state.requestedModelId,
-        availableIds: this.modelService.registry.list().map((p) => p.config.id),
+        availableIds: this.routingProviders(state).map((p) => p.config.id),
         escalate: decision.escalate,
       });
       if (escalated.registryId) state.handoffModelId = escalated.registryId;
@@ -4328,11 +4356,11 @@ export class StreamingAgentRuntime {
    * preview_environments row — one record per run, written here so a preview
    * URL is never inferred from another run or project.
    */
-  private saveMissionCheckpoint(runId: string, state: RunState): void {
+  private async saveMissionCheckpoint(runId: string, state: RunState): Promise<void> {
     if (!this.memoryStore) return;
     try {
       const events = this.store.get(runId)?.events ?? [];
-      const sandbox = sandboxRegistry().forRun(runId);
+      const sandbox = (await sandboxRegistry().forRun(runId));
       const runExecution = this.store.get(runId)?.execution;
       const checkpoint = buildCheckpoint({
         runId,
@@ -4354,14 +4382,14 @@ export class StreamingAgentRuntime {
           executionLocation: state.execution?.location,
         },
       });
-      this.memoryStore.saveMissionCheckpoint(runId, checkpoint, state.phase);
+      await this.memoryStore.saveMissionCheckpoint(runId, checkpoint, state.phase);
       const previewUrl = checkpoint.verificationEvidence.previewUrl;
       if (previewUrl) {
         // The canonical record is upserted every checkpoint (status may move
         // active → verified); the event fires only when the pair changes.
         const verified = events.some((e) => e.type === "preview.verified");
         const status = verified ? "verified" : "active";
-        this.memoryStore.savePreviewEnvironment({
+        await this.memoryStore.savePreviewEnvironment({
           id: previewEnvironmentKey(runId),
           organizationId: state.execution?.organizationId ?? null,
           projectId: state.execution?.projectId ?? null,
@@ -4378,11 +4406,63 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "mission.checkpoint", { phase: state.phase, filesChanged: checkpoint.filesChanged.length, errors: checkpoint.errors.length });
     } catch {
-      // Checkpointing is bookkeeping — it must never break a live run.
+      // Never announce an unacknowledged checkpoint as durable.
+      this.store.emit(runId, "mission.checkpoint.failed", { phase: state.phase, message: "Mission checkpoint could not be saved." });
     }
   }
 
-  private enterPhase(runId: string, phase: RunPhase): void {
+  /** Open the named live URL in the Cloud Browser before the model starts searching. */
+  private async openInspectionBrowser(runId: string, messages: AIMessage[], url: string): Promise<void> {
+    const state = this.runs.get(runId);
+    if (!state || state.cancelled || !this.isKnownTool(runId, "browser_open")) return;
+    const call: ToolCall = { id: `inspect_open_${runId.slice(0, 8)}`, name: "browser_open", arguments: { url } };
+    this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
+    this.emitDomainEvent(runId, call);
+    let result: ToolResult;
+    try {
+      result = await runWithComputerContext(
+        {
+          tenantId: state.execution?.tenantId || "",
+          userId: state.execution?.userId ?? null,
+          organizationId: state.execution?.organizationId ?? null,
+          projectId: state.execution?.projectId ?? null,
+          projectRoot: state.projectRoot,
+          runId,
+          computerSurface: state.execution?.computerSurface,
+        },
+        () =>
+          this.gatewayFor(runId).execute("browser_open", { url }, "coder", projectToolContext(state, {
+            signal: state.controller.signal,
+            executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+            toolUseId: call.id,
+            runId,
+            tenantId: state.execution?.tenantId || undefined,
+            approval: { granted: true, scope: "internal", approvalId: call.id, grantedBy: "runtime" },
+          })),
+      );
+    } catch (err: any) {
+      result = { ok: false, error: String(err?.message ?? err).slice(0, 300) };
+    }
+    const output = result.ok ? String(result.output ?? `Opened ${url} in the Cloud Browser.`) : "";
+    if (result.ok) {
+      this.store.emit(runId, "tool.completed", { callId: call.id, tool: "browser_open", preview: output.slice(0, 400) });
+      this.store.emit(runId, "browser.completed", { tool: "browser_open", url });
+      state.pendingNotes.push(`The Cloud workspace Browser is already open on ${url}. Call browser_screenshot next and describe the live page. Do not web_search or fetch_url as a substitute.`);
+    } else {
+      this.store.emit(runId, "tool.failed", { callId: call.id, tool: "browser_open", error: result.error });
+      state.pendingNotes.push(`Open ${url} with browser_open now so the user can watch it in the Cloud workspace Browser. Do not start with web_search or fetch_url.`);
+    }
+    messages.push({ role: "assistant", content: "", toolCalls: [call] });
+    messages.push({
+      role: "tool",
+      name: "browser_open",
+      toolCallId: call.id,
+      content: result.ok ? output : `Could not open ${url}: ${result.error ?? "unknown error"}`,
+    });
+    state.toolCalls += 1;
+  }
+
+  private async enterPhase(runId: string, phase: RunPhase): Promise<void> {
     const state = this.runs.get(runId);
     if (!state || !canEnterPhase(state.phase, phase)) return;
     if (state.phase === phase) return;
@@ -4403,7 +4483,7 @@ export class StreamingAgentRuntime {
     });
     // A phase change is a meaningful step: the durable checkpoint follows it,
     // so a restarted control plane resumes the same mission at this point.
-    this.saveMissionCheckpoint(runId, state);
+    await this.saveMissionCheckpoint(runId, state);
   }
 
   private speak(runId: string, text: string): void {
@@ -4436,19 +4516,26 @@ export class StreamingAgentRuntime {
   }
 
   /** Resolves a pending approval, unblocking the paused loop. */
-  resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once", inputs?: { secrets?: Record<string, string> }): boolean {
-    const p = this.pending.get(callId);
-    if (!p) return false;
-    this.pending.delete(callId);
-    if (approved && inputs?.secrets && typeof inputs.secrets === "object") this.approvalInputs.set(callId, inputs.secrets);
-    if (approved && scope !== "once" && !p.destructive) {
-      const run = this.runs.get(p.runId);
-      run?.approvedTools.add(p.call.name);
-      if (scope === "session" || scope === "project" || scope === "always") {
-        try { run?.onApprovalGrant?.(scope, p.call.name); } catch { /* persistence must not block the approval */ }
+  async resolveApproval(callId: string, approved: boolean, scope: ApprovalScope = "once", inputs?: { secrets?: Record<string, string> }): Promise<boolean> {
+    const pending = this.pending.get(callId);
+    if (!pending || this.resolvingApprovals.has(callId)) return false;
+    this.resolvingApprovals.add(callId);
+    try {
+      const run = this.runs.get(pending.runId);
+      if (approved && scope !== "once" && !pending.destructive) {
+        if (scope === "session" || scope === "project" || scope === "always") {
+          await run?.onApprovalGrant?.(scope, pending.call.name);
+        }
       }
+      // Cancellation or timeout may have removed the call while storage waited.
+      if (this.pending.get(callId) !== pending) return false;
+      this.pending.delete(callId);
+      if (approved && inputs?.secrets && typeof inputs.secrets === "object") this.approvalInputs.set(callId, inputs.secrets);
+      if (approved && scope !== "once" && !pending.destructive) run?.approvedTools.add(pending.call.name);
+      pending.resolve(approved);
+      return true;
+    } finally {
+      this.resolvingApprovals.delete(callId);
     }
-    p.resolve(approved);
-    return true;
   }
 }

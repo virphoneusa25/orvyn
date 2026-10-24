@@ -70,7 +70,7 @@ function body(name: string): string {
   return `${skill!.instructions}\n${skill!.metadata.validation.rule}`;
 }
 
-test("artifacts and content built-ins load beside the existing 41 skills", () => {
+test("artifacts and content built-ins load beside the existing 41 skills",  async () => {
   const report = new SkillLoader(builtinSkillsRoot()).load();
   assert.deepEqual(report.rejected, []);
   const ids = report.skills.map((skill) => skill.id);
@@ -118,10 +118,10 @@ test("artifacts and content built-ins load beside the existing 41 skills", () =>
   assert.deepEqual(deliver!.metadata.requiredTools, ["generate_image", "create_document", "artifact_create"]);
   assert.match(deliver!.instructions, /Never invent a filename or a sandbox\/artifacts\/\.\.\.\/download path/);
 
-  assert.deepEqual(matchValidatedSkills("Generate a virphone logo in png format").map((skill) => skill.id), ["skill_deliver_file"]);
-  assert.deepEqual(matchValidatedSkills("Fix the failing tests").map((skill) => skill.id), ["skill_code_with_tests"]);
-  assert.deepEqual(matchValidatedSkills("The dashboard layout overflows").map((skill) => skill.id), ["skill_visual_verify"]);
-  assert.equal(skillsPromptFor("What time is it?"), "");
+  assert.deepEqual((await matchValidatedSkills("Generate a virphone logo in png format")).map((skill) => skill.id), ["skill_deliver_file"]);
+  assert.deepEqual((await matchValidatedSkills("Fix the failing tests")).map((skill) => skill.id), ["skill_code_with_tests"]);
+  assert.deepEqual((await matchValidatedSkills("The dashboard layout overflows")).map((skill) => skill.id), ["skill_visual_verify"]);
+  assert.equal((await skillsPromptFor("What time is it?")), "");
 });
 
 test("document, spreadsheet, presentation, image, and verification skills require real artifacts", () => {

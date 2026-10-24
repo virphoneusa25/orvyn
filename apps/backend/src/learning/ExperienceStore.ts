@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import type { Run } from "../agent/events";
 import { sanitizeRecord, sanitizeLearningText } from "./sanitize";
 import { evaluateRun, type RunEvaluation } from "./RunEvaluator";
@@ -24,7 +24,7 @@ export interface Experience {
 export class ExperienceStore {
   constructor(private tenantId: string, private store: LocalStore) {}
 
-  captureFromRun(run: Run): Experience {
+  async captureFromRun(run: Run): Promise<Experience> {
     const tools = new Set<string>();
     let edits = 0;
     let testsRan = false;
@@ -78,19 +78,19 @@ export class ExperienceStore {
       createdAt: Date.now(),
       evaluation,
     });
-    this.store.saveLearningRecord({ id: exp.id, kind: "experience", payload: exp });
+    await this.store.saveLearningRecord({ id: exp.id, kind: "experience", payload: exp });
     return exp;
   }
 
-  list(kind = "experience", limit = 80): Experience[] {
-    return this.store.listLearningRecords(kind, limit).map((r) => r.payload as Experience);
+  async list(kind = "experience", limit = 80): Promise<Experience[]> {
+    return (await this.store.listLearningRecords(kind, limit)).map((r) => r.payload as Experience);
   }
 
-  overview() {
-    const experiences = this.list("experience", 200);
-    const skills = this.store.listLearningRecords("skill", 80);
-    const datasets = this.store.listLearningRecords("dataset", 40);
-    const models = this.store.listLearningRecords("model", 20);
+  async overview() {
+    const experiences = await this.list("experience", 200);
+    const skills = await this.store.listLearningRecords("skill", 80);
+    const datasets = await this.store.listLearningRecords("dataset", 40);
+    const models = await this.store.listLearningRecords("model", 20);
     const failures = experiences.flatMap((e) => e.failures);
     const clusters = clusterFailures(failures);
     return {

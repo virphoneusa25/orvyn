@@ -29,6 +29,8 @@ export interface ExecutionRouteInput {
   isSite?: boolean;
   /** OVH control plane (desktop is a Cloud client). Artifact work stays here. */
   cloudControlPlane?: boolean;
+  /** A project owned by the connected Desktop worker, rather than the Cloud filesystem. */
+  desktopProject?: boolean;
 }
 
 export interface ExecutionRoute {
@@ -46,7 +48,8 @@ export interface ExecutionRoute {
  *   explicit Server/Deploy requiring remote → ovh_worker
  *   background / cloud mission             → ovh_worker
  *   risky / untrusted                      → local_sandbox
- *   local project + normal coding          → local_host
+ *   Desktop project + coding               → local_sandbox
+ *   Cloud project + coding                 → ovh_worker
  *   artifact / no-repo on Cloud control plane → local_host (in-process, virtual storage)
  *   artifact / no-repo generation          → local_host (virtual workspace)
  *   otherwise                              → local_host
@@ -80,6 +83,9 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
   if (input.isBackground) {
     return { requested, actual: "ovh_worker", reason: "Background / cloud mission" };
   }
+  if (input.cloudControlPlane && !input.desktopProject && (input.isLocalCoding || mode === "code" || input.hasLocalProject || input.isSite || input.isRisky)) {
+    return { requested, actual: "ovh_worker", reason: "Cloud coding runs in the configured Cloud worker" };
+  }
   if (input.isRisky) {
     return { requested, actual: "local_sandbox", reason: "Untrusted or isolation-required command" };
   }
@@ -97,8 +103,8 @@ export function routeExecutionTarget(input: ExecutionRouteInput = {}): Execution
       reason: "Cloud control plane — virtual file storage. Desktop is the client; no worker sandbox.",
     };
   }
-  if (input.hasLocalProject || input.isLocalCoding) {
-    return { requested, actual: "local_host", reason: "Local project + normal coding" };
+  if (input.hasLocalProject || input.isLocalCoding || mode === "code") {
+    return { requested, actual: "local_sandbox", reason: "Desktop coding defaults to the project Docker sandbox; Host requires explicit selection" };
   }
   if (input.isArtifact) {
     return { requested, actual: "local_host", reason: "Generated artifact — virtual workspace, no Cloud worker" };

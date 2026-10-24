@@ -1,3 +1,4 @@
+import { staffStore, onboardingStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/middleware/accountReady.ts
 //
 // The server half of the account gate. On ORVYN Cloud a signed-in person
@@ -12,9 +13,9 @@
 // API keys (server-to-server) are not people and are not gated here.
 
 import type { NextFunction, Request, Response } from "express";
-import { authService } from "../auth/AuthService";
-import { staffStore } from "../admin/staffStore";
-import { onboardingStore } from "../onboarding/OnboardingStore";
+import { authService } from "../auth/AsyncAuthService";
+
+
 import { verificationRequired } from "../onboarding/provisioning";
 
 export type AccountReadiness = "ready" | "EMAIL_NOT_VERIFIED" | "ONBOARDING_REQUIRED";
@@ -23,9 +24,9 @@ export function accountGateEnabled(env: NodeJS.ProcessEnv = process.env): boolea
   return env.ORVYN_CLOUD_MODE === "true" && env.ORVYN_REQUIRE_ONBOARDING !== "false";
 }
 
-export function accountReadiness(userId: string): AccountReadiness {
-  if (verificationRequired() && !authService.isEmailVerified(userId)) return "EMAIL_NOT_VERIFIED";
-  if (!onboardingStore().get(userId)?.completedAt) return "ONBOARDING_REQUIRED";
+export async function accountReadiness(userId: string): Promise<AccountReadiness> {
+  if (verificationRequired() && !(await authService.isEmailVerified(userId))) return "EMAIL_NOT_VERIFIED";
+  if (!(await onboardingStore().get(userId))?.completedAt) return "ONBOARDING_REQUIRED";
   return "ready";
 }
 
@@ -45,31 +46,31 @@ const MESSAGE: Record<Exclude<AccountReadiness, "ready">, string> = {
 };
 
 /** A paused account (staff action) can sign in but not use ORVYN; its data stays exactly as it was. */
-export function pausedMessage(tenantId: string | undefined): string | null {
+export async function pausedMessage(tenantId: string | undefined): Promise<string | null> {
   if (!tenantId) return null;
-  return staffStore().suspension(tenantId) ? "This account is paused. Contact ORVYN support to restore access." : null;
+  return (await staffStore().suspension(tenantId)) ? "This account is paused. Contact ORVYN support to restore access." : null;
 }
 
-export function requireAccountReady(req: Request, res: Response, next: NextFunction): void {
+export async function requireAccountReady(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.principal && !(req as Request & { viewAs?: unknown }).viewAs && !OPEN_ANY.some((r) => r.test(req.path))) {
-    const paused = pausedMessage(req.principal.tenantId);
+    const paused = (await pausedMessage(req.principal.tenantId));
     if (paused) { res.status(403).json({ error: paused, code: "ACCOUNT_PAUSED" }); return; }
   }
   const userId = req.principal?.userId;
   if (!userId || !accountGateEnabled() || gateExempt(req.method, req.path)) return next();
-  const state = accountReadiness(userId);
+  const state = (await accountReadiness(userId));
   if (state === "ready") return next();
   if (state === "ONBOARDING_REQUIRED" && req.method === "POST" && OPEN_DURING_SETUP.some((r) => r.test(req.path))) return next();
   res.status(403).json({ error: MESSAGE[state], code: state });
 }
 
 /** Same rule for the chat WebSocket (session tokens only). */
-export function socketAccountReady(token: string | null): { ok: true } | { ok: false; error: string; code: AccountReadiness } {
+export async function socketAccountReady(token: string | null): Promise<{ ok: true } | { ok: false; error: string; code: AccountReadiness }> {
   if (!token || !accountGateEnabled()) return { ok: true };
-  const session = authService.verifyPrincipal(token);
+  const session = (await authService.verifyPrincipal(token));
   if (!session) return { ok: true }; // API keys and invalid tokens are handled by authorizeSocket
-  const paused = pausedMessage(session.principal.tenantId);
+  const paused = (await pausedMessage(session.principal.tenantId));
   if (paused) return { ok: false, error: paused, code: "ACCOUNT_PAUSED" as AccountReadiness };
-  const state = accountReadiness(session.user.id);
+  const state = (await accountReadiness(session.user.id));
   return state === "ready" ? { ok: true } : { ok: false, error: MESSAGE[state], code: state };
 }

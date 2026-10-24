@@ -79,15 +79,8 @@ const webhook = async (event, secret = WHSEC) => {
 };
 const wallet = async (token) => (await call("/billing", "GET", null, token)).json.wallet;
 async function runTask(token, instruction) {
-  const started = await call("/agent/stream/runs", "POST", { instruction, executionTarget: "auto", composerMode: "auto", mode: "ask", permissionMode: "full_access" }, token);
-  const runId = started.json.runId;
-  if (!runId) return { started };
-  for (let i = 0; i < 160; i++) {
-    const r = await call(`/agent/stream/runs/${runId}/events.json`, "GET", null, token);
-    if (["completed", "error", "cancelled", "blocked", "failed"].includes(r.json.status)) return { started, runId, status: r.json.status };
-    await sleep(250);
-  }
-  return { started, runId, status: "timeout" };
+  const started = await call("/chat/completions", "POST", { message: instruction, composerMode: "ask", context: { mode: "ask" } }, token);
+  return { started, status: started.status === 200 && started.json.content ? "completed" : "failed" };
 }
 
 async function main() {
@@ -100,14 +93,16 @@ async function main() {
     STRIPE_SECRET_KEY: "sk_test_e2e", STRIPE_WEBHOOK_SECRET: WHSEC, STRIPE_API_BASE: `http://127.0.0.1:${STRIPE_PORT}`,
     STRIPE_PRICE_PRO_MONTHLY: "price_pro_m", STRIPE_PRICE_PACK_10K: "price_pack10k",
     MODEL_API_KEY: "scripted", OPENAI_BASE_URL: `http://127.0.0.1:${MODEL_PORT}`, OPENAI_MODEL: "scripted", OPENAI_CODE_MODEL: "scripted",
+    ORVYN_PROVIDER_RATES_JSON: JSON.stringify([{ provider: "openai-compatible", modelId: "scripted", input: .2, cachedInput: .02, output: .8, source: "https://fixture.invalid/pricing", verifiedAt: Date.now() - 1000, expiresAt: Date.now() + 3_600_000 }]),
   };
   delete env.ORVYN_API_KEY;
-  for (const k of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "FIREWORKS_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "NEBIUS_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST"]) env[k] = "";
-  const server = spawn(process.execPath, ["dist/index.js"], { cwd: backendCwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  for (const k of ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "FIREWORKS_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEY", "CHEAPER_INFERENCE_API_KEY", "NEBIUS_API_KEY", "DEEPSEEK_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OLLAMA_MODEL", "OLLAMA_HOST"]) env[k] = "";
+  const server = spawn(process.execPath, ["dist/index.js"], { cwd: backendCwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   const log = []; server.stdout.on("data", (d) => log.push(String(d))); server.stderr.on("data", (d) => log.push(String(d)));
   try {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await sleep(250); }
-    const reg = await call("/auth/register", "POST", { name: "Payer", email: "payer@example.com", password: "a-long-password-1" });
+    const legal = await call("/auth/legal", "GET");
+    const reg = await call("/auth/register", "POST", { name: "Payer", email: "payer@example.com", password: "a-long-password-1", legalAccepted: true, legalVersion: legal.json.version });
     const T = reg.json.token;
     const acct = reg.json.principal?.tenantId;
     await call("/onboarding/provision", "POST", {}, T);
@@ -152,7 +147,7 @@ async function main() {
 
     console.log("\n4. Runs spend through the ledger and the gate holds");
     // A second, Free account for the window test.
-    const reg2 = await call("/auth/register", "POST", { name: "Free", email: "free@example.com", password: "a-long-password-2" });
+    const reg2 = await call("/auth/register", "POST", { name: "Free", email: "free@example.com", password: "a-long-password-2", legalAccepted: true, legalVersion: legal.json.version });
     const F = reg2.json.token;
     await call("/onboarding/provision", "POST", {}, F);
     await call("/onboarding", "PUT", { step: "complete", completed: ["first_mission"] }, F);
@@ -162,7 +157,7 @@ async function main() {
     const big = await runTask(F, "BIG job please");
     const wBig = await wallet(F);
     ok(wBig.windows.fiveHour.used >= wBig.windows.fiveHour.limit, "a large run uses up the 5-hour window", JSON.stringify(wBig.windows.fiveHour) + ` ${big.status}`);
-    const refused = await call("/agent/stream/runs", "POST", { instruction: "one more", mode: "ask" }, F);
+    const refused = await call("/chat/completions", "POST", { message: "one more", composerMode: "ask", context: { mode: "ask" } }, F);
     ok(refused.status === 402 && refused.json.code === "CREDITS_WINDOW_5H" && /5-hour/.test(refused.json.error), "the next run is refused in plain words (402)", `${refused.status} ${JSON.stringify(refused.json)}`);
     ok(wBig.availableBalance >= 0 && wBig.reservedBalance === 0, "the balance never goes below zero and nothing stays held", JSON.stringify({ a: wBig.availableBalance, r: wBig.reservedBalance }));
 
@@ -173,7 +168,7 @@ async function main() {
     let immutable = false; try { db.prepare(`UPDATE ledger_entries SET amount = 1`).run(); } catch { immutable = true; }
     db.close();
     ok(sums.every((s) => s.n >= 0), "no balance bucket is negative", JSON.stringify(sums));
-    ok(["monthly_grant", "topup_purchase", "mission_reservation", "usage_settlement", "reservation_release", "expiration"].every((t) => types.has(t)), "grants, top-ups, reservations, settlements, releases and expirations are all entries", [...types].join(","));
+    ok(["monthly_grant", "topup_purchase", "usage_settlement", "expiration"].every((t) => types.has(t)), "grants, top-ups, model settlements and expirations are all entries", [...types].join(","));
     ok(immutable, "ledger entries cannot be edited");
     ok(!log.join("").includes("sk_test_e2e") && !log.join("").includes(WHSEC), "no Stripe secret in the server log");
   } catch (e) {

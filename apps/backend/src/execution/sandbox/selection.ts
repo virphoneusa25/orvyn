@@ -143,3 +143,10 @@ export function selectSandbox(input: SelectionInput, registry: Pick<SandboxRegis
     reason: gate.reason,
   };
 }
+
+/** Read shared flags before applying the same deterministic selection policy. */
+export async function selectSandboxAsync(input:SelectionInput,registry:{flag:(scope:"org"|"project",id:string,flag:string)=>Promise<boolean|null>},env:NodeJS.ProcessEnv=process.env):Promise<SandboxPlan>{
+ const project=input.projectId?await registry.flag("project",input.projectId,OPENSHELL_FLAG):null;
+ const org=await registry.flag("org",input.organizationId,OPENSHELL_FLAG);
+ return selectSandbox(input,{flag:(scope)=>scope==="project"?project:org},env);
+}

@@ -27,6 +27,7 @@ export class CompleteService {
     const suffix = (req.suffix ?? "").slice(0, 1200);
     if (!prefix.trim()) return { completion: "" };
 
+    await this.modelService.huggingFaceReady;
     const provider = this.modelService.router.resolve("completion");
     const response = await provider.generate({
       messages: [

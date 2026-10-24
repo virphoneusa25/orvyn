@@ -1,3 +1,4 @@
+import { asyncHandler } from "../http/asyncHandler";
 // apps/backend/src/routes/account.ts
 //
 // The customer portal's account area: profile, password, team (members,
@@ -9,8 +10,8 @@
 // never manage the account (it could otherwise mint more keys or add people).
 
 import { Router, type Request, type Response } from "express";
-import { authService } from "../auth/AuthService";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { authService } from "../auth/AsyncAuthService";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { planById } from "../billing/plans";
 import { githubConnection } from "../integrations/githubConnection";
 import { deploymentConnections, removeDeploymentConnection, saveDeploymentConnection } from "../integrations/deploymentConnections";
@@ -18,8 +19,8 @@ import { mailConfigured, securityNoticeMail, sendMail, teamInviteMail } from "..
 import { requirePrincipal } from "../middleware/tenant";
 import { publicOrigin } from "./auth";
 import type { OrgRole, Principal } from "../identity/principal";
-import { sandboxRegistry } from "../execution/sandbox/SandboxRegistry";
-import { decideRequest, TEMPLATE_LABELS } from "../execution/sandbox/policyRequests";
+import { sandboxRegistry } from "../execution/sandbox/AsyncSandboxRegistry";
+import { decideRequest, TEMPLATE_LABELS } from "../execution/sandbox/asyncPolicyRequests";
 
 export const accountRouter = Router();
 
@@ -41,43 +42,43 @@ function fail(res: Response, err: any): void {
   res.status(err?.status ?? 400).json({ error: String(err?.message ?? err), code: err?.code });
 }
 
-function seatsFor(tenantId: string): number {
-  return planById(creditLedger.planOf(tenantId) ?? "free").features.teamSeats;
+async function seatsFor(tenantId: string): Promise<number> {
+  return planById((await creditLedger.planOf(tenantId)) ?? "free").features.teamSeats;
 }
 
 // ── Profile & password ───────────────────────────────────────────────────
 
-accountRouter.patch("/profile", (req, res) => {
+accountRouter.patch("/profile", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   const name = String(req.body?.name ?? "").trim();
   if (name.length < 2 || name.length > 80) return res.status(400).json({ error: "Enter your name (2–80 characters)." });
-  authService.setName(p.userId, name);
+  (await authService.setName(p.userId, name));
   res.json({ ok: true, name });
-});
+}));
 
-accountRouter.post("/password", async (req, res) => {
+accountRouter.post("/password", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   try {
-    const ended = authService.changePassword(p.userId, String(req.body?.current ?? ""), String(req.body?.next ?? ""), bearer(req));
+    const ended = (await authService.changePassword(p.userId, String(req.body?.current ?? ""), String(req.body?.next ?? ""), bearer(req)));
     if (mailConfigured()) {
       void sendMail(securityNoticeMail({ to: p.email, name: p.name, subject: "Your ORVYN password was changed", message: "Your ORVYN password was just changed. Every other device was signed out." })).catch(() => undefined);
     }
     res.json({ ok: true, signedOut: ended });
   } catch (err) { fail(res, err); }
-});
+}));
 
 // ── Team ──────────────────────────────────────────────────────────────────
 
-accountRouter.get("/team", (req, res) => {
+accountRouter.get("/team", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const org = authService.getOrganization(p.organizationId);
-  const members = authService.listMembers(p.organizationId);
-  const invites = authService.listInvites(p.organizationId);
-  const role = authService.memberRole(p.organizationId, p.userId) ?? p.role;
-  const seats = seatsFor(p.tenantId);
+  const org = (await authService.getOrganization(p.organizationId));
+  const members = (await authService.listMembers(p.organizationId));
+  const invites = (await authService.listInvites(p.organizationId));
+  const role = (await authService.memberRole(p.organizationId, p.userId)) ?? p.role;
+  const seats = (await seatsFor(p.tenantId));
   res.json({
     organization: org ? { id: org.id, name: org.name, kind: org.kind } : null,
     role,
@@ -85,23 +86,23 @@ accountRouter.get("/team", (req, res) => {
     members: members.map((m) => ({ ...m, you: m.userId === p.userId })),
     invites,
     seats: { included: seats, used: members.filter((m) => m.role !== "owner").length + invites.length },
-    plan: planById(creditLedger.planOf(p.tenantId) ?? "free").label,
+    plan: planById((await creditLedger.planOf(p.tenantId)) ?? "free").label,
   });
-});
+}));
 
-accountRouter.patch("/team", (req, res) => {
+accountRouter.patch("/team", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  try { res.json({ organization: authService.renameOrganization(p, String(req.body?.name ?? "")) }); } catch (err) { fail(res, err); }
-});
+  try { res.json({ organization: (await authService.renameOrganization(p, String(req.body?.name ?? ""))) }); } catch (err) { fail(res, err); }
+}));
 
-accountRouter.post("/team/invites", async (req, res) => {
+accountRouter.post("/team/invites", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   const role: OrgRole = req.body?.role === "admin" ? "admin" : "member";
   try {
-    const { token, invite } = authService.createInvite(p, String(req.body?.email ?? ""), role, seatsFor(p.tenantId));
-    const org = authService.getOrganization(p.organizationId);
+    const { token, invite } = (await authService.createInvite(p, String(req.body?.email ?? ""), role, (await seatsFor(p.tenantId))));
+    const org = (await authService.getOrganization(p.organizationId));
     const link = `${publicOrigin(req)}/invite?token=${encodeURIComponent(token)}`;
     let emailed = false;
     if (mailConfigured()) {
@@ -113,140 +114,140 @@ accountRouter.post("/team/invites", async (req, res) => {
     // The link is shown once to the inviter too, so an invitation never depends on email delivery.
     res.status(201).json({ invite, link, emailed });
   } catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.delete("/team/invites/:id", (req, res) => {
+accountRouter.delete("/team/invites/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  try { res.json({ ok: authService.revokeInvite(p, String(req.params.id)) }); } catch (err) { fail(res, err); }
-});
+  try { res.json({ ok: (await authService.revokeInvite(p, String(req.params.id))) }); } catch (err) { fail(res, err); }
+}));
 
 /** What an invitation is for, before joining (only the invited email may accept). */
-accountRouter.get("/invites/:token", (req, res) => {
+accountRouter.get("/invites/:token", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const info = authService.inviteInfo(String(req.params.token));
+  const info = (await authService.inviteInfo(String(req.params.token)));
   if (!info) return res.status(410).json({ error: "This invitation has expired or was already used. Ask for a new one." });
   res.json({ organizationName: info.organizationName, role: info.role, invitedBy: info.invitedBy, email: info.email, matches: info.email === p.email });
-});
+}));
 
-accountRouter.post("/invites/accept", (req, res) => {
+accountRouter.post("/invites/accept", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  const user = authService.getUser(p.userId);
+  const user = (await authService.getUser(p.userId));
   if (!user) return res.status(401).json({ error: "Sign in again." });
   try {
-    const org = authService.acceptInvite(String(req.body?.token ?? ""), user);
+    const org = (await authService.acceptInvite(String(req.body?.token ?? ""), user));
     res.json({ organization: { id: org.id, name: org.name, kind: org.kind } });
   } catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.post("/invites/:id/accept", (req, res) => {
+accountRouter.post("/invites/:id/accept", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  const user = authService.getUser(p.userId);
+  const user = (await authService.getUser(p.userId));
   if (!user) return res.status(401).json({ error: "Sign in again." });
   try {
-    const org = authService.acceptInviteById(String(req.params.id), user);
+    const org = (await authService.acceptInviteById(String(req.params.id), user));
     res.json({ organization: { id: org.id, name: org.name, kind: org.kind } });
   } catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.post("/invites/:id/decline", (req, res) => {
+accountRouter.post("/invites/:id/decline", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  const user = authService.getUser(p.userId);
-  res.json({ ok: user ? authService.declineInvite(String(req.params.id), user) : false });
-});
+  const user = (await authService.getUser(p.userId));
+  res.json({ ok: user ? (await authService.declineInvite(String(req.params.id), user)) : false });
+}));
 
-accountRouter.patch("/team/members/:userId", (req, res) => {
+accountRouter.patch("/team/members/:userId", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   const role = req.body?.role;
   if (role !== "admin" && role !== "member") return res.status(400).json({ error: "Role must be admin or member." });
-  try { authService.setMemberRole(p, String(req.params.userId), role); res.json({ ok: true }); } catch (err) { fail(res, err); }
-});
+  try { (await authService.setMemberRole(p, String(req.params.userId), role)); res.json({ ok: true }); } catch (err) { fail(res, err); }
+}));
 
-accountRouter.delete("/team/members/:userId", (req, res) => {
+accountRouter.delete("/team/members/:userId", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  try { authService.removeMember(p, String(req.params.userId)); res.json({ ok: true }); } catch (err) { fail(res, err); }
-});
+  try { (await authService.removeMember(p, String(req.params.userId))); res.json({ ok: true }); } catch (err) { fail(res, err); }
+}));
 
-accountRouter.post("/team/leave", (req, res) => {
+accountRouter.post("/team/leave", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  try { authService.removeMember(p, p.userId); res.json({ ok: true }); } catch (err) { fail(res, err); }
-});
+  try { (await authService.removeMember(p, p.userId)); res.json({ ok: true }); } catch (err) { fail(res, err); }
+}));
 
 // ── Personal API keys ─────────────────────────────────────────────────────
 
-accountRouter.get("/api-keys", (req, res) => {
+accountRouter.get("/api-keys", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const included = planById(creditLedger.planOf(p.tenantId) ?? "free").features.apiAccess;
-  res.json({ included, keys: authService.listApiKeys(p.userId, p.organizationId) });
-});
+  const included = planById((await creditLedger.planOf(p.tenantId)) ?? "free").features.apiAccess;
+  res.json({ included, keys: (await authService.listApiKeys(p.userId, p.organizationId)) });
+}));
 
-accountRouter.post("/api-keys", (req, res) => {
+accountRouter.post("/api-keys", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  if (!planById(creditLedger.planOf(p.tenantId) ?? "free").features.apiAccess) {
+  if (!planById((await creditLedger.planOf(p.tenantId)) ?? "free").features.apiAccess) {
     return res.status(402).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
   }
   try {
-    const { key, record } = authService.createApiKey(p, String(req.body?.name ?? ""));
+    const { key, record } = (await authService.createApiKey(p, String(req.body?.name ?? "")));
     // The full key is returned exactly once; only its hash is stored.
     res.status(201).json({ key, record });
   } catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.delete("/api-keys/:id", (req, res) => {
+accountRouter.delete("/api-keys/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  res.json({ ok: authService.revokeApiKey(p.userId, String(req.params.id)) });
-});
+  res.json({ ok: (await authService.revokeApiKey(p.userId, String(req.params.id))) });
+}));
 
 // ── Connected apps ────────────────────────────────────────────────────────
 
-accountRouter.get("/connections", (req, res) => {
+accountRouter.get("/connections", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const sessions = authService.listSessions(p.userId, bearer(req));
+  const sessions = (await authService.listSessions(p.userId, bearer(req)));
   const desktops = sessions.filter((s) => /desktop|electron|orvyn/i.test(s.device) && !/browser|chrome|firefox|safari|edge/i.test(s.device));
   res.json({
-    github: githubConnection(p.userId),
-    deployment: deploymentConnections(p.tenantId),
+    github: (await githubConnection(p.userId)),
+    deployment: await deploymentConnections(p.tenantId),
     desktop: { connected: desktops.length > 0, devices: desktops.map((d) => ({ id: d.id, device: d.device, lastUsedAt: d.lastUsedAt })) },
   });
-});
+}));
 
-accountRouter.put("/connections/:id", (req, res) => {
+accountRouter.put("/connections/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   if (p.role !== "owner" && p.role !== "admin") return res.status(403).json({ error: "Only a workspace owner or admin can manage deployment credentials." });
-  try { saveDeploymentConnection(p.tenantId, String(req.params.id), String(req.body?.token ?? "")); res.json({ ok: true }); }
+  try { await saveDeploymentConnection(p.tenantId, String(req.params.id), String(req.body?.token ?? "")); res.json({ ok: true }); }
   catch (err) { fail(res, err); }
-});
+}));
 
-accountRouter.delete("/connections/:id", (req, res) => {
+accountRouter.delete("/connections/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
   if (p.role !== "owner" && p.role !== "admin") return res.status(403).json({ error: "Only a workspace owner or admin can manage deployment credentials." });
-  try { removeDeploymentConnection(p.tenantId, String(req.params.id)); res.json({ ok: true }); }
+  try { await removeDeploymentConnection(p.tenantId, String(req.params.id)); res.json({ ok: true }); }
   catch (err) { fail(res, err); }
-});
+}));
 
 // ── Network access requests from cloud missions ─────────────────────────
 // A mission's workspace starts with no network. When ORION needs some, it
 // files a request; an owner or admin of the organization decides here.
 
-function canManage(p: Principal): boolean {
-  const role = authService.memberRole(p.organizationId, p.userId) ?? p.role;
+async function canManage(p: Principal): Promise<boolean> {
+  const role = (await authService.memberRole(p.organizationId, p.userId)) ?? p.role;
   return role === "owner" || role === "admin";
 }
 
-function requestView(r: ReturnType<ReturnType<typeof sandboxRegistry>["policyRequest"]>) {
+function requestView(r: Awaited<ReturnType<ReturnType<typeof sandboxRegistry>["policyRequest"]>>) {
   if (!r) return null;
   return {
     id: r.id, runId: r.runId, access: TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template,
@@ -254,31 +255,31 @@ function requestView(r: ReturnType<ReturnType<typeof sandboxRegistry>["policyReq
   };
 }
 
-accountRouter.get("/network-requests", (req, res) => {
+accountRouter.get("/network-requests", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const rows = sandboxRegistry().policyRequests({ organizationId: p.organizationId, limit: 50 });
-  res.json({ canDecide: canManage(p), requests: rows.map(requestView) });
-});
+  const rows = (await sandboxRegistry().policyRequests({ organizationId: p.organizationId, limit: 50 }));
+  res.json({ canDecide: (await canManage(p)), requests: rows.map(requestView) });
+}));
 
-accountRouter.post("/network-requests/:id", (req, res) => {
+accountRouter.post("/network-requests/:id", asyncHandler(async (req, res) => {
   const p = person(req, res);
   if (!p) return;
-  if (!canManage(p)) return res.status(403).json({ error: "Only an owner or admin can decide network access." });
+  if (!(await canManage(p))) return res.status(403).json({ error: "Only an owner or admin can decide network access." });
   if (typeof req.body?.approve !== "boolean") return res.status(400).json({ error: "approve must be true or false." });
   try {
-    const out = decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `user:${p.userId}`, { organizationId: p.organizationId });
+    const out = (await decideRequest(sandboxRegistry(), req.params.id, req.body.approve, `user:${p.userId}`, { organizationId: p.organizationId }));
     if (!out) return res.status(404).json({ error: "Request not found." });
     res.json({ request: requestView(out) });
   } catch (err) { fail(res, err); }
-});
+}));
 
 // ── Notifications (derived from the account's real state) ───────────────
 
-accountRouter.get("/notifications", (req, res) => {
+accountRouter.get("/notifications", asyncHandler(async (req, res) => {
   const p = person(req, res, false);
   if (!p) return;
-  const w = creditLedger.snapshot(p.tenantId);
+  const w = (await creditLedger.snapshot(p.tenantId));
   const out: { id: string; kind: "warning" | "info" | "danger"; title: string; body: string; href?: string; at: number; inviteId?: string }[] = [];
   const now = Date.now();
   if (w.subscription.status === "past_due" || w.subscription.status === "unpaid") {
@@ -293,17 +294,17 @@ accountRouter.get("/notifications", (req, res) => {
       out.push({ id, kind: "warning", title: `You've used ${Math.min(100, Math.round((win.used / win.limit) * 100))}% of your ${label} allowance`, body: `It refills ${new Date(win.resetAt).toUTCString().slice(0, 22)} UTC.`, href: "/usage", at: now });
     }
   }
-  if (canManage(p)) {
+  if ((await canManage(p))) {
     try {
-      for (const r of sandboxRegistry().policyRequests({ organizationId: p.organizationId, status: "pending", limit: 10 })) {
+      for (const r of (await sandboxRegistry().policyRequests({ organizationId: p.organizationId, status: "pending", limit: 10 }))) {
         const label = TEMPLATE_LABELS[r.template as keyof typeof TEMPLATE_LABELS] ?? r.template;
         out.push({ id: `netreq-${r.id}`, kind: "warning", title: `A task is asking for network access: ${label}`, body: `${r.reason || "No reason given."}${r.params.host?.length ? ` (${r.params.host.join(", ")})` : ""}`, at: r.createdAt, networkRequestId: r.id } as any);
       }
     } catch { /* registry unavailable */ }
   }
-  const invites = authService.invitesForEmail(p.email);
+  const invites = (await authService.invitesForEmail(p.email));
   for (const i of invites) {
     out.push({ id: `invite-${i.id}`, kind: "info", title: `Invitation to ${i.organizationName}`, body: `${i.invitedBy ?? "Someone"} invited you to join as ${i.role === "admin" ? "an admin" : "a member"}.`, at: i.createdAt, inviteId: i.id });
   }
   res.json({ notifications: out });
-});
+}));

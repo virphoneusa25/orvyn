@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("orvyn", {
+
   system: {
     /** Live machine stats for the status bar — sampled in main, never guessed. */
     getStats: (): Promise<{

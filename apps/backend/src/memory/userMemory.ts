@@ -1,4 +1,4 @@
-import { memoryEnabled } from "../onboarding/preferences";
+import { memoryEnabled, memoryEnabledAsync, readPreferencesAsync } from "../onboarding/preferences";
 // apps/backend/src/memory/userMemory.ts
 //
 // ORION remembers the user across conversations: who they are, their
@@ -31,6 +31,20 @@ export interface MemoryStoreLike {
   listMemories(projectRoot?: string | null, limit?: number): MemoryRow[];
   saveMemory(input: { id: string; scope: "global" | "project"; projectRoot?: string | null; kind: string; title: string; content: string; source?: string | null; pinned?: boolean }): void;
   deleteMemory(id: string): void;
+}
+
+export interface AsyncMemoryStoreLike {
+  listMemories(projectRoot?: string | null, limit?: number): MemoryRow[] | Promise<MemoryRow[]>;
+  saveMemory(input: Parameters<MemoryStoreLike["saveMemory"]>[0]): void | Promise<void>;
+  deleteMemory(id: string): void | Promise<void>;
+  getSetting?(key: string): string | null | Promise<string | null>;
+}
+
+export async function userMemoryPromptAsync(store: AsyncMemoryStoreLike | undefined, text: string, projectRoot?: string | null): Promise<string> {
+  const preferences = await readPreferencesAsync(store);
+  if (!store || preferences.memory === false) return "";
+  const rows = await store.listMemories(projectRoot ?? null, 300);
+  return userMemoryPrompt({ listMemories: () => rows, saveMemory() {}, deleteMemory() {}, getSetting: () => JSON.stringify(preferences) } as MemoryStoreLike, text, projectRoot);
 }
 
 export interface GenerateLike {
@@ -100,24 +114,24 @@ export interface LearnResult { added: string[]; updated: string[]; removed: stri
  * Learns from one user message. Explicit "remember that …" is saved as said;
  * otherwise a model extracts durable facts. Never throws (memory is best-effort).
  */
-export async function learnFromUserMessage(store: MemoryStoreLike | undefined, model: GenerateLike | undefined, userText: string): Promise<LearnResult> {
+export async function learnFromUserMessage(store: AsyncMemoryStoreLike | undefined, model: GenerateLike | undefined, userText: string): Promise<LearnResult> {
   // Project Memory off (onboarding / settings): nothing is learned.
-  if (!memoryEnabled(store)) return { added: [], updated: [], removed: [] };
+  try { if (!await memoryEnabledAsync(store)) return { added: [], updated: [], removed: [] }; } catch { return { added: [], updated: [], removed: [] }; }
   const result: LearnResult = { added: [], updated: [], removed: [] };
   if (!store || !mightTeachAboutUser(userText) || SECRET.test(userText)) return result;
   let existing: MemoryRow[] = [];
-  try { existing = store.listMemories(null, 300).filter((m) => m.kind === ABOUT_USER); } catch { return result; }
-  const save = (content: string, id = `mem_${randomUUID()}`, source = "learned") => {
+  try { existing = (await store.listMemories(null, 300)).filter((m) => m.kind === ABOUT_USER); } catch { return result; }
+  const save = async (content: string, id = `mem_${randomUUID()}`, source = "learned") => {
     const clean = content.replace(/\s+/g, " ").trim().slice(0, 400);
     if (!clean || SECRET.test(clean)) return false;
     if (existing.some((m) => m.content.trim().toLowerCase() === clean.toLowerCase() && m.id !== id)) return false;
-    store.saveMemory({ id, scope: "global", projectRoot: null, kind: ABOUT_USER, title: titleOf(clean), content: clean, source, pinned: false });
+    try { await store.saveMemory({ id, scope: "global", projectRoot: null, kind: ABOUT_USER, title: titleOf(clean), content: clean, source, pinned: false }); } catch { return false; }
     return true;
   };
 
   const explicit = EXPLICIT.exec(userText.trim());
   if (explicit && !model) {
-    if (save(explicit[1]!.replace(/[.\s]+$/, "") + ".", undefined, "user")) result.added.push(explicit[1]!);
+    if (await save(explicit[1]!.replace(/[.\s]+$/, "") + ".", undefined, "user")) result.added.push(explicit[1]!);
     return result;
   }
   if (!model) return result;
@@ -132,19 +146,19 @@ export async function learnFromUserMessage(store: MemoryStoreLike | undefined, m
     });
     const data = parseJson(String(reply?.content ?? ""));
     if (!data) {
-      if (explicit && save(explicit[1]!, undefined, "user")) result.added.push(explicit[1]!);
+      if (explicit && await save(explicit[1]!, undefined, "user")) result.added.push(explicit[1]!);
       return result;
     }
     const ids = new Set(existing.map((m) => m.id));
     for (const fact of Array.isArray(data.add) ? data.add : []) {
-      if (typeof fact === "string" && save(fact, undefined, explicit ? "user" : "learned")) result.added.push(fact);
+      if (typeof fact === "string" && await save(fact, undefined, explicit ? "user" : "learned")) result.added.push(fact);
     }
     for (const u of Array.isArray(data.update) ? data.update : []) {
       const row = u as { id?: unknown; content?: unknown };
-      if (typeof row.id === "string" && ids.has(row.id) && typeof row.content === "string" && save(row.content, row.id, "learned")) result.updated.push(row.id);
+      if (typeof row.id === "string" && ids.has(row.id) && typeof row.content === "string" && await save(row.content, row.id, "learned")) result.updated.push(row.id);
     }
     for (const id of Array.isArray(data.remove) ? data.remove : []) {
-      if (typeof id === "string" && ids.has(id)) { store.deleteMemory(id); result.removed.push(id); }
+      if (typeof id === "string" && ids.has(id)) { await store.deleteMemory(id); result.removed.push(id); }
     }
   } catch {
     /* memory is best-effort; the conversation never waits on it */

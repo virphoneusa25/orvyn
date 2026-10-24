@@ -244,6 +244,17 @@ export class SandboxRegistry {
     return (this.db.prepare(`SELECT * FROM execution_sandboxes WHERE state NOT IN ('completed','failed','stopped') ORDER BY created_at DESC`).all() as any[]).map((r) => this.row(r)!);
   }
 
+  /** Check lifecycle and human approval within the same storage transaction. */
+  authorizedSandbox(runId:string,templates:string[]):SandboxRecord|null{
+    const rec=this.forRun(runId);
+    if(!rec||rec.provider!=="openshell"||["completed","failed","stopped"].includes(rec.state))return null;
+    return this.policyRequests({runId,limit:50}).some(r=>(r.status==="approved"||r.status==="applied")&&templates.includes(r.template))?rec:null;
+  }
+
+  failures(limit=25):SandboxRecord[]{
+    return (this.db.prepare("SELECT * FROM execution_sandboxes WHERE state = 'failed' OR fallback_reason IS NOT NULL ORDER BY updated_at DESC LIMIT ?").all(limit) as any[]).map(r=>this.row(r)!);
+  }
+
   /** Aggregates for admin System Health. */
   stats(sinceMs: number, now = Date.now()): {
     byProvider: Record<string, { active: number; failed: number; created: number; avgProvisionMs: number | null; p95ProvisionMs: number | null; reconnects: number; policyDenials: number; execCount: number; execMs: number; fallbacks: number }>;

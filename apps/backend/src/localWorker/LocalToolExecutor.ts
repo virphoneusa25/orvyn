@@ -19,6 +19,8 @@ import { isServiceCommand, runService, type ServiceRecord } from "../services/Se
 import { listServices, serviceLogs, stopService } from "../ai/tools/processTools";
 import type { ToolResult, ToolExecutionContext } from "../ai/ToolTypes";
 import {
+  makeHostDesktopInspectTool,
+  makeHostDesktopKeyTool,
   makeHostDesktopClickTool,
   makeHostDesktopFocusTool,
   makeHostDesktopMoveTool,
@@ -26,8 +28,6 @@ import {
   makeHostDesktopScrollTool,
   makeHostDesktopStatusTool,
   makeHostDesktopTypeTool,
-  makeHostDesktopKeyTool,
-  makeHostDesktopInspectTool,
 } from "../ai/tools/hostDesktopTools";
 
 export interface LocalToolRequest {

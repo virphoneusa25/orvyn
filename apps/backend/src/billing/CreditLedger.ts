@@ -93,6 +93,10 @@ interface RateCard {
 }
 
 export interface UsageChargeInput {
+  requireExactRate?: boolean;
+  imageCount?: number;
+  /** The rate quoted when inference began; late completions keep that version. */
+  rateAt?: number;
   userId: string;
   organizationId?: string;
   sessionId?: string;
@@ -239,6 +243,11 @@ export class CreditLedger {
         extra_usd REAL NOT NULL DEFAULT 0
       );
     `);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS image_usage_counts (event_id TEXT PRIMARY KEY, n INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS image_rate_cards (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL,
+        usd_per_image REAL NOT NULL, source TEXT NOT NULL, verified_at INTEGER NOT NULL, UNIQUE(provider,model,verified_at));
+      CREATE TABLE IF NOT EXISTS image_reservations (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, lane TEXT NOT NULL,
+        n INTEGER NOT NULL, credits INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.seedDefaultRateCard();
     this.migrateV1();
   }
@@ -260,15 +269,17 @@ export class CreditLedger {
 
   setRateCard(card: Omit<RateCard, "id" | "effectiveTo"> & { effectiveFrom?: number }): RateCard {
     const from = card.effectiveFrom ?? Date.now();
+    if (![card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion].every((n) => Number.isFinite(n) && n >= 0)) throw new Error("Invalid provider rates");
+    const future = this.db.prepare(`SELECT MIN(effective_from) AS next FROM rate_cards WHERE model_id = ? AND provider = ? AND effective_from > ?`).get(card.modelId, card.provider, from) as { next: number | null };
     this.db.prepare(
-      `UPDATE rate_cards SET effective_to = ? WHERE model_id = ? AND provider = ? AND effective_to IS NULL AND effective_from < ?`,
-    ).run(from, card.modelId, card.provider, from);
+      `UPDATE rate_cards SET effective_to = ? WHERE model_id = ? AND provider = ? AND (effective_to IS NULL OR effective_to > ?) AND effective_from < ?`,
+    ).run(from, card.modelId, card.provider, from, from);
     const id = `rc_${randomUUID().slice(0, 8)}`;
     this.db.prepare(
       `INSERT INTO rate_cards (id, provider, model_id, input_usd_per_million, cached_input_usd_per_million, output_usd_per_million, effective_from, effective_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-    ).run(id, card.provider, card.modelId, card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion, from);
-    return { ...card, id, effectiveFrom: from, effectiveTo: null };
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, card.provider, card.modelId, card.inputUsdPerMillion, card.cachedInputUsdPerMillion, card.outputUsdPerMillion, from, future.next);
+    return { ...card, id, effectiveFrom: from, effectiveTo: future.next };
   }
 
   rateCardAt(provider: string, modelId: string, at: number): RateCard | null {
@@ -374,7 +385,7 @@ export class CreditLedger {
   // ---------- money in ----------
 
   /** Credits a paid top-up. `paymentRef` is the payment's id (Stripe event / payment intent): one credit per payment. */
-  creditPurchase(accountId: string, packId: PackId, opts: { paymentRef: string; source?: "checkout" | "auto_recharge"; amountUsd?: number }, now = Date.now()): { credits: number; priceUsd: number; duplicate: boolean } {
+  creditPurchase(accountId: string, packId: PackId, opts: { paymentRef: string; source?: "checkout" | "auto_recharge"; amountUsd?: number; recharge?:{cycleStart:number;n:number} }, now = Date.now()): { credits: number; priceUsd: number; duplicate: boolean } {
     const pack = packById(packId);
     if (!pack) throw new BillingLimitError("PACK", "Unknown credit pack.");
     if (!opts.paymentRef) throw new BillingLimitError("PAYMENT", "A top-up needs a payment reference.");
@@ -386,7 +397,8 @@ export class CreditLedger {
         key: `topup:${opts.paymentRef}`, meta: { pack: pack.id, priceUsd: opts.amountUsd ?? pack.priceUsd, source: opts.source ?? "checkout", paymentRef: opts.paymentRef }, now,
       });
       if (!duplicate && opts.source === "auto_recharge") {
-        this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+        if(opts.recharge)this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId,opts.recharge.cycleStart,opts.recharge.n);
+        else this.db.prepare(`UPDATE auto_recharge_requests SET status = 'paid' WHERE account_id = ? AND status = 'pending'`).run(accountId);
       }
     });
     return { credits: pack.credits, priceUsd: pack.priceUsd, duplicate };
@@ -474,6 +486,12 @@ export class CreditLedger {
     return this.entryByKey(key)!.id;
   }
 
+  /** Authoritative remaining reservations for one account, including after restart. */
+  heldRuns(accountId: string): Array<{runId:string;credits:number}> {
+    const rows = this.db.prepare(`SELECT run_id, SUM(amount) AS n FROM ledger_entries WHERE account_id = ? AND bucket = 'hold' AND run_id IS NOT NULL GROUP BY run_id HAVING SUM(amount) > 0 ORDER BY run_id`).all(accountId) as {run_id:string;n:number}[];
+    return rows.map(row => ({runId:row.run_id,credits:Number(row.n)}));
+  }
+
   /** Returns what a finished run did not use. Safe to call more than once. */
   release(runId: string, now = Date.now()): void {
     this.tx(() => {
@@ -490,7 +508,8 @@ export class CreditLedger {
     this.ensureAccount(accountId, DEFAULT_PLAN, now);
     if (use.lane || use.type) this.assertEntitlement(accountId, use.lane ?? "auto", use.type ?? "model", now);
     if (runId) this.assertRunCap(accountId, runId, 0, now);
-    const available = this.available(accountId) + (runId ? this.holdRemaining(runId) : 0);
+    const pending = this.pendingImages(accountId, now).credits;
+    const available = this.available(accountId) + (runId ? this.holdRemaining(runId) : 0) - pending;
     if (available <= 0) {
       throw new BillingLimitError("BALANCE", "You're out of credits. Add credits or upgrade your plan to continue.");
     }
@@ -501,13 +520,47 @@ export class CreditLedger {
     const plan = planById(w.plan_id);
     const limit5h = this.bucketSum(accountId, "purchased") > 0 ? plan.burst5h : plan.rolling5h;
     const used5h = this.windowCredits(accountId, now - 5 * HOUR, now);
-    if (used5h >= limit5h) {
+    if (used5h + pending >= limit5h) {
       throw new BillingLimitError("WINDOW_5H", `You've used this 5-hour window's ${limit5h.toLocaleString("en-US")} credits. It frees up as earlier usage ages out.`);
     }
     const used7d = this.windowCredits(accountId, now - 7 * DAY, now);
-    if (used7d >= plan.rolling7d) {
+    if (used7d + pending >= plan.rolling7d) {
       throw new BillingLimitError("WINDOW_7D", `You've used this week's ${plan.rolling7d.toLocaleString("en-US")} credits. It frees up as earlier usage ages out.`);
     }
+  }
+
+  setImageRateCard(provider: string, model: string, quote: { usdPerImage: number; source: string; verifiedAt: number }): void {
+    if (!Number.isFinite(quote.usdPerImage) || quote.usdPerImage <= 0 || !Number.isSafeInteger(quote.verifiedAt)) throw new Error("Invalid per-image rate");
+    this.db.prepare("INSERT OR IGNORE INTO image_rate_cards VALUES (?, ?, ?, ?, ?, ?)").run(`image_rate_${randomUUID()}`, provider, model, quote.usdPerImage, quote.source, quote.verifiedAt);
+  }
+
+  /** Persisted leases prevent parallel image calls from bypassing burst/wallet checks. */
+  reserveImage(accountId: string, count: number, lane: "image" | "image_pro", costUsd: number, now = Date.now()): () => void {
+    if (!Number.isInteger(count) || count < 1 || count > 4 || !Number.isFinite(costUsd) || costUsd <= 0) throw new Error("Invalid image quote");
+    const id = `image_${randomUUID()}`;
+    this.tx(() => {
+      this.assertCanSpend(accountId, undefined, now, { lane, type: "image" });
+      const plan = planById(this.wallet(accountId)!.plan_id);
+      const premium = lane === "image_pro";
+      const pending = this.pendingImages(accountId, now, lane);
+      if (this.countImages(accountId, premium, now - 5 * HOUR, now) + pending.n + count > (premium ? plan.proImages5h : plan.images5h) ||
+          this.countImages(accountId, premium, now - 7 * DAY, now) + pending.n + count > (premium ? plan.proImages7d : plan.images7d)) {
+        throw new BillingLimitError("IMAGE_BURST", "This image request exceeds your remaining image allowance.");
+      }
+      const credits = customerCreditsFor(costUsd, LANE_FACTORS[lane]).customerCredits;
+      const totalPending = this.pendingImages(accountId, now).credits;
+      const limit5 = this.bucketSum(accountId, "purchased") > 0 ? plan.burst5h : plan.rolling5h;
+      if (this.available(accountId) - totalPending < credits) throw new BillingLimitError("BALANCE", "Not enough credits for this image request.");
+      if (this.windowCredits(accountId, now - 5 * HOUR, now) + totalPending + credits > limit5) throw new BillingLimitError("WINDOW_5H", "This image request exceeds your 5-hour credit allowance.");
+      if (this.windowCredits(accountId, now - 7 * DAY, now) + totalPending + credits > plan.rolling7d) throw new BillingLimitError("WINDOW_7D", "This image request exceeds your weekly credit allowance.");
+      this.db.prepare("INSERT INTO image_reservations VALUES (?, ?, ?, ?, ?, ?)").run(id, accountId, lane, count, credits, now + HOUR);
+    });
+    return () => { this.db.prepare("DELETE FROM image_reservations WHERE id = ? AND account_id = ?").run(id, accountId); };
+  }
+
+  private pendingImages(accountId: string, now: number, lane?: string): { n: number; credits: number } {
+    return this.db.prepare(`SELECT COALESCE(SUM(n),0) AS n, COALESCE(SUM(credits),0) AS credits FROM image_reservations
+      WHERE account_id = ? AND expires_at > ? ${lane ? "AND lane = ?" : ""}`).get(...(lane ? [accountId, now, lane] : [accountId, now])) as { n: number; credits: number };
   }
 
   /**
@@ -522,7 +575,11 @@ export class CreditLedger {
     const prior = this.db.prepare(`SELECT credits_charged, provider_cost_micros FROM usage_events WHERE id = ?`).get(eventId) as { credits_charged: number; provider_cost_micros: number } | undefined;
     if (prior) return { creditsCharged: 0, providerCostUsd: prior.provider_cost_micros / 1_000_000, eventId };
     const lane: Lane = input.lane ?? "auto";
-    const card = this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", now);
+    if (input.type === "image" && input.ok !== false && input.providerCostUsd === undefined) throw new Error("Successful image usage requires an exact provider cost");
+    const card = input.type === "image" ? undefined : this.rateCardAt(input.provider ?? "orvyn", input.model ?? "default", input.rateAt ?? now);
+    if (input.requireExactRate && input.type === "model" && input.ok !== false && input.providerCostUsd === undefined && (!card || card.provider !== input.provider || card.modelId !== input.model)) throw new Error("Exact provider/model billing rate required");
+    if (input.providerCostUsd !== undefined && (!Number.isFinite(input.providerCostUsd) || input.providerCostUsd < 0)) throw new Error("Invalid provider settlement cost");
+    const imageCard = input.type === "image" ? this.db.prepare("SELECT id FROM image_rate_cards WHERE provider = ? AND model = ? AND verified_at <= ? ORDER BY verified_at DESC LIMIT 1").get(input.provider ?? "", input.model ?? "", input.rateAt ?? now) as { id: string } | undefined : undefined;
     const cost = input.providerCostUsd ?? (card
       ? providerCostUsd({
           inputTokens: input.inputTokens,
@@ -547,8 +604,9 @@ export class CreditLedger {
         eventId, input.userId, input.organizationId ?? null, input.sessionId ?? null, input.runId ?? null, input.type,
         input.provider ?? null, input.model ?? null, lane,
         input.inputTokens ?? null, input.cachedInputTokens ?? null, input.outputTokens ?? null,
-        Math.round(cost * 1_000_000), charged, card?.id ?? null, input.ok === false ? 0 : 1, now,
+        Math.round(cost * 1_000_000), charged, imageCard?.id ?? card?.id ?? null, input.ok === false ? 0 : 1, now,
       );
+      if (input.type === "image") this.db.prepare("INSERT INTO image_usage_counts VALUES (?, ?)").run(eventId, input.ok === false ? 0 : input.imageCount ?? 1);
     });
     if (charged > 0) this.maybeAutoRecharge(input.userId, now);
     return { creditsCharged: charged, providerCostUsd: cost, eventId };
@@ -777,10 +835,10 @@ export class CreditLedger {
     const w = this.wallet(accountId)!;
     if (this.available(accountId) >= settings.threshold) return;
     const requests = this.db.prepare(`SELECT n, status FROM auto_recharge_requests WHERE account_id = ? AND cycle_start = ? ORDER BY n`).all(accountId, w.cycle_start) as { n: number; status: string }[];
-    if (requests.some((r) => r.status === "pending")) return; // one payment in flight at a time
+    if (requests.some((r) => r.status === "pending" || r.status === "pending_v2" || r.status.startsWith("submitted:"))) return; // one payment in flight at a time
     if (requests.length >= settings.max_per_month) return; // the monthly cap
     this.db.prepare(
-      `INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`,
+      `INSERT INTO auto_recharge_requests (account_id, cycle_start, n, pack_id, status, created_at) VALUES (?, ?, ?, ?, 'pending_v2', ?)`,
     ).run(accountId, w.cycle_start, requests.length + 1, settings.pack_id, now);
     for (const l of this.rechargeListeners) {
       try { l(accountId, settings.pack_id as PackId); } catch { /* the payment side logs its own failures */ }
@@ -788,8 +846,20 @@ export class CreditLedger {
   }
 
   /** The payment side reports a failed auto-recharge so the next one can be tried (still within the cap). */
-  autoRechargeFailed(accountId: string): void {
-    this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+  autoRechargeFailed(accountId: string,recharge?:{cycleStart:number;n:number}): void {
+    if(recharge)this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND cycle_start = ? AND n = ? AND status <> 'paid'`).run(accountId,recharge.cycleStart,recharge.n);
+    else this.db.prepare(`UPDATE auto_recharge_requests SET status = 'failed' WHERE account_id = ? AND status = 'pending'`).run(accountId);
+  }
+
+  /** Legacy requests used timestamp keys and must be reconciled rather than automatically replayed. */
+  pendingAutoRecharges():Array<{accountId:string;cycleStart:number;n:number;packId:PackId;createdAt:number}> {
+    return (this.db.prepare(`SELECT account_id,cycle_start,n,pack_id,created_at FROM auto_recharge_requests WHERE status='pending_v2' ORDER BY created_at`).all() as any[])
+      .map(row=>({accountId:row.account_id,cycleStart:Number(row.cycle_start),n:Number(row.n),packId:row.pack_id,createdAt:Number(row.created_at)}));
+  }
+
+  autoRechargeDispatched(accountId:string,recharge:{cycleStart:number;n:number},paymentIntentId:string):void {
+    if(!/^pi_[a-zA-Z0-9_]+$/.test(paymentIntentId))throw new Error("Invalid recharge payment intent");
+    this.db.prepare(`UPDATE auto_recharge_requests SET status = ? WHERE account_id = ? AND cycle_start = ? AND n = ? AND status = 'pending_v2'`).run(`submitted:${paymentIntentId}`,accountId,recharge.cycleStart,recharge.n);
   }
 
   private assertRunCap(accountId: string, runId: string, nextCostUsd: number, _now: number): void {
@@ -857,7 +927,7 @@ export class CreditLedger {
 
   private countImages(accountId: string, pro: boolean, from: number, to: number): number {
     const row = this.db.prepare(
-      `SELECT COUNT(*) AS n FROM usage_events WHERE user_id = ? AND type = 'image' AND ok = 1 AND created_at > ? AND created_at <= ? AND lane ${pro ? "=" : "!="} 'image_pro'`,
+      `SELECT COALESCE(SUM(COALESCE(c.n,1)),0) AS n FROM usage_events u LEFT JOIN image_usage_counts c ON c.event_id=u.id WHERE user_id = ? AND type = 'image' AND ok = 1 AND created_at > ? AND created_at <= ? AND lane ${pro ? "=" : "!="} 'image_pro'`,
     ).get(accountId, from, to) as { n: number };
     return row.n;
   }

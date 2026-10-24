@@ -1,4 +1,4 @@
-import { NativeDesktopSettings } from './NativeDesktopSettings';
+import { NativeDesktopSettings } from "./NativeDesktopSettings";
 import React, { useEffect, useState } from "react";
 import { getConnectionConfig, loadConnectionConfig, saveConnectionConfig, apiUrl, authHeaders, isSessionToken, ORVYN_CLOUD_URL } from "../connection";
 import { onConnectionFacts, signInWithCredentials, signOutOfCloud } from "../connectionRuntime";
@@ -33,8 +33,7 @@ export function ConnectionSettings() {
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [stateLine, setStateLine] = useState("Local workspace");
-  const [hostDesktop, setHostDesktop] = useState(false);
-  const [hostDesktopDetail, setHostDesktopDetail] = useState("");
+
 
   useEffect(() => {
     loadConnectionConfig().then((c) => {
@@ -50,15 +49,6 @@ export function ConnectionSettings() {
         setAccount(null);
       }
     });
-    window.orvyn?.localWorker?.status?.()
-      .then((s) => setHostDesktop(Boolean(s.hostDesktopAllowed)))
-      .catch(() => undefined);
-    fetch(apiUrl("/host-desktop"), { headers: authHeaders() })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d && typeof d.allowed === "boolean") setHostDesktop(d.allowed);
-      })
-      .catch(() => undefined);
     fetch(apiUrl("/profile"), { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => {

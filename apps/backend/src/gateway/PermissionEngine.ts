@@ -15,8 +15,8 @@ export type Capability =
   | "GIT"
   | "DATABASE"
   | "DEPLOYMENT"
-  | "LOCAL_DESKTOP"
-  | "SYSTEM";
+  | "SYSTEM"
+  | "LOCAL_DESKTOP";
 
 export type AgentRole =
   | "orchestrator"
@@ -132,9 +132,9 @@ const TOOL_CAPABILITIES: Record<string, Capability[]> = {
 /** What each agent role is allowed to touch. Orchestrator plans; it does not edit. */
 const ROLE_CAPABILITIES: Record<AgentRole, Capability[]> = {
   orchestrator: ["READ", "GIT"],
-  coder: ["LOCAL_DESKTOP", "READ", "WRITE", "DELETE", "EXECUTE", "GIT", "NETWORK"],
+  coder: ["READ", "WRITE", "DELETE", "EXECUTE", "GIT", "NETWORK", "LOCAL_DESKTOP"],
   tester: ["READ", "EXECUTE", "NETWORK"],
-  browser: ["LOCAL_DESKTOP", "READ", "NETWORK", "EXECUTE"],
+  browser: ["READ", "NETWORK", "EXECUTE", "LOCAL_DESKTOP"],
   security: ["READ", "GIT"],
   research: ["READ", "NETWORK"],
   // WRITE here covers commit/checkout mutations; the git agent's TOOL list is

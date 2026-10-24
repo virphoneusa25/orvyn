@@ -1,1 +1,2 @@
 orvyn-desktop/entrypoint.sh text eol=lf
+*.sh text eol=lf

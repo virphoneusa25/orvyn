@@ -9,6 +9,7 @@ import { verifyProjectFile, type ProjectFileEvidence } from "../artifacts/projec
 import { resolveSafePath } from "../execution/pathSafety";
 import { selectImageModel } from "../models/selectModel";
 import { FireworksKontextProvider } from "./fireworksKontext";
+import type { ModelConfig } from "@orvyn/ai-core";
 
 export interface GenerateImageRequest {
   prompt: string;
@@ -94,6 +95,7 @@ export class ImageService {
   ) {}
 
   async generate(req: GenerateImageRequest): Promise<{ model: string; images: GeneratedImage[] }> {
+    await this.modelService.imageReady;
     if (!req.prompt?.trim()) throw new Error("Prompt is required");
     if (!this.artifacts) throw new Error("Artifact storage is not configured. Image generation cannot succeed without persistence.");
     if (req.projectRoot) {
@@ -101,7 +103,9 @@ export class ImageService {
       if (!workspace?.isDirectory()) throw new Error("Project workspace is unavailable for image generation; no project image was created.");
     }
     const listed = typeof this.modelService.registry.list === "function" ? this.modelService.registry.list() : [];
-    const imageModels = listed.filter((p) => p.config.capabilities.image);
+    const explicit = Boolean(req.modelId && req.modelId !== "auto");
+    const premium = req.quality === "premium" || explicit && /flux-kontext-max$/.test(req.modelId!);
+    const imageModels = listed.filter((p) => p.config.capabilities.image && (premium || !/flux-kontext-max$/.test(p.config.id)));
     const imageChoice = selectImageModel({
       quality: req.quality,
       editing: req.editing,
@@ -116,7 +120,7 @@ export class ImageService {
     if (req.editing && !imageChoice.registryId) throw new Error(imageChoice.reason);
     const ordered = [
       imageChoice.registryId,
-      ...imageModels.map((p) => p.config.id),
+      ...(explicit ? [] : imageModels.map((p) => p.config.id)),
     ].filter((id, index, all): id is string => Boolean(id) && all.indexOf(id) === index);
     const attempts = ordered.length ? ordered : [""];
     const failures: string[] = [];
@@ -143,7 +147,7 @@ export class ImageService {
   }
 
   private async persistFromProvider(
-    provider: { config: { id: string; endpoint: string; apiKey?: string; apiModelId?: string; capabilities: { image?: boolean } }; generateImage?: (request: { prompt: string; size?: string; n?: number; quality?: string; inputImage?: string }) => Promise<{ b64?: string; url?: string; revisedPrompt?: string }[]> },
+    provider: { config: ModelConfig; generateImage?: (request: { prompt: string; size?: string; n?: number; quality?: string; inputImage?: string }) => Promise<{ b64?: string; url?: string; revisedPrompt?: string }[]> },
     req: GenerateImageRequest
   ): Promise<{ model: string; images: GeneratedImage[] }> {
     const fireworks = provider.config.id.startsWith("fw:") && provider.config.capabilities.image && provider.config.apiKey && provider.config.apiModelId;
@@ -156,9 +160,9 @@ export class ImageService {
         apiKey: provider.config.apiKey!,
         modelId: provider.config.apiModelId!,
       });
-      const out = req.editing
-        ? await kontext.editImage(req.prompt.trim(), req.inputImage!)
-        : await kontext.generateImage(req.prompt.trim());
+      const out = await this.modelService.usage.imageCall(provider.config, 1, () => req.editing
+        ? kontext.editImage(req.prompt.trim(), req.inputImage!)
+        : kontext.generateImage(req.prompt.trim()), () => 1);
       providerRequestId = out.providerRequestId;
       raw = [{ b64: out.bytes.toString("base64") }];
     } else {

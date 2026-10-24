@@ -191,9 +191,10 @@ export class UpdateService {
   }
 
   async installOnExit(): Promise<DesktopUpdateState> {
+    await this.ensurePrefs();
     this.state = reduceUpdate(this.state, { type: "install_on_exit", armed: true });
     if (this.updater) this.updater.autoInstallOnAppQuit = true;
-    this.prefs = { ...this.prefs, installOnExit: true };
+    this.prefs = { ...this.prefs, installOnExit: true, installOnExitOptIn: true };
     await saveUpdatePrefs(this.opts.userData, this.prefs);
     this.emit();
     void this.report("update_install_requested");
@@ -258,9 +259,10 @@ export class UpdateService {
   async setInstallOnExitPref(raw: unknown): Promise<DesktopUpdateState> {
     const v = parseBooleanArg(raw);
     if (v === null) return this.getState();
-    this.prefs = { ...this.prefs, installOnExit: v };
+    this.prefs = { ...this.prefs, installOnExit: v, installOnExitOptIn: v };
     await saveUpdatePrefs(this.opts.userData, this.prefs);
     if (this.updater) this.updater.autoInstallOnAppQuit = v;
+    if (!v) this.state = reduceUpdate(this.state, { type: "install_on_exit", armed: false });
     this.state = reduceUpdate(this.state, {
       type: "prefs",
       autoCheck: this.prefs.autoCheck,

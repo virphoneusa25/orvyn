@@ -106,7 +106,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build -w @orvyn/desktop && npm run build -w @orvyn/backend
+      - run: npm run build -w @orvyn/ai-core && npm run build -w @orvyn/desktop && npm run build -w @orvyn/backend
+      - run: node scripts/stage-desktop-backend.mjs
       - name: Package macOS
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -137,7 +138,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build -w @orvyn/desktop && npm run build -w @orvyn/backend
+      - run: npm run build -w @orvyn/ai-core && npm run build -w @orvyn/desktop && npm run build -w @orvyn/backend
+      - run: node scripts/stage-desktop-backend.mjs
       - name: Package Linux
         run: npx electron-builder --linux AppImage --publish never
         working-directory: apps/desktop

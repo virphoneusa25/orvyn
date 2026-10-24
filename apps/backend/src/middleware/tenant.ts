@@ -1,11 +1,12 @@
+import { staffStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/middleware/tenant.ts
 import { Request, Response, NextFunction } from "express";
 import { Tenant, tenantManager } from "../tenancy/TenantManager";
-import { staffStore } from "../admin/staffStore";
-import { authService } from "../auth/AuthService";
+
+import { authService } from "../auth/AsyncAuthService";
 import type { Principal } from "../identity/principal";
 import { claimedTenantId, rejectTenantOverride } from "../identity/isolation";
-import { creditLedger } from "../billing/creditLedgerInstance";
+import { creditLedger } from "../billing/AsyncFinancialStores";
 import { planById } from "../billing/plans";
 
 declare global {
@@ -39,7 +40,7 @@ function extractKey(req: Request): string | undefined {
 // Resolves the caller's tenant and attaches it to req.tenant. Every route then
 // reads its services off req.tenant instead of module globals, which is what
 // actually enforces isolation.
-export function resolveTenant(req: Request, res: Response, next: NextFunction): void {
+export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (/\/ports\/[^/]+\/proxy$/.test(req.path) && typeof req.query.fwd === "string") {
     next();
     return;
@@ -53,15 +54,15 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
       res.status(401).json({ error: "Unauthorized — missing API key" });
       return;
     }
-    req.tenant = tenantManager.ensureLocalDefault();
+    req.tenant = (await tenantManager.ensureLocalDefault());
     next();
     return;
   }
 
   // Staff "View as customer": read-only, time-limited, and never a customer session.
   if (key.startsWith("orvview_")) {
-    const view = staffStore().resolveViewAs(key);
-    const as = view ? authService.principalFor(view.userId, view.organizationId) : null;
+    const view = (await staffStore().resolveViewAs(key));
+    const as = view ? (await authService.principalFor(view.userId, view.organizationId)) : null;
     if (!view || !as) {
       res.status(401).json({ error: "This support view has ended.", code: "VIEW_AS_ENDED" });
       return;
@@ -71,7 +72,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
       res.status(403).json({ error: "Support view is read-only.", code: "READ_ONLY_VIEW" });
       return;
     }
-    req.tenant = tenantManager.ensureOrgTenant(as.principal);
+    req.tenant = (await tenantManager.ensureOrgTenant(as.principal));
     req.principal = as.principal;
     (req as Request & { viewAs?: unknown }).viewAs = view;
     next();
@@ -82,16 +83,16 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
   // workspace — on plans that include API access, and never for account
   // management (req.apiKeyId marks it; the account routes refuse it).
   if (key.startsWith("orvkey_")) {
-    const k = authService.verifyApiKey(key);
+    const k = (await authService.verifyApiKey(key));
     if (!k) {
       res.status(401).json({ error: "Unauthorized — this API key is invalid or was revoked", code: "API_KEY_INVALID" });
       return;
     }
-    if (!planById(creditLedger.planOf(k.principal.tenantId) ?? "free").features.apiAccess) {
+    if (!planById((await creditLedger.planOf(k.principal.tenantId)) ?? "free").features.apiAccess) {
       res.status(403).json({ error: "API access is included on the Business and Team plans.", code: "API_ACCESS_PLAN" });
       return;
     }
-    req.tenant = tenantManager.ensureOrgTenant(k.principal);
+    req.tenant = (await tenantManager.ensureOrgTenant(k.principal));
     req.tenant.usage.requests++;
     req.principal = k.principal;
     (req as Request & { apiKeyId?: string }).apiKeyId = k.keyId;
@@ -101,7 +102,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
 
   // Session tokens (per-user accounts) take precedence over shared API keys.
   // Tenant identity comes from the session's organization — never the client.
-  const session = authService.verifyPrincipal(key);
+  const session = (await authService.verifyPrincipal(key));
   if (session) {
     try {
       rejectTenantOverride(session.principal.tenantId, claimedTenantId({
@@ -113,7 +114,7 @@ export function resolveTenant(req: Request, res: Response, next: NextFunction): 
       res.status(err.status ?? 403).json({ error: err.message });
       return;
     }
-    const tenant = tenantManager.ensureOrgTenant(session.principal);
+    const tenant = (await tenantManager.ensureOrgTenant(session.principal));
     tenant.usage.requests++;
     req.tenant = tenant;
     req.principal = session.principal;
@@ -149,10 +150,10 @@ export function requirePrincipal(req: Request): Principal {
   return req.principal;
 }
 
-export function resolveTenantFromToken(token: string | null): Tenant | undefined {
+export async function resolveTenantFromToken(token: string | null): Promise<Tenant | undefined> {
   if (!token) return undefined;
-  const session = authService.verifyPrincipal(token);
-  if (session) return tenantManager.ensureOrgTenant(session.principal);
+  const session = (await authService.verifyPrincipal(token));
+  if (session) return (await tenantManager.ensureOrgTenant(session.principal));
   return tenantManager.resolveByApiKey(token);
 }
 
@@ -160,11 +161,11 @@ export function resolveTenantFromToken(token: string | null): Tenant | undefined
  * WebSocket admission. In cloud mode (or when API keys exist) a missing or
  * invalid token is a hard reject — never the local default tenant.
  */
-export function authorizeSocket(token: string | null): { ok: true; tenant: Tenant } | { ok: false; error: string } {
-  const tenant = resolveTenantFromToken(token);
+export async function authorizeSocket(token: string | null): Promise<{ ok: true; tenant: Tenant } | { ok: false; error: string }> {
+  const tenant = (await resolveTenantFromToken(token));
   if (tenant) return { ok: true, tenant };
   if (!unauthenticatedTenantAllowed()) {
     return { ok: false, error: "Unauthorized — missing or invalid token" };
   }
-  return { ok: true, tenant: tenantManager.ensureLocalDefault() };
+  return { ok: true, tenant: (await tenantManager.ensureLocalDefault()) };
 }

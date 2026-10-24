@@ -1,6 +1,6 @@
 {
   "name": "@orvyn/desktop",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "private": true,
   "main": "dist/main/main.js",
   "scripts": {
@@ -69,7 +69,16 @@
         "nsis"
       ],
       "icon": "resources/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "resources/native",
+          "to": "native",
+          "filter": [
+            "orvyn-native-desktop.exe"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

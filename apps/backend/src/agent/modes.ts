@@ -21,6 +21,15 @@ export interface ModeDefinition {
 }
 
 const READ_ONLY: Record<string, ToolPermission> = {
+  host_desktop_status: "allowed",
+  host_desktop_screenshot: "ask",
+  host_desktop_inspect: "ask",
+  host_desktop_click: "denied",
+  host_desktop_move: "denied",
+  host_desktop_type: "denied",
+  host_desktop_key: "denied",
+  host_desktop_scroll: "denied",
+  host_desktop_focus: "denied",
   read_document: "allowed",
   read_file: "allowed",
   list_directory: "allowed",
@@ -89,6 +98,15 @@ const READ_ONLY: Record<string, ToolPermission> = {
 // Full-access profile shared by Agent and Multitask: reads are free, anything
 // that mutates state or leaves the sandbox needs a per-call approval.
 const FULL_WITH_APPROVAL: Record<string, ToolPermission> = {
+  host_desktop_status: "allowed",
+  host_desktop_screenshot: "ask",
+  host_desktop_inspect: "ask",
+  host_desktop_click: "ask",
+  host_desktop_move: "ask",
+  host_desktop_type: "ask",
+  host_desktop_key: "ask",
+  host_desktop_scroll: "ask",
+  host_desktop_focus: "ask",
   read_document: "allowed",
   read_file: "allowed",
   list_directory: "allowed",

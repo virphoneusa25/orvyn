@@ -23,6 +23,7 @@ export function evaluatePreflight(input: {
   workspace: WorkspaceContext;
   servers: RegisteredResource[];
 }): PreflightResult {
+  if (input.intent.category === "browser" && !input.intent.requiresRemoteResource) return { status: "ok" };
   if (!needsLiveSystem(input.intent)) return { status: "ok" };
   const server = input.servers.some((s) => s.type === "server" && s.status === "ready" && s.authorized);
   if (input.workspace.repositoryDetected || server) return { status: "ok" };

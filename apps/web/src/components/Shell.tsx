@@ -38,6 +38,25 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [mobileNav, setMobileNav] = useState(false);
   const full = path.startsWith("/chats") || /^\/projects\/[^/]+/.test(path);
   useEffect(() => { setMobileNav(false); }, [path]);
+  // iOS keyboards shrink the visual viewport without resizing 100dvh.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const resize = () => {
+      if (window.innerWidth <= 820) {
+        document.documentElement.style.setProperty("--portal-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+      } else {
+        document.documentElement.style.removeProperty("--portal-viewport-height");
+      }
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    viewport?.addEventListener("resize", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      viewport?.removeEventListener("resize", resize);
+      document.documentElement.style.removeProperty("--portal-viewport-height");
+    };
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((v) => !v); }

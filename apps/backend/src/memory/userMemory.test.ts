@@ -48,3 +48,35 @@ test("remember that … is saved as said even without a model", async () => {
   assert.equal(store.rows[0]?.content, "our brand color is #6C5CFF.");
   assert.equal(store.rows[0]?.source, "user");
 });
+
+test("asynchronous memory waits for privacy settings and write acknowledgement", async () => {
+  const { userMemoryPromptAsync } = await import("./userMemory");
+  const sync = fakeStore();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let acknowledged = false;
+  const store = {
+    getSetting: async () => JSON.stringify({ memory: true }),
+    listMemories: async () => sync.listMemories(),
+    saveMemory: async (input: Parameters<MemoryStoreLike["saveMemory"]>[0]) => { await gate; sync.saveMemory(input); },
+    deleteMemory: async (id: string) => sync.deleteMemory(id),
+  };
+  const learning = learnFromUserMessage(store, undefined, "Remember that our brand color is violet").then((result) => { acknowledged = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(acknowledged, false);
+  release();
+  assert.equal((await learning).added.length, 1);
+  assert.match(await userMemoryPromptAsync(store, "brand color"), /violet/);
+  const disabled = { ...store, getSetting: async () => JSON.stringify({ memory: false }), listMemories: async () => { throw new Error("must not read disabled memory"); } };
+  assert.equal(await userMemoryPromptAsync(disabled, "brand"), "");
+  assert.deepEqual(await learnFromUserMessage(disabled, undefined, "Remember that our color is blue"), { added: [], updated: [], removed: [] });
+});
+
+test("unavailable asynchronous privacy settings prevent learning and model calls", async () => {
+  const sync = fakeStore();
+  const m = model('{"add":["Uses violet"],"update":[],"remove":[]}');
+  const store = { ...sync, getSetting: async (): Promise<string | null> => { throw new Error("storage unavailable"); } };
+  assert.deepEqual(await learnFromUserMessage(store, m, "Remember that our brand color is violet"), { added: [], updated: [], removed: [] });
+  assert.equal(m.calls, 0);
+  assert.equal(sync.rows.length, 0);
+});

@@ -79,7 +79,7 @@ export interface AgentTurnPolicy {
   /** The completion evaluator. Only "approved" completes the run. */
   verify(turn: number, reply: ModelReply): Promise<VerificationDecision>;
   /** Publishes the approved answer and marks the run completed. */
-  complete(turn: number, reply: ModelReply): void;
+  complete(turn: number, reply: ModelReply): void | Promise<void>;
   /** Called when maxTurns is reached without an outcome. */
   onTurnLimit(turns: number): void;
   onTurn?(record: AgentTurnRecord): void;
@@ -150,7 +150,7 @@ export async function runAgentTurns(policy: AgentTurnPolicy): Promise<AgentLoopO
       return end(verdict.outcome, verdict.reason);
     }
     record({ kind: "final", tools }, started);
-    policy.complete(turn, reply);
+    await policy.complete(turn, reply);
     return end("completed", "completion evaluator approved");
   }
 

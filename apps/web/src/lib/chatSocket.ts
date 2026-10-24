@@ -4,6 +4,7 @@ import { api } from "./api";
 // one-minute single-use ticket (the session token never rides a URL).
 
 export interface ChatChunk {
+  routing?: { provider: string; modelId: string; reason: string };
   delta?: string;
   done?: boolean;
   error?: string;
@@ -13,6 +14,7 @@ export interface ChatChunk {
   type?: string;
   activity?: { id: string; kind: string; status?: string; query?: string; url?: string; title?: string; results?: number; error?: string };
   artifacts?: { artifactId: string; name: string; mimeType: string }[];
+  imageGeneration?: { status: "queued" | "generating" | "provider-completed" | "failed"; error?: string };
 }
 
 export interface TurnInput {

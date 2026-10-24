@@ -15,6 +15,9 @@ import { localWorkerManager } from "./localWorkerManager";
 import { BrowserSessionManager } from "./browserSessionManager";
 import { sampleHostStats } from "./systemStats";
 import { createDesktopUpdateService, registerUpdateIpc } from "./update/registerUpdateIpc";
+import { localEngineEnvironment, packagedNode } from "./localEngineEnvironment";
+import { captureProviderCredentials } from "./providerEnvironment";
+const backendProviderCredentials = captureProviderCredentials(process.env);
 
 let browserManager: WorkbenchBrowserManager | null = null;
 let browserSessions: BrowserSessionManager | null = null;
@@ -49,21 +52,21 @@ async function ensureLocalEngine(opts?: { force?: boolean }): Promise<boolean> {
     const backend = app.isPackaged ? path.join(process.resourcesPath, "backend") : path.resolve(__dirname, "../../../backend");
     const entry = path.join(backend, "dist/index.js");
     await fs.access(entry);
-    const executable = app.isPackaged ? path.join(backend, "node.exe") : "node";
+    const executable = app.isPackaged ? packagedNode(backend) : "node";
     const log = createWriteStream(path.join(app.getPath("userData"), "local-engine.log"), {flags: "a"});
-    const env = { ...process.env, PORT: "4570" };
-    delete (env as { ORVYN_CLOUD_MODE?: string }).ORVYN_CLOUD_MODE;
+    const env = localEngineEnvironment(
+      process.env, backendProviderCredentials,
+      process.env.ORVYN_DESKTOP_DATA_DIR?.trim() || path.join(os.homedir(), ".orvyn", "data"),
+    );
     localEngine = spawn(executable, [entry], {cwd: backend, windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env});
-    const engineChild = localEngine;
-    engineChild.on('message', (msg: any) => {
-      if (msg?.type !== 'desktop.command') return;
-      void nativeDesktop.request(msg.command).then(result => { try { engineChild.send?.({type:'desktop.result',id:msg.id,result}); } catch {} });
-    });
+    bindNativeDesktop(localEngine);
     localEngine.stdout?.pipe(log, {end: false});
     localEngine.stderr?.pipe(log, {end: false});
     localEngine.once("error", () => {localEngine = null; log.end();});
     localEngine.once("exit", () => {localEngine = null; log.end();});
-    for (let i = 0; i < 20; i++) {
+    // Cold Windows installs may need time to load the bundled engine.
+    for (let i = 0; i < 240; i++) {
+      if (!localEngine) return false;
       await new Promise((r) => setTimeout(r, 250));
       try {
         const response = await fetch("http://127.0.0.1:4570/api/v1/health", { signal: AbortSignal.timeout(800) });
@@ -169,6 +172,7 @@ function createWindow(): void {
     },
   });
 
+  nativeDesktop.bindWindow(mainWindow);
   mainWindow.on("maximize", () => mainWindow?.webContents.send("window:maximized", true));
   mainWindow.on("unmaximize", () => mainWindow?.webContents.send("window:maximized", false));
 
@@ -198,9 +202,9 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     nativeDesktop.register(() => mainWindow);
+    powerMonitor.on("lock-screen", () => nativeDesktop.stop());
+    powerMonitor.on("suspend", () => nativeDesktop.stop());
     localWorkerManager.setDesktopHandler(command => nativeDesktop.request(command));
-    powerMonitor.on('lock-screen', () => nativeDesktop.stop());
-    powerMonitor.on('suspend', () => nativeDesktop.stop());
     await ensureDefaultWorkspace();
     const recent = (await loadRecents())[0];
     if (recent) { try { if ((await fs.stat(recent)).isDirectory()) currentProjectRoot = recent; } catch { /* missing folder falls back to workspace */ } }
@@ -212,7 +216,7 @@ if (!app.requestSingleInstanceLock()) {
       backendUrl: bootConfig.backendUrl,
       apiKey: bootConfig.apiKey,
       projectRoot: currentProjectRoot ?? defaultWorkspacePath(),
-      hostDesktopAllowed: false,
+      hostDesktopAllowed: true, // Capability advertisement only; main-process grants remain off.
     });
     void localWorkerManager.start();
     createWindow();
@@ -244,21 +248,13 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) { createWindow(); if (mainWindow) nativeDesktop.bindWindow(mainWindow); }
 });
 
-function hostDesktopPath(): string {
-  return path.join(app.getPath("userData"), "host-desktop.json");
-}
-
-async function readHostDesktopAllowed(): Promise<boolean> {
-  try {
-    const raw = JSON.parse(await fs.readFile(hostDesktopPath(), "utf-8"));
-    return raw.allowed === true;
-  } catch {
-    return false;
-  }
-}
-
-async function writeHostDesktopAllowed(allowed: boolean): Promise<void> {
-  await fs.writeFile(hostDesktopPath(), JSON.stringify({ allowed }), "utf-8");
+function bindNativeDesktop(child: ChildProcess) {
+  child.on("message", (message: any) => {
+    if (message?.type !== "desktop.command" || typeof message.id !== "string" || message.id.length > 64) return;
+    void nativeDesktop.request(message.command).then(result => {
+      if (child.connected) child.send({type:"desktop.result",id:message.id,result});
+    }).catch(() => undefined);
+  });
 }
 
 function resolveInProject(relativePath: string): string {
@@ -538,7 +534,7 @@ ipcMain.handle("project:readBinary", async (_evt, relativePath: string) => {
 });
 
 const CONFIG_PATH = path.join(app.getPath("userData"), "orvyn-connection.json");
-const DEFAULT_CONFIG = { backendUrl: "http://localhost:4570", apiKey: "" };
+const DEFAULT_CONFIG = { backendUrl: process.env.ORVYN_CLOUD_URL?.trim() || "https://orvyn.virphoneusa.com", apiKey: "" };
 
 interface PersistedConfig {
   backendUrl?: string;
@@ -659,12 +655,10 @@ ipcMain.handle("chats:save", async (_evt, data: unknown) => {
 });
 
 ipcMain.handle("localWorker:status", () => localWorkerManager.getStatus());
+// Legacy checkbox cannot grant broad access. Only the window-scoped consent UI can.
 ipcMain.handle("localWorker:setHostDesktop", async (_evt, allowed: unknown) => {
-  const on = false;
-  if (allowed === false) nativeDesktop.stop();
-  await writeHostDesktopAllowed(on);
-  localWorkerManager.configure({ hostDesktopAllowed: on });
-  localWorkerManager.restartForHostDesktop();
+  if (allowed === true) throw new Error("Select a window in local desktop permissions instead.");
+  nativeDesktop.stop();
   return localWorkerManager.getStatus();
 });
 

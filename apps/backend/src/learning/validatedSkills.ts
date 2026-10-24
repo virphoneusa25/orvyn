@@ -1,4 +1,4 @@
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence as LocalStore } from "../persistence/TenantPersistence";
 import { skillRegistry } from "../skills/SkillRegistry";
 import type { SkillCandidate } from "./skillCandidates";
 
@@ -24,24 +24,24 @@ function packagedSkills(): SkillCandidate[] {
   }));
 }
 
-export function seedValidatedSkills(store: LocalStore): SkillCandidate[] {
+export async function seedValidatedSkills(store: LocalStore): Promise<SkillCandidate[]> {
   const now = Date.now();
   for (const skill of packagedSkills()) {
-    const existing = store.listLearningRecords("skill", 200).find((r) => r.id === skill.id);
+    const existing = (await store.listLearningRecords("skill", 200)).find((r) => r.id === skill.id);
     const payload = existing?.payload as SkillCandidate | undefined;
     if (payload?.validated && payload.name === skill.name) continue;
-    store.saveLearningRecord({
+    await store.saveLearningRecord({
       id: skill.id,
       kind: "skill",
       payload: { ...skill, createdAt: payload?.createdAt || now },
     });
   }
-  return listValidatedSkills(store);
+  return (await listValidatedSkills(store));
 }
 
-export function listValidatedSkills(store?: LocalStore): SkillCandidate[] {
+export async function listValidatedSkills(store?: LocalStore): Promise<SkillCandidate[]> {
   if (!store) return packagedSkills();
-  const rows = store.listLearningRecords("skill", 200)
+  const rows = (await store.listLearningRecords("skill", 200))
     .map((r) => r.payload as SkillCandidate)
     .filter((s) => s?.validated && s.id);
   const byId = new Map(rows.map((s) => [s.id, s]));
@@ -51,16 +51,16 @@ export function listValidatedSkills(store?: LocalStore): SkillCandidate[] {
   return [...byId.values()];
 }
 
-export function matchValidatedSkills(instruction: string, store?: LocalStore): SkillCandidate[] {
+export async function matchValidatedSkills(instruction: string, store?: LocalStore): Promise<SkillCandidate[]> {
   const text = String(instruction ?? "").toLowerCase();
-  return listValidatedSkills(store).filter((skill) => {
+  return (await listValidatedSkills(store)).filter((skill) => {
     const needles = skill.trigger.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
     return needles.some((n) => text.includes(n));
   });
 }
 
-export function skillsPromptFor(instruction: string, store?: LocalStore): string {
-  const matched = matchValidatedSkills(instruction, store);
+export async function skillsPromptFor(instruction: string, store?: LocalStore): Promise<string> {
+  const matched = await matchValidatedSkills(instruction, store);
   if (matched.length === 0) return "";
   const blocks = matched.map((s) => {
     const steps = s.steps.map((step, i) => `  ${i + 1}. ${step}`).join("\n");

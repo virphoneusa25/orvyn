@@ -49,6 +49,10 @@ export class ComputerUseCapability {
         sessionId: opened.sessionId,
       };
     }
+    if (req.action === "focus_window" && surface === "host") {
+      const result=await hostAction(req.identity.tenantId,{action:"focus"});
+      return {...result,desktopHealthy:true,surface};
+    }
     if (req.action === "focus_window") {
       const windows = this.desktop.getWindows(req.identity);
       return {
@@ -70,6 +74,10 @@ export class ComputerUseCapability {
   }
 
   private async screenshot(req: ComputerUseRequest, surface: ComputerSurface): Promise<ComputerUseResult> {
+    if (surface === "host") {
+      const result=await hostAction(req.identity.tenantId,{action:"screenshot"});
+      return {...result,screenshot:result.screenshot,desktopHealthy:true,surface};
+    }
     if (surface === "browser") {
       try {
         await this.browser.ensureSession(req.identity.projectRoot);
@@ -94,7 +102,6 @@ export class ComputerUseCapability {
         screenshot: { b64: frame.bytes.toString("base64"), mediaType: frame.mediaType },
       };
     }
-    if (surface === 'host') { const result = await hostAction(req.identity.tenantId,{action:'screenshot'}); return {...result, surface,desktopHealthy:true}; }
     const shot = await this.desktop.captureScreenshot(req.identity);
     if (!shot || shot.bytes.length === 0) {
       const frame = await this.browser.captureScreenshot(req.identity.projectRoot);

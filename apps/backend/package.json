@@ -6,7 +6,7 @@
   "scripts": {
     "predev": "node scripts/check-node-version.cjs",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "npm run build --prefix ../../packages/ai-core && tsc -p .",
+    "build": "npm run build --prefix ../../packages/ai-core && node scripts/generate-postgres-auth.cjs --check && node scripts/generate-postgres-payments.cjs --check && node scripts/generate-postgres-ledger.cjs --check && node scripts/generate-postgres-sessions.cjs --check && node scripts/generate-postgres-tenant.cjs --check && node scripts/generate-postgres-admin.cjs --check && node scripts/generate-postgres-desktop-releases.cjs --check && node scripts/generate-postgres-sandboxes.cjs --check && tsc -p . && node scripts/build-sandbox-tools.cjs",
     "start": "node scripts/start.cjs",
     "test": "node --test dist/**/*.test.js"
   },
@@ -31,7 +31,8 @@
     "pg": "^8.23.0",
     "pptxgenjs": "^4.0.1",
     "ws": "^8.17.0",
-    "@vercel/sandbox": "^3.9.0"
+    "@vercel/sandbox": "^3.9.0",
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -40,7 +41,7 @@
     "@types/nodemailer": "^6.4.24",
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.10",
-    "playwright": "^1.63.0",
+    "esbuild": "0.21.5",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.5"
   }

@@ -85,3 +85,32 @@ test("usage keyed by model or provider is re-keyed under ORVYN names and merged"
   assert.deepEqual(Object.keys(out.days[0].models).sort(), ["ORVYN Auto", "ORVYN Fast", "my:mine"]);
   assert.doesNotMatch(JSON.stringify(out), /fireworks|nebius|gpt-5/i);
 });
+
+test("customer routing hides serving identity while internal telemetry remains intact", () => {
+  const routing = { provider: "huggingface", modelId: "hf:zai-org/GLM-5.3:deepinfra", reason: "Verified cheaper equivalent", apiKey: "fixture-private", endpoint: "https://private.test" };
+  const redacted = redactForCustomer({ routing, apiKey: "fixture-private" }, IDS);
+  assert.equal(redacted.routing.provider, "ORVYN");
+  assert.match(redacted.routing.modelId, /^ORVYN/);
+  assert.equal(routing.provider, "huggingface", "internal telemetry is not mutated");
+  assert.equal(redacted.routing.reason, "Automatic model selection");
+  assert.doesNotMatch(JSON.stringify(redacted), /huggingface|deepinfra|GLM|zai-org/i);
+  assert.ok(!JSON.stringify(redacted).includes("fixture-private"));
+  assert.ok(!JSON.stringify(redacted).includes("private.test"));
+});
+
+test("nested live/history routing and HF diagnostics never reveal platform identities", () => {
+  const routing = { provider: "nebius", modelId: "nebius:zai-org/GLM-5.3-Flash", reason: "Nebius price tie; Hugging Face DeepInfra unavailable" };
+  const result = redactForCustomer({events:[{data:{routing}}],messages:[{meta:{routing}}],reason:"Hugging Face failed at https://router.huggingface.co/v1/models",providers:{huggingface:2,deepinfra:3}}, IDS);
+  assert.doesNotMatch(JSON.stringify(result), /nebius|hugging ?face|deepinfra|zai-org|GLM|router\./i);
+  assert.deepEqual(result.providers, {ORVYN:5});
+  assert.equal(routing.provider,"nebius");
+});
+
+test("customer usage preserves numeric rates without provider pricing-source URLs", () => {
+  const rate = {input:0.68,output:3.4,source:"https://router.huggingface.co/v1/models",verifiedAt:1,expiresAt:2};
+  const output = redactForCustomer({usage:[{provider:"huggingface",modelId:"hf:moonshotai/Kimi-K2.7-Code:deepinfra",rate}]}, IDS);
+  assert.equal(output.usage[0]!.rate.input,0.68);
+  assert.ok(!("source" in output.usage[0]!.rate));
+  assert.doesNotMatch(JSON.stringify(output),/huggingface|deepinfra|moonshotai/);
+  assert.equal(rate.source,"https://router.huggingface.co/v1/models");
+});

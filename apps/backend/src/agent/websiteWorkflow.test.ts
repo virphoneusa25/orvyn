@@ -188,7 +188,7 @@ test("a one-page website is written, served, and checked before the final answer
     prose("Finished. The site is running and the Browser check passed."),
   ]);
 
-  const runId = h.runtime.start(root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   const status = await waitFor(h.store, runId);
   const failure = h.store.get(runId)?.events.find((e) => e.type === "run.error");
   assert.equal(status, "partial", String(failure?.data?.message ?? status));
@@ -269,7 +269,7 @@ test("repeated website narration fails without claiming the site exists", async 
     prose("I'll now create index.html."),
     prose("I'll create index.html now."),
   ]);
-  const runId = h.runtime.start(root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" });
+  const runId = (await h.runtime.start(root, PROMPT, undefined, "agent", undefined, [], undefined, undefined, { accessMode: "full_access" }));
   assert.equal(await waitFor(h.store, runId), "error");
   const error = h.store.get(runId)!.events.find((e) => e.type === "run.error");
   assert.match(String(error?.data?.message ?? ""), /described the next step without calling a tool/);

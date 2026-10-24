@@ -10,7 +10,7 @@ import * as path from "path";
 import type { AgentEvent, RunStore } from "../agent/events";
 import { summarizeRuns, sessionRuns, type ThreadRunSummary } from "../agent/runThread";
 import { readPublishedFile } from "../agent/sitePreview";
-import type { WorkSession, WorkSessionStore } from "./WorkSessionStore";
+import type { WorkSession, WorkSessionPersistence as WorkSessionStore } from "./WorkSessionStore";
 
 export interface SessionFile {
   path: string;
@@ -129,7 +129,7 @@ export function collectSessionOutputs(runs: { id: string; events: AgentEvent[] }
   return { files: [...files.values()], artifacts: [...artifacts.values()], preview };
 }
 
-export function sessionState(sessions: WorkSessionStore, store: RunStore, session: WorkSession): SessionState {
+export async  function sessionState(sessions: WorkSessionStore, store: RunStore, session: WorkSession): Promise<SessionState> {
   const runs = sessionRuns(store, session.runIds).map((r) => ({ id: r.id, events: r.events }));
   const out = collectSessionOutputs(runs);
   const siteId = out.preview ? previewSiteId(out.preview.url) : null;
@@ -138,7 +138,7 @@ export function sessionState(sessions: WorkSessionStore, store: RunStore, sessio
     session,
     runs: summarizeRuns(store, session.runIds),
     activeRunId: session.activeRunId,
-    messageCount: sessions.messageSummary(session.sessionId).messageCount,
+    messageCount: (await sessions.messageSummary(session.sessionId)).messageCount,
     files: mergeDiskProjectFiles(out.files, session.projectRoot),
     artifacts: out.artifacts,
     // available means the preview server is still serving. Files can exist when this is false.

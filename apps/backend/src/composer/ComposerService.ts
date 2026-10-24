@@ -63,6 +63,7 @@ export class ComposerService {
   constructor(private modelService: ModelService) {}
 
   async plan(projectRoot: string, instruction: string, rules?: string): Promise<ComposerPlan> {
+    await this.modelService.huggingFaceReady;
     const provider = this.modelService.router.resolve("code");
     const response = await provider.generate({
       messages: [{ role: "user", content: buildComposerPrompt(instruction, rules) }],

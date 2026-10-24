@@ -7,15 +7,15 @@
 // records, never from provider dashboards.
 //
 // Honesty rules:
-//   - Token counts are recorded ONLY when the provider reports them
-//     (AIResponse.usage). Streams don't report tokens on this wire; those
-//     events carry duration + output size instead. Nothing is estimated.
+//   - Provider-reported token counts are preferred. Missing counts are explicitly
+//     marked as estimated; trusted settled cost takes precedence for billing.
 //   - Mission/task/agent attribution comes from AsyncLocalStorage context set
 //     by the runtimes; requests outside a mission simply have no missionId.
 
+import type { UsageRecoveryJournal } from "./UsageRecoveryJournal";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { AIChunk, AIModelProvider, AIRequest, AIResponse } from "@orvyn/ai-core";
+import { AIChunk, AIModelProvider, AIRequest, AIResponse, type ModelConfig } from "@orvyn/ai-core";
 import { isTransientError, withModelRetries } from "./modelRetries";
 
 export interface UsageContext {
@@ -27,11 +27,17 @@ export interface UsageContext {
 }
 
 export interface UsageEvent {
+  imageRate?: ModelConfig["imageRate"];
+  imageCount?: number;
+  providerCostUsd?: number;
+  imagePremium?: boolean;
+  rate?: ModelConfig["rate"];
+  cachedTokens?: number;
   id: string;
   timestamp: number;
   modelId: string;
   provider: string;
-  method: "generate" | "stream" | "image";
+  method: "generate" | "stream" | "image" | "embed";
   durationMs: number;
   ok: boolean;
   error?: string;
@@ -86,17 +92,32 @@ function utcMonthStart(now = Date.now()): number {
 }
 
 interface UsageStore {
-  saveUsageEvent(e: UsageEvent): void;
-  loadRecentUsage(limit?: number): UsageEvent[];
-  countUsageSince?(ts: number): number;
+  saveUsageEvent(e: UsageEvent): void | Promise<void>;
+  loadRecentUsage(limit?: number): UsageEvent[] | Promise<UsageEvent[]>;
+  countUsageSince?(ts: number): number | Promise<number>;
+}
+type UsageRelease = () => void | Promise<void>;
+// Existing synchronous listeners may return incidental values; await thenables and ignore results.
+type UsageSink = (event: UsageEvent) => unknown;
+type UsageGuard = (ctx: UsageContext, model?: UsagePreflight) => void | UsageRelease | Promise<void | UsageRelease>;
+
+class UsagePersistenceError extends Error {
+  constructor() { super("Usage storage is temporarily unavailable. Please retry."); }
 }
 
 export class UsageService {
+  private storeReady: Promise<void> = Promise.resolve();
+  private pendingStorage: UsageEvent[] = [];
+  private storing?: Promise<void>;
   private events: UsageEvent[] = [];
   private als = new AsyncLocalStorage<UsageContext>();
   private store?: UsageStore;
-  private sinks: Array<(event: UsageEvent) => void> = [];
-  private preflights: Array<(ctx: UsageContext, model?: { id: string }) => void> = [];
+  private journal?: UsageRecoveryJournal;
+  private sinks: UsageSink[] = [];
+  private pendingSinks: Array<{ event: UsageEvent; sink: UsageSink }> = [];
+  private preflights: UsageGuard[] = [];
+  private settling = new Set<Promise<void>>();
+  private retrying?: Promise<void>;
 
   // Monthly quota on model requests. 0 = unlimited (the local-mode default).
   // Enforced in wrap() BEFORE the provider call — the one choke point every
@@ -121,28 +142,135 @@ export class UsageService {
    * with LocalStore.
    */
   /** A check run before every provider call (the credit wallet): throwing stops the call. */
-  onPreflight(fn: (ctx: UsageContext, model?: { id: string }) => void): void {
+  onPreflight(fn: UsageGuard): void {
     this.preflights.push(fn);
   }
 
-  private runPreflight(model?: { id: string }): void {
-    const ctx = this.als.getStore() ?? {};
-    for (const fn of this.preflights) fn(ctx, model);
+  private async retryPendingSinks(): Promise<void> {
+    if (!this.retrying) this.retrying = (async () => {
+      while (this.pendingSinks.length) {
+        const pending = this.pendingSinks[0];
+        try { await pending.sink(pending.event); } catch { throw new Error("Billing settlement is temporarily unavailable. Please retry."); }
+        this.pendingSinks.shift();
+      }
+    })().finally(() => { this.retrying = undefined; });
+    return this.retrying;
   }
 
-  onRecord(fn: (event: UsageEvent) => void): void {
+  private async runPreflight(model?: UsagePreflight): Promise<() => Promise<void>> {
+    await this.storeReady;
+    await this.flushStorage();
+    await Promise.all([...this.settling]);
+    await this.retryPendingSinks();
+    try { await this.journal?.check(); } catch { throw new UsagePersistenceError(); }
+    const ctx = this.als.getStore() ?? {};
+    const releases: UsageRelease[] = [];
+    const releaseAll = async () => {
+      let failure: unknown;
+      let failed = false;
+      for (const release of [...releases].reverse()) {
+        try { await release(); } catch (error) { if (!failed) failure = error; failed = true; }
+      }
+      if (failed) throw failure;
+    };
+    try {
+      for (const fn of this.preflights) { const release = await fn(ctx, model); if (release) releases.push(release); }
+    } catch (err) { try { await releaseAll(); } catch { /* preserve the admission failure */ } throw err; }
+    return releaseAll;
+  }
+
+  /** Covers adapters and the direct Fireworks Kontext wire with the same billing boundary. */
+  async imageCall<T>(config: Pick<ModelConfig, "id" | "provider" | "providerName" | "rate" | "imageRate" | "imageSettlementBudgetUsd">, count: number,
+    call: () => Promise<T>, produced: (result: T) => number, settledCost?: (result: T) => number | undefined): Promise<T> {
+    await this.checkQuotaAsync();
+    this.checkMissionBudget();
+    const rate = config.imageRate ? { ...config.imageRate } : undefined;
+    const release = await this.runPreflight({ id: config.id, method: "image", imageCount: count,
+      imageRate: rate, rate: config.rate, imageSettlementBudgetUsd: config.imageSettlementBudgetUsd, providerCostUsd: config.imageSettlementBudgetUsd ? count * config.imageSettlementBudgetUsd : rate ? count * rate.usdPerImage : undefined });
+    const start = Date.now();
+    try {
+      const result = await call();
+      const actual = produced(result);
+      if (!Number.isInteger(actual) || actual < 1 || actual > count) throw new Error("Image provider returned an invalid image count");
+      const exact = settledCost?.(result);
+      if (config.imageSettlementBudgetUsd && (exact === undefined || !Number.isFinite(exact) || exact < 0)) throw new Error("Image provider did not report final settled cost");
+      await this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: true,
+        imageCount: actual, imageRate: rate, imagePremium: rate?.premium, providerCostUsd: exact ?? (rate ? actual * rate.usdPerImage : undefined), durationMs: Date.now() - start });
+      return result;
+    } catch (err: any) {
+      if (err instanceof UsagePersistenceError) throw err;
+      await this.record({ modelId: config.id, provider: config.providerName ?? config.provider, method: "image", ok: false,
+        imageCount: 0, providerCostUsd: 0, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
+      throw err;
+    } finally { await release(); }
+  }
+
+  onRecord(fn: UsageSink): void {
     this.sinks.push(fn);
   }
 
-  attachStore(store: UsageStore): void {
+  attachStore(store: UsageStore, journal?: UsageRecoveryJournal): void | Promise<void> {
     this.store = store;
+    this.journal = journal;
     const persisted = store.loadRecentUsage(MAX_EVENTS);
-    if (persisted.length > 0) {
-      this.events = [...persisted, ...this.events].slice(-MAX_EVENTS);
+    const count = store.countUsageSince?.(this.monthStart);
+    const hydrate = (events: UsageEvent[], total?: number) => {
+      const existing = new Set(this.events.map(event => event.id));
+      this.events = [...events.filter(event => !existing.has(event.id)), ...this.events].slice(-MAX_EVENTS);
+      if (total !== undefined) this.monthCount = total;
+    };
+    if (!journal && Array.isArray(persisted) && (count === undefined || typeof count === "number")) {
+      hydrate(persisted, count);
+      return;
     }
-    // Quota counting must survive restarts, or a customer could reset their
-    // budget by crashing the backend.
-    this.monthCount = store.countUsageSince?.(this.monthStart) ?? this.monthCount;
+    this.storeReady = Promise.all([persisted, count]).then(async ([events, total]) => {
+      hydrate(events, total);
+      if (journal) {
+        const pending = await journal.pending();
+        const queued = new Set(this.pendingStorage.map(event => event.id));
+        this.pendingStorage.push(...pending.filter(event => !queued.has(event.id)));
+        await this.flushStorage();
+        hydrate(await store.loadRecentUsage(MAX_EVENTS), await store.countUsageSince?.(this.monthStart));
+      }
+    });
+    void this.storeReady.catch(() => {});
+    return this.storeReady;
+  }
+
+  /** Read authoritative usage before admission or displaying a quota. */
+  async quotaAsync(): Promise<ReturnType<UsageService["quota"]>> {
+    await this.storeReady;
+    await this.flushStorage();
+    this.rollMonth();
+    if (this.store?.countUsageSince) this.monthCount = await this.store.countUsageSince(this.monthStart);
+    return this.quota();
+  }
+
+  private async checkQuotaAsync(): Promise<void> {
+    await this.quotaAsync();
+    this.checkQuota();
+  }
+
+  private flushStorage(): Promise<void> {
+    if (!this.storing) this.storing = (async () => {
+      while (this.pendingStorage.length) {
+        const event = this.pendingStorage[0];
+        try {
+          await this.journal?.put(event);
+          await this.store?.saveUsageEvent(event);
+          await this.journal?.remove(event.id);
+        }
+        catch { throw new UsagePersistenceError(); }
+        for (const sink of this.sinks) {
+          try { await sink(event); } catch (err) {
+            this.pendingSinks.push({ event, sink });
+            console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
+          }
+        }
+        this.pendingStorage.shift();
+      }
+    })().finally(() => { this.storing = undefined; });
+    return this.storing;
   }
 
   /** Current quota state; surfaced on /usage so clients can warn early. */
@@ -160,7 +288,7 @@ export class UsageService {
     const start = utcMonthStart();
     if (start !== this.monthStart) {
       this.monthStart = start;
-      this.monthCount = this.store?.countUsageSince?.(start) ?? 0;
+      this.monthCount = 0;
     }
   }
 
@@ -180,20 +308,15 @@ export class UsageService {
     return this.als.run(merged, fn);
   }
 
-  record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): void {
+  async record(e: Omit<UsageEvent, "id" | "timestamp" | keyof UsageContext>): Promise<void> {
+    await this.storeReady;
     const ctx = this.als.getStore() ?? {};
-    const event: UsageEvent = { id: `use_${randomUUID().slice(0, 8)}`, timestamp: Date.now(), ...ctx, ...e };
+    const event: UsageEvent = { id: `use_${randomUUID()}`, timestamp: Date.now(), ...ctx, ...e };
     this.events.push(event);
     if (this.events.length > MAX_EVENTS) this.events.splice(0, this.events.length - MAX_EVENTS);
     this.rollMonth();
     this.monthCount++;
-    this.store?.saveUsageEvent(event);
-    for (const sink of this.sinks) {
-      try { sink(event); } catch (err) {
-        console.warn(`Credit ledger did not accept usage ${event.id}: ${(err as Error).message}`);
-      }
-    }
-
+    this.pendingStorage.push(event);
     if (ctx.missionId) {
       const m = this.missions.get(ctx.missionId) ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
       m.requests++;
@@ -201,6 +324,9 @@ export class UsageService {
       m.completionTokens += e.completionTokens ?? 0;
       this.missions.set(ctx.missionId, m);
     }
+    const settlement = this.flushStorage();
+    this.settling.add(settlement);
+    try { await settlement; } finally { this.settling.delete(settlement); }
   }
 
   /** Per-mission counters, for the usage endpoint and reports. */
@@ -290,9 +416,10 @@ export class UsageService {
       },
 
       async generate(request: AIRequest): Promise<AIResponse> {
-        usage.checkQuota();
+        const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
-        usage.runPreflight(inner.config);
+        const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
         try {
           // Retry lives INSIDE the metered boundary: one usage event records
@@ -301,10 +428,14 @@ export class UsageService {
             label: `${inner.config.id} generate`,
             signal: request.signal,
           });
-          const reported = Boolean(res.usage?.promptTokens || res.usage?.completionTokens);
-          usage.record({
+          const reported = Boolean(res.usage);
+          if (inner.config.billingRequired && inner.config.settledCostRequired && res.usage?.providerCostUsd === undefined) throw new Error("Provider did not report final settled cost");
+          await usage.record({
+            rate,
+            cachedTokens: res.usage?.cachedTokens,
+            providerCostUsd: res.usage?.providerCostUsd,
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: true,
@@ -316,40 +447,46 @@ export class UsageService {
           });
           return res;
         } catch (err: any) {
-          usage.record({
+          if (err instanceof UsagePersistenceError) throw err;
+          await usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "generate",
             durationMs: Date.now() - start,
             ok: false,
             error: String(err?.message ?? err).slice(0, 300),
           });
           throw err;
-        }
+        } finally { await release(); }
       },
 
       async *stream(request: AIRequest): AsyncIterable<AIChunk> {
-        usage.checkQuota();
+        const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
+        await usage.checkQuotaAsync();
         usage.checkMissionBudget();
-        usage.runPreflight(inner.config);
+        const release = await usage.runPreflight({ ...inner.config, rate });
         const start = Date.now();
         let chars = 0;
         let toolCalls = 0;
-        let reportedUsage: { promptTokens?: number; completionTokens?: number } | undefined;
+        let reportedUsage: { promptTokens?: number; completionTokens?: number; cachedTokens?: number; providerCostUsd?: number } | undefined;
         let settled = false;
         let yieldedAny = false;
-        const recordOk = () => {
+        const recordOk = async () => {
           if (settled) return;
+          if (inner.config.billingRequired && inner.config.settledCostRequired && reportedUsage?.providerCostUsd === undefined) throw new Error("Provider did not report final settled cost");
           settled = true;
-          usage.record({
+          await usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
             durationMs: Date.now() - start,
             ok: true,
-            promptTokens: reportedUsage?.promptTokens || estimateTokens(requestChars(request)),
-            completionTokens: reportedUsage?.completionTokens || estimateTokens(chars),
-            estimated: reportedUsage?.promptTokens || reportedUsage?.completionTokens ? undefined : true,
+            rate,
+            cachedTokens: reportedUsage?.cachedTokens,
+            providerCostUsd: reportedUsage?.providerCostUsd,
+            promptTokens: reportedUsage?.promptTokens ?? estimateTokens(requestChars(request)),
+            completionTokens: reportedUsage?.completionTokens ?? estimateTokens(chars),
+            estimated: reportedUsage ? undefined : true,
             outputChars: chars,
             toolCalls: toolCalls || undefined,
           });
@@ -382,12 +519,13 @@ export class UsageService {
               await new Promise((r) => setTimeout(r, 800));
             }
           }
-          recordOk();
+          await recordOk();
         } catch (err: any) {
           settled = true;
-          usage.record({
+          if (err instanceof UsagePersistenceError) throw err;
+          await usage.record({
             modelId: inner.config.id,
-            provider: inner.config.provider,
+            provider: inner.config.providerName ?? inner.config.provider,
             method: "stream",
             durationMs: Date.now() - start,
             ok: false,
@@ -398,7 +536,8 @@ export class UsageService {
         } finally {
           // The consumer stopped reading (it had the final chunk, or the run
           // was cancelled mid-answer): what was delivered is still one call.
-          if (!settled && yieldedAny) recordOk();
+          try { if (!settled && yieldedAny) await recordOk(); }
+          finally { await release(); }
         }
       },
 
@@ -409,39 +548,45 @@ export class UsageService {
 
     // Optional capabilities: only present on the wrapper when the inner
     // adapter has them, because callers feature-detect with `provider.embed?`.
-    if (inner.embed) wrapper.embed = (input) => inner.embed!(input);
-    if (inner.embedMany) wrapper.embedMany = (inputs) => inner.embedMany!(inputs);
+    const embed = async (inputs: string[]): Promise<number[][]> => {
+      if (!inputs.length) return [];
+      const rate = inner.config.rate ? { ...inner.config.rate } : undefined;
+      await usage.checkQuotaAsync(); usage.checkMissionBudget(); const release = await usage.runPreflight({ ...inner.config, rate });
+      const start = Date.now();
+      try {
+        const result = inner.embedWithUsage ? await inner.embedWithUsage(inputs) : { embeddings: inner.embedMany ? await inner.embedMany(inputs) : await Promise.all(inputs.map((s) => inner.embed!(s))) };
+        await usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: true, rate, durationMs: Date.now() - start,
+          promptTokens: result.usage?.promptTokens ?? estimateTokens(inputs.reduce((sum, s) => sum + s.length, 0)), completionTokens: 0,
+          cachedTokens: result.usage?.cachedTokens, providerCostUsd: result.usage?.providerCostUsd, estimated: result.usage ? undefined : true });
+        return result.embeddings;
+      } catch (err: any) {
+        if (err instanceof UsagePersistenceError) throw err;
+        await usage.record({ modelId: inner.config.id, provider: inner.config.providerName ?? inner.config.provider, method: "embed", ok: false, durationMs: Date.now() - start, error: String(err?.message ?? err).slice(0, 300) });
+        throw err;
+      } finally { await release(); }
+    };
+    if (inner.embed) wrapper.embed = async (input) => (await embed([input]))[0] ?? [];
+    if (inner.embedMany) wrapper.embedMany = embed;
     if (inner.generateImage) {
       wrapper.generateImage = async (request) => {
-        usage.checkQuota();
-        usage.runPreflight(inner.config);
-        const start = Date.now();
-        try {
-          const res = await inner.generateImage!(request);
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: true,
-          });
-          return res;
-        } catch (err: any) {
-          usage.record({
-            modelId: inner.config.id,
-            provider: inner.config.provider,
-            method: "image",
-            durationMs: Date.now() - start,
-            ok: false,
-            error: String(err?.message ?? err).slice(0, 300),
-          });
-          throw err;
-        }
+        return usage.imageCall(inner.config, request.n ?? 1, () => inner.generateImage!(request), (res) => res.length, (res) => res.usage?.providerCostUsd);
       };
     }
 
     return wrapper;
   }
+}
+
+export interface UsagePreflight {
+  id: string;
+  provider?: string;
+  providerName?: string;
+  rate?: ModelConfig["rate"];
+  method?: "image";
+  imageCount?: number;
+  imageRate?: ModelConfig["imageRate"];
+  imageSettlementBudgetUsd?: number;
+  providerCostUsd?: number;
 }
 
 /** ~4 characters per token: a conservative estimate used only when the provider reports nothing. */

@@ -75,7 +75,7 @@ async function main() {
   server.stderr.on("data", chunk=>{backendLog=(backendLog+chunk.toString()).slice(-8000)});
   try {
     for (let i = 0; i < 80; i++) { try { if ((await fetch(`${BASE}/api/v1/health`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
-    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "auto", composerMode: "code", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
+    const started = await (await fetch(`${BASE}/api/v1/agent/stream/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectRoot: projectDir, remoteProjectRoot: projectDir, executionTarget: "local_host", clientKind: "desktop", composerMode: "code", instruction: "Run the slow counter and tell me what it prints.", mode: "agent", permissionMode: "full_access" }) })).json();
     const runId = started.runId;
     const events = [];
     const seen = {}; // event type -> client time first seen

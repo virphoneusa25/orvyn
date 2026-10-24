@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto";
 import type { AgentRole } from "../gateway/PermissionEngine";
 import type { EventBus } from "./EventBus";
-import type { LocalStore } from "../persistence/LocalStore";
+import type { TenantPersistence } from "../persistence/TenantPersistence";
 
 export type TaskStatus =
   | "QUEUED"
@@ -79,112 +79,102 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 export class TaskEngine {
   private missions = new Map<string, Mission>();
 
-  constructor(private bus: EventBus, private store?: LocalStore) {
-    // Warm-start mission history so Mission Control survives restarts.
-    // Missions that were mid-flight when the process died can never resume
-    // (their run loop is gone), so mark them FAILED rather than lying.
-    if (store) {
-      for (const m of store.loadMissions()) {
-        if (m.status === "QUEUED" || m.status === "PLANNING" || m.status === "RUNNING" || m.status === "REVIEW") {
-          m.status = "FAILED";
-          m.updatedAt = Date.now();
-          store.saveMission(m);
-        }
-        this.missions.set(m.id, m);
+
+  readonly ready: Promise<void>;
+  private writes: Promise<void> = Promise.resolve();
+
+  constructor(private bus: EventBus, private store?: Pick<TenantPersistence, "loadMissions" | "saveMission">) {
+    this.ready = this.hydrate();
+    void this.ready.catch(() => {});
+  }
+
+  private async hydrate(): Promise<void> {
+    const loaded = await this.store?.loadMissions() ?? [];
+    for (const original of loaded) {
+      const m = structuredClone(original);
+      if (["QUEUED", "PLANNING", "RUNNING", "REVIEW"].includes(m.status)) {
+        m.status = "FAILED";
+        m.updatedAt = Date.now();
+        await this.store?.saveMission(m);
       }
+      this.missions.set(m.id, m);
     }
   }
 
-  private persist(m: Mission): void {
-    this.store?.saveMission(m);
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.writes.then(async () => { await this.ready; return operation(); });
+    this.writes = result.then(() => {}, () => {});
+    return result;
   }
 
-  createMission(runId: string, projectRoot: string, goal: string): Mission {
-    const mission: Mission = {
-      id: `mission_${randomUUID().slice(0, 8)}`,
-      runId,
-      projectRoot,
-      goal,
-      status: "QUEUED",
-      tasks: [],
-      reviewCycles: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    this.missions.set(mission.id, mission);
-    this.persist(mission);
-    this.bus.missionCreated(mission);
-    return mission;
+  private async commit(draft: Mission): Promise<Mission> {
+    await this.store?.saveMission(draft);
+    const existing = this.missions.get(draft.id);
+    if (!existing) { this.missions.set(draft.id, draft); return draft; }
+    const tasks = draft.tasks.map((task) => {
+      const old = existing.tasks.find((t) => t.id === task.id);
+      if (old) { Object.assign(old, task); return old; }
+      return task;
+    });
+    Object.assign(existing, draft, { tasks });
+    return existing;
   }
 
-  getMission(id: string): Mission | undefined {
-    return this.missions.get(id);
+  async createMission(runId: string, projectRoot: string, goal: string): Promise<Mission> {
+    return this.enqueue(async () => {
+      const mission = await this.commit({ id: `mission_${randomUUID().slice(0, 8)}`, runId, projectRoot, goal,
+        status: "QUEUED", tasks: [], reviewCycles: 0, createdAt: Date.now(), updatedAt: Date.now() });
+      this.bus.missionCreated(mission);
+      return mission;
+    });
   }
 
-  missionForRun(runId: string): Mission | undefined {
-    for (const m of this.missions.values()) if (m.runId === runId) return m;
-    return undefined;
+  async getMission(id: string): Promise<Mission | undefined> { await this.ready; await this.writes; return this.missions.get(id); }
+  async missionForRun(runId: string): Promise<Mission | undefined> { await this.ready; await this.writes; return [...this.missions.values()].find((m) => m.runId === runId); }
+  async listMissions(): Promise<Mission[]> { await this.ready; await this.writes; return [...this.missions.values()].sort((a, b) => b.createdAt - a.createdAt); }
+
+  async setMissionStatus(missionId: string, status: MissionStatus): Promise<void> {
+    return this.enqueue(async () => {
+      const current = this.missions.get(missionId); if (!current) return;
+      const m = await this.commit({ ...structuredClone(current), status, updatedAt: Date.now() });
+      if (status === "RUNNING") this.bus.missionStarted(m);
+      if (status === "COMPLETED" || status === "FAILED") this.bus.missionCompleted(m);
+      if (status === "BLOCKED") this.bus.missionBlocked(m);
+    });
   }
 
-  listMissions(): Mission[] {
-    return Array.from(this.missions.values()).sort((a, b) => b.createdAt - a.createdAt);
+  async addTask(missionId: string, description: string, agent: AgentRole, dependsOn?: string[]): Promise<Task | undefined> {
+    return this.enqueue(async () => {
+      const current = this.missions.get(missionId); if (!current) return;
+      const draft = structuredClone(current);
+      const task: Task = { id: `task_${draft.tasks.length + 1}`, missionId, description, agent, status: "QUEUED", attempts: 0,
+        ...(dependsOn?.length ? { dependsOn: [...dependsOn] } : {}), createdAt: Date.now(), updatedAt: Date.now() };
+      draft.tasks.push(task); draft.updatedAt = Date.now();
+      const m = await this.commit(draft);
+      this.bus.taskCreated(m, task);
+      return task;
+    });
   }
 
-  setMissionStatus(missionId: string, status: MissionStatus): void {
-    const m = this.missions.get(missionId);
-    if (!m) return;
-    m.status = status;
-    m.updatedAt = Date.now();
-    this.persist(m);
-    if (status === "RUNNING") this.bus.missionStarted(m);
-    if (status === "COMPLETED" || status === "FAILED") this.bus.missionCompleted(m);
-    if (status === "BLOCKED") this.bus.missionBlocked(m);
+  async transition(missionId: string, taskId: string, to: TaskStatus): Promise<Task> {
+    return this.enqueue(async () => {
+      const current = this.missions.get(missionId);
+      const draft = current && structuredClone(current);
+      const task = draft?.tasks.find((t) => t.id === taskId);
+      if (!draft || !task) throw new Error(`Unknown task ${missionId}/${taskId}`);
+      if (task.status !== to && !VALID_TRANSITIONS[task.status].includes(to)) throw new Error(`Invalid task transition ${task.status} → ${to} (${taskId})`);
+      task.status = to; task.updatedAt = Date.now(); draft.updatedAt = Date.now();
+      const committed = await this.commit(draft);
+      return committed.tasks.find((t) => t.id === taskId)!;
+    });
   }
 
-  addTask(missionId: string, description: string, agent: AgentRole, dependsOn?: string[]): Task | undefined {
-    const m = this.missions.get(missionId);
-    if (!m) return undefined;
-    const task: Task = {
-      id: `task_${m.tasks.length + 1}`,
-      missionId,
-      description,
-      agent,
-      status: "QUEUED",
-      attempts: 0,
-      ...(dependsOn?.length ? { dependsOn } : {}),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    m.tasks.push(task);
-    m.updatedAt = Date.now();
-    this.persist(m);
-    this.bus.taskCreated(m, task);
-    return task;
-  }
-
-  /** Moves a task through the state machine; invalid jumps throw so bugs surface. */
-  transition(missionId: string, taskId: string, to: TaskStatus): Task {
-    const m = this.missions.get(missionId);
-    const task = m?.tasks.find((t) => t.id === taskId);
-    if (!m || !task) throw new Error(`Unknown task ${missionId}/${taskId}`);
-    if (task.status !== to && !VALID_TRANSITIONS[task.status].includes(to)) {
-      throw new Error(`Invalid task transition ${task.status} → ${to} (${taskId})`);
-    }
-    task.status = to;
-    task.updatedAt = Date.now();
-    m.updatedAt = Date.now();
-    // Transitions happen right after result/attempt mutations in the runtime,
-    // so persisting here also captures those fields.
-    this.persist(m);
-    return task;
-  }
-
-  incrementReviewCycles(missionId: string): number {
-    const m = this.missions.get(missionId);
-    if (!m) return 0;
-    m.reviewCycles++;
-    this.persist(m);
-    return m.reviewCycles;
+  async incrementReviewCycles(missionId: string): Promise<number> {
+    return this.enqueue(async () => {
+      const current = this.missions.get(missionId); if (!current) return 0;
+      const draft = structuredClone(current); draft.reviewCycles++; draft.updatedAt = Date.now();
+      return (await this.commit(draft)).reviewCycles;
+    });
   }
 
   /** Snapshot for the UI (Mission Control). */

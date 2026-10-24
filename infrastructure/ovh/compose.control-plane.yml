@@ -22,6 +22,9 @@ services:
       - ORVYN_API_KEY=${ORVYN_API_KEY}
       # Persistent volume: sessions, and tenants/<id>/workspaces/<id> project files.
       - ORVYN_DATA_DIR=/data
+      - ORVYN_POSTGRES_MIRROR=${ORVYN_POSTGRES_MIRROR:-0}
+      - ORVYN_POSTGRES_PRIMARY_READS=${ORVYN_POSTGRES_PRIMARY_READS:-0}
+      - ORVYN_POSTGRES_PRIMARY_WRITES=${ORVYN_POSTGRES_PRIMARY_WRITES:-0}
       # Control-plane service connections (internal network only)
       - ORVYN_PG_URL=postgres://orvyn:${ORVYN_PG_PASSWORD:-orvyn_dev}@postgres:5432/orvyn
       - ORVYN_REDIS_URL=redis://redis:6379/0

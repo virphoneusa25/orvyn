@@ -1,3 +1,4 @@
+import { onboardingStore, staffStore } from "../auth/AsyncAccountStores";
 // apps/backend/src/cli/account.ts
 //
 // Operator tool: create (or update) an ORVYN account from the server, ready
@@ -11,10 +12,10 @@
 // signed-in device is signed out) and it is marked verified and set up.
 
 import readline from "node:readline";
-import { authService } from "../auth/AuthService";
-import { onboardingStore } from "../onboarding/OnboardingStore";
+import { authService } from "../auth/AsyncAuthService";
+
 import { provisionAccount } from "../onboarding/provisioning";
-import { staffStore, STAFF_ROLES, type StaffRole } from "../admin/staffStore";
+import { STAFF_ROLES, type StaffRole } from "../admin/staffStore";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -50,30 +51,30 @@ async function main() {
   }
 
   let userId: string;
-  const reset = authService.createPasswordReset(email);
+  const reset = (await authService.createPasswordReset(email));
   if (reset) {
-    authService.resetPassword(reset.token, password);
+    (await authService.resetPassword(reset.token, password));
     userId = reset.user.id;
     console.log(`Updated the existing account ${email} (its devices were signed out).`);
   } else {
-    const created = authService.register(email, password, name, "operator-cli");
-    authService.logout(created.token);
+    const created = (await authService.register(email, password, name, "operator-cli"));
+    (await authService.logout(created.token));
     userId = created.user.id;
     console.log(`Created ${email}.`);
   }
-  if (name) authService.setName(userId, name);
-  if (!authService.isEmailVerified(userId)) {
-    const v = authService.createEmailVerification(userId);
-    authService.verifyEmailToken(v.token);
+  if (name) (await authService.setName(userId, name));
+  if (!(await authService.isEmailVerified(userId))) {
+    const v = (await authService.createEmailVerification(userId));
+    (await authService.verifyEmailToken(v.token));
   }
   const store = onboardingStore();
-  store.ensure(userId, "provisioning", ["welcome", "signup", "verification"]);
-  provisionAccount(userId);
-  store.update(userId, { step: "complete", completed: ["provisioning", "name"], ...(name ? { answers: { name } } : {}) });
+  (await store.ensure(userId, "provisioning", ["welcome", "signup", "verification"]));
+  (await provisionAccount(userId));
+  (await store.update(userId, { step: "complete", completed: ["provisioning", "name"], ...(name ? { answers: { name } } : {}) }));
   console.log("Email verified and setup complete.");
   if (role) {
-    staffStore().setStaff(email, role, "operator-cli");
-    staffStore().audit({ actorId: "operator-cli", actorEmail: "operator-cli", action: "staff.set", tenantId: null, detail: { email, role } });
+    (await staffStore().setStaff(email, role, "operator-cli"));
+    (await staffStore().audit({ actorId: "operator-cli", actorEmail: "operator-cli", action: "staff.set", tenantId: null, detail: { email, role } }));
     console.log(`Staff role: ${role}.`);
   }
 }

@@ -1,3 +1,5 @@
+import { selectedStorage, postgresRuntime } from "./persistence/PostgresRuntime";
+import { asyncHandler } from "./http/asyncHandler";
 import * as pathModule from "path";
 import * as fsModule from "fs";
 import "./loadEnv";
@@ -24,7 +26,7 @@ import { authRouter } from "./routes/auth";
 import { onboardingRouter } from "./routes/onboarding";
 import { authorizeSocket, resolveTenant } from "./middleware/tenant";
 import { requireAccountReady, socketAccountReady } from "./middleware/accountReady";
-import { authService } from "./auth/AuthService";
+import { authService } from "./auth/AsyncAuthService";
 import { redactChunk } from "./middleware/customerRedaction";
 import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
@@ -34,6 +36,7 @@ import { registerWorkspaceFreeToolsFor } from "./ai/registerProjectTools";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
 import { environmentName } from "./identity/principal";
 import { loadVaultKey } from "./secrets/vault";
+import { validateTenantMirrorMode } from "./persistence/TenantPostgresMirror";
 import { githubToken } from "./integrations/githubConnection";
 import { migratePostgresIdentity } from "./identity/postgres";
 import { redisHealth } from "./identity/redisNamespace";
@@ -74,16 +77,17 @@ app.get("/api/v1/health", (_req, res) =>
   })
 );
 
-app.get("/api/v1/health/detailed", async (_req, res) => {
+app.get("/api/v1/health/detailed", asyncHandler(async (_req, res) => {
   const checks: Record<string, { healthy: boolean; detail?: string }> = {
     api: { healthy: true },
   };
 
-  // PostgreSQL (when ORVYN_PG_URL is set — control-plane deployments)
-  if (process.env.ORVYN_PG_URL) {
+  const storage = selectedStorage();
+  const postgresUrl = storage.mode === "postgres" ? storage.url : process.env.ORVYN_PG_URL;
+  if (postgresUrl) {
     try {
       const { Client } = await import("pg");
-      const client = new Client({ connectionString: process.env.ORVYN_PG_URL, connectionTimeoutMillis: 3000 });
+      const client = new Client({ connectionString: postgresUrl, connectionTimeoutMillis: 3000 });
       await client.connect();
       const r = await client.query("SELECT version()");
       await client.end();
@@ -98,7 +102,10 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
   checks.redis = await redisHealth();
   checks.identity = { healthy: true, detail: "session + personal organization" };
 
-  if (process.env.ORVYN_PG_URL) {
+  if (selectedStorage().mode === "postgres") {
+    try { await (await postgresRuntime()).reports.ping(); checks.migrations = {healthy:true,detail:"PostgreSQL primary account, billing and payment stores ready"}; }
+    catch { checks.migrations = {healthy:false,detail:"PostgreSQL primary stores unavailable"}; }
+  } else if (process.env.ORVYN_PG_URL) {
     try {
       const migrated = await migratePostgresIdentity();
       checks.migrations = { healthy: true, detail: `${migrated.database} applied=${migrated.applied.join(",") || "none"}` };
@@ -162,14 +169,14 @@ app.get("/api/v1/health/detailed", async (_req, res) => {
     },
     timestamp: new Date().toISOString(),
   });
-});
+}));
 
 // Accounts: register/login are reachable without credentials by design;
 // me/logout validate their own bearer token against the session store.
 // Per-IP rate limit so the open endpoints can't be hammered.
 app.use("/api/v1/sites", siteRouter);
 // The portal's preview frame: one stored file by a five-minute link (no session), sandboxed.
-app.get("/api/v1/preview/:token", async (req, res) => {
+app.get("/api/v1/preview/:token", asyncHandler(async (req, res) => {
   const link = resolvePreviewLink(String(req.params.token));
   const tenant = link ? tenantManager.get(link.tenantId) : undefined;
   if (!link || !tenant) return res.status(404).type("text/plain").send("This preview link expired. Open the preview again.");
@@ -186,7 +193,7 @@ app.get("/api/v1/preview/:token", async (req, res) => {
   } catch {
     res.status(404).type("text/plain").send("That file is no longer available.");
   }
-});
+}));
 app.use("/api/v1/billing/return", billingReturnRouter);
 // ORVYN Admin Portal API: platform staff only (checked inside), never the customer chain.
 app.use("/api/v1/admin", ipRateLimit(Number(process.env.ORVYN_ADMIN_RATE_LIMIT_RPM) || 600), adminRouter);
@@ -203,26 +210,26 @@ app.use("/api/v1/onboarding", ipRateLimit(Number(process.env.ORVYN_ONBOARDING_RA
 
 // A shared conversation (read-only public link from Chats → Share). Text only:
 // attachments, files and account details never leave through a share link.
-app.get("/api/v1/public/shares/:token", ipRateLimit(120), (req, res) => {
+app.get("/api/v1/public/shares/:token", ipRateLimit(120), asyncHandler(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  const share = authService.resolveShare(String(req.params.token));
-  const as = share ? authService.principalFor(share.userId, share.organizationId) : null;
-  const tenant = as ? tenantManager.ensureOrgTenant(as.principal) : null;
-  const session = share && tenant ? tenant.sessions.get(share.sessionId) : undefined;
+  const share = (await authService.resolveShare(String(req.params.token)));
+  const as = share ? (await authService.principalFor(share.userId, share.organizationId)) : null;
+  const tenant = as ? (await tenantManager.ensureOrgTenant(as.principal)) : null;
+  const session = share && tenant ? (await tenant.sessions.get(share.sessionId)) : undefined;
   if (!share || !session || (session.userId && session.userId !== share.userId)) return res.status(404).json({ error: "This shared conversation isn't available. The link may have been turned off." });
-  const messages = tenant!.sessions.messages(session.sessionId, 0)
+  const messages = (await tenant!.sessions.messages(session.sessionId, 0))
     .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
     .map((m: { role: string; content: string; createdAt: number }) => ({ role: m.role, content: String(m.content ?? ""), createdAt: m.createdAt }));
   res.json({ title: session.title, sharedAt: share.createdAt, author: as!.user.name?.split(" ")[0] ?? null, messages });
-});
+}));
 
 // Everything else resolves a tenant first — from a user session token or an
 // API key. Each tenant has its own models, index, tools and agent sessions.
 // The rate limit is per tenant, so one customer can't starve the others.
 // …then the account gate: a signed-in person uses ORVYN only after verifying
 // their email and finishing onboarding (no skipping into the app).
-app.use("/api/v1", resolveTenant, requireAccountReady, (req, res, next) => {
+app.use("/api/v1", asyncHandler(resolveTenant), asyncHandler(requireAccountReady), (req, res, next) => {
     // Desktop frame polling is a real-time visual stream (~11 FPS), not a
     // typical API call — exempting it prevents the 300 RPM tenant limiter
     // from starving the stream with 429s while the user watches.
@@ -294,22 +301,26 @@ server.on("upgrade", (req, socket, head) => {
 });
 const wss = new WebSocketServer({ server, path: "/ws/chat", maxPayload: 20 * 1024 * 1024 });
 
-wss.on("connection", (socket, req) => {
+wss.on("connection", async (socket, req) => {
+  // Clients wait for connection.ready. Fail closed if data arrives during admission.
+  const prematureMessage = () => socket.close(1008, "Authentication pending");
+  socket.on("message", prematureMessage);
+  try {
   const url = new URL(req.url ?? "", "http://internal");
   const ticket = url.searchParams.get("ticket");
-  const token = ticket ? authService.redeemWsTicket(ticket) : url.searchParams.get("token");
+  const token = ticket ? (await authService.redeemWsTicket(ticket)) : url.searchParams.get("token");
   if (ticket && !token) {
     socket.send(JSON.stringify({ delta: "", done: true, error: "This connection expired. Reconnecting…", code: "TICKET_EXPIRED" }));
     socket.close();
     return;
   }
-  const ready = socketAccountReady(token);
+  const ready = (await socketAccountReady(token));
   if (!ready.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: ready.error, code: ready.code }));
     socket.close();
     return;
   }
-  const admitted = authorizeSocket(token);
+  const admitted = (await authorizeSocket(token));
   if (!admitted.ok) {
     socket.send(JSON.stringify({ delta: "", done: true, error: admitted.error }));
     socket.close();
@@ -318,7 +329,13 @@ wss.on("connection", (socket, req) => {
   const tenant = admitted.tenant;
   (socket as any).__orvynTenantId = tenant.id;
   // The person on this socket (session tokens): conversations are theirs alone.
-  const socketUserId = token ? authService.verifyPrincipal(token)?.user.id ?? null : null;
+  const socketUserId = token ? (await authService.verifyPrincipal(token))?.user.id ?? null : null;
+  if (token?.startsWith("orvsess_") && !socketUserId) {
+    socket.close(1008, "Session expired");
+    return;
+  }
+  if (socket.readyState !== socket.OPEN) return;
+  socket.off("message", prematureMessage);
 
   socket.send(JSON.stringify({
     type: "connection.ready",
@@ -327,12 +344,9 @@ wss.on("connection", (socket, req) => {
     at: Date.now(),
   }));
 
-  let activeRecorder: ChatTurnRecorder | null = null;
-  let chatController: AbortController | null = null;
+  const chatRecorders = new Set<ChatTurnRecorder>();
+  const chatControllers = new Set<AbortController>();
   socket.on("message", async (raw) => {
-    chatController?.abort();
-    const turnController = new AbortController();
-    chatController = turnController;
     let recorder: ChatTurnRecorder | null = null;
     let body;
     try {
@@ -376,7 +390,7 @@ wss.on("connection", (socket, req) => {
       const capabilityPrompt = chatCapabilityPrompt(tenant.toolGateway.list().map((t) => t.name));
       // The turn is stored now, and the reply as it streams: the session is
       // the durable conversation, not the desktop's cache file.
-      const found = typeof body?.sessionId === "string" ? tenant.sessions.get(body.sessionId) : undefined;
+      const found = typeof body?.sessionId === "string" ? (await tenant.sessions.get(body.sessionId)) : undefined;
       if (found && socketUserId && found.userId && found.userId !== socketUserId) {
         socket.send(JSON.stringify({ delta: "", done: true, error: "Unknown conversation" }));
         return;
@@ -390,7 +404,7 @@ wss.on("connection", (socket, req) => {
         body.surface = "cloud";
         body.sessionId = session?.sessionId;
         if (session && !Array.isArray(body.history)) {
-          body.history = tenant.sessions.messages(session.sessionId)
+          body.history = (await tenant.sessions.messages(session.sessionId))
             .filter((m) => (m.role === "user" || m.role === "assistant") && m.status === "complete" && m.content.trim())
             .slice(-24)
             .map((m) => ({ role: m.role, content: m.content.slice(0, 12_000) }));
@@ -399,7 +413,7 @@ wss.on("connection", (socket, req) => {
         body.task = "chat";
         if (body.context && typeof body.context === "object") delete body.context.projectRoot;
       }
-      const priorMessages = session ? tenant.sessions.messages(session.sessionId) : [];
+      const priorMessages = session ? (await tenant.sessions.messages(session.sessionId)) : [];
       const latestArtifact = priorMessages.slice().reverse().flatMap((message) => {
         const artifacts = message.meta?.artifacts;
         return Array.isArray(artifacts) ? artifacts : [];
@@ -424,7 +438,7 @@ wss.on("connection", (socket, req) => {
       ].filter(Boolean);
       body.conversationContext = contextLines.join("\n");
       // Regenerate: the old reply is replaced by the one about to stream.
-      if (session && typeof body?.replacesMessageId === "string") tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId);
+      if (session && typeof body?.replacesMessageId === "string") (await tenant.sessions.deleteMessage(session.sessionId, body.replacesMessageId));
       recorder = session && typeof body?.userMessage === "string"
         ? new ChatTurnRecorder(tenant.sessions, session.sessionId, {
             userMessage: body.userMessage,
@@ -435,7 +449,8 @@ wss.on("connection", (socket, req) => {
             attachments: Array.isArray(body.attachmentRefs) ? body.attachmentRefs.slice(0, 20).map((a: any) => ({ artifactId: String(a?.artifactId ?? ""), name: String(a?.name ?? ""), mimeType: String(a?.mimeType ?? "") })).filter((a: any) => a.artifactId) : undefined,
           })
         : null;
-      activeRecorder = recorder;
+      if (recorder) chatRecorders.add(recorder);
+      await recorder?.ready;
       // A turn never hangs: a heartbeat every 10s tells the desktop the turn is
       // alive (a reasoning model can think silently for a while), and if the
       // model sends nothing for CHAT_STALL_MS the turn ends with a plain error
@@ -444,7 +459,9 @@ wss.on("connection", (socket, req) => {
       const beat = setInterval(() => { if (socket.readyState === 1) socket.send(JSON.stringify({ delta: "", heartbeat: true, done: false })); }, 10_000);
       beat.unref?.();
       let stalled = false;
-      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt, signal:turnController.signal })[Symbol.asyncIterator]();
+      const controller = new AbortController();
+      chatControllers.add(controller);
+      const iterator = orchestrator.streamChat({ ...body, capabilityPrompt, signal: controller.signal })[Symbol.asyncIterator]();
       const guarded = {
         [Symbol.asyncIterator]() { return this; },
         async next(): Promise<IteratorResult<any>> {
@@ -455,35 +472,45 @@ wss.on("connection", (socket, req) => {
       };
       try {
       for await (const chunk of guarded) {
-        if (turnController.signal.aborted || socket.readyState !== 1) break;
-        socket.send(JSON.stringify(redactChunk(tenant, chunk)));
         const chunkError = (chunk as { error?: unknown }).error;
         if (chunk.activity) recorder?.activity(chunk.activity);
+        if (chunk.routing) recorder?.routing(chunk.routing);
         if (Array.isArray((chunk as { artifacts?: unknown[] }).artifacts)) recorder?.artifacts((chunk as { artifacts: unknown[] }).artifacts);
         if (chunk.retract) recorder?.retract();
-        if (chunkError) recorder?.finish(String(chunkError));
+        if (chunkError) await recorder?.finish(String(chunkError));
         else recorder?.delta(String(chunk.delta ?? ""));
-        if (chunk.done) { recorder?.finish(); learn(); break; }
+        if (chunk.done) await recorder?.finish();
+        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(redactChunk(tenant, chunk)));
+        if (chunk.done) { learn(); break; }
         // Yield so each token can leave the process and paint in the UI
         // instead of arriving as one burst.
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       } finally {
+        controller.abort();
+        chatControllers.delete(controller);
         clearInterval(beat);
-        if (turnController.signal.aborted) void iterator.return?.(undefined).catch(()=>undefined);
+        if (controller.signal.aborted) void iterator.return?.(undefined).catch(()=>undefined);
         if (stalled) { console.warn(JSON.stringify({ event: "chat.turn.stalled", stallMs })); void iterator.return?.(undefined).catch(() => undefined); }
       }
-      recorder?.finish();
+      await recorder?.finish();
     } catch (err: any) {
-      if(turnController.signal.aborted || socket.readyState !== 1){recorder?.finish();return;}
-      recorder?.finish(err.message);
+      await recorder?.finish(err.message).catch(() => {});
       // A wallet/plan stop carries its code so the client can offer an upgrade or top-up.
       const code = (err as { billing?: boolean; code?: string })?.billing ? `CREDITS_${(err as { code?: string }).code ?? "LIMIT"}` : undefined;
-      socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message, ...(code ? { code } : {}) })));
+      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(redactChunk(tenant, { delta: "", done: true, error: err.message, ...(code ? { code } : {}) })));
+    } finally {
+      if (recorder) chatRecorders.delete(recorder);
     }
   });
   // The app closed mid-reply: keep what arrived.
-  socket.on("close", () => { chatController?.abort(); activeRecorder?.finish(); });
+  socket.on("close", () => { for (const controller of chatControllers) controller.abort(); for (const recorder of chatRecorders) void recorder.finish().catch(() => console.warn("[sessions] closed socket reply persistence failed")); });
+  } catch {
+    // Do not admit a socket or expose database details after authentication errors.
+    if (socket.readyState === socket.OPEN) socket.close(1011, "Authentication unavailable");
+  } finally {
+    socket.off("message", prematureMessage);
+  }
 });
 
 // Liveness heartbeat for desktop/cloud clients. A half-open socket must not
@@ -503,24 +530,27 @@ server.on("close", () => clearInterval(heartbeat));
 
 try {
   loadVaultKey();
+  validateTenantMirrorMode();
 } catch (err) {
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 }
 
+async function startServer(): Promise<void> {
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4570;
-if (process.env.ORVYN_PG_URL) {
+if (selectedStorage().mode === "postgres") await postgresRuntime();
+if (selectedStorage().mode === "sqlite" && process.env.ORVYN_PG_URL) {
   void migratePostgresIdentity().catch((err) => {
     console.error("Postgres identity migration failed:", err?.message ?? err);
   });
 }
-bootstrapDefaultTenant();
+await bootstrapDefaultTenant();
 // Reconnect enabled MCP servers (best-effort; failures stay per-server).
 setTimeout(() => {
-  void (async () => { try { const t = tenantManager.ensureLocalDefault(); await t.mcpManager.startEnabled(); } catch {} })();
+  void (async () => { try { const t = (await tenantManager.ensureLocalDefault()); await t.mcpManager.startEnabled(); } catch {} })();
 }, 3000);
 
-server.listen(PORT, () => {
+server.listen(PORT, process.env.ORVYN_BIND_HOST || "0.0.0.0", () => {
   console.log(`ORVYN backend listening on http://localhost:${PORT}`);
   console.log(`  Fireworks configured: ${process.env.FIREWORKS_API_KEY?.trim() ? "yes" : "no"}`);
   console.log(`  REST:      http://localhost:${PORT}/api/v1/health`);
@@ -536,6 +566,8 @@ server.listen(PORT, () => {
   }
 });
 
+}
+
 /** The chat's own tools (web search, page reads, finding and installing MCP tools), usable before any project is open. */
 function chatOwnTool(tenant: any, name: string) {
   const market = () => chatMarketplaceFor(tenant.mcpManager, tenant.localStore, tenant.id);
@@ -547,3 +579,5 @@ function chatOwnTool(tenant: any, name: string) {
     default: return null;
   }
 }
+
+void startServer().catch(() => { console.error("Tenant initialization failed; server was not started."); process.exit(1); });

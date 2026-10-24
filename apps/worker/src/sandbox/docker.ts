@@ -8,6 +8,7 @@
 // deterministic name so a restarted worker can find its sandbox again.
 
 import { spawn } from "child_process";
+import { statSync } from "node:fs";
 import { docker, labelValue } from "./dockerCli";
 import {
   SandboxError,
@@ -70,12 +71,16 @@ export class DockerExecutionProvider implements ExecutionSandboxProvider {
     const name = dockerSandboxName(spec.sandboxId);
     const r = spec.resources;
     const id = spec.identity;
+    // With ALL capabilities dropped, container root cannot override the host
+    // workspace owner's permissions. Run as that owner instead of weakening isolation.
+    const owner = statSync(spec.workspaceHostPath);
     await docker(["rm", "-f", name]); // re-run safety: a stale sandbox with this id is replaced
     const create = await docker([
       "create", "--name", name,
       "--network", "none",
       "--cap-drop", "ALL",
       "--security-opt", "no-new-privileges",
+      "--user", `${owner.uid}:${owner.gid}`,
       "--memory", `${r.memoryMb}m`, "--memory-swap", `${r.memoryMb}m`,
       "--cpus", String(r.cpus), "--pids-limit", String(r.pidsLimit),
       "--label", "orvyn.sandbox=1",

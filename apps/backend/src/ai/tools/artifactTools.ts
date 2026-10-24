@@ -90,8 +90,8 @@ export function makeArtifactListTool(artifacts: ArtifactService): AITool {
     async execute(args): Promise<ToolResult> {
       try {
         const items = args.query
-          ? artifacts.search(String(args.query))
-          : artifacts.listArtifacts({ kind: args.kind ? String(args.kind) : undefined });
+          ? (await artifacts.search(String(args.query)))
+          : (await artifacts.listArtifacts({ kind: args.kind ? String(args.kind) : undefined }));
         return {
           ok: true,
           output: json({

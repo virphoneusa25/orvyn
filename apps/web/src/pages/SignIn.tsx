@@ -5,6 +5,8 @@ import { navigate, useLocation } from "../lib/router";
 import { Orb } from "../components/Orb";
 import { surface } from "../lib/surface";
 import { Icon } from "../components/Icons";
+import { Markdown } from "../lib/markdown";
+import { LEGAL_LOAD_ERROR, parseSignupLegalBundle, signupLegalAcceptance, type SignupLegalBundle } from "../lib/signupLegal";
 
 // Sign in / create account / reset password. Google and GitHub finish through a
 // handoff: the portal keeps a secret verifier in this tab and claims the
@@ -57,8 +59,19 @@ export function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [providers, setProviders] = useState<Providers>({ google: false, github: false, email: false });
+  const [legal, setLegal] = useState<SignupLegalBundle | null>(null);
+  const [legalError, setLegalError] = useState<string | null>(null);
 
-  useEffect(() => { api<Providers>("/onboarding/providers").then(setProviders).catch(() => undefined); }, []);
+  const loadLegal = async () => {
+    setLegal(null); setLegalError(null); setTerms(false);
+    try { setLegal(parseSignupLegalBundle(await api<unknown>("/auth/legal"))); }
+    catch { setLegalError(LEGAL_LOAD_ERROR); }
+  };
+
+  useEffect(() => {
+    api<Providers>("/onboarding/providers").then(setProviders).catch(() => undefined);
+    void loadLegal();
+  }, []);
 
   // Back from Google/GitHub: claim the session with the verifier kept in this tab.
   const complete = query.get("complete");
@@ -84,7 +97,8 @@ export function SignIn() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return "Enter a valid email address.";
     if (!strength.ok) return "Choose a stronger password: at least 12 characters, or mix upper and lower case, numbers and symbols.";
     if (password !== confirm) return "The passwords don't match.";
-    if (!terms) return "Agree to the Terms of Service and Privacy Policy to continue.";
+    if (!terms) return "Agree to the current ORVYN legal documents to continue.";
+    if (!legal?.version) return "ORVYN's current legal documents haven't loaded. Refresh and try again.";
     return null;
   };
   const submit = async (e: React.FormEvent) => {
@@ -97,7 +111,7 @@ export function SignIn() {
         const r = await api<{ message: string }>("/auth/password/forgot", { method: "POST", body: { email } });
         setNotice(r.message);
       } else {
-        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email: email.trim(), password, name: `${first.trim()} ${last.trim()}`, organization: company.trim() || undefined, acceptTerms: true, client: "web" } });
+        const r = await api<{ token: string }>(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "login" ? { email, password } : { email: email.trim(), password, name: `${first.trim()} ${last.trim()}`, organization: company.trim() || undefined, ...signupLegalAcceptance(legal, terms), client: "web" } });
         await signIn(r.token);
       }
     } catch (err: any) {
@@ -147,12 +161,26 @@ export function SignIn() {
           {mode === "register" ? (
             <>
               <div className="field"><label htmlFor="confirm">Confirm password *</label><input id="confirm" className="input" type={show ? "text" : "password"} required value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" aria-invalid={Boolean(confirm) && confirm !== password} /></div>
-              <label className="terms"><input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} data-testid="accept-terms" /> <span>I agree to the {providers.termsUrl ? <a href={providers.termsUrl} target="_blank" rel="noopener noreferrer">Terms of Service</a> : "Terms of Service"} and {providers.privacyUrl ? <a href={providers.privacyUrl} target="_blank" rel="noopener noreferrer">Privacy Policy</a> : "Privacy Policy"}.</span></label>
+              {legalError ? <div role="alert" data-testid="legal-load-error">{legalError} <button type="button" className="linkbtn" onClick={() => void loadLegal()}>Reload legal documents</button></div> : !legal ? <p role="status">Loading current legal documents…</p> : null}
+              <label className="terms"><input type="checkbox" checked={terms} disabled={!legal} onChange={(e) => setTerms(e.target.checked)} data-testid="accept-terms" /> <span>I agree to the current ORVYN Software License, Privacy Policy, Acceptable Use Policy, and AI &amp; Agent Disclosure{legal?.version ? " (version " + legal.version + ")" : ""}.</span></label>
+              {legal ? (
+                <details className="terms-review" data-testid="legal-review">
+                  <summary>Review required legal documents</summary>
+                  <div style={{ maxHeight: 320, overflowY: "auto", display: "grid", gap: 12, padding: "10px 4px" }}>
+                    {legal.documents.filter((document) => document.requiredForAcceptance).map((document) => (
+                      <details key={document.id}>
+                        <summary>{document.title}</summary>
+                        <div className="markdown" style={{ padding: "10px 2px" }}><Markdown text={document.content} /></div>
+                      </details>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
             </>
           ) : null}
           {error ? <div className="error" role="alert">{error}</div> : null}
           {notice ? <div className="notice">{notice}</div> : null}
-          <button className="btn btn--primary btn--big" type="submit" disabled={busy} data-testid="auth-submit">
+          <button className="btn btn--primary btn--big" type="submit" disabled={busy || (mode === "register" && !legal)} data-testid="auth-submit">
             {busy ? "Please wait…" : mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"}
           </button>
         </form>

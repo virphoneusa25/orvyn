@@ -227,19 +227,19 @@ test("official provider uses injected fetch (no live network in unit test)", asy
   assert.equal(h.status, "online");
 });
 
-test("provider secrets persist under mcp.secret.* and are never returned", () => {
+test("provider secrets persist under mcp.secret.* and are never returned", async () => {
   const saved: Record<string, string> = {};
   const store = { getSetting: (k: string) => saved[k], setSetting: (k: string, v: string) => { saved[k] = v; } };
   const manager = { listServers: () => [], searchTools: () => [], statuses: () => [] } as any;
   const svc = new MarketplaceService(manager, store, "tenant-a");
-  const after = svc.setProviderSecret("glama", "glm_TEST_NOT_A_REAL_KEY");
+  const after = await svc.setProviderSecret("glama", "glm_TEST_NOT_A_REAL_KEY");
   assert.equal(after.glama, true);
   assert.notEqual(saved["mcp.secret.glama"], "glm_TEST_NOT_A_REAL_KEY");
   assert.match(saved["mcp.secret.glama"], /^orvyn:v1:/);
   const status = svc.providerSecretStatus();
   assert.deepEqual(status, { glama: true, smithery: false });
   assert.equal(JSON.stringify(status).includes("glm_"), false);
-  const smithery = svc.setProviderSecret("smithery", "11111111-1111-4111-8111-111111111111");
+  const smithery = await svc.setProviderSecret("smithery", "11111111-1111-4111-8111-111111111111");
   assert.equal(smithery.smithery, true);
   assert.notEqual(saved["mcp.secret.smithery"], "11111111-1111-4111-8111-111111111111");
   assert.match(saved["mcp.secret.smithery"], /^orvyn:v1:/);
@@ -687,4 +687,51 @@ test("natural-language github inspect ranks GitHub MCP", async () => {
   const score = rankServer(q, github!.server);
   const fs = officialReferenceResults("filesystem")[0];
   assert.ok(score > rankServer(q, fs.server) - 50);
+});
+
+
+test("marketplace waits for async hydration and only publishes acknowledged registry updates", async () => {
+  const saved = new Map<string, string>();
+  let hydrate!: () => void;
+  const hydration = new Promise<void>((resolve) => { hydrate = resolve; });
+  let acknowledge!: () => void;
+  let gate: Promise<void> = Promise.resolve();
+  let fail = false;
+  const store = {
+    getSetting: async (key: string) => { await hydration; return saved.get(key); },
+    setSetting: async (key: string, value: string) => { await gate; if (fail) throw new Error("storage unavailable"); saved.set(key, value); },
+  };
+  const manager = { listServers: () => [], searchTools: () => [], statuses: () => [] } as any;
+  const service = new MarketplaceService(manager, store, "fixture");
+  assert.throws(() => service.listPrivateRegistries(), /not ready/);
+  hydrate(); await service.ready;
+  gate = new Promise<void>((resolve) => { acknowledge = resolve; });
+  const update = service.upsertPrivateRegistry({ id: "fixture", name: "fixture", url: "https://fixture.invalid", enabled: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(service.listPrivateRegistries().length, 0);
+  acknowledge(); await update;
+  fail = true;
+  await assert.rejects(service.removePrivateRegistry("fixture"), /storage unavailable/);
+  assert.equal(service.listPrivateRegistries().length, 1);
+  (service as any).cache.set("public-fixture", { name: "fixture" });
+  await service.flushPersistence(); // Optional cache writes absorb failures.
+  fail = false;
+  await Promise.all(Array.from({ length: 8 }, (_, i) => service.upsertPrivateRegistry({ id: `fixture-${i}`, name: "fixture", url: "https://fixture.invalid", enabled: false })));
+  assert.equal(service.listPrivateRegistries().length, 9);
+  (service as any).cache.set("public-fixture", { name: "fixture" });
+  await service.flushPersistence();
+  const reopened = new MarketplaceService(manager, store, "fixture"); await reopened.ready;
+  assert.equal(reopened.listPrivateRegistries().length, 9);
+  assert.deepEqual((reopened as any).cache.get("public-fixture").payload, { name: "fixture" });
+  const copy = reopened.listPrivateRegistries(); copy[0].name = "changed";
+  assert.equal(reopened.listPrivateRegistries()[0].name, "fixture");
+});
+
+test("marketplace hydration failures reject startup and configuration mutations", async () => {
+  const store = { getSetting: async () => { throw new Error("database offline"); }, setSetting: async () => {} };
+  const manager = { listServers: () => [], searchTools: () => [], statuses: () => [] } as any;
+  const service = new MarketplaceService(manager, store, "fixture");
+  await assert.rejects(service.ready, /database offline/);
+  await assert.rejects(service.removePrivateRegistry("fixture"), /database offline/);
+  assert.throws(() => service.providerSecretStatus(), /not ready/);
 });

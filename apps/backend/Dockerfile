@@ -15,7 +15,8 @@ COPY apps/web/package.json apps/web/
 
 # --ignore-scripts: the root postinstall builds ai-core, but sources aren't
 # copied yet at this layer — the explicit build steps below handle it.
-RUN npm install --workspaces --no-audit --no-fund --ignore-scripts
+RUN npm install --workspaces --no-audit --no-fund --ignore-scripts \
+ && mkdir -p apps/backend/node_modules
 
 COPY packages/ai-core packages/ai-core
 COPY apps/backend apps/backend
@@ -28,12 +29,11 @@ RUN npm run build -w apps/web
 # deploy-ovh.sh writes build-info.json (commit + time); local builds get "{}".
 RUN test -f apps/backend/build-info.json || echo '{}' > apps/backend/build-info.json
 
-# Playwright: install the npm package + Chromium in the build stage so the
-# runtime image carries them (browserTools.ts does a runtime require).
+# Playwright is already a backend dependency. Resolve its CLI from that
+# workspace; a second npm install can remove the root executable shim.
 # PLAYWRIGHT_BROWSERS_PATH forces a known location we can copy from.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN cd apps/backend && npm install playwright --no-save && cd /repo
-RUN npx playwright install chromium --with-deps
+RUN node -e "const {createRequire}=require('node:module'); const {execFileSync}=require('node:child_process'); const path=require('node:path'); const r=createRequire('/repo/apps/backend/package.json'); execFileSync(process.execPath,[path.join(path.dirname(r.resolve('playwright/package.json')),'cli.js'),'install','chromium','--with-deps'],{stdio:'inherit'});"
 
 FROM node:22-slim AS runtime
 WORKDIR /app
@@ -50,6 +50,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /repo/node_modules ./node_modules
+# Preserve dependencies npm places beneath the backend workspace too.
+COPY --from=build /repo/apps/backend/node_modules ./node_modules
 COPY --from=build /repo/packages/ai-core ./packages/ai-core
 COPY --from=build /repo/apps/backend/dist ./dist
 COPY --from=build /repo/apps/backend/package.json ./package.json

@@ -1,5 +1,6 @@
 import { CloudWorkbench } from "./CloudWorkbench";
 import { followRun } from "../lib/followRun";
+import { stripLeakedToolMarkup } from "../lib/leakedToolMarkup";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, downloadArtifact, getToken } from "../lib/api";
 import { streamTurn, uid, type ChatChunk } from "../lib/chatSocket";
@@ -15,11 +16,14 @@ import { useRevealedText } from "../lib/streamReveal";
 import { navigate } from "../lib/router";
 import { useStore } from "../lib/store";
 import { signal } from "../lib/events";
-import { FileVisual, Thumb } from "./FileVisual";
+import { FileVisual } from "./FileVisual";
 import { Icon } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 import { Orb } from "./Orb";
 import { usePreview } from "./Preview";
+import { looksLikeImageRequest } from "../../../../packages/ai-core/src/imageIntent";
+import { markImageGenerationReady, type GeneratedImageAsset, type ImageGenerationJob } from "../../../../packages/ai-core/src/imageGeneration";
+import { ImageGenerationMessage } from "./ImageGenerationMessage";
 
 // One ORVYN Cloud conversation: stored on the server (reopens anywhere),
 // streamed over the chat socket for chat turns and over SSE for agent runs,
@@ -27,6 +31,7 @@ import { usePreview } from "./Preview";
 
 export type FileRef = StreamFileRef;
 interface Msg {
+  routing?: ChatChunk["routing"];
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -41,6 +46,7 @@ interface Msg {
   runStatus?: string;
   agentEvents?: AgentProgressEvent[];
   retry?: string;
+  imageJob?: ImageGenerationJob;
 }
 interface Pending { id: string; file: File; url?: string }
 
@@ -56,17 +62,55 @@ export const STARTERS: { title: string; sub: string; prompt: string }[] = [
 
 function toMsg(m: any): Msg | null {
   if (m.role !== "user" && m.role !== "assistant") return null;
+  const artifacts = Array.isArray(m.meta?.artifacts) ? m.meta.artifacts as FileRef[] : undefined;
+  const image = artifacts?.find((f) => fileKind(f.name, f.mimeType) === "image");
   return {
     id: m.messageId,
     role: m.role,
     content: m.content ?? "",
+    routing: m.meta?.routing,
     createdAt: m.createdAt,
     streaming: m.status === "streaming",
     runId: typeof m.runId === "string" ? m.runId : undefined,
     attachments: Array.isArray(m.meta?.attachments) ? m.meta.attachments : undefined,
-    artifacts: Array.isArray(m.meta?.artifacts) ? m.meta.artifacts : undefined,
+    artifacts,
     activities: Array.isArray(m.meta?.activity) ? m.meta.activity : undefined,
+    ...(m.role === "assistant" && image ? { imageJob: { id: m.messageId, prompt: "", status: "provider-completed", assets: [image] } } : {}),
   };
+}
+
+function imageJobFromEvents(prompt: string, id: string, userMessageId: string, events: AgentProgressEvent[], status: string): ImageGenerationJob | undefined {
+  if (!looksLikeImageRequest(prompt)) return undefined;
+  let job: ImageGenerationJob = { id, prompt, userMessageId, status: "queued" };
+  for (const event of events) {
+    const data = event.data ?? {};
+    if (event.type === "tool.started" && data.tool === "generate_image") job = { ...job, status: "generating" };
+    if (event.type === "artifact.created" && (data.tool === "generate_image" || data.kind === "generated") && String(data.mimeType ?? "").startsWith("image/")) {
+      const artifactId = String(data.artifactId ?? data.id ?? "");
+      if (artifactId) job = { ...job, status: "provider-completed", assets: [{ artifactId, name: String(data.name ?? "generated-image.png"), mimeType: String(data.mimeType) }] };
+    }
+    if (event.type === "tool.failed" && data.tool === "generate_image") job = { ...job, status: "failed", error: String(data.error ?? "The image provider could not complete the request.") };
+  }
+  if (["completed", "partial", "error", "cancelled", "blocked"].includes(status) && ["queued", "generating"].includes(job.status)) job = { ...job, status: "failed", error: "The run finished without a completed image." };
+  return job;
+}
+
+function attachImagePrompts(messages: Msg[]): Msg[] {
+  let previousUser: Msg | undefined;
+  return messages.map((message) => {
+    if (message.role === "user") previousUser = message;
+    if (message.role === "assistant" && previousUser && (message.imageJob || looksLikeImageRequest(previousUser.content))) {
+      const imageJob = message.imageJob ?? {
+        id: message.id,
+        prompt: previousUser.content,
+        userMessageId: previousUser.id,
+        status: message.runId ? "queued" as const : message.streaming ? "generating" as const : "failed" as const,
+        ...(!message.streaming && !message.runId ? { error: message.content || "Image generation ended before an image was saved." } : {}),
+      };
+      return { ...message, imageJob: { ...imageJob, prompt: imageJob.prompt || previousUser.content, userMessageId: imageJob.userMessageId || previousUser.id } };
+    }
+    return message;
+  });
 }
 
 function readBase64(file: File): Promise<string> {
@@ -112,21 +156,6 @@ export function FileChip({ f, big, generating }: { f: FileRef; big?: boolean; ge
 }
 
 /** An image ORVYN made: shown large in the conversation (click to open), with Download. */
-function GeneratedImage({ f }: { f: FileRef }) {
-  const preview = usePreview();
-  return (
-    <div data-testid="generated-image">
-      <button className="gen-image" onClick={() => preview(f)} aria-label={`Open ${f.name}`}>
-        <Thumb artifactId={f.artifactId} name={f.name} fallbackSize={300} />
-      </button>
-      <div className="gen-image__bar">
-        <button className="btn btn--sm" onClick={() => preview(f)} data-testid="chip-preview"><Icon.eye size={14} /> Open</button>
-        <button className="btn btn--sm" onClick={() => void downloadArtifact(f.artifactId, f.name)} data-testid="chip-download"><Icon.download size={14} /> Download</button>
-      </div>
-    </div>
-  );
-}
-
 function UpgradePrompt({ code, message }: { code?: string; message?: string }) {
   const limit = code === "CREDITS_WINDOW_5H" || code === "CREDITS_WINDOW_7D";
   return (
@@ -164,6 +193,28 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
 }) {
   const { me, model, refreshBilling, toast } = useStore();
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [workbenchOpen, setWorkbenchOpen] = useState(() => {
+    if (window.innerWidth <= 1050) return false;
+    try { return localStorage.getItem("orvyn.cloudWorkspace") !== "closed"; } catch { return true; }
+  });
+  const [workbenchExpanded, setWorkbenchExpanded] = useState(false);
+  const workbenchToggle = useRef<HTMLButtonElement>(null);
+  function closeWorkbench() {
+    setWorkbenchOpen(false); setWorkbenchExpanded(false);
+    try { localStorage.setItem("orvyn.cloudWorkspace", "closed"); } catch { /* storage unavailable */ }
+    workbenchToggle.current?.focus();
+  }
+  function openWorkbench() {
+    if (window.innerWidth <= 1050) return;
+    setWorkbenchOpen(true);
+    try { localStorage.setItem("orvyn.cloudWorkspace", "open"); } catch { /* storage unavailable */ }
+  }
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 1050px)");
+    const changed = () => { if (narrow.matches) { setWorkbenchOpen(false); setWorkbenchExpanded(false); } };
+    narrow.addEventListener("change", changed);
+    return () => narrow.removeEventListener("change", changed);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -188,7 +239,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     let alive = true;
     setLoading(true);
     api<{ messages: any[] }>(`/sessions/${encodeURIComponent(sessionId)}/messages`)
-      .then((r) => { if (alive) { setMessages(r.messages.map(toMsg).filter(Boolean) as Msg[]); stick.current = true; } })
+      .then((r) => { if (alive) { setMessages(attachImagePrompts(r.messages.map(toMsg).filter(Boolean) as Msg[])); stick.current = true; } })
       .catch((e) => { if (alive) { setMessages([]); toast(e.status === 404 ? "That conversation isn't available." : e.message); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -206,15 +257,17 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
           let content = "";
           for (const event of events) {
             if (event.type === "message.retracted") content = "";
-            if (event.type === "message.delta") content += String(event.data?.content ?? "");
+            if (event.type === "message.delta") content = stripLeakedToolMarkup(content + String(event.data?.content ?? ""));
           }
           const fromEvents = artifactsFromEvents(events);
           const assistantId = `cloud-run-${message.runId}`;
+          const imageJob = imageJobFromEvents(message.content, assistantId, message.id, events, result.status);
+          const imageAssets = imageJob?.assets ?? [];
           setMessages((all) => {
             const exists = all.some((item) => item.runId === message.runId && item.role === "assistant");
-            const assistant: Msg = { id: assistantId, role: "assistant", content, createdAt: message.createdAt, runId: message.runId, runStatus: result.status, agentEvents: events, artifacts: fromEvents, streaming: !terminalRunStatus(result.status) };
+            const assistant: Msg = { id: assistantId, role: "assistant", content: imageJob ? "" : content, createdAt: message.createdAt, runId: message.runId, runStatus: result.status, agentEvents: events, artifacts: imageJob ? imageAssets : fromEvents, streaming: !terminalRunStatus(result.status), ...(imageJob ? { imageJob } : {}) };
             return exists
-              ? all.map((item) => item.runId === message.runId && item.role === "assistant" ? { ...item, runStatus: result.status, agentEvents: events, artifacts: item.artifacts?.length ? item.artifacts : fromEvents, ...(content ? { content } : {}) } : item)
+              ? all.map((item) => item.runId === message.runId && item.role === "assistant" ? { ...item, runStatus: result.status, streaming: !terminalRunStatus(result.status), agentEvents: events, artifacts: imageJob ? imageAssets : item.artifacts?.length ? item.artifacts : fromEvents, ...(imageJob ? { imageJob, content: "" } : content ? { content } : {}) } : item)
               : [...all, assistant];
           });
         })
@@ -234,7 +287,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         if(m.runId!==restoredRun || m.role!=='assistant') return m;
         const events=[...(m.agentEvents??[]),event as AgentProgressEvent];
         const status=event.type==='run.blocked' && event.data?.terminal!==true?'awaiting_approval':/^run\.(completed|partial|error|cancelled|blocked)$/.test(event.type)?event.type.slice(4):m.runStatus;
-        return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?m.content+String(event.data?.content??''):m.content,runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
+        return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?stripLeakedToolMarkup(m.content+String(event.data?.content??'')):stripLeakedToolMarkup(m.content),runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
       }));
     }).catch(error=>toast(error.message));
     stopRun.current=()=>{void api(`/agent/stream/runs/${encodeURIComponent(restoredRun)}/cancel`,{method:'POST',body:{}}).catch(error=>toast(error.message))};
@@ -262,7 +315,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     catch (err: any) { toast(err.message); }
   }, [toast]);
 
-  const send = useCallback(async (raw?: string) => {
+  const send = useCallback(async (raw?: string, retryImage?: { userMessageId: string; modelId?: string }) => {
     const content = (raw ?? text).trim();
     if ((!content && !pending.length) || busy) return;
     setBusy(true);
@@ -270,12 +323,14 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     const files = pending;
     setText(""); setPending([]);
     if (area.current) area.current.style.height = "auto";
-    const userId = uid("msg");
+    const userId = retryImage?.userMessageId ?? uid("msg");
     const replyId = uid("msg");
     const userMessage = content || "Here are some files.";
+    const isImage = Boolean(retryImage || looksLikeImageRequest(userMessage));
+    const imageJob: ImageGenerationJob | undefined = isImage ? { id: replyId, prompt: userMessage, status: "queued", modelId: retryImage?.modelId ?? model, userMessageId: userId } : undefined;
     setMessages((all) => [...all,
-      { id: userId, role: "user", content: userMessage, createdAt: Date.now(), attachments: files.map((p) => ({ artifactId: "", name: p.file.name, mimeType: p.file.type })) },
-      { id: replyId, role: "assistant", content: "", createdAt: Date.now(), streaming: true, retry: userMessage }]);
+      ...(retryImage ? [] : [{ id: userId, role: "user" as const, content: userMessage, createdAt: Date.now(), attachments: files.map((p) => ({ artifactId: "", name: p.file.name, mimeType: p.file.type })) }]),
+      { id: replyId, role: "assistant", content: "", createdAt: Date.now(), streaming: true, retry: userMessage, ...(imageJob ? { imageJob } : {}) }]);
     try {
       // 1. The conversation (created on the first message).
       let sid = sessionId;
@@ -317,11 +372,12 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       // fall back to the existing chat socket, preserving live text chunks.
       const routed = await api<{ routed?: string; runId?: string; sessionId?: string }>("/agent/stream/runs", {
         method: "POST",
-        body: { sessionId: sid, projectId, instruction: userMessage, clientKind: "cloud", composerMode: "auto", mode: "agent", requestedModelId: model, messageId: userId, attachments: forModel },
+        body: { sessionId: sid, projectId, instruction: userMessage, clientKind: "cloud", composerMode: "auto", mode: "agent", requestedModelId: imageJob?.modelId ?? model, messageId: userId, attachments: forModel },
       });
       if (routed.runId) {
         const runId = routed.runId;
         hydratedRuns.current.add(runId);
+        openWorkbench();
         patch(replyId, (m) => ({ ...m, runId, runStatus: "running", agentEvents: [] }));
         const controller = new AbortController();
         cancel.current = () => controller.abort();
@@ -339,9 +395,20 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
           runStatus = nextStatus;
           patch(replyId, (m) => {
             const agentEvents = [...(m.agentEvents ?? []), event];
-            let content = m.content;
-            if (event.type === "message.retracted") content = "";
-            if (event.type === "message.delta") content += String(event.data?.content ?? "");
+            let content = m.imageJob ? "" : m.content;
+            if (event.type === "message.retracted" && !m.imageJob) content = "";
+            if (event.type === "message.delta" && !m.imageJob) content = stripLeakedToolMarkup(content + String(event.data?.content ?? ""));
+            let imageJob = m.imageJob;
+            const data = event.data ?? {};
+            if (imageJob && event.type === "tool.started" && data.tool === "generate_image") imageJob = { ...imageJob, status: "generating", error: undefined };
+            if (imageJob && event.type === "artifact.created" && (data.tool === "generate_image" || data.kind === "generated") && String(data.mimeType ?? "").startsWith("image/")) {
+              const asset: GeneratedImageAsset = { artifactId: String(data.artifactId ?? data.id ?? ""), name: String(data.name ?? "generated-image.png"), mimeType: String(data.mimeType) };
+              if (asset.artifactId) imageJob = { ...imageJob, status: "provider-completed", assets: [asset] };
+            }
+            if (imageJob && event.type === "tool.completed" && data.tool === "generate_image" && data.artifactId && String(data.mimeType ?? "image/png").startsWith("image/")) {
+              imageJob = { ...imageJob, status: "provider-completed", assets: [{ artifactId: String(data.artifactId), name: String(data.artifactName ?? "generated-image.png"), mimeType: String(data.mimeType ?? "image/png") }] };
+            }
+            if (imageJob && event.type === "tool.failed" && data.tool === "generate_image") imageJob = { ...imageJob, status: "failed", error: String(data.error ?? "The image provider could not complete the request.") };
             const fromEvents = artifactsFromEvents(agentEvents);
             const artifacts = fromEvents.length ? fromEvents : m.artifacts;
             if (fromEvents.length > (m.artifacts?.length ?? 0)) signal("files");
@@ -351,8 +418,11 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
               : event.type === "run.cancelled" ? "cancelled"
               : event.type === "run.blocked" ? "blocked" : m.runStatus ?? "running";
             if (event.type === 'run.blocked' && event.data?.terminal !== true) return {...m,content,agentEvents,runStatus:'awaiting_approval',streaming:true};
-            const error = ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
-            return { ...m, content, agentEvents, artifacts, runStatus: next, streaming: !terminalRunStatus(next), error };
+            runStatus = next;
+            if (imageJob && ["run.completed", "run.partial", "run.error", "run.cancelled", "run.blocked"].includes(event.type) && ["queued", "generating"].includes(imageJob.status)) imageJob = { ...imageJob, status: "failed", error: event.type === "run.error" ? String(data.message ?? "The run ended before the image was ready.") : "The run finished without a completed image." };
+            const error = m.imageJob ? m.error : ["run.error", "run.blocked"].includes(event.type) ? String(event.data?.message ?? "The run needs attention.") : m.error;
+            const artifact = event.type === "artifact.created" && imageJob?.assets?.[0] ? imageJob.assets[0] : undefined;
+            return { ...m, content, imageJob, routing: data.routing as Msg["routing"] ?? m.routing, artifacts: artifact ? [...(m.artifacts ?? []).filter((a) => a.artifactId !== artifact.artifactId), artifact] : artifacts, agentEvents, runStatus: next, streaming: !terminalRunStatus(next), error };
           });
         };
         await followRun(runId, token, controller.signal, after, event => onEvent(event as AgentProgressEvent));
@@ -367,12 +437,18 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         }
       } else {
       // 4. Ordinary answer: the established WebSocket token stream.
-      const turn = streamTurn({ sessionId: sid, userMessage, userMessageId: userId, assistantMessageId: replyId, requestedModelId: model, attachments: forModel, attachmentRefs: refs }, (c: ChatChunk) => {
+      const turn = streamTurn({ sessionId: sid, userMessage, userMessageId: userId, assistantMessageId: replyId, requestedModelId: imageJob?.modelId ?? model, attachments: forModel, attachmentRefs: refs }, (c: ChatChunk) => {
+        if (c.routing) patch(replyId, (m) => ({ ...m, routing: c.routing }));
         if (c.retract) patch(replyId, (m) => ({ ...m, content: "" }));
         if (c.activity) patch(replyId, (m) => ({ ...m, activities: upsertActivity(m.activities ?? [], c.activity!) }));
-        if (c.delta) patch(replyId, (m) => ({ ...m, content: m.content + c.delta }));
-        if (c.artifacts?.length) { patch(replyId, (m) => ({ ...m, artifacts: [...(m.artifacts ?? []), ...c.artifacts!] })); signal("files"); }
-        if (c.error) patch(replyId, (m) => ({ ...m, error: c.error, code: c.code ?? (/credit|allowance|limit reached|out of/i.test(c.error!) ? "CREDITS_LIMIT" : undefined) }));
+        if (c.delta && !imageJob) patch(replyId, (m) => ({ ...m, content: stripLeakedToolMarkup(m.content + c.delta) }));
+        if (c.imageGeneration && imageJob) patch(replyId, (m) => ({ ...m, imageJob: { ...m.imageJob!, status: c.imageGeneration!.status, ...(c.imageGeneration?.error ? { error: c.imageGeneration.error } : {}) } }));
+        if (c.artifacts?.length) {
+          patch(replyId, (m) => ({ ...m, artifacts: [...(m.artifacts ?? []), ...c.artifacts!], ...(imageJob ? { imageJob: { ...m.imageJob!, status: "provider-completed", assets: c.artifacts!.filter((a) => a.mimeType.startsWith("image/")) } } : {}) }));
+          signal("files");
+        }
+        if (c.error && imageJob) patch(replyId, (m) => ({ ...m, imageJob: { ...m.imageJob!, status: "failed", error: c.error } }));
+        if (c.error && !imageJob) patch(replyId, (m) => ({ ...m, error: c.error, code: c.code ?? (/credit|allowance|limit reached|out of/i.test(c.error!) ? "CREDITS_LIMIT" : undefined) }));
         if (c.done) patch(replyId, (m) => ({ ...m, streaming: false }));
       });
       cancel.current = turn.cancel;
@@ -380,7 +456,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       await turn.done;
       }
     } catch (err: any) {
-      patch(replyId, (m) => ({ ...m, error: err.message, code: err.code?.startsWith?.("CREDITS") ? err.code : undefined }));
+      patch(replyId, (m) => ({ ...m, ...(m.imageJob ? { imageJob: { ...m.imageJob, status: "failed", error: err.message } } : { error: err.message }), code: err.code?.startsWith?.("CREDITS") ? err.code : undefined }));
     } finally {
       patch(replyId, (m) => ({ ...m, streaming: false, runStatus: m.runStatus === "running" && !cancel.current ? "error" : m.runStatus }));
       cancel.current = null;
@@ -401,9 +477,19 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
 
   const empty = !loading && !messages.length;
   const viewAs = Boolean(me?.viewAs);
+  const workspaceMessage = [...messages].reverse().find((message) => message.runId);
 
   return (
-    <div className={compact ? undefined : "cloud-chat-layout"}>
+    <div className={compact ? undefined : `cloud-chat-layout${workbenchOpen ? " is-workspace-open" : ""}${workbenchExpanded && workbenchOpen ? " is-workspace-expanded" : ""}`}>
+    {!compact ? <div className="cloud-chat-layout__toolbar">
+      <button ref={workbenchToggle} className="cloud-chat-layout__toggle" aria-expanded={workbenchOpen} aria-controls="cloud-workbench" onClick={() => {
+        if (workbenchOpen) closeWorkbench();
+        else {
+          setWorkbenchOpen(true);
+          try { localStorage.setItem("orvyn.cloudWorkspace", "open"); } catch { /* storage unavailable */ }
+        }
+      }}><Icon.layers size={14} /><span>{workbenchOpen ? "Back to chat" : "Open workspace"}</span></button>
+    </div> : null}
     <div className={`chat${compact ? " chat--compact" : ""}`}
       onDragEnter={(e) => { if (e.dataTransfer.types.includes("Files")) setDragging(true); }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
@@ -436,19 +522,26 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                   {m.activities?.length ? <EventLog items={m.activities} /> : null}
                   {m.role === "assistant" && m.runId ? <AgentProgress events={m.agentEvents ?? []} status={m.runStatus ?? (m.streaming ? "running" : "completed")} onApprove={answerApproval} /> : null}
                   {m.role === "assistant" && m.agentEvents?.length ? <FileEditList edits={fileEditsFromEvents(m.agentEvents)} /> : null}
-                  {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}
-                  {m.role === "assistant" ? <StreamedMarkdown text={m.content} live={Boolean(m.streaming)} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
+                  {m.role === "assistant" && m.imageJob ? <ImageGenerationMessage
+                    job={m.imageJob}
+                    onReady={() => patch(m.id, (current) => current.imageJob ? { ...current, imageJob: markImageGenerationReady(current.imageJob) } : current)}
+                    onRetry={(request) => void send(request.prompt, { userMessageId: m.imageJob!.userMessageId ?? m.id, modelId: request.modelId })}
+                  /> : <>
+                    {m.role === "assistant" && m.streaming && !m.content ? <span className="typing" aria-label="ORVYN is replying"><i /><i /><i /></span> : null}
+                    {m.role === "assistant" ? <StreamedMarkdown text={stripLeakedToolMarkup(m.content)} live={Boolean(m.streaming)} /> : <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>}
+                  </>}
                 </div>
                 {m.attachments?.length ? (
                   <div className="bubble__files">{m.attachments.map((f, i) => f.artifactId ? <FileChip key={f.artifactId} f={f} /> : <span key={i} className="pending-file"><span>{f.name} · uploading…</span></span>)}</div>
                 ) : null}
                 {(() => {
                   const generating = m.role === "assistant" ? generatingFilesFromEvents(m.agentEvents ?? []) : [];
-                  if (!m.artifacts?.length && !generating.length) return null;
+                  const artifacts = (m.artifacts ?? []).filter((f) => fileKind(f.name, f.mimeType) !== "image");
+                  if (!artifacts.length && !generating.length) return null;
                   return (
                     <div className="bubble__files">
                       {generating.map((g) => <FileChip key={`gen-${g.name}`} f={{ artifactId: "", name: g.name, mimeType: "" }} generating />)}
-                      {(m.artifacts ?? []).map((f) => fileKind(f.name, f.mimeType) === "image" ? <GeneratedImage key={f.artifactId} f={f} /> : <FileChip key={f.artifactId} f={f} big />)}
+                      {artifacts.map((f) => <FileChip key={f.artifactId} f={f} big />)}
                     </div>
                   );
                 })()}
@@ -457,7 +550,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
                 )) : null}
                 {!m.streaming ? (
                   <div className="msg__actions">
-                    {m.content ? <CopyButton text={m.content} /> : null}
+                    {m.content && !m.imageJob ? <CopyButton text={m.content} /> : null}
                     <span className="bubble__time">{clock(m.createdAt)}</span>
                   </div>
                 ) : null}
@@ -503,7 +596,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
         {!compact ? <div className="composer__hint">ORVYN can make mistakes — check important details. Shift + Enter for a new line.</div> : null}
       </div>
     </div>
-    {!compact && <CloudWorkbench runId={[...messages].reverse().find(m=>m.runId)?.runId} events={[...messages].reverse().find(m=>m.runId)?.agentEvents??[]}/>}
+    {!compact && <CloudWorkbench key={workspaceMessage?.runId ?? "no-run"} runId={workspaceMessage?.runId} runStatus={workspaceMessage?.runStatus} events={workspaceMessage?.agentEvents ?? []} active={workbenchOpen} expanded={workbenchExpanded} readOnly={viewAs} onClose={closeWorkbench} onExpand={() => setWorkbenchExpanded((value) => !value)} />}
     </div>
   );
 }

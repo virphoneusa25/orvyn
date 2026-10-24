@@ -34,6 +34,8 @@ services:
         max-file: "5"
 
   caddy:
+    volumes:
+      - ${ORVYN_DESKTOP_FEED_DIR:-/home/ubuntu/orvyn-desktop-updates/public}:/srv/orvyn-updates:ro
     restart: always
     logging:
       driver: json-file
