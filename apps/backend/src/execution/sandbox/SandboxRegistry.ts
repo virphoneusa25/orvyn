@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
 
-export type SandboxProvider = "docker" | "openshell";
+export type SandboxProvider = "docker" | "openshell" | "vercel";
 export type SandboxState = "provisioning" | "ready" | "running" | "degraded" | "recovering" | "completed" | "failed" | "stopping" | "stopped";
 export const SANDBOX_STATES: SandboxState[] = ["provisioning", "ready", "running", "degraded", "recovering", "completed", "failed", "stopping", "stopped"];
 
@@ -219,7 +219,7 @@ export class SandboxRegistry {
     return this.get(id);
   }
 
-  /** Swaps the provider when the worker fell back (openshell → docker). Recorded, never silent. */
+  /** Records an explicit provider fallback. Never silent. */
   recordFallback(id: string, to: SandboxProvider, reason: string, now = Date.now()): void {
     this.db.prepare(`UPDATE execution_sandboxes SET provider = ?, fallback_reason = ?, updated_at = ? WHERE id = ?`).run(to, reason.slice(0, 300), now, id);
   }
@@ -249,7 +249,7 @@ export class SandboxRegistry {
     byProvider: Record<string, { active: number; failed: number; created: number; avgProvisionMs: number | null; p95ProvisionMs: number | null; reconnects: number; policyDenials: number; execCount: number; execMs: number; fallbacks: number }>;
   } {
     const out: Record<string, any> = {};
-    for (const p of ["docker", "openshell"]) {
+    for (const p of ["docker", "openshell", "vercel"]) {
       const since = now - sinceMs;
       const q = (sql: string, ...a: any[]) => this.db.prepare(sql).get(p, ...a) as any;
       const active = q(`SELECT COUNT(*) n FROM execution_sandboxes WHERE provider = ? AND state NOT IN ('completed','failed','stopped')`).n;
