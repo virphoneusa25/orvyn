@@ -133,6 +133,12 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
     writeFileSync(join(project, "delete.txt"), "delete me\n");
     writeFileSync(join(project, "nested", "remove-me", "old.txt"), "gone\n");
     writeFileSync(join(project, ".git", "config"), "preserve git metadata\n");
+    mkdirSync(join(project, ".git", "objects", "aa"), { recursive: true });
+    writeFileSync(join(project, ".git", "objects", "aa", "object"), "original");
+    mkdirSync(join(extracted, ".git", "objects", "aa"), { recursive: true });
+    writeFileSync(join(extracted, ".git", "objects", "aa", "object"), "sandbox");
+    writeFileSync(join(extracted, ".git", "config"), "sandbox config");
+
 
     mkdirSync(join(extracted, "src"), { recursive: true });
     writeFileSync(join(extracted, "src", "keep.txt"), "new\n");
@@ -149,6 +155,7 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
       readFileSync(join(project, ".git", "config"), "utf8"),
       "preserve git metadata\n"
     );
+    assert.equal(readFileSync(join(project, ".git", "objects", "aa", "object"), "utf8"), "original");
     assert.deepEqual(files.sort(), ["created.txt", "src/keep.txt"]);
   } finally {
     rmSync(project, { recursive: true, force: true });
