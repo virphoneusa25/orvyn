@@ -40,7 +40,12 @@ export function makeSandboxTerminalTool(sandbox: SandboxSession): AITool {
       const target = cwd
         ? base + "/" + cwd.replace(/^\/+/, "")
         : base;
-      const full = "cd " + JSON.stringify(target) + " && (" + command + ")";
+      // Preserve the legacy Docker command string for ordinary POSIX paths,
+      // while still quoting unusual provider/cwd paths safely.
+      const shellPath = /^[A-Za-z0-9_./-]+$/.test(target)
+        ? target
+        : JSON.stringify(target);
+      const full = "cd " + shellPath + " && (" + command + ")";
 
       const result = await sandbox.exec(full);
       if (result.timedOut) {
