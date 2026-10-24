@@ -1,0 +1,60 @@
+name: Task-Aware Vercel Cloud Validation
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/backend/src/execution/**"
+      - "apps/backend/src/agent/**"
+      - "apps/backend/src/routes/cloudWorkbench.ts"
+      - "apps/backend/package.json"
+      - "package-lock.json"
+      - ".env.example"
+      - ".github/workflows/task-aware-vercel-cloud.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # First run synchronizes package-lock.json for @vercel/sandbox.
+      - name: Install dependencies and regenerate lock
+        run: npm install --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Commit regenerated lockfile
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json already synchronized"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "deps: regenerate lockfile for task-aware Vercel cloud"
+          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Build ai-core
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        run: npm run build -w @orvyn/backend
+
+      - name: Vercel execution tests
+        run: node --test apps/backend/dist/execution/VercelExecutionProvider.test.js
+
+      - name: Existing backend suite
+        run: npm test -w @orvyn/backend
