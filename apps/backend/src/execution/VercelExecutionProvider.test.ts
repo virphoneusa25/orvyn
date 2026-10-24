@@ -2,7 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VercelExecutionProvider, reconcileDownloadedWorkspace } from "./VercelExecutionProvider";
+import {
+  VercelExecutionProvider,
+  reconcileDownloadedWorkspace,
+  vercelWorkspaceName,
+  workspaceFingerprint,
+} from "./VercelExecutionProvider";
 import { SandboxRegistry } from "./sandbox/SandboxRegistry";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -119,5 +124,38 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(extracted, { recursive: true, force: true });
+  }
+});
+
+
+test("persistent Vercel workspace identity is stable per project root", () => {
+  const a = vercelWorkspaceName("/tmp/project-a");
+  const b = vercelWorkspaceName("/tmp/project-a");
+  const c = vercelWorkspaceName("/tmp/project-b");
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+  assert.match(a, /^orvyn-[a-f0-9]{24}$/);
+});
+
+test("workspace fingerprint tracks project content but ignores git and excluded caches", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orvyn-vercel-fingerprint-"));
+  try {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    writeFileSync(join(dir, "src", "app.ts"), "one\n");
+    writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(dir, "node_modules", "cache.txt"), "cache one\n");
+
+    const first = await workspaceFingerprint(dir);
+
+    writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/other\n");
+    writeFileSync(join(dir, "node_modules", "cache.txt"), "cache two\n");
+    assert.equal(await workspaceFingerprint(dir), first);
+
+    writeFileSync(join(dir, "src", "app.ts"), "two\n");
+    assert.notEqual(await workspaceFingerprint(dir), first);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
