@@ -25,16 +25,17 @@ import {
   requestControl,
   type DesktopSession,
 } from "../../desktop/desktopSession";
+import { dockerAvailable } from "../../desktop/sandboxDesktop";
 import {
-  captureSandboxFrame,
-  dockerAvailable,
-  findSandboxSession,
-  sandboxAgentInput,
-  sandboxNavigate,
-  startSandboxDesktop,
-  stopSandboxDesktop,
-  type SandboxDesktopSession,
-} from "../../desktop/sandboxDesktop";
+  captureCloudDesktopFrame,
+  cloudDesktopInput,
+  cloudDesktopNavigate,
+  findCloudDesktopSession,
+  startCloudDesktop,
+  stopCloudDesktop,
+  type CloudDesktopSession,
+} from "../../desktop/cloudDesktop";
+import { vercelToolRunner } from "../../execution/VercelToolRunner";
 
 function playwrightGuard(projectRoot: string, tenantId: string, runId: string | undefined, fn: (session: DesktopSession, args: Record<string, unknown>) => Promise<ToolResult>) {
   // A background Playwright page is not the sandbox desktop visible in the
@@ -53,15 +54,15 @@ function withAgentLock(session: DesktopSession, run: () => Promise<ToolResult>):
   });
 }
 
-function sandboxFor(tenantId: string): SandboxDesktopSession | undefined {
+function sandboxFor(tenantId: string): CloudDesktopSession | undefined {
   const context=currentComputerContext();
   if(!context?.projectRoot || context.tenantId!==tenantId) return undefined;
-  const s = findSandboxSession(tenantId,context.projectRoot);
+  const s = findCloudDesktopSession(tenantId,context.projectRoot);
   if(s?.runId && context.runId && s.runId!==context.runId) return undefined;
   return s && s.status !== "ended" ? s : undefined;
 }
 
-function sandboxOwnerError(s: SandboxDesktopSession): ToolResult | null {
+function sandboxOwnerError(s: CloudDesktopSession): ToolResult | null {
   if (s.controlOwner === "user") {
     return { ok: false, error: "User controls this desktop. ORION actions are paused until control returns to ORION." };
   }
@@ -97,17 +98,27 @@ async function waitForHealthyPreview(url: string, settleMs = 1500): Promise<Tool
 }
 
 async function sbStart(tenantId: string, projectRoot: string, runId?: string, url?: string): Promise<ToolResult> {
-  if (!(await dockerAvailable())) return { ok: false, error: "no-sandbox" };
+  const vercel = Boolean(runId && vercelToolRunner.hasRun(runId));
+  if (!vercel && !(await dockerAvailable())) {
+    return { ok: false, error: "no-sandbox" };
+  }
   try {
     if (url) {
       const unhealthy = await waitForHealthyPreview(url);
       if (unhealthy) return unhealthy;
     }
-    // Idempotent: one desktop session per tenant. A second desktop_start
-    // (the model verifying again) reuses the live session instead of
-    // spawning a duplicate container.
+    // Idempotent: one desktop session per tenant/project/run. ORION and the
+    // user always operate the same visible session.
     let s = sandboxFor(tenantId);
-    if (!s) s = await startSandboxDesktop({ tenantId, projectRoot, runId, url });
+    if (!s) {
+      s = await startCloudDesktop({
+        provider: vercel ? "vercel" : "docker",
+        tenantId,
+        projectRoot,
+        runId,
+        url,
+      });
+    }
     if (s.status === "error") return { ok: false, error: s.error ?? "Desktop failed to start." };
     // A previous run's finish returns the desktop to the user. A NEW agent
     // run starting work takes control back (the pane shows "ORION in
@@ -119,7 +130,7 @@ async function sbStart(tenantId: string, projectRoot: string, runId?: string, ur
       s.status = "ready";
     }
     if (url) {
-      const nav = await sandboxNavigate(s, url);
+      const nav = await cloudDesktopNavigate(s, url);
       if (!nav.ok) return { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle } };
     }
     return { ok: true, output: `Desktop session ${s.id} ready (${s.width}×${s.height}).${url ? ` Opened ${url}.` : ""}` };
@@ -133,7 +144,12 @@ async function sbAct(tenantId: string, type: string, args: Record<string, unknow
   if (!s) return { ok: false, error: "No Desktop session. Call desktop_start first." };
   const blocked = sandboxOwnerError(s);
   if (blocked) return blocked;
-  const ok = await sandboxAgentInput(s, type, { ...args, viewWidth: s.width, viewHeight: s.height });
+  const ok = await cloudDesktopInput(
+    s,
+    type,
+    { ...args, viewWidth: s.width, viewHeight: s.height },
+    "orion"
+  );
   return ok
     ? { ok: true, output: `${type} at ${args.x ?? ""}${args.y !== undefined ? "," + args.y : ""}`.trim() }
     : { ok: false, error: "Input injection failed." };
@@ -184,7 +200,7 @@ export function makeDesktopOpenUrlTool(projectRoot: string, tenantId: string, ru
         const url = String(args.url);
         const unhealthy = await waitForHealthyPreview(url);
         if (unhealthy) return unhealthy;
-        const nav = await sandboxNavigate(s, url);
+        const nav = await cloudDesktopNavigate(s, url);
         return nav.ok
           ? { ok: true, output: `Desktop opened ${url} — the window shows "${nav.pageTitle}" (matches the page's title).`, meta: { desktopTarget: nav.target } }
           : { ok: false, error: nav.error ?? "Navigation failed.", meta: { code: nav.target?.reason === "WRONG_TARGET" || nav.target?.reason === "UNCHANGED" ? "WRONG_TARGET" : "NAVIGATION_FAILED", target: url, pageTitle: nav.pageTitle, desktopTarget: nav.target } };
@@ -320,7 +336,7 @@ export function makeDesktopScreenshotTool(projectRoot: string, tenantId: string,
     execute: async (args) => {
       const s = sandboxFor(tenantId);
       if (s) {
-        const frame = await captureSandboxFrame(s, "high");
+        const frame = await captureCloudDesktopFrame(s, "high");
         if (!frame) return { ok: false, error: "No Desktop frame available." };
         s.lastFrameAt = Date.now();
         return {
@@ -376,7 +392,7 @@ export function makeDesktopStopTool(projectRoot: string, tenantId: string, runId
     execute: async (args) => {
       const s = sandboxFor(tenantId);
       if (s) {
-        await stopSandboxDesktop(s);
+        await stopCloudDesktop(s);
         return { ok: true, output: `Desktop session ${s.id} ended.` };
       }
       return playwrightGuard(projectRoot, tenantId, runId, async (session) => {
