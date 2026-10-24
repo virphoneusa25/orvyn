@@ -159,7 +159,7 @@ test(
       assert.match(read.output ?? "", /hello from ORVYN Vercel cloud/);
 
       const git = await toolRpc.execute(runId, "git_status", {});
-      assert.equal(git.ok, true);
+      assert.equal(git.ok, true, "git_status failed: " + JSON.stringify(git));
       assert.match(git.output ?? "", /created-by-vercel\.txt/);
 
       const mcpList = await toolRpc.execute(
@@ -168,7 +168,7 @@ test(
         {},
         90_000
       );
-      assert.equal(mcpList.ok, true);
+      assert.equal(mcpList.ok, true, "mcp_list failed: " + JSON.stringify(mcpList));
       assert.match(mcpList.output ?? "", /fixture:/);
       assert.match(mcpList.output ?? "", /echo/);
 
@@ -182,7 +182,7 @@ test(
         },
         90_000
       );
-      assert.equal(mcpCall.ok, true);
+      assert.equal(mcpCall.ok, true, "mcp_call failed: " + JSON.stringify(mcpCall));
       assert.match(mcpCall.output ?? "", /42/);
 
       const browser = await toolRpc.execute(
@@ -191,7 +191,7 @@ test(
         { url: "https://example.com" },
         6 * 60_000
       );
-      assert.equal(browser.ok, true);
+      assert.equal(browser.ok, true, "browser_open failed: " + JSON.stringify(browser));
       assert.match(browser.output ?? "", /Example Domain|example\.com/i);
 
       const screenshot = await toolRpc.execute(
@@ -200,7 +200,7 @@ test(
         {},
         90_000
       );
-      assert.equal(screenshot.ok, true);
+      assert.equal(screenshot.ok, true, "browser_screenshot failed: " + JSON.stringify({ output: screenshot.output, error: screenshot.error, stderr: screenshot.stderr, exitCode: screenshot.exitCode, metaKeys: screenshot.meta ? Object.keys(screenshot.meta as any) : [] }));
       const b64 = String(
         (screenshot.meta as any)?.screenshot?.b64 ?? ""
       );
@@ -241,7 +241,7 @@ test(
         runId,
         "printf %s persistent-ok > /vercel/sandbox/.orvyn-persistence-probe"
       );
-      assert.equal(probe.ok, true);
+      assert.equal(probe.ok, true, "persistence probe failed: " + JSON.stringify(probe));
 
       store.setStatus(runId, "completed");
       await vercelToolRunner.stop(runId, "live smoke complete");
@@ -275,13 +275,13 @@ test(
         resumeRunId,
         "cat /vercel/sandbox/.orvyn-persistence-probe"
       );
-      assert.equal(resumedProbe.ok, true);
+      assert.equal(resumedProbe.ok, true, "resumed persistence probe failed: " + JSON.stringify(resumedProbe));
       assert.match(resumedProbe.output, /persistent-ok/);
 
       const canonicalSeed = await toolRpc.execute(resumeRunId, "read_file", {
         path: "seed.txt",
       });
-      assert.equal(canonicalSeed.ok, true);
+      assert.equal(canonicalSeed.ok, true, "canonical seed read failed: " + JSON.stringify(canonicalSeed));
       assert.match(canonicalSeed.output ?? "", /seed updated locally/);
 
       store.setStatus(resumeRunId, "completed");
