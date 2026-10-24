@@ -153,7 +153,11 @@ export class VercelToolRunner {
 
     const startedAt = Date.now();
     try {
-      await this.provider.startRun(runId, projectRoot);
+      await this.provider.startRun(runId, projectRoot, {
+        tenantId: identity.tenantId,
+        workspaceId: identity.workspaceId,
+        projectId: identity.projectId,
+      });
       const providerSandboxId = this.provider.sandboxId(runId) ?? null;
       registry.report(logicalId, {
         state: "ready",
@@ -169,6 +173,8 @@ export class VercelToolRunner {
         provider: "vercel",
         sandboxId: logicalId,
         providerSandboxId,
+        sandboxName: this.provider.sandboxName(runId),
+        persistent: this.provider.isPersistent(runId),
         workspace: WORKSPACE,
       });
 
