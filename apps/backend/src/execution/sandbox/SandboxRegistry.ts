@@ -147,6 +147,10 @@ export class SandboxRegistry {
     `);
   }
 
+  close(): void {
+    this.db.close();
+  }
+
   private row(r: any): SandboxRecord | null {
     if (!r) return null;
     return {
@@ -387,4 +391,7 @@ export function sandboxRegistry(dataDir?: string): SandboxRegistry {
 }
 
 /** Tests only. */
-export function resetSandboxRegistry(): void { instance = null; }
+export function resetSandboxRegistry(): void {
+  instance?.close();
+  instance = null;
+}

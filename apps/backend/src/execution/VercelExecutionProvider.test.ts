@@ -87,8 +87,9 @@ test("Vercel cloud provider fails closed when server credentials are absent", as
 
 test("sandbox registry records Vercel as a first-class provider", () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-vercel-registry-"));
+  let registry: SandboxRegistry | undefined;
   try {
-    const registry = new SandboxRegistry(join(dir, "execution.sqlite"));
+    registry = new SandboxRegistry(join(dir, "execution.sqlite"));
     const rec = registry.plan({
       id: "sbx_vercel_test",
       provider: "vercel",
@@ -117,6 +118,7 @@ test("sandbox registry records Vercel as a first-class provider", () => {
     assert.equal(stats.byProvider.vercel?.created, 1);
     assert.equal(stats.byProvider.vercel?.active, 1);
   } finally {
+    registry?.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

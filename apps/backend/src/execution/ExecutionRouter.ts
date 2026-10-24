@@ -75,8 +75,8 @@ export class ExecutionRouter {
    *   - simple chat/read/plan tasks     → LOCAL
    *   - remote-flagged tasks            → OVH_WORKER (if healthy)
    *
-   * If the preferred provider is unavailable, falls back truthfully to
-   * LOCAL with the reason recorded — never silently pretends.
+   * Explicit and task-classified remote work fails closed when Cloud is
+   * unavailable. It never moves to a local executor silently.
    */
   async select(opts: {
     preference?: ExecutionPreference;
@@ -118,15 +118,7 @@ export class ExecutionRouter {
         const cloud = await this.cloud();
         return { ...cloud, reason: "task marked for remote ORVYN Cloud execution; " + cloud.reason };
       } catch (cloudError: any) {
-        const dockerHealth = await this.docker.health();
-        if (opts.isIsolated && dockerHealth.healthy) {
-          return { provider: this.docker, location: "DOCKER_LOCAL", reason: "remote preferred but ORVYN Cloud unavailable — Docker sandbox for isolation" };
-        }
-        return {
-          provider: this.local,
-          location: "LOCAL",
-          reason: `remote preferred but ORVYN Cloud unavailable (${cloudError?.message ?? cloudError}) and isolation${opts.isIsolated ? "" : " not"} needed`,
-        };
+        throw new Error(`${String(cloudError?.message ?? cloudError)}; no local execution fallback.`);
       }
     }
     if (opts.isIsolated) {

@@ -68,8 +68,6 @@ export class LocalWorkerManager {
     this.browserHandler = handler;
   }
 
-  private desktopHandler?: (command: unknown) => Promise<unknown>;
-  setDesktopHandler(handler: (command: unknown) => Promise<unknown>) { this.desktopHandler = handler; }
   getStatus(): LocalWorkerStatus {
     return { ...this.status };
   }
