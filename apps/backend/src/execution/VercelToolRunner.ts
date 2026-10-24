@@ -42,6 +42,7 @@ type RunEntry = {
   store: RunStore;
   identity: Identity;
   stopping: boolean;
+  stopPromise?: Promise<void>;
   processes: Map<string, ProcessEntry>;
   browserReady: boolean;
   browserProvisioning?: Promise<void>;
@@ -237,40 +238,53 @@ export class VercelToolRunner {
 
   async stop(runId: string, reason = "stopped"): Promise<void> {
     const entry = this.runs.get(runId);
-    if (!entry || entry.stopping) return;
+    if (!entry) return;
+
+    // Shutdown can be triggered concurrently by the polling loop (when the
+    // run status becomes terminal) and by explicit callers. Every caller must
+    // await the same stop promise so durable sync-back is complete before stop()
+    // resolves.
+    if (entry.stopPromise) {
+      await entry.stopPromise;
+      return;
+    }
+
     entry.stopping = true;
+    entry.stopPromise = (async () => {
+      try {
+        await this.provider.downloadArtifacts(runId);
+      } catch (err: any) {
+        entry.store.emit(runId, "sandbox.sync.failed", {
+          provider: "vercel",
+          error: String(err?.message ?? err).slice(0, 500),
+        });
+      }
 
-    try {
-      await this.provider.downloadArtifacts(runId);
-    } catch (err: any) {
-      entry.store.emit(runId, "sandbox.sync.failed", {
+      await this.provider.stopRun(runId).catch(() => undefined);
+      toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.");
+
+      const registry = sandboxRegistry();
+      const rec = registry.forRun(runId);
+      if (rec?.provider === "vercel") {
+        registry.report(rec.id, {
+          state: reason === "run ended" ? "completed" : "stopped",
+          destroyedAt: Date.now(),
+        });
+        registry.audit("sandbox.destroyed", "vercel-runner", {
+          sandboxId: rec.id,
+          organizationId: rec.organizationId,
+          detail: { reason },
+        });
+      }
+
+      entry.store.emit(runId, "sandbox.stopped", {
         provider: "vercel",
-        error: String(err?.message ?? err).slice(0, 500),
+        reason,
       });
-    }
+      this.runs.delete(runId);
+    })();
 
-    await this.provider.stopRun(runId).catch(() => undefined);
-    toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.");
-
-    const registry = sandboxRegistry();
-    const rec = registry.forRun(runId);
-    if (rec?.provider === "vercel") {
-      registry.report(rec.id, {
-        state: reason === "run ended" ? "completed" : "stopped",
-        destroyedAt: Date.now(),
-      });
-      registry.audit("sandbox.destroyed", "vercel-runner", {
-        sandboxId: rec.id,
-        organizationId: rec.organizationId,
-        detail: { reason },
-      });
-    }
-
-    entry.store.emit(runId, "sandbox.stopped", {
-      provider: "vercel",
-      reason,
-    });
-    this.runs.delete(runId);
+    await entry.stopPromise;
   }
 
   private async command(
