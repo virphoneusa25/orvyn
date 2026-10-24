@@ -9,6 +9,7 @@ import type { ExecutionLocation } from "./ExecutionProvider";
 import { LocalExecutionProvider } from "./LocalExecutionProvider";
 import { DockerExecutionProvider } from "./DockerExecutionProvider";
 import { OvhWorkerProvider } from "./OvhWorkerProvider";
+import { VercelExecutionProvider } from "./VercelExecutionProvider";
 
 export type ExecutionPreference = "auto" | ExecutionLocation;
 
@@ -22,11 +23,47 @@ export class ExecutionRouter {
   readonly local: LocalExecutionProvider;
   readonly docker: DockerExecutionProvider;
   readonly ovh: OvhWorkerProvider;
+  readonly vercel: VercelExecutionProvider;
 
   constructor() {
     this.local = new LocalExecutionProvider();
     this.docker = new DockerExecutionProvider();
     this.ovh = new OvhWorkerProvider();
+    this.vercel = new VercelExecutionProvider();
+  }
+
+  private cloudPreference(): "vercel" | "ovh" {
+    return process.env.ORVYN_CLOUD_EXECUTION_PROVIDER?.trim().toLowerCase() === "vercel"
+      ? "vercel"
+      : "ovh";
+  }
+
+  private async cloud(): Promise<RoutingDecision> {
+    if (this.cloudPreference() === "vercel") {
+      const health = await this.vercel.health();
+      if (health.healthy) {
+        return {
+          provider: this.vercel,
+          location: "VERCEL_CLOUD",
+          reason: "ORVYN Cloud is configured for Vercel Sandbox",
+        };
+      }
+      throw new Error(
+        `ORVYN Cloud Vercel Sandbox unavailable (${health.detail ?? "not configured"})`
+      );
+    }
+
+    const health = await this.ovh.health();
+    if (health.healthy) {
+      return {
+        provider: this.ovh,
+        location: "OVH_WORKER",
+        reason: "ORVYN Cloud is configured for the legacy OVH worker",
+      };
+    }
+    throw new Error(
+      `ORVYN Cloud worker unavailable (${health.detail ?? "not configured"})`
+    );
   }
 
   /**
@@ -38,8 +75,8 @@ export class ExecutionRouter {
    *   - simple chat/read/plan tasks     → LOCAL
    *   - remote-flagged tasks            → OVH_WORKER (if healthy)
    *
-   * If the preferred provider is unavailable, falls back truthfully to
-   * LOCAL with the reason recorded — never silently pretends.
+   * Explicit and task-classified remote work fails closed when Cloud is
+   * unavailable. It never moves to a local executor silently.
    */
   async select(opts: {
     preference?: ExecutionPreference;
@@ -60,21 +97,29 @@ export class ExecutionRouter {
       }
       throw new Error(`Local Sandbox unavailable (${dockerHealth.detail ?? "Docker is not running"}). Explicit Sandbox was requested — there is no silent Local fallback.`);
     }
-    if (pref === "OVH_WORKER") {
-      const ovhHealth = await this.ovh.health();
-      if (ovhHealth.healthy) {
-        return { provider: this.ovh, location: "OVH_WORKER", reason: "explicitly requested OVH worker" };
+    if (pref === "OVH_WORKER" || pref === "VERCEL_CLOUD") {
+      if (pref === "VERCEL_CLOUD") {
+        const health = await this.vercel.health();
+        if (health.healthy) {
+          return { provider: this.vercel, location: "VERCEL_CLOUD", reason: "explicitly requested Vercel ORVYN Cloud" };
+        }
+        throw new Error(`Vercel ORVYN Cloud unavailable (${health.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
       }
-      throw new Error(`ORVYN Cloud worker unavailable (${ovhHealth.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
+      const health = await this.ovh.health();
+      if (health.healthy) {
+        return { provider: this.ovh, location: "OVH_WORKER", reason: "explicitly requested legacy OVH worker" };
+      }
+      throw new Error(`Legacy ORVYN Cloud worker unavailable (${health.detail ?? "not configured"}). Explicit Cloud was requested — there is no silent Local fallback.`);
     }
 
     // auto routing
     if (opts.isRemote) {
-      const ovhHealth = await this.ovh.health();
-      if (ovhHealth.healthy) {
-        return { provider: this.ovh, location: "OVH_WORKER", reason: "task marked for remote execution" };
+      try {
+        const cloud = await this.cloud();
+        return { ...cloud, reason: "task marked for remote ORVYN Cloud execution; " + cloud.reason };
+      } catch (cloudError: any) {
+        throw new Error(`${String(cloudError?.message ?? cloudError)}; no local execution fallback.`);
       }
-      throw new Error(`ORVYN Cloud worker unavailable (${ovhHealth.detail ?? "not configured"}); no local execution fallback.`);
     }
     if (opts.isIsolated) {
       const dockerHealth = await this.docker.health();
@@ -102,10 +147,18 @@ export class ExecutionRouter {
     if (decision.location === "OVH_WORKER") {
       info.workerId = process.env.ORVYN_OVH_WORKER_URL || "unknown";
     }
+    if (decision.location === "VERCEL_CLOUD" && decision.provider instanceof VercelExecutionProvider) {
+      info.sandboxId = decision.provider.sandboxId(runId);
+    }
     return info;
   }
 
   async dispose(): Promise<void> {
-    await Promise.allSettled([this.local.dispose?.(), this.docker.dispose(), this.ovh.dispose()]);
+    await Promise.allSettled([
+      this.local.dispose?.(),
+      this.docker.dispose(),
+      this.ovh.dispose(),
+      this.vercel.dispose(),
+    ]);
   }
 }

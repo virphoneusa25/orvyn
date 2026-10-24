@@ -47,4 +47,3 @@ const result=ts.transform(source,[context=>{
     return node;
   };
 }]);result.dispose();
-

@@ -12,7 +12,10 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    const run=requireTenant(req).runStore.get(req.params.runId);
    if(!run)return res.status(404).json({error:'Run not found'});
    const execution=[...run.events].reverse().find(e=>e.type==='run.execution');
-   if(execution?.data?.executionTargetActual!=='ovh_worker')return res.status(409).json({error:'This run has no isolated cloud worker workspace.'});
+   const actual = execution?.data?.executionTargetActual;
+   if(actual !== "ovh_worker" && actual !== "vercel_cloud") {
+     return res.status(409).json({error:"This run has no isolated ORVYN Cloud workspace."});
+   }
    res.locals.run=run;next();
  });
  router.get('/:runId/browser/stream',async(req,res)=>{

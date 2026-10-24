@@ -1,0 +1,76 @@
+name: Live Vercel Cloud Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "feat/vercel-task-aware-cloud"
+    paths:
+      - "apps/backend/src/execution/**"
+      - "apps/backend/src/desktop/**"
+      - "apps/backend/src/computerUse/**"
+      - "apps/backend/src/ai/tools/desktopTools.ts"
+      - "apps/backend/src/routes/cloudWorkbench.ts"
+      - "apps/backend/src/routes/desktop.ts"
+      - "apps/backend/package.json"
+      - "package-lock.json"
+      - ".env.example"
+      - ".github/workflows/vercel-live-smoke.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Detect required Vercel credentials
+        id: credentials
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID }}
+        shell: bash
+        run: |
+          if [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_TEAM_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "::error::Live smoke requires VERCEL_TOKEN as a repository secret and VERCEL_TEAM_ID / VERCEL_PROJECT_ID as repository variables (or legacy secrets)"
+            exit 1
+          fi
+          echo "::notice::Skipping live Vercel smoke: add VERCEL_TOKEN under Actions secrets and VERCEL_TEAM_ID / VERCEL_PROJECT_ID under Actions variables"
+
+      - name: Install dependencies
+        if: steps.credentials.outputs.configured == 'true'
+        run: npm ci --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Build ai-core
+        if: steps.credentials.outputs.configured == 'true'
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        if: steps.credentials.outputs.configured == 'true'
+        run: npm run build -w @orvyn/backend
+
+      - name: Run real Vercel Sandbox parity smoke test
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          ORVYN_VERCEL_LIVE_TEST: "1"
+          ORVYN_CLOUD_EXECUTION_PROVIDER: vercel
+          ORVYN_VERCEL_PERSISTENT_WORKSPACES: "true"
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID }}
+          ORVYN_SANDBOX_TIMEOUT_MIN: "20"
+          ORVYN_SANDBOX_COMMAND_TIMEOUT_S: "180"
+          ORVYN_VERCEL_SANDBOX_PORTS: "3000,5173"
+          ORVYN_VERCEL_SYNC_MAX_MB: "64"
+        run: node --test apps/backend/dist/execution/VercelLive.integration.test.js

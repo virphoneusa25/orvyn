@@ -15,26 +15,32 @@ import {
   toPublic,
 } from "../desktop/desktopSession";
 import {
-  startSandboxDesktop,
-  restartSandboxDesktop,
-  captureSandboxFrame,
-  captureSandboxScreenshot,
   desktopMetrics,
   noteInputLatency,
   noteStreamBytes,
   repeatFramesToViewers,
-  sandboxInput,
-  sandboxSendKeys,
-  sandboxLaunchApp,
-  findSandboxSession,
-  stopSandboxDesktop,
   resolveKeyCombo,
   dockerAvailable,
-  subscribeFrames,
   noteDesktopUse,
-  type SandboxDesktopSession,
+  mapSandboxPoint,
   type FrameQuality,
 } from "../desktop/sandboxDesktop";
+import {
+  captureCloudDesktopFrame,
+  captureCloudDesktopScreenshot,
+  cloudDesktopInput,
+  cloudDesktopLaunchApp,
+  cloudDesktopSendKeys,
+  cloudDesktopTransport,
+  findCloudDesktopSession,
+  isVercelDesktop,
+  restartCloudDesktop,
+  startCloudDesktop,
+  stopCloudDesktop,
+  subscribeCloudDesktopFrames,
+  type CloudDesktopSession,
+} from "../desktop/cloudDesktop";
+import { vercelToolRunner } from "../execution/VercelToolRunner";
 import { setElectronBrowserTarget } from "../desktop/electronBrowserTarget";
 
 async function hasDocker(): Promise<boolean> {
@@ -42,12 +48,12 @@ async function hasDocker(): Promise<boolean> {
 }
 
 function sandboxSessionFor(tenantId: string, projectRoot: string) {
-  return projectRoot ? findSandboxSession(tenantId, projectRoot) : undefined;
+  return projectRoot ? findCloudDesktopSession(tenantId, projectRoot) : undefined;
 }
 
 /** Public wire shape for a sandbox session — includes truthful resource
  *  metadata so the UI can display "Linux · 2 vCPU · 4 GB RAM". */
-function publicSandbox(s: SandboxDesktopSession) {
+function publicSandbox(s: CloudDesktopSession) {
   return {
     id: s.id,
     status: s.status,
@@ -56,7 +62,7 @@ function publicSandbox(s: SandboxDesktopSession) {
     height: s.height,
     url: s.url,
     live: s.status === "ready" || s.status === "user_control",
-    transport: "sandbox-x11",
+    transport: cloudDesktopTransport(s),
     error: s.error,
     resources: s.resources,
     startedAt: s.startedAt ?? new Date(s.createdAt).toISOString(),
@@ -81,7 +87,7 @@ export function desktopRouter(): Router {
     if (!run) return res.status(404).json({error:"Run not found"});
     const execution = [...run.events].reverse().find(e => e.type === "run.execution");
     if (execution?.data?.executionTargetActual === "local_host" || execution?.data?.executionTargetActual === "local_sandbox") return res.status(409).json({error:"This run belongs to a local computer, not the Cloud desktop."});
-    const sandbox=findSandboxSession(tenant.id,run.projectRoot);
+    const sandbox=findCloudDesktopSession(tenant.id,run.projectRoot);
     if(sandbox && sandbox.runId!==runId && !(req.method==="POST" && req.path==="/session")) return res.status(404).json({error:"No desktop for this task."});
     req.query.projectRoot = run.projectRoot;
     if (req.body) req.body.projectRoot = run.projectRoot;
@@ -92,10 +98,32 @@ export function desktopRouter(): Router {
   // "signed out" (needs Cloud) from "connected but no worker" (specific error).
   router.get("/capabilities", async (req, res) => {
     const docker = await hasDocker();
+    const cloudProvider =
+      process.env.ORVYN_CLOUD_EXECUTION_PROVIDER?.trim().toLowerCase() ===
+      "vercel"
+        ? "vercel"
+        : "ovh";
+    const vercel =
+      cloudProvider === "vercel" ? await vercelToolRunner.health() : null;
+    const available =
+      cloudProvider === "vercel" ? Boolean(vercel?.healthy) : docker;
     res.json({
-      desktopAvailable: docker,
-      transport: docker ? "sandbox-x11" : "none",
-      reason: docker ? undefined : "Docker sandbox runtime not available on this backend.",
+      desktopAvailable: available,
+      transport:
+        cloudProvider === "vercel"
+          ? available
+            ? "vercel-x11"
+            : "none"
+          : docker
+            ? "sandbox-x11"
+            : "none",
+      provider: cloudProvider === "vercel" ? "orvyn-cloud" : "legacy-cloud",
+      reason:
+        available
+          ? undefined
+          : cloudProvider === "vercel"
+            ? vercel?.detail ?? "ORVYN Cloud Sandbox is unavailable."
+            : "Docker sandbox runtime not available on this backend.",
     });
   });
 
@@ -110,7 +138,7 @@ export function desktopRouter(): Router {
       return res.json({
         session: publicSandbox(sandbox),
         playwright: playwrightAvailable(),
-        sandbox: docker,
+        sandbox: true,
       });
     }
 
@@ -124,7 +152,42 @@ export function desktopRouter(): Router {
     const runId = typeof req.body?.runId === "string" ? req.body.runId : undefined;
     const url = typeof req.body?.url === "string" ? req.body.url : undefined;
 
-    // PREFER the true sandbox desktop when Docker is available.
+    const run = runId ? t.runStore.get(runId) : undefined;
+    const execution = run
+      ? [...run.events].reverse().find((event) => event.type === "run.execution")
+      : undefined;
+    const vercelRun =
+      execution?.data?.executionTargetActual === "vercel_cloud" ||
+      execution?.data?.location === "VERCEL_CLOUD";
+
+    if (vercelRun && runId) {
+      try {
+        const desktop = await startCloudDesktop({
+          provider: "vercel",
+          tenantId: t.id,
+          projectRoot,
+          runId,
+          url,
+        });
+        if (desktop.status !== "error") {
+          return res.json({
+            session: publicSandbox(desktop),
+            sandbox: true,
+          });
+        }
+        return res.status(503).json({
+          error: desktop.error ?? "ORVYN Cloud Desktop failed to start.",
+          sandbox: true,
+        });
+      } catch (err: any) {
+        return res.status(503).json({
+          error: err?.message ?? String(err),
+          sandbox: true,
+        });
+      }
+    }
+
+    // PREFER the legacy true sandbox desktop when Docker is available.
     const docker = await hasDocker();
     if (docker) {
       // Cloud: the client sends its LOCAL path (C:/...) - resolve to a
@@ -138,7 +201,8 @@ export function desktopRouter(): Router {
         ? projectRoot
         : "/opt/orvyn/workspaces/" + (projectRoot.split(/[\\/]/).filter(Boolean).pop() || "default");
       try {
-        const sandbox = await startSandboxDesktop({
+        const sandbox = await startCloudDesktop({
+          provider: "docker",
           tenantId: t.id,
           projectRoot: serverRoot,
           runId,
@@ -168,14 +232,20 @@ export function desktopRouter(): Router {
     // Sandbox frame (X11 capture).
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox && sandbox.status !== "ended") {
-      const jpeg = await captureSandboxFrame(sandbox, frameQuality(req.query.q));
+      const jpeg = await captureCloudDesktopFrame(
+        sandbox,
+        frameQuality(req.query.q)
+      );
       if (!jpeg) {
         return res.status(409).json({ error: "Desktop frame not yet available." });
       }
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Orvyn-Desktop-Control", sandbox.controlOwner);
-      res.setHeader("X-Orvyn-Desktop-Transport", "sandbox-x11");
+      res.setHeader(
+        "X-Orvyn-Desktop-Transport",
+        cloudDesktopTransport(sandbox)
+      );
       if (sandbox.url) res.setHeader("X-Orvyn-Desktop-Url", encodeURIComponent(sandbox.url));
       return res.send(jpeg);
     }
@@ -235,7 +305,7 @@ export function desktopRouter(): Router {
       res.off("drain", onDrain);
       unsubscribe?.();
     };
-    const unsubscribe = subscribeFrames(sandbox, {
+    const unsubscribe = subscribeCloudDesktopFrames(sandbox, {
       frame: write,
       end: (reason) => {
         if (closed) return;
@@ -317,9 +387,32 @@ export function desktopRouter(): Router {
     if (sandbox && sandbox.status !== "ended") {
       if (sandbox.controlOwner !== "user") return res.status(409).json({ error: "Take Control before interacting with this desktop." });
       const inputStart = Date.now();
-      const ok = await sandboxInput(sandbox, String(req.body?.type ?? ""), req.body ?? {});
+      const kind = String(req.body?.type ?? "");
+      let inputArgs = req.body ?? {};
+      if (
+        isVercelDesktop(sandbox) &&
+        ["move", "click", "dblclick", "rightclick", "scroll"].includes(kind)
+      ) {
+        const mapped = mapSandboxPoint(
+          sandbox,
+          Number(req.body?.x ?? 0),
+          Number(req.body?.y ?? 0),
+          Number(req.body?.viewWidth ?? sandbox.width),
+          Number(req.body?.viewHeight ?? sandbox.height)
+        );
+        inputArgs = { ...req.body, ...mapped };
+      }
+      const ok = await cloudDesktopInput(
+        sandbox,
+        kind,
+        inputArgs,
+        "user"
+      );
       noteInputLatency(sandbox.id, Date.now() - inputStart);
-      return res.json({ ok, session: { id: sandbox.id, controlOwner: sandbox.controlOwner } });
+      return res.json({
+        ok,
+        session: { id: sandbox.id, controlOwner: sandbox.controlOwner },
+      });
     }
 
     // Playwright input.
@@ -362,7 +455,7 @@ export function desktopRouter(): Router {
     // Stop sandbox.
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (sandbox) {
-      await stopSandboxDesktop(sandbox);
+      await stopCloudDesktop(sandbox);
       return res.json({ session: { id: sandbox.id, status: "ended", controlOwner: "none" } });
     }
 
@@ -382,7 +475,7 @@ export function desktopRouter(): Router {
     if (!sandbox || sandbox.status === "ended") {
       return res.status(404).json({ error: "No Desktop session." });
     }
-    const png = await captureSandboxScreenshot(sandbox);
+    const png = await captureCloudDesktopScreenshot(sandbox);
     if (!png) return res.status(409).json({ error: "Desktop frame not yet available." });
 
     const name = `desktop-${sandbox.id}-${Date.now()}.png`;
@@ -419,7 +512,7 @@ export function desktopRouter(): Router {
     if (!resolveKeyCombo(combo)) {
       return res.status(400).json({ error: `Unknown key combo: ${combo}` });
     }
-    const ok = await sandboxSendKeys(sandbox, combo);
+    const ok = await cloudDesktopSendKeys(sandbox, combo);
     res.json({ ok });
   });
 
@@ -430,7 +523,7 @@ export function desktopRouter(): Router {
     const sandbox = sandboxSessionFor(t.id, projectRoot);
     if (!sandbox) return res.status(404).json({ error: "No Desktop session." });
     try {
-      const fresh = await restartSandboxDesktop(sandbox);
+      const fresh = await restartCloudDesktop(sandbox);
       res.json({ session: publicSandbox(fresh) });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -449,7 +542,10 @@ export function desktopRouter(): Router {
     if (!["terminal", "files", "chromium", "editor", "settings"].includes(app)) {
       return res.status(400).json({ error: `Unknown app: ${app}` });
     }
-    const ok = await sandboxLaunchApp(sandbox, app as "terminal" | "files" | "chromium" | "editor" | "settings");
+    const ok = await cloudDesktopLaunchApp(
+      sandbox,
+      app as "terminal" | "files" | "chromium" | "editor" | "settings"
+    );
     res.json({ ok });
   });
 
