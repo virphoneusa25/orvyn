@@ -35,7 +35,7 @@ class StdioSession {
     this.proc.stdout.on("data", (chunk) => {
       this.buffer += chunk.toString("utf8");
       let end;
-      while ((end = this.buffer.indexOf("\\n")) >= 0) {
+      while ((end = this.buffer.indexOf("\n")) >= 0) {
         const line = this.buffer.slice(0, end).trim();
         this.buffer = this.buffer.slice(end + 1);
         try {
@@ -78,13 +78,13 @@ class StdioSession {
         },
       });
       this.proc.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\\n"
+        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"
       );
     });
   }
 
   notify(method) {
-    this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method }) + "\\n");
+    this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method }) + "\n");
   }
 }
 
@@ -140,7 +140,7 @@ async function httpRpc(name, spec, method, params) {
     ?.includes("text/event-stream")
     ? JSON.parse(
         text
-          .split(/\\r?\\n/)
+          .split(/\\r?\n/)
           .filter((x) => x.startsWith("data:"))
           .pop()
           .slice(5)
@@ -186,7 +186,7 @@ async function execute(message) {
       }
     }
     return lines.length
-      ? lines.join("\\n")
+      ? lines.join("\n")
       : "No MCP servers configured in .orvyn/mcp.json.";
   }
 
@@ -202,7 +202,7 @@ async function execute(message) {
     .map((part) =>
       part.type === "text" ? part.text : "[" + part.type + " content]"
     )
-    .join("\\n");
+    .join("\n");
   if (result.isError) throw new Error(text || "MCP tool reported an error");
   return (text || JSON.stringify(result)).slice(0, 20000);
 }
