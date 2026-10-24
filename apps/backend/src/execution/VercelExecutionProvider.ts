@@ -17,11 +17,37 @@ const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
 
 type Entry = { sandbox: any; sandboxId: string; projectRoot: string; cancelled: boolean };
 
-function credentials(): { token: string; teamId: string; projectId: string } | null {
-  const token = process.env.SANDBOX_VERCEL_TOKEN?.trim() || process.env.VERCEL_TOKEN?.trim();
-  const teamId = process.env.SANDBOX_VERCEL_TEAM_ID?.trim() || process.env.VERCEL_TEAM_ID?.trim();
-  const projectId = process.env.SANDBOX_VERCEL_PROJECT_ID?.trim() || process.env.VERCEL_PROJECT_ID?.trim();
-  return token && teamId && projectId ? { token, teamId, projectId } : null;
+function credentials():
+  | { mode: "oidc"; createOptions: Record<string, never> }
+  | {
+      mode: "access-token";
+      createOptions: { token: string; teamId: string; projectId: string };
+    }
+  | null {
+  // Vercel injects OIDC automatically into production runtimes. In that
+  // environment the SDK authenticates without explicit token/team/project
+  // arguments, so ORVYN does not need a long-lived Vercel token.
+  if (process.env.VERCEL_OIDC_TOKEN?.trim()) {
+    return { mode: "oidc", createOptions: {} };
+  }
+
+  // External runtimes/CI use a team-scoped access token.
+  const token =
+    process.env.SANDBOX_VERCEL_TOKEN?.trim() ||
+    process.env.VERCEL_TOKEN?.trim();
+  const teamId =
+    process.env.SANDBOX_VERCEL_TEAM_ID?.trim() ||
+    process.env.VERCEL_TEAM_ID?.trim();
+  const projectId =
+    process.env.SANDBOX_VERCEL_PROJECT_ID?.trim() ||
+    process.env.VERCEL_PROJECT_ID?.trim();
+
+  return token && teamId && projectId
+    ? {
+        mode: "access-token",
+        createOptions: { token, teamId, projectId },
+      }
+    : null;
 }
 
 function sh(value: string): string {
@@ -72,13 +98,18 @@ export class VercelExecutionProvider implements ExecutionProvider {
   async startRun(runId: string, projectRoot: string): Promise<void> {
     await this.stopRun(runId);
     const auth = credentials();
-    if (!auth) throw new Error("Vercel Sandbox credentials are not configured");
+    if (!auth) {
+      throw new Error(
+        "Vercel Sandbox authentication is not configured. Use Vercel OIDC " +
+          "when deployed on Vercel, or set token/team/project credentials."
+      );
+    }
 
     const mod = await import("@vercel/sandbox");
     const ports = String(process.env.ORVYN_VERCEL_SANDBOX_PORTS || "3000,5173")
       .split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0);
     const sandbox: any = await (mod.Sandbox as any).create({
-      ...auth,
+      ...auth.createOptions,
       // Pin the current Ubuntu-based managed image so X11/browser package
       // provisioning is deterministic instead of depending on Vercel's
       // changing default image generation.
@@ -219,10 +250,23 @@ export class VercelExecutionProvider implements ExecutionProvider {
   }
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
-    if (!credentials()) return { healthy: false, detail: "Vercel Sandbox credentials are not configured" };
+    const auth = credentials();
+    if (!auth) {
+      return {
+        healthy: false,
+        detail:
+          "Vercel Sandbox auth is not configured (OIDC or access token)",
+      };
+    }
     try {
       await import("@vercel/sandbox");
-      return { healthy: true, detail: "Vercel Sandbox ready" };
+      return {
+        healthy: true,
+        detail:
+          auth.mode === "oidc"
+            ? "Vercel Sandbox ready via OIDC"
+            : "Vercel Sandbox ready via access token",
+      };
     } catch (err: any) {
       return { healthy: false, detail: "Vercel Sandbox SDK unavailable: " + (err?.message ?? String(err)) };
     }
