@@ -23,6 +23,7 @@ import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
+import type { ExecResult, SandboxSession } from "./SandboxProvider";
 
 const SANDBOX_IMAGE = process.env.ORVYN_SANDBOX_IMAGE || "node:22-slim";
 /** Whole-mission wall clock, minutes. A wedged mission must not hold a box. */
@@ -46,14 +47,13 @@ function docker(args: string[], opts: { timeoutMs?: number; maxBuffer?: number }
   });
 }
 
-export interface ExecResult {
-  ok: boolean;
-  output: string;
-  exitCode: number;
-  timedOut: boolean;
-}
+export class DockerSandbox implements SandboxSession {
+  readonly provider = "docker";
+  readonly workspacePath = "/workspace";
 
-export class DockerSandbox {
+  get id(): string {
+    return this.containerId;
+  }
   readonly containerId: string;
   private stopped = false;
   private wallClock?: NodeJS.Timeout;
