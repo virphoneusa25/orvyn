@@ -4,6 +4,7 @@
 // use this contract while Docker remains the legacy backend and Vercel becomes
 // the managed cloud backend.
 
+import type { TargetMatch } from "../agent/previewTarget";
 import {
   captureSandboxFrame,
   captureSandboxScreenshot,
@@ -162,7 +163,7 @@ export async function cloudDesktopNavigate(
   ok: boolean;
   error?: string;
   pageTitle?: string;
-  target?: { reason?: string; [key: string]: unknown };
+  target?: TargetMatch;
 }> {
   return isVercelDesktop(session)
     ? vercelDesktopNavigate(session, url)
