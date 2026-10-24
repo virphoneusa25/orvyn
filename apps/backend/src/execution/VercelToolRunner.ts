@@ -153,7 +153,11 @@ export class VercelToolRunner {
 
     const startedAt = Date.now();
     try {
-      await this.provider.startRun(runId, projectRoot);
+      await this.provider.startRun(runId, projectRoot, {
+        tenantId: identity.tenantId,
+        workspaceId: identity.workspaceId,
+        projectId: identity.projectId,
+      });
       const providerSandboxId = this.provider.sandboxId(runId) ?? null;
       registry.report(logicalId, {
         state: "ready",
@@ -169,6 +173,8 @@ export class VercelToolRunner {
         provider: "vercel",
         sandboxId: logicalId,
         providerSandboxId,
+        sandboxName: this.provider.sandboxName(runId),
+        persistent: this.provider.isPersistent(runId),
         workspace: WORKSPACE,
       });
 
@@ -423,13 +429,16 @@ export class VercelToolRunner {
         "utf8"
       ).toString("base64");
 
+      const playwrightMarker = root + "/.orvyn-playwright-1.63.0-ready";
       const install = [
         "mkdir -p " + shellQuote(root),
         "printf %s " + shellQuote(encoded) + " | base64 -d > " + shellQuote(scriptPath),
         "cd " + shellQuote(root),
         "test -f package.json || npm init -y >/dev/null 2>&1",
-        "test -d node_modules/playwright || npm install --silent --no-audit --no-fund playwright@1.63.0",
-        "npx playwright install --with-deps chromium >/tmp/orvyn-playwright-install.log 2>&1",
+        "if [ ! -f " + shellQuote(playwrightMarker) + " ]; then " +
+          "npm install --silent --no-audit --no-fund playwright@1.63.0 && " +
+          "npx playwright install --with-deps chromium >/tmp/orvyn-playwright-install.log 2>&1 && " +
+          "touch " + shellQuote(playwrightMarker) + "; fi",
       ].join(" && ");
 
       const installed = await this.command(runId, install, "", 300);

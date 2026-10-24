@@ -2,6 +2,7 @@
 // Managed Vercel Sandbox execution behind ORVYN Cloud.
 
 import { execFile } from "child_process";
+import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -16,7 +17,38 @@ const EXCLUDES = ["node_modules", ".orvyn", "dist", "release", ".cache"];
 const DELETE_PROTECTED_PREFIXES = [".git"];
 const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
 
-type Entry = { sandbox: any; sandboxId: string; projectRoot: string; cancelled: boolean };
+export interface VercelWorkspaceIdentity {
+  tenantId: string;
+  workspaceId: string;
+  projectId?: string | null;
+}
+
+type Entry = {
+  sandbox: any;
+  sandboxId: string;
+  sandboxName?: string;
+  projectRoot: string;
+  cancelled: boolean;
+  persistent: boolean;
+};
+
+export function vercelSandboxName(identity: VercelWorkspaceIdentity): string {
+  const digest = createHash("sha256")
+    .update(
+      [identity.tenantId, identity.workspaceId, identity.projectId ?? ""].join("\n")
+    )
+    .digest("hex")
+    .slice(0, 24);
+  return "orvyn-ws-" + digest;
+}
+
+function persistentWorkspacesEnabled(identity?: VercelWorkspaceIdentity): boolean {
+  if (!identity?.tenantId?.trim() || !identity.workspaceId?.trim()) return false;
+  const raw = String(process.env.ORVYN_VERCEL_PERSISTENT_WORKSPACES ?? "true")
+    .trim()
+    .toLowerCase();
+  return !["0", "false", "off", "no"].includes(raw);
+}
 
 function credentials():
   | { mode: "oidc"; createOptions: Record<string, never> }
@@ -182,8 +214,13 @@ export class VercelExecutionProvider implements ExecutionProvider {
   readonly location = "VERCEL_CLOUD" as const;
   private runs = new Map<string, Entry>();
   private handlers = new Map<string, (chunk: string) => void>();
+  private persistentLeases = new Map<string, string>();
 
-  async startRun(runId: string, projectRoot: string): Promise<void> {
+  async startRun(
+    runId: string,
+    projectRoot: string,
+    identity?: VercelWorkspaceIdentity
+  ): Promise<void> {
     await this.stopRun(runId);
     const auth = credentials();
     if (!auth) {
@@ -194,28 +231,73 @@ export class VercelExecutionProvider implements ExecutionProvider {
     }
 
     const mod = await import("@vercel/sandbox");
+    const Sandbox = (mod.Sandbox as any);
     const ports = String(process.env.ORVYN_VERCEL_SANDBOX_PORTS || "3000,5173")
       .split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0);
-    const sandbox: any = await (mod.Sandbox as any).create({
+    const requestedPersistent =
+      persistentWorkspacesEnabled(identity) &&
+      typeof Sandbox.getOrCreate === "function";
+    const requestedSandboxName =
+      requestedPersistent && identity ? vercelSandboxName(identity) : undefined;
+    const leaseOwner = requestedSandboxName
+      ? this.persistentLeases.get(requestedSandboxName)
+      : undefined;
+    const persistent =
+      Boolean(requestedSandboxName) && (!leaseOwner || leaseOwner === runId);
+    const sandboxName = persistent ? requestedSandboxName : undefined;
+    const baseOptions = {
       ...auth.createOptions,
-      // Pin the current Ubuntu-based managed image so X11/browser package
-      // provisioning is deterministic instead of depending on Vercel's
-      // changing default image generation.
       image: "vercel/sandbox/universal:latest",
-      // ORVYN already owns durable mission/project state and explicitly syncs
-      // the workspace back. Keep per-run sandboxes ephemeral until resume via
-      // Vercel snapshots is implemented intentionally.
-      persistent: false,
       timeout:
         (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60000,
       ports,
       env: {
-        ORVYN_RUN_ID: runId,
         ORVYN_EXECUTION_LOCATION: "VERCEL_CLOUD",
       },
-    });
+    };
+
+    // Named persistent sandboxes let ORVYN reuse expensive environment state
+    // (browser/desktop packages and package-manager caches) across missions.
+    // The project workspace itself is rebuilt from canonical ORVYN state each
+    // run so stale dependencies or deleted project files cannot leak forward.
+    // getOrCreate also recovers cleanly when an older snapshot has expired.
+    let sandbox: any;
+    if (persistent && sandboxName) {
+      // Claim before awaiting getOrCreate so two concurrent starts in this
+      // control-plane process cannot attach to the same durable filesystem.
+      this.persistentLeases.set(sandboxName, runId);
+      try {
+        sandbox = await Sandbox.getOrCreate({
+          ...baseOptions,
+          name: sandboxName,
+          persistent: true,
+        });
+      } catch (err) {
+        if (this.persistentLeases.get(sandboxName) === runId) {
+          this.persistentLeases.delete(sandboxName);
+        }
+        throw err;
+      }
+    } else {
+      sandbox = await Sandbox.create({
+        ...baseOptions,
+        persistent: false,
+        env: {
+          ...baseOptions.env,
+          ORVYN_RUN_ID: runId,
+        },
+      });
+    }
+
     const sandboxId = String(sandbox.sandboxId ?? sandbox.id ?? runId);
-    this.runs.set(runId, { sandbox, sandboxId, projectRoot, cancelled: false });
+    this.runs.set(runId, {
+      sandbox,
+      sandboxId,
+      sandboxName,
+      projectRoot,
+      cancelled: false,
+      persistent,
+    });
     try {
       await this.uploadWorkspace(runId);
     } catch (err) {
@@ -274,7 +356,19 @@ export class VercelExecutionProvider implements ExecutionProvider {
       await entry.sandbox.writeFiles([{ path: UPLOAD, content: snap.data }]);
       const result = await entry.sandbox.runCommand({
         cmd: "sh",
-        args: ["-lc", "rm -rf " + sh(WORKSPACE) + " && mkdir -p " + sh(WORKSPACE) + " && tar xf " + sh(UPLOAD) + " --no-same-owner -C " + sh(WORKSPACE) + " && rm -f " + sh(UPLOAD)],
+        args: [
+          "-lc",
+          "rm -rf " +
+            sh(WORKSPACE) +
+            " && mkdir -p " +
+            sh(WORKSPACE) +
+            " && tar xf " +
+            sh(UPLOAD) +
+            " --no-same-owner -C " +
+            sh(WORKSPACE) +
+            " && rm -f " +
+            sh(UPLOAD),
+        ],
       });
       if (Number(result.exitCode ?? 1) !== 0) {
         const streams = await output(result);
@@ -319,6 +413,12 @@ export class VercelExecutionProvider implements ExecutionProvider {
     this.runs.delete(runId);
     this.handlers.delete(runId);
     await entry.sandbox.stop().catch(() => undefined);
+    if (
+      entry.sandboxName &&
+      this.persistentLeases.get(entry.sandboxName) === runId
+    ) {
+      this.persistentLeases.delete(entry.sandboxName);
+    }
   }
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
@@ -346,6 +446,14 @@ export class VercelExecutionProvider implements ExecutionProvider {
 
   sandboxId(runId: string): string | undefined {
     return this.runs.get(runId)?.sandboxId;
+  }
+
+  sandboxName(runId: string): string | undefined {
+    return this.runs.get(runId)?.sandboxName;
+  }
+
+  isPersistent(runId: string): boolean {
+    return this.runs.get(runId)?.persistent === true;
   }
 
   async dispose(): Promise<void> {

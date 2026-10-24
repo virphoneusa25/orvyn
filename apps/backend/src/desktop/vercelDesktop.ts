@@ -135,14 +135,17 @@ export async function startVercelDesktop(opts: {
 
   try {
     const provision = [
-      "sudo apt-get update -qq",
-      "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb openbox xdotool imagemagick x11-apps xterm pcmanfm curl nano",
-      "mkdir -p /tmp/orvyn-browser",
+      "mkdir -p /tmp/orvyn-browser /tmp/orvyn-desktop",
+      "if [ ! -f /tmp/orvyn-desktop/.orvyn-x11-v1-ready ]; then " +
+        "sudo apt-get update -qq && " +
+        "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb openbox xdotool imagemagick x11-apps xterm pcmanfm curl nano && " +
+        "touch /tmp/orvyn-desktop/.orvyn-x11-v1-ready; fi",
       "cd /tmp/orvyn-browser",
       "test -f package.json || npm init -y >/dev/null 2>&1",
-      "test -d node_modules/playwright || npm install --silent --no-audit --no-fund playwright@1.63.0",
-      "npx playwright install --with-deps chromium >/tmp/orvyn-desktop-playwright.log 2>&1",
-      "mkdir -p /tmp/orvyn-desktop",
+      "if [ ! -f /tmp/orvyn-browser/.orvyn-playwright-1.63.0-ready ]; then " +
+        "npm install --silent --no-audit --no-fund playwright@1.63.0 && " +
+        "npx playwright install --with-deps chromium >/tmp/orvyn-desktop-playwright.log 2>&1 && " +
+        "touch /tmp/orvyn-browser/.orvyn-playwright-1.63.0-ready; fi",
       "node -e \"console.log(require('playwright').chromium.executablePath())\" > /tmp/orvyn-desktop/chrome-path",
     ].join(" && ");
 

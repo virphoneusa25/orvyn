@@ -2,7 +2,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VercelExecutionProvider, reconcileDownloadedWorkspace } from "./VercelExecutionProvider";
+import {
+  VercelExecutionProvider,
+  reconcileDownloadedWorkspace,
+  vercelSandboxName,
+} from "./VercelExecutionProvider";
 import { SandboxRegistry } from "./sandbox/SandboxRegistry";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -41,6 +45,36 @@ function withCleanEnv(fn: () => Promise<void> | void): Promise<void> | void {
     throw err;
   }
 }
+
+test("persistent Vercel sandbox names are stable and workspace-scoped", () => {
+  const a = vercelSandboxName({
+    tenantId: "tenant-a",
+    workspaceId: "workspace-1",
+    projectId: "project-1",
+  });
+  const again = vercelSandboxName({
+    tenantId: "tenant-a",
+    workspaceId: "workspace-1",
+    projectId: "project-1",
+  });
+  const otherTenant = vercelSandboxName({
+    tenantId: "tenant-b",
+    workspaceId: "workspace-1",
+    projectId: "project-1",
+  });
+  const otherWorkspace = vercelSandboxName({
+    tenantId: "tenant-a",
+    workspaceId: "workspace-2",
+    projectId: "project-1",
+  });
+
+  assert.equal(a, again);
+  assert.notEqual(a, otherTenant);
+  assert.notEqual(a, otherWorkspace);
+  assert.match(a, /^orvyn-ws-[a-f0-9]{24}$/);
+  assert.equal(a.includes("tenant-a"), false);
+  assert.equal(a.includes("workspace-1"), false);
+});
 
 test("Vercel cloud provider fails closed when server credentials are absent", async () => {
   await withCleanEnv(async () => {
