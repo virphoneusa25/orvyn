@@ -9,7 +9,10 @@ import type { CommandResult, ExecutionProvider } from "./ExecutionProvider";
 
 const WORKSPACE = "/vercel/sandbox/workspace";
 const UPLOAD = "/vercel/sandbox/orvyn-workspace.tar";
-const EXCLUDES = ["node_modules", ".git", ".orvyn", "dist", "release", ".cache"];
+// Preserve .git so ORION's existing git_status/diff/log/branch/commit
+// tools operate on the real repository inside the cloud microVM. Large repos
+// should move to direct Git clone hydration in the next optimization phase.
+const EXCLUDES = ["node_modules", ".orvyn", "dist", "release", ".cache"];
 const MAX_SYNC_MB = Number(process.env.ORVYN_VERCEL_SYNC_MAX_MB) || 64;
 
 type Entry = { sandbox: any; sandboxId: string; projectRoot: string; cancelled: boolean };
