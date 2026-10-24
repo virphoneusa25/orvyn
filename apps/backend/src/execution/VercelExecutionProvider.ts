@@ -249,8 +249,9 @@ export class VercelExecutionProvider implements ExecutionProvider {
     };
 
     // Named persistent sandboxes let ORVYN reuse expensive environment state
-    // (browser packages, package caches, node_modules) across missions while
-    // the canonical project is still re-hydrated from ORVYN before each run.
+    // (browser/desktop packages and package-manager caches) across missions.
+    // The project workspace itself is rebuilt from canonical ORVYN state each
+    // run so stale dependencies or deleted project files cannot leak forward.
     // getOrCreate also recovers cleanly when an older snapshot has expired.
     const sandbox: any = persistent
       ? await Sandbox.getOrCreate({
@@ -332,16 +333,14 @@ export class VercelExecutionProvider implements ExecutionProvider {
     const snap = await snapshot(entry.projectRoot);
     try {
       await entry.sandbox.writeFiles([{ path: UPLOAD, content: snap.data }]);
-      const reset = entry.persistent
-        ? "mkdir -p " + sh(WORKSPACE) +
-          " && find " + sh(WORKSPACE) +
-          " -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf -- {} +"
-        : "rm -rf " + sh(WORKSPACE) + " && mkdir -p " + sh(WORKSPACE);
       const result = await entry.sandbox.runCommand({
         cmd: "sh",
         args: [
           "-lc",
-          reset +
+          "rm -rf " +
+            sh(WORKSPACE) +
+            " && mkdir -p " +
+            sh(WORKSPACE) +
             " && tar xf " +
             sh(UPLOAD) +
             " --no-same-owner -C " +
