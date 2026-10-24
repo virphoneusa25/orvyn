@@ -33,8 +33,8 @@ jobs:
         id: credentials
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID }}
         shell: bash
         run: |
           if [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_TEAM_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
@@ -43,10 +43,10 @@ jobs:
           fi
           echo "configured=false" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "::error::Live smoke requires VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID repository secrets"
+            echo "::error::Live smoke requires VERCEL_TOKEN as a repository secret and VERCEL_TEAM_ID / VERCEL_PROJECT_ID as repository variables (or legacy secrets)"
             exit 1
           fi
-          echo "::notice::Skipping live Vercel smoke on push because repository credentials are not configured"
+          echo "::notice::Skipping live Vercel smoke: add VERCEL_TOKEN under Actions secrets and VERCEL_TEAM_ID / VERCEL_PROJECT_ID under Actions variables"
 
       - name: Install dependencies
         if: steps.credentials.outputs.configured == 'true'
@@ -67,8 +67,8 @@ jobs:
           ORVYN_CLOUD_EXECUTION_PROVIDER: vercel
           ORVYN_VERCEL_PERSISTENT_WORKSPACES: "true"
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID || vars.VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID }}
           ORVYN_SANDBOX_TIMEOUT_MIN: "20"
           ORVYN_SANDBOX_COMMAND_TIMEOUT_S: "180"
           ORVYN_VERCEL_SANDBOX_PORTS: "3000,5173"
