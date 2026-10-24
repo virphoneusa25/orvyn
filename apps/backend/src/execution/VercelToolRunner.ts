@@ -429,13 +429,16 @@ export class VercelToolRunner {
         "utf8"
       ).toString("base64");
 
+      const playwrightMarker = root + "/.orvyn-playwright-1.63.0-ready";
       const install = [
         "mkdir -p " + shellQuote(root),
         "printf %s " + shellQuote(encoded) + " | base64 -d > " + shellQuote(scriptPath),
         "cd " + shellQuote(root),
         "test -f package.json || npm init -y >/dev/null 2>&1",
-        "test -d node_modules/playwright || npm install --silent --no-audit --no-fund playwright@1.63.0",
-        "npx playwright install --with-deps chromium >/tmp/orvyn-playwright-install.log 2>&1",
+        "if [ ! -f " + shellQuote(playwrightMarker) + " ]; then " +
+          "npm install --silent --no-audit --no-fund playwright@1.63.0 && " +
+          "npx playwright install --with-deps chromium >/tmp/orvyn-playwright-install.log 2>&1 && " +
+          "touch " + shellQuote(playwrightMarker) + "; fi",
       ].join(" && ");
 
       const installed = await this.command(runId, install, "", 300);
