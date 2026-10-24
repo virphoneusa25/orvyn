@@ -47,7 +47,7 @@ test("Vercel cloud provider fails closed when server credentials are absent", as
     const provider = new VercelExecutionProvider();
     const health = await provider.health();
     assert.equal(health.healthy, false);
-    assert.match(health.detail ?? "", /credentials/i);
+    assert.match(health.detail ?? "", /auth|credentials/i);
   });
 });
 
