@@ -214,6 +214,7 @@ export class VercelExecutionProvider implements ExecutionProvider {
   readonly location = "VERCEL_CLOUD" as const;
   private runs = new Map<string, Entry>();
   private handlers = new Map<string, (chunk: string) => void>();
+  private persistentLeases = new Map<string, string>();
 
   async startRun(
     runId: string,
@@ -233,10 +234,17 @@ export class VercelExecutionProvider implements ExecutionProvider {
     const Sandbox = (mod.Sandbox as any);
     const ports = String(process.env.ORVYN_VERCEL_SANDBOX_PORTS || "3000,5173")
       .split(",").map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 0);
-    const persistent =
+    const requestedPersistent =
       persistentWorkspacesEnabled(identity) &&
       typeof Sandbox.getOrCreate === "function";
-    const sandboxName = persistent && identity ? vercelSandboxName(identity) : undefined;
+    const requestedSandboxName =
+      requestedPersistent && identity ? vercelSandboxName(identity) : undefined;
+    const leaseOwner = requestedSandboxName
+      ? this.persistentLeases.get(requestedSandboxName)
+      : undefined;
+    const persistent =
+      Boolean(requestedSandboxName) && (!leaseOwner || leaseOwner === runId);
+    const sandboxName = persistent ? requestedSandboxName : undefined;
     const baseOptions = {
       ...auth.createOptions,
       image: "vercel/sandbox/universal:latest",
@@ -253,20 +261,33 @@ export class VercelExecutionProvider implements ExecutionProvider {
     // The project workspace itself is rebuilt from canonical ORVYN state each
     // run so stale dependencies or deleted project files cannot leak forward.
     // getOrCreate also recovers cleanly when an older snapshot has expired.
-    const sandbox: any = persistent
-      ? await Sandbox.getOrCreate({
+    let sandbox: any;
+    if (persistent && sandboxName) {
+      // Claim before awaiting getOrCreate so two concurrent starts in this
+      // control-plane process cannot attach to the same durable filesystem.
+      this.persistentLeases.set(sandboxName, runId);
+      try {
+        sandbox = await Sandbox.getOrCreate({
           ...baseOptions,
           name: sandboxName,
           persistent: true,
-        })
-      : await Sandbox.create({
-          ...baseOptions,
-          persistent: false,
-          env: {
-            ...baseOptions.env,
-            ORVYN_RUN_ID: runId,
-          },
         });
+      } catch (err) {
+        if (this.persistentLeases.get(sandboxName) === runId) {
+          this.persistentLeases.delete(sandboxName);
+        }
+        throw err;
+      }
+    } else {
+      sandbox = await Sandbox.create({
+        ...baseOptions,
+        persistent: false,
+        env: {
+          ...baseOptions.env,
+          ORVYN_RUN_ID: runId,
+        },
+      });
+    }
 
     const sandboxId = String(sandbox.sandboxId ?? sandbox.id ?? runId);
     this.runs.set(runId, {
@@ -392,6 +413,12 @@ export class VercelExecutionProvider implements ExecutionProvider {
     this.runs.delete(runId);
     this.handlers.delete(runId);
     await entry.sandbox.stop().catch(() => undefined);
+    if (
+      entry.sandboxName &&
+      this.persistentLeases.get(entry.sandboxName) === runId
+    ) {
+      this.persistentLeases.delete(entry.sandboxName);
+    }
   }
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
