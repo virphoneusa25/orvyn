@@ -158,7 +158,12 @@ export async function cloudDesktopLaunchApp(
 export async function cloudDesktopNavigate(
   session: CloudDesktopSession,
   url: string
-): Promise<{ ok: boolean; error?: string; pageTitle?: string; target?: unknown }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  pageTitle?: string;
+  target?: { reason?: string; [key: string]: unknown };
+}> {
   return isVercelDesktop(session)
     ? vercelDesktopNavigate(session, url)
     : sandboxNavigate(session, url);
@@ -200,7 +205,7 @@ export function subscribeCloudDesktopFrames(
       closed ||
       (session.status !== "ready" && session.status !== "user_control")
     ) {
-      if (!closed) sub.end("desktop ended");
+      if (!closed) sub.end("stopped");
       return;
     }
     if (busy) return;
