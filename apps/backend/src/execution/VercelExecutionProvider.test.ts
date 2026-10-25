@@ -355,10 +355,16 @@ test("Vercel cloud provider safely initializes empty workspace for repo-free / b
             writtenFiles.push(...files);
           },
           runCommand: async (cmd: any) => {
-            executedCommands.push(cmd.args.join(" "));
+            const command = cmd.args.join(" ");
+            executedCommands.push(command);
+            // downloadArtifacts expects a base64-encoded tar stream from the
+            // sandbox. Empty stdout means corrupt export data, not an empty workspace.
+            const stdout = command.includes("base64 -w0")
+              ? Buffer.alloc(1024, 0).toString("base64")
+              : "";
             return {
               exitCode: 0,
-              stdout: async () => "",
+              stdout: async () => stdout,
               stderr: async () => "",
             };
           },
