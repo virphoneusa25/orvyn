@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   VercelExecutionProvider,
+  isSnapshotQuotaError,
   reconcileDownloadedWorkspace,
   vercelSandboxName,
 } from "./VercelExecutionProvider";
@@ -162,5 +163,166 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(extracted, { recursive: true, force: true });
+  }
+});
+
+
+// ── Snapshot storage quota fallback ─────────────────────────────────────
+
+function fakeSandbox(id: string) {
+  return {
+    sandboxId: id,
+    writeFiles: async () => undefined,
+    runCommand: async () => ({ exitCode: 0, stdout: async () => "", stderr: async () => "" }),
+    stop: async () => undefined,
+  };
+}
+
+async function withStubbedSandbox(
+  stubs: { getOrCreate: (opts: any) => Promise<any>; create: (opts: any) => Promise<any> },
+  fn: () => Promise<void>
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { Sandbox } = require("@vercel/sandbox");
+  const original = { getOrCreate: Sandbox.getOrCreate, create: Sandbox.create };
+  const savedEnv = new Map<string, string | undefined>();
+  const env: Record<string, string> = {
+    SANDBOX_VERCEL_TOKEN: "test-token",
+    SANDBOX_VERCEL_TEAM_ID: "team_test",
+    SANDBOX_VERCEL_PROJECT_ID: "prj_test",
+    ORVYN_VERCEL_PERSISTENT_WORKSPACES: "true",
+  };
+  for (const [k, v] of Object.entries(env)) {
+    savedEnv.set(k, process.env[k]);
+    process.env[k] = v;
+  }
+  const savedOidc = process.env.VERCEL_OIDC_TOKEN;
+  delete process.env.VERCEL_OIDC_TOKEN;
+  Sandbox.getOrCreate = stubs.getOrCreate;
+  Sandbox.create = stubs.create;
+  try {
+    await fn();
+  } finally {
+    Sandbox.getOrCreate = original.getOrCreate;
+    Sandbox.create = original.create;
+    for (const [k, v] of savedEnv) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    if (savedOidc !== undefined) process.env.VERCEL_OIDC_TOKEN = savedOidc;
+  }
+}
+
+const identity = { tenantId: "tenant-q", workspaceId: "ws-q", projectId: "prj-q" };
+
+test("isSnapshotQuotaError recognises Vercel Hobby snapshot storage 402s only", () => {
+  assert.equal(
+    isSnapshotQuotaError(
+      new Error(
+        "Status code 402 is not ok: Hobby plan usage limit exceeded for Snapshots Storage."
+      )
+    ),
+    true
+  );
+  assert.equal(isSnapshotQuotaError({ status: 402, message: "Payment required" }), true);
+  assert.equal(isSnapshotQuotaError(new Error("snapshot quota reached")), true);
+  assert.equal(isSnapshotQuotaError(new Error("Status code 401 is not ok: unauthorized")), false);
+  assert.equal(isSnapshotQuotaError(new Error("ECONNRESET")), false);
+});
+
+test("persistent sandbox requests bound snapshot retention", async () => {
+  const project = mkdtempSync(join(tmpdir(), "orvyn-vercel-keep-"));
+  writeFileSync(join(project, "a.txt"), "a\n");
+  let seen: any;
+  try {
+    await withStubbedSandbox(
+      {
+        getOrCreate: async (opts) => {
+          seen = opts;
+          return fakeSandbox("sbx_persistent");
+        },
+        create: async () => {
+          throw new Error("create should not be called");
+        },
+      },
+      async () => {
+        const provider = new VercelExecutionProvider();
+        await provider.startRun("run-keep", project, identity);
+        assert.equal(provider.isPersistent("run-keep"), true);
+        assert.equal(provider.sandboxName("run-keep"), vercelSandboxName(identity));
+        await provider.stopRun("run-keep");
+      }
+    );
+    assert.equal(seen.persistent, true);
+    assert.deepEqual(seen.keepLastSnapshots, { count: 1, deleteEvicted: true });
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("snapshot storage quota falls back to an ephemeral Vercel sandbox, not another environment", async () => {
+  const project = mkdtempSync(join(tmpdir(), "orvyn-vercel-quota-"));
+  writeFileSync(join(project, "a.txt"), "a\n");
+  let createOpts: any;
+  try {
+    await withStubbedSandbox(
+      {
+        getOrCreate: async () => {
+          throw new Error(
+            "Status code 402 is not ok: Hobby plan usage limit exceeded for Snapshots Storage."
+          );
+        },
+        create: async (opts) => {
+          createOpts = opts;
+          return fakeSandbox("sbx_ephemeral");
+        },
+      },
+      async () => {
+        const provider = new VercelExecutionProvider();
+        await provider.startRun("run-quota", project, identity);
+        assert.equal(provider.location, "VERCEL_CLOUD");
+        assert.equal(provider.isPersistent("run-quota"), false);
+        assert.equal(provider.sandboxName("run-quota"), undefined);
+        assert.equal(provider.sandboxId("run-quota"), "sbx_ephemeral");
+        await provider.stopRun("run-quota");
+
+        // Lease must be released so a later run can retry persistence.
+        await provider.startRun("run-quota-2", project, identity);
+        assert.equal(provider.sandboxId("run-quota-2"), "sbx_ephemeral");
+        await provider.stopRun("run-quota-2");
+      }
+    );
+    assert.equal(createOpts.persistent, false);
+    assert.equal(createOpts.env.ORVYN_EXECUTION_LOCATION, "VERCEL_CLOUD");
+    assert.equal(createOpts.env.ORVYN_RUN_ID, "run-quota-2");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test("non-quota persistent sandbox failures still fail closed", async () => {
+  const project = mkdtempSync(join(tmpdir(), "orvyn-vercel-fail-"));
+  writeFileSync(join(project, "a.txt"), "a\n");
+  let createCalls = 0;
+  try {
+    await withStubbedSandbox(
+      {
+        getOrCreate: async () => {
+          throw new Error("Status code 401 is not ok: unauthorized");
+        },
+        create: async () => {
+          createCalls++;
+          return fakeSandbox("sbx_never");
+        },
+      },
+      async () => {
+        const provider = new VercelExecutionProvider();
+        await assert.rejects(provider.startRun("run-401", project, identity), /401/);
+        assert.equal(provider.sandboxId("run-401"), undefined);
+      }
+    );
+    assert.equal(createCalls, 0);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
   }
 });

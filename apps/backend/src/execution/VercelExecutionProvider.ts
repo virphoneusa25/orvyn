@@ -51,6 +51,19 @@ function persistentWorkspacesEnabled(identity?: VercelWorkspaceIdentity): boolea
   return !["0", "false", "off", "no"].includes(raw);
 }
 
+/**
+ * True when Vercel rejected a persistent sandbox because the account's
+ * snapshot storage quota is exhausted (e.g. Hobby plan HTTP 402).
+ */
+export function isSnapshotQuotaError(err: unknown): boolean {
+  const e = err as any;
+  const msg = String(e?.message ?? e ?? "");
+  const status = Number(e?.status ?? e?.statusCode ?? e?.response?.status);
+  if (/snapshots?\s+storage/i.test(msg)) return true;
+  if (/snapshot[^.]*(limit|quota)/i.test(msg)) return true;
+  return status === 402 || /status code 402/i.test(msg);
+}
+
 function credentials():
   | { mode: "oidc"; createOptions: Record<string, never> }
   | {
@@ -278,24 +291,10 @@ export class VercelExecutionProvider implements ExecutionProvider {
     // run so stale dependencies or deleted project files cannot leak forward.
     // getOrCreate also recovers cleanly when an older snapshot has expired.
     let sandbox: any;
-    if (persistent && sandboxName) {
-      // Claim before awaiting getOrCreate so two concurrent starts in this
-      // control-plane process cannot attach to the same durable filesystem.
-      this.persistentLeases.set(sandboxName, runId);
-      try {
-        sandbox = await Sandbox.getOrCreate({
-          ...baseOptions,
-          name: sandboxName,
-          persistent: true,
-        });
-      } catch (err) {
-        if (this.persistentLeases.get(sandboxName) === runId) {
-          this.persistentLeases.delete(sandboxName);
-        }
-        throw err;
-      }
-    } else {
-      sandbox = await Sandbox.create({
+    let effectivePersistent = persistent;
+    let effectiveSandboxName = sandboxName;
+    const createEphemeral = () =>
+      Sandbox.create({
         ...baseOptions,
         persistent: false,
         env: {
@@ -303,16 +302,50 @@ export class VercelExecutionProvider implements ExecutionProvider {
           ORVYN_RUN_ID: runId,
         },
       });
+    if (effectivePersistent && effectiveSandboxName) {
+      // Claim before awaiting getOrCreate so two concurrent starts in this
+      // control-plane process cannot attach to the same durable filesystem.
+      this.persistentLeases.set(effectiveSandboxName, runId);
+      try {
+        sandbox = await Sandbox.getOrCreate({
+          ...baseOptions,
+          name: effectiveSandboxName,
+          persistent: true,
+          // Bound snapshot storage growth: keep only the latest snapshot per
+          // named workspace sandbox and delete evicted ones immediately.
+          keepLastSnapshots: { count: 1, deleteEvicted: true },
+        });
+      } catch (err) {
+        if (this.persistentLeases.get(effectiveSandboxName) === runId) {
+          this.persistentLeases.delete(effectiveSandboxName);
+        }
+        if (!isSnapshotQuotaError(err)) throw err;
+        // The Vercel account's snapshot storage quota is exhausted. The
+        // project workspace is still rebuilt from canonical ORVYN storage
+        // (uploadWorkspace/downloadArtifacts), so an ephemeral Vercel
+        // microVM preserves project data; only cached environment state
+        // (package caches, browser installs) is lost for this run.
+        // Execution stays on VERCEL_CLOUD — never silently moves elsewhere.
+        console.warn(
+          "[vercel] persistent sandbox unavailable (snapshot storage quota); " +
+            "falling back to ephemeral Vercel sandbox for run " + runId
+        );
+        effectivePersistent = false;
+        effectiveSandboxName = undefined;
+        sandbox = await createEphemeral();
+      }
+    } else {
+      sandbox = await createEphemeral();
     }
 
     const sandboxId = String(sandbox.sandboxId ?? sandbox.id ?? runId);
     this.runs.set(runId, {
       sandbox,
       sandboxId,
-      sandboxName,
+      sandboxName: effectiveSandboxName,
       projectRoot,
       cancelled: false,
-      persistent,
+      persistent: effectivePersistent,
     });
     try {
       await this.uploadWorkspace(runId);
