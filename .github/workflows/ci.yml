@@ -52,20 +52,37 @@ jobs:
       - name: Build all workspaces
         run: npm run build
 
-      - name: Run test suite
+      # Step-level bound. The job cap stays at 20 minutes; this makes a hang
+      # attributable to this step instead of consuming the whole job budget.
+      # The runner additionally times out each test FILE and names it, so a
+      # single hanging file is identified rather than the suite as a whole.
+      - name: Run test suite (discovery-based, all tiers reported)
+        timeout-minutes: 12
         run: |
           set +e
-          npm test > test-out.txt 2>&1
+          npm run test:ci > test-out.txt 2>&1
           code=$?
+          cat test-out.txt
           if [ "$code" -ne 0 ]; then
-            grep -E "not ok |^# (fail|tests|pass|skipped)|AssertionError|ERR_|Error:" test-out.txt | head -60 | while IFS= read -r line; do
+            grep -E "^  (FAIL|TIMEOUT) |UNACCOUNTED|BUILD FAILED|Untracked test files|exclusion |not ok |AssertionError|ERR_" test-out.txt \
+              | head -60 | while IFS= read -r line; do
               echo "::error title=test-suite::$line"
             done
           fi
           exit "$code"
 
-      - name: Worker sandbox tests (policy templates, provider selection, fallback, reconcile)
-        run: node --test apps/worker/dist/sandbox/*.test.js
+      - name: Publish test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.sha }}
+          path: reports/test-report.json
+          if-no-files-found: warn
+
+      # The runner discovers and executes apps/worker/src/**/*.test.ts, so the
+      # previous standalone worker step would double-execute it.
+      # apps/worker now has a `prebuild` that wipes dist/ before tsc, so a
+      # renamed or deleted worker source file cannot leave a runnable artifact.
 
       - name: Desktop project sandbox acceptance gate
         env:
@@ -75,10 +92,10 @@ jobs:
           node --test apps/backend/dist/execution/acceptanceMatrix.test.js
           ORVYN_SANDBOX_IMAGE=node:22-slim node scripts/acceptance/worker-sandbox-e2e.mjs
 
-      - name: Signup legal compatibility
-        run: |
-          npm test -w @orvyn/web
-          node --test apps/backend/dist/routes/signupLegal.test.js
+      # apps/web/src/lib/signupLegal.test.ts and
+      # apps/backend/src/routes/signupLegal.test.ts are both discovered and run
+      # by the unit tier above, so re-running them here would double-execute.
+      # What remains unique to this step is the signup UI check in the image.
 
       - name: Exact provider billing and payment acceptance
         run: node scripts/acceptance/billing-e2e.mjs
