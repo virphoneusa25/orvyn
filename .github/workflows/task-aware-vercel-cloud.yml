@@ -42,4 +42,5 @@ jobs:
         run: node --test apps/backend/dist/execution/VercelExecutionProvider.test.js
 
       - name: Existing backend suite
+        timeout-minutes: 12
         run: npm test -w @orvyn/backend
