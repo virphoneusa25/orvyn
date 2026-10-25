@@ -326,3 +326,70 @@ test("non-quota persistent sandbox failures still fail closed", async () => {
     rmSync(project, { recursive: true, force: true });
   }
 });
+
+
+test("Vercel workspace sync-back handles empty or missing projectRoot safely", async () => {
+  const extracted = mkdtempSync(join(tmpdir(), "orvyn-vercel-extracted-empty-"));
+  try {
+    writeFileSync(join(extracted, "created.txt"), "hello\n");
+    const emptyResult = await reconcileDownloadedWorkspace("", extracted);
+    assert.deepEqual(emptyResult, []);
+
+    const nonExistentResult = await reconcileDownloadedWorkspace("/path/does/not/exist", extracted);
+    assert.deepEqual(nonExistentResult, []);
+  } finally {
+    rmSync(extracted, { recursive: true, force: true });
+  }
+});
+
+test("Vercel cloud provider safely initializes empty workspace for repo-free / browser tasks", async () => {
+  let writtenFiles: any[] = [];
+  let executedCommands: string[] = [];
+
+  await withStubbedSandbox(
+    {
+      getOrCreate: async () => {
+        return {
+          id: "sbx_repo_free",
+          writeFiles: async (files: any[]) => {
+            writtenFiles.push(...files);
+          },
+          runCommand: async (cmd: any) => {
+            executedCommands.push(cmd.args.join(" "));
+            return {
+              exitCode: 0,
+              stdout: async () => "",
+              stderr: async () => "",
+            };
+          },
+          stop: async () => {},
+        };
+      },
+      create: async () => {
+        throw new Error("unexpected create call");
+      },
+    },
+    async () => {
+      const provider = new VercelExecutionProvider();
+      // startRun with empty string projectRoot (website review / browser research)
+      await provider.startRun("run-repo-free", "", identity);
+      assert.equal(provider.sandboxId("run-repo-free"), "sbx_repo_free");
+
+      // Verify empty tar was uploaded safely without tar error
+      assert.equal(writtenFiles.length, 1);
+      assert.equal(writtenFiles[0].path, "/vercel/sandbox/orvyn-workspace.tar");
+      assert.equal(Buffer.isBuffer(writtenFiles[0].content), true);
+      assert.equal(writtenFiles[0].content.length, 1024);
+
+      // Verify tar extraction command ran cleanly
+      assert.ok(executedCommands.some((c) => c.includes("tar xf '/vercel/sandbox/orvyn-workspace.tar'")));
+
+      // downloadArtifacts on empty projectRoot returns empty files array without failing
+      const dl = await provider.downloadArtifacts("run-repo-free");
+      assert.deepEqual(dl, { files: [] });
+
+      await provider.stopRun("run-repo-free");
+      assert.equal(provider.sandboxId("run-repo-free"), undefined);
+    }
+  );
+});

@@ -98,15 +98,55 @@ async function run(message) {
     consoleErrors.length = 0;
     networkErrors.length = 0;
     if (a.url) {
-      await page.goto(String(a.url), {
+      let targetUrl = String(a.url).trim();
+      if (!/^https?:\/\//i.test(targetUrl) && !/^file:\/\//i.test(targetUrl)) {
+        targetUrl = "https://" + targetUrl;
+      }
+      await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
     }
     actions.push({ action: op, url: page.url(), timestamp: Date.now() });
+
+    const pageInfo = await page.evaluate(() => {
+      const title = document.title || "";
+      const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
+      const headings = Array.from(document.querySelectorAll("h1, h2, h3"))
+        .map((h) => (h.tagName + ": " + (h.textContent || "").trim()))
+        .filter((t) => t.length > 4)
+        .slice(0, 15);
+      const links = Array.from(document.querySelectorAll("a[href]"))
+        .map((a) => ({ text: (a.textContent || "").trim(), href: a.getAttribute("href") }))
+        .filter((l) => l.text && l.href && !l.href.startsWith("#") && !l.href.startsWith("javascript:"))
+        .slice(0, 20);
+      const bodyText = (document.body?.innerText || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 3000);
+      return { title, metaDesc, headings, links, bodyText };
+    }).catch(() => null);
+
+    const parts = [
+      "Now at " + page.url() + " — Title: " + (pageInfo?.title || (await page.title())),
+    ];
+    if (pageInfo?.metaDesc) parts.push("Description: " + pageInfo.metaDesc);
+    if (pageInfo?.headings?.length) {
+      parts.push("Key Headings:\n" + pageInfo.headings.map((h) => "- " + h).join("\n"));
+    }
+    if (pageInfo?.links?.length) {
+      parts.push("Navigation Links:\n" + pageInfo.links.map((l) => "- " + l.text + " (" + l.href + ")").join("\n"));
+    }
+    if (pageInfo?.bodyText) {
+      parts.push("Rendered Page Content:\n" + pageInfo.bodyText);
+    }
+
     return {
-      output: "Now at " + page.url() + " — title: " + (await page.title()),
-      meta: snapshot(),
+      output: parts.join("\n\n"),
+      meta: {
+        ...snapshot(),
+        ...(pageInfo ? { pageInfo } : {}),
+      },
     };
   }
 

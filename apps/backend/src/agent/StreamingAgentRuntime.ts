@@ -1578,6 +1578,16 @@ export class StreamingAgentRuntime {
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
           return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: needsVision });
         })();
+    if (!projectRoot || typeof projectRoot !== "string" || !projectRoot.trim()) {
+      const tenantId = execution?.tenantId || "default";
+      const ephemeralRoot = path.join(defaultDataDir(), "tenants", tenantId, "ephemeral", runId);
+      try {
+        mkdirSync(ephemeralRoot, { recursive: true });
+        projectRoot = ephemeralRoot;
+      } catch {
+        // Fallback if directory creation fails
+      }
+    }
     if (!recovering) this.store.create(runId, projectRoot);
     else {
       this.store.setStatus(runId, "running");

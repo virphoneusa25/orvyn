@@ -41,6 +41,7 @@ function Step({ row, onApprove }: {
       </span>
       {row.state === "running" || row.state === "waiting" ? <i className="agent-progress__spinner" aria-label="In progress" /> : null}
       {row.state === "done" ? <span className="agent-progress__done" aria-hidden="true"><Icon.check size={14} /></span> : null}
+      {row.state === "failed" ? <span className="agent-progress__failed" aria-hidden="true"><Icon.x size={14} /></span> : null}
     </li>
   );
 }
@@ -57,11 +58,21 @@ export function AgentProgress({ events, status, onApprove }: {
   const current = [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting");
   const summary = current?.label
     ?? liveStatusLabel(events, status)
-    ?? (live ? "Working on your request" : status === "partial" ? "Work completed with remaining items" : status === "cancelled" ? "Work stopped" : "Work completed");
+    ?? (live
+      ? "Working on your request"
+      : status === "error" || status === "failed"
+        ? "Task failed"
+        : status === "blocked"
+          ? "Task blocked"
+          : status === "partial"
+            ? "Work completed with remaining items"
+            : status === "cancelled"
+              ? "Work stopped"
+              : "Work completed");
 
   return (
     <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
-      <details open={live}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
+      <details open={live || status === "error" || status === "failed" || status === "blocked"}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
       <ol className="agent-progress__steps">
         {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
       </ol></details>

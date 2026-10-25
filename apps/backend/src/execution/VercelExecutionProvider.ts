@@ -104,7 +104,12 @@ function sh(value: string): string {
 function localExec(file: string, args: string[], timeout = 120000): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, _out, stderr) => {
-      if (err) return reject(new Error(file + ": " + String(stderr || err.message).slice(0, 1000)));
+      if (err) {
+        const raw = String(stderr || err.message).trim().slice(0, 1000);
+        const prefix = file + ": ";
+        const message = raw.startsWith(prefix) ? raw : prefix + raw;
+        return reject(new Error(message));
+      }
       resolve();
     });
   });
@@ -114,6 +119,18 @@ async function snapshot(projectRoot: string): Promise<{ dir: string; data: Buffe
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orvyn-vercel-in-"));
   const archive = path.join(dir, "workspace.tar");
   try {
+    const hasDir = Boolean(
+      projectRoot &&
+      typeof projectRoot === "string" &&
+      await fs.stat(projectRoot).then((s) => s.isDirectory()).catch(() => false)
+    );
+    if (!hasDir) {
+      // Safe initialization for repo-free tasks, empty workspaces, and browser-only research:
+      // A standard empty POSIX tar archive consists of two 512-byte blocks of zeroes (1024 bytes).
+      const emptyTar = Buffer.alloc(1024, 0);
+      await fs.writeFile(archive, emptyTar);
+      return { dir, data: emptyTar };
+    }
     const args = ["cf", archive];
     for (const name of EXCLUDES) args.push("--exclude", name);
     args.push("-C", projectRoot, ".");
@@ -154,8 +171,15 @@ async function output(result: any): Promise<{ stdout: string; stderr: string }> 
 
 async function collectRelativeFiles(root: string, rel = ""): Promise<Set<string>> {
   const files = new Set<string>();
+  if (!root || typeof root !== "string") return files;
   const dir = rel ? path.join(root, ...rel.split("/")) : root;
-  for (const item of await fs.readdir(dir, { withFileTypes: true })) {
+  let items;
+  try {
+    items = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const item of items) {
     if (SYNC_EXCLUDES.includes(item.name)) continue;
     const child = rel ? rel + "/" + item.name : item.name;
     if (item.isDirectory()) {
@@ -192,6 +216,9 @@ export async function reconcileDownloadedWorkspace(
   projectRoot: string,
   extractedRoot: string
 ): Promise<string[]> {
+  if (!projectRoot || typeof projectRoot !== "string") return [];
+  const stat = await fs.stat(projectRoot).catch(() => null);
+  if (!stat?.isDirectory()) return [];
   const before = await collectRelativeFiles(projectRoot);
   const after = await collectRelativeFiles(extractedRoot);
 
@@ -449,7 +476,12 @@ export class VercelExecutionProvider implements ExecutionProvider {
       await fs.writeFile(archive, data);
       await fs.mkdir(extracted, { recursive: true });
       await localExec("tar", ["xf", archive, "--no-same-owner", "-C", extracted]);
-      files.push(...(await reconcileDownloadedWorkspace(entry.projectRoot, extracted)));
+      if (entry.projectRoot && typeof entry.projectRoot === "string") {
+        const rootStat = await fs.stat(entry.projectRoot).catch(() => null);
+        if (rootStat?.isDirectory()) {
+          files.push(...(await reconcileDownloadedWorkspace(entry.projectRoot, extracted)));
+        }
+      }
       return { files };
     } finally {
       await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);

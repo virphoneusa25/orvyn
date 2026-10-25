@@ -4,6 +4,9 @@
 // against a run-scoped Vercel Sandbox. The model loop and credentials remain
 // on the ORVYN control plane; only approved tool actions enter the microVM.
 
+import { promises as fs } from "fs";
+import * as path from "path";
+import { defaultDataDir } from "../persistence/LocalStore";
 import type { RunStore } from "../agent/events";
 import { toolRpc, type ToolRequest, type ToolResponse } from "./ToolRpc";
 import { sandboxRegistry } from "./sandbox/SandboxRegistry";
@@ -152,9 +155,16 @@ export class VercelToolRunner {
       expiresAt: Date.now() + (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60_000,
     });
 
+    let effectiveProjectRoot = typeof projectRoot === "string" ? projectRoot.trim() : "";
+    if (!effectiveProjectRoot) {
+      const ephemeralBase = path.join(defaultDataDir(), "tenants", identity.tenantId || "default", "ephemeral");
+      effectiveProjectRoot = path.join(ephemeralBase, runId);
+      await fs.mkdir(effectiveProjectRoot, { recursive: true }).catch(() => undefined);
+    }
+
     const startedAt = Date.now();
     try {
-      await this.provider.startRun(runId, projectRoot, {
+      await this.provider.startRun(runId, effectiveProjectRoot, {
         tenantId: identity.tenantId,
         workspaceId: identity.workspaceId,
         projectId: identity.projectId,
@@ -180,7 +190,7 @@ export class VercelToolRunner {
       });
 
       const entry: RunEntry = {
-        projectRoot,
+        projectRoot: effectiveProjectRoot,
         store,
         identity,
         stopping: false,
