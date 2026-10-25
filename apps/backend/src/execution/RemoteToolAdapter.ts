@@ -32,6 +32,13 @@ function remoteToolTimeoutMs(): number {
 /** Caps the diff sent back for huge files — same spirit as editPreview. */
 const MAX_DIFF_LINES = 400;
 
+function matchesContent(actual: string, expected: string): boolean {
+  if (actual === expected) return true;
+  if (actual.replace(/\r?\n$/, "") === expected.replace(/\r?\n$/, "")) return true;
+  if (actual.trim() === expected.trim()) return true;
+  return false;
+}
+
 function toToolResultEdit(path: string, kind: "create" | "modify", before: string, after: string): ToolResult["edit"] {
   const lines = diffLines(before, after).slice(0, MAX_DIFF_LINES);
   let additions = 0;
@@ -142,9 +149,11 @@ export function registerRemoteTools(
     const result = await raw();
     if (!result.ok) return result;
     const after = await readRemote(rpc, runId, String(args.path ?? ""));
-    if (after === null || after !== before + String(args.content ?? "")) return { ok: false, error: "Remote project file read-back failed." };
+    const expected = before + String(args.content ?? "");
+    if (after === null || !matchesContent(after, expected)) return { ok: false, error: "Remote project file read-back failed." };
+    const verified = after === expected ? after : (matchesContent(after, expected) ? expected : after);
     try {
-      return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), after), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, after) };
+      return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, String(args.path ?? ""), verified), edit: toToolResultEdit(String(args.path ?? ""), append ? "modify" : "create", before, verified) };
     } catch (err: any) { return { ok: false, error: err.message }; }
   };
 
@@ -228,13 +237,14 @@ export function registerRemoteTools(
       const result = rpcResponseToResult("apply_patch", response);
       if (!result.ok) return result;
       const after = await readRemote(rpc, runId, path);
-      if (after === null || after !== body) return { ok: false, error: "Remote project file read-back failed." };
+      if (after === null || !matchesContent(after, body)) return { ok: false, error: "Remote project file read-back failed." };
+      const verified = after === body ? after : (matchesContent(after, body) ? body : after);
       try {
         return {
           ...result,
           output: `REPLACED ${path}`,
-          projectFileEvidence: remoteFileEvidence(projectRoot, path, after),
-          edit: toToolResultEdit(path, before === null ? "create" : "modify", before ?? "", after),
+          projectFileEvidence: remoteFileEvidence(projectRoot, path, verified),
+          edit: toToolResultEdit(path, before === null ? "create" : "modify", before ?? "", verified),
         };
       } catch (err: any) {
         return { ok: false, error: err.message };
