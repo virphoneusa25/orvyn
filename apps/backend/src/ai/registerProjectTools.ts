@@ -54,6 +54,11 @@ import {
   setBrowserToolTenant,
   makeBrowserEvidenceTool,
   makeBrowserViewportTool,
+  makeBrowserFillTool,
+  makeBrowserSnapshotTool,
+  makeBrowserTabsTool,
+  makeBrowserSwitchTabTool,
+  makeBrowserNetworkErrorsTool,
 } from "./tools/browserTools";
 import { registerDesktopTools } from "./tools/desktopTools";
 import { registerHostDesktopTools } from "./tools/hostDesktopTools";
@@ -146,6 +151,11 @@ export async function registerProjectToolsFor(tenant: Tenant, projectRoot: strin
   g.register(makeBrowserScreenshotTool(projectRoot));
   g.register(makeBrowserConsoleErrorsTool(projectRoot));
   g.register(makeBrowserEvidenceTool(projectRoot));
+  g.register(makeBrowserSnapshotTool(projectRoot));
+  g.register(makeBrowserFillTool(projectRoot));
+  g.register(makeBrowserTabsTool(projectRoot));
+  g.register(makeBrowserSwitchTabTool(projectRoot));
+  g.register(makeBrowserNetworkErrorsTool(projectRoot));
   registerDesktopTools((tool) => g.register(tool), projectRoot, tenant.id);
   registerHostDesktopTools((tool) => g.register(tool), tenant.id);
   registerComputerUseTools((tool) => g.register(tool), (alias, target) => g.registerAlias(alias, target), projectRoot, tenant.id, tenant.artifactService);

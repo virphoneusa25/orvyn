@@ -194,8 +194,16 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
   }
   useEffect(() => { if (active && runId && tab === "Files") void read(); }, [active, runId, tab]);
 
-  const previewStatus = ended ? "Task finished" : connection === "live" && pictureReady ? (owner === "user" ? "You have control" : owner === "orion" ? "ORVYN has control" : "Live preview") : connection === "connecting" ? "Connecting" : connection === "error" ? "Preview unavailable" : connection === "ended" ? "Session ended" : ended ? "Task finished" : "Not started";
+  const previewStatus = ended
+    ? (runStatus === "error" || runStatus === "failed" ? "Task failed" : runStatus === "blocked" ? "Task blocked" : runStatus === "partial" ? "Work completed with remaining items" : "Task finished")
+    : connection === "live" && pictureReady
+      ? (owner === "user" ? "You have control" : owner === "orion" ? "ORVYN has control" : "Live preview")
+      : connection === "connecting" ? "Connecting"
+      : connection === "error" ? "Preview unavailable"
+      : connection === "ended" ? "Session ended"
+      : "Not started";
   const lastUrl = [...events].reverse().find((event) => event.data?.url)?.data?.url;
+  const lastTitle = [...events].reverse().find((event) => event.data?.title)?.data?.title;
 
   return (
     <aside id="cloud-workbench" className="cloud-workbench" aria-label="Cloud workspace" hidden={!active}>
@@ -215,13 +223,13 @@ export function CloudWorkbench({ runId, runStatus, events = [], active = true, e
         }}><Glyph size={15} /><span>{name}</span>{name === "Changes" && edits.length > 0 ? <small>{edits.length}</small> : null}</button>)}
       </div>
       <div className="cloud-workbench__context">
-        <span className={`cloud-workbench__status ${connection === "live" && pictureReady && liveView ? "is-live" : ""}`}><i />{!runId ? "No task selected" : liveView ? previewStatus : ended ? "Task finished" : "Task workspace"}</span>
+        <span className={`cloud-workbench__status ${connection === "live" && pictureReady && liveView ? "is-live" : ""}`}><i />{!runId ? "No task selected" : liveView ? previewStatus : ended ? (runStatus === "error" || runStatus === "failed" ? "Task failed" : "Task finished") : "Task workspace"}</span>
         <button className="cloud-workbench__follow" aria-pressed={follow} onClick={() => setFollow(!follow)} title="Switch tabs as ORVYN works"><Icon.eye size={14} /> Follow agent</button>
       </div>
       <section id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${tab}`} tabIndex={0} className="cloud-workbench__content">
         {!runId ? <div className="cloud-workbench__empty"><Icon.layers size={32} /><h3>Your task workspace</h3><p>Ask ORVYN to browse, code, or use its cloud desktop. Watch the work here while the conversation stays in chat.</p></div> : <>
           {liveView ? <>
-            <div className="cloud-workbench__preview-bar"><Icon.lock size={14} /><span title={typeof lastUrl === "string" ? lastUrl : undefined}>{tab === "Browser" && typeof lastUrl === "string" ? lastUrl : "Isolated cloud computer"}</span><button className="btn btn--sm" disabled={!canControl || pending} onClick={() => void control(owner === "user" ? "orion" : "user")}>{owner === "user" ? "Return to ORVYN" : "Take control"}</button></div>
+            <div className="cloud-workbench__preview-bar"><Icon.lock size={14} /><span title={typeof lastUrl === "string" ? lastUrl : undefined}>{tab === "Browser" && typeof lastUrl === "string" ? `${lastTitle ? `${lastTitle} — ` : ""}${lastUrl}` : "Isolated cloud computer"}</span><button className="btn btn--sm" disabled={!canControl || pending} onClick={() => void control(owner === "user" ? "orion" : "user")}>{owner === "user" ? "Return to ORVYN" : "Take control"}</button></div>
             {picture ? <div className="cloud-workbench__preview"><img key={streamVersion} className="cloud-workbench__screen" src={picture} alt={`Cloud ${tab.toLowerCase()} preview`} tabIndex={inputEnabled ? 0 : -1} onLoad={() => setPictureReady(true)} onError={() => { if (runId) delete receivedFrames.current[`${runId}:${tab}`]; setPictureReady(false); setPicture(""); setConnection("error"); setError("The preview frame couldn't be displayed. Reconnect to try again."); }} onClick={(event) => {
               if (!inputEnabled) return; event.currentTarget.focus();
               const rect = event.currentTarget.getBoundingClientRect();

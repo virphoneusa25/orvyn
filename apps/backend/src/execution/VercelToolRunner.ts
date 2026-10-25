@@ -880,6 +880,11 @@ export class VercelToolRunner {
       case "browser_screenshot":
       case "browser_evidence":
       case "browser_input":
+      case "browser_snapshot":
+      case "browser_fill":
+      case "browser_tabs":
+      case "browser_switch_tab":
+      case "browser_network_errors":
         result = await this.browserTool(runId, entry, request);
         break;
       case "mcp_list":

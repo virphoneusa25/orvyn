@@ -441,22 +441,36 @@ export function makeBrowserViewportTool(projectRoot: string): AITool {
 export function makeBrowserClickTool(projectRoot: string): AITool {
   return {
     name: "browser_click",
-    description: "Click an element in the browser session by CSS selector or visible text (text=...).",
+    description: "Click an element in the browser session by ref (@e1, @e2), CSS selector, visible text (text=...), or coordinate.",
     parameters: {
       type: "object",
-      properties: { selector: { type: "string" }, sessionId: sessionIdParam },
-      required: ["selector"],
+      properties: {
+        selector: { type: "string", description: "CSS selector, element ref (@e1, @e2), or text=..." },
+        target: { type: "string", description: "Element ref (e.g. @e1) or CSS selector" },
+        x: { type: "number", description: "Optional x coordinate" },
+        y: { type: "number", description: "Optional y coordinate" },
+        sessionId: sessionIdParam,
+      },
     },
     defaultPermission: "ask",
     execute: guard(async (args, context) => {
-      const selector = String(args.selector);
-      const visible = await workbench(context, { op: "click", selector, sessionId: args.sessionId });
-      if (visible) return sessionResult(visible, `Clicked ${selector}.`);
+      const target = String(args.target ?? args.selector ?? "");
+      const visible = await workbench(context, { op: "click", selector: target, target, x: args.x, y: args.y, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Clicked ${target || `${args.x},${args.y}`}.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
-      await page.click(selector, { timeout: 10_000 });
-      return { ok: true, output: `Clicked ${selector}. URL now ${page.url()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+      let sel = target;
+      if (/^@e\d+$/i.test(sel)) {
+        sel = `[data-orvyn-ref="${sel.toLowerCase()}"]`;
+      }
+      if (args.x !== undefined && args.y !== undefined) {
+        await page.mouse.click(Number(args.x), Number(args.y));
+      } else {
+        if (!sel) return { ok: false, error: "target, selector, or x/y coordinate is required for browser_click" };
+        await page.click(sel, { timeout: 10_000 });
+      }
+      return { ok: true, output: `Clicked ${target || `${args.x},${args.y}`}. URL now ${page.url()}\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
     }),
   };
 }
@@ -464,29 +478,208 @@ export function makeBrowserClickTool(projectRoot: string): AITool {
 export function makeBrowserTypeTool(projectRoot: string): AITool {
   return {
     name: "browser_type",
-    description: "Type text into an input in the browser session (CSS selector), then optionally press Enter.",
+    description: "Type text into an input in the browser session (element ref @e1 or CSS selector), then optionally press Enter.",
     parameters: {
       type: "object",
       properties: {
-        selector: { type: "string" },
+        selector: { type: "string", description: "CSS selector or element ref (@e1)" },
+        target: { type: "string", description: "Element ref (@e1) or CSS selector" },
         text: { type: "string" },
+        value: { type: "string" },
         submit: { type: "boolean", description: "Press Enter afterwards" },
         sessionId: sessionIdParam,
       },
-      required: ["selector", "text"],
+      required: ["text"],
     },
     defaultPermission: "ask",
     execute: guard(async (args, context) => {
-      const selector = String(args.selector);
-      const text = String(args.text);
-      const visible = await workbench(context, { op: "type", selector, text, sessionId: args.sessionId });
-      if (visible) return sessionResult(visible, `Typed into ${selector}.`);
+      const target = String(args.target ?? args.selector ?? "");
+      const text = String(args.value ?? args.text ?? "");
+      const visible = await workbench(context, { op: "type", selector: target, target, text, value: text, submit: args.submit, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Typed into ${target}.`);
       const missing = needPlaywright();
       if (missing) return missing;
       const page = await getPage(projectRoot);
-      await page.fill(selector, text, { timeout: 10_000 });
-      if (args.submit === true) await page.press(selector, "Enter");
-      return { ok: true, output: `Typed into ${selector}${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+      let sel = target;
+      if (/^@e\d+$/i.test(sel)) {
+        sel = `[data-orvyn-ref="${sel.toLowerCase()}"]`;
+      }
+      if (!sel) return { ok: false, error: "target or selector is required for browser_type" };
+      await page.fill(sel, text, { timeout: 10_000 });
+      if (args.submit === true) await page.press(sel, "Enter");
+      return { ok: true, output: `Typed into ${target}${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+    }),
+  };
+}
+
+export function makeBrowserFillTool(projectRoot: string): AITool {
+  return {
+    name: "browser_fill",
+    description: "Fill text into an input or textarea element by element ref (e.g. @e1, @e2) or CSS selector, optionally pressing Enter.",
+    parameters: {
+      type: "object",
+      properties: {
+        target: { type: "string", description: "Element ref (@e1, @e2) or CSS selector" },
+        selector: { type: "string", description: "Alternative selector" },
+        value: { type: "string", description: "Text value to fill" },
+        text: { type: "string", description: "Alternative text to fill" },
+        submit: { type: "boolean", description: "Press Enter afterwards" },
+        sessionId: sessionIdParam,
+      },
+    },
+    defaultPermission: "ask",
+    execute: guard(async (args, context) => {
+      const target = String(args.target ?? args.selector ?? "");
+      const val = String(args.value ?? args.text ?? "");
+      const visible = await workbench(context, { op: "fill", selector: target, target, value: val, submit: args.submit, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Filled ${target} with "${val}".`);
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const page = await getPage(projectRoot);
+      let sel = target;
+      if (/^@e\d+$/i.test(sel)) {
+        sel = `[data-orvyn-ref="${sel.toLowerCase()}"]`;
+      }
+      if (!sel) return { ok: false, error: "target or selector is required for browser_fill" };
+      await page.fill(sel, val, { timeout: 10_000 });
+      if (args.submit === true) await page.press(sel, "Enter");
+      return { ok: true, output: `Filled ${target} with "${val}"${args.submit ? " and submitted" : ""}.\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+    }),
+  };
+}
+
+export function makeBrowserSnapshotTool(projectRoot: string): AITool {
+  return {
+    name: "browser_snapshot",
+    description: "Get a compact accessibility and interactive element snapshot (@e1, @e2, ...) of the current page. Much lighter and faster than full DOM inspection.",
+    parameters: {
+      type: "object",
+      properties: { sessionId: sessionIdParam },
+    },
+    defaultPermission: "allowed",
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "snapshot", sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, "Browser snapshot:");
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const page = await getPage(projectRoot);
+      const snap = await page.evaluate(() => {
+        const isVisible = (el: Element) => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
+        };
+        const interactive = Array.from(document.querySelectorAll(
+          'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="tab"], [tabindex="0"]'
+        )).filter(isVisible).slice(0, 60);
+
+        const elements = interactive.map((el, i) => {
+          const ref = "@e" + (i + 1);
+          const tag = el.tagName.toLowerCase();
+          const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" ? "button" : (el as HTMLInputElement).type || tag);
+          const name = ((el as HTMLElement).innerText || el.getAttribute("aria-label") || (el as HTMLInputElement).placeholder || (el as HTMLInputElement).value || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80);
+          const href = el.getAttribute("href") || undefined;
+          el.setAttribute("data-orvyn-ref", ref);
+          return { ref, role, name, href };
+        });
+
+        const lines = elements.map(e => `[${e.ref}] ${e.role} "${e.name}"${e.href ? ` -> ${e.href}` : ""}`);
+        return { elements, treeText: lines.join("\n") };
+      }).catch(() => ({ elements: [], treeText: "" }));
+
+      const output = [
+        `Page: ${page.url()} — Title: "${await page.title().catch(() => "")}"`,
+        `Interactive Elements (${snap.elements.length} found):`,
+        snap.treeText || "(No interactive elements detected on this page)",
+        `Tip: Target elements using refs in browser_click or browser_fill (e.g. target: "@e1").`,
+        BACKGROUND_NOTE,
+      ].join("\n\n");
+
+      return {
+        ok: true,
+        output,
+        meta: {
+          ...backgroundMeta(projectRoot),
+          interactiveCount: snap.elements.length,
+          tree: snap.treeText,
+        },
+      };
+    }),
+  };
+}
+
+export function makeBrowserTabsTool(projectRoot: string): AITool {
+  return {
+    name: "browser_tabs",
+    description: "List all open browser tabs and identify the currently active tab.",
+    parameters: { type: "object", properties: { sessionId: sessionIdParam } },
+    defaultPermission: "allowed",
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "tabs", sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, "Browser tabs:");
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const s = sessions.get(projectRoot);
+      if (!s) return { ok: false, error: "No browser session. Call browser_open first." };
+      const pages = s.page.context().pages();
+      const tabList = await Promise.all(pages.map(async (p: any, idx: number) => ({
+        index: idx,
+        url: p.url(),
+        title: await p.title().catch(() => ""),
+        active: p === s.page,
+      })));
+      const lines = tabList.map((t: any) => `Tab [${t.index}] ${t.active ? "(active) " : ""}${t.title} — ${t.url}`);
+      return { ok: true, output: lines.join("\n") + "\n" + BACKGROUND_NOTE, meta: backgroundMeta(projectRoot) };
+    }),
+  };
+}
+
+export function makeBrowserSwitchTabTool(projectRoot: string): AITool {
+  return {
+    name: "browser_switch_tab",
+    description: "Switch active browser tab by tab index (0-based).",
+    parameters: {
+      type: "object",
+      properties: { index: { type: "number", description: "0-based tab index" }, sessionId: sessionIdParam },
+      required: ["index"],
+    },
+    defaultPermission: "ask",
+    execute: guard(async (args, context) => {
+      const idx = Number(args.index ?? 0);
+      const visible = await workbench(context, { op: "switch_tab", index: idx, sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, `Switched to tab ${idx}.`);
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const s = sessions.get(projectRoot);
+      if (!s) return { ok: false, error: "No browser session. Call browser_open first." };
+      const pages = s.page.context().pages();
+      if (idx < 0 || idx >= pages.length) return { ok: false, error: `Invalid tab index: ${idx}. Open tabs: ${pages.length}` };
+      s.page = pages[idx];
+      await s.page.bringToFront();
+      return { ok: true, output: `Switched to tab ${idx} (${s.page.url()})\n${BACKGROUND_NOTE}`, meta: backgroundMeta(projectRoot) };
+    }),
+  };
+}
+
+export function makeBrowserNetworkErrorsTool(projectRoot: string): AITool {
+  return {
+    name: "browser_network_errors",
+    description: "Report failed network requests (HTTP 4xx/5xx or blocked connections) encountered by the browser.",
+    parameters: { type: "object", properties: { sessionId: sessionIdParam } },
+    defaultPermission: "allowed",
+    execute: guard(async (args, context) => {
+      const visible = await workbench(context, { op: "network_errors", sessionId: args.sessionId });
+      if (visible) return sessionResult(visible, "Browser network errors:");
+      const missing = needPlaywright();
+      if (missing) return missing;
+      const s = sessions.get(projectRoot);
+      if (!s) return { ok: false, error: "No browser session. Call browser_open first." };
+      const lines = s.failedRequests.map(r => `[network] ${r.method} ${r.url} [${r.status}]`);
+      return {
+        ok: true,
+        output: lines.length ? lines.join("\n") + "\n" + BACKGROUND_NOTE : "No network errors observed.\n" + BACKGROUND_NOTE,
+        meta: backgroundMeta(projectRoot),
+      };
     }),
   };
 }

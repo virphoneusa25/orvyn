@@ -51,28 +51,29 @@ export function AgentProgress({ events, status, onApprove }: {
   status: string;
   onApprove?: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => void;
 }) {
-  const rows = progressRows(events, status);
+  const hasError = status === "error" || status === "failed" || events.some((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true));
+  const effectiveStatus = hasError ? "error" : status;
+  const rows = progressRows(events, effectiveStatus);
   const permLabel = runPermissionLabel(events);
-  const live = !terminalRunStatus(status);
-  if (!rows.length && !live) return null;
-  const current = [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting");
-  const summary = current?.label
-    ?? liveStatusLabel(events, status)
-    ?? (live
+  const live = !terminalRunStatus(effectiveStatus);
+  if (!rows.length && !live && !hasError) return null;
+  const current = live ? [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting") : undefined;
+  const summary = (live && (current?.label ?? liveStatusLabel(events, effectiveStatus)))
+    || (live
       ? "Working on your request"
-      : status === "error" || status === "failed"
+      : effectiveStatus === "error" || effectiveStatus === "failed"
         ? "Task failed"
-        : status === "blocked"
+        : effectiveStatus === "blocked"
           ? "Task blocked"
-          : status === "partial"
+          : effectiveStatus === "partial"
             ? "Work completed with remaining items"
-            : status === "cancelled"
+            : effectiveStatus === "cancelled"
               ? "Work stopped"
               : "Work completed");
 
   return (
-    <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
-      <details open={live || status === "error" || status === "failed" || status === "blocked"}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
+    <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={effectiveStatus}>
+      <details open={live || effectiveStatus === "error" || effectiveStatus === "failed" || effectiveStatus === "blocked"}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
       <ol className="agent-progress__steps">
         {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
       </ol></details>

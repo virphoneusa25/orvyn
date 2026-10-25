@@ -17,8 +17,11 @@ export type TaskCategory =
   | "research"
   | "automation";
 
+export type MissionTaskType = "coding" | "browser_research" | "desktop" | "hybrid" | "informational";
+
 export interface TaskIntent {
   category: TaskCategory;
+  taskType: MissionTaskType;
   goal: string;
   requiresWorkspace: boolean;
   requiresRemoteResource: boolean;
@@ -196,8 +199,22 @@ export function inferTaskIntent(instruction: string, composerMode?: string): Tas
         ? "simple"
         : "standard";
 
+  let taskType: MissionTaskType = "coding";
+  if (informational) {
+    taskType = "informational";
+  } else if ((code || frontend) && (browser || desktop || inspection)) {
+    taskType = "hybrid";
+  } else if (browser || inspection) {
+    taskType = "browser_research";
+  } else if (desktop) {
+    taskType = "desktop";
+  } else {
+    taskType = "coding";
+  }
+
   return {
     category,
+    taskType,
     goal,
     requiresWorkspace:
       !informational &&

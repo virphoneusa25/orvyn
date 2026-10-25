@@ -1,6 +1,8 @@
 // apps/backend/src/execution/VercelBrowserRuntime.ts
 //
 // Source for the run-scoped browser helper installed inside a Vercel Sandbox.
+// Provides agent-browser compatible accessibility snapshot, element-ref targeting (@e1, @e2),
+// form filling, screenshotting, tab management, and SSRF security guards.
 // Keep this as literal JavaScript source: do not use nested template
 // interpolation inside the helper or the backend TypeScript compiler will try
 // to resolve sandbox-local variables.
@@ -17,40 +19,91 @@ const context = await chromium.launchPersistentContext("/tmp/orvyn-browser-profi
   viewport: { width: 1280, height: 800 },
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
 });
-const page = context.pages()[0] ?? await context.newPage();
+
+let activePageIndex = 0;
+function getActivePage() {
+  const pages = context.pages();
+  if (activePageIndex >= pages.length) activePageIndex = Math.max(0, pages.length - 1);
+  return pages[activePageIndex] ?? pages[0];
+}
+
 const consoleErrors = [];
 const networkErrors = [];
 const actions = [];
+let cachedElements = [];
 
-page.on("console", (message) => {
-  if (message.type() === "error") {
-    consoleErrors.push(message.text().slice(0, 1000));
-  }
-});
-page.on("pageerror", (error) => {
-  consoleErrors.push(String(error?.message ?? error).slice(0, 1000));
-});
-page.on("requestfailed", (request) => {
-  const failure = request.failure()?.errorText ?? "failed";
-  networkErrors.push(
-    (request.method() + " " + request.url() + " " + failure).slice(0, 1200)
-  );
-});
+function setupPageListeners(p) {
+  p.on("console", (message) => {
+    if (message.type() === "error") {
+      consoleErrors.push(message.text().slice(0, 1000));
+    }
+  });
+  p.on("pageerror", (error) => {
+    consoleErrors.push(String(error?.message ?? error).slice(0, 1000));
+  });
+  p.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText ?? "failed";
+    networkErrors.push({
+      method: request.method(),
+      url: request.url(),
+      status: 0,
+      error: failure.slice(0, 500)
+    });
+  });
+  p.on("response", (res) => {
+    if (res.status() >= 400) {
+      networkErrors.push({
+        method: res.request().method(),
+        url: res.url(),
+        status: res.status(),
+        error: "HTTP " + res.status() + " " + res.statusText()
+      });
+    }
+  });
+}
+
+const initialPage = context.pages()[0] ?? await context.newPage();
+setupPageListeners(initialPage);
 
 function snapshot() {
+  const p = getActivePage();
   return {
     browserSessionId: "vercel-browser",
-    url: page.url(),
-    viewport: page.viewportSize(),
+    url: p ? p.url() : "",
+    viewport: p ? p.viewportSize() : { width: 1280, height: 800 },
     consoleErrors: consoleErrors.slice(-50),
     networkErrors: networkErrors.slice(-50),
     actions: actions.slice(-100),
+    interactiveElements: cachedElements.slice(0, 60),
   };
+}
+
+function checkSsrf(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const host = u.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      host === "169.254.169.254" ||
+      host === "metadata.google.internal" ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) {
+      throw new Error("Access to private/local/metadata network target " + host + " is forbidden.");
+    }
+  } catch (err) {
+    if (/forbidden/i.test(err.message)) throw err;
+  }
 }
 
 async function run(message) {
   const op = String(message?.op ?? "");
   const a = message?.args ?? {};
+  let page = getActivePage();
 
   if (op === "input") {
     if (a.type === "click") {
@@ -72,14 +125,8 @@ async function run(message) {
       await page.keyboard.insertText(a.text);
     } else if (a.type === "key") {
       const allowed = [
-        "Enter",
-        "Tab",
-        "Escape",
-        "Backspace",
-        "ArrowUp",
-        "ArrowDown",
-        "ArrowLeft",
-        "ArrowRight",
+        "Enter", "Tab", "Escape", "Backspace",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
       ];
       if (!allowed.includes(a.key)) throw new Error("Unsupported key");
       await page.keyboard.press(a.key);
@@ -102,6 +149,7 @@ async function run(message) {
       if (!/^https?:\/\//i.test(targetUrl) && !/^file:\/\//i.test(targetUrl)) {
         targetUrl = "https://" + targetUrl;
       }
+      checkSsrf(targetUrl);
       await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
@@ -150,6 +198,51 @@ async function run(message) {
     };
   }
 
+  if (op === "snapshot") {
+    const snap = await page.evaluate(() => {
+      const isVisible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
+      };
+      const interactive = Array.from(document.querySelectorAll(
+        'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="tab"], [tabindex="0"]'
+      )).filter(isVisible).slice(0, 60);
+
+      const elements = interactive.map((el, i) => {
+        const ref = "@e" + (i + 1);
+        const tag = el.tagName.toLowerCase();
+        const role = el.getAttribute("role") || (tag === "a" ? "link" : tag === "button" ? "button" : el.type || tag);
+        const name = (el.innerText || el.getAttribute("aria-label") || el.placeholder || el.value || el.title || "").replace(/\s+/g, " ").trim().slice(0, 80);
+        const href = el.getAttribute("href") || undefined;
+        el.setAttribute("data-orvyn-ref", ref);
+        return { ref, role, name, href };
+      });
+
+      const lines = elements.map(e => "[" + e.ref + "] " + e.role + " \"" + e.name + "\"" + (e.href ? " -> " + e.href : ""));
+      return { elements, treeText: lines.join("\n") };
+    }).catch(() => ({ elements: [], treeText: "" }));
+
+    cachedElements = snap.elements;
+    actions.push({ action: op, count: snap.elements.length, timestamp: Date.now() });
+
+    const output = [
+      "Page: " + page.url() + " — Title: \"" + (await page.title().catch(() => "")) + "\"",
+      "Interactive Elements (" + snap.elements.length + " found):",
+      snap.treeText || "(No interactive elements detected on this page)",
+      "Tip: Target elements using refs in browser_click or browser_fill (e.g. target: \"@e1\")."
+    ].join("\n\n");
+
+    return {
+      output,
+      meta: {
+        ...snapshot(),
+        interactiveCount: snap.elements.length,
+        tree: snap.treeText,
+      }
+    };
+  }
+
   if (op === "viewport") {
     const presets = {
       desktop: [1280, 800],
@@ -168,8 +261,16 @@ async function run(message) {
   }
 
   if (op === "click") {
-    const selector = String(a.selector ?? "");
-    await page.click(selector, { timeout: 10000 });
+    let selector = String(a.target ?? a.selector ?? "");
+    if (/^@e\d+$/i.test(selector)) {
+      selector = "[data-orvyn-ref=\"" + selector.toLowerCase() + "\"]";
+    }
+    if (a.x !== undefined && a.y !== undefined) {
+      await page.mouse.click(Number(a.x), Number(a.y));
+    } else {
+      if (!selector) throw new Error("target, selector, or x/y coordinate is required for browser_click");
+      await page.click(selector, { timeout: 10000 });
+    }
     actions.push({
       action: op,
       selector,
@@ -182,15 +283,23 @@ async function run(message) {
     };
   }
 
-  if (op === "type") {
-    const selector = String(a.selector ?? "");
-    await page.fill(selector, String(a.text ?? ""), { timeout: 10000 });
+  if (op === "fill" || op === "type") {
+    let selector = String(a.target ?? a.selector ?? "");
+    if (/^@e\d+$/i.test(selector)) {
+      selector = "[data-orvyn-ref=\"" + selector.toLowerCase() + "\"]";
+    }
+    if (!selector) throw new Error("target or selector is required for browser_fill");
+    const val = String(a.value ?? a.text ?? "");
+    await page.fill(selector, val, { timeout: 10000 });
     if (a.submit === true) await page.press(selector, "Enter");
     actions.push({ action: op, selector, timestamp: Date.now() });
     return {
       output:
-        "Typed into " +
+        "Filled " +
         selector +
+        " with: \"" +
+        (val.length > 50 ? val.slice(0, 50) + "..." : val) +
+        "\"" +
         (a.submit ? " and submitted" : "") +
         ".",
       meta: snapshot(),
@@ -231,14 +340,44 @@ async function run(message) {
     };
   }
 
-  if (op === "errors") {
-    const all = [
-      ...consoleErrors.map((value) => "[console] " + value),
-      ...networkErrors.map((value) => "[network] " + value),
-    ];
+  if (op === "tabs") {
+    const pages = context.pages();
+    const tabList = await Promise.all(pages.map(async (p, idx) => ({
+      index: idx,
+      url: p.url(),
+      title: await p.title().catch(() => ""),
+      active: p === page,
+    })));
     return {
-      output: all.length
-        ? all.join("\\n")
+      output: tabList.map(t => "Tab [" + t.index + "] " + (t.active ? "(active) " : "") + t.title + " — " + t.url).join("\n"),
+      meta: { ...snapshot(), tabs: tabList }
+    };
+  }
+
+  if (op === "switch_tab") {
+    const idx = Number(a.index ?? 0);
+    const pages = context.pages();
+    if (idx < 0 || idx >= pages.length) throw new Error("Invalid tab index: " + idx);
+    activePageIndex = idx;
+    page = pages[idx];
+    await page.bringToFront();
+    actions.push({ action: op, index: idx, url: page.url(), timestamp: Date.now() });
+    return { output: "Switched to tab " + idx + " (" + page.url() + ")", meta: snapshot() };
+  }
+
+  if (op === "errors" || op === "network_errors") {
+    const lines = [];
+    if (consoleErrors.length) {
+      lines.push("Console Errors (" + consoleErrors.length + "):");
+      consoleErrors.slice(-20).forEach(e => lines.push("  - [console] " + e));
+    }
+    if (networkErrors.length) {
+      lines.push("Network Failures (" + networkErrors.length + "):");
+      networkErrors.slice(-20).forEach(n => lines.push("  - [" + n.method + " " + n.status + "] " + n.url + " (" + n.error + ")"));
+    }
+    return {
+      output: lines.length
+        ? lines.join("\n")
         : "No console, page or network errors observed.",
       meta: snapshot(),
     };

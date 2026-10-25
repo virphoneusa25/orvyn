@@ -157,11 +157,17 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
   const cursor = timelineCursor(events, status);
   const intro: ProgressState = cursor === "introducing" ? "running" : "done";
   const checking: ProgressState = cursor === "checking" ? "running" : cursor === "done" ? "done" : cursor === "failed" ? "failed" : "pending";
+  const errorEvent = events.find((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true));
+  const errorDetail = errorEvent?.data?.message ? String(errorEvent.data.message).slice(0, 300) : undefined;
+  const errorRow: ProgressRow[] = (cursor === "failed" && errorDetail && !collapsed.some((r) => r.state === "failed"))
+    ? [{ id: "stage:error", kind: "other", label: "Task error", detail: errorDetail, state: "failed" }]
+    : [];
   // Flat ledger: each action is its own permanent row. Tools are not nested
   // under an Acting accordion — they sit between Introducing and Checking.
   return [
     { id: "stage:introducing", kind: "plan", label: "Introducing", state: intro },
     ...collapsed,
+    ...errorRow,
     { id: "stage:checking", kind: "review", label: "Checking the result", state: checking },
   ];
 }
@@ -200,7 +206,7 @@ function collapseSameHostFetchFailures(work: ProgressRow[]): ProgressRow[] {
 }
 
 function timelineCursor(events: AgentProgressEvent[], status: string): "introducing" | "acting" | "checking" | "done" | "failed" {
-  if (status === "error" || status === "failed") return "failed";
+  if (status === "error" || status === "failed" || events.some((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true))) return "failed";
   if (terminalRunStatus(status) || events.some((e) => e.type === "run.completed" || e.type === "run.partial")) return "done";
   let stage: "introducing" | "acting" | "checking" = "introducing";
   for (const event of events) {
