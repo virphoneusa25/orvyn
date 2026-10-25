@@ -166,6 +166,8 @@ export interface ExecutionSpec {
   hostPlatform?: string;
   clientKind?: "desktop" | "cloud";
   computerSurface?: "host" | "desktop" | "browser" | "none";
+  canaryEligible?: boolean;
+  canaryReason?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
@@ -1795,6 +1797,9 @@ export class StreamingAgentRuntime {
         executionLabel: label,
         fallbackReason: execution!.fallbackReason,
         remoteProjectRoot: execution!.remoteProjectRoot ?? "",
+        executionProvider: execution!.location === "VERCEL_CLOUD" ? "vercel" : (execution!.location === "OVH_WORKER" ? "ovh" : "local"),
+        canaryEligible: execution!.canaryEligible,
+        canaryReason: execution!.canaryReason,
         note:
           actual === "vercel_cloud"
             ? "Tools execute inside an isolated ORVYN Cloud microVM. Changed files are synchronized back to the Cloud workspace when the run settles."

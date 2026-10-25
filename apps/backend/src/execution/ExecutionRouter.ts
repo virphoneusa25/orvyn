@@ -1,3 +1,4 @@
+import { resolveCloudExecutionProvider, CanaryContext } from "./VercelCanaryRollout";
 // apps/backend/src/execution/ExecutionRouter.ts
 //
 // Provider selection + lifecycle management. Chooses the execution location
@@ -32,14 +33,13 @@ export class ExecutionRouter {
     this.vercel = new VercelExecutionProvider();
   }
 
-  private cloudPreference(): "vercel" | "ovh" {
-    return process.env.ORVYN_CLOUD_EXECUTION_PROVIDER?.trim().toLowerCase() === "vercel"
-      ? "vercel"
-      : "ovh";
+  private async cloudPreference(context?: CanaryContext): Promise<"vercel" | "ovh"> {
+    const canary = await resolveCloudExecutionProvider(context);
+    return canary.provider;
   }
 
-  private async cloud(): Promise<RoutingDecision> {
-    if (this.cloudPreference() === "vercel") {
+  private async cloud(context?: CanaryContext): Promise<RoutingDecision> {
+    if ((await this.cloudPreference(context)) === "vercel") {
       const health = await this.vercel.health();
       if (health.healthy) {
         return {
@@ -84,6 +84,7 @@ export class ExecutionRouter {
     isIsolated?: boolean;
     /** True when the task was explicitly marked for remote execution. */
     isRemote?: boolean;
+    context?: CanaryContext;
   }): Promise<RoutingDecision> {
     const pref = opts.preference ?? "auto";
 
@@ -115,7 +116,7 @@ export class ExecutionRouter {
     // auto routing
     if (opts.isRemote) {
       try {
-        const cloud = await this.cloud();
+        const cloud = await this.cloud(opts.context);
         return { ...cloud, reason: "task marked for remote ORVYN Cloud execution; " + cloud.reason };
       } catch (cloudError: any) {
         throw new Error(`${String(cloudError?.message ?? cloudError)}; no local execution fallback.`);

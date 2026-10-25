@@ -1,3 +1,4 @@
+import { resolveCloudExecutionProvider } from "../execution/VercelCanaryRollout";
 import { selectedStorage, postgresRuntime } from "../persistence/PostgresRuntime";
 import { persistToolPermission } from "../gateway/toolPermissionPersistence";
 import { installModelSettingsRoutes } from "./modelSettingsRoutes";
