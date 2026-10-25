@@ -103,19 +103,26 @@ export function validateBrowserUrl(rawUrl: string): { ok: boolean; normalizedUrl
   }
 
   // Prepend https:// if protocol is omitted
-  if (!/^https?:\/\//i.test(trimmed) && !/^file:\/\//i.test(trimmed)) {
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(trimmed)) {
     trimmed = "https://" + trimmed;
   }
 
   try {
     const parsed = new URL(trimmed);
-    const host = parsed.hostname.toLowerCase();
 
-    // 1. Block loopback
+    // 1. Block dangerous/unsupported protocols
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return { ok: false, normalizedUrl: trimmed, error: `Protocol "${parsed.protocol}" is not supported.` };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    const cleanHost = host.replace(/^\[|\]$/g, "");
+
+    // 2. Block loopback
     if (
       host === "localhost" ||
       host === "127.0.0.1" ||
-      host === "::1" ||
+      cleanHost === "::1" ||
       host === "0.0.0.0" ||
       host.endsWith(".localhost") ||
       host.endsWith(".invalid")
@@ -123,23 +130,18 @@ export function validateBrowserUrl(rawUrl: string): { ok: boolean; normalizedUrl
       return { ok: false, normalizedUrl: trimmed, error: `Access to loopback target "${host}" is restricted.` };
     }
 
-    // 2. Block Cloud metadata service (AWS/GCP/Azure/OpenStack)
+    // 3. Block Cloud metadata service (AWS/GCP/Azure/OpenStack)
     if (host === "169.254.169.254" || host === "metadata.google.internal") {
       return { ok: false, normalizedUrl: trimmed, error: `Access to cloud metadata service "${host}" is strictly forbidden.` };
     }
 
-    // 3. Block private RFC 1918 subnets (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    // 4. Block private RFC 1918 subnets (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
     if (
       /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
       /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
       /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)
     ) {
       return { ok: false, normalizedUrl: trimmed, error: `Access to private network address "${host}" is restricted.` };
-    }
-
-    // 4. Block dangerous protocols
-    if (!["http:", "https:"].includes(parsed.protocol)) {
-      return { ok: false, normalizedUrl: trimmed, error: `Protocol "${parsed.protocol}" is not supported.` };
     }
 
     return { ok: true, normalizedUrl: trimmed };
