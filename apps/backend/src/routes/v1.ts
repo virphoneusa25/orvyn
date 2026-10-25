@@ -942,10 +942,16 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
 
   const localWorkerOnline = hasOnlineLocalWorker(t.id);
   const inProcessLocal = !cloudHost;
-  const cloudProvider =
-    process.env.ORVYN_CLOUD_EXECUTION_PROVIDER?.trim().toLowerCase() === "vercel"
-      ? "vercel"
-      : "ovh";
+  const staffRole = req.principal?.userId ? await (await import("../auth/AsyncAccountStores")).staffStore().roleOf(req.principal.userId) : null;
+  const isStaff = Boolean(staffRole);
+  const canaryDecision = await resolveCloudExecutionProvider({
+    tenantId: t.id,
+    userId: req.principal?.userId,
+    organizationId: req.principal?.organizationId,
+    projectId: preflight.status === "resolved" ? preflight.projectId : (typeof req.body.projectId === "string" ? req.body.projectId : null),
+    isStaff,
+  });
+  const cloudProvider = canaryDecision.provider;
   let vercelCloudHealthy = false;
   let vercelCloudDetail = "";
   if (cloudProvider === "vercel") {
@@ -1069,6 +1075,8 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
       targetRequested: routed.requested,
       targetActual: actualExecutionTarget,
       executionLabel,
+      canaryEligible: canaryDecision.eligible,
+      canaryReason: canaryDecision.reason,
       clientKind,
       computerSurface: computer.surface === 'local_computer' ? 'host' : computer.surface === 'cloud_desktop' ? 'desktop' : computer.surface === 'cloud_browser' ? 'browser' : 'none',
       // Local runs execute on the user's computer: tell the model its shell.
