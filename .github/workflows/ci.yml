@@ -173,7 +173,13 @@ jobs:
           retention-days: 14
 
       - name: Upload packaged Desktop runtime
-        if: github.ref == 'refs/heads/codex/shared-hf-auto' || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
+        if: >-
+          github.ref == 'refs/heads/codex/shared-hf-auto'
+          || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' &&
+            ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
+              (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
+          || (github.ref == 'refs/heads/codex/hf-provider-verification' &&
+            github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging')
         uses: actions/upload-artifact@v4
         with:
           name: orvyn-packaged-desktop
@@ -291,10 +297,12 @@ jobs:
       || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' &&
         ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
           (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
+      || (github.ref == 'refs/heads/codex/hf-provider-verification' &&
+        github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging')
     steps:
       - uses: actions/checkout@v4
       - name: Require cloud and PostgreSQL checks for this exact candidate
-        if: github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle'
+        if: github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' || github.ref == 'refs/heads/codex/hf-provider-verification'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

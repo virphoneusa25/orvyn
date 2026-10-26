@@ -6,7 +6,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${OVH_HOST:-ubuntu@40.160.11.123}"
 KEY="${OVH_SSH_KEY:-$HOME/.ssh/github_virphone}"
 REMOTE="${OVH_REMOTE_DIR:-/home/ubuntu/orvyn-staging-release}"
-PRODUCTION="/home/ubuntu/orvyn"
 STAGING_HEALTH="${STAGING_HEALTH_URL:-https://staging.orvyn.virphoneusa.com/api/v1/health}"
 [[ "$REMOTE" == /home/ubuntu/orvyn-staging-release ]] || { echo "Refusing an unverified staging source path" >&2; exit 1; }
 [[ -f "$KEY" ]] || { echo "OVH SSH key missing" >&2; exit 1; }
@@ -14,7 +13,7 @@ SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecki
 RSH="${SSH[*]}"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 printf '{"commit":"%s","builtAt":"%s"}\n' "$COMMIT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ROOT/apps/backend/build-info.json"
-"${SSH[@]}" "$HOST" "set -eu; mkdir -p '$REMOTE'; chmod 700 '$REMOTE'; if [ ! -f '$REMOTE/.env.staging' ]; then test -f '$PRODUCTION/.env.staging'; cp '$PRODUCTION/.env.staging' '$REMOTE/.env.staging'; chmod 600 '$REMOTE/.env.staging'; fi"
+"${SSH[@]}" "$HOST" "set -eu; mkdir -p '$REMOTE'; chmod 700 '$REMOTE'; test -f '$REMOTE/.env.staging' || { echo 'Isolated staging configuration is missing; refusing to read production configuration' >&2; exit 1; }; chmod 600 '$REMOTE/.env.staging'"
 for folder in apps/backend apps/web apps/worker packages infrastructure resources scripts; do
   "${SSH[@]}" "$HOST" "mkdir -p '$REMOTE/$folder'"
   rsync -az --delete -e "$RSH" --exclude node_modules/ --exclude dist/ --exclude '*.log' --exclude .env --exclude .env.staging "$ROOT/$folder/" "$HOST:$REMOTE/$folder/"
@@ -27,7 +26,8 @@ for name in ORVYN_PROVIDER_RATES_JSON ORVYN_IMAGE_SETTLEMENT_BUDGET_USD MODEL_AP
   [[ -n "$value" ]] || continue
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; value=\$(cat); { grep -v '^$name=' .env.staging || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .env.staging.tmp; chmod 600 .env.staging.tmp; mv .env.staging.tmp .env.staging"
 done
-"${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; current=\$(docker inspect backend-staging --format '{{.Image}}'); docker image tag \"\$current\" orvyn-staging-backend-staging:rollback-before-shared-hf; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build"
+ROLLBACK_REF="orvyn-staging-backend-staging:rollback-before-${COMMIT}"
+"${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; current=\$(docker inspect backend-staging --format '{{.Image}}'); docker image tag \"\$current\" '$ROLLBACK_REF'; printf 'Staging rollback image: %s (image ID %s)\\n' '$ROLLBACK_REF' \"\$current\"; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build"
 for _ in $(seq 1 40); do
   if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
     curl -fsS -m 8 "$STAGING_HEALTH"; echo
