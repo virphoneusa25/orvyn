@@ -61,7 +61,7 @@ test("Cloud and Desktop share verified, price-qualified routes and provider-boun
     }) as typeof fetch;
     const unconfigured = new ModelService();
     assert.equal(unconfigured.registry.list().some((p) => p.config.id.startsWith("hf:")), false);
-    assert.match(preferHuggingFace(unconfigured.registry.list(), { capability: "chat" }, true, undefined, "flash").reason, /credentials/);
+    assert.match(preferHuggingFace(unconfigured.registry.list(), { capability: "chat" }, true, undefined, "flash").reason, /No eligible Hugging Face route/);
     process.env.HF_TOKEN = "fixture-credential-not-a-real-token";
     process.env.HUGGINGFACE_BASE_URL = `http://127.0.0.1:${port}/hf/v1`;
     process.env.HUGGINGFACE_MODELS = models.map((id) => `${id}:deepinfra`).join(",");
@@ -114,6 +114,7 @@ test("Cloud and Desktop share verified, price-qualified routes and provider-boun
     await t.test("disabled, failed verification, capability and context exclusions record reasons", () => {
       const needs = { capability: "agent" as const, tools: true, streaming: true };
       assert.match(preferHuggingFace(providers, needs, false, undefined, "advanced").reason, /disabled/);
+      assert.equal(preferHuggingFace([], needs, true, undefined, "code").reason, "No eligible Hugging Face route matches the selected model family");
       assert.equal(incompatibility(hf.config, { ...needs, vision: true }), "vision unsupported");
       assert.equal(incompatibility(hf.config, { ...needs, contextTokens: 300000 }), "context window too small");
       hf.config.routingVerification = { status: "failed", reason: "tool probe failed" };
