@@ -32,10 +32,14 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
    await store.saveMissionCheckpoint('run',{content},'DONE');
    await store.savePreviewEnvironment({id:'preview',runId:'run',url:content,status:'ready'});
    await store.saveBlobRow({key:'blob',sha256:'hash',mediaType:'image/png',size:12,path:content,runId:'run'});
+   await store.createToolRpcCommand({requestId:'tool-command',runId:'run',tenantId:tenant,tool:'read_file',argumentsJson:JSON.stringify({path:'src/fixture.txt'}),timeoutMs:5000,createdAt:1700000000002});
   }
   const snapshot=await migration.exportSnapshot();
-  assert.equal(Object.keys(snapshot).length,11);
+  assert.equal(Object.keys(snapshot).length,12);
   for(const [name,table] of Object.entries(snapshot))assert.equal(table.rows.length,name==='settings'?6:1);
+  const rpcCommand=await store.loadToolRpcCommand(tenant,'run','tool-command');
+  assert.equal(rpcCommand.tool,'read_file');
+  assert.deepEqual(JSON.parse(rpcCommand.arguments_json),{path:'src/fixture.txt'});
   assert.equal(await store.getSetting('fixture'),content);
   const restoredRegistry=new McpRegistry(store,tenant);await restoredRegistry.ready;
   assert.equal(restoredRegistry.list()[0].id,'mcp-fixture');
@@ -52,4 +56,4 @@ const tenant='ci-tenant-restore-fixture',content='Restored Unicode 🌲 and NUL\
   assert.equal((await store.pendingBilling())[0].event.id,'usage');
   console.log(JSON.stringify({tenantFixtureVerified:true,tables:11,restored:process.argv.includes('--verify')}));
  }finally{await store.close();await migration.close();}
-})().catch(()=>{console.error('Tenant restore fixture failed');process.exitCode=1;});
+})().catch(error=>{console.error('Tenant restore fixture failed:',error?.stack||error);process.exitCode=1;});
