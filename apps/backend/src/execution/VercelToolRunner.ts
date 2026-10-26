@@ -9,12 +9,19 @@ import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import type { RunStore } from "../agent/events";
 import { toolRpc, type ToolRequest, type ToolResponse } from "./ToolRpc";
-import { sandboxRegistry } from "./sandbox/SandboxRegistry";
+import { sandboxRegistry } from "./sandbox/AsyncSandboxRegistry";
+import type { SandboxOperations } from "./sandbox/AsyncSandboxRegistry";
 import { VercelExecutionProvider } from "./VercelExecutionProvider";
 import {
   VERCEL_BROWSER_PORT,
   VERCEL_BROWSER_SERVER_SOURCE,
 } from "./VercelBrowserRuntime";
+import {
+  UpstreamAgentBrowserProvider,
+  createSandboxSessionLike,
+  isUpstreamEnabledFor,
+  buildSessionName,
+} from "./UpstreamAgentBrowserProvider";
 import {
   VERCEL_MCP_PORT,
   VERCEL_MCP_SERVER_SOURCE,
@@ -27,6 +34,7 @@ type Identity = {
   tenantId: string;
   organizationId: string;
   userId: string;
+  userEmail?: string;
   projectId: string | null;
   workspaceId: string;
 };
@@ -49,6 +57,10 @@ type RunEntry = {
   processes: Map<string, ProcessEntry>;
   browserReady: boolean;
   browserProvisioning?: Promise<void>;
+  upstreamBrowser?: UpstreamAgentBrowserProvider;
+  upstreamBrowserReady?: boolean;
+  upstreamBrowserProvisioning?: Promise<void>;
+  upstreamBrowserSessionId?: string;
   mcpReady: boolean;
   mcpProvisioning?: Promise<void>;
   loop: Promise<void>;
@@ -99,13 +111,27 @@ function jsonOrText(value: unknown): string {
 
 export class VercelToolRunner {
   private runs = new Map<string, RunEntry>();
+  private starting = new Map<string, Promise<void>>();
 
   constructor(
-    readonly provider = new VercelExecutionProvider()
+    readonly provider = new VercelExecutionProvider(),
+    private readonly registry: SandboxOperations = sandboxRegistry()
   ) {}
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
     return this.provider.health();
+  }
+
+  async executeRequest(request: ToolRequest): Promise<ToolResponse> {
+    const entry = this.runs.get(request.runId);
+    if (!entry) {
+      return response(request, request.createdAt, {
+        ok: false,
+        error: "No active runner for run " + request.runId,
+        exitCode: 1,
+      });
+    }
+    return this.execute(request, entry);
   }
 
   hasRun(runId: string): boolean {
@@ -138,12 +164,29 @@ export class VercelToolRunner {
     identity: Identity
   ): Promise<void> {
     if (this.runs.has(runId)) return;
+    const inFlight = this.starting.get(runId);
+    if (inFlight) return inFlight;
+    const start = this.startOnce(runId, projectRoot, store, identity);
+    this.starting.set(runId, start);
+    try {
+      await start;
+    } finally {
+      if (this.starting.get(runId) === start) this.starting.delete(runId);
+    }
+  }
 
-    const registry = sandboxRegistry();
+  private async startOnce(
+    runId: string,
+    projectRoot: string,
+    store: RunStore,
+    identity: Identity
+  ): Promise<void> {
+
+    const registry = this.registry;
     const logicalId = "sbx_vercel_" + runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
-    registry.plan({
+    const plan = {
       id: logicalId,
-      provider: "vercel",
+      provider: "vercel" as const,
       organizationId: identity.organizationId,
       tenantId: identity.tenantId,
       userId: identity.userId,
@@ -151,9 +194,11 @@ export class VercelToolRunner {
       workspaceId: identity.workspaceId,
       runId,
       policyTemplate: "code-basic",
-      retention: "ephemeral",
+      retention: "ephemeral" as const,
       expiresAt: Date.now() + (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60_000,
-    });
+    };
+    // Do not create billable cloud resources unless durable ownership is recorded.
+    await registry.plan(plan);
 
     let effectiveProjectRoot = typeof projectRoot === "string" ? projectRoot.trim() : "";
     if (!effectiveProjectRoot) {
@@ -170,12 +215,13 @@ export class VercelToolRunner {
         projectId: identity.projectId,
       });
       const providerSandboxId = this.provider.sandboxId(runId) ?? null;
-      registry.report(logicalId, {
+      const ready = await registry.report(logicalId, {
         state: "ready",
         providerSandboxId,
         provisionMs: Date.now() - startedAt,
       });
-      registry.audit("sandbox.ready", "vercel-runner", {
+      if (!ready) throw new Error("Vercel sandbox registry rejected ready transition");
+      await registry.audit("sandbox.ready", "vercel-runner", {
         sandboxId: logicalId,
         organizationId: identity.organizationId,
         detail: { provider: "vercel", provisionMs: Date.now() - startedAt },
@@ -202,21 +248,38 @@ export class VercelToolRunner {
       this.runs.set(runId, entry);
       entry.loop = this.serve(runId, entry);
     } catch (err: any) {
-      registry.report(logicalId, {
-        state: "failed",
-        lastError: err?.message ?? String(err),
-        destroyedAt: Date.now(),
+      const original = err instanceof Error ? err : new Error(String(err));
+      await this.provider.stopRun(runId).catch((cleanupError: unknown) => {
+        console.error("[vercel] sandbox cleanup after start failure failed", cleanupError);
       });
-      registry.audit("sandbox.failed", "vercel-runner", {
-        sandboxId: logicalId,
-        organizationId: identity.organizationId,
-        detail: { error: String(err?.message ?? err).slice(0, 300) },
-      });
+      const persistenceErrors: unknown[] = [];
+      try {
+        const failed = await registry.report(logicalId, {
+          state: "failed",
+          lastError: original.message,
+          destroyedAt: Date.now(),
+        });
+        if (!failed) throw new Error("Vercel sandbox registry rejected failed transition");
+      } catch (registryError) {
+        persistenceErrors.push(registryError);
+      }
+      try {
+        await registry.audit("sandbox.failed", "vercel-runner", {
+          sandboxId: logicalId,
+          organizationId: identity.organizationId,
+          detail: { error: original.message.slice(0, 300) },
+        });
+      } catch (registryError) {
+        persistenceErrors.push(registryError);
+      }
+      if (persistenceErrors.length) {
+        console.error("[vercel] could not persist sandbox start failure", ...persistenceErrors);
+        (original as Error & { registryErrors?: unknown[] }).registryErrors = persistenceErrors;
+      }
       store.emit(runId, "sandbox.stopped", {
-        provider: "vercel",
-        reason: err?.message ?? String(err),
+        provider: "vercel", reason: original.message,
       });
-      throw err;
+      throw original;
     }
   }
 
@@ -261,7 +324,11 @@ export class VercelToolRunner {
 
     entry.stopping = true;
     entry.stopPromise = (async () => {
+      if (entry.upstreamBrowser) {
+        await entry.upstreamBrowser.closeSession().catch(() => undefined);
+      }
       let syncError: Error | undefined;
+      let registryError: Error | undefined;
       try {
         await this.provider.downloadArtifacts(runId);
       } catch (err: any) {
@@ -273,40 +340,51 @@ export class VercelToolRunner {
         });
       }
 
-      await this.provider.stopRun(runId).catch(() => undefined);
+      let cleanupError: Error | undefined;
+      try {
+        await this.provider.stopRun(runId);
+      } catch (err: any) {
+        cleanupError = err instanceof Error ? err : new Error(String(err));
+      }
       toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.");
 
-      const registry = sandboxRegistry();
-      const rec = registry.forRun(runId);
-      if (rec?.provider === "vercel") {
-        registry.report(rec.id, {
-          state: syncError
+      try {
+        const registry = this.registry;
+        const rec = await registry.forRun(runId);
+        if (rec?.provider === "vercel") {
+          const state = syncError || cleanupError
             ? "failed"
-            : reason === "run ended"
-              ? "completed"
-              : "stopped",
-          destroyedAt: Date.now(),
-        });
-        registry.audit("sandbox.destroyed", "vercel-runner", {
-          sandboxId: rec.id,
-          organizationId: rec.organizationId,
-          detail: {
-            reason,
-            ...(syncError ? { syncError: syncError.message.slice(0, 500) } : {}),
-          },
-        });
+            : reason === "run ended" ? "completed" : "stopped";
+          const updated = await registry.report(rec.id, { state, destroyedAt: Date.now() });
+          if (!updated) throw new Error("Vercel sandbox registry rejected terminal transition");
+          await registry.audit("sandbox.destroyed", "vercel-runner", {
+            sandboxId: rec.id,
+            organizationId: rec.organizationId,
+            detail: {
+              reason,
+              ...(syncError ? { syncError: syncError.message.slice(0, 500) } : {}),
+              ...(cleanupError ? { cleanupError: cleanupError.message.slice(0, 500) } : {}),
+            },
+          });
+        }
+      } catch (err: any) {
+        registryError = err instanceof Error ? err : new Error(String(err));
       }
 
       entry.store.emit(runId, "sandbox.stopped", {
         provider: "vercel",
         reason,
         syncOk: !syncError,
+        cleanupOk: !cleanupError,
+        registryOk: !registryError,
       });
       this.runs.delete(runId);
 
       if (syncError) {
         throw new Error("Vercel durable sync-back failed: " + syncError.message);
       }
+      if (cleanupError) throw new Error("Vercel sandbox cleanup failed: " + cleanupError.message);
+      if (registryError) throw new Error("Vercel sandbox lifecycle persistence failed: " + registryError.message);
     })();
 
     await entry.stopPromise;
@@ -533,6 +611,272 @@ export class VercelToolRunner {
       await entry.browserProvisioning;
     } finally {
       entry.browserProvisioning = undefined;
+    }
+  }
+
+
+  private isUpstreamEnabled(entry: RunEntry): boolean {
+    return isUpstreamEnabledFor(entry.identity.userEmail) || isUpstreamEnabledFor(entry.identity.userId);
+  }
+
+  private async ensureUpstreamBrowser(runId: string, entry: RunEntry): Promise<UpstreamAgentBrowserProvider> {
+    if (entry.upstreamBrowser && entry.upstreamBrowserReady) {
+      return entry.upstreamBrowser;
+    }
+    if (entry.upstreamBrowserProvisioning) {
+      await entry.upstreamBrowserProvisioning;
+      if (entry.upstreamBrowser) return entry.upstreamBrowser;
+    }
+
+    entry.upstreamBrowserProvisioning = (async () => {
+      const rawSandbox = this.provider.getSandbox(runId);
+      const session = createSandboxSessionLike(rawSandbox, (cmd) => this.command(runId, cmd));
+      const provider = new UpstreamAgentBrowserProvider(session);
+      const res = await provider.startSession({
+        runId,
+        tenantId: entry.identity.tenantId,
+        projectId: entry.identity.projectId,
+        surface: "vercel_cloud",
+      });
+      if (!res.ok) {
+        throw new Error(res.error || "Failed to start upstream agent-browser session");
+      }
+      entry.upstreamBrowser = provider;
+      entry.upstreamBrowserSessionId = res.sessionId;
+      entry.upstreamBrowserReady = true;
+      entry.store.emit(runId, "browser.ready", {
+        provider: "agent-browser-upstream",
+        browserSessionId: res.sessionId,
+      });
+    })();
+
+    try {
+      await entry.upstreamBrowserProvisioning;
+    } finally {
+      entry.upstreamBrowserProvisioning = undefined;
+    }
+
+    return entry.upstreamBrowser!;
+  }
+
+  private async upstreamBrowserTool(
+    runId: string,
+    entry: RunEntry,
+    request: ToolRequest
+  ): Promise<{ ok: boolean; output?: string; error?: string; exitCode: number; meta?: any }> {
+    let browser: UpstreamAgentBrowserProvider;
+    try {
+      browser = await this.ensureUpstreamBrowser(runId, entry);
+    } catch (err: any) {
+      console.warn("[upstream-browser] Upstream initialization failed, falling back to Playwright:", err?.message || err);
+      return this.browserTool(runId, entry, request);
+    }
+
+    const sessionId = entry.upstreamBrowserSessionId || buildSessionName(entry.identity.tenantId, runId);
+    const tool = request.tool;
+    const a = (request.arguments || {}) as Record<string, any>;
+
+    switch (tool) {
+      case "browser_open":
+      case "browser_navigate": {
+        const url = String(a.url || "").trim();
+        const timeoutMs = typeof a.timeoutMs === "number" ? a.timeoutMs : 30000;
+        const nav = await browser.navigate(url, timeoutMs);
+        if (!nav.ok) {
+          return {
+            ok: false,
+            error: nav.error || `Navigation to ${url} failed`,
+            exitCode: 1,
+            meta: { browserSessionId: sessionId, url: nav.url, error: nav.error },
+          };
+        }
+        const snap = await browser.snapshot(true);
+        const parts = [
+          `Now at ${nav.url} — Title: ${nav.title || "(no title)"}`,
+        ];
+        if (nav.metaDesc) parts.push(`Description: ${nav.metaDesc}`);
+        if (snap.interactiveElements.length > 0) {
+          parts.push(`Interactive Elements (${snap.interactiveElements.length} found):`);
+          const items = snap.interactiveElements.slice(0, 30).map(
+            (e) => `[${e.ref}] ${e.role} "${e.name}"${e.href ? " -> " + e.href : ""}`
+          );
+          parts.push(items.join("\n"));
+        } else if (snap.accessibilityTree) {
+          parts.push(snap.accessibilityTree);
+        }
+        parts.push('Tip: Target elements using refs in browser_click or browser_fill (e.g. target: "@e1").');
+
+        return {
+          ok: true,
+          output: parts.join("\n\n"),
+          exitCode: 0,
+          meta: {
+            browserSessionId: sessionId,
+            url: nav.url,
+            title: nav.title,
+            status: nav.status,
+            interactiveElements: snap.interactiveElements,
+            consoleErrors: snap.consoleErrors,
+            networkErrors: snap.networkErrors,
+            tree: snap.accessibilityTree,
+          },
+        };
+      }
+
+      case "browser_snapshot": {
+        const interactiveOnly = a.interactiveOnly !== false;
+        const snap = await browser.snapshot(interactiveOnly);
+        const elements = snap.interactiveElements;
+        const output = [
+          `Page: ${snap.url} — Title: "${snap.title}"`,
+          `Interactive Elements (${elements.length} found):`,
+          elements.length > 0
+            ? elements.map((e) => `[${e.ref}] ${e.role} "${e.name}"${e.href ? " -> " + e.href : ""}`).join("\n")
+            : "(No interactive elements detected on this page)",
+          'Tip: Target elements using refs in browser_click or browser_fill (e.g. target: "@e1").',
+        ].join("\n\n");
+
+        return {
+          ok: true,
+          output,
+          exitCode: 0,
+          meta: {
+            browserSessionId: sessionId,
+            url: snap.url,
+            title: snap.title,
+            interactiveCount: elements.length,
+            interactiveElements: elements,
+            consoleErrors: snap.consoleErrors,
+            networkErrors: snap.networkErrors,
+            tree: snap.accessibilityTree,
+          },
+        };
+      }
+
+      case "browser_screenshot":
+      case "browser_evidence": {
+        const fullPage = a.fullPage === true;
+        const shot = await browser.screenshot(fullPage);
+        if (!shot.ok) {
+          return {
+            ok: false,
+            error: shot.error || "Failed to capture browser screenshot",
+            exitCode: 1,
+            meta: { browserSessionId: sessionId },
+          };
+        }
+        return {
+          ok: true,
+          output: `Screenshot ${shot.screenshotId} taken.`,
+          exitCode: 0,
+          meta: {
+            browserSessionId: sessionId,
+            screenshot: { b64: shot.b64, mediaType: shot.mediaType },
+            browserScreenshot: {
+              screenshotId: shot.screenshotId,
+              sessionId,
+              width: shot.width,
+              height: shot.height,
+              sha256: shot.sha256,
+            },
+          },
+        };
+      }
+
+      case "browser_click": {
+        const target = a.target ?? a.ref ?? a.selector ?? (a.x !== undefined && a.y !== undefined ? { x: Number(a.x), y: Number(a.y) } : "");
+        const res = await browser.click(target);
+        return {
+          ok: res.ok,
+          output: res.output || (res.ok ? `Clicked ${typeof target === "string" ? target : JSON.stringify(target)}.` : undefined),
+          error: res.error,
+          exitCode: res.ok ? 0 : 1,
+          meta: { browserSessionId: sessionId, url: res.currentUrl },
+        };
+      }
+
+      case "browser_fill":
+      case "browser_type":
+      case "browser_input": {
+        const target = a.target ?? a.ref ?? a.selector ?? "";
+        const val = String(a.value ?? a.text ?? "");
+        const res = await browser.fill(target, val);
+        return {
+          ok: res.ok,
+          output: res.output || (res.ok ? `Filled ${typeof target === "string" ? target : JSON.stringify(target)} with "${val}".` : undefined),
+          error: res.error,
+          exitCode: res.ok ? 0 : 1,
+          meta: { browserSessionId: sessionId, url: res.currentUrl },
+        };
+      }
+
+      case "browser_scroll": {
+        const deltaY = typeof a.deltaY === "number" ? a.deltaY : 400;
+        const deltaX = typeof a.deltaX === "number" ? a.deltaX : 0;
+        const res = await browser.scroll({ deltaY, deltaX });
+        return {
+          ok: res.ok,
+          output: res.output || `Scrolled by ${deltaY}px.`,
+          error: res.error,
+          exitCode: res.ok ? 0 : 1,
+          meta: { browserSessionId: sessionId },
+        };
+      }
+
+      case "browser_console_errors": {
+        const snap = await browser.snapshot();
+        return {
+          ok: true,
+          output: snap.consoleErrors.join("\n") || "No console errors detected.",
+          exitCode: 0,
+          meta: { browserSessionId: sessionId, consoleErrors: snap.consoleErrors },
+        };
+      }
+
+      case "browser_network_errors": {
+        const snap = await browser.snapshot();
+        const formatted = snap.networkErrors.map((e) => `${e.method} ${e.url} [${e.status}] ${e.error ?? ""}`.trim());
+        return {
+          ok: true,
+          output: formatted.join("\n") || "No network errors detected.",
+          exitCode: 0,
+          meta: { browserSessionId: sessionId, networkErrors: snap.networkErrors },
+        };
+      }
+
+      case "browser_tabs": {
+        const tabs = await browser.getTabs();
+        return {
+          ok: true,
+          output: tabs.map((t) => `Tab [${t.index}] ${t.active ? "(active) " : ""}${t.title} — ${t.url}`).join("\n"),
+          exitCode: 0,
+          meta: { browserSessionId: sessionId, tabs },
+        };
+      }
+
+      case "browser_switch_tab": {
+        const idx = typeof a.index === "number" ? a.index : 0;
+        const res = await browser.switchTab(idx);
+        return {
+          ok: res.ok,
+          output: res.output || `Switched to tab ${idx}.`,
+          error: res.error,
+          exitCode: res.ok ? 0 : 1,
+          meta: { browserSessionId: sessionId },
+        };
+      }
+
+      case "browser_set_viewport": {
+        return {
+          ok: true,
+          output: "Viewport configured.",
+          exitCode: 0,
+          meta: { browserSessionId: sessionId },
+        };
+      }
+
+      default:
+        return this.browserTool(runId, entry, request);
     }
   }
 
@@ -885,7 +1229,11 @@ export class VercelToolRunner {
       case "browser_tabs":
       case "browser_switch_tab":
       case "browser_network_errors":
-        result = await this.browserTool(runId, entry, request);
+        if (this.isUpstreamEnabled(entry)) {
+          result = await this.upstreamBrowserTool(runId, entry, request);
+        } else {
+          result = await this.browserTool(runId, entry, request);
+        }
         break;
       case "mcp_list":
       case "mcp_call":

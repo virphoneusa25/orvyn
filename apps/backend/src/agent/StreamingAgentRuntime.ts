@@ -156,6 +156,7 @@ export interface ExecutionSpec {
   tenantId?: string;
   organizationId?: string;
   userId?: string;
+  userEmail?: string;
   projectId?: string | null;
   workspaceId?: string | null;
   targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker" | "vercel_cloud";
@@ -1867,6 +1868,7 @@ export class StreamingAgentRuntime {
             tenantId: remoteExecution.tenantId ?? "",
             organizationId: remoteExecution.organizationId ?? remoteExecution.tenantId ?? "",
             userId: remoteExecution.userId ?? remoteExecution.tenantId ?? "",
+            userEmail: remoteExecution.userEmail ?? "",
             projectId: remoteExecution.projectId ?? null,
             workspaceId: remoteExecution.workspaceId ?? "run:" + runId,
           });

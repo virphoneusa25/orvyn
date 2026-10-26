@@ -525,6 +525,10 @@ export class VercelExecutionProvider implements ExecutionProvider {
     }
   }
 
+  getSandbox(runId: string): any {
+    return this.runs.get(runId)?.sandbox;
+  }
+
   sandboxId(runId: string): string | undefined {
     return this.runs.get(runId)?.sandboxId;
   }
