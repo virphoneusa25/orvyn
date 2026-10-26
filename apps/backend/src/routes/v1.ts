@@ -1071,6 +1071,7 @@ v1Router.post("/agent/stream/runs", asyncHandler(async (req, _res, next) => {
       tenantId: t.id,
       organizationId: req.principal?.organizationId ?? "",
       userId: req.principal?.userId ?? "",
+      userEmail: req.principal?.email ?? "",
       projectId: preflight.status === "resolved" ? preflight.projectId : (typeof req.body.projectId === "string" ? req.body.projectId : null),
       targetRequested: routed.requested,
       targetActual: actualExecutionTarget,

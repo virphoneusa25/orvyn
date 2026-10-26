@@ -43,6 +43,49 @@ export interface SandboxSessionLike {
   }>;
 }
 
+export function createSandboxSessionLike(
+  sandbox: any,
+  fallbackCommand?: (cmd: string) => Promise<{ ok: boolean; output: string; exitCode?: number }>,
+): SandboxSessionLike {
+  return {
+    async runCommand(command: string, args: readonly string[]) {
+      if (sandbox && typeof sandbox.runCommand === "function") {
+        try {
+          const res = await sandbox.runCommand(command, args as string[]);
+          if (res && (typeof res.stdout === "function" || typeof res.stdout === "string")) {
+            return {
+              exitCode: typeof res.exitCode === "number" ? res.exitCode : 0,
+              stdout: async () => (typeof res.stdout === "function" ? res.stdout() : String(res.stdout ?? "")),
+              stderr: async () => (typeof res.stderr === "function" ? res.stderr() : String(res.stderr ?? "")),
+            };
+          }
+        } catch {
+          try {
+            const res = await sandbox.runCommand({ cmd: command, args: args as string[] });
+            return {
+              exitCode: typeof res.exitCode === "number" ? res.exitCode : 0,
+              stdout: async () => (typeof res.stdout === "function" ? res.stdout() : String(res.stdout ?? "")),
+              stderr: async () => (typeof res.stderr === "function" ? res.stderr() : String(res.stderr ?? "")),
+            };
+          } catch {
+            /* fall through to fallbackCommand */
+          }
+        }
+      }
+      if (fallbackCommand) {
+        const full = [command, ...args].join(" ");
+        const res = await fallbackCommand(full);
+        return {
+          exitCode: res.exitCode ?? (res.ok ? 0 : 1),
+          stdout: async () => (res.ok ? res.output : ""),
+          stderr: async () => (!res.ok ? res.output : ""),
+        };
+      }
+      throw new Error(`Cannot execute "${command}": no sandbox session available.`);
+    },
+  };
+}
+
 export interface AgentBrowserCommandResult<TJson = unknown> {
   readonly command: string;
   readonly exitCode: number;
