@@ -303,7 +303,7 @@ jobs:
             curl -fsS \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&event=pull_request&per_page=20" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&event=push&per_page=20" \
               | jq -r 'if (.workflow_runs | length) == 0 then "missing" else (.workflow_runs | sort_by(.created_at) | last | if .status == "completed" then .conclusion else "pending" end) end'
           }
           for attempt in $(seq 1 40); do
