@@ -615,6 +615,7 @@ export class VercelToolRunner {
     try {
       browser = await this.ensureUpstreamBrowser(runId, entry);
     } catch (err: any) {
+      console.warn("[upstream-browser] Upstream initialization failed, falling back to Playwright:", err?.message || err);
       return this.browserTool(runId, entry, request);
     }
 

@@ -221,11 +221,25 @@ export class UpstreamAgentBrowserProvider implements BrowserProvider {
     try {
       this.helpers = await loadVercelHelpers();
       if (!this.installed) {
-        await this.helpers.installAgentBrowserInVercelSandbox(this.sandbox, {
-          installSpec: UPSTREAM_AGENT_BROWSER_SPEC,
-          installBrowser: true,
-          installSystemDependencies: true,
-        });
+        try {
+          await this.helpers.installAgentBrowserInVercelSandbox(this.sandbox, {
+            installSpec: UPSTREAM_AGENT_BROWSER_SPEC,
+            installBrowser: true,
+            installSystemDependencies: true,
+          });
+        } catch (err: any) {
+          const msg = String(err?.message ?? err) + " " + String(err?.stderr ?? "");
+          if (msg.includes("dnf: command not found") || msg.includes("sudo: dnf") || msg.includes("dnf")) {
+            await this.helpers.installAgentBrowserInVercelSandbox(this.sandbox, {
+              installSpec: UPSTREAM_AGENT_BROWSER_SPEC,
+              installBrowser: false,
+              installSystemDependencies: false,
+            });
+            await this.sandbox.runCommand("agent-browser", ["install", "--with-deps"]);
+          } else {
+            throw err;
+          }
+        }
         this.installed = true;
       }
       // `open` with no URL launches the browser and stays on about:blank.
