@@ -170,7 +170,7 @@ jobs:
           retention-days: 14
 
       - name: Upload packaged Desktop runtime
-        if: github.ref == 'refs/heads/codex/shared-hf-auto'
+        if: github.ref == 'refs/heads/codex/shared-hf-auto' || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' && github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging')
         uses: actions/upload-artifact@v4
         with:
           name: orvyn-packaged-desktop
@@ -282,7 +282,11 @@ jobs:
     needs: [build-and-test, windows-installer]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.ref == 'refs/heads/codex/shared-hf-auto' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify'))
+    if: >-
+      (github.ref == 'refs/heads/codex/shared-hf-auto' &&
+        (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify')))
+      || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' &&
+        github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging')
     steps:
       - uses: actions/checkout@v4
       - name: Deploy candidate to isolated staging
