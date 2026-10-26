@@ -4,6 +4,7 @@ const path = require('node:path');
 const { ModelService } = require(path.resolve(process.argv[2] || '/app/dist', 'services/ModelService.js'));
 const { selectAgentModel } = require(path.resolve(process.argv[2] || '/app/dist', 'models/selectModel.js'));
 const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist', 'agent/taskIntent.js'));
+const { inspectHuggingFace } = require(path.resolve(process.argv[2] || '/app/dist', 'models/huggingFaceVerification.js'));
 (async () => {
   const direct = process.argv[3] === 'fireworks';
   const deepseek = process.argv[3] === 'deepseek';
@@ -13,7 +14,20 @@ const { inferTaskIntent } = require(path.resolve(process.argv[2] || '/app/dist',
   const service = new ModelService();
   await service.huggingFaceReady;
   const providers = service.registry.list();
-  const capabilities = providers.filter(p => p.config.id.startsWith('hf:')).map(p => ({modelId:p.config.id,verification:p.config.routingVerification,context:p.config.contextWindow,tools:p.config.capabilities.tools,vision:p.config.capabilities.vision,streaming:p.config.streaming,rate:p.config.rate}));
+  const hfProviders = providers.filter(p => p.config.id.startsWith('hf:'));
+  const capabilities = await Promise.all(hfProviders.map(async p => ({
+    modelId:p.config.id,
+    credentialStatus:(process.env.HUGGINGFACE_API_KEY?.trim()||process.env.HF_TOKEN?.trim())?'configured':'unavailable',
+    routeEnabled:/^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED||''),
+    catalog:await inspectHuggingFace(p.config),
+    verification:p.config.routingVerification,
+    context:p.config.contextWindow,
+    tools:p.config.capabilities.tools,
+    vision:p.config.capabilities.vision,
+    streaming:p.config.streaming,
+    rate:p.config.rate,
+  })));
+  console.log(JSON.stringify({event:'hf.preflight.settings',credentialStatus:(process.env.HUGGINGFACE_API_KEY?.trim()||process.env.HF_TOKEN?.trim())?'configured':'unavailable',routeEnabled:/^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED||''),configuredModels:hfProviders.map(p=>p.config.id)}));
   const choice = selectAgentModel({intent:inferTaskIntent('Fix the subtraction bug in math.js and run the unit tests'),requestedModelId:'auto',availableIds:providers.filter(p=>p.config.id!=='orvyn-mock').map(p=>p.config.id),providers});
   const provider = deepseek ? service.registry.get(process.env.DEEPSEEK_CODE_MODEL?.trim() || 'deepseek-v4-flash') : direct ? service.registry.get('fw:accounts/fireworks/models/deepseek-v4-flash-0731') : choice.registryId ? service.registry.get(choice.registryId) : null;
   if (direct && provider && provider.config.routingVerification?.status !== 'verified') {

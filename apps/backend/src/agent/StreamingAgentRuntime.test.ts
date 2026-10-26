@@ -712,6 +712,23 @@ test("model timeout fallback searches compatible platform providers past timeout
   }finally{clearModelAvailability();clearProviderHealth();}
 });
 
+test("model failover rejects an unverified Hugging Face same-model candidate",()=>{
+  clearModelAvailability();clearProviderHealth();
+  try{
+    const current=new FakeProvider([]),hf=new FakeProvider([]);
+    current.config.id="fw:accounts/fireworks/models/glm-5p3";
+    current.config.providerName="fireworks";
+    hf.config.id="hf:zai-org/GLM-5.3:deepinfra";
+    hf.config.providerName="huggingface";
+    hf.config.routingVerification={status:"unverified",reason:"metered capability evidence is missing"};
+    const h=harness([],{provider:current,registryModels:[current,hf]});
+    h.store.create("run-unverified-fallback",mkdtempSync(join(tmpdir(),"orvyn-failover-")));
+    markProviderFailure(current.config.id,"provider","timeout");
+    const next=(h.runtime as any).failoverModel("run-unverified-fallback",{requireVision:false},current,"provider","operation timed out");
+    assert.equal(next,null,"an unverified model cannot be described or used as a successful fallback");
+  }finally{clearModelAvailability();clearProviderHealth();}
+});
+
 // The event NAME must match the outcome: a UI that listens for "run.completed"
 // must never see one for a mission that did not fully pass its settlement
 // criteria. mission.settled is the canonical record; run.* events are

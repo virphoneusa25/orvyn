@@ -8,11 +8,24 @@ import { selectAgentModel } from "./selectModel";
 import { incompatibility, preferHuggingFace } from "@orvyn/ai-core";
 import { clearModelAvailability, clearProviderHealth } from "./modelAvailability";
 import { verifyHuggingFace } from "./huggingFaceVerification";
+import { meteredProviderProbe } from "./MeteredProviderProbe";
+import type { ModelConfig, TokenUsage } from "@orvyn/ai-core";
 
 const keys = ["HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGINGFACE_BASE_URL", "HUGGINGFACE_MODELS", "HUGGINGFACE_ROUTING_ENABLED", "NEBIUS_BASE_URL", "NEBIUS_API_KEY", "MODEL_API_KEY", "OPENAI_API_KEY", "FIREWORKS_API_KEY", "CHEAPER_INFERENCE_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OLLAMA_MODEL", "ORVYN_DEFAULT_MODEL_PROVIDER"];
 const models = ["zai-org/GLM-5.3", "zai-org/GLM-5.3-Flash", "moonshotai/Kimi-K2.7-Code"];
 const prices = [[0.9, 4], [0.15, 0.5], [0.68, 3.4]];
 const sse = (j: unknown) => `data: ${JSON.stringify(j)}\n\n`;
+let paidVerificationId = 0;
+async function meteredVerify(config: ModelConfig) {
+  const probe = meteredProviderProbe({
+    reserve: async () => `fixture-attempt-${++paidVerificationId}`,
+    settle: async (_id, cost, usage) => {
+      assert.ok(Number.isSafeInteger(cost) && cost! >= 0);
+      assert.ok(usage && Number.isSafeInteger((usage as TokenUsage).promptTokens));
+    },
+  });
+  await verifyHuggingFace(config, { meteredProbe: probe, verificationStore: { save: async (_config, id) => assert.equal(id, probe.successfulAttempt) } });
+}
 
 test("Cloud and Desktop share verified, price-qualified routes and provider-boundary behavior", async (t) => {
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
@@ -61,8 +74,8 @@ test("Cloud and Desktop share verified, price-qualified routes and provider-boun
     const providers = service.registry.list();
     assert.equal(calls.length, 0, "constructing tenant services must not run paid inference probes");
     for (const provider of providers.filter(p => p.config.providerName === "huggingface")) {
-      assert.equal(provider.config.routingVerification?.status, "failed");
-      await verifyHuggingFace(provider.config, { allowPaidProbe: true });
+      assert.equal(provider.config.routingVerification?.status, "unverified");
+      await meteredVerify(provider.config);
     }
     const hf = service.registry.get(`hf:${models[0]}:deepinfra`)!;
     assert.equal(hf.config.routingVerification?.status, "verified");
