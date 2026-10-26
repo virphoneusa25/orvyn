@@ -29,7 +29,7 @@ for name in ORVYN_PROVIDER_RATES_JSON ORVYN_IMAGE_SETTLEMENT_BUDGET_USD MODEL_AP
 done
 # Fail before Docker build when host disk cannot accommodate Chromium and image layers.
 # This check is read-only; safe cleanup or disk expansion must happen separately.
-MIN_STAGING_FREE_KB=12582912 # 12 GiB
+MIN_STAGING_FREE_KB=10485760 # 10 GiB
 STAGING_FREE_KB="$("${SSH[@]}" "$HOST" "df -Pk '$REMOTE'" | awk 'NR==2 {print $4}')"
 if [[ ! "$STAGING_FREE_KB" =~ ^[0-9]+$ ]] || (( STAGING_FREE_KB < MIN_STAGING_FREE_KB )); then
   echo "ERROR: Isolated staging has insufficient free disk for Docker/Playwright build (available KB: ${STAGING_FREE_KB:-unknown}; required KB: $MIN_STAGING_FREE_KB). Preserve volumes, rollback images and running containers; clean verified unused cache or expand disk before retry." >&2
