@@ -57,6 +57,14 @@ class MockVercelExecutionProvider extends VercelExecutionProvider {
   override sandboxId(_runId: string): string {
     return "sbx_mock_test";
   }
+
+  override async downloadArtifacts(_runId: string): Promise<{ files: string[] }> {
+    return { files: [] };
+  }
+
+  override async stopRun(_runId: string): Promise<void> {
+    return;
+  }
 }
 
 function fakeUpstreamHelpers() {
