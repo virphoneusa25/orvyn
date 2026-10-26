@@ -7,5 +7,13 @@ packages/*/dist
 .git
 .cursor
 .cowork
+.devin
+.orvyn
 **/*.log
 **/__pycache__
+Claude outputs
+doc
+reports
+dist
+fixtures
+_zip_*
