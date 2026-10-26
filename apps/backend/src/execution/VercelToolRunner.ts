@@ -9,7 +9,8 @@ import * as path from "path";
 import { defaultDataDir } from "../persistence/LocalStore";
 import type { RunStore } from "../agent/events";
 import { toolRpc, type ToolRequest, type ToolResponse } from "./ToolRpc";
-import { sandboxRegistry } from "./sandbox/SandboxRegistry";
+import { sandboxRegistry } from "./sandbox/AsyncSandboxRegistry";
+import type { SandboxOperations } from "./sandbox/AsyncSandboxRegistry";
 import { VercelExecutionProvider } from "./VercelExecutionProvider";
 import {
   VERCEL_BROWSER_PORT,
@@ -110,9 +111,11 @@ function jsonOrText(value: unknown): string {
 
 export class VercelToolRunner {
   private runs = new Map<string, RunEntry>();
+  private starting = new Map<string, Promise<void>>();
 
   constructor(
-    readonly provider = new VercelExecutionProvider()
+    readonly provider = new VercelExecutionProvider(),
+    private readonly registry: SandboxOperations = sandboxRegistry()
   ) {}
 
   async health(): Promise<{ healthy: boolean; detail?: string }> {
@@ -161,12 +164,29 @@ export class VercelToolRunner {
     identity: Identity
   ): Promise<void> {
     if (this.runs.has(runId)) return;
+    const inFlight = this.starting.get(runId);
+    if (inFlight) return inFlight;
+    const start = this.startOnce(runId, projectRoot, store, identity);
+    this.starting.set(runId, start);
+    try {
+      await start;
+    } finally {
+      if (this.starting.get(runId) === start) this.starting.delete(runId);
+    }
+  }
 
-    const registry = sandboxRegistry();
+  private async startOnce(
+    runId: string,
+    projectRoot: string,
+    store: RunStore,
+    identity: Identity
+  ): Promise<void> {
+
+    const registry = this.registry;
     const logicalId = "sbx_vercel_" + runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
-    registry.plan({
+    const plan = {
       id: logicalId,
-      provider: "vercel",
+      provider: "vercel" as const,
       organizationId: identity.organizationId,
       tenantId: identity.tenantId,
       userId: identity.userId,
@@ -174,9 +194,11 @@ export class VercelToolRunner {
       workspaceId: identity.workspaceId,
       runId,
       policyTemplate: "code-basic",
-      retention: "ephemeral",
+      retention: "ephemeral" as const,
       expiresAt: Date.now() + (Number(process.env.ORVYN_SANDBOX_TIMEOUT_MIN) || 30) * 60_000,
-    });
+    };
+    // Do not create billable cloud resources unless durable ownership is recorded.
+    await registry.plan(plan);
 
     let effectiveProjectRoot = typeof projectRoot === "string" ? projectRoot.trim() : "";
     if (!effectiveProjectRoot) {
@@ -193,12 +215,13 @@ export class VercelToolRunner {
         projectId: identity.projectId,
       });
       const providerSandboxId = this.provider.sandboxId(runId) ?? null;
-      registry.report(logicalId, {
+      const ready = await registry.report(logicalId, {
         state: "ready",
         providerSandboxId,
         provisionMs: Date.now() - startedAt,
       });
-      registry.audit("sandbox.ready", "vercel-runner", {
+      if (!ready) throw new Error("Vercel sandbox registry rejected ready transition");
+      await registry.audit("sandbox.ready", "vercel-runner", {
         sandboxId: logicalId,
         organizationId: identity.organizationId,
         detail: { provider: "vercel", provisionMs: Date.now() - startedAt },
@@ -225,21 +248,38 @@ export class VercelToolRunner {
       this.runs.set(runId, entry);
       entry.loop = this.serve(runId, entry);
     } catch (err: any) {
-      registry.report(logicalId, {
-        state: "failed",
-        lastError: err?.message ?? String(err),
-        destroyedAt: Date.now(),
+      const original = err instanceof Error ? err : new Error(String(err));
+      await this.provider.stopRun(runId).catch((cleanupError: unknown) => {
+        console.error("[vercel] sandbox cleanup after start failure failed", cleanupError);
       });
-      registry.audit("sandbox.failed", "vercel-runner", {
-        sandboxId: logicalId,
-        organizationId: identity.organizationId,
-        detail: { error: String(err?.message ?? err).slice(0, 300) },
-      });
+      const persistenceErrors: unknown[] = [];
+      try {
+        const failed = await registry.report(logicalId, {
+          state: "failed",
+          lastError: original.message,
+          destroyedAt: Date.now(),
+        });
+        if (!failed) throw new Error("Vercel sandbox registry rejected failed transition");
+      } catch (registryError) {
+        persistenceErrors.push(registryError);
+      }
+      try {
+        await registry.audit("sandbox.failed", "vercel-runner", {
+          sandboxId: logicalId,
+          organizationId: identity.organizationId,
+          detail: { error: original.message.slice(0, 300) },
+        });
+      } catch (registryError) {
+        persistenceErrors.push(registryError);
+      }
+      if (persistenceErrors.length) {
+        console.error("[vercel] could not persist sandbox start failure", ...persistenceErrors);
+        (original as Error & { registryErrors?: unknown[] }).registryErrors = persistenceErrors;
+      }
       store.emit(runId, "sandbox.stopped", {
-        provider: "vercel",
-        reason: err?.message ?? String(err),
+        provider: "vercel", reason: original.message,
       });
-      throw err;
+      throw original;
     }
   }
 
@@ -288,6 +328,7 @@ export class VercelToolRunner {
         await entry.upstreamBrowser.closeSession().catch(() => undefined);
       }
       let syncError: Error | undefined;
+      let registryError: Error | undefined;
       try {
         await this.provider.downloadArtifacts(runId);
       } catch (err: any) {
@@ -299,40 +340,51 @@ export class VercelToolRunner {
         });
       }
 
-      await this.provider.stopRun(runId).catch(() => undefined);
+      let cleanupError: Error | undefined;
+      try {
+        await this.provider.stopRun(runId);
+      } catch (err: any) {
+        cleanupError = err instanceof Error ? err : new Error(String(err));
+      }
       toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.");
 
-      const registry = sandboxRegistry();
-      const rec = registry.forRun(runId);
-      if (rec?.provider === "vercel") {
-        registry.report(rec.id, {
-          state: syncError
+      try {
+        const registry = this.registry;
+        const rec = await registry.forRun(runId);
+        if (rec?.provider === "vercel") {
+          const state = syncError || cleanupError
             ? "failed"
-            : reason === "run ended"
-              ? "completed"
-              : "stopped",
-          destroyedAt: Date.now(),
-        });
-        registry.audit("sandbox.destroyed", "vercel-runner", {
-          sandboxId: rec.id,
-          organizationId: rec.organizationId,
-          detail: {
-            reason,
-            ...(syncError ? { syncError: syncError.message.slice(0, 500) } : {}),
-          },
-        });
+            : reason === "run ended" ? "completed" : "stopped";
+          const updated = await registry.report(rec.id, { state, destroyedAt: Date.now() });
+          if (!updated) throw new Error("Vercel sandbox registry rejected terminal transition");
+          await registry.audit("sandbox.destroyed", "vercel-runner", {
+            sandboxId: rec.id,
+            organizationId: rec.organizationId,
+            detail: {
+              reason,
+              ...(syncError ? { syncError: syncError.message.slice(0, 500) } : {}),
+              ...(cleanupError ? { cleanupError: cleanupError.message.slice(0, 500) } : {}),
+            },
+          });
+        }
+      } catch (err: any) {
+        registryError = err instanceof Error ? err : new Error(String(err));
       }
 
       entry.store.emit(runId, "sandbox.stopped", {
         provider: "vercel",
         reason,
         syncOk: !syncError,
+        cleanupOk: !cleanupError,
+        registryOk: !registryError,
       });
       this.runs.delete(runId);
 
       if (syncError) {
         throw new Error("Vercel durable sync-back failed: " + syncError.message);
       }
+      if (cleanupError) throw new Error("Vercel sandbox cleanup failed: " + cleanupError.message);
+      if (registryError) throw new Error("Vercel sandbox lifecycle persistence failed: " + registryError.message);
     })();
 
     await entry.stopPromise;
