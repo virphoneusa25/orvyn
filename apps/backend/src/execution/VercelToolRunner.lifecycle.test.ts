@@ -78,6 +78,13 @@ test("async SQLite registry persists Vercel provisioning, ready, completion and 
     const audit = await ops.auditLog({ organizationId: identity.organizationId });
     assert.deepEqual(audit.map((e) => e.type).sort(), ["sandbox.destroyed", "sandbox.ready"]);
     assert.ok(audit.every((e) => e.sandboxId === planned?.id));
+
+    const completedRun = `run-completed-${Math.random().toString(16).slice(2)}`;
+    h.store.create(completedRun, h.root, "running");
+    await h.runner.start(completedRun, h.root, h.store, identity);
+    await h.runner.stop(completedRun, "run ended");
+    assert.equal((await ops.forRun(completedRun))?.state, "completed");
+    assert.equal(h.provider.stops, 2);
   } finally {
     await h.runner.stop(h.runId).catch(() => undefined);
     db.close();
