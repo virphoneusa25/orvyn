@@ -1,3 +1,4 @@
+import { listDynamicCanaries, addCanaryUser, removeCanaryUser, addCanaryTenant, removeCanaryTenant, setEmergencyDisableVercel, isEmergencyDisabled } from "../execution/VercelCanaryRollout";
 import { adminService } from "../admin/AsyncAdminService";
 import { paymentStore as stripeStore } from "../billing/AsyncFinancialStores";
 import { staffStore } from "../auth/AsyncAccountStores";
@@ -101,6 +102,45 @@ const wrap = (fn: (req: AdminRequest, res: Response) => unknown) => async (req: 
 };
 
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+
+// ---------- canary rollout management ----------
+
+adminRouter.get("/canary/vercel", need("read"), wrap(async (_req, res) => {
+  const dynamic = listDynamicCanaries();
+  const envCanaries = {
+    envUsers: String(process.env.VERCEL_CANARY_USERS ?? "").split(",").filter(Boolean),
+    envTenants: String(process.env.VERCEL_CANARY_TENANTS ?? "").split(",").filter(Boolean),
+    envOrgs: String(process.env.VERCEL_CANARY_ORGS ?? "").split(",").filter(Boolean),
+    emergencyDisabled: isEmergencyDisabled(),
+    adminOnly: process.env.VERCEL_CANARY_ADMIN_ONLY !== "false",
+    canaryRequired: process.env.VERCEL_CANARY_REQUIRED !== "false",
+    globalProvider: process.env.ORVYN_CLOUD_EXECUTION_PROVIDER ?? "ovh",
+  };
+  res.json({ dynamic, env: envCanaries });
+}));
+
+adminRouter.post("/canary/vercel", need("staff.manage"), wrap(async (req: AdminRequest, res) => {
+  const { action, userId, tenantId, emergencyDisable } = req.body ?? {};
+  if (typeof emergencyDisable === "boolean") {
+    setEmergencyDisableVercel(emergencyDisable);
+    await audit(req, "canary.vercel_emergency_disable", null, { emergencyDisable });
+  }
+  if (action === "add_user" && typeof userId === "string") {
+    addCanaryUser(userId);
+    await audit(req, "canary.vercel_user_added", null, { userId });
+  } else if (action === "remove_user" && typeof userId === "string") {
+    removeCanaryUser(userId);
+    await audit(req, "canary.vercel_user_removed", null, { userId });
+  } else if (action === "add_tenant" && typeof tenantId === "string") {
+    addCanaryTenant(tenantId);
+    await audit(req, "canary.vercel_tenant_added", tenantId, { tenantId });
+  } else if (action === "remove_tenant" && typeof tenantId === "string") {
+    removeCanaryTenant(tenantId);
+    await audit(req, "canary.vercel_tenant_removed", tenantId, { tenantId });
+  }
+  res.json({ ok: true, current: listDynamicCanaries() });
+}));
 
 // ---------- who am I ----------
 

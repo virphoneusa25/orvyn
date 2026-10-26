@@ -109,7 +109,7 @@ import { previewEnvironmentKey } from "../persistence/LocalStore";
 import { buildToolResultEnvelope, envelopeForEvent, type ToolResultEnvelope } from "../gateway/toolResultEnvelope";
 import { runAgentTurns, type AgentTurnPolicy } from "./AgentTurn";
 import { actionableFindings, collectVerificationEvidence, findingsPrompt, isImplementationTask, VERIFIER_TOOLS, VerificationRuntime } from "./VerificationRuntime";
-import { AccessMode, ACCESS_MODES, applyAccessMode, isAccessMode } from "../gateway/PermissionProfiles";
+import { AccessMode, ACCESS_MODES, applyAccessMode, applyToolOverrides, effectivePermissionInfo, isAccessMode } from "../gateway/PermissionProfiles";
 import type { ReasoningEffort } from "@orvyn/ai-core";
 import { announcesPendingWork, CONTINUATION_PROMPT, handsBackToUser, MAX_CONTINUATION_NUDGES } from "./continuation";
 import { clampToolOutput, compactConversation, estimateConversationTokens, estimateMessageTokens, estimateTokens, MAX_TOOL_OUTPUT_CHARS } from "./contextBudget";
@@ -120,6 +120,7 @@ import type { IndexService } from "../indexing/IndexService";
 import { toolRpc } from "../execution/ToolRpc";
 import { registerRemoteTools } from "../execution/RemoteToolAdapter";
 import { queueExecutorJob, cancelWorkerRun } from "../routes/worker";
+import { vercelToolRunner } from "../execution/VercelToolRunner";
 import { dropLocalJob, hasOnlineLocalWorker, localJobUnclaimed } from "../routes/localWorker";
 
 /** How long a queued local job may wait for a worker before a local engine runs it itself. */
@@ -148,28 +149,40 @@ const NETWORK_ACCESS_TOOL = "request_network_access";
  *  remote execution with NO local fallback — if the worker cannot serve the
  *  run, the run fails truthfully. */
 export interface ExecutionSpec {
-  location: "LOCAL" | "LOCAL_HOST" | "LOCAL_SANDBOX" | "OVH_WORKER";
+  location: "LOCAL" | "LOCAL_HOST" | "LOCAL_SANDBOX" | "OVH_WORKER" | "VERCEL_CLOUD";
   /** Worker-side path of the project to stage into the mission container. */
   remoteProjectRoot?: string;
   /** Tenant that owns the run. Worker events must land here, never the default tenant. */
   tenantId?: string;
   organizationId?: string;
   userId?: string;
+  userEmail?: string;
   projectId?: string | null;
   workspaceId?: string | null;
-  targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker";
-  targetActual?: "local_host" | "local_sandbox" | "ovh_worker";
+  targetRequested?: "auto" | "local_host" | "local_sandbox" | "ovh_worker" | "vercel_cloud";
+  targetActual?: "local_host" | "local_sandbox" | "ovh_worker" | "vercel_cloud";
   fallbackReason?: string;
   executionLabel?: string;
   /** The OS the terminal runs on for this run ("win32" on a Windows Local run). */
   hostPlatform?: string;
   clientKind?: "desktop" | "cloud";
   computerSurface?: "host" | "desktop" | "browser" | "none";
+  canaryEligible?: boolean;
+  canaryReason?: string;
 }
 
 /** How long the runtime waits for the worker to prepare the mission
  *  container (sandbox.started event) before failing the run. */
 const REMOTE_READY_TIMEOUT_MS = Number(process.env.ORVYN_REMOTE_READY_TIMEOUT_MS) || 90_000;
+
+function isCloudExecution(location: ExecutionSpec["location"] | undefined): boolean {
+  return location === "OVH_WORKER" || location === "VERCEL_CLOUD";
+}
+
+function isRemoteToolExecution(location: ExecutionSpec["location"] | undefined): boolean {
+  return isCloudExecution(location) || location === "LOCAL_HOST" || location === "LOCAL_SANDBOX";
+}
+
 
 interface PendingApproval {
   call: ToolCall;
@@ -234,6 +247,8 @@ interface RunState {
    *  Undefined for callers that did not send one — the tenant autonomy
    *  profile applies unchanged for those, preserving legacy behavior. */
   accessMode?: AccessMode;
+  toolOverrides?: Record<string, import("../ai/ToolTypes").ToolPermission>;
+  baseDeniedTools?: Set<string>;
   /** Persisted artifacts created this run — the only names ORION may claim. */
   createdArtifacts: GroundedArtifact[];
   projectFileEvidence: ProjectFileEvidence[];
@@ -372,6 +387,8 @@ export interface RunOptions {
   admittedRunId?: string;
   reasoningEffort?: ReasoningEffort;
   accessMode?: AccessMode;
+  toolOverrides?: Record<string, import("../ai/ToolTypes").ToolPermission>;
+  baseDeniedTools?: Set<string>;
   /** User-facing chip (auto/code/server/research/deploy/automate). Prompt only. */
   composerMode?: string;
   /** Set when workspace preflight already bound this run. */
@@ -403,8 +420,8 @@ function workspaceAnchor(
   execution: ExecutionSpec | undefined,
   identity?: { created: boolean; restored: boolean; fresh: boolean; knownFiles?: string[] }
 ): string {
-  if (execution?.location === "OVH_WORKER") {
-    return "Project root: /workspace\nFile tools take paths relative to /workspace on the Cloud worker. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
+  if (isCloudExecution(execution?.location)) {
+    return "Project root: /workspace\nFile tools take paths relative to the isolated ORVYN Cloud workspace. Do not use the user's Windows path. The Cloud workspace exists even when no local folder was uploaded.";
   }
   if (identity) return workspaceModelNote(identity);
   return "File tools take paths relative to this chat's workspace. Do not invent another project folder.";
@@ -566,7 +583,7 @@ export class StreamingAgentRuntime {
           }
           if (!state.modelCallStartedAt && now - state.lastActivityAt > stallMs) {
             const events = this.store.get(runId)?.events ?? [];
-            const waitingOnWorker = Boolean(state.execution && ["OVH_WORKER", "LOCAL_HOST", "LOCAL_SANDBOX"].includes(String(state.execution.location))) && !events.some((e) => e.type === "sandbox.ready" || String(e.type) === "local.ready" || e.type === "tool.started");
+            const waitingOnWorker = Boolean(state.execution && isRemoteToolExecution(state.execution.location)) && !events.some((e) => e.type === "sandbox.ready" || String(e.type) === "local.ready" || e.type === "tool.started");
             state.stalled = true;
             this.store.emit(runId, "run.stalled", { stallMs, waitingOnWorker });
             this.store.emit(runId, "run.error", waitingOnWorker
@@ -756,7 +773,7 @@ export class StreamingAgentRuntime {
     // Tenant + workspace: one preview address per workspace, never shared
     // across customers, never derivable from ids a client has seen.
     const siteKey = state?.workspaceId ? `ws:${tenantId}:${state.workspaceId}` : undefined;
-    const remote = state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX";
+    const remote = isRemoteToolExecution(state?.execution?.location);
     return {
       siteKey,
       sourceRoot: !remote && state?.projectRoot ? state.projectRoot : undefined,
@@ -891,7 +908,7 @@ export class StreamingAgentRuntime {
           signal: state.controller.signal,
           runId,
           workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
-          executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+          executionTarget: isCloudExecution(state.execution?.location) ? "cloud_worker" : "local_host",
           // Attachment staging is sanctioned by the runtime itself.
           approval: { granted: true, scope: "internal", grantedBy: "runtime" },
         });
@@ -912,7 +929,7 @@ export class StreamingAgentRuntime {
         signal: state.controller.signal,
         runId,
         workspaceRoot: state.execution?.remoteProjectRoot || state.projectRoot,
-        executionTarget: state.execution?.targetActual === "ovh_worker" ? "cloud_worker" : "local_host",
+        executionTarget: isCloudExecution(state.execution?.location) ? "cloud_worker" : "local_host",
         approval: { granted: true, scope: "internal", grantedBy: "runtime" },
       });
       return result.ok && typeof result.output === "string" && result.output.trim() && !/…\(truncated\)\s*$/.test(result.output) ? result.output : null;
@@ -1332,7 +1349,7 @@ export class StreamingAgentRuntime {
    */
   private isLocalEngine(runId: string): boolean {
     if (process.env.ORVYN_CLOUD_MODE === "true" || process.env.ORVYN_PROJECTS_DIR) return false;
-    return this.runs.get(runId)?.execution?.location !== "OVH_WORKER";
+    return !isCloudExecution(this.runs.get(runId)?.execution?.location);
   }
 
   private async verifyPublishedPreview(runId: string, url: string, announce = false): Promise<boolean> {
@@ -1390,10 +1407,12 @@ export class StreamingAgentRuntime {
         this.store.emit(runId, "file.read", { path: args.path });
         break;
       case "write_file":
+      case "create_file":
+      case "apply_patch":
         this.store.emit(runId, "file.created", { path: args.path, callId: call.id });
         this.store.emit(runId, "file.edit", { path: args.path, preview });
         // A part appended to a large file: the preview holds the whole file so far.
-        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? "")}` : args.content);
+        this.openAgentPreview(runId, args.path, args.append === true ? `${siteFileText(runId, String(args.path ?? "")) ?? ""}${String(args.content ?? args.patch ?? "")}` : (args.content ?? args.patch));
         break;
       case "edit_file":
         this.store.emit(runId, "file.edit", { path: args.path, preview, op: "modify" });
@@ -1560,6 +1579,16 @@ export class StreamingAgentRuntime {
           if (picked?.config.capabilities.agent && picked.supportsTools()) return picked;
           return this.modelService.router.resolve("agent", { tools: true, streaming: true, vision: needsVision });
         })();
+    if (!projectRoot || typeof projectRoot !== "string" || !projectRoot.trim()) {
+      const tenantId = execution?.tenantId || "default";
+      const ephemeralRoot = path.join(defaultDataDir(), "tenants", tenantId, "ephemeral", runId);
+      try {
+        mkdirSync(ephemeralRoot, { recursive: true });
+        projectRoot = ephemeralRoot;
+      } catch {
+        // Fallback if directory creation fails
+      }
+    }
     if (!recovering) this.store.create(runId, projectRoot);
     else {
       this.store.setStatus(runId, "running");
@@ -1599,6 +1628,8 @@ export class StreamingAgentRuntime {
     // mode genuinely cannot write even if the model tries. All of it is
     // applied to this run's SCOPED gateway — the shared tenant registry is
     // never mutated by a run.
+    const baseDeniedTools = new Set(this.tools.list().filter((t) => this.tools.getPermission(t.name) === "denied" && t.defaultPermission !== "denied").map((t) => t.name));
+    const toolOverrides = Boolean(projectRoot) && this.memoryStore?.getToolOverrides ? await Promise.resolve(this.memoryStore.getToolOverrides(projectRoot)).catch(() => ({})) : {};
     const runGateway = this.scopedGateway();
     this.runTools.set(runId, runGateway);
     const def = applyMode(runGateway.registry, mode);
@@ -1611,6 +1642,7 @@ export class StreamingAgentRuntime {
     const accessMode = options?.accessMode && isAccessMode(options.accessMode) ? options.accessMode : undefined;
     if (accessMode) applyAccessMode(runGateway.registry, accessMode);
     else runGateway.applyProfile();
+    applyToolOverrides(runGateway.registry, def.permissions, def.toolsEnabled, toolOverrides, baseDeniedTools);
 
     let toolModelError: string | undefined;
     let toolFallbackReason: string | undefined;
@@ -1696,6 +1728,8 @@ export class StreamingAgentRuntime {
       cachedTokensSum: 0,
       promptTokensSum: 0,
       ...(accessMode ? { accessMode } : {}),
+      toolOverrides,
+      baseDeniedTools,
       createdArtifacts: [],
       projectFileEvidence: [],
       instruction,
@@ -1741,25 +1775,52 @@ export class StreamingAgentRuntime {
     // serves tool RPCs; the model loop stays HERE (credentials never leave
     // the control plane). No local fallback — if the worker never reports
     // readiness, the run fails truthfully in awaitRemoteReady below.
-    if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && (execution?.location === "OVH_WORKER" || execution?.location === "LOCAL_HOST" || execution?.location === "LOCAL_SANDBOX")) {
-      const actual = execution.targetActual
-        ?? (execution.location === "OVH_WORKER" ? "ovh_worker" : execution.location === "LOCAL_SANDBOX" ? "local_sandbox" : "local_host");
-      const label = execution.executionLabel
-        ?? (actual === "local_host" ? "Local" : actual === "local_sandbox" ? "Local Sandbox" : "ORVYN Cloud");
+    if (
+      preflight.status === "ok" &&
+      resolution.status === "ok" &&
+      !toolModelError &&
+      isRemoteToolExecution(execution?.location)
+    ) {
+      const actual =
+        execution!.targetActual ??
+        (execution!.location === "VERCEL_CLOUD"
+          ? "vercel_cloud"
+          : execution!.location === "OVH_WORKER"
+            ? "ovh_worker"
+            : execution!.location === "LOCAL_SANDBOX"
+              ? "local_sandbox"
+              : "local_host");
+      const label =
+        execution!.executionLabel ??
+        (actual === "local_host"
+          ? "Local"
+          : actual === "local_sandbox"
+            ? "Local Sandbox"
+            : "ORVYN Cloud");
       this.store.emit(runId, "run.execution", {
-        location: execution.location === "OVH_WORKER" ? "OVH_WORKER" : actual === "local_sandbox" ? "LOCAL_SANDBOX" : "LOCAL",
-        executionTargetRequested: execution.targetRequested ?? "auto",
+        location: isCloudExecution(execution!.location)
+          ? execution!.location
+          : actual === "local_sandbox"
+            ? "LOCAL_SANDBOX"
+            : "LOCAL",
+        executionTargetRequested: execution!.targetRequested ?? "auto",
         executionTargetActual: actual,
         executionLabel: label,
-        fallbackReason: execution.fallbackReason,
-        remoteProjectRoot: execution.remoteProjectRoot ?? "",
-        note: actual === "ovh_worker"
-          ? "Tools execute on a remote worker inside an isolated mission container. Changed files are copied back to the Cloud workspace before that container is removed."
-          : actual === "local_sandbox"
-            ? "Tools execute in a local Docker sandbox. Project stays on this machine."
-            : label === "Cloud"
-              ? "Generated files are saved to this project and to Files → Generated."
-              : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to ORVYN Cloud.",
+        fallbackReason: execution!.fallbackReason,
+        remoteProjectRoot: execution!.remoteProjectRoot ?? "",
+        executionProvider: execution!.location === "VERCEL_CLOUD" ? "vercel" : (execution!.location === "OVH_WORKER" ? "ovh" : "local"),
+        canaryEligible: execution!.canaryEligible,
+        canaryReason: execution!.canaryReason,
+        note:
+          actual === "vercel_cloud"
+            ? "Tools execute inside an isolated ORVYN Cloud microVM. Changed files are synchronized back to the Cloud workspace when the run settles."
+            : actual === "ovh_worker"
+              ? "Tools execute on the legacy ORVYN Cloud worker inside an isolated mission container. Changed files are copied back to the Cloud workspace before that container is removed."
+              : actual === "local_sandbox"
+                ? "Tools execute in a local Docker sandbox. Project stays on this machine."
+                : label === "Cloud"
+                  ? "Generated files are saved to this project and to Files → Generated."
+                  : "Tools execute on your computer through the ORVYN Local Worker. Project files are not uploaded to ORVYN Cloud.",
       });
     } else if (preflight.status === "ok" && resolution.status === "ok" && !toolModelError && execution?.executionLabel === "Cloud") {
       // Cloud workspace on the control plane (no project folder): say so, so
@@ -1792,22 +1853,40 @@ export class StreamingAgentRuntime {
     // Cloud workspace on this control plane. Snapshot that source of truth
     // before queueing remote tool calls. Local Worker paths still belong to
     // the customer's computer and must never be opened here.
-    const checkpointVisibleHere = !execution || execution.location === "LOCAL" || execution.location === "OVH_WORKER";
+    const checkpointVisibleHere =
+      !execution ||
+      execution.location === "LOCAL" ||
+      isCloudExecution(execution.location);
     const queueRemoteRun = async (): Promise<void> => {
-      if (execution?.location !== "OVH_WORKER") return;
+      const remoteExecution = execution;
+      if (!remoteExecution || !isCloudExecution(remoteExecution.location)) {
+        return;
+      }
       try {
-        (await queueExecutorJob(runId, execution.remoteProjectRoot ?? "", {
-          tenantId: execution.tenantId ?? "",
-          organizationId: execution.organizationId ?? "",
-          userId: execution.userId ?? "",
-          projectId: execution.projectId ?? null,
-          runId,
-        }, projectRoot, recovering));
+        if (remoteExecution.location === "VERCEL_CLOUD") {
+          await vercelToolRunner.start(runId, projectRoot, this.store, {
+            tenantId: remoteExecution.tenantId ?? "",
+            organizationId: remoteExecution.organizationId ?? remoteExecution.tenantId ?? "",
+            userId: remoteExecution.userId ?? remoteExecution.tenantId ?? "",
+            userEmail: remoteExecution.userEmail ?? "",
+            projectId: remoteExecution.projectId ?? null,
+            workspaceId: remoteExecution.workspaceId ?? "run:" + runId,
+          });
+        } else {
+          await queueExecutorJob(runId, remoteExecution.remoteProjectRoot ?? "", {
+            tenantId: remoteExecution.tenantId ?? "",
+            organizationId: remoteExecution.organizationId ?? "",
+            userId: remoteExecution.userId ?? "",
+            projectId: remoteExecution.projectId ?? null,
+            runId,
+          }, projectRoot, recovering);
+        }
       } catch (err: any) {
-        // A sandbox that cannot be planned under a mandatory provider (e.g.
-        // ORVYN_EXECUTION_PROVIDER=openshell with the run ineligible) must not
-        // degrade to a weaker executor — the run blocks truthfully.
-        this.store.emit(runId, "run.blocked", { message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`, resumable: true, reason: "sandbox_unavailable" });
+        this.store.emit(runId, "run.blocked", {
+          message: `Execution environment unavailable: ${String(err?.message ?? err).slice(0, 300)}`,
+          resumable: true,
+          reason: "sandbox_unavailable",
+        });
         this.store.setStatus(runId, "blocked");
       }
     };
@@ -2001,7 +2080,7 @@ export class StreamingAgentRuntime {
             runId,
           });
         }
-        if (state?.execution?.location === "OVH_WORKER" || state?.execution?.location === "LOCAL_HOST" || state?.execution?.location === "LOCAL_SANDBOX") {
+        if (isRemoteToolExecution(state?.execution?.location)) {
           const remote = await this.awaitRemoteReady(runId);
           if (remote) await this.mountRemoteTools(runId);
         }
@@ -2097,7 +2176,7 @@ export class StreamingAgentRuntime {
           toolNames: runGateway.list().map((t) => t.name),
           hasLocalProject: workspace.available,
           cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
-          cloudWorkspaceAvailable: state?.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
+          cloudWorkspaceAvailable: isCloudExecution(state?.execution?.location) || process.env.ORVYN_CLOUD_MODE === "true",
           composerMode: options?.composerMode ?? mode,
           actualTarget: execution?.targetActual,
         });
@@ -2197,8 +2276,8 @@ export class StreamingAgentRuntime {
     if (!state?.execution) return;
     const gateway = this.gatewayFor(runId);
     const remoteNames = new Set([
-      "read_file", "write_file", "edit_file", "list_directory", "search_code", "search_files",
-      "terminal", "run_command", "run_tests", "run_typecheck",
+      "read_file", "write_file", "create_file", "edit_file", "apply_patch", "list_directory", "search_code", "search_files",
+      "terminal", "run_command", "run_tests", "run_typecheck", "run_linter",
       "git_status", "git_diff", "git_log", "git_branch", "git_checkout", "git_commit",
       "start_process", "stop_process", "read_process_logs", "list_processes",
       "delete_file",
@@ -2210,13 +2289,14 @@ export class StreamingAgentRuntime {
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
-    applyMode(gateway.registry, state.mode);
+    const remoteModeDef = applyMode(gateway.registry, state.mode);
     if (state.accessMode) applyAccessMode(gateway.registry, state.accessMode);
     else gateway.applyProfile();
+    applyToolOverrides(gateway.registry, remoteModeDef.permissions, remoteModeDef.toolsEnabled, state.toolOverrides, state.baseDeniedTools);
     // Tools with no remote variant must not run on the control plane while
     // the model believes it is inside the mission container. Remote variants
     // (write_file, terminal, git, start_process) keep the run's access mode.
-    if (state.execution.location === "OVH_WORKER") {
+    if (isCloudExecution(state.execution.location)) {
       const localOnlyStateful = new Set(["move_file", "ssh_exec"]);
       for (const t of gateway.list()) {
         if (localOnlyStateful.has(t.name) && !remoteNames.has(t.name)) gateway.setPermission(t.name, "denied");
@@ -2321,6 +2401,9 @@ export class StreamingAgentRuntime {
     // container immediately — the worker observes the cancelled status on
     // its next poll and kills the mission container.
     if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
+    if (state.execution?.location === "VERCEL_CLOUD") {
+      void vercelToolRunner.stop(runId, "cancelled");
+    }
 
     // Release the loop if it is parked on an approval, otherwise it would hang
     // forever holding the abort it can no longer observe.
@@ -2422,7 +2505,7 @@ export class StreamingAgentRuntime {
       toolNames: this.gatewayFor(runId).list().map((t) => t.name),
       hasLocalProject: inspectWorkspace(state.projectRoot).available,
       cloudControlPlane: process.env.ORVYN_CLOUD_MODE === "true" || Boolean(process.env.ORVYN_PROJECTS_DIR),
-      cloudWorkspaceAvailable: state.execution?.location === "OVH_WORKER" || process.env.ORVYN_CLOUD_MODE === "true",
+      cloudWorkspaceAvailable: isCloudExecution(state.execution?.location) || process.env.ORVYN_CLOUD_MODE === "true",
       composerMode: state.composerMode ?? state.resumeMode,
       actualTarget: state.execution?.targetActual,
     });
@@ -2552,7 +2635,7 @@ export class StreamingAgentRuntime {
       provider: provider.config.providerName ?? provider.config.provider,
       reasoningEffortRequested: state.reasoningEffort,
       reasoningEffortApplied: reasoningApplied,
-      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode } : {}),
+      ...(state.accessMode ? { permissionMode: ACCESS_MODES[state.accessMode].label, accessMode: state.accessMode, effectiveProfile: ACCESS_MODES[state.accessMode].profile } : { permissionMode: effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).label, effectiveProfile: effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).profile }),
       tenantId: state.execution?.tenantId ?? "",
       projectId: state.execution?.projectId ?? null,
       executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
@@ -2570,7 +2653,8 @@ export class StreamingAgentRuntime {
       projectId: state.execution?.projectId ?? null,
       mode,
       executionTarget: state.execution?.targetActual ?? state.execution?.location ?? "",
-      permissionMode: state.accessMode ?? "",
+      permissionMode: state.accessMode ?? effectivePermissionInfo(undefined, this.gatewayFor(runId).profile).modeKey,
+      effectiveProfile: effectivePermissionInfo(state.accessMode, this.gatewayFor(runId).profile).profile,
       selectedModel: provider.config.id,
       toolCount: toolDefs.length,
       toolNames: toolDefs.map((tool) => tool.name),
@@ -3551,7 +3635,7 @@ export class StreamingAgentRuntime {
       // Remote runs read their files in the mission container, so the local
       // previewer has nothing to show — the remote tool returns the real
       // before/after diff with its result instead.
-      const preview = isFileMutatingTool(call.name) && state.execution?.location !== "OVH_WORKER"
+      const preview = isFileMutatingTool(call.name) && !isCloudExecution(state.execution?.location)
         ? await previewToolEdit(state.projectRoot, call.name, call.arguments as Record<string, unknown>)
         : undefined;
       previews.set(call.id, preview);
@@ -3659,18 +3743,18 @@ export class StreamingAgentRuntime {
       }
       this.store.emit(runId, "tool.started", { callId: call.id, tool: call.name });
       this.store.emit(runId, "tool.input", { callId: call.id, input: call.arguments });
-      if (!["write_file", "edit_file", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
+      if (!["write_file", "create_file", "edit_file", "apply_patch", "delete_file", "move_file", "terminal", "run_command"].includes(call.name)) this.emitDomainEvent(runId, call, previews.get(call.id));
 
       // Single-agent runs act as the coding worker, so its capability set applies.
       // REMOTE runs: the worker relays terminal.started/output/completed through
       // the event relay — emitting them here too would duplicate every card.
       const terminalLike = call.name === "terminal" || call.name === "run_command";
-      const remoteRun = state.execution?.location === "OVH_WORKER";
+      const remoteRun = isCloudExecution(state.execution?.location);
       if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.started", { callId: call.id, command: (call.arguments as any).command });
       // Remote writes carry the runtime's write-safety facts (task scope +
       // read evidence) so the worker's guard grades them identically to the
       // control plane's. Authorization is runtime policy, never the model's say-so.
-      if (remoteRun && (call.name === "write_file" || call.name === "edit_file")) {
+      if (remoteRun && (call.name === "write_file" || call.name === "create_file" || call.name === "edit_file" || call.name === "apply_patch")) {
         const writePath = String((call.arguments as { path?: unknown })?.path ?? "");
         (call.arguments as Record<string, unknown>).__orvynGuard = {
           scope: state.taskScope,
@@ -3725,7 +3809,7 @@ export class StreamingAgentRuntime {
           () =>
             this.gatewayFor(runId).execute(call.name, call.arguments, "coder", projectToolContext(state, {
               signal: state.controller.signal,
-              executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+              executionTarget: isCloudExecution(state.execution?.location) ? "cloud_worker" : "local_host",
               toolUseId: call.id,
               runId,
               tenantId: state.execution?.tenantId || undefined,
@@ -3796,11 +3880,15 @@ export class StreamingAgentRuntime {
       }
       const desktopTarget = (result.meta as { desktopTarget?: Record<string, unknown> } | undefined)?.desktopTarget;
       if (desktopTarget) this.store.emit(runId, "desktop.target", { callId: call.id, tool: call.name, ...desktopTarget });
-      if (result.ok && (call.name === "write_file" || call.name === "edit_file") && result.projectFileEvidence &&
+      if (result.ok && (call.name === "write_file" || call.name === "create_file" || call.name === "edit_file" || call.name === "apply_patch") && result.projectFileEvidence &&
           /\.(svg|png|jpe?g|webp)$/i.test(result.projectFileEvidence.name) && this.artifacts) {
         let bytes: Buffer | null = null;
-        if (call.name === "write_file") bytes = Buffer.from(String((call.arguments as Record<string, unknown>).content ?? ""), "utf-8");
-        else if (state.execution?.location === "LOCAL_HOST" || state.execution?.location === "LOCAL_SANDBOX" || state.execution?.location === "OVH_WORKER") {
+        if (call.name === "write_file" || call.name === "create_file" || call.name === "apply_patch") bytes = Buffer.from(String((call.arguments as Record<string, unknown>).content ?? (call.arguments as Record<string, unknown>).patch ?? ""), "utf-8");
+        else if (
+          state.execution?.location === "LOCAL_HOST" ||
+          state.execution?.location === "LOCAL_SANDBOX" ||
+          isCloudExecution(state.execution?.location)
+        ) {
           const read = await toolRpc.execute(runId, "read_file", { path: result.projectFileEvidence.path }).catch(() => null);
           if (read?.ok) bytes = Buffer.from(String(read.output ?? ""), "utf-8");
         } else {
@@ -3882,7 +3970,7 @@ export class StreamingAgentRuntime {
             if (/\.html?$/i.test(readPath)) await this.completeSiteAssets(runId);
           }
         }
-        if (["write_file", "edit_file", "delete_file", "move_file"].includes(call.name)) {
+        if (["write_file", "create_file", "edit_file", "apply_patch", "delete_file", "move_file"].includes(call.name)) {
           // Remote tools carry the REAL before/after diff back with the
           // result; local runs use the pre-execution preview.
           this.emitDomainEvent(runId, call, (result.edit as EditPreview | undefined) ?? previews.get(call.id));
@@ -3957,8 +4045,8 @@ export class StreamingAgentRuntime {
         const forModel = shouldCondense(call.name, raw) ? await this.condenseForModel(runId, state, call, raw, command) : raw;
         const { text, truncated } = clampToolOutput(forModel, MAX_TOOL_OUTPUT_CHARS);
         const first = persisted[0];
-        const written = call.name === "write_file" && typeof toolArgs.content === "string" && toolArgs.content && String(toolArgs.path ?? "")
-          ? await this.offerWrittenFileDownload(runId, state, String(toolArgs.path), toolArgs.content)
+        const written = (call.name === "write_file" || call.name === "create_file" || call.name === "apply_patch") && typeof (toolArgs.content ?? toolArgs.patch) === "string" && String(toolArgs.content ?? toolArgs.patch) && String(toolArgs.path ?? "")
+          ? await this.offerWrittenFileDownload(runId, state, String(toolArgs.path), String(toolArgs.content ?? toolArgs.patch))
           : null;
         const download = written ?? first;
         this.store.emit(runId, "tool.completed", {
@@ -4108,7 +4196,7 @@ export class StreamingAgentRuntime {
     });
     const context = projectToolContext(state, {
       signal: state.controller.signal,
-      executionTarget: state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER" ? "cloud_worker" : "local_host",
+      executionTarget: isCloudExecution(state.execution?.location) ? "cloud_worker" : "local_host",
       runId,
       tenantId: state.execution?.tenantId || undefined,
     });
@@ -4410,7 +4498,7 @@ export class StreamingAgentRuntime {
     if (state.phase === phase) return;
     state.phase = phase;
     const executionTarget =
-      state.execution?.targetActual === "ovh_worker" || state.execution?.location === "OVH_WORKER"
+      isCloudExecution(state.execution?.location)
         ? "cloud_worker"
         : state.execution?.targetActual === "local_sandbox" || state.execution?.location === "LOCAL_SANDBOX"
           ? "local_sandbox"

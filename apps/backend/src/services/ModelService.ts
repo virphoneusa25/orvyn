@@ -499,6 +499,12 @@ export class ModelService {
       this.router.setDefaultOverride("planner", ollamaId);
       this.router.setDefaultOverride("reviewer", ollamaId);
       this.router.setDefaultOverride("executor", ollamaId);
+    } else if (fireworksKey) {
+      const fwAuto = "fw:accounts/fireworks/models/glm-5p3-flash";
+      const fwCoder = "fw:accounts/fireworks/models/kimi-k2p7-code";
+      for (const task of ["chat", "completion", "executor"] as const) this.router.setDefaultOverride(task, fwAuto);
+      for (const task of ["code", "agent", "planner", "reviewer"] as const) this.router.setDefaultOverride(task, fwCoder);
+      this.router.setDefaultOverride("vision", fwAuto);
     } else if (nebiusKey) {
       const fast = "nebius:zai-org/GLM-5.3-Flash";
       const coder = "nebius:moonshotai/Kimi-K2.7-Code";

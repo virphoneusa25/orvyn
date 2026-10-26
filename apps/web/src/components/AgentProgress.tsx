@@ -1,5 +1,5 @@
 import { Icon } from "./Icons";
-import { liveStatusLabel, progressRows, terminalRunStatus, type AgentProgressEvent, type ProgressRow } from "../lib/agentProgress";
+import { liveStatusLabel, progressRows, runPermissionLabel, terminalRunStatus, type AgentProgressEvent, type ProgressRow } from "../lib/agentProgress";
 
 function typeIcon(row: ProgressRow) {
   if (row.integration === "github") return <Icon.github />;
@@ -41,6 +41,7 @@ function Step({ row, onApprove }: {
       </span>
       {row.state === "running" || row.state === "waiting" ? <i className="agent-progress__spinner" aria-label="In progress" /> : null}
       {row.state === "done" ? <span className="agent-progress__done" aria-hidden="true"><Icon.check size={14} /></span> : null}
+      {row.state === "failed" ? <span className="agent-progress__failed" aria-hidden="true"><Icon.x size={14} /></span> : null}
     </li>
   );
 }
@@ -50,17 +51,29 @@ export function AgentProgress({ events, status, onApprove }: {
   status: string;
   onApprove?: (callId: string, approved: boolean, scope?: "once" | "mission" | "session" | "project" | "always") => void;
 }) {
-  const rows = progressRows(events, status);
-  const live = !terminalRunStatus(status);
-  if (!rows.length && !live) return null;
-  const current = [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting");
-  const summary = current?.label
-    ?? liveStatusLabel(events, status)
-    ?? (live ? "Working on your request" : status === "partial" ? "Work completed with remaining items" : status === "cancelled" ? "Work stopped" : "Work completed");
+  const hasError = status === "error" || status === "failed" || events.some((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true));
+  const effectiveStatus = hasError ? "error" : status;
+  const rows = progressRows(events, effectiveStatus);
+  const permLabel = runPermissionLabel(events);
+  const live = !terminalRunStatus(effectiveStatus);
+  if (!rows.length && !live && !hasError) return null;
+  const current = live ? [...rows].reverse().find((row) => row.state === "running" || row.state === "waiting") : undefined;
+  const summary = (live && (current?.label ?? liveStatusLabel(events, effectiveStatus)))
+    || (live
+      ? "Working on your request"
+      : effectiveStatus === "error" || effectiveStatus === "failed"
+        ? "Task failed"
+        : effectiveStatus === "blocked"
+          ? "Task blocked"
+          : effectiveStatus === "partial"
+            ? "Work completed with remaining items"
+            : effectiveStatus === "cancelled"
+              ? "Work stopped"
+              : "Work completed");
 
   return (
-    <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
-      <details open={live}><summary className="agent-progress__live">{summary}</summary>
+    <section className="agent-progress agent-progress--flat" aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={effectiveStatus}>
+      <details open={live || effectiveStatus === "error" || effectiveStatus === "failed" || effectiveStatus === "blocked"}><summary className="agent-progress__live"><span>{summary}</span>{permLabel ? <span className="badge" data-testid="run-permission-mode" style={{ marginLeft: 8, fontSize: 11 }}>{permLabel}</span> : null}</summary>
       <ol className="agent-progress__steps">
         {rows.filter((row) => row.kind !== "file").map((row) => <Step key={row.id} row={row} onApprove={onApprove} />)}
       </ol></details>

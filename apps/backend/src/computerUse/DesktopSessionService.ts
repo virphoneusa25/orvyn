@@ -11,14 +11,15 @@ import {
   type DesktopSession,
 } from "../desktop/desktopSession";
 import {
-  captureSandboxFrame,
-  captureSandboxScreenshot,
-  findSandboxSession,
-  sandboxAgentInput,
-  sandboxLaunchApp,
-  startSandboxDesktop,
-  type SandboxDesktopSession,
-} from "../desktop/sandboxDesktop";
+  captureCloudDesktopFrame,
+  captureCloudDesktopScreenshot,
+  cloudDesktopInput,
+  cloudDesktopLaunchApp,
+  findCloudDesktopSession,
+  startCloudDesktop,
+  type CloudDesktopSession,
+} from "../desktop/cloudDesktop";
+import { vercelToolRunner } from "../execution/VercelToolRunner";
 import {
   beginHostAgentAction,
   getHostDesktopState,
@@ -51,16 +52,16 @@ export class DesktopSessionService {
     return getDesktopSession(identity.tenantId, identity.runId ?? undefined, identity.projectRoot);
   }
 
-  sandbox(identity: ComputerUseIdentity): SandboxDesktopSession | undefined {
-    return findSandboxSession(identity.tenantId, identity.projectRoot);
+  sandbox(identity: ComputerUseIdentity): CloudDesktopSession | undefined {
+    return findCloudDesktopSession(identity.tenantId, identity.projectRoot);
   }
 
   async captureScreenshot(identity: ComputerUseIdentity): Promise<{ bytes: Buffer; mediaType: string; sessionId: string } | null> {
     const sb = this.sandbox(identity);
     if (sb) {
-      const png = await captureSandboxScreenshot(sb);
+      const png = await captureCloudDesktopScreenshot(sb);
       if (png) return { bytes: png, mediaType: "image/png", sessionId: sb.id };
-      const frame = await captureSandboxFrame(sb, "high");
+      const frame = await captureCloudDesktopFrame(sb, "high");
       if (frame) return { bytes: frame, mediaType: "image/jpeg", sessionId: sb.id };
     }
     const session = this.getSession(identity);
@@ -77,7 +78,7 @@ export class DesktopSessionService {
       if (sb.controlOwner === "user") {
         return { ok: false, error: "User has taken control. ORION input is paused.", sessionId: sb.id };
       }
-      const ok = await sandboxAgentInput(sb, kind, args);
+      const ok = await cloudDesktopInput(sb, kind, args, "orion");
       return ok
         ? { ok: true, sessionId: sb.id }
         : { ok: false, error: "Desktop did not accept input.", sessionId: sb.id };
@@ -121,7 +122,11 @@ export class DesktopSessionService {
     let sb = this.sandbox(identity);
     if (!sb) {
       try {
-        sb = await startSandboxDesktop({
+        const vercel = Boolean(
+          identity.runId && vercelToolRunner.hasRun(identity.runId)
+        );
+        sb = await startCloudDesktop({
+          provider: vercel ? "vercel" : "docker",
           tenantId: identity.tenantId,
           projectRoot: identity.projectRoot,
           runId: identity.runId ?? undefined,
@@ -132,7 +137,7 @@ export class DesktopSessionService {
     }
     const name = desktopAppName(app);
     if (!name) return { ok: false, sessionId: sb.id, error: `Unknown app "${app}". Use browser, terminal, files, editor or settings.` };
-    const ok = await sandboxLaunchApp(sb, name);
+    const ok = await cloudDesktopLaunchApp(sb, name);
     return { ok, sessionId: sb.id, error: ok ? undefined : `Could not open ${app}` };
   }
 

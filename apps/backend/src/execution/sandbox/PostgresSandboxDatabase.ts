@@ -33,7 +33,7 @@ export class PostgresSandboxDatabase {
         for(const table of SANDBOX_TABLES){
           const columns=await db.client().query("SELECT column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY column_name",[db.schema,table]);
           const fields=expected[table].map(c=>({column_name:c.name,data_type:c.type==="TEXT"?"text":"bigint",is_nullable:c.notnull||c.pk?"NO":"YES"}));
-          
+
           if(JSON.stringify(columns.rows)!==JSON.stringify(fields.sort((a,b)=>a.column_name<b.column_name?-1:1)))throw new Error("Unsupported sandbox target columns");
         }
 

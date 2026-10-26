@@ -1,0 +1,46 @@
+name: Task-Aware Vercel Cloud Validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apps/backend/src/execution/**"
+      - "apps/backend/src/agent/**"
+      - "apps/backend/src/desktop/**"
+      - "apps/backend/src/computerUse/**"
+      - "apps/backend/src/ai/tools/desktopTools.ts"
+      - "apps/backend/src/routes/cloudWorkbench.ts"
+      - "apps/backend/src/routes/desktop.ts"
+      - "apps/backend/package.json"
+      - "package-lock.json"
+      - ".env.example"
+      - ".github/workflows/task-aware-vercel-cloud.yml"
+      - ".github/workflows/vercel-live-smoke.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --workspaces --ignore-scripts --no-audit --no-fund
+
+      - name: Build ai-core
+        run: npm run build -w @orvyn/ai-core
+
+      - name: Build backend
+        run: npm run build -w @orvyn/backend
+
+      - name: Vercel execution tests
+        run: node --test apps/backend/dist/execution/VercelExecutionProvider.test.js
+
+      - name: Existing backend suite
+        timeout-minutes: 12
+        run: npm test -w @orvyn/backend

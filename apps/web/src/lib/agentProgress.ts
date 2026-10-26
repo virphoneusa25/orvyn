@@ -31,11 +31,16 @@ const TOOL_LABELS: Record<string, string> = {
   create_zip: "Creating archive",
   read_file: "Reading file",
   write_file: "Creating file",
+  create_file: "Creating file",
   edit_file: "Editing file",
+  apply_patch: "Applying patch",
   delete_file: "Deleting file",
   move_file: "Moving file",
   terminal: "Running command",
   run_tests: "Running tests",
+  run_typecheck: "Running typecheck",
+  run_linter: "Running linter",
+  run_command: "Running command",
   git_status: "Checking Git status",
   git_diff: "Reviewing changes",
   browser_screenshot: "Checking the app in a browser",
@@ -44,8 +49,8 @@ const TOOL_LABELS: Record<string, string> = {
 function str(value: unknown): string { return typeof value === "string" ? value : ""; }
 function toolKind(tool: string): ProgressRow["kind"] {
   if (/^(generate_image)$/.test(tool)) return "image";
-  if (/^(write_file|edit_file|delete_file|move_file|read_file|create_document|create_zip|artifact_create|artifact_write)$/.test(tool)) return "file";
-  if (/^(terminal|run_tests|ssh_exec|remote_exec|start_process|run_command)$/.test(tool)) return "command";
+  if (/^(write_file|create_file|edit_file|apply_patch|delete_file|move_file|read_file|create_document|create_zip|artifact_create|artifact_write)$/.test(tool)) return "file";
+  if (/^(terminal|run_tests|run_typecheck|run_linter|ssh_exec|remote_exec|start_process|run_command)$/.test(tool)) return "command";
   if (/^(web_search|fetch_url|search_files|search_code|search_capabilities)$/.test(tool)) return "search";
   if (/^(git_diff|git_status|browser_screenshot|verify)$/.test(tool)) return "review";
   return "other";
@@ -138,7 +143,9 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
       continue;
     }
     if (event.type === "approval.required") {
-      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined, state: "waiting", approvalCallId: callId || undefined });
+      const toolName = str(data.tool) ? TOOL_LABELS[str(data.tool)] ?? str(data.tool) : undefined;
+      const inputDetail = data.input && typeof data.input === "object" ? toolDetail(data.input as Record<string, unknown>) : undefined;
+      put({ id: `approval:${callId || event.sequence}`, kind: "approval", label: "Waiting for approval", detail: toolName && inputDetail ? `${toolName} · ${inputDetail}` : toolName ?? inputDetail, state: "waiting", approvalCallId: callId || undefined });
     } else if (event.type === "approval.resolved" && callId) {
       const row = byKey.get(`approval:${callId}`);
       if (row) row.state = data.approved === true ? "done" : "failed";
@@ -150,11 +157,17 @@ export function progressRows(events: AgentProgressEvent[], status = "running"): 
   const cursor = timelineCursor(events, status);
   const intro: ProgressState = cursor === "introducing" ? "running" : "done";
   const checking: ProgressState = cursor === "checking" ? "running" : cursor === "done" ? "done" : cursor === "failed" ? "failed" : "pending";
+  const errorEvent = events.find((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true));
+  const errorDetail = errorEvent?.data?.message ? String(errorEvent.data.message).slice(0, 300) : undefined;
+  const errorRow: ProgressRow[] = (cursor === "failed" && errorDetail && !collapsed.some((r) => r.state === "failed"))
+    ? [{ id: "stage:error", kind: "other", label: "Task error", detail: errorDetail, state: "failed" }]
+    : [];
   // Flat ledger: each action is its own permanent row. Tools are not nested
   // under an Acting accordion — they sit between Introducing and Checking.
   return [
     { id: "stage:introducing", kind: "plan", label: "Introducing", state: intro },
     ...collapsed,
+    ...errorRow,
     { id: "stage:checking", kind: "review", label: "Checking the result", state: checking },
   ];
 }
@@ -193,7 +206,7 @@ function collapseSameHostFetchFailures(work: ProgressRow[]): ProgressRow[] {
 }
 
 function timelineCursor(events: AgentProgressEvent[], status: string): "introducing" | "acting" | "checking" | "done" | "failed" {
-  if (status === "error" || status === "failed") return "failed";
+  if (status === "error" || status === "failed" || events.some((e) => e.type === "run.error" || (e.type === "run.blocked" && e.data?.terminal === true))) return "failed";
   if (terminalRunStatus(status) || events.some((e) => e.type === "run.completed" || e.type === "run.partial")) return "done";
   let stage: "introducing" | "acting" | "checking" = "introducing";
   for (const event of events) {
@@ -234,4 +247,18 @@ export function liveStatusLabel(events: AgentProgressEvent[], status: string): s
 
 export function terminalRunStatus(status: string): boolean {
   return ["completed", "partial", "error", "failed", "cancelled", "blocked"].includes(status);
+}
+
+export function runPermissionLabel(events: AgentProgressEvent[]): string | undefined {
+  for (const event of events) {
+    if (event.type === "run.started" && typeof event.data?.permissionMode === "string" && event.data.permissionMode.trim()) {
+      return event.data.permissionMode.trim();
+    }
+    if (event.type === "run.diagnostics" && typeof event.data?.permissionMode === "string" && event.data.permissionMode.trim()) {
+      const m = event.data.permissionMode.trim();
+      const map: Record<string, string> = { ask: "Ask", auto_read: "Auto Read", auto_workspace: "Auto Workspace", full_access: "Full Access" };
+      return map[m] ?? m;
+    }
+  }
+  return undefined;
 }

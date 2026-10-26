@@ -4,6 +4,7 @@ import { noteActiveRunId } from "./connectionRuntime";
 import { pollRetryDelayMs } from "./runPollRetry";
 import { AgentEvent } from "./components/AgentActivityList";
 import { Attachment } from "./components/AttachmentBar";
+import { readComposerDefaults, type AccessMode, type ReasoningEffort, type ExecutionTargetSetting } from "./composerSettings";
 
 export interface RunUsage {
   promptTokens: number;
@@ -238,6 +239,9 @@ export function useAgentRun(
     mode?: string;
     attachments?: Attachment[];
     requestedModelId?: string;
+    permissionMode?: AccessMode;
+    reasoningEffort?: ReasoningEffort;
+    executionTarget?: ExecutionTargetSetting;
   }): Promise<boolean> {
     if (!projectRoot || !opts.instruction.trim()) return false;
     const mode = opts.mode ?? "agent";
@@ -248,11 +252,12 @@ export function useAgentRun(
     setUsage(null);
     lastSeq.current = 0;
     try {
+      const permissionMode = opts.permissionMode ?? readComposerDefaults().permissionMode;
       const endpoint = mode === "multitask" ? "/agent/orchestrate" : "/agent/stream/runs";
       const payload =
         mode === "multitask"
-          ? { projectRoot, goal: opts.instruction, attachments: opts.attachments, requestedModelId: opts.requestedModelId }
-          : { projectRoot, instruction: opts.instruction, mode, attachments: opts.attachments, requestedModelId: opts.requestedModelId };
+          ? { projectRoot, goal: opts.instruction, attachments: opts.attachments, requestedModelId: opts.requestedModelId, permissionMode, ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}), ...(opts.executionTarget ? { executionTarget: opts.executionTarget } : {}) }
+          : { projectRoot, instruction: opts.instruction, mode, attachments: opts.attachments, requestedModelId: opts.requestedModelId, permissionMode, ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}), ...(opts.executionTarget ? { executionTarget: opts.executionTarget } : {}) };
       const res = await fetch(apiUrl(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeaders() },

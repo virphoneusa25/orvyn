@@ -13,7 +13,7 @@ export function validateSandboxSnapshot(value:unknown):asserts value is SandboxS
  const expected=columns[table];const names=expected.map(c=>c.name);
  for(const row of rows){if(!row||JSON.stringify(Object.keys(row).sort())!==JSON.stringify([...names].sort()))throw new Error("Unknown sandbox snapshot columns");
  for(const c of expected){const v=row[c.name];if(v===null){if(c.notnull||c.pk)throw new Error("Null required desktop value");continue;}if(c.type==="TEXT"?typeof v!=="string":!Number.isSafeInteger(v))throw new Error("Invalid sandbox snapshot value");}
- 
+
  }}
 }
 export function readSandboxSnapshot(file:string):SandboxSnapshot{

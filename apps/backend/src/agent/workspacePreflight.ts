@@ -219,10 +219,11 @@ function mismatch(session: WorkSession, projectId: string, workspaceId: string, 
   sessions: WorkSessionStore,
   session: WorkSession,
   binding: { workspaceId: string; projectId: string; projectRoot: string },
-  flags: { created: boolean; restored: boolean }
+  flags: { created: boolean; restored: boolean; keepSessionProject?: boolean }
 ): Promise<WorkspaceResolved> {
   const projectRoot = existsSync(binding.projectRoot) ? realpathSync(binding.projectRoot) : binding.projectRoot;
-  (await sessions.bindWorkspace(session.sessionId, { ...binding, projectRoot }));
+  const effectiveProjectId = flags.keepSessionProject && session.projectId ? session.projectId : binding.projectId;
+  (await sessions.bindWorkspace(session.sessionId, { ...binding, projectId: effectiveProjectId, projectRoot }));
   const known = (await sessions.knownFiles(binding.workspaceId));
   if (known.length === 0) {
     const found = listWorkspaceFiles(projectRoot);
@@ -232,14 +233,14 @@ function mismatch(session: WorkSession, projectId: string, workspaceId: string, 
   const fresh = filesNow.length === 0 && (await sessions.knownFiles(binding.workspaceId)).length === 0;
   (await sessions.persistFingerprint(binding.workspaceId));
   workspaceLog("project.workspace.persist", {
-    projectId: binding.projectId,
+    projectId: effectiveProjectId,
     workspaceId: binding.workspaceId,
     conversationId: session.sessionId,
     fileCount: filesNow.length,
   });
   return resolved({
     sessionId: session.sessionId,
-    projectId: binding.projectId,
+    projectId: effectiveProjectId,
     workspaceId: binding.workspaceId,
     projectRoot,
     created: flags.created,
@@ -248,15 +249,15 @@ function mismatch(session: WorkSession, projectId: string, workspaceId: string, 
   });
 }
 
- async function provision(sessions: WorkSessionStore, session: WorkSession): Promise<WorkspaceResolved> {
+ async function provision(sessions: WorkSessionStore, session: WorkSession, keepSessionProject = true): Promise<WorkspaceResolved> {
   const created = (await sessions.provisionWorkspace());
-  return (await finish(sessions, session, created, { created: true, restored: false }));
+  return (await finish(sessions, session, created, { created: true, restored: false, keepSessionProject }));
 }
 
- async function adoptClient(sessions: WorkSessionStore, session: WorkSession, clientRoot: string): Promise<WorkspaceResolved> {
+ async function adoptClient(sessions: WorkSessionStore, session: WorkSession, clientRoot: string, keepSessionProject = true): Promise<WorkspaceResolved> {
   const projectRoot = realpathSync(path.resolve(clientRoot));
   const ws = (await sessions.workspaceFor(projectRoot));
-  return (await finish(sessions, session, { ...ws, projectRoot }, { created: ws.created, restored: !ws.created }));
+  return (await finish(sessions, session, { ...ws, projectRoot }, { created: ws.created, restored: !ws.created, keepSessionProject }));
 }
 
 function explicitProjectChange(input: WorkspacePreflightInput): boolean {
@@ -290,20 +291,21 @@ function managedWorkspaceDir(dataDir: string, tenantId: string, workspaceId: str
   ctx: { cwd: string; virtualRoot: string }
 ): Promise<WorkspacePreflightResult> {
   const stored = record.projectRoot;
+  const effectiveProjectId = session.projectId || record.projectId;
   // generated/* entries are deliverables in artifact storage (Files →
   // Generated), not project files — they cannot prove the workspace had a
   // project, so they never trigger a WORKSPACE_STATE_MISMATCH.
   const known = (await input.sessions.knownFiles(record.workspaceId)).filter((f) => !/^generated\//i.test(f));
   const managed = managedWorkspaceDir(input.sessions.dataDirectory, input.tenantId, record.workspaceId);
   workspaceLog("project.workspace.resolve", {
-    projectId: record.projectId,
+    projectId: effectiveProjectId,
     workspaceId: record.workspaceId,
     conversationId: session.sessionId,
     knownFiles: known.length,
   });
   (await input.sessions.bindWorkspace(session.sessionId, {
     workspaceId: record.workspaceId,
-    projectId: record.projectId,
+    projectId: effectiveProjectId,
     projectRoot: stored,
   }));
 
@@ -336,35 +338,35 @@ function managedWorkspaceDir(dataDir: string, tenantId: string, workspaceId: str
     // let the Local Worker work on them there.
     mkdirSync(managed, { recursive: true });
     const root = existingDirectory(stored) ?? realpathSync(managed);
-    workspaceLog("project.workspace.restore", { projectId: record.projectId, workspaceId: record.workspaceId, conversationId: session.sessionId, onClient: true });
-    return (await finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: root }, { created: false, restored: true }));
+    workspaceLog("project.workspace.restore", { projectId: effectiveProjectId, workspaceId: record.workspaceId, conversationId: session.sessionId, onClient: true });
+    return (await finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: effectiveProjectId, projectRoot: root }, { created: false, restored: true, keepSessionProject: true }));
   }
 
   if (!chosen && known.length > 0) {
     workspaceLog("project.workspace.recover", {
-      projectId: record.projectId,
+      projectId: effectiveProjectId,
       workspaceId: record.workspaceId,
       conversationId: session.sessionId,
       recovered: false,
     });
     workspaceLog("project.workspace.mismatch", {
-      projectId: record.projectId,
+      projectId: effectiveProjectId,
       workspaceId: record.workspaceId,
       conversationId: session.sessionId,
     });
-    return mismatch(session, record.projectId, record.workspaceId, stored);
+    return mismatch(session, effectiveProjectId, record.workspaceId, stored);
   }
 
   let root = chosen?.root ?? existingDirectory(stored) ?? "";
   if (!root) {
-    if (known.length > 0 && !input.filesOnClient) return mismatch(session, record.projectId, record.workspaceId, stored);
+    if (known.length > 0 && !input.filesOnClient) return mismatch(session, effectiveProjectId, record.workspaceId, stored);
     mkdirSync(managed, { recursive: true });
     root = realpathSync(managed);
     (await input.sessions.relocateWorkspace(record.workspaceId, root));
   } else if (path.resolve(root) !== path.resolve(stored)) {
     (await input.sessions.relocateWorkspace(record.workspaceId, root));
     workspaceLog("project.workspace.mount", {
-      projectId: record.projectId,
+      projectId: effectiveProjectId,
       workspaceId: record.workspaceId,
       conversationId: session.sessionId,
       remounted: true,
@@ -373,13 +375,13 @@ function managedWorkspaceDir(dataDir: string, tenantId: string, workspaceId: str
 
   const recovered = !chosen?.intact || path.resolve(root) !== path.resolve(stored);
   workspaceLog(recovered ? "project.workspace.recover" : "project.workspace.restore", {
-    projectId: record.projectId,
+    projectId: effectiveProjectId,
     workspaceId: record.workspaceId,
     conversationId: session.sessionId,
     fileCount: chosen?.fileCount ?? listWorkspaceFiles(root).length,
     recovered,
   });
-  return (await finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: record.projectId, projectRoot: root }, { created: false, restored: true }));
+  return (await finish(input.sessions, session, { workspaceId: record.workspaceId, projectId: effectiveProjectId, projectRoot: root }, { created: false, restored: true, keepSessionProject: true }));
 }
 
 /**
@@ -387,15 +389,28 @@ function managedWorkspaceDir(dataDir: string, tenantId: string, workspaceId: str
  * Existing sessions keep their workspace. A wrong client path does not mint a new one.
  * An existing workspace whose files cannot be recovered is WORKSPACE_STATE_MISMATCH.
  */
-export async  function resolveRunWorkspace(input: WorkspacePreflightInput): Promise<WorkspacePreflightResult> {
+export async function resolveRunWorkspace(input: WorkspacePreflightInput): Promise<WorkspacePreflightResult> {
   const session = (await input.sessions.get(input.session.sessionId)) ?? input.session;
   const cwd = input.cwd ?? process.cwd();
   const virtualRoot = virtualWorkspaceRoot(input.tenantId, input.sessions.dataDirectory);
   const ctx = { cwd, virtualRoot, tenantId: input.tenantId, dataDir: input.sessions.dataDirectory };
   const client = String(input.clientRoot ?? "").trim();
   const actionable = needsActionWorkspace(input.instruction, input.composerMode);
-  const record = session.workspaceId ? (await input.sessions.getWorkspace(session.workspaceId)) : undefined;
+  let record = session.workspaceId ? (await input.sessions.getWorkspace(session.workspaceId)) : undefined;
   const leaving = explicitProjectChange(input);
+
+  // If this session belongs to a project (e.g. a second chat opened inside the
+  // same project) and does not yet have its own workspaceId, reuse the
+  // project's existing bound workspace so project files persist across chats.
+  if (!record && !session.workspaceId && session.projectId && !leaving) {
+    const siblings = await input.sessions.list();
+    const siblingWithWorkspace = siblings.find(
+      (s) => s.sessionId !== session.sessionId && s.projectId === session.projectId && s.workspaceId
+    );
+    if (siblingWithWorkspace?.workspaceId) {
+      record = await input.sessions.getWorkspace(siblingWithWorkspace.workspaceId);
+    }
+  }
 
   // Research, browser review, image generation, and other workspace-free
   // turns must not be blocked by stale files from an earlier project in the
@@ -410,23 +425,23 @@ export async  function resolveRunWorkspace(input: WorkspacePreflightInput): Prom
   if (record && !leaving) return (await restoreOwnedWorkspace(input, session, record, ctx));
 
   if (record && input.switchProject && isTrustedExistingProject(client, ctx) && rootKey(path.resolve(client)) !== rootKey(record.projectRoot)) {
-    return (await adoptClient(input.sessions, session, client));
+    return (await adoptClient(input.sessions, session, client, false));
   }
 
   // The user has a real project folder open: every run works there (commands,
   // reads, previews), whether or not this instruction writes files.
-  if (!record && !leaving && isTrustedExistingProject(client, ctx)) return (await adoptClient(input.sessions, session, client));
+  if (!record && !leaving && isTrustedExistingProject(client, ctx)) return (await adoptClient(input.sessions, session, client, true));
 
   if (!record && !actionable && !leaving) return { status: "skipped" };
 
-  if (record && (input.newProject || input.forkProject)) return (await provision(input.sessions, session));
+  if (record && (input.newProject || input.forkProject)) return (await provision(input.sessions, session, false));
 
   if (!record) {
-    if (isTrustedExistingProject(client, ctx)) return (await adoptClient(input.sessions, session, client));
+    if (isTrustedExistingProject(client, ctx)) return (await adoptClient(input.sessions, session, client, !leaving));
     // A path from another machine is not a workspace this process can use.
     // Provision one durable directory instead of storing an unreachable root.
-    if (client && looksLikeForeignAbsolutePath(client)) return (await provision(input.sessions, session));
-    return (await provision(input.sessions, session));
+    if (client && looksLikeForeignAbsolutePath(client)) return (await provision(input.sessions, session, !leaving));
+    return (await provision(input.sessions, session, !leaving));
   }
 
   return (await restoreOwnedWorkspace(input, session, record, ctx));

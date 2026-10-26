@@ -33,3 +33,6 @@ apps/desktop/resources/backend/
 apps/backend/build-info.json
 
 apps/desktop/resources/native/
+
+# Test reports from scripts/test/run-tests.mjs
+reports/

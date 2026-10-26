@@ -5,7 +5,7 @@ type AsyncSandboxContract={[K in keyof Omit<SandboxRegistry,"db">]:SandboxRegist
 import { randomUUID } from "node:crypto";
 import * as fs from "fs";
 import * as path from "path";
-export type SandboxProvider = "docker" | "openshell";
+export type SandboxProvider = "docker" | "openshell" | "vercel";
 export type SandboxState = "provisioning" | "ready" | "running" | "degraded" | "recovering" | "completed" | "failed" | "stopping" | "stopped";
 export const SANDBOX_STATES: SandboxState[] = ["provisioning", "ready", "running", "degraded", "recovering", "completed", "failed", "stopping", "stopped"];
 export interface SandboxRecord {
@@ -209,7 +209,7 @@ export class PostgresSandboxRegistry implements AsyncSandboxContract {
     }> {
         return this.db.transaction(async () => {
             const out: Record<string, any> = {};
-            for (const p of ["docker", "openshell"]) {
+            for (const p of ["docker", "openshell", "vercel"]) {
                 const since = now - sinceMs;
                 const q = async (sql: string, ...a: any[]) => (await this.db.prepare(sql).get(p, ...a)) as any;
                 const active = (await q(`SELECT COUNT(*) n FROM execution_sandboxes WHERE provider = ? AND state NOT IN ('completed','failed','stopped')`)).n;

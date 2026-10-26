@@ -744,3 +744,122 @@ test("website review executes browser tools and sends the captured frame to a vi
   assert.ok(vision.requests.some(request=>request.messages.some(message=>message.attachments?.some(asset=>asset.kind==="image"&&asset.b64===screenshot))),"the screenshot must reach the model, not just the UI");
   assert.ok(!events.some(event=>event.type==="file.created"||event.type==="file.edit"||event.type==="terminal.started"),"review must not create a replacement website");
 });
+
+
+test("missing or invalid accessMode defaults safely to SAFE and requires approval for file creation", async () => {
+  const h = harness([
+    [{ delta: "", toolCall: { id: "c1", name: "create_file", arguments: { path: "hello.txt", content: "hi" } }, done: false }, { delta: "", done: true }],
+    [{ delta: "Created after approval.", done: true }],
+  ]);
+  h.registry.register({
+    name: "create_file",
+    description: "create file",
+    parameters: { type: "object", properties: {} },
+    defaultPermission: "ask",
+    async execute() { return { ok: true, output: "created" }; },
+  });
+  h.gateway.profile = "SAFE";
+  const root = mkdtempSync(join(tmpdir(), "orvyn-safe-default-"));
+  const runId = await h.runtime.start(root, "Create hello.txt", undefined, "agent", undefined, [], undefined, undefined, {
+    accessMode: undefined,
+  });
+
+  // Wait for approval.required
+  let pendingCallId = "";
+  for (let i = 0; i < 40; i++) {
+    const ev = h.store.get(runId)?.events.find((e) => e.type === "approval.required");
+    if (ev) {
+      pendingCallId = String(ev.data.callId);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.ok(pendingCallId, "missing accessMode must not skip approval in SAFE profile");
+  const started = h.store.get(runId)!.events.find((e) => e.type === "run.started")!;
+  assert.equal(started.data.effectiveProfile, "SAFE");
+  assert.notEqual(started.data.effectiveProfile, "AUTONOMOUS");
+
+  await h.runtime.resolveApproval(pendingCallId, true);
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+});
+
+test("auto_workspace (BALANCED) executes create_file, apply_patch, edit_file, and run_tests without approval, while gating mutating terminal and mcp_call", async () => {
+  const executed: string[] = [];
+  const h = harness([
+    [
+      { delta: "", toolCall: { id: "t1", name: "create_file", arguments: { path: "a.ts", content: "export const a = 1;" } }, done: false },
+      { delta: "", toolCall: { id: "t2", name: "apply_patch", arguments: { path: "a.ts", patch: "<<<<<<< SEARCH\nexport const a = 1;\n=======\nexport const a = 2;\n>>>>>>> REPLACE" } }, done: false },
+      { delta: "", toolCall: { id: "t3", name: "edit_file", arguments: { path: "a.ts", old_string: "2", new_string: "3" } }, done: false },
+      { delta: "", toolCall: { id: "t4", name: "run_tests", arguments: {} }, done: false },
+      { delta: "", toolCall: { id: "t5", name: "mcp_call", arguments: { server: "ext", tool: "ping" } }, done: false },
+      { delta: "", done: true },
+    ],
+    [{ delta: "Done.", done: true }],
+  ]);
+  for (const name of ["create_file", "apply_patch", "edit_file", "run_tests", "mcp_call"]) {
+    h.registry.register({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      defaultPermission: "ask",
+      async execute() {
+        executed.push(name);
+        return { ok: true, output: `ran ${name}` };
+      },
+    });
+  }
+  const root = mkdtempSync(join(tmpdir(), "orvyn-balanced-run-"));
+  const runId = await h.runtime.start(root, "Implement and test a.ts then call MCP", undefined, "agent", undefined, [], undefined, undefined, {
+    accessMode: "auto_workspace",
+  });
+
+  // Wait for mcp_call to hit approval.required while create_file/apply_patch/edit_file/run_tests run automatically
+  let mcpCallId = "";
+  for (let i = 0; i < 60; i++) {
+    const ev = h.store.get(runId)?.events.find((e) => e.type === "approval.required");
+    if (ev) {
+      assert.equal(ev.data.tool, "mcp_call", "only mcp_call should ask for approval");
+      mcpCallId = String(ev.data.callId);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.ok(mcpCallId, "mcp_call must require approval in auto_workspace");
+
+  // Deny mcp_call and verify create_file/apply_patch/edit_file/run_tests executed while mcp_call did NOT execute
+  await h.runtime.resolveApproval(mcpCallId, false);
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+  assert.deepEqual(executed, ["create_file", "apply_patch", "edit_file", "run_tests"]);
+  assert.equal(executed.includes("mcp_call"), false, "denied mcp_call must not execute");
+  const approvalEvents = h.store.get(runId)!.events.filter((e) => e.type === "approval.required");
+  assert.deepEqual(approvalEvents.map((e) => e.data.tool), ["mcp_call"]);
+  const followUp = h.provider.requests[1];
+  const mcpReply = followUp.messages.find((m) => m.role === "tool" && m.toolCallId === "t5");
+  assert.match(String(mcpReply?.content), /PERMISSION_DENIED/);
+});
+
+test("persisted per-project tool overrides are respected on the run-scoped gateway", async () => {
+  const h = harness([
+    [{ delta: "", toolCall: { id: "w1", name: "write_file", arguments: { path: "x.txt", content: "x" } }, done: false }, { delta: "", done: true }],
+    [{ delta: "Handled denied override.", done: true }],
+  ]);
+  const root = mkdtempSync(join(tmpdir(), "orvyn-override-run-"));
+  const fakeMemoryStore = {
+    getAll: () => [],
+    listMemories: async () => [],
+    getPreferences: async () => ({}),
+    getToolOverrides: async (projectRoot: string) => (projectRoot === root ? { write_file: "denied" as const } : {}),
+  } as any;
+  const runtimeWithMemory = new StreamingAgentRuntime(
+    (h.runtime as any).modelService,
+    h.gateway,
+    h.store,
+    undefined,
+    fakeMemoryStore
+  );
+  const runId = await runtimeWithMemory.start(root, "Try writing x.txt", undefined, "agent", undefined, [], undefined, undefined, {
+    accessMode: "auto_workspace",
+  });
+  assert.equal(await waitForStatus(h.store, runId), "completed");
+  assert.equal(h.executionOrder.includes("write_file"), false, "persisted denied override must prevent write_file even in auto_workspace");
+});

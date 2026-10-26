@@ -103,6 +103,7 @@ export type AgentEventType =
   | "sandbox.policy.updated"
   | "sandbox.failed"
   | "sandbox.destroyed"
+  | "sandbox.sync.failed"
   // --- Remote execution: where a run's tools execute (no local fallback) ---
   | "run.execution"
   // --- Steering: user instructions delivered at the next safe boundary ---
@@ -137,6 +138,8 @@ export type AgentEventType =
   | "worker.cancelled"
   | "browser.action"
   | "browser.completed"
+  | "browser.provisioning"
+  | "browser.ready"
   | "desktop.started"
   | "desktop.ready"
   | "desktop.control.changed"
@@ -151,6 +154,7 @@ export type AgentEventType =
   | "preview.available"
   | "preview.updated"
   | "mcp.connected"
+  | "mcp.ready"
   | "mcp.disconnected"
   | "mcp.error"
   | "capability.required"

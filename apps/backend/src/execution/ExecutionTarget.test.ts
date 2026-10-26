@@ -127,3 +127,17 @@ test("Auto routing examples from prompt classification", () => {
   assert.equal(logo.isArtifact, true);
   assert.equal(routeExecutionTarget({ requested: "auto", hasLocalProject: false, ...logo }).actual, "local_host");
 });
+
+
+test("Cloud coding prompts without the literal word 'test' route to Cloud worker when on Cloud control plane", () => {
+  const vercelCoding = classifyExecutionHints("Implement a calculator module in src/calc.ts and export add and multiply");
+  assert.equal(vercelCoding.isLocalCoding, true);
+  const vercelDecision = routeExecutionTarget({
+    requested: "auto",
+    hasLocalProject: false,
+    cloudControlPlane: true,
+    ...vercelCoding,
+  });
+  assert.equal(vercelDecision.actual, "ovh_worker");
+  assert.equal(runtimeLocation(vercelDecision.actual), "OVH_WORKER");
+});

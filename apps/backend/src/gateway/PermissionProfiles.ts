@@ -13,7 +13,7 @@
 //   - the project-root sandbox,
 //   - agent-role capability checks (PermissionEngine).
 
-import { ToolRegistry } from "../ai/ToolTypes";
+import { ToolPermission, ToolRegistry } from "../ai/ToolTypes";
 
 export type PermissionProfile = "SAFE" | "BALANCED" | "AUTONOMOUS";
 
@@ -108,7 +108,9 @@ const BALANCED_ALLOW = new Set([
   "artifact_create",
   "artifact_write",
   "write_file",
+  "create_file",
   "edit_file",
+  "apply_patch",
   "move_file",
   "run_tests",
   "run_typecheck",
@@ -201,5 +203,61 @@ export function applyAccessMode(registry: ToolRegistry, mode: AccessMode): void 
         registry.setPermission(tool.name, "ask");
       }
     }
+  }
+}
+
+/**
+ * Resolves the effective permission metadata for a run. Missing or invalid
+ * `accessMode` never silently grants unrestricted (`AUTONOMOUS` / `full_access`)
+ * access — it falls back to the tenant's persisted autonomy profile (which
+ * defaults to `SAFE`).
+ */
+export function effectivePermissionInfo(
+  accessMode?: unknown,
+  fallbackProfile: PermissionProfile = "SAFE"
+): { accessMode?: AccessMode; profile: PermissionProfile; label: string; modeKey: string } {
+  if (isAccessMode(accessMode)) {
+    const conf = ACCESS_MODES[accessMode];
+    return { accessMode, profile: conf.profile, label: conf.label, modeKey: accessMode };
+  }
+  const safeProfile: PermissionProfile = PROFILES[fallbackProfile] ? fallbackProfile : "SAFE";
+  const modeKey =
+    safeProfile === "AUTONOMOUS"
+      ? "full_access"
+      : safeProfile === "BALANCED"
+        ? "auto_workspace"
+        : "auto_read";
+  return {
+    accessMode: undefined,
+    profile: safeProfile,
+    label: PROFILES[safeProfile].label,
+    modeKey,
+  };
+}
+
+/**
+ * Restores explicit user/project per-tool permission overrides AFTER mode and
+ * profile application, while never un-denying a tool that the mode boundary
+ * itself denied (e.g., Plan or Research mode stays strictly read-only).
+ */
+export function applyToolOverrides(
+  registry: ToolRegistry,
+  modePermissions: Record<string, ToolPermission>,
+  toolsEnabled: boolean,
+  overrides?: Record<string, ToolPermission>,
+  baseDenied?: ReadonlySet<string>
+): void {
+  if (!toolsEnabled) return;
+  if (baseDenied) {
+    for (const name of baseDenied) {
+      registry.setPermission(name, "denied");
+    }
+  }
+  if (!overrides) return;
+  for (const [name, perm] of Object.entries(overrides)) {
+    if (perm !== "allowed" && perm !== "ask" && perm !== "denied") continue;
+    // Mode hard-denials (such as read-only Research/Plan modes) cannot be overridden to ask/allowed.
+    if ((modePermissions[name] === "denied" || baseDenied?.has(name)) && perm !== "denied") continue;
+    registry.setPermission(name, perm);
   }
 }

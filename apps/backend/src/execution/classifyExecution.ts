@@ -23,7 +23,7 @@ const VISUAL =
 const ARTIFACT =
   /\b(logo|png|jpg|jpeg|gif|webp|svg|pdf|docx|xlsx|zip|generate|draw|image)\b/i;
 const LOCAL_CODE =
-  /\b(test|tests|typecheck|lint|build|fix|edit|refactor|commit|git|calculator|file|src\/)\b/i;
+  /\b(test|tests|typecheck|lint|build|fix|edit|refactor|commit|git|calculator|file|files|src\/|code|codebase|script|function|module|class|component|endpoint|route|package\.json|node|npm|python|pytest|implement|debug|compile|[a-z0-9_-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|json|sh|css|html|md))\b/i;
 const FORCE_LOCAL = /\b(do not use cloud|don't use cloud|do not use Cloud|locally|on this machine|no ovh)\b/i;
 const FORCE_CLOUD = /\b(force cloud|cloud worker|(?<!\bdo not )(?<!\bdon't )(?<!\bno )\buse cloud)\b/i;
 const FORCE_SANDBOX = /\b(in sandbox|use sandbox|isolated container)\b/i;

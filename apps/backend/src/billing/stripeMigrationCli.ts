@@ -30,4 +30,3 @@ void main().catch(error => {
   console.error(JSON.stringify({ error:"Stripe payment migration failed", code:typeof error?.code === "string" ? error.code : "VALIDATION_ERROR" }));
   process.exitCode = 1;
 });
-

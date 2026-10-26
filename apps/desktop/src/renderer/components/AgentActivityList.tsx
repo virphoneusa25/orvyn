@@ -235,14 +235,34 @@ function isTrackedWork(item: { kind: string; thought?: unknown; label?: string; 
     || item.kind === "research" || item.kind === "approval" || item.kind === "summary" || item.kind === "status";
 }
 
-function ProgressAccordion({ live, children }: { live: boolean; children: React.ReactNode }) {
-  const [open, setOpen] = React.useState(live);
-  React.useEffect(() => { setOpen(live); }, [live]);
+function ProgressAccordion({ live, status, children }: { live: boolean; status?: string; children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(live || status === "error" || status === "failed" || status === "blocked");
+  React.useEffect(() => { setOpen(live || status === "error" || status === "failed" || status === "blocked"); }, [live, status]);
   return (
-    <section className={`agent-progress${open ? " is-open" : ""}`} aria-label="Agentic Progress Tracking" data-testid="agent-progress">
+    <section className={`agent-progress${open ? " is-open" : ""}`} aria-label="Agentic Progress Tracking" data-testid="agent-progress" data-status={status}>
       <button type="button" className="agent-progress__head" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        {live ? <i className="agent-progress__pulse" /> : <span className="agent-progress__done" aria-hidden="true">✓</span>}
-        <span className="agent-progress__summary">{live ? "Working on your request" : "Work completed"}</span>
+        {live ? (
+          <i className="agent-progress__pulse" />
+        ) : status === "error" || status === "failed" ? (
+          <span className="agent-progress__failed" aria-hidden="true">✕</span>
+        ) : status === "cancelled" ? (
+          <span className="agent-progress__cancelled" aria-hidden="true">■</span>
+        ) : (
+          <span className="agent-progress__done" aria-hidden="true">✓</span>
+        )}
+        <span className="agent-progress__summary">
+          {live
+            ? "Working on your request"
+            : status === "error" || status === "failed"
+              ? "Task failed"
+              : status === "blocked"
+                ? "Task blocked"
+                : status === "partial"
+                  ? "Work completed with remaining items"
+                  : status === "cancelled"
+                    ? "Work stopped"
+                    : "Work completed"}
+        </span>
         <span className="agent-progress__chevron" aria-hidden="true">▾</span>
       </button>
       {open ? <div className="agent-progress__panel">{children}</div> : null}
@@ -387,7 +407,7 @@ export function AgentActivityList({
   return (
     <>
       {segments.map((segment, i) => segment.kind === "pack"
-        ? <ProgressAccordion key={`pack-${i}`} live={live}>{segment.items.map((item) => <React.Fragment key={item.key}>{renderItem(item)}</React.Fragment>)}</ProgressAccordion>
+        ? <ProgressAccordion key={`pack-${i}`} live={live} status={status}>{segment.items.map((item) => <React.Fragment key={item.key}>{renderItem(item)}</React.Fragment>)}</ProgressAccordion>
         : <React.Fragment key={segment.item.key}>{renderItem(segment.item)}</React.Fragment>)}
       <OrbStatusSlot
         active={live && (Boolean(liveStatus) || toolLive)}

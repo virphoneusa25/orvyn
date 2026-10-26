@@ -52,6 +52,13 @@ interface Pending { id: string; file: File; url?: string }
 
 const MAX_FILE = 7 * 1024 * 1024;
 const MAX_FILES = 8;
+type WebAccessMode = "ask" | "auto_read" | "auto_workspace" | "full_access";
+const WEB_ACCESS_MODES: { id: WebAccessMode; label: string; profile: "SAFE" | "BALANCED" | "AUTONOMOUS" }[] = [
+  { id: "ask", label: "Ask", profile: "SAFE" },
+  { id: "auto_read", label: "Auto Read", profile: "SAFE" },
+  { id: "auto_workspace", label: "Auto Workspace", profile: "BALANCED" },
+  { id: "full_access", label: "Full Access", profile: "AUTONOMOUS" },
+];
 
 export const STARTERS: { title: string; sub: string; prompt: string }[] = [
   { title: "Draft an email", sub: "to a customer about a delayed order", prompt: "Draft a friendly, professional email to a customer explaining that their order is delayed by a week, with an apology and a small discount." },
@@ -216,6 +223,13 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
     return () => narrow.removeEventListener("change", changed);
   }, []);
   const [loading, setLoading] = useState(false);
+  const [accessMode, setAccessMode] = useState<WebAccessMode>(() => {
+    try {
+      const saved = localStorage.getItem("orvyn:access");
+      if (saved === "ask" || saved === "auto_read" || saved === "auto_workspace" || saved === "full_access") return saved;
+    } catch { /* storage unavailable */ }
+    return "auto_workspace";
+  });
   const [text, setText] = useState("");
   const [pending, setPending] = useState<Pending[]>([]);
   const [busy, setBusy] = useState(false);
@@ -286,7 +300,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       setMessages(all=>all.map(m=>{
         if(m.runId!==restoredRun || m.role!=='assistant') return m;
         const events=[...(m.agentEvents??[]),event as AgentProgressEvent];
-        const status=event.type==='run.blocked' && event.data?.terminal!==true?'awaiting_approval':/^run\.(completed|partial|error|cancelled|blocked)$/.test(event.type)?event.type.slice(4):m.runStatus;
+        const status=event.type==='approval.required' || (event.type==='run.blocked' && event.data?.terminal!==true)?'awaiting_approval':event.type==='approval.resolved'?'running':/^run\.(completed|partial|error|cancelled|blocked)$/.test(event.type)?event.type.slice(4):m.runStatus;
         return {...m,agentEvents:events,content:event.type==='message.retracted'?'':event.type==='message.delta'?stripLeakedToolMarkup(m.content+String(event.data?.content??'')):stripLeakedToolMarkup(m.content),runStatus:status,streaming:!terminalRunStatus(status??'running'),artifacts:artifactsFromEvents(events)};
       }));
     }).catch(error=>toast(error.message));
@@ -372,7 +386,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       // fall back to the existing chat socket, preserving live text chunks.
       const routed = await api<{ routed?: string; runId?: string; sessionId?: string }>("/agent/stream/runs", {
         method: "POST",
-        body: { sessionId: sid, projectId, instruction: userMessage, clientKind: "cloud", composerMode: "auto", mode: "agent", requestedModelId: imageJob?.modelId ?? model, messageId: userId, attachments: forModel },
+        body: { sessionId: sid, projectId, instruction: userMessage, clientKind: "cloud", composerMode: "auto", mode: "agent", permissionMode: accessMode, requestedModelId: imageJob?.modelId ?? model, messageId: userId, attachments: forModel },
       });
       if (routed.runId) {
         const runId = routed.runId;
@@ -391,7 +405,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
           if (event.runId && event.runId !== runId) return;
           if (!Number.isFinite(seq) || seq <= after) return;
           after = seq;
-          const nextStatus = event.type === 'run.blocked' && event.data?.terminal !== true ? 'awaiting_approval' : event.type.startsWith('run.') && ['completed','partial','error','cancelled','blocked'].includes(event.type.slice(4)) ? event.type.slice(4) : runStatus;
+          const nextStatus = event.type === 'approval.required' || (event.type === 'run.blocked' && event.data?.terminal !== true) ? 'awaiting_approval' : event.type === 'approval.resolved' ? 'running' : event.type.startsWith('run.') && ['completed','partial','error','cancelled','blocked'].includes(event.type.slice(4)) ? event.type.slice(4) : runStatus;
           runStatus = nextStatus;
           patch(replyId, (m) => {
             const agentEvents = [...(m.agentEvents ?? []), event];
@@ -416,7 +430,9 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
               : event.type === "run.partial" ? "partial"
               : event.type === "run.error" ? "error"
               : event.type === "run.cancelled" ? "cancelled"
-              : event.type === "run.blocked" ? "blocked" : m.runStatus ?? "running";
+              : event.type === "run.blocked" ? "blocked"
+              : event.type === "approval.required" ? "awaiting_approval"
+              : event.type === "approval.resolved" ? "running" : m.runStatus ?? "running";
             if (event.type === 'run.blocked' && event.data?.terminal !== true) return {...m,content,agentEvents,runStatus:'awaiting_approval',streaming:true};
             runStatus = next;
             if (imageJob && ["run.completed", "run.partial", "run.error", "run.cancelled", "run.blocked"].includes(event.type) && ["queued", "generating"].includes(imageJob.status)) imageJob = { ...imageJob, status: "failed", error: event.type === "run.error" ? String(data.message ?? "The run ended before the image was ready.") : "The run finished without a completed image." };
@@ -466,7 +482,7 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
       signal("sessions"); signal("notifications");
       area.current?.focus();
     }
-  }, [text, pending, busy, sessionId, projectId, onSession, model, refreshBilling, toast]);
+  }, [text, pending, busy, sessionId, projectId, onSession, model, accessMode, refreshBilling, toast]);
 
   // Home and the search palette hand a first message to a new conversation.
   useEffect(() => {
@@ -586,6 +602,25 @@ export function ChatThread({ sessionId, projectId, onSession, compact, placehold
             <button type="button" className="composer__attach" aria-label="Attach files" title="Attach files (or drop them here)" onClick={() => fileInput.current?.click()}><Icon.paperclip size={18} /></button>
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} data-testid="file-input" />
             {compact ? null : <ModelPicker small up />}
+            {compact ? null : (
+              <select
+                className="input input--sm"
+                aria-label="Permission mode"
+                title="Permission mode for autonomous actions"
+                data-testid="composer-access-mode"
+                value={accessMode}
+                onChange={(e) => {
+                  const next = e.target.value as WebAccessMode;
+                  setAccessMode(next);
+                  try { localStorage.setItem("orvyn:access", next); } catch { /* ignore */ }
+                  const entry = WEB_ACCESS_MODES.find((m) => m.id === next);
+                  if (entry) void api("/profile", { method: "POST", body: { profile: entry.profile } }).catch(() => {});
+                }}
+                style={{ width: "auto", maxWidth: 150, fontSize: 12, padding: "4px 8px" }}
+              >
+                {WEB_ACCESS_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            )}
             {busy ? (
               <button type="button" className="composer__send composer__send--stop" aria-label="Stop" title="Stop" onClick={() => (stopRun.current ?? cancel.current)?.()} data-testid="stop"><Icon.stop size={14} /></button>
             ) : (
