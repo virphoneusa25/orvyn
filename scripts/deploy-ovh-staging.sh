@@ -36,9 +36,11 @@ for _ in $(seq 1 40); do
       cat "$ROOT/scripts/acceptance/verify-hf-capabilities.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - --authorize-paid-probe --model hf:moonshotai/Kimi-K2.7-Code:deepinfra --max-usd 0.01"
     fi
     cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist --saved-evidence-only"
-    if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
-      cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist deepseek"
-    fi
+    # Do not implicitly run a second, billable live model smoke test.
+    # Hugging Face's persisted verification is the required staging gate above.
+    # DeepSeek live verification requires a separate explicit operator authorization
+    # and budget policy; merely having a configured key is not consent to spend.
+    echo "Optional DeepSeek live smoke skipped (separate authorization required)"
     echo "Staging commit and HF coding/tool provider evidence verified"
     cat "$ROOT/scripts/acceptance/provider-billing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
     exit 0
