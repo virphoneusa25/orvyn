@@ -352,19 +352,27 @@ export class UpstreamAgentBrowserProvider implements BrowserProvider {
   async screenshot(fullPage = false): Promise<ScreenshotResult> {
     const empty: ScreenshotResult = { ok: false, screenshotId: "", mediaType: "image/png", width: 0, height: 0 };
     try {
-      // --base64 keeps the image in the command result; writing to the sandbox
-      // filesystem would need a second round trip to read it back out.
-      const args = ["screenshot", "--base64"];
+      // agent-browser writes screenshots to a temporary file and returns its
+      // path as `data.path` in JSON. --base64 is an eval flag, not a screenshot
+      // option; passing it here is interpreted as a selector by the CLI.
+      const args = ["screenshot"];
       if (fullPage) args.push("--full");
       const result = await this.run(args);
-      const data = asRecord(result.json);
-      const b64 = str(data.base64 ?? data.data ?? data.image);
-      if (result.exitCode !== 0 || !b64) {
-        return { ...empty, error: result.stderr || "agent-browser returned no image data." };
+      const payload = asRecord(result.json);
+      const data = asRecord(payload.data ?? payload);
+      const screenshotPath = str(data.path);
+      if (result.exitCode !== 0 || !screenshotPath) {
+        return { ...empty, error: result.stderr || "agent-browser returned no screenshot path." };
+      }
+      const encoded = await this.sandbox.runCommand("base64", ["-w", "0", screenshotPath]);
+      const b64 = (await encoded.stdout()).trim();
+      if (encoded.exitCode !== 0 || !b64) {
+        const detail = (await encoded.stderr()).trim();
+        return { ...empty, error: detail || "Could not read the agent-browser screenshot from the sandbox." };
       }
       return {
         ok: true,
-        screenshotId: str(data.id, `${this.sessionName}-${Date.now()}`),
+        screenshotId: str(data.id ?? data.screenshotId, `${this.sessionName}-${Date.now()}`),
         b64,
         mediaType: str(data.mediaType, "image/png"),
         width: typeof data.width === "number" ? data.width : 0,

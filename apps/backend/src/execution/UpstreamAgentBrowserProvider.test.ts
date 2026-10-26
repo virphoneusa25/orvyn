@@ -190,6 +190,32 @@ test("a screenshot with no image data is a failure, not an empty success", async
   const shot = await p.screenshot(true);
   assert.equal(shot.ok, false);
   assert.ok(shot.error, "the reason is reported rather than an empty ok result");
+  assert.deepEqual(f.calls.find((call) => call.args[0] === "screenshot")?.args, ["screenshot", "--full"]);
+});
+
+test("screenshot uses the CLI JSON path and reads the image bytes from the same sandbox", async () => {
+  const f = fakeHelpers({
+    screenshot: { json: { success: true, data: { path: "/tmp/orvyn-shot.png", id: "shot-1", width: 640, height: 480 } } },
+  });
+  __setVercelHelpersForTest(f.helpers);
+  const reads: { command: string; args: readonly string[] }[] = [];
+  const session: SandboxSessionLike = {
+    async runCommand(command, args) {
+      reads.push({ command, args });
+      return { exitCode: 0, stdout: async () => "aGVsbG8=\n", stderr: async () => "" };
+    },
+  };
+  const p = new UpstreamAgentBrowserProvider(session);
+  await p.startSession({ runId: "r", tenantId: "t" });
+
+  const shot = await p.screenshot();
+  assert.equal(shot.ok, true);
+  assert.equal(shot.b64, "aGVsbG8=");
+  assert.equal(shot.screenshotId, "shot-1");
+  assert.equal(shot.width, 640);
+  assert.equal(shot.height, 480);
+  assert.deepEqual(f.calls.find((call) => call.args[0] === "screenshot")?.args, ["screenshot"]);
+  assert.deepEqual(reads, [{ command: "base64", args: ["-w", "0", "/tmp/orvyn-shot.png"] }]);
 });
 
 test("closeSession is idempotent and never throws", async () => {

@@ -113,6 +113,10 @@ function harness(
   registry.register(makeTool("read_file"));
   registry.register(makeTool("search_code"));
   registry.register(makeTool("write_file"));
+  // This intentionally returns no persisted artifact. The runtime must turn
+  // its apparent success into tool.failed without erasing another accepted
+  // call in the same batch.
+  registry.register(makeTool("generate_image", 20));
   registry.register(makeTool("desktop_start"));
   registry.register(makeTool("desktop_click"));
 
@@ -216,6 +220,36 @@ test("runs read-only tools concurrently", async () => {
     h.stats().maxConcurrent > 1,
     `read-only tools should overlap, but peak concurrency was ${h.stats().maxConcurrent}`
   );
+});
+
+test("a file artifact failure does not erase a successful call in the same tool batch", async () => {
+  const h = harness([
+    [
+      toolCallChunk("call_read", "read_file"),
+      { delta: "", toolCall: { id: "call_image", name: "generate_image", arguments: { prompt: "test image" } }, done: false },
+      { delta: "", done: true },
+    ],
+    [{ delta: "The file read succeeded; image generation did not persist an artifact.", done: true }],
+  ]);
+
+  const runId = await h.runtime.start(
+    "/tmp/project",
+    "Read a file and generate an image",
+    undefined,
+    "agent",
+    undefined,
+    [],
+    undefined,
+    undefined,
+    { approvedTools: ["generate_image"] },
+  );
+  assert.equal(await waitForStatus(h.store, runId), "partial", "the failed artifact keeps the final run honest");
+
+  const events = h.store.get(runId)!.events;
+  assert.ok(events.some((event) => event.type === "tool.completed" && event.data?.callId === "call_read"));
+  assert.ok(events.some((event) => event.type === "tool.failed" && event.data?.callId === "call_image"));
+  const batchTurn = events.find((event) => event.type === "agent.turn" && event.data?.kind === "tools");
+  assert.equal(batchTurn?.data?.reason, undefined, "one accepted call means this batch did not wholly fail");
 });
 
 test("serialises writes even when requested in the same turn", async () => {
