@@ -1,7 +1,7 @@
 export function buildSessionName(tenantId: string, runId: string): string {
-  const cleanTenant = String(tenantId || "t").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 22);
-  const cleanRun = String(runId || "r").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 22);
-  return `orv-${cleanTenant}-${cleanRun}`.slice(0, 48);
+  const cleanTenant = String(tenantId || "t").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
+  const cleanRun = String(runId || "r").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
+  return `orvyn-${cleanTenant}-${cleanRun}`.slice(0, 56);
 }
 
 // apps/backend/src/execution/UpstreamAgentBrowserProvider.ts
