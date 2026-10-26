@@ -31,6 +31,10 @@ ROLLBACK_REF="orvyn-staging-backend-staging:rollback-before-${COMMIT}"
 for _ in $(seq 1 40); do
   if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
     curl -fsS -m 8 "$STAGING_HEALTH"; echo
+    if [[ "${ORVYN_AUTHORIZE_HF_PAID_PROBE:-false}" == "true" ]]; then
+      echo "Running the explicitly authorized single Hugging Face capability probe (maximum $0.01)"
+      cat "$ROOT/scripts/acceptance/verify-hf-capabilities.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - --authorize-paid-probe --model hf:moonshotai/Kimi-K2.7-Code:deepinfra --max-usd 0.01"
+    fi
     cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
     if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
       cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist deepseek"

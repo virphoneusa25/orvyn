@@ -19,6 +19,10 @@ on:
         type: choice
         options: [verify, staging, production]
         default: verify
+      authorize_hf_paid_probe:
+        description: Explicitly authorize one Hugging Face staging capability probe capped at $0.01
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -331,6 +335,7 @@ jobs:
           exit 1
       - name: Deploy candidate to isolated staging
         env:
+          ORVYN_AUTHORIZE_HF_PAID_PROBE: ${{ inputs.authorize_hf_paid_probe }}
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
           HUGGINGFACE_ROUTING_ENABLED: ${{ vars.HUGGINGFACE_ROUTING_ENABLED || '0' }}
