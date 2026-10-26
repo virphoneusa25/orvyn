@@ -224,12 +224,11 @@ function mismatch(session: WorkSession, projectId: string, workspaceId: string, 
   const projectRoot = existsSync(binding.projectRoot) ? realpathSync(binding.projectRoot) : binding.projectRoot;
   const effectiveProjectId = flags.keepSessionProject && session.projectId ? session.projectId : binding.projectId;
   (await sessions.bindWorkspace(session.sessionId, { ...binding, projectId: effectiveProjectId, projectRoot }));
-  const known = (await sessions.knownFiles(binding.workspaceId));
-  if (known.length === 0) {
-    const found = listWorkspaceFiles(projectRoot);
-    if (found.length) (await sessions.rememberFiles(binding.workspaceId, found));
-  }
   const filesNow = listWorkspaceFiles(projectRoot);
+  // Tool writes are tracked directly, but shell/MCP-generated files may only
+  // become visible after remote sync-back. Refresh the durable manifest on
+  // every workspace resolution so those files are checked on the next mission.
+  if (filesNow.length) (await sessions.rememberFiles(binding.workspaceId, filesNow));
   const fresh = filesNow.length === 0 && (await sessions.knownFiles(binding.workspaceId)).length === 0;
   (await sessions.persistFingerprint(binding.workspaceId));
   workspaceLog("project.workspace.persist", {

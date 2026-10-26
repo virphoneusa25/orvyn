@@ -100,6 +100,7 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
   const projectRoot = job.projectRoot || process.env.ORVYN_PROJECT_ROOT || process.cwd();
   const isolated = job.role === "local_sandbox" ? new LocalSandboxExecutor() : undefined;
   let cancellationPoll: NodeJS.Timeout | undefined;
+  let toolHeartbeat: NodeJS.Timeout | undefined;
   try {
   if (isolated) await isolated.start(job.runId, projectRoot);
   if (isolated) cancellationPoll = setInterval(() => {
@@ -128,6 +129,11 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       continue;
     }
     const req = next.request;
+    const leaseId=String(req.leaseId??"");
+    if(!leaseId)throw new Error("Tool RPC command has no durable lease");
+    const ack=await cp(`/api/v1/local-worker/tools/${job.runId}/ack`,"POST",{requestId:req.requestId,leaseId,workerId:WORKER_ID});
+    if(!ack?.ok)continue;
+    toolHeartbeat=setInterval(()=>{void cp(`/api/v1/local-worker/tools/${job.runId}/heartbeat`,"POST",{requestId:req.requestId,leaseId,workerId:WORKER_ID}).catch(()=>undefined)},15_000);
     const started = Date.now();
     if (req.tool === "terminal" || req.tool === "run_command" || req.tool === "run_tests") {
       await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", {
@@ -176,16 +182,18 @@ async function serveJob(job: { runId: string; projectRoot: string; role?: string
       requestId: req.requestId,
       runId: job.runId,
       workerId: WORKER_ID,
+      leaseId,
       ok: result.ok,
       output: result.output,
       meta: result.meta,
       error: result.error,
       durationMs: Date.now() - started,
     });
+    if(toolHeartbeat){clearInterval(toolHeartbeat);toolHeartbeat=undefined;}
   }
   } catch {
     await cp(`/api/v1/local-worker/events/${job.runId}`, "POST", { type: "sandbox.stopped", data: { reason: "Project sandbox unavailable or failed; no tools ran on the host. Start Docker or explicitly select Host." } }).catch(() => undefined);
-  } finally { if (cancellationPoll) clearInterval(cancellationPoll); await isolated?.finish(projectRoot, false).catch(() => undefined); }
+  } finally { if (cancellationPoll) clearInterval(cancellationPoll); if(toolHeartbeat)clearInterval(toolHeartbeat); await isolated?.finish(projectRoot, false).catch(() => undefined); }
 }
 
 // ── Workbench Browser relay ─────────────────────────────────────────────

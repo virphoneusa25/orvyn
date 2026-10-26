@@ -85,7 +85,7 @@ export function providerOf(registryId: string): string {
   return i > 0 ? registryId.slice(0, i) : registryId;
 }
 
-interface ProviderHealth { ok: number; failed: number; streak: number; until: number; lastError?: string }
+interface ProviderHealth { ok: number; failed: number; streak: number; until: number; lastError?: string; lastFailureKind?: "provider"|"auth" }
 const providers = new Map<string, ProviderHealth>();
 const MAX_COOLDOWN_MS = 15 * 60_000;
 
@@ -105,6 +105,7 @@ export function markProviderFailure(registryId: string, kind: "provider" | "auth
   const cooldown = kind === "auth" ? base : Math.min(MAX_COOLDOWN_MS, base * 2 ** (h.streak - 1));
   h.until = now + cooldown;
   h.lastError = reason.slice(0, 200);
+  h.lastFailureKind = kind;
   return cooldown;
 }
 
@@ -118,6 +119,11 @@ export function markProviderSuccess(registryId: string): void {
 export function isProviderCoolingDown(registryId: string, now = Date.now()): boolean {
   const h = providers.get(providerOf(registryId));
   return Boolean(h && h.until > now);
+}
+
+/** Authentication failures must never be retried by the emergency model path. */
+export function isProviderAuthBlocked(registryId:string,now=Date.now()):boolean {
+  const h=providers.get(providerOf(registryId));return Boolean(h&&h.until>now&&h.lastFailureKind==="auth");
 }
 
 /** 0..1: share of recent calls that succeeded (1 for a provider with no history), 0 while cooling down. */

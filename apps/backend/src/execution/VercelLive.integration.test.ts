@@ -115,7 +115,7 @@ test(
 
       const pwd = await toolRpc.execute(runId, "terminal", {
         command: "pwd",
-      });
+      }, 60_000, tenantId);
       assert.equal(
         pwd.ok,
         true,
@@ -131,7 +131,7 @@ test(
       const write = await toolRpc.execute(runId, "write_file", {
         path: "created-by-vercel.txt",
         content: "hello from ORVYN Vercel cloud\n",
-      });
+      }, 60_000, tenantId);
       assert.equal(
         write.ok,
         true,
@@ -145,7 +145,7 @@ test(
 
       const read = await toolRpc.execute(runId, "read_file", {
         path: "created-by-vercel.txt",
-      });
+      }, 60_000, tenantId);
       assert.equal(
         read.ok,
         true,
@@ -158,7 +158,7 @@ test(
       );
       assert.match(read.output ?? "", /hello from ORVYN Vercel cloud/);
 
-      const git = await toolRpc.execute(runId, "git_status", {});
+      const git = await toolRpc.execute(runId, "git_status", {}, 60_000, tenantId);
       assert.equal(git.ok, true, "git_status failed: " + JSON.stringify(git));
       assert.match(git.output ?? "", /created-by-vercel\.txt/);
 
@@ -166,7 +166,8 @@ test(
         runId,
         "mcp_list",
         {},
-        90_000
+        90_000,
+        tenantId
       );
       assert.equal(mcpList.ok, true, "mcp_list failed: " + JSON.stringify(mcpList));
       assert.match(mcpList.output ?? "", /fixture:/);
@@ -180,7 +181,8 @@ test(
           tool: "echo",
           arguments: { value: 42 },
         },
-        90_000
+        90_000,
+        tenantId
       );
       assert.equal(mcpCall.ok, true, "mcp_call failed: " + JSON.stringify(mcpCall));
       assert.match(mcpCall.output ?? "", /42/);
@@ -189,7 +191,8 @@ test(
         runId,
         "browser_open",
         { url: "https://example.com" },
-        6 * 60_000
+        6 * 60_000,
+        tenantId
       );
       assert.equal(browser.ok, true, "browser_open failed: " + JSON.stringify(browser));
       assert.match(browser.output ?? "", /Example Domain|example\.com/i);
@@ -198,7 +201,8 @@ test(
         runId,
         "browser_screenshot",
         {},
-        90_000
+        90_000,
+        tenantId
       );
       assert.equal(screenshot.ok, true, "browser_screenshot failed: " + JSON.stringify({ output: screenshot.output, error: screenshot.error, stderr: screenshot.stderr, exitCode: screenshot.exitCode, metaKeys: screenshot.meta ? Object.keys(screenshot.meta as any) : [] }));
       const b64 = String(
@@ -280,7 +284,7 @@ test(
 
       const canonicalSeed = await toolRpc.execute(resumeRunId, "read_file", {
         path: "seed.txt",
-      });
+      }, 60_000, tenantId);
       assert.equal(canonicalSeed.ok, true, "canonical seed read failed: " + JSON.stringify(canonicalSeed));
       assert.match(canonicalSeed.output ?? "", /seed updated locally/);
 

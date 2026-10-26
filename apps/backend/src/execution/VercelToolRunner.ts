@@ -29,6 +29,7 @@ import {
 
 const WORKSPACE = "/vercel/sandbox/workspace";
 const POLL_MS = 100;
+const TOOL_LEASE_HEARTBEAT_MS = 15_000;
 
 type Identity = {
   tenantId: string;
@@ -289,20 +290,60 @@ export class VercelToolRunner {
         const run = entry.store.get(runId);
         if (!run || ["completed", "cancelled", "error", "partial"].includes(run.status)) break;
 
-        const request = toolRpc.poll(runId);
+        const workerId = `vercel:${runId}`;
+        const request = await toolRpc.claim(runId, entry.identity.tenantId, workerId);
         if (!request) {
           await new Promise((resolve) => setTimeout(resolve, POLL_MS));
           continue;
         }
 
-        const result = await this.execute(request, entry).catch((err: any) =>
-          response(request, request.createdAt, {
+        if (request.leaseId && !(await toolRpc.begin(request, entry.identity.tenantId, workerId, request.leaseId))) {
+          continue;
+        }
+
+        let leaseLost = false;
+        const heartbeat = request.leaseId
+          ? setInterval(() => {
+              void toolRpc.heartbeat(request, entry.identity.tenantId, workerId, request.leaseId!)
+                .then((renewed) => {
+                  if (!renewed) {
+                    leaseLost = true;
+                    console.warn("[tool-rpc] Vercel sandbox command lease lost", {
+                      tenantId: entry.identity.tenantId,
+                      runId,
+                      requestId: request.requestId,
+                    });
+                  }
+                })
+                .catch((error) => console.error("[tool-rpc] Vercel sandbox lease heartbeat failed", {
+                  tenantId: entry.identity.tenantId,
+                  runId,
+                  requestId: request.requestId,
+                  error: String(error?.message ?? error),
+                }));
+            }, TOOL_LEASE_HEARTBEAT_MS)
+          : undefined;
+        heartbeat?.unref();
+        let result: ToolResponse;
+        try {
+          result = await this.execute(request, entry).catch((err: any) =>
+            response(request, request.createdAt, {
+              ok: false,
+              error: err?.message ?? String(err),
+              exitCode: 1,
+            })
+          );
+        } finally {
+          if (heartbeat) clearInterval(heartbeat);
+        }
+        if (leaseLost) {
+          toolRpc.resolve(response(request, request.createdAt, {
             ok: false,
-            error: err?.message ?? String(err),
+            error: "The durable tool lease was lost while executing; the command outcome is uncertain and will not be replayed automatically.",
             exitCode: 1,
-          })
-        );
-        toolRpc.resolve(result);
+          }));
+        } else if(request.leaseId) await toolRpc.settle(result, entry.identity.tenantId, workerId, request.leaseId);
+        else toolRpc.resolve(result);
       }
     } finally {
       await this.stop(runId, "run ended").catch(() => undefined);
@@ -346,7 +387,7 @@ export class VercelToolRunner {
       } catch (err: any) {
         cleanupError = err instanceof Error ? err : new Error(String(err));
       }
-      toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.");
+      await toolRpc.failRun(runId, "The Vercel cloud sandbox ended before this tool completed.",entry.identity.tenantId);
 
       try {
         const registry = this.registry;

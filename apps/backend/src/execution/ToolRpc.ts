@@ -1,27 +1,22 @@
-// apps/backend/src/execution/ToolRpc.ts
-//
-// The tool RPC channel: control-plane ↔ worker request/response for
-// remote tool execution. The ORION runtime stays in the control plane
-// (model credentials NEVER reach workers/containers); tool calls are
-// routed through this channel to the worker which executes them inside
-// the mission container.
-//
-// Architecture:
-//   ORION → ToolGateway → RemoteToolAdapter → ToolRpcChannel → Worker
-//   Worker → container exec → result → ToolRpcChannel → ORION
-//
-// Uses HTTP long-poll + result endpoint (the spec's acceptable option).
-
 import { randomUUID } from "crypto";
 
-export interface ToolRequest {
+export type ToolRpcState = "pending" | "leased" | "executing" | "completed" | "failed" | "uncertain";
+
+export interface ToolRpcRequest {
   requestId: string;
   runId: string;
+  tenantId?: string;
   tool: string;
   arguments: Record<string, unknown>;
   timeoutMs: number;
   createdAt: number;
+  leaseOwner?: string;
+  leaseId?: string;
+  leaseExpiresAt?: number;
+  attempts?: number;
 }
+
+export type ToolRequest = ToolRpcRequest;
 
 export interface ToolResponse {
   requestId: string;
@@ -35,137 +30,206 @@ export interface ToolResponse {
   durationMs: number;
 }
 
-type PendingRequest = {
+export interface DurableToolRpcStore {
+  createToolRpcCommand(input: { requestId: string; runId: string; tenantId: string; tool: string; argumentsJson: string; timeoutMs: number; createdAt: number }): unknown | Promise<unknown>;
+  claimToolRpcCommand(tenantId: string, runId: string, workerId: string, now: number, leaseMs: number, maxAttempts: number): any | Promise<any>;
+  beginToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, now: number): unknown | Promise<unknown>;
+  heartbeatToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, now: number, leaseMs: number): unknown | Promise<unknown>;
+  settleToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, status: string, resultJson: string, now: number): unknown | Promise<unknown>;
+  failPendingToolRpc(tenantId: string, runId: string, error: string, now: number): unknown | Promise<unknown>;
+  markToolRpcUncertain(tenantId: string, runId: string, requestId: string, error: string, now: number): unknown | Promise<unknown>;
+  markToolRpcRunUncertain(tenantId: string, runId: string, error: string, now: number): unknown | Promise<unknown>;
+  loadToolRpcCommand(tenantId: string, runId: string, requestId: string): any | Promise<any>;
+}
+
+type Pending = {
   request: ToolRequest;
   resolve: (response: ToolResponse) => void;
   timer: NodeJS.Timeout;
 };
 
-/**
- * In-memory tool request queue per run. The worker polls for the next
- * tool request, executes it in the container, and POSTs the result.
- * The pending Promise resolves (or times out).
- */
-export class ToolRpcChannel {
-  private queues = new Map<string, ToolRequest[]>(); // runId → pending requests
-  private pending = new Map<string, PendingRequest>(); // requestId → pending promise
+const LEASE_MS = 45_000;
+const MAX_ATTEMPTS = 3;
 
-  /**
-   * Sends a tool request to the worker for a run. Returns the result.
-   * Times out after the specified duration.
-   */
-  execute(
+function value<T>(result: T | Promise<T>): Promise<T> {
+  return Promise.resolve(result);
+}
+
+/** Durable tenant-scoped request journal. In-memory promises are wait handles only. */
+export class ToolRpcChannel {
+  private readonly queues = new Map<string, ToolRequest[]>();
+  private readonly pending = new Map<string, Pending>();
+  private readonly inFlight = new Set<string>();
+  private resolveStore?: (tenantId: string) => DurableToolRpcStore | Promise<DurableToolRpcStore> | undefined;
+
+  setPersistenceResolver(resolve: (tenantId: string) => DurableToolRpcStore | Promise<DurableToolRpcStore> | undefined): void {
+    this.resolveStore = resolve;
+  }
+
+  private async store(tenantId?: string): Promise<DurableToolRpcStore | undefined> {
+    return tenantId ? this.resolveStore?.(tenantId) : undefined;
+  }
+
+  async execute(
     runId: string,
     tool: string,
     args: Record<string, unknown>,
-    timeoutMs = 60_000
+    timeoutMs = 60_000,
+    tenantId?: string,
   ): Promise<ToolResponse> {
-    const request: ToolRequest = {
-      requestId: randomUUID(),
-      runId,
-      tool,
-      arguments: args,
-      timeoutMs,
-      createdAt: Date.now(),
-    };
+    const request: ToolRequest = { requestId: randomUUID(), runId, tenantId, tool, arguments: args, timeoutMs, createdAt: Date.now() };
+    if (tenantId) {
+      const store = await this.store(tenantId);
+      if (!store) throw new Error(`Durable ToolRpc storage unavailable for tenant ${tenantId}`);
+      await value(store.createToolRpcCommand({ requestId: request.requestId, runId, tenantId, tool, argumentsJson: JSON.stringify(args), timeoutMs, createdAt: request.createdAt }));
+    }
 
     return new Promise<ToolResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId);
+        this.inFlight.delete(request.requestId);
+        if (tenantId) {
+          void this.store(tenantId).then((store) => store && value(store.markToolRpcUncertain(tenantId, runId, request.requestId, "control plane timed out while execution outcome was unresolved", Date.now())))
+            .catch((error) => console.error("[tool-rpc] timeout persistence failed", { tenantId, runId, requestId: request.requestId, error: String(error) }));
+        }
         reject(new Error(`Remote tool "${tool}" timed out after ${timeoutMs}ms`));
       }, timeoutMs);
-
       this.pending.set(request.requestId, { request, resolve, timer });
-
-      const queue = this.queues.get(runId) ?? [];
-      queue.push(request);
-      this.queues.set(runId, queue);
+      if (!tenantId) {
+        const queue = this.queues.get(runId) ?? [];
+        queue.push(request);
+        this.queues.set(runId, queue);
+      }
+      console.info(JSON.stringify({ event: "tool_rpc.command.created", tenantId: tenantId ?? "test-memory", runId, requestId: request.requestId, tool, state: tenantId ? "pending" : "pending-memory" }));
     });
   }
 
-  /** Worker calls this to get the next tool request for a run. */
-  poll(runId: string): ToolRequest | null {
-    const queue = this.queues.get(runId);
-    if (!queue || queue.length === 0) return null;
-    return queue.shift() ?? null;
+  /** Workers claim persisted commands with expiring, owner-fenced leases. */
+  async claim(runId: string, tenantId: string, workerId: string): Promise<ToolRequest | null> {
+    const store = await this.store(tenantId);
+    if (!store) return this.poll(runId);
+    const row = await value(store.claimToolRpcCommand(tenantId, runId, workerId, Date.now(), LEASE_MS, MAX_ATTEMPTS));
+    if (!row) return null;
+
+    let args: Record<string, unknown>;
+    try {
+      args = JSON.parse(row.arguments_json);
+    } catch {
+      await this.failRun(runId, "Stored ToolRpc arguments were invalid", tenantId);
+      return null;
+    }
+    const request: ToolRequest = {
+      requestId: String(row.request_id), runId: String(row.run_id), tenantId,
+      tool: String(row.tool), arguments: args, timeoutMs: Number(row.timeout_ms), createdAt: Number(row.created_at),
+      leaseOwner: String(row.lease_owner), leaseId: String(row.lease_id), leaseExpiresAt: Number(row.lease_expires_at), attempts: Number(row.attempts),
+    };
+    console.info(JSON.stringify({ event: "tool_rpc.command.leased", tenantId, runId, requestId: request.requestId, tool: request.tool, workerId, attempt: request.attempts }));
+    return request;
   }
 
-  /** Worker calls this with the result. Resolves the pending Promise. */
+  async begin(request: ToolRequest, tenantId: string, workerId: string, leaseId: string): Promise<boolean> {
+    const store = await this.store(tenantId);
+    if (!store) {
+      this.inFlight.add(request.requestId);
+      return true;
+    }
+    const ok = Boolean(await value(store.beginToolRpcCommand(tenantId, request.runId, request.requestId, workerId, leaseId, Date.now())));
+    if (ok) this.inFlight.add(request.requestId);
+    console.info(JSON.stringify({ event: "tool_rpc.command.executing", tenantId, runId: request.runId, requestId: request.requestId, ok }));
+    return ok;
+  }
+
+  async heartbeat(request: ToolRequest, tenantId: string, workerId: string, leaseId: string): Promise<boolean> {
+    const store = await this.store(tenantId);
+    if (!store) return false;
+    return Boolean(await value(store.heartbeatToolRpcCommand(tenantId, request.runId, request.requestId, workerId, leaseId, Date.now(), LEASE_MS)));
+  }
+
+  async settle(response: ToolResponse, tenantId: string, workerId: string, leaseId: string): Promise<boolean> {
+    const store = await this.store(tenantId);
+    if (!store) return this.resolve(response);
+    const resultJson = JSON.stringify(response);
+    const ok = Boolean(await value(store.settleToolRpcCommand(tenantId, response.runId, response.requestId, workerId, leaseId, response.ok ? "completed" : "failed", resultJson, Date.now())));
+    console.info(JSON.stringify({ event: "tool_rpc.command.settled", tenantId, runId: response.runId, requestId: response.requestId, state: response.ok ? "completed" : "failed", ok }));
+    if (ok) this.resolve(response);
+    return ok;
+  }
+
+  poll(runId: string): ToolRequest | null {
+    const queue = this.queues.get(runId);
+    const request = queue?.shift() ?? null;
+    if (request) this.inFlight.add(request.requestId);
+    return request;
+  }
+
   resolve(response: ToolResponse): boolean {
     const pending = this.pending.get(response.requestId);
     if (!pending || pending.request.runId !== response.runId) return false;
     this.pending.delete(response.requestId);
+    this.inFlight.delete(response.requestId);
     clearTimeout(pending.timer);
     pending.resolve(response);
     return true;
   }
 
-  /** Cancel all pending requests for a run (Stop button) — including ones
-   *  already polled by the worker (in flight) and ones still queued. */
-  cancelRun(runId: string): void {
-    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
-    for (const [requestId, pending] of [...this.pending]) {
-      if (pending.request.runId !== runId && !queued.has(requestId)) continue;
-      clearTimeout(pending.timer);
-      this.pending.delete(requestId);
-      pending.resolve({
-        requestId,
-        runId,
-        ok: false,
-        error: "Cancelled by user",
-        durationMs: 0,
-      });
+  async cancelRun(runId: string, tenantId?: string): Promise<void> {
+    if (tenantId) {
+      const store = await this.store(tenantId);
+      if (store) await value(store.failPendingToolRpc(tenantId, runId, "Cancelled by user", Date.now()));
     }
-    this.queues.delete(runId);
+    this.finish(runId, "Cancelled by user");
   }
 
-  /**
-   * Fails every pending request for a run with a truthful reason (the worker
-   * stopped the container, the run ended). The awaiting tool call surfaces
-   * the error to the model immediately instead of burning its full timeout.
-   */
-  failRun(runId: string, reason: string): void {
-    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
-    for (const [requestId, pending] of [...this.pending]) {
-      if (pending.request.runId !== runId && !queued.has(requestId)) continue;
-      clearTimeout(pending.timer);
-      this.pending.delete(requestId);
-      pending.resolve({
-        requestId,
-        runId,
-        ok: false,
-        error: reason,
-        durationMs: Date.now() - pending.request.createdAt,
-      });
+  async failRun(runId: string, reason: string, tenantId?: string): Promise<void> {
+    if (tenantId) {
+      const store = await this.store(tenantId);
+      if (store) await value(store.failPendingToolRpc(tenantId, runId, reason, Date.now()));
     }
-    this.queues.delete(runId);
+    this.finish(runId, reason);
   }
 
-  /**
-   * The worker serving this run died. Requests it had already taken may or
-   * may not have run, so they fail with that truth (the model re-checks the
-   * workspace). Requests still queued stay queued for the recovering worker.
-   */
   failInFlight(runId: string, reason: string): number {
-    const queued = new Set((this.queues.get(runId) ?? []).map((r) => r.requestId));
-    let n = 0;
-    for (const [requestId, pending] of [...this.pending]) {
-      if (pending.request.runId !== runId || queued.has(requestId)) continue;
+    let count = 0;
+    for (const [id, pending] of [...this.pending]) {
+      if (pending.request.runId !== runId || !this.inFlight.has(id)) continue;
       clearTimeout(pending.timer);
-      this.pending.delete(requestId);
-      pending.resolve({ requestId, runId, ok: false, error: reason, durationMs: Date.now() - pending.request.createdAt });
-      n++;
+      this.pending.delete(id);
+      this.inFlight.delete(id);
+      pending.resolve({ requestId: id, runId, ok: false, error: reason, durationMs: Date.now() - pending.request.createdAt });
+      count++;
     }
-    return n;
+    return count;
   }
 
-  /** Clean up a completed run: pending requests resolve as finished (they
-   *  can never be served) and the queue is dropped. */
-  cleanup(runId: string): void {
-    this.failRun(runId, "The run has ended; this tool request was never executed.");
+  async markInFlightUncertain(runId: string, tenantId: string, reason: string): Promise<void> {
+    const store = await this.store(tenantId);
+    if (!store) throw new Error("Durable ToolRpc storage unavailable");
+    await value(store.markToolRpcRunUncertain(tenantId, runId, reason, Date.now()));
+    console.info(JSON.stringify({ event: "tool_rpc.command.recovery_uncertain", tenantId, runId }));
+  }
+
+  async cleanup(runId: string, tenantId?: string): Promise<void> {
+    await this.failRun(runId, "The run has ended; this tool request was never executed.", tenantId);
     this.queues.delete(runId);
+  }
+
+  private finish(runId: string, reason: string): void {
+    this.finishQueued(runId, reason);
+    this.queues.delete(runId);
+  }
+
+  private finishQueued(runId: string, reason: string): number {
+    let count = 0;
+    for (const [id, pending] of [...this.pending]) {
+      if (pending.request.runId !== runId) continue;
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      this.inFlight.delete(id);
+      pending.resolve({ requestId: id, runId, ok: false, error: reason, durationMs: Date.now() - pending.request.createdAt });
+      count++;
+    }
+    return count;
   }
 }
 
-// Singleton — one channel per backend process
 export const toolRpc = new ToolRpcChannel();

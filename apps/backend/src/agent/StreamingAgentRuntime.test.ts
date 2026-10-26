@@ -22,6 +22,7 @@ import { ToolGateway } from "../gateway/ToolGateway";
 import { PermissionEngine } from "../gateway/PermissionEngine";
 import { RunStore } from "./events";
 import { StreamingAgentRuntime } from "./StreamingAgentRuntime";
+import { clearModelAvailability, clearProviderHealth, markProviderFailure } from "../models/modelAvailability";
 
 const CONFIG: ModelConfig = {
   id: "fake-model",
@@ -691,6 +692,24 @@ test("a model stream that never yields is aborted by the idle watchdog, not left
     if (previousIdle === undefined) delete process.env.ORVYN_MODEL_STREAM_IDLE_MS;
     else process.env.ORVYN_MODEL_STREAM_IDLE_MS = previousIdle;
   }
+});
+
+test("model timeout fallback searches compatible platform providers past timeout cooldowns",()=>{
+  clearModelAvailability();clearProviderHealth();
+  try{
+    const current=new FakeProvider([]),backup=new FakeProvider([]);
+    current.config.id="active:model";backup.config.id="backup:model";
+    const h=harness([],{provider:current,registryModels:[current,backup]});
+    h.store.create("run-fallback",mkdtempSync(join(tmpdir(),"orvyn-failover-")));
+    markProviderFailure("active:model","provider","timeout");
+    markProviderFailure("backup:model","provider","recent timeout");
+    const state:any={requireVision:false};
+    const next=(h.runtime as any).failoverModel("run-fallback",state,current,"provider","operation timed out");
+    assert.equal(next?.config.id,"backup:model");
+    assert.match(state.failoverReason,/active:model → backup:model/);
+    clearProviderHealth();markProviderFailure("active:model","provider","timeout");markProviderFailure("backup:model","auth","invalid credentials");
+    assert.equal((h.runtime as any).failoverModel("run-fallback",{requireVision:false},current,"provider","operation timed out"),null,"emergency fallback must not retry an authentication-blocked provider");
+  }finally{clearModelAvailability();clearProviderHealth();}
 });
 
 // The event NAME must match the outcome: a UI that listens for "run.completed"

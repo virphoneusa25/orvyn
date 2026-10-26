@@ -19,6 +19,28 @@ function open(dir: string) {
   return { sessions, session };
 }
 
+test("files produced by tools or terminal sync are indexed and survive the next mission and backend reopen",async()=>{
+  const dir=mkdtempSync(join(tmpdir(),"orvyn-ws-cross-mission-")),cwd=mkdtempSync(join(tmpdir(),"orvyn-cwd-cross-mission-"));
+  const first=open(dir),created=await resolveRunWorkspace({sessions:first.sessions,tenantId:"t1",session:first.session,instruction:"Build a small code project.",clientRoot:"",cwd});
+  assert.equal(created.status,"resolved");if(created.status!=="resolved")return;
+  mkdirSync(join(created.projectRoot,"src"),{recursive:true});
+  writeFileSync(join(created.projectRoot,"src","pipeline-smoke.js"),'console.log("PIPELINE_OK");\n');
+  writeFileSync(join(created.projectRoot,"src","recovery-probe.js"),'console.log("RECOVERY_OK");\n');
+
+  const second=await resolveRunWorkspace({sessions:first.sessions,tenantId:"t1",session:first.sessions.get(created.sessionId)!,instruction:"Verify the project files.",clientRoot:"",cwd});
+  assert.equal(second.status,"resolved");
+  assert.deepEqual(first.sessions.knownFiles(created.workspaceId).sort(),["src/pipeline-smoke.js","src/recovery-probe.js"]);
+  first.sessions.close();
+
+  const reopened=new WorkSessionStore("t1",dir),session=reopened.get(created.sessionId)!;
+  const third=await resolveRunWorkspace({sessions:reopened,tenantId:"t1",session,instruction:"Continue the project work.",clientRoot:"",cwd});
+  assert.equal(third.status,"resolved");if(third.status!=="resolved")return;
+  assert.equal(readFileSync(join(third.projectRoot,"src","pipeline-smoke.js"),"utf8"),'console.log("PIPELINE_OK");\n');
+  assert.equal(readFileSync(join(third.projectRoot,"src","recovery-probe.js"),"utf8"),'console.log("RECOVERY_OK");\n');
+  assert.deepEqual(reopened.knownFiles(created.workspaceId).sort(),["src/pipeline-smoke.js","src/recovery-probe.js"]);
+  reopened.close();
+});
+
 test("TEST A — a new website provisions one workspace and can write index.html there", async () => {
   const dir = mkdtempSync(join(tmpdir(), "orvyn-ws-a-"));
   const cwd = mkdtempSync(join(tmpdir(), "orvyn-cwd-a-"));

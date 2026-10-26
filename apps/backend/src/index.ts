@@ -31,6 +31,7 @@ import { redactChunk } from "./middleware/customerRedaction";
 import { billingReturnRouter, stripeWebhookHandler } from "./routes/billingPublic";
 import { tenantRateLimit, ipRateLimit } from "./middleware/rateLimit";
 import { tenantManager, bootstrapDefaultTenant } from "./tenancy/TenantManager";
+import { toolRpc } from "./execution/ToolRpc";
 import { Orchestrator } from "./ai/Orchestrator";
 import { registerWorkspaceFreeToolsFor } from "./ai/registerProjectTools";
 import { chatCapabilityPrompt } from "./agent/runCapabilities";
@@ -53,6 +54,51 @@ const BUILD_INFO: { commit?: string; builtAt?: string } = (() => {
 })();
 
 const app = express();
+toolRpc.setPersistenceResolver((tenantId) => {
+  const tenant = tenantManager.get(tenantId);
+  if (tenant) return tenant.localStore as any;
+  // In PostgreSQL-primary deployments tenants are opened lazily, while a
+  // remote worker can poll the run before an HTTP request rehydrates it.
+  // Open the tenant store through the configured persistent backend instead
+  // of making ToolRpc silently fall back to a process-local queue.
+  if (process.env.ORVYN_POSTGRES_PRIMARY_READS?.trim() === "1" && process.env.ORVYN_POSTGRES_PRIMARY_WRITES?.trim() === "1") {
+    const { openTenantStorage } = require("./persistence/PostgresRuntime") as typeof import("./persistence/PostgresRuntime");
+    return lazyPostgresToolRpcStore(tenantId, openTenantStorage) as any;
+  }
+  return undefined;
+});
+
+function lazyPostgresToolRpcStore(
+  tenantId: string,
+  open: (id: string) => Promise<import("./persistence/TenantPersistence").TenantPersistence>,
+): Record<string, (...args: any[]) => Promise<any>> {
+  let current: import("./persistence/TenantPersistence").TenantPersistence | undefined;
+  let opening: Promise<import("./persistence/TenantPersistence").TenantPersistence> | undefined;
+  const get = () => {
+    if (current) return Promise.resolve(current);
+    if (!opening) opening = open(tenantId).then((store) => current = store).finally(() => { opening = undefined; });
+    return opening;
+  };
+  const operations = new Map<string, (...args: any[]) => unknown | Promise<unknown>>();
+  for (const name of [
+    "createToolRpcCommand", "claimToolRpcCommand", "beginToolRpcCommand", "heartbeatToolRpcCommand",
+    "settleToolRpcCommand", "failPendingToolRpc", "markToolRpcUncertain", "markToolRpcRunUncertain", "loadToolRpcCommand",
+  ] as const) {
+    operations.set(name, async (...args: any[]) => {
+      const store = await get();
+      return (store[name] as any).apply(store, args);
+    });
+  }
+  operations.set("close", async () => {
+    const store = await get();
+    await store.close();
+    current = undefined;
+  });
+  operations.set("tenantMirrorSnapshot", async () => (await get()).tenantMirrorSnapshot());
+  operations.set("tenantMirrorCounts", async () => (await get()).tenantMirrorCounts());
+  const proxy = new Proxy({}, { get: (_target, property: string) => operations.get(property) });
+  return proxy as Record<string, (...args: any[]) => Promise<any>>;
+}
 app.use(cloudCors());
 // Stripe signs the raw body: the webhook reads it before the JSON parser.
 app.post("/api/v1/billing/stripe/webhook", ...stripeWebhookHandler);

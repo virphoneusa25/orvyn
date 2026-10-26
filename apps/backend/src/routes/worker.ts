@@ -364,11 +364,11 @@ export function workerRuntimeReports(): Array<{ workerId: string; status: string
 }
 
 /** Removes any queued job for the run and drops pending tool RPCs. */
-export function cancelWorkerRun(runId: string): void {
+export async function cancelWorkerRun(runId: string): Promise<void> {
   jobAdmissions.cancel(runId);
   const job = jobQueue.find((j) => j.runId === runId);
   if (job) jobQueue.splice(jobQueue.indexOf(job), 1);
-  toolRpc.cancelRun(runId);
+  await toolRpc.cancelRun(runId,job?.tenantId);
 }
 
 // Mark workers offline if heartbeat is stale (>45s)
@@ -445,6 +445,7 @@ export function workerRouter(
       job.assignedTo = undefined;
       job.recover = true;
       const failed = toolRpc.failInFlight(job.runId, "The cloud worker running this step restarted before it finished. Check the workspace state (read the file / list the folder) before retrying.");
+      await toolRpc.markInFlightUncertain(job.runId,job.tenantId!,"Worker restarted during execution; command outcome is unknown and will not be replayed automatically.");
       try {
         (await getRunStore(job.tenantId)).emit(job.runId, "agent.phase" as AgentEventType, { phase: "EXECUTE", note: "Reconnecting to the mission workspace" });
         const rec = (await sandboxRegistry().forRun(job.runId));
@@ -456,7 +457,7 @@ export function workerRouter(
       console.warn(`[worker-registry] worker ${lost} lost; re-queued ${job.runId} for recovery (${failed} in-flight tool call(s) failed)`);
     }
   };
-  setInterval(recoverOrphanedJobs, 20_000).unref();
+  setInterval(()=>{void recoverOrphanedJobs().catch(error=>console.error("[worker-recovery] durable command recovery failed",error));},20_000).unref();
 
   // ── Registration ─────────────────────────────────────────────────────
   r.post("/register", (req, res) => {
@@ -590,17 +591,17 @@ export function workerRouter(
     if (!workerId || !worker || worker.status === "offline" || assigned !== workerId) {
       return res.status(409).json({ error: "This run was reassigned to another worker (you were declared offline). Stop serving it." });
     }
-    const request = toolRpc.poll(req.params.runId);
+    const bound = tenantForRun(req.params.runId);
     let finished = false;
     try {
-      const bound = tenantForRun(req.params.runId);
       const run = (await getRunStore(bound)).get(req.params.runId);
       finished = run ? isRunSettled(run.status) : false;
     } catch { /* store unavailable — keep serving */ }
     if (finished) {
-      toolRpc.cleanup(req.params.runId);
+      await toolRpc.cleanup(req.params.runId,tenantForRun(req.params.runId));
       (await finishJob(req.params.runId));
     }
+    const request = bound && !finished ? await toolRpc.claim(req.params.runId, bound, workerId) : null;
     let policyUpdate = null;
     if (!finished) {
       try { policyUpdate = (await pendingPolicyUpdate(sandboxRegistry(), req.params.runId)); } catch { /* registry unavailable */ }
@@ -608,8 +609,28 @@ export function workerRouter(
     res.json({ request, finished, ...(policyUpdate ? { policyUpdate } : {}) });
   }));
 
+  r.post("/tools/:runId/ack", asyncHandler(async (req,res)=>{
+    if(denyUnlessWorker(req,res))return;
+    const tenantId=tenantForRun(req.params.runId),workerId=String(req.body?.workerId??""),requestId=String(req.body?.requestId??""),leaseId=String(req.body?.leaseId??"");
+    if(!tenantId||!requestId||!leaseId)return res.status(404).json({error:"Tool request not found"});
+    const worker=workers.get(workerId),assigned=jobQueue.find(j=>j.runId===req.params.runId)?.assignedTo;
+    if(!worker||worker.status==="offline"||assigned!==workerId)return res.status(409).json({error:"Worker assignment changed"});
+    const request={requestId,runId:req.params.runId} as any;
+    const ok=await toolRpc.begin(request,tenantId,workerId,leaseId);
+    res.status(ok?200:409).json({ok});
+  }));
+  r.post("/tools/:runId/heartbeat", asyncHandler(async (req,res)=>{
+    if(denyUnlessWorker(req,res))return;
+    const tenantId=tenantForRun(req.params.runId),workerId=String(req.body?.workerId??""),requestId=String(req.body?.requestId??""),leaseId=String(req.body?.leaseId??"");
+    if(!tenantId||!requestId||!leaseId)return res.status(404).json({error:"Tool request not found"});
+    const worker=workers.get(workerId),assigned=jobQueue.find(j=>j.runId===req.params.runId)?.assignedTo;
+    if(!worker||worker.status==="offline"||assigned!==workerId)return res.status(409).json({error:"Worker assignment changed"});
+    const ok=await toolRpc.heartbeat({requestId,runId:req.params.runId} as any,tenantId,workerId,leaseId);
+    res.status(ok?200:409).json({ok});
+  }));
+
   // ── Tool RPC: worker submits the tool result ──────────────────────────
-  r.post("/tools/:runId/result", (req, res) => {
+  r.post("/tools/:runId/result", asyncHandler(async (req, res) => {
     if (denyUnlessWorker(req, res)) return;
     if (!bindWorkerRun(req.params.runId) && !tenantForRun(req.params.runId)) {
       return res.status(404).json({ error: "Not found" });
@@ -625,7 +646,7 @@ export function workerRouter(
         return res.status(409).json({ error: `This run was reassigned to another worker (you were declared offline). Stop serving it.` });
       }
     }
-    const resolved = toolRpc.resolve({
+    const response = {
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
       ok: Boolean(req.body.ok),
@@ -635,9 +656,13 @@ export function workerRouter(
       error: req.body.error ? String(req.body.error) : undefined,
       meta: req.body.meta && typeof req.body.meta === "object" ? req.body.meta as Record<string, unknown> : undefined,
       durationMs: Number(req.body.durationMs ?? 0),
-    });
+    };
+    const tenantId=tenantForRun(req.params.runId);
+    const resolved = tenantId && req.body.leaseId
+      ? await toolRpc.settle(response,tenantId,String(req.body.workerId),String(req.body.leaseId))
+      : toolRpc.resolve(response);
     res.json({ ok: resolved });
-  });
+  }));
 
   // ── DURABLE event relay (workers push events → RunStore) ────────────
   // Events get authoritative sequence numbers, JSONL persistence, and
@@ -662,7 +687,7 @@ export function workerRouter(
       // The worker stopping the container fails any tool RPC still waiting
       // on it — fast and truthful, instead of burning the full timeout.
       if (type === "sandbox.stopped") {
-        toolRpc.failRun(runId, `The worker stopped the mission container (${String(data?.reason ?? "unknown reason")}) before this tool completed.`);
+        await toolRpc.failRun(runId, `The worker stopped the mission container (${String(data?.reason ?? "unknown reason")}) before this tool completed.`,decision.tenantId);
       }
     } catch (err: any) {
       // Event persistence failure should NOT block the worker — log it.
@@ -854,7 +879,7 @@ export function workerRouter(
     if (job) {
       jobQueue.splice(jobQueue.indexOf(job), 1);
     }
-    toolRpc.cancelRun(runId);
+    await toolRpc.cancelRun(runId,decision.tenantId);
     // Mark the run cancelled in the RunStore (durable event) — unless the
     // control-plane runtime already reached a terminal state of its own.
     try {

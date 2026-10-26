@@ -130,9 +130,11 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
   const extracted = mkdtempSync(join(tmpdir(), "orvyn-vercel-extracted-"));
   try {
     mkdirSync(join(project, "src"), { recursive: true });
+    mkdirSync(join(project, "tmp"), { recursive: true });
     mkdirSync(join(project, "nested", "remove-me"), { recursive: true });
     mkdirSync(join(project, ".git"), { recursive: true });
     writeFileSync(join(project, "src", "keep.txt"), "old\n");
+    writeFileSync(join(project, "src", "pipeline-smoke.js"), 'console.log("PIPELINE_OK");\n');
     writeFileSync(join(project, "delete.txt"), "delete me\n");
     writeFileSync(join(project, "nested", "remove-me", "old.txt"), "gone\n");
     writeFileSync(join(project, ".git", "config"), "preserve git metadata\n");
@@ -144,13 +146,18 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
 
 
     mkdirSync(join(extracted, "src"), { recursive: true });
+    mkdirSync(join(extracted, "tmp"), { recursive: true });
     writeFileSync(join(extracted, "src", "keep.txt"), "new\n");
+    writeFileSync(join(extracted, "src", "pipeline-smoke.js"), 'console.log("PIPELINE_OK");\n');
+    writeFileSync(join(extracted, "tmp", "recovery-probe.js"), 'console.log("RECOVERY_OK");\n');
     writeFileSync(join(extracted, "created.txt"), "created\n");
 
     const files = await reconcileDownloadedWorkspace(project, extracted);
 
     assert.equal(readFileSync(join(project, "src", "keep.txt"), "utf8"), "new\n");
     assert.equal(readFileSync(join(project, "created.txt"), "utf8"), "created\n");
+    assert.equal(readFileSync(join(project, "src", "pipeline-smoke.js"), "utf8"), 'console.log("PIPELINE_OK");\n');
+    assert.equal(readFileSync(join(project, "tmp", "recovery-probe.js"), "utf8"), 'console.log("RECOVERY_OK");\n');
     assert.equal(existsSync(join(project, "delete.txt")), false);
     assert.equal(existsSync(join(project, "nested", "remove-me", "old.txt")), false);
     assert.equal(existsSync(join(project, "nested", "remove-me")), false);
@@ -159,7 +166,7 @@ test("Vercel workspace sync-back preserves edits, adds files, and applies deleti
       "preserve git metadata\n"
     );
     assert.equal(readFileSync(join(project, ".git", "objects", "aa", "object"), "utf8"), "original");
-    assert.deepEqual(files.sort(), ["created.txt", "src/keep.txt"]);
+    assert.deepEqual(files.sort(), ["created.txt", "src/keep.txt", "src/pipeline-smoke.js", "tmp/recovery-probe.js"]);
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(extracted, { recursive: true, force: true });
