@@ -6,6 +6,7 @@ import {
   __setVercelHelpersForTest,
   isUpstreamEnabledFor,
   type SandboxSessionLike,
+  type AgentBrowserCommandResult,
 } from "./UpstreamAgentBrowserProvider";
 
 /** Records every command the adapter sends, so we can assert on the real argv. */
@@ -20,13 +21,13 @@ function fakeHelpers(replies: Record<string, { exitCode?: number; json?: unknown
         installs.push(options);
         return [];
       },
-      async runAgentBrowserCommand(_s: SandboxSessionLike, args: readonly string[], options?: { session?: string }) {
+      async runAgentBrowserCommand<TJson = unknown>(_s: SandboxSessionLike, args: readonly string[], options?: { session?: string }): Promise<AgentBrowserCommandResult<TJson>> {
         calls.push({ args, session: options?.session });
         const reply = replies[args[0] as string] ?? {};
         return {
           command: args.join(" "),
           exitCode: reply.exitCode ?? 0,
-          json: reply.json ?? null,
+          json: (reply.json ?? null) as TJson | null,
           stdout: reply.stdout ?? "",
           stderr: reply.stderr ?? "",
         };
@@ -156,10 +157,10 @@ test("click and fill accept refs and selectors but refuse coordinates", async ()
   await p.startSession({ runId: "r", tenantId: "t" });
 
   assert.equal((await p.click({ ref: "@e2" })).ok, true);
-  assert.deepEqual(f.calls.at(-1)?.args, ["click", "@e2"]);
+  assert.deepEqual(f.calls[f.calls.length - 1]?.args, ["click", "@e2"]);
 
   assert.equal((await p.fill({ selector: "#email" }, "a@b.com")).ok, true);
-  assert.deepEqual(f.calls.at(-1)?.args, ["fill", "#email", "a@b.com"]);
+  assert.deepEqual(f.calls[f.calls.length - 1]?.args, ["fill", "#email", "a@b.com"]);
 
   const byPoint = await p.click({ x: 10, y: 20 });
   assert.equal(byPoint.ok, false, "coordinates are not supported upstream");
@@ -173,11 +174,11 @@ test("scroll converts a signed delta into the direction and distance upstream ex
   await p.startSession({ runId: "r", tenantId: "t" });
 
   await p.scroll({ deltaY: 400 });
-  assert.deepEqual(f.calls.at(-1)?.args, ["scroll", "down", "400"]);
+  assert.deepEqual(f.calls[f.calls.length - 1]?.args, ["scroll", "down", "400"]);
   await p.scroll({ deltaY: -250 });
-  assert.deepEqual(f.calls.at(-1)?.args, ["scroll", "up", "250"]);
+  assert.deepEqual(f.calls[f.calls.length - 1]?.args, ["scroll", "up", "250"]);
   await p.scroll({ deltaX: -120 });
-  assert.deepEqual(f.calls.at(-1)?.args, ["scroll", "left", "120"]);
+  assert.deepEqual(f.calls[f.calls.length - 1]?.args, ["scroll", "left", "120"]);
 });
 
 test("a screenshot with no image data is a failure, not an empty success", async () => {
