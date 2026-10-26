@@ -6,6 +6,7 @@ type AsyncTenantContract={[K in keyof LocalStore]:LocalStore[K] extends (...args
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { randomUUID } from "crypto";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
@@ -95,6 +96,80 @@ export class PostgresTenantStore implements AsyncTenantContract {
         tenantId);
     }
     async close(): Promise<void> { await this.db.close(); }
+    /** Durable ToolRpc writes intentionally bypass guard(): command state must never silently fall back to memory. */
+    async createToolRpcCommand(input: {
+        requestId: string;
+        runId: string;
+        tenantId: string;
+        tool: string;
+        argumentsJson: string;
+        timeoutMs: number;
+        createdAt: number;
+    }): Promise<void> {
+        return this.db.transaction(async () => {
+            (await this.db.prepare(`INSERT INTO tool_rpc_commands(request_id,run_id,tenant_id,tool,arguments_json,timeout_ms,created_at,updated_at,status,attempts) VALUES(?,?,?,?,?,?,?,?, 'pending',0)`)
+                .run(input.requestId, input.runId, input.tenantId, input.tool, input.argumentsJson, input.timeoutMs, input.createdAt, input.createdAt));
+        });
+    }
+    async claimToolRpcCommand(tenantId: string, runId: string, workerId: string, now: number, leaseMs: number, maxAttempts: number): Promise<any | null> {
+        return this.db.transaction(async () => {
+            try {
+                (await this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',updated_at=?,last_error='unacknowledged command lease expired; outcome may be unknown' WHERE tenant_id=? AND run_id=? AND status='leased' AND lease_expires_at<=? AND tool NOT IN ('read_file','list_directory','search_code','search_files','git_status','git_diff','git_log','git_branch','browser_evidence','browser_console_errors')`).run(now, tenantId, runId, now));
+                (await this.db.prepare(`UPDATE tool_rpc_commands SET status='pending',lease_owner=NULL,lease_id=NULL,lease_expires_at=NULL,updated_at=? WHERE tenant_id=? AND run_id=? AND status='leased' AND lease_expires_at<=? AND tool IN ('read_file','list_directory','search_code','search_files','git_status','git_diff','git_log','git_branch','browser_evidence','browser_console_errors') AND attempts<?`).run(now, tenantId, runId, now, maxAttempts));
+                (await this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',updated_at=?,last_error='execution lease expired; operation outcome is unknown' WHERE tenant_id=? AND run_id=? AND status='executing' AND lease_expires_at<=?`).run(now, tenantId, runId, now));
+                (await this.db.prepare(`UPDATE tool_rpc_commands SET status='failed',updated_at=?,last_error='ToolRpc retry limit reached' WHERE tenant_id=? AND run_id=? AND status IN ('pending','leased') AND attempts>=?`).run(now, tenantId, runId, maxAttempts));
+                const row: any = (await this.db.prepare(`SELECT * FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND ((status='pending' AND attempts<?) OR (status='leased' AND lease_expires_at<=? AND attempts<?)) ORDER BY created_at LIMIT 1`).get(tenantId, runId, maxAttempts, now, maxAttempts));
+                if (!row)
+                    return null;
+                const leaseId = randomUUID();
+                const changed = (await this.db.prepare(`UPDATE tool_rpc_commands SET status='leased',lease_owner=?,lease_id=?,lease_expires_at=?,heartbeat_at=?,attempts=attempts+1,updated_at=? WHERE request_id=? AND tenant_id=? AND status=?`).run(workerId, leaseId, now + leaseMs, now, now, row.request_id, tenantId, row.status));
+                if (!changed.changes)
+                    return null;
+                return { ...row, status: 'leased', lease_owner: workerId, lease_id: leaseId, lease_expires_at: now + leaseMs, attempts: Number(row.attempts) + 1 };
+            }
+            catch (error) {
+                throw error;
+            }
+        });
+    }
+    async beginToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, now: number): Promise<boolean> {
+        return this.db.transaction(async () => {
+            const prior: any = (await this.db.prepare(`SELECT status,lease_owner,lease_id,lease_expires_at FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId, runId, requestId));
+            if (prior?.status === 'executing' && prior.lease_owner === workerId && prior.lease_id === leaseId && Number(prior.lease_expires_at) > now)
+                return true;
+            const r = (await this.db.prepare(`UPDATE tool_rpc_commands SET status='executing',heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE tenant_id=? AND run_id=? AND request_id=? AND status='leased' AND lease_owner=? AND lease_id=? AND lease_expires_at>?`).run(now, now + 60000, now, tenantId, runId, requestId, workerId, leaseId, now));
+            return r.changes === 1;
+        });
+    }
+    async heartbeatToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, now: number, leaseMs: number): Promise<boolean> {
+        return this.db.transaction(async () => {
+            const r = (await this.db.prepare(`UPDATE tool_rpc_commands SET heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE tenant_id=? AND run_id=? AND request_id=? AND status='executing' AND lease_owner=? AND lease_id=? AND lease_expires_at>?`).run(now, now + leaseMs, now, tenantId, runId, requestId, workerId, leaseId, now));
+            return r.changes === 1;
+        });
+    }
+    async settleToolRpcCommand(tenantId: string, runId: string, requestId: string, workerId: string, leaseId: string, status: string, resultJson: string, now: number): Promise<boolean> {
+        return this.db.transaction(async () => {
+            const row: any = (await this.db.prepare(`SELECT status,result_json FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId, runId, requestId));
+            if (!row)
+                return false;
+            if (['completed', 'failed'].includes(row.status))
+                return row.result_json === resultJson;
+            const r = (await this.db.prepare(`UPDATE tool_rpc_commands SET status=?,result_json=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND request_id=? AND status='executing' AND lease_owner=? AND lease_id=?`).run(status, resultJson, now, tenantId, runId, requestId, workerId, leaseId));
+            return r.changes === 1;
+        });
+    }
+    async markToolRpcUncertain(tenantId: string, runId: string, requestId: string, error: string, now: number): Promise<void> {
+        return this.db.transaction(async () => { (await this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',last_error=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND request_id=? AND status IN ('pending','leased','executing')`).run(error, now, tenantId, runId, requestId)); });
+    }
+    async markToolRpcRunUncertain(tenantId: string, runId: string, error: string, now: number): Promise<void> {
+        return this.db.transaction(async () => { (await this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',last_error=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND status='executing'`).run(error, now, tenantId, runId)); });
+    }
+    async failPendingToolRpc(tenantId: string, runId: string, error: string, now: number): Promise<void> {
+        return this.db.transaction(async () => { (await this.db.prepare(`UPDATE tool_rpc_commands SET status='failed',last_error=?,updated_at=? WHERE tenant_id=? AND run_id=? AND status IN ('pending','leased')`).run(error, now, tenantId, runId)); });
+    }
+    async loadToolRpcCommand(tenantId: string, runId: string, requestId: string): Promise<any | null> {
+        return this.db.transaction(async () => { return (await this.db.prepare(`SELECT * FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId, runId, requestId)) as any ?? null; });
+    }
     // ---------- missions ----------
     async saveMission(m: Mission): Promise<void> {
         return this.db.transaction(async () => {

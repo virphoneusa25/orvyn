@@ -28,6 +28,8 @@ let synced = null;
 const events = [];
 const reports = [];
 const results = new Map();
+const leases = new Map();
+let leaseRejectedResult = false;
 const script = [
   { tool: "write_file", arguments: { path: "test.txt", content: "hello" } },
   { tool: "read_file", arguments: { path: "test.txt" } },
@@ -70,9 +72,32 @@ const server = http.createServer((req, res) => {
         return send({ request: null, finished: false });
       }
       const s = script[next];
-      return send({ request: { requestId: String(next++), runId, tool: s.tool, arguments: s.arguments, timeoutMs: 60_000, createdAt: Date.now() }, finished: false });
+      const requestId = String(next++);
+      const leaseId = `lease-${requestId}`;
+      leases.set(requestId, { leaseId, begun: false });
+      return send({ request: { requestId, runId, tenantId: job.tenantId, tool: s.tool, arguments: s.arguments, timeoutMs: 60_000, createdAt: Date.now(), leaseOwner: "worker-e2e", leaseId, leaseExpiresAt: Date.now() + 60_000, attempts: 1 }, finished: false });
     }
-    if (p === `/tools/${runId}/result`) { results.set(Number(json.requestId), json); return send({ ok: true }); }
+    if (p === `/tools/${runId}/ack`) {
+      const lease = leases.get(String(json.requestId));
+      const ok = Boolean(lease && lease.leaseId === json.leaseId && json.workerId && !lease.begun);
+      if (ok) lease.begun = true;
+      return send({ ok }, ok ? 200 : 409);
+    }
+    if (p === `/tools/${runId}/heartbeat`) {
+      const lease = leases.get(String(json.requestId));
+      return send({ ok: Boolean(lease && lease.leaseId === json.leaseId && lease.begun) });
+    }
+    if (p === `/tools/${runId}/result`) {
+      const requestId = String(json.requestId);
+      const lease = leases.get(requestId);
+      if (!lease || lease.leaseId !== json.leaseId || !lease.begun) {
+        leaseRejectedResult = true;
+        return send({ error: "lease rejected" }, 409);
+      }
+      results.set(Number(requestId), json);
+      leases.delete(requestId);
+      return send({ ok: true });
+    }
     if (p === `/events/${runId}`) { events.push(json.type); return send({ ok: true }); }
     if (p === `/sandboxes/${runId}/report`) { reports.push(json); return send({ ok: true }); }
     if (p === "/sandboxes/live") return send({ live: [sandboxId] });
@@ -118,6 +143,7 @@ const syncedTest = (synced ?? []).find((f) => f.path === "test.txt");
 check("changed files synced back to the durable workspace before removal", Boolean(syncedTest) && Buffer.from(syncedTest.contentBase64, "base64").toString() === "hello, world\nappended\n");
 check("lifecycle events emitted without naming the runtime", ["sandbox.created", "sandbox.ready", "sandbox.destroyed"].every((t) => events.includes(t)) && !JSON.stringify(events).toLowerCase().includes("openshell"), events.filter((e) => e.startsWith("sandbox.")).join(", "));
 check("registry reports ready then completed", reports.some((x) => x.state === "ready") && reports.some((x) => x.state === "completed"));
+check("tool results require an acknowledged durable lease", !leaseRejectedResult && leases.size === 0);
 check("ephemeral workspace removed from the worker host", !fs.existsSync(job.workspace));
 const left = provider === "docker"
   ? String(spawnSync("docker", ["ps", "-a", "--filter", "label=orvyn.sandbox=1", "--filter", `label=orvyn.sandbox_id=${sandboxId}`, "-q"]).stdout).trim()

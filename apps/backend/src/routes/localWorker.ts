@@ -198,9 +198,25 @@ export function localWorkerRouter(
       finished = !!run && isRunSettled(run.status);
       cancelled = run?.status === "cancelled";
     } catch { /* keep serving */ }
-    if (finished) toolRpc.cleanup(req.params.runId);
-    else request = toolRpc.poll(req.params.runId);
+    if (finished) await toolRpc.cleanup(req.params.runId,t.id);
+    if (!finished && !job.assignedTo) return res.status(409).json({ error: "Run is not assigned to a registered worker" });
+    else if (!finished) request = await toolRpc.claim(req.params.runId,t.id,String(job.assignedTo));
     res.json({ request, finished, cancelled, projectRoot: job?.projectRoot });
+  }));
+
+  r.post("/tools/:runId/ack", asyncHandler(async(req,res)=>{
+    const t=requireTenant(req),job=jobs.find(j=>j.runId===req.params.runId);
+    if(!job||job.tenantId!==t.id)return res.status(403).json({error:"Not your run"});
+    const workerId=String(req.body?.workerId??""),request={requestId:String(req.body?.requestId??""),runId:req.params.runId} as any;
+    if(!job.assignedTo||job.assignedTo!==workerId)return res.status(409).json({error:"Worker assignment changed"});
+    const ok=await toolRpc.begin(request,t.id,workerId,String(req.body?.leaseId??""));res.status(ok?200:409).json({ok});
+  }));
+  r.post("/tools/:runId/heartbeat", asyncHandler(async(req,res)=>{
+    const t=requireTenant(req),job=jobs.find(j=>j.runId===req.params.runId);
+    if(!job||job.tenantId!==t.id)return res.status(403).json({error:"Not your run"});
+    const workerId=String(req.body?.workerId??""),request={requestId:String(req.body?.requestId??""),runId:req.params.runId} as any;
+    if(!job.assignedTo||job.assignedTo!==workerId)return res.status(409).json({error:"Worker assignment changed"});
+    const ok=await toolRpc.heartbeat(request,t.id,workerId,String(req.body?.leaseId??""));res.status(ok?200:409).json({ok});
   }));
 
   r.get("/tools/:runId/state", asyncHandler(async (req, res) => {
@@ -211,7 +227,7 @@ export function localWorkerRouter(
     res.json({ cancelled: run?.status === "cancelled", finished: Boolean(run && isRunSettled(run.status)) });
   }));
 
-  r.post("/tools/:runId/result", (req, res) => {
+  r.post("/tools/:runId/result", asyncHandler(async(req, res) => {
     const t = requireTenant(req);
     const job = jobs.find((j) => j.runId === req.params.runId);
     if (!job || job.tenantId !== t.id) return res.status(403).json({ error: "Not your run" });
@@ -219,14 +235,14 @@ export function localWorkerRouter(
     // resolve its ToolRPC — a re-registered process must not answer for a
     // stale assignment (same rule the cloud worker route enforces).
     const workerId = String(req.body.workerId ?? "");
-    if (job?.assignedTo && workerId && job.assignedTo !== workerId) {
+    if (!job.assignedTo || job.assignedTo !== workerId) {
       return res.status(409).json({ error: "This run is assigned to another worker" });
     }
     // Only bounded PNG evidence is relayed; arbitrary worker metadata is not trusted.
     const candidate=req.body.meta?.screenshot;
     const screenshot=candidate?.mediaType==="image/png" && typeof candidate.b64==="string" && candidate.b64.length<=9_000_000 && /^[A-Za-z0-9+/]*={0,2}$/.test(candidate.b64)
       ? {b64:candidate.b64,mediaType:"image/png"} : undefined;
-    const resolved = toolRpc.resolve({
+    const response = {
       requestId: String(req.body.requestId ?? ""),
       runId: req.params.runId,
       ok: Boolean(req.body.ok),
@@ -236,9 +252,12 @@ export function localWorkerRouter(
       error: req.body.error ? String(req.body.error) : undefined,
       durationMs: Number(req.body.durationMs ?? 0),
       ...(screenshot ? {meta:{screenshot}} : {}),
-    });
+    };
+    const resolved=req.body.leaseId
+      ? await toolRpc.settle(response,t.id,workerId,String(req.body.leaseId))
+      : toolRpc.resolve(response);
     res.json({ ok: resolved });
-  });
+  }));
 
   r.post("/events/:runId", asyncHandler(async (req, res) => {
     const t = requireTenant(req);

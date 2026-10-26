@@ -13,6 +13,7 @@ import { LocalStore } from "./LocalStore";
 import { PostgresTenantStore } from "./PostgresTenantStore";
 import { PostgresTenantDatabase, tenantDataSchema, tenantSql, encodeTenantText, decodeTenantText } from "./PostgresTenantDatabase";
 import { PostgresTenantStorage, readTenantDataSnapshot } from "./PostgresTenantStorage";
+import { ToolRpcChannel } from "../execution/ToolRpc";
 
 const url = process.env.ORVYN_PG_URL ?? "";
 const live = process.env.ORVYN_TENANT_RUNTIME_TEST === "1" && Boolean(url);
@@ -43,11 +44,71 @@ test("tenant SQL and text preserve parameter boundaries and arbitrary SQLite con
   assert.throws(() => tenantSql("INSERT OR REPLACE INTO settings VALUES (?,?)"), /Unsupported/);
 });
 
+test("SQLite: durable ToolRpc leases fence concurrent workers and never replay an expired executing command", async()=>{
+  const tenant="toolrpc-"+randomUUID(),dir=mkdtempSync(join(tmpdir(),"orvyn-toolrpc-"));let store=new LocalStore(tenant,dir);const rpc=new ToolRpcChannel();
+  rpc.setPersistenceResolver(id=>id===tenant?store:undefined);
+  try{
+    const pending=rpc.execute("run-a","git_commit",{message:"once"},5000,tenant);
+    const claims=await Promise.all([rpc.claim("run-a",tenant,"worker-a"),rpc.claim("run-a",tenant,"worker-b")]);
+    const request=claims.find(Boolean)!;assert.equal(claims.filter(Boolean).length,1);
+    assert.ok(request.leaseId);
+    assert.equal(await rpc.begin(request,tenant,request.leaseOwner!,request.leaseId!),true);
+    assert.equal(await rpc.begin(request,tenant,request.leaseOwner!,request.leaseId!),true,"repeated acknowledgement for the same lease is idempotent");
+    assert.equal(await rpc.claim("run-a",tenant,"worker-c"),null);
+    const reply={requestId:request.requestId,runId:request.runId,ok:true,output:"committed",durationMs:1};
+    assert.equal(await rpc.settle(reply,tenant,request.leaseOwner!,request.leaseId!),true);
+    assert.equal(await rpc.settle(reply,tenant,request.leaseOwner!,request.leaseId!),true,"identical result settlement is idempotent");
+    assert.equal((await pending).output,"committed");
+
+    const abandoned=rpc.execute("run-b","delete_file",{path:"important.txt"},5000,tenant);
+    const leased=(await rpc.claim("run-b",tenant,"worker-a"))!;
+    assert.equal(await rpc.begin(leased,tenant,"worker-a",leased.leaseId!),true);
+    assert.equal(await rpc.claim("run-b",tenant,"worker-b"),null);
+    const row=store.loadToolRpcCommand(tenant,"run-b",leased.requestId);
+    assert.equal(row.status,"executing");
+    // A later claimant causes expired executing commands to become uncertain, not executable again.
+    assert.equal(store.claimToolRpcCommand(tenant,"run-b","worker-b",Date.now()+120_000,45_000,3),null);
+    assert.equal(store.loadToolRpcCommand(tenant,"run-b",leased.requestId).status,"uncertain");
+    rpc.resolve({requestId:leased.requestId,runId:"run-b",ok:false,error:"worker outcome uncertain",durationMs:1});
+    assert.equal((await abandoned).ok,false);
+    assert.equal(await rpc.claim("run-b","another-tenant","worker-x"),null);
+
+    const destructive=rpc.execute("run-c","delete_file",{path:"may-have-run.txt"},5000,tenant);
+    const unacked=(await rpc.claim("run-c",tenant,"old-worker"))!;
+    assert.equal(store.claimToolRpcCommand(tenant,"run-c","new-worker",Date.now()+120_000,45_000,3),null);
+    assert.equal(store.loadToolRpcCommand(tenant,"run-c",unacked.requestId).status,"uncertain","destructive command with expired unacknowledged lease must not replay");
+    rpc.resolve({requestId:unacked.requestId,runId:"run-c",ok:false,error:"command outcome uncertain",durationMs:1});
+    assert.equal((await destructive).ok,false);
+
+    const retryable=rpc.execute("run-d","read_file",{path:"safe.txt"},5000,tenant);
+    const firstRead=(await rpc.claim("run-d",tenant,"worker-a"))!;
+    const nextRead=store.claimToolRpcCommand(tenant,"run-d","worker-b",Date.now()+120_000,45_000,2);
+    assert.ok(nextRead,"read-only command may safely retry before execution ack");
+    assert.equal(nextRead.attempts,2);
+    rpc.resolve({requestId:firstRead.requestId,runId:"run-d",ok:false,error:"old lease fenced",durationMs:1});
+    assert.equal((await retryable).ok,false);
+
+    const restartId=randomUUID();store.createToolRpcCommand({requestId:restartId,runId:"run-restart",tenantId:tenant,tool:"read_file",argumentsJson:JSON.stringify({path:"after-restart.txt"}),timeoutMs:5000,createdAt:Date.now()});
+    store.close();store=new LocalStore(tenant,dir);
+    const restartedRpc=new ToolRpcChannel();restartedRpc.setPersistenceResolver(id=>id===tenant?store:undefined);
+    const recovered=await restartedRpc.claim("run-restart",tenant,"restarted-worker");assert.ok(recovered);
+    assert.equal(recovered?.arguments.path,"after-restart.txt");
+    assert.equal(await restartedRpc.begin(recovered!,tenant,"restarted-worker",recovered!.leaseId!),true);
+    assert.equal(await restartedRpc.settle({requestId:restartId,runId:"run-restart",ok:true,output:"recovered",durationMs:2},tenant,"restarted-worker",recovered!.leaseId!),true);
+    assert.equal(store.loadToolRpcCommand(tenant,"run-restart",restartId).status,"completed");
+  }finally{await store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test("ToolRpc storage write failures reject before a command is made visible",async()=>{
+  const rpc=new ToolRpcChannel();rpc.setPersistenceResolver(()=>({createToolRpcCommand(){throw new Error("database unavailable");}} as any));
+  await assert.rejects(rpc.execute("run-fail","delete_file",{path:"x"},1000,"tenant-fail"),/database unavailable/);
+});
+
 test("tenant snapshot rejects missing databases, foreign ownership and unknown tables", () => {
   const tenant = "source-" + randomUUID();
   const file = seed(tenant);
   const snapshot = readTenantDataSnapshot(file, tenant);
-  assert.equal(Object.keys(snapshot).length, 11);
+  assert.equal(Object.keys(snapshot).length, 12);
   assert.equal(snapshot.settings.rows[0]?.value, content);
   assert.equal(snapshot.memories.rows[0]?.content, content);
   assert.throws(() => readTenantDataSnapshot(file + ".missing", tenant), /Missing/);
@@ -68,7 +129,7 @@ test("real PostgreSQL: all tenant families import exactly and preserve behavior 
   const migration = await PostgresTenantStorage.connect(url, tenant);
   let store: PostgresTenantStore | undefined;
   try {
-    assert.equal((await migration.importSqlite(file)).tables, 11);
+    assert.equal((await migration.importSqlite(file)).tables, 12);
     assert.deepEqual(await migration.exportSnapshot(), JSON.parse(JSON.stringify(readTenantDataSnapshot(file, tenant))));
     assert.equal((await migration.importSqlite(file)).alreadyImported, true);
     store = await PostgresTenantStore.connect(url, tenant);
@@ -105,6 +166,21 @@ test("real PostgreSQL: concurrent settings edits serialize without lost permissi
     await first.clearToolApprovalGrants("user", "tool-0");
     assert.equal((await second.getToolApprovalGrants("user", "chat", "project")).includes("tool-0"), false);
   } finally { await first.close(); await second.close(); await cleanup(tenant); }
+});
+
+test("real PostgreSQL: ToolRpc command lifecycle survives store reconnect and fences duplicate starts",{skip:!live},async()=>{
+  const tenant="toolrpc-pg-"+randomUUID(),rpc=new ToolRpcChannel();let store=await PostgresTenantStore.connect(url,tenant);rpc.setPersistenceResolver(id=>id===tenant?store:undefined);
+  try{
+    const pending=rpc.execute("run-pg","delete_file",{path:"durable.txt"},5000,tenant);
+    const first=await rpc.claim("run-pg",tenant,"worker-a");assert.ok(first?.leaseId);
+    await store.close();store=await PostgresTenantStore.connect(url,tenant);
+    assert.equal(await rpc.begin(first!,tenant,"worker-a",first!.leaseId!),true);
+    assert.equal(await rpc.claim("run-pg",tenant,"worker-b"),null);
+    const result={requestId:first!.requestId,runId:first!.runId,ok:false,error:"fixture command failure",durationMs:2};
+    assert.equal(await rpc.settle(result,tenant,"worker-a",first!.leaseId!),true);
+    assert.equal((await pending).ok,false);
+    assert.equal((await store.loadToolRpcCommand(tenant,"run-pg",first!.requestId)).status,"failed");
+  }finally{await store.close();await cleanup(tenant);}
 });
 
 test("real PostgreSQL: failed writes roll back and storage errors never degrade into empty grants", { skip: !live }, async () => {

@@ -20,6 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { randomUUID } from "crypto";
 import type { ModelConfig } from "@orvyn/ai-core";
 import type { Mission } from "../agent/TaskEngine";
 import type { UsageEvent } from "../services/UsageService";
@@ -131,6 +132,14 @@ CREATE TABLE IF NOT EXISTS blobs (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_blobs_run ON blobs (run_id, created_at);
+CREATE TABLE IF NOT EXISTS tool_rpc_commands (
+  request_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+  tool TEXT NOT NULL, arguments_json TEXT NOT NULL, timeout_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, status TEXT NOT NULL,
+  lease_owner TEXT, lease_id TEXT, lease_expires_at INTEGER, heartbeat_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0, result_json TEXT, last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_rpc_run_status ON tool_rpc_commands(run_id,status,created_at);
 `;
 
 export function defaultDataDir(): string {
@@ -196,6 +205,46 @@ function mapArtifactRow(r: any) {
 export class LocalStore {
   private db: DatabaseSync;
   private warned = false;
+
+  /** Durable ToolRpc writes intentionally bypass guard(): command state must never silently fall back to memory. */
+  createToolRpcCommand(input: {requestId:string;runId:string;tenantId:string;tool:string;argumentsJson:string;timeoutMs:number;createdAt:number}): void {
+    this.db.prepare(`INSERT INTO tool_rpc_commands(request_id,run_id,tenant_id,tool,arguments_json,timeout_ms,created_at,updated_at,status,attempts) VALUES(?,?,?,?,?,?,?,?, 'pending',0)`)
+      .run(input.requestId,input.runId,input.tenantId,input.tool,input.argumentsJson,input.timeoutMs,input.createdAt,input.createdAt);
+  }
+
+  claimToolRpcCommand(tenantId:string,runId:string,workerId:string,now:number,leaseMs:number,maxAttempts:number): any|null {
+    try {
+      this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',updated_at=?,last_error='unacknowledged command lease expired; outcome may be unknown' WHERE tenant_id=? AND run_id=? AND status='leased' AND lease_expires_at<=? AND tool NOT IN ('read_file','list_directory','search_code','search_files','git_status','git_diff','git_log','git_branch','browser_evidence','browser_console_errors')`).run(now,tenantId,runId,now);
+      this.db.prepare(`UPDATE tool_rpc_commands SET status='pending',lease_owner=NULL,lease_id=NULL,lease_expires_at=NULL,updated_at=? WHERE tenant_id=? AND run_id=? AND status='leased' AND lease_expires_at<=? AND tool IN ('read_file','list_directory','search_code','search_files','git_status','git_diff','git_log','git_branch','browser_evidence','browser_console_errors') AND attempts<?`).run(now,tenantId,runId,now,maxAttempts);
+      this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',updated_at=?,last_error='execution lease expired; operation outcome is unknown' WHERE tenant_id=? AND run_id=? AND status='executing' AND lease_expires_at<=?`).run(now,tenantId,runId,now);
+      this.db.prepare(`UPDATE tool_rpc_commands SET status='failed',updated_at=?,last_error='ToolRpc retry limit reached' WHERE tenant_id=? AND run_id=? AND status IN ('pending','leased') AND attempts>=?`).run(now,tenantId,runId,maxAttempts);
+      const row:any=this.db.prepare(`SELECT * FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND ((status='pending' AND attempts<?) OR (status='leased' AND lease_expires_at<=? AND attempts<?)) ORDER BY created_at LIMIT 1`).get(tenantId,runId,maxAttempts,now,maxAttempts);
+      if(!row)return null;
+      const leaseId=randomUUID();
+      const changed=this.db.prepare(`UPDATE tool_rpc_commands SET status='leased',lease_owner=?,lease_id=?,lease_expires_at=?,heartbeat_at=?,attempts=attempts+1,updated_at=? WHERE request_id=? AND tenant_id=? AND status=?`).run(workerId,leaseId,now+leaseMs,now,now,row.request_id,tenantId,row.status);
+      if(!changed.changes)return null;
+      return {...row,status:'leased',lease_owner:workerId,lease_id:leaseId,lease_expires_at:now+leaseMs,attempts:Number(row.attempts)+1};
+    } catch(error){throw error;}
+  }
+
+  beginToolRpcCommand(tenantId:string,runId:string,requestId:string,workerId:string,leaseId:string,now:number): boolean {
+    const prior:any=this.db.prepare(`SELECT status,lease_owner,lease_id,lease_expires_at FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId,runId,requestId);
+    if(prior?.status==='executing'&&prior.lease_owner===workerId&&prior.lease_id===leaseId&&Number(prior.lease_expires_at)>now)return true;
+    const r=this.db.prepare(`UPDATE tool_rpc_commands SET status='executing',heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE tenant_id=? AND run_id=? AND request_id=? AND status='leased' AND lease_owner=? AND lease_id=? AND lease_expires_at>?`).run(now,now+60_000,now,tenantId,runId,requestId,workerId,leaseId,now);return r.changes===1;
+  }
+  heartbeatToolRpcCommand(tenantId:string,runId:string,requestId:string,workerId:string,leaseId:string,now:number,leaseMs:number): boolean {
+    const r=this.db.prepare(`UPDATE tool_rpc_commands SET heartbeat_at=?,lease_expires_at=?,updated_at=? WHERE tenant_id=? AND run_id=? AND request_id=? AND status='executing' AND lease_owner=? AND lease_id=? AND lease_expires_at>?`).run(now,now+leaseMs,now,tenantId,runId,requestId,workerId,leaseId,now);return r.changes===1;
+  }
+  settleToolRpcCommand(tenantId:string,runId:string,requestId:string,workerId:string,leaseId:string,status:string,resultJson:string,now:number): boolean {
+    const row:any=this.db.prepare(`SELECT status,result_json FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId,runId,requestId);
+    if(!row)return false;
+    if(['completed','failed'].includes(row.status))return row.result_json===resultJson;
+    const r=this.db.prepare(`UPDATE tool_rpc_commands SET status=?,result_json=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND request_id=? AND status='executing' AND lease_owner=? AND lease_id=?`).run(status,resultJson,now,tenantId,runId,requestId,workerId,leaseId);return r.changes===1;
+  }
+  markToolRpcUncertain(tenantId:string,runId:string,requestId:string,error:string,now:number):void { this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',last_error=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND request_id=? AND status IN ('pending','leased','executing')`).run(error,now,tenantId,runId,requestId); }
+  markToolRpcRunUncertain(tenantId:string,runId:string,error:string,now:number):void { this.db.prepare(`UPDATE tool_rpc_commands SET status='uncertain',last_error=?,updated_at=?,lease_expires_at=NULL WHERE tenant_id=? AND run_id=? AND status='executing'`).run(error,now,tenantId,runId); }
+  failPendingToolRpc(tenantId:string,runId:string,error:string,now:number): void { this.db.prepare(`UPDATE tool_rpc_commands SET status='failed',last_error=?,updated_at=? WHERE tenant_id=? AND run_id=? AND status IN ('pending','leased')`).run(error,now,tenantId,runId); }
+  loadToolRpcCommand(tenantId:string,runId:string,requestId:string): any|null { return this.db.prepare(`SELECT * FROM tool_rpc_commands WHERE tenant_id=? AND run_id=? AND request_id=?`).get(tenantId,runId,requestId) as any ?? null; }
 
   constructor(public readonly tenantId: string, dataDir: string = defaultDataDir()) {
     fs.mkdirSync(dataDir, { recursive: true });

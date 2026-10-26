@@ -57,6 +57,7 @@ function makeRemoteTool(
   defaultPermission: "allowed" | "ask" | "denied",
   rpc: ToolRpcChannel,
   runId: string,
+  tenantId?: string,
   execute?: (args: Record<string, unknown>, raw: () => Promise<ToolResult>) => Promise<ToolResult>
 ): AITool {
   return {
@@ -70,11 +71,11 @@ function makeRemoteTool(
       const start = Date.now();
       try {
         if (execute) return await execute(args, async () => {
-          const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
+          const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs(), tenantId);
           if(name === "browser_screenshot" && response.ok) markBrowserFrame(runId);
         return rpcResponseToResult(name, response);
         });
-        const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs());
+        const response = await rpc.execute(runId, name, args, remoteToolTimeoutMs(), tenantId);
         if(name === "browser_screenshot" && response.ok) markBrowserFrame(runId);
         return rpcResponseToResult(name, response);
       } catch (err: any) {
@@ -99,9 +100,9 @@ function rpcResponseToResult(name: string, response: { ok: boolean; output?: str
 }
 
 /** Reads a remote file as text; returns null when the read fails. */
-async function readRemote(rpc: ToolRpcChannel, runId: string, path: string): Promise<string | null> {
+async function readRemote(rpc: ToolRpcChannel, runId: string, path: string, tenantId?: string): Promise<string | null> {
   try {
-    const r = await rpc.execute(runId, "read_file", { path }, remoteToolTimeoutMs());
+    const r = await rpc.execute(runId, "read_file", { path }, remoteToolTimeoutMs(), tenantId);
     return r.ok ? String(r.output ?? "") : null;
   } catch {
     return null;
@@ -128,11 +129,12 @@ export function registerRemoteTools(
   rpc: ToolRpcChannel,
   runId: string,
   projectRoot = "remote-workspace",
-  nativeDesktop = false
+  nativeDesktop = false,
+  tenantId?: string
 ): void {
   if (nativeDesktop) {
     const native = [hostTools.makeHostDesktopStatusTool(''),hostTools.makeHostDesktopScreenshotTool(''),hostTools.makeHostDesktopClickTool(''),hostTools.makeHostDesktopTypeTool(''),hostTools.makeHostDesktopMoveTool(''),hostTools.makeHostDesktopScrollTool(''),hostTools.makeHostDesktopFocusTool(''),hostTools.makeHostDesktopKeyTool(''),hostTools.makeHostDesktopInspectTool('')];
-    for (const tool of native) gateway.register(makeRemoteTool(tool.name,tool.description,tool.parameters,tool.defaultPermission,rpc,runId));
+    for (const tool of native) gateway.register(makeRemoteTool(tool.name,tool.description,tool.parameters,tool.defaultPermission,rpc,runId,tenantId));
   }
 
   gateway.register(makeRemoteTool(
@@ -140,15 +142,15 @@ export function registerRemoteTools(
     "Read a file from the remote workspace",
     { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     "allowed",
-    rpc, runId
+    rpc, runId, tenantId
   ));
 
   const remoteWriteExecute = async (args: Record<string, unknown>, raw: () => Promise<ToolResult>): Promise<ToolResult> => {
     const append = args.append === true;
-    const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""))) ?? "" : "";
+    const before = append ? (await readRemote(rpc, runId, String(args.path ?? ""), tenantId)) ?? "" : "";
     const result = await raw();
     if (!result.ok) return result;
-    const after = await readRemote(rpc, runId, String(args.path ?? ""));
+    const after = await readRemote(rpc, runId, String(args.path ?? ""), tenantId);
     const expected = before + String(args.content ?? "");
     if (after === null || !matchesContent(after, expected)) return { ok: false, error: "Remote project file read-back failed." };
     const verified = after === expected ? after : (matchesContent(after, expected) ? expected : after);
@@ -162,7 +164,7 @@ export function registerRemoteTools(
     WRITE_FILE_DESCRIPTION,
     WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
     "ask",
-    rpc, runId,
+    rpc, runId, tenantId,
     remoteWriteExecute
   ));
 
@@ -171,10 +173,10 @@ export function registerRemoteTools(
     `${WRITE_FILE_DESCRIPTION} (alias of write_file)`,
     WRITE_FILE_PARAMETERS as unknown as Record<string, unknown>,
     "ask",
-    rpc, runId,
+    rpc, runId, tenantId,
     async (args) => {
       return remoteWriteExecute(args, async () => {
-        const response = await rpc.execute(runId, "write_file", args, remoteToolTimeoutMs());
+        const response = await rpc.execute(runId, "write_file", args, remoteToolTimeoutMs(), tenantId);
         return rpcResponseToResult("write_file", response);
       });
     }
@@ -194,16 +196,16 @@ export function registerRemoteTools(
       required: ["path", "old_string", "new_string"],
     },
     "ask",
-    rpc, runId,
+    rpc, runId, tenantId,
     // The diff is computed from the remote file on both sides of the edit —
     // the control plane never assumes the file's local state.
     async (args, raw) => {
       const path = String(args.path ?? "");
-      const before = await readRemote(rpc, runId, path);
+      const before = await readRemote(rpc, runId, path, tenantId);
       const result = await raw();
       if (!result.ok) return result;
       if (before === null) return { ok: false, error: "Remote project file before-state unavailable." };
-      const after = await readRemote(rpc, runId, path);
+      const after = await readRemote(rpc, runId, path, tenantId);
       if (after === null) return { ok: false, error: "Remote project file read-back failed." };
       try {
         return { ...result, projectFileEvidence: remoteFileEvidence(projectRoot, path, after), edit: toToolResultEdit(path, "modify", before, after) };
@@ -224,7 +226,7 @@ export function registerRemoteTools(
       required: ["path"],
     },
     "ask",
-    rpc, runId,
+    rpc, runId, tenantId,
     async (args) => {
       const path = String(args.path ?? "");
       const body = args.content != null ? String(args.content) : args.patch != null ? String(args.patch) : "";
@@ -232,11 +234,11 @@ export function registerRemoteTools(
       if (/(^|\n)(?:\+\+\+|---)\s+\S*\.\.([\\/]|$)/.test(body)) {
         return { ok: false, error: "Patch escapes the project root — refused" };
       }
-      const before = await readRemote(rpc, runId, path);
-      const response = await rpc.execute(runId, "write_file", { path, content: body, append: false }, remoteToolTimeoutMs());
+      const before = await readRemote(rpc, runId, path, tenantId);
+      const response = await rpc.execute(runId, "write_file", { path, content: body, append: false }, remoteToolTimeoutMs(), tenantId);
       const result = rpcResponseToResult("apply_patch", response);
       if (!result.ok) return result;
-      const after = await readRemote(rpc, runId, path);
+      const after = await readRemote(rpc, runId, path, tenantId);
       if (after === null || !matchesContent(after, body)) return { ok: false, error: "Remote project file read-back failed." };
       const verified = after === body ? after : (matchesContent(after, body) ? body : after);
       try {
@@ -257,26 +259,26 @@ export function registerRemoteTools(
     "List files in a directory in the remote workspace",
     { type: "object", properties: { path: { type: "string" } } },
     "allowed",
-    rpc, runId
+    rpc, runId, tenantId
   ));
 
   const searchParams = {
     type: "object",
     properties: { query: { type: "string" }, pattern: { type: "string" } },
   };
-  gateway.register(makeRemoteTool("search_code", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("search_files", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("search_code", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("search_files", "Search for a pattern in remote workspace files", searchParams, "allowed", rpc, runId, tenantId));
 
   const terminalParams = { type: "object", properties: { command: { type: "string" } }, required: ["command"] };
-  gateway.register(makeRemoteTool("terminal", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("run_command", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("terminal", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("run_command", "Run a terminal command in the remote mission container", terminalParams, "ask", rpc, runId, tenantId));
 
   gateway.register(makeRemoteTool(
     "run_tests",
     "Run the project's test suite (npm test) in the remote mission container",
     { type: "object", properties: {} },
     "ask",
-    rpc, runId
+    rpc, runId, tenantId
   ));
 
   gateway.register(makeRemoteTool(
@@ -284,7 +286,7 @@ export function registerRemoteTools(
     "Run the project's typecheck in the remote container",
     { type: "object", properties: {} },
     "ask",
-    rpc, runId
+    rpc, runId, tenantId
   ));
 
   gateway.register(makeRemoteTool(
@@ -292,35 +294,35 @@ export function registerRemoteTools(
     "Run the project's linter in the remote container",
     { type: "object", properties: {} },
     "ask",
-    rpc, runId
+    rpc, runId, tenantId
   ));
 
   const gitRead = { type: "object", properties: {} };
-  gateway.register(makeRemoteTool("git_status", "git status in the execution workspace", gitRead, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("git_diff", "git diff in the execution workspace", gitRead, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("git_log", "git log in the execution workspace", { type: "object", properties: { limit: { type: "number" }, path: { type: "string" } } }, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("git_branch", "git branch in the execution workspace", gitRead, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("git_checkout", "Switch branch in the execution workspace", { type: "object", properties: { branch: { type: "string" }, create: { type: "boolean" } }, required: ["branch"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("git_commit", "Commit in the execution workspace (never automatic)", { type: "object", properties: { message: { type: "string" } }, required: ["message"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("delete_file", "Delete a file in the execution workspace", { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("start_process", "Start a long-running local process / dev server", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("stop_process", "Stop a process this run started", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("read_process_logs", "Read logs from a tracked process", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("list_processes", "List processes ORION started for this project", gitRead, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("git_status", "git status in the execution workspace", gitRead, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("git_diff", "git diff in the execution workspace", gitRead, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("git_log", "git log in the execution workspace", { type: "object", properties: { limit: { type: "number" }, path: { type: "string" } } }, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("git_branch", "git branch in the execution workspace", gitRead, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("git_checkout", "Switch branch in the execution workspace", { type: "object", properties: { branch: { type: "string" }, create: { type: "boolean" } }, required: ["branch"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("git_commit", "Commit in the execution workspace (never automatic)", { type: "object", properties: { message: { type: "string" } }, required: ["message"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("delete_file", "Delete a file in the execution workspace", { type: "object", properties: { path: { type: "string" } }, required: ["path"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("start_process", "Start a long-running local process / dev server", { type: "object", properties: { command: { type: "string" } }, required: ["command"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("stop_process", "Stop a process this run started", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("read_process_logs", "Read logs from a tracked process", { type: "object", properties: { processId: { type: "string" }, id: { type: "string" } } }, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("list_processes", "List processes ORION started for this project", gitRead, "allowed", rpc, runId, tenantId));
 
   // Browser state and MCP child processes live inside the mission sandbox.
   // The control plane keeps the same logical tool names and permission gates.
   const browserSession = { type: "string", description: "Browser session id (the sandbox has one session per run)" };
-  gateway.register(makeRemoteTool("browser_open", "Open a URL in the sandbox browser", { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_navigate", "Navigate the sandbox browser", { type: "object", properties: { url: { type: "string" }, sessionId: browserSession }, required: ["url"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_set_viewport", "Resize the sandbox browser", { type: "object", properties: { preset: { type: "string", enum: ["desktop", "tablet", "mobile"] }, width: { type: "number" }, height: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_click", "Click an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, sessionId: browserSession }, required: ["selector"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_type", "Type into an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, text: { type: "string" }, submit: { type: "boolean" }, sessionId: browserSession }, required: ["selector", "text"] }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_scroll", "Scroll the sandbox browser", { type: "object", properties: { deltaY: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_console_errors", "Report browser console and network errors from inside the sandbox", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("browser_screenshot", "Capture the sandbox browser viewport", { type: "object", properties: { fullPage: { type: "boolean" }, sessionId: browserSession } }, "ask", rpc, runId));
-  gateway.register(makeRemoteTool("browser_evidence", "Return sandbox browser URL, errors, actions and screenshots", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId));
+  gateway.register(makeRemoteTool("browser_open", "Open a URL in the sandbox browser", { type: "object", properties: { url: { type: "string" } }, required: ["url"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_navigate", "Navigate the sandbox browser", { type: "object", properties: { url: { type: "string" }, sessionId: browserSession }, required: ["url"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_set_viewport", "Resize the sandbox browser", { type: "object", properties: { preset: { type: "string", enum: ["desktop", "tablet", "mobile"] }, width: { type: "number" }, height: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_click", "Click an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, sessionId: browserSession }, required: ["selector"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_type", "Type into an element in the sandbox browser", { type: "object", properties: { selector: { type: "string" }, text: { type: "string" }, submit: { type: "boolean" }, sessionId: browserSession }, required: ["selector", "text"] }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_scroll", "Scroll the sandbox browser", { type: "object", properties: { deltaY: { type: "number" }, sessionId: browserSession } }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_console_errors", "Report browser console and network errors from inside the sandbox", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_screenshot", "Capture the sandbox browser viewport", { type: "object", properties: { fullPage: { type: "boolean" }, sessionId: browserSession } }, "ask", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("browser_evidence", "Return sandbox browser URL, errors, actions and screenshots", { type: "object", properties: { sessionId: browserSession } }, "allowed", rpc, runId, tenantId));
 
-  gateway.register(makeRemoteTool("mcp_list", "List tools from MCP servers configured in .orvyn/mcp.json; stdio servers run inside the sandbox", { type: "object", properties: {} }, "allowed", rpc, runId));
-  gateway.register(makeRemoteTool("mcp_call", "Call an MCP tool inside the sandbox", { type: "object", properties: { server: { type: "string" }, tool: { type: "string" }, arguments: { type: "object" } }, required: ["server", "tool"] }, "ask", rpc, runId));
+  gateway.register(makeRemoteTool("mcp_list", "List tools from MCP servers configured in .orvyn/mcp.json; stdio servers run inside the sandbox", { type: "object", properties: {} }, "allowed", rpc, runId, tenantId));
+  gateway.register(makeRemoteTool("mcp_call", "Call an MCP tool inside the sandbox", { type: "object", properties: { server: { type: "string" }, tool: { type: "string" }, arguments: { type: "object" } }, required: ["server", "tool"] }, "ask", rpc, runId, tenantId));
 }

@@ -5,6 +5,7 @@ import {toolRpc} from '../execution/ToolRpc';
 import {browserControl,setBrowserControl,clearBrowserControl} from '../computerUse/cloudBrowserControl';
 import {makeReadFileTool,makeListDirectoryTool} from '../ai/tools/fileTools';
 import {findSandboxSession,stopSandboxDesktop} from '../desktop/sandboxDesktop';
+const CLOUD_BROWSER_FRAME_TIMEOUT_MS=(()=>{const configured=Number(process.env.ORVYN_CLOUD_BROWSER_FRAME_TIMEOUT_MS);return Number.isFinite(configured)&&configured>=15_000?Math.min(configured,120_000):45_000})();
 export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"execute">} = {rpc:toolRpc}){
  const rpc=dependencies.rpc;
  const router=Router();
@@ -29,7 +30,7 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
      const current=requireTenant(req).runStore.get(run.id ?? req.params.runId);
      if(!current || isTerminal(current.status))break;
      try{
-       const result=await rpc.execute(req.params.runId,'browser_screenshot',{fullPage:false},10000);
+       const result=await rpc.execute(req.params.runId,'browser_screenshot',{fullPage:false},CLOUD_BROWSER_FRAME_TIMEOUT_MS,requireTenant(req).id);
        if(closed)break;
        if(!res.writableNeedDrain)res.write(`data: ${JSON.stringify({ok:result.ok,error:result.error,...result.meta,control:browserControl(req.params.runId)})}\n\n`);
      }catch(error){if(!closed)res.write(`data: ${JSON.stringify({ok:false,error:String(error)})}\n\n`);break}
@@ -48,7 +49,7 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    if(browserControl(req.params.runId).owner!=='user')return res.status(409).json({error:'Take control first'});
    const body=req.body??{};
    if(!['click','type','key','scroll'].includes(body.type))return res.status(400).json({error:'Unsupported browser input'});
-   try{res.json(await rpc.execute(req.params.runId,'browser_input',{type:body.type,x:body.x,y:body.y,text:body.text,key:body.key,deltaY:body.deltaY},15000))}catch(error){res.status(409).json({error:String(error)})}
+   try{res.json(await rpc.execute(req.params.runId,'browser_input',{type:body.type,x:body.x,y:body.y,text:body.text,key:body.key,deltaY:body.deltaY},15_000,requireTenant(req).id))}catch(error){res.status(409).json({error:String(error)})}
  });
  router.get('/:runId/files',async(req,res)=>{
    const run=res.locals.run;
@@ -56,7 +57,7 @@ export function cloudWorkbenchRouter(dependencies: {rpc: Pick<typeof toolRpc,"ex
    const args={path:String(req.query.path??'.')};
    try{
      const active=!isTerminal(run.status);
-     const result=active?await rpc.execute(req.params.runId,name,args,15000):await (name==='read_file'?makeReadFileTool(run.projectRoot):makeListDirectoryTool(run.projectRoot)).execute(args);
+     const result=active?await rpc.execute(req.params.runId,name,args,15_000,requireTenant(req).id):await (name==='read_file'?makeReadFileTool(run.projectRoot):makeListDirectoryTool(run.projectRoot)).execute(args);
      res.status(result.ok?200:409).json(result);
    }catch(error){res.status(409).json({error:String(error)})}
  });

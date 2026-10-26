@@ -7,6 +7,7 @@ on:
       - fix/core-agent-runtime
       - codex/production-signup-hf
       - codex/shared-hf-auto
+      - codex/durable-toolrpc-lifecycle
   pull_request:
     branches:
       - main
@@ -19,6 +20,7 @@ on:
         default: verify
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -170,7 +172,7 @@ jobs:
           retention-days: 14
 
       - name: Upload packaged Desktop runtime
-        if: github.ref == 'refs/heads/codex/shared-hf-auto'
+        if: github.ref == 'refs/heads/codex/shared-hf-auto' || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' && ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
         uses: actions/upload-artifact@v4
         with:
           name: orvyn-packaged-desktop
@@ -282,9 +284,40 @@ jobs:
     needs: [build-and-test, windows-installer]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.ref == 'refs/heads/codex/shared-hf-auto' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify'))
+    if: >-
+      (github.ref == 'refs/heads/codex/shared-hf-auto' &&
+        (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify')))
+      || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' &&
+        ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
     steps:
       - uses: actions/checkout@v4
+      - name: Require cloud and PostgreSQL checks for this exact candidate
+        if: github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          fetch_conclusion() {
+            local workflow="$1"
+            curl -fsS \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$GITHUB_SHA&per_page=20" \
+              | jq -r 'if (.workflow_runs | length) == 0 then "missing" else (.workflow_runs | sort_by(.created_at) | last | if .status == "completed" then .conclusion else "pending" end) end'
+          }
+          for attempt in $(seq 1 40); do
+            cloud=$(fetch_conclusion task-aware-vercel-cloud.yml)
+            postgres=$(fetch_conclusion postgres-production-mirror.yml)
+            echo "Required checks for $GITHUB_SHA: Vercel=$cloud PostgreSQL=$postgres"
+            if [[ "$cloud" == "success" && "$postgres" == "success" ]]; then exit 0; fi
+            for conclusion in "$cloud" "$postgres"; do
+              case "$conclusion" in failure|cancelled|timed_out|action_required|startup_failure) echo "Required candidate check ended as $conclusion" >&2; exit 1 ;; esac
+            done
+            sleep 30
+          done
+          echo "Timed out waiting for required candidate checks" >&2
+          exit 1
       - name: Deploy candidate to isolated staging
         env:
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}

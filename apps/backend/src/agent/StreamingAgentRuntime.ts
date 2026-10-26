@@ -11,7 +11,7 @@ import { scorecardFromChecks, requiredChecksForTask } from "./verificationScorec
 import { approvalFor, classifyCommand, commandOf } from "../gateway/commandRisk";
 import { creditsFor, escalate as escalateStep, runCreditBudget, stepFrom, TIERS, weightFor, type RouteStep } from "../models/routingPolicy";
 import { condenseOutput, shouldCondense } from "./outputCondenser";
-import { classifyModelFailure, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess } from "../models/modelAvailability";
+import { classifyModelFailure, isModelUnavailable, isProviderAuthBlocked, isRouteBlocked, markModelUnavailable, markProviderFailure, markProviderSuccess, providerOf } from "../models/modelAvailability";
 import { sameModelElsewhere } from "../models/modelEquivalents";
 import { builtInToolsFor } from "./capabilityGap";
 import { preferencesPromptAsync } from "../onboarding/preferences";
@@ -1143,7 +1143,13 @@ export class StreamingAgentRuntime {
         if (id) { next = registry.get(id); break; }
       }
     }
-    if (!next) next = registry.list().find((p) => usable(p) && !(this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id));
+    if (!next) next = registry.list().find((p) => {
+      if (!p || p.config.id===current.config.id || p.config.id==="orvyn-mock" || (this.modelService.isUserModel?.bind(this.modelService) ?? (() => false))(p.config.id)) return false;
+      if (isModelUnavailable(p.config.id) || isProviderAuthBlocked(p.config.id)) return false;
+      if (kind!=="model" && providerOf(p.config.id)===providerOf(current.config.id)) return false;
+      if (p.config.id.startsWith("hf:") && !/^(1|true|yes|on)$/i.test(process.env.HUGGINGFACE_ROUTING_ENABLED??"")) return false;
+      return !incompatibility(p.config,{capability:"agent",tools:true,streaming:true,vision:state.requireVision});
+    });
     // Last resort: "no backup model could take over" is only true after EVERY
     // registered model was considered. Route blocks are heuristic cooldowns
     // (a 404 six hours ago, a provider blip minutes ago) — a dying run may
@@ -2216,7 +2222,7 @@ export class StreamingAgentRuntime {
         }
       } finally {
         if (typeof process.send === "function") await runWithComputerContext({tenantId:this.runs.get(runId)?.execution?.tenantId || "local",projectRoot,runId},()=>nativeDesktopRequest({action:"end_task"}));
-        this.teardownRemote(runId);
+        await this.teardownRemote(runId);
         try {
           await this.onRunSettled?.(runId);
         } catch {
@@ -2290,7 +2296,7 @@ export class StreamingAgentRuntime {
       "browser_type", "browser_scroll", "browser_console_errors", "browser_screenshot",
       "browser_evidence", "mcp_list", "mcp_call",
     ]);
-    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST" && state.execution.computerSurface === "host");
+    registerRemoteTools(gateway, toolRpc, runId, state.execution.remoteProjectRoot || state.projectRoot, state.execution.location === "LOCAL_HOST" && state.execution.computerSurface === "host", state.execution.tenantId || "default");
     await this.mountNetworkAccessTool(runId, state);
     // Re-apply the mode profile so permission policy still comes from the
     // mode, not from whatever defaults registration just set.
@@ -2356,8 +2362,8 @@ export class StreamingAgentRuntime {
    * all lived on the scoped registry, which is discarded here — the shared
    * tenant gateway was never touched.
    */
-  private teardownRemote(runId: string): void {
-    toolRpc.cleanup(runId);
+  private async teardownRemote(runId: string): Promise<void> {
+    await toolRpc.cleanup(runId,this.runs.get(runId)?.execution?.tenantId || "default");
     // A blocked run can be resumed on the same scoped surface — keep its
     // gateway; only a run whose state is discarded loses it.
     if (this.store.get(runId)?.status !== "blocked") this.runTools.delete(runId);
@@ -2405,7 +2411,7 @@ export class StreamingAgentRuntime {
     // Remote runs: reject in-flight tool RPCs and drop the worker job /
     // container immediately — the worker observes the cancelled status on
     // its next poll and kills the mission container.
-    if (state.execution?.location === "OVH_WORKER") cancelWorkerRun(runId);
+    if (state.execution?.location === "OVH_WORKER") void cancelWorkerRun(runId).catch(error=>console.error("[tool-rpc] cancellation persistence failed",error));
     if (state.execution?.location === "VERCEL_CLOUD") {
       void vercelToolRunner.stop(runId, "cancelled");
     }
@@ -3897,7 +3903,7 @@ export class StreamingAgentRuntime {
           state.execution?.location === "LOCAL_SANDBOX" ||
           isCloudExecution(state.execution?.location)
         ) {
-          const read = await toolRpc.execute(runId, "read_file", { path: result.projectFileEvidence.path }).catch(() => null);
+          const read = await toolRpc.execute(runId, "read_file", { path: result.projectFileEvidence.path }, undefined, state.execution?.tenantId || "default").catch(() => null);
           if (read?.ok) bytes = Buffer.from(String(read.output ?? ""), "utf-8");
         } else {
           bytes = await fs.readFile(resolveSafePath(state.projectRoot, result.projectFileEvidence.path)).catch(() => null);

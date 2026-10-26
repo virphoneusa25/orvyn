@@ -750,6 +750,7 @@ async function transferProject(workspaceDir: string, sourcePath: string): Promis
 // ends when the control-plane run finishes (observed via the `finished` flag
 // — the worker NEVER decides completion itself) or the run is cancelled.
 async function pollForToolRequests(runId: string): Promise<void> {
+  let toolHeartbeat: NodeJS.Timeout | undefined;
   while (activeContainers.has(runId) && !cancelledRuns.has(runId)) {
     try {
       await pollPortalTerminal(runId);
@@ -785,6 +786,11 @@ async function pollForToolRequests(runId: string): Promise<void> {
       }
       if (res.request) {
         const req = res.request;
+        const leaseId=String(req.leaseId??"");
+        if(!leaseId)throw new Error("Tool RPC command has no durable lease");
+        const ack=await cp(`/api/v1/worker/tools/${runId}/ack`,"POST",{requestId:req.requestId,leaseId,workerId:WORKER_ID});
+        if(!ack?.ok){console.warn(`[worker] tool lease rejected ${req.requestId}`);continue;}
+        toolHeartbeat=setInterval(()=>{void cp(`/api/v1/worker/tools/${runId}/heartbeat`,"POST",{requestId:req.requestId,leaseId,workerId:WORKER_ID}).then((h:any)=>{if(!h?.ok){fencedRuns.add(runId);console.warn(`[worker] tool lease lost ${req.requestId}`);}}).catch(()=>undefined)},15_000);
         console.log("[worker] tool RPC: " + req.tool + " requestId=" + req.requestId);
         let result: { ok: boolean; output?: string; stderr?: string; exitCode?: number; error?: string; failureKind?: string; meta?: Record<string, unknown> };
         switch (req.tool) {
@@ -942,10 +948,12 @@ async function pollForToolRequests(runId: string): Promise<void> {
         }
         const submitted = await cp("/api/v1/worker/tools/" + runId + "/result", "POST", {
           requestId: req.requestId, runId: runId, ok: result.ok,
+          leaseId,
           output: result.output, stderr: result.stderr, exitCode: result.exitCode,
           error: result.error, failureKind: result.failureKind, durationMs: Date.now() - req.createdAt,
           meta: result.meta, workerId: WORKER_ID,
         }).catch(e => ({ error: e.message }));
+        if(toolHeartbeat){clearInterval(toolHeartbeat);toolHeartbeat=undefined;}
         if (submitted?.error && /reassigned|offline|assigned/i.test(String(submitted.error))) {
           fencedRuns.add(runId);
           console.warn(`[worker] fenced from ${runId}: ${submitted.error}`);
@@ -953,7 +961,7 @@ async function pollForToolRequests(runId: string): Promise<void> {
         }
         console.log("[worker] tool result: " + req.tool + " ok=" + result.ok);
       }
-    } catch { /* transient */ }
+    } catch { if(toolHeartbeat){clearInterval(toolHeartbeat);toolHeartbeat=undefined;} /* transient */ }
     await new Promise(r => setTimeout(r, 1000));
   }
 }
