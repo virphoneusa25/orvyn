@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deploy the production candidate to the existing isolated staging stack.
+# Staging release checks reuse persisted HF verification without automatic paid probes.
 # Sources live separately from production; existing staging secrets and volumes survive.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
