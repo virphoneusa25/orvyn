@@ -1,0 +1,106 @@
+{
+  "$comment": [
+    "Tier configuration for scripts/test/run-tests.mjs.",
+    "Every *.test.ts / *.test.tsx file under apps/*/src and packages/*/src is discovered",
+    "automatically. A file lands in the FIRST tier whose `match` globs it; anything",
+    "unmatched falls into `defaultTier`. New test files therefore run with no edits here.",
+    "To stop a file running you must add it to `exclusions` WITH a reason \u2014 the runner",
+    "fails if an exclusion has no reason, or if an exclusion no longer matches any file."
+  ],
+  "defaultTier": "unit",
+  "tiers": [
+    {
+      "name": "network",
+      "description": "Reaches hosts outside the runner: live Vercel API, SSH, remote registries. Long timeouts.",
+      "match": [
+        "**/*.integration.test.ts"
+      ],
+      "requiresEnv": [
+        "ORVYN_NETWORK_TESTS"
+      ],
+      "runByDefault": false,
+      "timeoutMs": 960000
+    },
+    {
+      "name": "browser",
+      "description": "Drives a real Chromium instance via Playwright. Needs browsers installed.",
+      "match": [],
+      "requiresEnv": [
+        "ORVYN_BROWSER_TESTS"
+      ],
+      "runByDefault": false,
+      "timeoutMs": 180000
+    },
+    {
+      "name": "integration",
+      "description": "Needs a live backing service (Postgres, Redis, Qdrant).",
+      "match": [],
+      "requiresEnv": [
+        "ORVYN_PG_URL"
+      ],
+      "runByDefault": false,
+      "timeoutMs": 120000
+    },
+    {
+      "name": "unit",
+      "description": "Deterministic, no network, no external services. The CI gate.",
+      "match": [
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ],
+      "requiresEnv": [],
+      "runByDefault": true,
+      "timeoutMs": 60000
+    }
+  ],
+  "$tierNotes": [
+    "`browser` and `integration` have empty `match` lists on purpose.",
+    "Audited at b54f389: ORVYN has no test FILE that is wholly service-dependent.",
+    "Service-dependent CASES live inside otherwise-deterministic files and gate themselves",
+    "\u2014 e.g. PostgresAuthStorage.test.ts uses { skip: !integration } driven by ORVYN_PG_URL.",
+    "node:test reports those as skipped and the runner surfaces them as SKIPPED, never passed.",
+    "Those same files are re-run with ORVYN_PG_URL set against a real postgres:16 service by",
+    ".github/workflows/postgres-production-mirror.yml. That is the live integration tier today",
+    "and it is deliberate, not duplicate execution: the unit run exercises the deterministic",
+    "cases, the mirror run exercises the gated ones.",
+    "Populate these `match` lists when a genuinely service-only test FILE is added."
+  ],
+  "acceptance": {
+    "description": "Real GUI / live-environment acceptance. Separate scripts, not node:test files.",
+    "runByDefault": false,
+    "requiresEnv": [
+      "ORVYN_ACCEPTANCE"
+    ],
+    "scripts": [
+      {
+        "name": "browser-session",
+        "run": "npm run accept:browser",
+        "needs": "xvfb + Chromium"
+      },
+      {
+        "name": "cloud-portal",
+        "run": "npm run accept:portal",
+        "needs": "built web + backend"
+      },
+      {
+        "name": "admin-portal",
+        "run": "npm run accept:admin",
+        "needs": "built web + backend"
+      },
+      {
+        "name": "chat-live",
+        "run": "npm run accept:chat-live",
+        "needs": "live model credentials"
+      }
+    ]
+  },
+  "exclusions": [],
+  "$exclusionNotes": [
+    "Empty on purpose. Audited at b54f389: no ORVYN test file should be prevented from running.",
+    "The previous root `npm test` allowlist silently omitted 26 files; all 26 now execute.",
+    "apps/desktop/tsconfig.json excludes src/renderer/**/*.test.ts from the tsc BUILD only;",
+    "those files still execute here via node --experimental-strip-types.",
+    "To exclude a file from execution add { path, reason, owner, reviewBy }. The runner fails",
+    "the build if an exclusion has no reason, or if it points at a file that no longer exists."
+  ]
+}
