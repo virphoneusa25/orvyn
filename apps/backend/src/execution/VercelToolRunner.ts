@@ -19,6 +19,7 @@ import {
   UpstreamAgentBrowserProvider,
   createSandboxSessionLike,
   isUpstreamEnabledFor,
+  buildSessionName,
 } from "./UpstreamAgentBrowserProvider";
 import {
   VERCEL_MCP_PORT,
@@ -619,7 +620,7 @@ export class VercelToolRunner {
       return this.browserTool(runId, entry, request);
     }
 
-    const sessionId = entry.upstreamBrowserSessionId || `orvyn-${entry.identity.tenantId}-${runId}`;
+    const sessionId = entry.upstreamBrowserSessionId || buildSessionName(entry.identity.tenantId, runId);
     const tool = request.tool;
     const a = (request.arguments || {}) as Record<string, any>;
 

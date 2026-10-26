@@ -1,3 +1,9 @@
+export function buildSessionName(tenantId: string, runId: string): string {
+  const cleanTenant = String(tenantId || "t").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 22);
+  const cleanRun = String(runId || "r").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 22);
+  return `orv-${cleanTenant}-${cleanRun}`.slice(0, 48);
+}
+
 // apps/backend/src/execution/UpstreamAgentBrowserProvider.ts
 //
 // BrowserProvider backed by the official Vercel Labs agent-browser CLI,
@@ -214,9 +220,9 @@ export class UpstreamAgentBrowserProvider implements BrowserProvider {
   }
 
   async startSession(context: BrowserSessionContext): Promise<{ ok: boolean; sessionId: string; error?: string }> {
-    // Session names are namespaced per tenant AND per run, so two tenants can
-    // never address one another's browser session inside a shared sandbox.
-    this.sessionName = `orvyn-${context.tenantId}-${context.runId}`;
+    // Session names are namespaced per tenant AND per run, but bounded in length
+    // because Linux UNIX domain socket paths (sun_path) are strictly <= 104 bytes.
+    this.sessionName = buildSessionName(context.tenantId, context.runId);
     this.closed = false;
     try {
       this.helpers = await loadVercelHelpers();
