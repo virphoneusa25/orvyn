@@ -450,6 +450,11 @@ function runCap(name: string): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/** A batch succeeds when at least one runnable call reaches tool.completed. */
+export function toolBatchOutcome(succeededCalls: number, runnableCount: number): "ok" | "all_failed" {
+  return succeededCalls > 0 || runnableCount === 0 ? "ok" : "all_failed";
+}
+
 /**
  * Tools that own shared external state and therefore cannot be parallelised,
  * even though their capability class looks harmless. One browser session
@@ -3727,7 +3732,10 @@ export class StreamingAgentRuntime {
     const runnableFetches = fetchDeduped.execute;
     const parallel = runnableFetches.filter((c) => this.isParallelSafe(c.name));
     const serial = runnableFetches.filter((c) => !this.isParallelSafe(c.name));
-    let anySucceeded = false;
+    // Track accepted successes per batch. Parallel calls must not mutate a
+    // shared boolean before artifact validation finishes: one rejected
+    // generated artifact must not erase another call's verified success.
+    let succeededCalls = 0;
 
     const runOne = async (call: ToolCall): Promise<void> => {
       const command = String((call.arguments as { command?: string } | undefined)?.command ?? "");
@@ -3920,7 +3928,6 @@ export class StreamingAgentRuntime {
       const envelope = envelopeFor(result);
       if (result.ok) {
         state.failedFingerprints.delete(fingerprint);
-        anySucceeded = true;
         // Loop detection: identical successful calls with no useful change
         // between them are churn, not progress. Warn once, then stop.
         if (WORKSPACE_CHANGING_TOOLS.has(call.name)) state.lastUsefulChangeAt = Date.now();
@@ -3990,7 +3997,6 @@ export class StreamingAgentRuntime {
         const persisted = FILE_PRODUCING_TOOLS.has(call.name) || result.artifacts?.length ? await this.verifiedPersisted(result) : [];
         if (FILE_PRODUCING_TOOLS.has(call.name) && persisted.length === 0) {
           state.failedFingerprints.set(fingerprint, (state.failedFingerprints.get(fingerprint) ?? 0) + 1);
-          anySucceeded = false;
           const error = "Generation produced no persisted artifact. No file was saved.";
           this.store.emit(runId, "tool.failed", { callId: call.id, tool: call.name, error, errorType: "EXECUTION_FAILED", retryable: false, envelope: envelopeForEvent(envelopeFor({ ok: false, error })) });
           replies.set(call.id, `The tool "${call.name}" FAILED:\n${error}\n\nDo not tell the user a file was generated, saved, attached, or is in Files → Generated.`);
@@ -4062,6 +4068,7 @@ export class StreamingAgentRuntime {
           path: written ? String(toolArgs.path ?? "") : undefined,
           envelope: envelopeForEvent(envelope),
         });
+        succeededCalls++;
         if (terminalLike && !remoteRun) this.store.emit(runId, "terminal.completed", { callId: call.id, exitOk: true });
         if (call.name === "browser_open" || call.name === "browser_navigate" || call.name === "browser_screenshot") {
           const argsUrl = String((call.arguments as { url?: unknown })?.url ?? "");
@@ -4167,7 +4174,7 @@ export class StreamingAgentRuntime {
       }
     }
 
-    return anySucceeded || runnable.length === 0 ? "ok" : "all_failed";
+    return toolBatchOutcome(succeededCalls, runnable.length);
   }
 
   // Tool-call turns often include a sentence of intent. If the adapter did

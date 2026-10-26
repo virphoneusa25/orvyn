@@ -105,12 +105,15 @@ function fakeUpstreamHelpers() {
           };
         } else if (op === "screenshot") {
           json = {
-            id: "shot_123",
-            base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-            mediaType: "image/png",
-            width: 1280,
-            height: 800,
-            sha256: "fake-sha256",
+            success: true,
+            data: {
+              id: "shot_123",
+              path: "/tmp/orvyn-shot.png",
+              mediaType: "image/png",
+              width: 1280,
+              height: 800,
+              sha256: "fake-sha256",
+            },
           };
         } else if (op === "click") {
           json = { url: "https://example.com/clicked", message: "Clicked @e1" };
@@ -140,8 +143,10 @@ test("when enabled and user is allowlisted, browser tools dispatch to UpstreamAg
   process.env.ORVYN_AGENT_BROWSER_UPSTREAM_USERS = "rmcknight@virphoneusa.com";
 
   const fakeSandbox = {
-    async runCommand() {
-      return { exitCode: 0, stdout: async () => "", stderr: async () => "" };
+    async runCommand(command: string, args: string[]) {
+      assert.equal(command, "base64");
+      assert.deepEqual(args, ["-w", "0", "/tmp/orvyn-shot.png"]);
+      return { exitCode: 0, stdout: async () => "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", stderr: async () => "" };
     },
   };
   const mockProvider = new MockVercelExecutionProvider(fakeSandbox);

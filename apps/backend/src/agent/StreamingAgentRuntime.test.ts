@@ -21,7 +21,7 @@ import { ToolRegistry } from "../ai/ToolTypes";
 import { ToolGateway } from "../gateway/ToolGateway";
 import { PermissionEngine } from "../gateway/PermissionEngine";
 import { RunStore } from "./events";
-import { StreamingAgentRuntime } from "./StreamingAgentRuntime";
+import { StreamingAgentRuntime, toolBatchOutcome } from "./StreamingAgentRuntime";
 
 const CONFIG: ModelConfig = {
   id: "fake-model",
@@ -216,6 +216,16 @@ test("runs read-only tools concurrently", async () => {
     h.stats().maxConcurrent > 1,
     `read-only tools should overlap, but peak concurrency was ${h.stats().maxConcurrent}`
   );
+});
+
+test("mixed tool batches count accepted calls after artifact checks", async () => {
+  const outcomes = await Promise.all([
+    Promise.resolve(true),  // read_file reached tool.completed
+    Promise.resolve(false), // generate_image failed its persisted-artifact check
+  ]);
+  assert.equal(toolBatchOutcome(outcomes.filter(Boolean).length, outcomes.length), "ok");
+  assert.equal(toolBatchOutcome(0, outcomes.length), "all_failed");
+  assert.equal(toolBatchOutcome(0, 0), "ok");
 });
 
 test("serialises writes even when requested in the same turn", async () => {
