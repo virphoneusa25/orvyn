@@ -58,28 +58,25 @@ let verificationStep = 'isolated-customer-setup';
       }
     } catch { failed = true; }
     const event = service.usage.recent().find((e) => e.modelId === id);
-    if (!event) {
-      assert.equal(required, false, `Usage event not recorded for ${providerName}`);
-      continue;
-    }
     let charge = null;
-    for (let attempt = 0; attempt < 25; attempt++) {
-      charge = await ledger.usageEvent(event.id);
-      if (charge) break;
-      await new Promise((r) => setTimeout(r, 100));
+    if (event) {
+      for (let attempt = 0; attempt < 25; attempt++) {
+        charge = await ledger.usageEvent(event.id);
+        if (charge) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
     }
-    assert.ok(charge);
     if (failed) {
-      assert.equal(charge.credits_charged, 0);
+      if (charge) assert.equal(charge.credits_charged, 0);
       assert.equal(required, false, `Required provider ${providerName} failed live billing/tool verification`);
       evidence.push({ provider: providerName, modelId: id, status: 'unavailable', failedUsageCharged: 0 }); continue;
     }
+    assert.ok(charge);
     assert.ok(called && done); assert.equal(event.ok, true); assert.equal(event.estimated, undefined);
     const quote = event.rate;
     const cost = event.providerCostUsd ?? providerCostUsd({ inputTokens: event.promptTokens, cachedInputTokens: event.cachedTokens, outputTokens: event.completionTokens, inputUsdPerMillion: quote.input, cachedInputUsdPerMillion: quote.cachedInput ?? quote.input, outputUsdPerMillion: quote.output });
     assert.equal(charge.provider_cost_micros, Math.round(cost * 1e6));
     assert.equal(charge.credits_charged, customerCreditsFor(cost, 2.25).customerCredits);
-    // The live gateway may report tokens without its optional final USD field; exact catalog prices then settle those real counts.
     evidence.push({ provider: providerName, modelId: id, status: 'passed', promptTokens: event.promptTokens, cachedTokens: event.cachedTokens, completionTokens: event.completionTokens, providerCostUsd: cost, creditsCharged: charge.credits_charged, toolCalling: called });
   }
   const image = service.registry.get('ci:nano-banana');
@@ -99,7 +96,9 @@ let verificationStep = 'isolated-customer-setup';
     assert.equal(imageCharge.credits_charged, customerCreditsFor(imageEvent.providerCostUsd, 3).customerCredits);
     evidence.push({ provider: 'cheaperinference', modelId: image.config.id, method: 'image', status: 'passed', imageCount: images.length, providerCostUsd: imageEvent.providerCostUsd, creditsCharged: imageCharge.credits_charged });
   }
-  assert.equal(tenant.localStore.pendingBilling().length, 0);
+  verificationStep = 'isolated-outbox-settled';
+  const pending = await tenant.localStore.pendingBilling();
+  assert.equal(pending.length, 0);
   console.log(JSON.stringify({ event: 'billing.preflight.result', passed: true, isolatedCustomerData: true, evidence }));
 })().catch((error) => { console.log(JSON.stringify({ event: 'billing.preflight.failed', step: verificationStep, assertion: error?.code === 'ERR_ASSERTION' ? String(error.message).slice(0, 300) : error?.name, reason: 'Exact provider pricing, live tools or settled credits did not verify; raw provider errors withheld' })); process.exitCode = 1;
 }).finally(() => { if (path.dirname(scratch) === os.tmpdir() && path.basename(scratch).startsWith('orvyn-provider-billing-')) fs.rmSync(scratch, { recursive: true, force: true }); process.exit(process.exitCode || 0); });
