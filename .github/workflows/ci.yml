@@ -8,6 +8,7 @@ on:
       - codex/production-signup-hf
       - codex/shared-hf-auto
       - codex/durable-toolrpc-lifecycle
+      - codex/hf-provider-verification
   pull_request:
     branches:
       - main
