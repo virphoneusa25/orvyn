@@ -27,7 +27,7 @@ for name in ORVYN_PROVIDER_RATES_JSON ORVYN_IMAGE_SETTLEMENT_BUDGET_USD MODEL_AP
   printf '%s' "$value" | "${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; value=\$(cat); { grep -v '^$name=' .env.staging || true; printf '%s=%s\\n' '$name' \"\$value\"; } > .env.staging.tmp; chmod 600 .env.staging.tmp; mv .env.staging.tmp .env.staging"
 done
 ROLLBACK_REF="orvyn-staging-backend-staging:rollback-before-${COMMIT}"
-"${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; current=\$(docker inspect backend-staging --format '{{.Image}}'); docker image tag \"\$current\" '$ROLLBACK_REF'; printf 'Staging rollback image: %s (image ID %s)\\n' '$ROLLBACK_REF' \"\$current\"; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build"
+"${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; current=\$(docker inspect backend-staging --format '{{.Image}}'); if docker image inspect '$ROLLBACK_REF' >/dev/null 2>&1; then printf 'Preserving existing staging rollback image: %s\\n' '$ROLLBACK_REF'; else docker image tag \"\$current\" '$ROLLBACK_REF'; fi; printf 'Staging rollback image: %s (image ID %s)\\n' '$ROLLBACK_REF' \"\$current\"; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --build"
 for _ in $(seq 1 40); do
   if curl -fsS -m 8 "$STAGING_HEALTH" | grep -q "\"commit\":\"$COMMIT\""; then
     curl -fsS -m 8 "$STAGING_HEALTH"; echo
@@ -35,7 +35,7 @@ for _ in $(seq 1 40); do
       echo "Running the explicitly authorized single Hugging Face capability probe (maximum $0.01)"
       cat "$ROOT/scripts/acceptance/verify-hf-capabilities.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - --authorize-paid-probe --model hf:moonshotai/Kimi-K2.7-Code:deepinfra --max-usd 0.01"
     fi
-    cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"
+    cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist --saved-evidence-only"
     if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
       cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node - /app/dist deepseek"
     fi

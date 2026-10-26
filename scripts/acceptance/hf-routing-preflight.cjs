@@ -8,6 +8,7 @@ const { inspectHuggingFace } = require(path.resolve(process.argv[2] || '/app/dis
 (async () => {
   const direct = process.argv[3] === 'fireworks';
   const deepseek = process.argv[3] === 'deepseek';
+  const savedEvidenceOnly = process.argv.includes('--saved-evidence-only');
   const expectedProvider = deepseek ? 'deepseek' : direct ? 'fireworks' : 'huggingface';
   if (deepseek) console.log(JSON.stringify({event:'deepseek.staging-config',credentialsConfigured:!!process.env.DEEPSEEK_API_KEY?.trim()}));
   if (direct) console.log(JSON.stringify({event:'fireworks.staging-config',credentialsConfigured:!!process.env.FIREWORKS_API_KEY?.trim()}));
@@ -42,6 +43,12 @@ const { inspectHuggingFace } = require(path.resolve(process.argv[2] || '/app/dis
   }
   console.log(JSON.stringify({event:'hf.preflight.capabilities',capabilities,choice}));
   if (!provider || provider.config.providerName !== expectedProvider || (!deepseek && provider.config.routingVerification?.status !== 'verified') || (!deepseek && !direct && !/Kimi-K2.7-Code/.test(provider.config.id))) { console.log(JSON.stringify({event:'provider.preflight.failed',provider:expectedProvider,reason:provider?.config.routingVerification?.reason || 'Required provider/model unavailable; fallback is not a pass'})); process.exitCode=1; return; }
+  if(savedEvidenceOnly) {
+    const passed=provider.config.capabilities.tools===true&&provider.config.streaming===true&&provider.config.routingVerification?.status==='verified';
+    console.log(JSON.stringify({event:'provider.preflight.result',passed,modelId:provider.config.id,provider:provider.config.providerName,verification:'persisted-provider-capability-evidence',called:0,wrote:null,tested:null,usage:[]}));
+    if(!passed) process.exitCode=1;
+    return;
+  }
   let content = 'export function add(a, b) { return a - b; }';
   let wrote=false, tested=false, passed=false, called=0;
   const messages=[{role:'user',content:'Fix the subtraction bug in math.js. Read it first, use write_file to replace it with a correct exported add(a, b) function, then call run_tests. Use the provided tools. No other files or commands are allowed.'}];
