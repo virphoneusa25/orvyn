@@ -104,15 +104,16 @@ if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
   echo "Build-cache cleanup did not restore the reserve; checking only untagged, inactive ORVYN release images that are not rollback images"
   while IFS= read -r image_id; do
     [[ -n "$image_id" ]] || continue
-    metadata="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.source"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{with index .Config.Labels "org.orvyn.rollback.source-image-id"}}{{.}}{{end}}|{{json .RepoTags}}')"
+    metadata="$(docker image inspect "$image_id" --format '{{with index .Config.Labels "org.opencontainers.image.source"}}{{.}}{{end}}|{{with index .Config.Labels "org.opencontainers.image.revision"}}{{.}}{{end}}|{{with index .Config.Labels "org.orvyn.rollback.source-image-id"}}{{.}}{{end}}|{{json .RepoTags}}')"
     IFS='|' read -r source revision rollback_source repo_tags <<<"$metadata"
-    [[ "$source" == 'https://github.com/virphoneusa25/orvyn' && "$revision" =~ ^[0-9a-f]{40}$ && "$revision" != "$COMMIT" ]] || continue
-    [[ -z "$rollback_source" ]] || continue
-    [[ "$repo_tags" == 'null' || "$repo_tags" == '[]' || "$repo_tags" == '["<none>:<none>"]' ]] || continue
+    [[ "$source" == 'https://github.com/virphoneusa25/orvyn' ]] || continue
+    [[ "$revision" =~ ^[0-9a-f]{40}$ && "$revision" != "$COMMIT" ]] || { echo "Keeping ORVYN image with current or invalid revision label: ${image_id#sha256:}"; continue; }
+    [[ -z "$rollback_source" ]] || { echo "Keeping rollback snapshot image: ${image_id#sha256:}"; continue; }
+    [[ "$repo_tags" == 'null' || "$repo_tags" == '[]' || "$repo_tags" == '["<none>:<none>"]' ]] || { echo "Keeping tagged ORVYN image revision=$revision (protected reference)"; continue; }
     if docker ps -aq --filter "ancestor=$image_id" | grep -q .; then continue; fi
     echo "Removing verified-unused untagged release image revision=$revision image=${image_id#sha256:} (no container or rollback reference)"
     docker image rm "$image_id" >/dev/null
-  done < <(docker image ls -aq --filter 'label=org.opencontainers.image.source=https://github.com/virphoneusa25/orvyn' | sort -u)
+  done < <(docker image ls -aq | sort -u)
   free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 fi
 [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_PREPULL_KB" ]] || { echo "Below configured image-pull reserve ($MIN_PREPULL_KB KiB)" >&2; exit 1; }
