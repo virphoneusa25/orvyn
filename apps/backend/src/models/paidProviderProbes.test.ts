@@ -13,8 +13,8 @@ test("automatic provider refreshes never make paid capability requests, includin
     for (const refresh of [refreshDeepSeekRates, verifyHuggingFace, verifyFireworksWriting]) {
       const config = { id: "probe-fixture", endpoint: "https://fixture.invalid", apiKey: "fixture" } as ModelConfig;
       await Promise.all(Array.from({length: 20}, () => refresh(config)));
-      assert.equal(config.routingVerification?.status, "failed");
-      assert.match(config.routingVerification!.reason, /Automatic paid capability probes are disabled/);
+      assert.equal(config.routingVerification?.status, refresh === verifyHuggingFace ? "unverified" : "failed");
+      assert.match(config.routingVerification!.reason, refresh === verifyHuggingFace ? /automatic paid probes are disabled/i : /Automatic paid capability probes are disabled/);
     }
     assert.equal(requests, 0);
   } finally { globalThis.fetch = original; }

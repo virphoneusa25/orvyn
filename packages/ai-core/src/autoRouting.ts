@@ -51,7 +51,7 @@ export function preferHuggingFace(providers: AIModelProvider[], needs: RoutingRe
   if (!enabled) return { reason: "Hugging Face Auto routing disabled" };
   if (!family) return { reason: "Existing quality-tested route retained; no equivalent price comparison" };
   const hf = providers.filter((p) => p.config.providerName === "huggingface" && routeFamily(p.config.id) === family);
-  if (!hf.length) return { reason: "Hugging Face credentials or configured models unavailable" };
+  if (!hf.length) return { reason: "No eligible Hugging Face route matches the selected model family" };
   const reasons: string[] = [];
   const compatible: AIModelProvider[] = [];
   let incompletePrices = false;

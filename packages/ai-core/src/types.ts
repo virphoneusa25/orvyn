@@ -141,7 +141,7 @@ export interface ModelConfig {
   imageSettlementBudgetUsd?: number;
   rate?: { input: number; output: number; cachedInput?: number; source: string; verifiedAt: number; expiresAt: number };
   imageRate?: { usdPerImage: number; premium: boolean; source: string; verifiedAt: number; expiresAt: number };
-  routingVerification?: { status: "pending" | "verified" | "failed"; reason: string };
+  routingVerification?: { status: "pending" | "verified" | "unverified" | "credentials_unavailable" | "account_unavailable" | "unsupported" | "provider_outage" | "failed"; reason: string };
   id: string;
   name: string;
   provider: string; // "ollama" | "vllm" | "llamacpp" | "openai-compatible" | "custom-http"

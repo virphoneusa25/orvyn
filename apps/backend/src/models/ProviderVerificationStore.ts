@@ -2,6 +2,9 @@ import {createHash,randomUUID} from "node:crypto";
 import {Pool} from "pg";
 import type {ModelConfig,TokenUsage} from "@orvyn/ai-core";
 
+// One credential can spend at most five cents and make at most four explicitly
+// authorized verification requests per UTC day. The operator CLI applies a
+// lower per-invocation cap; this database limit is the hard shared ceiling.
 export const PROBE_DAILY_MICROS=50_000,PROBE_DAILY_REQUESTS=4;
 export const credentialScope=(c:ModelConfig)=>createHash("sha256").update(JSON.stringify([c.providerName,c.apiKey])).digest("hex");
 export const verificationKey=(c:ModelConfig)=>createHash("sha256").update(JSON.stringify([credentialScope(c),c.endpoint,c.apiModelId??c.id])).digest("hex");

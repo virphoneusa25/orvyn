@@ -18,6 +18,13 @@ COPY apps/web/package.json apps/web/
 RUN npm install --workspaces --no-audit --no-fund --ignore-scripts \
  && mkdir -p apps/backend/node_modules
 
+# Playwright is already a backend dependency. Resolve its CLI from that
+# workspace; download Chromium immediately after dependency installation
+# so this layer is cached across commits unless dependencies change.
+# Omitting --with-deps avoids unneeded build-layer apt packages (runtime installs its own).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN node -e "const {createRequire}=require('node:module'); const {execFileSync}=require('node:child_process'); const path=require('node:path'); const r=createRequire('/repo/apps/backend/package.json'); execFileSync(process.execPath,[path.join(path.dirname(r.resolve('playwright/package.json')),'cli.js'),'install','chromium'],{stdio:'inherit'});"
+
 COPY packages/ai-core packages/ai-core
 COPY apps/backend apps/backend
 
@@ -29,12 +36,6 @@ RUN npm run build -w apps/web
 # deploy-ovh.sh writes build-info.json (commit + time); local builds get "{}".
 RUN test -f apps/backend/build-info.json || echo '{}' > apps/backend/build-info.json
 
-# Playwright is already a backend dependency. Resolve its CLI from that
-# workspace; a second npm install can remove the root executable shim.
-# PLAYWRIGHT_BROWSERS_PATH forces a known location we can copy from.
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN node -e "const {createRequire}=require('node:module'); const {execFileSync}=require('node:child_process'); const path=require('node:path'); const r=createRequire('/repo/apps/backend/package.json'); execFileSync(process.execPath,[path.join(path.dirname(r.resolve('playwright/package.json')),'cli.js'),'install','chromium','--with-deps'],{stdio:'inherit'});"
-
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
@@ -44,9 +45,14 @@ ENV PORT=4570
 # module spawns per-mission containers as siblings on the host daemon
 # (socket mounted by compose), so mission code never runs on the API
 # container itself.
+# Single apt installation layer for base tools and Chromium headless-shell dependencies.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates \
+  && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /repo/node_modules ./node_modules
@@ -67,14 +73,6 @@ COPY resources/imported-skills ./resources/imported-skills
 # Playwright + Chromium from the build stage.
 COPY --from=build /ms-playwright /ms-playwright
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
-# Chromium headless-shell runtime libraries.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-    libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
-  && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 4570
 CMD ["node", "scripts/start.cjs"]

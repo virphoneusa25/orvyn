@@ -1,8 +1,8 @@
 # Isolated staging control plane. Never shares volumes, DB, Redis, or
 # worker registration with production.
 #
-#   docker compose -p orvyn-staging \
-#     -f infrastructure/ovh/compose.staging.yml up -d --build
+# Images are built in GitHub Actions and deployed by immutable digest. Never
+# build application images on the constrained staging host.
 #
 # Caddy on the production stack proxies staging.orvyn.virphoneusa.com
 # to backend-staging:4570 on the shared orvyn_default network.
@@ -12,9 +12,7 @@ name: orvyn-staging
 services:
   backend-staging:
     container_name: backend-staging
-    build:
-      context: ../..
-      dockerfile: apps/backend/Dockerfile
+    image: ${ORVYN_BACKEND_IMAGE:?ORVYN_BACKEND_IMAGE must be an immutable GHCR digest reference}
     restart: always
     env_file:
       - ../../.env.staging
@@ -98,9 +96,7 @@ services:
 
   worker-staging:
     container_name: worker-staging
-    build:
-      context: ../..
-      dockerfile: apps/worker/Dockerfile
+    image: ${ORVYN_WORKER_IMAGE:?ORVYN_WORKER_IMAGE must be an immutable GHCR digest reference}
     restart: always
     env_file:
       - ../../.env.staging
