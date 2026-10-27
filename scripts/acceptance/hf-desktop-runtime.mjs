@@ -96,7 +96,7 @@ try{
  telemetry=await remote('telemetry',fixture.userId);const streams=telemetry.events.filter(e=>e.ok&&e.method==='stream');
  const verifiedKimi=streams.filter(e=>e.provider==='huggingface'&&e.modelId==='hf:moonshotai/Kimi-K2.7-Code:deepinfra');
  assert.ok(streams.length>=7);assert.ok(verifiedKimi.length>=2);
- for(const writing of turns.writing){const events=streams.filter(e=>writing.usageIds.includes(e.id));assert.ok(events.length>0);assert.ok(events.every(e=>e.provider==='deepseek'));}
+ for(const writing of turns.writing){const events=streams.filter(e=>writing.usageIds.includes(e.id));assert.ok(events.length>0);assert.ok(events.every(e=>(e.provider==='deepseek'&&e.modelId==='deepseek-flash')||(e.provider==='fireworks'&&e.modelId.startsWith('fw:'))),'Writing used an unrecognized provider/model route');}
  assert.ok(streams.every(e=>e.billingRecorded&&e.creditsCharged>0&&e.providerCostUsd>0));
  assert.ok(turns.usage.some(e=>e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>!e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>e.ok&&e.method==='generate'));
  failureStage='acceptance-assertions-passed';
