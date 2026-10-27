@@ -399,7 +399,9 @@ jobs:
         if: always()
         with:
           name: desktop-staging-evidence
-          path: desktop-hf-runtime.png
+          path: |
+            desktop-hf-runtime.png
+            desktop-hf-runtime-diagnostics.json
 
   desktop-production:
     name: Windows Desktop against production
