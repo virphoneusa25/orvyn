@@ -100,6 +100,21 @@ if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
   docker buildx prune --filter type=regular --min-free-space 16GB --force
   free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 fi
+if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
+  echo "Build-cache cleanup did not restore the reserve; checking only untagged, inactive ORVYN release images that are not rollback images"
+  while IFS= read -r image_id; do
+    [[ -n "$image_id" ]] || continue
+    metadata="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.source"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.orvyn.rollback.source-image-id"}}|{{json .RepoTags}}')"
+    IFS='|' read -r source revision rollback_source repo_tags <<<"$metadata"
+    [[ "$source" == 'https://github.com/virphoneusa25/orvyn' && "$revision" =~ ^[0-9a-f]{40}$ && "$revision" != "$COMMIT" ]] || continue
+    [[ -z "$rollback_source" ]] || continue
+    [[ "$repo_tags" == 'null' || "$repo_tags" == '[]' || "$repo_tags" == '["<none>:<none>"]' ]] || continue
+    if docker ps -aq --filter "ancestor=$image_id" | grep -q .; then continue; fi
+    echo "Removing verified-unused untagged release image revision=$revision image=${image_id#sha256:} (no container or rollback reference)"
+    docker image rm "$image_id" >/dev/null
+  done < <(docker image ls -aq --filter 'label=org.opencontainers.image.source=https://github.com/virphoneusa25/orvyn' | sort -u)
+  free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
+fi
 [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_PREPULL_KB" ]] || { echo "Below configured image-pull reserve ($MIN_PREPULL_KB KiB)" >&2; exit 1; }
 [[ "$inode_used" =~ ^[0-9]+$ && "$inode_used" -lt 98 ]] || { echo "Below 2% inode reserve" >&2; exit 1; }
 if (( free_kb < WARNING_KB )); then echo "::warning::Staging free disk is below configured warning reserve ($WARNING_KB KiB)."; fi
