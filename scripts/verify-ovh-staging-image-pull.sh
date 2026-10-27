@@ -104,7 +104,7 @@ if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
   echo "Build-cache cleanup did not restore the reserve; checking only untagged, inactive ORVYN release images that are not rollback images"
   while IFS= read -r image_id; do
     [[ -n "$image_id" ]] || continue
-    metadata="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.source"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.orvyn.rollback.source-image-id"}}|{{json .RepoTags}}')"
+    metadata="$(docker image inspect "$image_id" --format '{{index .Config.Labels "org.opencontainers.image.source"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{with index .Config.Labels "org.orvyn.rollback.source-image-id"}}{{.}}{{end}}|{{json .RepoTags}}')"
     IFS='|' read -r source revision rollback_source repo_tags <<<"$metadata"
     [[ "$source" == 'https://github.com/virphoneusa25/orvyn' && "$revision" =~ ^[0-9a-f]{40}$ && "$revision" != "$COMMIT" ]] || continue
     [[ -z "$rollback_source" ]] || continue
