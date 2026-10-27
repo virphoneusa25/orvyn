@@ -79,10 +79,11 @@ try{
  async function trackedTurn(prompt,surface){const usageUrl=base+'/api/v1/usage';const headers={Authorization:'Bearer '+token};const before=await(await fetch(usageUrl,{headers})).json();const ids=new Set((before.events||[]).map(e=>e.id));const result=await turn('auto',false,prompt,surface);await new Promise(r=>setTimeout(r,150));const after=await(await fetch(usageUrl,{headers})).json();return {...result,surface,usageIds:(after.events||[]).filter(e=>!ids.has(e.id)).map(e=>e.id)};}
  const auto=await turn();const pinned=await turn('hf:moonshotai/Kimi-K2.7-Code:deepinfra');
  const writing=[];const research=[];
- for(const surface of ['desktop','cloud']){writing.push(await trackedTurn('Write a two-sentence marketing caption for an ORVYN coding assistant. No browsing is needed.',surface));research.push(await trackedTurn('Explain Asterisk VoIP briefly, focusing on Asterisk itself.',surface));}
+ for(const surface of ['desktop','cloud']){writing.push(await trackedTurn('Write a two-sentence marketing caption for an ORVYN coding assistant. No browsing is needed.',surface));research.push(await trackedTurn('Explain Asterisk VoIP briefly. Only discuss Asterisk itself; do not mention VirPhone or any unrelated company.',surface));}
  const cancelled=await turn('auto',true);
  await new Promise(r=>setTimeout(r,2000));const response=await fetch(base+'/api/v1/usage',{headers:{Authorization:'Bearer '+token}});const usage=await response.json();
  diagnostics.httpStatuses.usage=response.status;
+ const researchResponseAudit=research.map(t=>({surface:t.surface,mentionsAsterisk:/asterisk/i.test(t.text),mentionsUnrelatedCompany:/virphone/i.test(t.text),responseChars:t.text.length}));
  diagnostics.acceptanceChecks={
   authenticatedAccount:authResponse.ok&&auth.user?.id===expectedUserId,
   inlineEditCorrect:/return\s+(a\s*\+\s*b|b\s*\+\s*a)/.test(String(edit.edited??'')),
@@ -91,8 +92,9 @@ try{
   cancellation:cancelled.cancelled===true,
   providerIdentityHidden:!/(huggingface|nebius|fireworks|deepinfra|deepseek|cheaperinference|zai-org|moonshotai)/i.test(JSON.stringify([auto.route,pinned.route,writing.map(t=>t.route),research.map(t=>t.route),cancelled.route,usage.events])),
   writingResponses:writing.every(t=>t.hasText),
-  researchMentionsAsterisk:research.map(t=>/asterisk/i.test(t.text)),
-  researchMentionsCustomer:research.map(t=>/virphone/i.test(t.text)),
+  researchResponseAudit,
+  researchMentionsAsterisk:researchResponseAudit.map(t=>t.mentionsAsterisk),
+  researchMentionsCustomer:researchResponseAudit.map(t=>t.mentionsUnrelatedCompany),
   usageHttpOk:response.ok,
  };
  return {health,login:{authenticated:true,status:authResponse.status},edit:auto&&edit.edited,auto,pinned,writing,research,cancelled,usage:usage.events,diagnostics};
