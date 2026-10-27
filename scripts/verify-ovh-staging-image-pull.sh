@@ -101,17 +101,25 @@ if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
   free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 fi
 if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
-  echo "Build-cache cleanup did not restore the reserve; checking only untagged, inactive ORVYN release images that are not rollback images"
+  echo "Build-cache cleanup did not restore the reserve; checking only inactive ORVYN release images tagged solely by their old commit SHA"
   while IFS= read -r image_id; do
     [[ -n "$image_id" ]] || continue
-    metadata="$(docker image inspect "$image_id" --format '{{with index .Config.Labels "org.opencontainers.image.source"}}{{.}}{{end}}|{{with index .Config.Labels "org.opencontainers.image.revision"}}{{.}}{{end}}|{{with index .Config.Labels "org.orvyn.rollback.source-image-id"}}{{.}}{{end}}|{{json .RepoTags}}')"
-    IFS='|' read -r source revision rollback_source repo_tags <<<"$metadata"
+    metadata="$(docker image inspect "$image_id" --format '{{with index .Config.Labels "org.opencontainers.image.source"}}{{.}}{{end}}|{{with index .Config.Labels "org.opencontainers.image.revision"}}{{.}}{{end}}|{{with index .Config.Labels "org.orvyn.rollback.source-image-id"}}{{.}}{{end}}|{{range .RepoTags}}{{println .}}{{end}}')"
+    source="${metadata%%|*}"; metadata="${metadata#*|}"
+    revision="${metadata%%|*}"; metadata="${metadata#*|}"
+    rollback_source="${metadata%%|*}"; repo_tags="${metadata#*|}"
     [[ "$source" == 'https://github.com/virphoneusa25/orvyn' ]] || continue
     [[ "$revision" =~ ^[0-9a-f]{40}$ && "$revision" != "$COMMIT" ]] || { echo "Keeping ORVYN image with current or invalid revision label: ${image_id#sha256:}"; continue; }
     [[ -z "$rollback_source" ]] || { echo "Keeping rollback snapshot image: ${image_id#sha256:}"; continue; }
-    [[ "$repo_tags" == 'null' || "$repo_tags" == '[]' || "$repo_tags" == '["<none>:<none>"]' ]] || { echo "Keeping tagged ORVYN image revision=$revision (protected reference)"; continue; }
+    [[ -n "$repo_tags" ]] || continue
+    safe_commit_tags=true
+    while IFS= read -r tag; do
+      [[ -z "$tag" ]] && continue
+      if [[ "$tag" != "ghcr.io/virphoneusa25/orvyn-backend:$revision" && "$tag" != "ghcr.io/virphoneusa25/orvyn-worker:$revision" ]]; then safe_commit_tags=false; break; fi
+    done <<<"$repo_tags"
+    [[ "$safe_commit_tags" == true ]] || { echo "Keeping ORVYN image revision=$revision with a non-candidate reference"; continue; }
     if docker ps -aq --filter "ancestor=$image_id" | grep -q .; then continue; fi
-    echo "Removing verified-unused untagged release image revision=$revision image=${image_id#sha256:} (no container or rollback reference)"
+    echo "Removing verified-unused release image revision=$revision image=${image_id#sha256:} (only old SHA tag; no container or rollback reference)"
     docker image rm "$image_id" >/dev/null
   done < <(docker image ls -aq | sort -u)
   free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
