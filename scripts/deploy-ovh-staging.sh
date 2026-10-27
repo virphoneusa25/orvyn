@@ -45,8 +45,10 @@ if ! printf '%s' "$GHCR_TOKEN" | "${SSH[@]}" "$HOST" "set -eu; mkdir -m 700 -p '
 fi
 cleanup_registry_auth() { "${SSH[@]}" "$HOST" "rm -rf -- '$AUTH_DIR'" >/dev/null 2>&1 || true; }
 trap cleanup_registry_auth EXIT
+BASELINE_COMMIT="$("${SSH[@]}" "$HOST" "docker exec backend-staging node -e 'fetch(\"http://127.0.0.1:4570/api/v1/health\").then(async r=>{const j=await r.json();if(!r.ok||j.environment!==\"staging\"||! /^[0-9a-f]{40}$/.test(j.commit||\"\"))process.exit(1);console.log(j.commit)}).catch(()=>process.exit(1))'")"
+[[ "$BASELINE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "Unable to record the pre-deployment staging commit" >&2; exit 1; }
 if ! { cat "$ROOT/scripts/deploy-ovh-staging-remote.sh"; } | "${SSH[@]}" "$HOST" "STAGING_MIN_PREPULL_KB='$MIN_PREPULL_KB' STAGING_MIN_POSTPULL_KB='$MIN_POSTPULL_KB' STAGING_STORAGE_WARNING_KB='$WARNING_KB' DOCKER_CONFIG='$AUTH_DIR' bash -s -- '$REMOTE' '$COMMIT' '$BACKEND_IMAGE' '$WORKER_IMAGE' '$AUTH_DIR'"; then
-  echo "Immutable image deployment failed; prior images and persistent services were preserved" >&2
+  echo "Immutable image deployment failed; the staging deployment script preserved or restored services as verified" >&2
   exit 1
 fi
 
@@ -76,6 +78,13 @@ if ! cat "$ROOT/scripts/acceptance/hf-routing-preflight.cjs" | "${SSH[@]}" "$HOS
 fi
 echo "Optional DeepSeek live smoke skipped (separate authorization required)"
 if ! cat "$ROOT/scripts/acceptance/provider-billing-preflight.cjs" | "${SSH[@]}" "$HOST" "docker exec -i backend-staging node"; then rollback || { echo "Rollback health verification also failed" >&2; exit 1; }; exit 1; fi
+export STAGING_BASELINE_COMMIT="$BASELINE_COMMIT" STAGING_CANDIDATE_COMMIT="$COMMIT"
+export STAGING_ROLLBACK_BACKEND="$rollback_backend" STAGING_ROLLBACK_WORKER="$rollback_worker"
+if ! bash "$ROOT/scripts/verify-ovh-staging-rollback.sh"; then
+  rollback || { echo "Rollback rehearsal failed and staging recovery could not be verified" >&2; exit 1; }
+  echo "Staging rollback rehearsal failed; the previous staging images have been restored" >&2
+  exit 1
+fi
 "${SSH[@]}" "$HOST" "rm -rf -- '$AUTH_DIR'"
 trap - EXIT
-echo "Staging commit $COMMIT passed immutable image, health, saved-evidence and billing preflight"
+echo "Staging commit $COMMIT passed immutable image, health, saved-evidence, billing, and rollback rehearsal gates"

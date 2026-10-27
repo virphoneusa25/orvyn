@@ -54,13 +54,19 @@ worker_idle() {
   docker exec "$container" node -e 'const k=process.env.ORVYN_API_KEY;if(!k)process.exit(2);fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();const workers=j.workers||[];const active=workers.reduce((n,w)=>n+(Number(w.activeRuns)||0),0);const queued=Number(j.queued)||0;console.log(`worker_active_runs=${active} queued_jobs=${queued}`);if(!r.ok||workers.length===0||active!==0||queued!==0)process.exit(1)}).catch(()=>process.exit(1))'
 }
 assert_secret_free_image() {
-  local ref="$1" secret_count
-  secret_count="$(docker image inspect "$ref" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const e=JSON.parse(s)[0].Config.Env||[];const n=e.filter(x=>/^(?:.*_)?(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_|$)/i.test(x.split("=",1)[0])).length;process.stdout.write(String(n))}catch{process.exit(2)}})')"
-  [[ "$secret_count" == 0 ]] || { echo "Rollback snapshot contains credential-like image environment keys" >&2; return 1; }
+  local ref="$1" secret_names
+  secret_names="$(docker image inspect --format '{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}' "$ref" | grep -Ei 'API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_?KEY|DATABASE_URL|PG_URL|REDIS_URL' || true)"
+  [[ -z "$secret_names" ]] || { echo "Rollback snapshot contains credential-like image environment keys" >&2; return 1; }
 }
 snapshot_worker_without_runtime_environment() {
-  local container="$1" source_id="$2" ref="$3" metadata created=false
+  local container="$1" source_id="$2" ref="$3" metadata created=false change path
   worker_idle "$(service_id backend-staging)"
+  while read -r change path; do
+    case "$path" in
+      /run|/run/*|/opt|/opt/orvyn|/opt/orvyn/workspaces-staging|/opt/orvyn/workspaces-staging/*) ;;
+      *) echo "Worker root filesystem changed outside runtime or mounted workspace paths; refusing rollback snapshot" >&2; return 1 ;;
+    esac
+  done < <(docker diff "$container")
   # docker export excludes mounted volumes; importing it drops runtime Env
   # values (including credentials) while preserving the running worker rootfs.
   if ! docker image inspect "$ref" >/dev/null 2>&1; then

@@ -24,7 +24,8 @@ continues running, the pull-only gate requires no active or queued jobs and
 captures the container filesystem with `docker export` (which excludes mounted
 workspace volumes). It imports that filesystem with the worker startup
 configuration and a source-image label, then verifies the image contains no
-credential-like environment keys and can launch its worker files. The
+credential-like environment keys, the source container has no unapproved
+root-filesystem changes, and the image can launch its worker files. The
 credential-free image ID is the immutable rollback reference. It pulls and
 verifies both candidate images before replacing either application service,
 then starts only the backend and worker. PostgreSQL, Redis, Qdrant, their named
@@ -32,6 +33,14 @@ volumes, project data, and the staging network are not recreated. Failed
 health, worker-registration, strict provider-preflight, or billing-preflight
 checks restore both preserved image references. Rollback references are
 retained on the host and are not pruned by this workflow.
+
+After saved-evidence and billing preflight succeed, the deployment gate
+rehearses rollback while the worker is idle: it restores the preserved backend
+and worker references, verifies the baseline health commit and exact image IDs,
+checks the worker is online, confirms PostgreSQL/Redis/Qdrant container IDs are
+unchanged, then restores and verifies the candidate digest images. If any
+intermediate step fails, the deployment command attempts the preserved rollback
+again and fails the release gate.
 
 GitHub Actions uses its run-scoped token with `packages:write` for publishing
 and `packages:read` for staging pulls. The pull credential is held in a

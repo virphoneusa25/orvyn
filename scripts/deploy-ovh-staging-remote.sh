@@ -39,7 +39,47 @@ worker_idle() {
   docker exec "$container" node -e 'const k=process.env.ORVYN_API_KEY;if(!k)process.exit(2);fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();const workers=j.workers||[];const active=workers.reduce((n,w)=>n+(Number(w.activeRuns)||0),0);const queued=Number(j.queued)||0;console.log(`worker_active_runs=${active} queued_jobs=${queued}`);if(!r.ok||workers.length===0||active!==0||queued!==0)process.exit(1)}).catch(()=>process.exit(1))'
 }
 cleanup_auth() { rm -rf -- "$AUTH_DIR"; }
-trap cleanup_auth EXIT
+replacement_started=false
+rollback_backend=""
+rollback_worker=""
+rollback_backend_id=""
+rollback_worker_id=""
+baseline_commit=""
+restore_previous() {
+  [[ -n "$rollback_backend" && -n "$rollback_worker" && -n "$rollback_backend_id" && -n "$rollback_worker_id" && -n "$baseline_commit" ]] || return 1
+  export ORVYN_BACKEND_IMAGE="$rollback_backend" ORVYN_WORKER_IMAGE="$rollback_worker"
+  "${COMPOSE[@]}" up -d --no-build --no-deps backend-staging worker-staging || true
+  for _ in $(seq 1 40); do
+    local backend worker
+    backend="$(service_id backend-staging 2>/dev/null || true)"
+    worker="$(service_id worker-staging 2>/dev/null || true)"
+    if [[ -n "$backend" && -n "$worker" ]] \
+      && [[ "$(docker inspect --format '{{.Image}}' "$backend" 2>/dev/null || true)" == "$rollback_backend_id" ]] \
+      && [[ "$(docker inspect --format '{{.State.Health.Status}}' "$backend" 2>/dev/null || true)" == healthy ]] \
+      && [[ "$(docker inspect --format '{{.Image}}' "$worker" 2>/dev/null || true)" == "$rollback_worker_id" ]] \
+      && [[ "$(docker inspect --format '{{.State.Status}}' "$worker" 2>/dev/null || true)" == running ]] \
+      && docker exec "$backend" node -e 'const c=process.argv[1];fetch("http://127.0.0.1:4570/api/v1/health").then(async r=>{const j=await r.json();if(!r.ok||j.environment!=="staging"||j.commit!==c)process.exit(1)}).catch(()=>process.exit(1))' "$baseline_commit" \
+      && docker exec "$backend" node -e 'const k=process.env.ORVYN_API_KEY;fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();if(!r.ok||!(j.workers||[]).some(w=>w.status!=="offline"))process.exit(1)}).catch(()=>process.exit(1))' \
+      && [[ "$(for service in postgres-staging redis-staging qdrant-staging; do id="$(service_id "$service")"; printf '%s %s\n' "$id" "$(docker inspect --format '{{.Image}}' "$id")"; done | sort)" == "$data_ids" ]]; then
+      echo "Rollback restored baseline commit $baseline_commit with exact backend/worker image IDs and healthy staging services"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "Failed to restore and verify the preserved staging images" >&2
+  return 1
+}
+on_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ "$status" -ne 0 && "$replacement_started" == true ]]; then
+    echo "Deployment interrupted after service replacement; attempting exact staging rollback" >&2
+    restore_previous || status=1
+  fi
+  cleanup_auth
+  exit "$status"
+}
+trap on_exit EXIT
 
 DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}')"
 worker_idle "$(service_id backend-staging)"
@@ -77,12 +117,16 @@ fi
 rollback_worker_id="$(docker image inspect --format '{{.Id}}' "$rollback_worker")"
 if [[ "$rollback_worker_id" != "$worker_id" ]]; then
   [[ "$(docker image inspect --format '{{index .Config.Labels "org.orvyn.rollback.source-image-id"}}' "$rollback_worker")" == "$worker_id" ]] || { echo "Worker rollback snapshot does not identify the current running worker image" >&2; exit 1; }
-  secret_count="$(docker image inspect "$rollback_worker" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const e=JSON.parse(s)[0].Config.Env||[];const n=e.filter(x=>/^(?:.*_)?(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_|$)/i.test(x.split("=",1)[0])).length;process.stdout.write(String(n))}catch{process.exit(2)}})')"
-  [[ "$secret_count" == 0 ]] || { echo "Worker rollback snapshot has credential-like image environment keys" >&2; exit 1; }
+  secret_names="$(docker image inspect --format '{{range .Config.Env}}{{println (index (split . "=") 0)}}{{end}}' "$rollback_worker" | grep -Ei 'API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_?KEY|DATABASE_URL|PG_URL|REDIS_URL' || true)"
+  [[ -z "$secret_names" ]] || { echo "Worker rollback snapshot has credential-like image environment keys" >&2; exit 1; }
   metadata="$(docker image inspect "$rollback_worker" --format '{{.Config.WorkingDir}}|{{json .Config.Entrypoint}}|{{json .Config.Cmd}}')"
   [[ "$metadata" == '/app|["docker-entrypoint.sh"]|["node","dist/index.js"]' ]] || { echo "Worker rollback snapshot startup configuration is invalid" >&2; exit 1; }
   docker run --rm --network none --entrypoint /bin/sh "$rollback_worker" -c 'test -f /app/dist/index.js && test -x /usr/local/bin/docker-entrypoint.sh'
 fi
+baseline_commit="$(docker exec "$(service_id backend-staging)" node -e 'fetch("http://127.0.0.1:4570/api/v1/health").then(async r=>{const j=await r.json();if(!r.ok||j.environment!=="staging"||! /^[0-9a-f]{40}$/.test(j.commit||""))process.exit(1);console.log(j.commit)}).catch(()=>process.exit(1))')"
+[[ "$baseline_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "Could not capture the current staging release identity" >&2; exit 1; }
+rollback_backend_id="$(docker image inspect --format '{{.Id}}' "$rollback_backend")"
+rollback_worker_id="$(docker image inspect --format '{{.Id}}' "$rollback_worker")"
 
 DOCKER_CONFIG="$AUTH_DIR" docker pull "$BACKEND_IMAGE"
 DOCKER_CONFIG="$AUTH_DIR" docker pull "$WORKER_IMAGE"
@@ -102,6 +146,7 @@ if (( free_kb < MIN_PREPULL_KB )); then echo "::warning::Staging free disk is be
 
 printf 'Candidate images verified: backend=%s worker=%s\n' "$BACKEND_IMAGE" "$WORKER_IMAGE"
 worker_idle "$(service_id backend-staging)"
+replacement_started=true
 "${COMPOSE[@]}" up -d --no-build --no-deps backend-staging worker-staging
 
 healthy=false
@@ -118,24 +163,9 @@ for _ in $(seq 1 60); do
 done
 
 if [[ "$healthy" != true ]]; then
-  echo "Candidate backend or worker health failed; restoring exact previous image IDs" >&2
-  export ORVYN_BACKEND_IMAGE="$rollback_backend" ORVYN_WORKER_IMAGE="$rollback_worker"
-  "${COMPOSE[@]}" up -d --no-build --no-deps backend-staging worker-staging
-  rollback_backend_id="$(docker image inspect --format '{{.Id}}' "$rollback_backend")"
-  rollback_worker_id="$(docker image inspect --format '{{.Id}}' "$rollback_worker")"
-  for _ in $(seq 1 40); do
-    backend_container="$(service_id backend-staging 2>/dev/null || true)"
-    if [[ -n "$backend_container" ]]; then backend_health="$(docker inspect --format '{{.State.Health.Status}}' "$backend_container" 2>/dev/null || true)"; else backend_health=''; fi
-    worker_container="$(service_id worker-staging 2>/dev/null || true)"
-    if [[ -n "$worker_container" ]]; then worker_state="$(docker inspect --format '{{.State.Status}}' "$worker_container" 2>/dev/null || true)"; else worker_state=''; fi
-    if [[ "$backend_health" == healthy && "$(docker inspect --format '{{.Image}}' "$backend_container" 2>/dev/null || true)" == "$rollback_backend_id" && "$worker_state" == running && "$(docker inspect --format '{{.Image}}' "$worker_container" 2>/dev/null || true)" == "$rollback_worker_id" ]]; then break; fi
-    sleep 5
-  done
-  rollback_backend_container="$(service_id backend-staging)"
-  rollback_worker_container="$(service_id worker-staging)"
-  [[ "$(docker inspect --format '{{.Image}}' "$rollback_backend_container")" == "$rollback_backend_id" && "$(docker inspect --format '{{.State.Health.Status}}' "$rollback_backend_container")" == healthy && "$(docker inspect --format '{{.Image}}' "$rollback_worker_container")" == "$rollback_worker_id" && "$(docker inspect --format '{{.State.Status}}' "$rollback_worker_container")" == running ]] || { echo "Rollback did not restore exact image IDs and healthy services" >&2; exit 1; }
-  docker inspect --format 'rollback backend image={{.Image}} health={{.State.Health.Status}}' "$(service_id backend-staging)"
-  docker inspect --format 'rollback worker image={{.Image}} state={{.State.Status}}' "$(service_id worker-staging)"
+  echo "Candidate backend or worker health failed; restoring the preserved staging references" >&2
+  restore_previous || exit 1
+  replacement_started=false
   exit 1
 fi
 
@@ -146,4 +176,5 @@ docker inspect --format 'worker={{.Image}} state={{.State.Status}}' "$(service_i
 curl -fsS "$HEALTH_URL"
 echo
 df -h "$REMOTE" "$DOCKER_ROOT"
+replacement_started=false
 echo "Staging digest deployment verified at $COMMIT; rollback refs $rollback_backend and $rollback_worker retained"
