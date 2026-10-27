@@ -98,8 +98,17 @@ docker system df -v
 docker buildx du --verbose || true
 free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 inode_used="$(df -Pi "$DOCKER_ROOT" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
-[[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb >= MIN_PREPULL_KB )) || {
-  echo "Staging has less than the configured $MIN_PREPULL_KB KiB image-pull reserve; refusing deployment without deleting cache or data" >&2
+required_initial_reserve="$MIN_PREPULL_KB"
+if docker image inspect "$BACKEND_IMAGE" >/dev/null 2>&1 && docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
+  required_initial_reserve="$MIN_POSTPULL_KB"
+  echo "Exact candidate images are already present from pull-only validation; applying the configured post-pull operating reserve"
+elif [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
+  echo "Staging is below the image-pull reserve; reclaiming only unused regular Docker build cache (no images, containers, or volumes)"
+  docker buildx prune --filter type=regular --min-free-space 16GB --force
+  free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
+fi
+[[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb >= required_initial_reserve )) || {
+  echo "Staging has less than the required $required_initial_reserve KiB free reserve; refusing deployment without deleting cache or data" >&2
   exit 1
 }
 [[ "$inode_used" =~ ^[0-9]+$ ]] && (( inode_used < 98 )) || { echo "Staging Docker filesystem has less than 2% inode reserve" >&2; exit 1; }

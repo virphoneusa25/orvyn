@@ -95,6 +95,11 @@ docker system df -v
 docker buildx du --verbose || true
 free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 inode_used="$(df -Pi "$DOCKER_ROOT" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
+if [[ "$free_kb" =~ ^[0-9]+$ ]] && (( free_kb < MIN_PREPULL_KB )); then
+  echo "Staging is below the image-pull reserve; reclaiming only unused regular Docker build cache (no images, containers, or volumes)"
+  docker buildx prune --filter type=regular --min-free-space 16GB --force
+  free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
+fi
 [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_PREPULL_KB" ]] || { echo "Below configured image-pull reserve ($MIN_PREPULL_KB KiB)" >&2; exit 1; }
 [[ "$inode_used" =~ ^[0-9]+$ && "$inode_used" -lt 98 ]] || { echo "Below 2% inode reserve" >&2; exit 1; }
 if (( free_kb < WARNING_KB )); then echo "::warning::Staging free disk is below configured warning reserve ($WARNING_KB KiB)."; fi
