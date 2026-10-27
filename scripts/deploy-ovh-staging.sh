@@ -12,11 +12,16 @@ BACKEND_IMAGE="${ORVYN_BACKEND_IMAGE:-}"
 WORKER_IMAGE="${ORVYN_WORKER_IMAGE:-}"
 GHCR_USERNAME="${GHCR_USERNAME:-}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
+MIN_PREPULL_KB="${STAGING_MIN_PREPULL_KB:-14680064}"
+MIN_POSTPULL_KB="${STAGING_MIN_POSTPULL_KB:-10485760}"
+WARNING_KB="${STAGING_STORAGE_WARNING_KB:-20971520}"
 [[ "$REMOTE" == /home/ubuntu/orvyn-staging-release ]] || { echo "Refusing an unverified staging source path" >&2; exit 1; }
 [[ -f "$KEY" ]] || { echo "OVH SSH key missing" >&2; exit 1; }
 [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/virphoneusa25/orvyn-backend@sha256:[0-9a-f]{64}$ ]] || { echo "Missing exact backend GHCR digest" >&2; exit 1; }
 [[ "$WORKER_IMAGE" =~ ^ghcr\.io/virphoneusa25/orvyn-worker@sha256:[0-9a-f]{64}$ ]] || { echo "Missing exact worker GHCR digest" >&2; exit 1; }
 [[ -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "GitHub Actions staging registry credentials are missing" >&2; exit 1; }
+for value in "$MIN_PREPULL_KB" "$MIN_POSTPULL_KB" "$WARNING_KB"; do [[ "$value" =~ ^[0-9]+$ ]] || { echo "Staging disk thresholds must be integer KiB values" >&2; exit 1; }; done
+(( MIN_PREPULL_KB >= MIN_POSTPULL_KB && WARNING_KB >= MIN_PREPULL_KB )) || { echo "Staging disk thresholds are inconsistent" >&2; exit 1; }
 SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 RSH="${SSH[*]}"
 AUTH_DIR="/tmp/orvyn-ghcr-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
@@ -40,7 +45,7 @@ if ! printf '%s' "$GHCR_TOKEN" | "${SSH[@]}" "$HOST" "set -eu; mkdir -m 700 -p '
 fi
 cleanup_registry_auth() { "${SSH[@]}" "$HOST" "rm -rf -- '$AUTH_DIR'" >/dev/null 2>&1 || true; }
 trap cleanup_registry_auth EXIT
-if ! { cat "$ROOT/scripts/deploy-ovh-staging-remote.sh"; } | "${SSH[@]}" "$HOST" "DOCKER_CONFIG='$AUTH_DIR' bash -s -- '$REMOTE' '$COMMIT' '$BACKEND_IMAGE' '$WORKER_IMAGE' '$AUTH_DIR'"; then
+if ! { cat "$ROOT/scripts/deploy-ovh-staging-remote.sh"; } | "${SSH[@]}" "$HOST" "STAGING_MIN_PREPULL_KB='$MIN_PREPULL_KB' STAGING_MIN_POSTPULL_KB='$MIN_POSTPULL_KB' STAGING_STORAGE_WARNING_KB='$WARNING_KB' DOCKER_CONFIG='$AUTH_DIR' bash -s -- '$REMOTE' '$COMMIT' '$BACKEND_IMAGE' '$WORKER_IMAGE' '$AUTH_DIR'"; then
   echo "Immutable image deployment failed; prior images and persistent services were preserved" >&2
   exit 1
 fi
@@ -48,7 +53,7 @@ fi
 rollback_backend="orvyn-staging-backend:rollback-before-$COMMIT"
 rollback_worker="orvyn-staging-worker:rollback-before-$COMMIT"
 rollback() {
-  echo "Staging release gate failed; restoring the exact previous backend and worker image IDs" >&2
+  echo "Staging release gate failed; restoring the preserved backend and worker image references" >&2
   "${SSH[@]}" "$HOST" "set -eu; cd '$REMOTE'; b=\$(docker image inspect --format '{{.Id}}' '$rollback_backend'); w=\$(docker image inspect --format '{{.Id}}' '$rollback_worker'); export ORVYN_BACKEND_IMAGE='$rollback_backend' ORVYN_WORKER_IMAGE='$rollback_worker'; docker compose -p orvyn-staging -f infrastructure/ovh/compose.staging.yml --env-file .env.staging up -d --no-build --no-deps backend-staging worker-staging; for n in \$(seq 1 40); do bh=\$(docker inspect --format '{{.State.Health.Status}}' backend-staging); bi=\$(docker inspect --format '{{.Image}}' backend-staging); wi=\$(docker inspect --format '{{.Image}}' worker-staging); if [ \"\$bh\" = healthy ] && [ \"\$bi\" = \"\$b\" ] && [ \"\$wi\" = \"\$w\" ]; then echo 'Exact previous image IDs restored and backend health is healthy'; exit 0; fi; sleep 5; done; echo 'Rollback image or health verification failed' >&2; exit 1"
 }
 for _ in $(seq 1 40); do

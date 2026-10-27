@@ -379,6 +379,9 @@ jobs:
           ORVYN_BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-backend@${{ needs.build-staging-images.outputs.backend_digest }}
           ORVYN_WORKER_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-worker@${{ needs.build-staging-images.outputs.worker_digest }}
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+          STAGING_MIN_PREPULL_KB: ${{ vars.ORVYN_STAGING_MIN_PREPULL_KB || '14680064' }}
+          STAGING_MIN_POSTPULL_KB: ${{ vars.ORVYN_STAGING_MIN_POSTPULL_KB || '10485760' }}
+          STAGING_STORAGE_WARNING_KB: ${{ vars.ORVYN_STAGING_STORAGE_WARNING_KB || '20971520' }}
         shell: bash
         run: |
           [ -n "$OVH_SSH_PRIVATE_KEY" ] || { echo "::error::Staging SSH credential missing"; exit 1; }
@@ -463,6 +466,9 @@ jobs:
           DEEPSEEK_PRO_MODEL: ${{ vars.DEEPSEEK_PRO_MODEL }}
           FIREWORKS_MODELS: ${{ vars.FIREWORKS_MODELS }}
           FIREWORKS_BASE_URL: ${{ vars.FIREWORKS_BASE_URL }}
+          STAGING_MIN_PREPULL_KB: ${{ vars.ORVYN_STAGING_MIN_PREPULL_KB || '14680064' }}
+          STAGING_MIN_POSTPULL_KB: ${{ vars.ORVYN_STAGING_MIN_POSTPULL_KB || '10485760' }}
+          STAGING_STORAGE_WARNING_KB: ${{ vars.ORVYN_STAGING_STORAGE_WARNING_KB || '20971520' }}
         run: |
           [ -n "$OVH_SSH_PRIVATE_KEY" ] && [ -n "$HUGGINGFACE_API_KEY" ] && [ "$HUGGINGFACE_ROUTING_ENABLED" = "1" ] || { echo "::error::Staging configuration missing"; exit 1; }
           mkdir -p -m 700 "$HOME/.ssh"

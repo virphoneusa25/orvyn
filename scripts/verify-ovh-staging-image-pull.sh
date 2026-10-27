@@ -10,11 +10,16 @@ BACKEND_IMAGE="${ORVYN_BACKEND_IMAGE:-}"
 WORKER_IMAGE="${ORVYN_WORKER_IMAGE:-}"
 GHCR_USERNAME="${GHCR_USERNAME:-}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
+MIN_PREPULL_KB="${STAGING_MIN_PREPULL_KB:-14680064}"
+MIN_POSTPULL_KB="${STAGING_MIN_POSTPULL_KB:-10485760}"
+WARNING_KB="${STAGING_STORAGE_WARNING_KB:-20971520}"
 [[ -f "$KEY" ]] || { echo "OVH staging SSH key missing" >&2; exit 1; }
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid candidate commit" >&2; exit 1; }
 [[ "$BACKEND_IMAGE" =~ ^ghcr\.io/virphoneusa25/orvyn-backend@sha256:[0-9a-f]{64}$ ]] || { echo "Missing exact backend GHCR digest" >&2; exit 1; }
 [[ "$WORKER_IMAGE" =~ ^ghcr\.io/virphoneusa25/orvyn-worker@sha256:[0-9a-f]{64}$ ]] || { echo "Missing exact worker GHCR digest" >&2; exit 1; }
 [[ -n "$GHCR_USERNAME" && -n "$GHCR_TOKEN" ]] || { echo "Staging registry credentials missing" >&2; exit 1; }
+for value in "$MIN_PREPULL_KB" "$MIN_POSTPULL_KB" "$WARNING_KB"; do [[ "$value" =~ ^[0-9]+$ ]] || { echo "Staging disk thresholds must be integer KiB values" >&2; exit 1; }; done
+(( MIN_PREPULL_KB >= MIN_POSTPULL_KB && WARNING_KB >= MIN_PREPULL_KB )) || { echo "Staging disk thresholds are inconsistent" >&2; exit 1; }
 SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 AUTH_DIR="/tmp/orvyn-ghcr-verify-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
 
@@ -27,7 +32,7 @@ trap cleanup_auth EXIT
 
 if ! { cat <<'REMOTE'
 set -euo pipefail
-COMMIT="$1" BACKEND_IMAGE="$2" WORKER_IMAGE="$3" AUTH_DIR="$4"
+COMMIT="$1" BACKEND_IMAGE="$2" WORKER_IMAGE="$3" AUTH_DIR="$4" MIN_PREPULL_KB="$5" MIN_POSTPULL_KB="$6" WARNING_KB="$7"
 [[ "$AUTH_DIR" =~ ^/tmp/orvyn-ghcr-verify-[A-Za-z0-9._-]+$ && -d "$AUTH_DIR" && ! -L "$AUTH_DIR" ]]
 export DOCKER_CONFIG="$AUTH_DIR"
 service_id() {
@@ -44,6 +49,39 @@ service_snapshot() {
     printf '%s %s\n' "$id" "$(docker inspect --format '{{.Image}}' "$id")"
   done | sort
 }
+worker_idle() {
+  local container="$1"
+  docker exec "$container" node -e 'const k=process.env.ORVYN_API_KEY;if(!k)process.exit(2);fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();const workers=j.workers||[];const active=workers.reduce((n,w)=>n+(Number(w.activeRuns)||0),0);const queued=Number(j.queued)||0;console.log(`worker_active_runs=${active} queued_jobs=${queued}`);if(!r.ok||workers.length===0||active!==0||queued!==0)process.exit(1)}).catch(()=>process.exit(1))'
+}
+assert_secret_free_image() {
+  local ref="$1" secret_count
+  secret_count="$(docker image inspect "$ref" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const e=JSON.parse(s)[0].Config.Env||[];const n=e.filter(x=>/^(?:.*_)?(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)(?:_|$)/i.test(x.split("=",1)[0])).length;process.stdout.write(String(n))}catch{process.exit(2)}})')"
+  [[ "$secret_count" == 0 ]] || { echo "Rollback snapshot contains credential-like image environment keys" >&2; return 1; }
+}
+snapshot_worker_without_runtime_environment() {
+  local container="$1" source_id="$2" ref="$3" metadata created=false
+  worker_idle "$(service_id backend-staging)"
+  # docker export excludes mounted volumes; importing it drops runtime Env
+  # values (including credentials) while preserving the running worker rootfs.
+  if ! docker image inspect "$ref" >/dev/null 2>&1; then
+    if ! docker export "$container" | docker import \
+      --change 'WORKDIR /app' \
+      --change 'ENTRYPOINT ["docker-entrypoint.sh"]' \
+      --change 'CMD ["node","dist/index.js"]' \
+      --change "LABEL org.orvyn.rollback.source-image-id=$source_id" - "$ref" >/dev/null; then
+      docker image rm "$ref" >/dev/null 2>&1 || true
+      return 1
+    fi
+    created=true
+  fi
+  metadata="$(docker image inspect "$ref" --format '{{.Config.WorkingDir}}|{{json .Config.Entrypoint}}|{{json .Config.Cmd}}|{{index .Config.Labels "org.orvyn.rollback.source-image-id"}}')" || { if [[ "$created" == true ]]; then docker image rm "$ref" >/dev/null 2>&1 || true; fi; return 1; }
+  if [[ "$metadata" != "/app|[\"docker-entrypoint.sh\"]|[\"node\",\"dist/index.js\"]|$source_id" ]] || ! assert_secret_free_image "$ref" || ! docker run --rm --network none --entrypoint /bin/sh "$ref" -c 'test -f /app/dist/index.js && test -x /usr/local/bin/docker-entrypoint.sh' || ! worker_idle "$(service_id backend-staging)"; then
+    echo "Credential-free worker rollback image failed its identity, metadata, or idle checks" >&2
+    if [[ "$created" == true ]]; then docker image rm "$ref" >/dev/null 2>&1 || true; fi
+    return 1
+  fi
+  printf 'worker_rollback_snapshot_source=%s worker_rollback_image=%s\n' "$source_id" "$(docker image inspect --format '{{.Id}}' "$ref")"
+}
 DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}')"
 df -h "$DOCKER_ROOT"
 df -i "$DOCKER_ROOT"
@@ -51,17 +89,31 @@ docker system df -v
 docker buildx du --verbose || true
 free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 inode_used="$(df -Pi "$DOCKER_ROOT" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
-[[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 14680064 ]] || { echo "Below 14 GiB pull reserve" >&2; exit 1; }
+[[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_PREPULL_KB" ]] || { echo "Below configured image-pull reserve ($MIN_PREPULL_KB KiB)" >&2; exit 1; }
 [[ "$inode_used" =~ ^[0-9]+$ && "$inode_used" -lt 98 ]] || { echo "Below 2% inode reserve" >&2; exit 1; }
+if (( free_kb < WARNING_KB )); then echo "::warning::Staging free disk is below configured warning reserve ($WARNING_KB KiB)."; fi
 before_services="$(service_snapshot)"
 backend_id="$(docker inspect --format '{{.Image}}' "$(service_id backend-staging)")"
 worker_id="$(docker inspect --format '{{.Image}}' "$(service_id worker-staging)")"
 rollback_backend="orvyn-staging-backend:rollback-before-$COMMIT"
 rollback_worker="orvyn-staging-worker:rollback-before-$COMMIT"
-docker image inspect "$rollback_backend" >/dev/null 2>&1 || docker image tag "$backend_id" "$rollback_backend"
-docker image inspect "$rollback_worker" >/dev/null 2>&1 || docker image tag "$worker_id" "$rollback_worker"
+if ! docker image inspect "$rollback_backend" >/dev/null 2>&1; then docker image tag "$backend_id" "$rollback_backend"; fi
 [[ "$(docker image inspect --format '{{.Id}}' "$rollback_backend")" == "$backend_id" ]]
-[[ "$(docker image inspect --format '{{.Id}}' "$rollback_worker")" == "$worker_id" ]]
+if docker image inspect "$rollback_worker" >/dev/null 2>&1; then
+  rollback_worker_id="$(docker image inspect --format '{{.Id}}' "$rollback_worker")"
+  if [[ "$rollback_worker_id" != "$worker_id" ]]; then
+    [[ "$(docker image inspect --format '{{index .Config.Labels "org.orvyn.rollback.source-image-id"}}' "$rollback_worker")" == "$worker_id" ]]
+    snapshot_worker_without_runtime_environment "$(service_id worker-staging)" "$worker_id" "$rollback_worker"
+  fi
+elif docker image inspect "$worker_id" >/dev/null 2>&1; then
+  docker image tag "$worker_id" "$rollback_worker"
+else
+  snapshot_ref="orvyn-staging-worker:rollback-snapshot-${worker_id#sha256:}"
+  snapshot_worker_without_runtime_environment "$(service_id worker-staging)" "$worker_id" "$snapshot_ref"
+  docker image tag "$snapshot_ref" "$rollback_worker"
+fi
+free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
+[[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_PREPULL_KB" ]] || { echo "Rollback preparation left less than configured pull reserve; candidate images were not pulled" >&2; exit 1; }
 DOCKER_CONFIG="$AUTH_DIR" docker pull "$BACKEND_IMAGE"
 DOCKER_CONFIG="$AUTH_DIR" docker pull "$WORKER_IMAGE"
 for ref in "$BACKEND_IMAGE" "$WORKER_IMAGE"; do
@@ -71,13 +123,14 @@ done
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$BACKEND_IMAGE")" == "$COMMIT" ]]
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$WORKER_IMAGE")" == "$COMMIT" ]]
 free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
-[[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 10485760 ]] || { echo "Image pull consumed operating reserve; no services were replaced" >&2; exit 1; }
+[[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge "$MIN_POSTPULL_KB" ]] || { echo "Image pull consumed configured operating reserve; no services were replaced" >&2; exit 1; }
+if (( free_kb < WARNING_KB )); then echo "::warning::Staging free disk is below configured warning reserve ($WARNING_KB KiB)."; fi
 after_services="$(service_snapshot)"
 [[ "$before_services" == "$after_services" ]] || { echo "A running staging service changed during pull-only validation" >&2; exit 1; }
-printf 'commit=%s\nbackend=%s\nworker=%s\nbackendRollback=%s (%s)\nworkerRollback=%s (%s)\n' "$COMMIT" "$BACKEND_IMAGE" "$WORKER_IMAGE" "$rollback_backend" "$backend_id" "$rollback_worker" "$worker_id"
+printf 'commit=%s\nbackend=%s\nworker=%s\nbackendRollback=%s (%s)\nworkerRollback=%s (%s)\n' "$COMMIT" "$BACKEND_IMAGE" "$WORKER_IMAGE" "$rollback_backend" "$backend_id" "$rollback_worker" "$(docker image inspect --format '{{.Id}}' "$rollback_worker")"
 df -h "$DOCKER_ROOT"
 echo "PASS: exact-SHA images pulled, labels/digests verified, rollback IDs preserved, running service identities unchanged"
 REMOTE
-} | "${SSH[@]}" "$HOST" "bash -s -- '$COMMIT' '$BACKEND_IMAGE' '$WORKER_IMAGE' '$AUTH_DIR'"; then
+} | "${SSH[@]}" "$HOST" "bash -s -- '$COMMIT' '$BACKEND_IMAGE' '$WORKER_IMAGE' '$AUTH_DIR' '$MIN_PREPULL_KB' '$MIN_POSTPULL_KB' '$WARNING_KB'"; then
   exit 1
 fi
