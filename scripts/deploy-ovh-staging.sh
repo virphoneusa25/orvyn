@@ -35,7 +35,7 @@ STAGING_FREE_KB="$("${SSH[@]}" "$HOST" "df -Pk '$REMOTE'" | awk 'NR==2 {print $4
 if [[ ! "$STAGING_FREE_KB" =~ ^[0-9]+$ ]] || (( STAGING_FREE_KB < MIN_STAGING_FREE_KB )); then
   echo "Staging disk is below the build threshold; inspecting disk, inode and Docker usage before safe cache cleanup"
   "${SSH[@]}" "$HOST" "df -h '$REMOTE'; df -i '$REMOTE'; docker system df -v"
-  "${SSH[@]}" "$HOST" "docker builder prune --filter 'until=24h' --force"
+  "${SSH[@]}" "$HOST" "docker buildx du --verbose; docker buildx prune --filter 'until=24h' --force"
   STAGING_FREE_KB="$("${SSH[@]}" "$HOST" "df -Pk '$REMOTE'" | awk 'NR==2 {print $4}')"
   echo "Staging disk after unused builder-cache cleanup: ${STAGING_FREE_KB:-unknown} KB available"
   "${SSH[@]}" "$HOST" "df -h '$REMOTE'; df -i '$REMOTE'"
