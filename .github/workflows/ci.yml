@@ -30,7 +30,8 @@ permissions:
 
 concurrency:
   group: orvyn-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never interrupt a staging deployment between application image swaps.
+  cancel-in-progress: false
 
 jobs:
   build-and-test:
@@ -181,10 +182,10 @@ jobs:
           github.ref == 'refs/heads/codex/shared-hf-auto'
           || (github.ref == 'refs/heads/codex/durable-toolrpc-lifecycle' &&
             ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
-              (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
+              (github.event_name == 'push' && (contains(github.event.head_commit.message, '[deploy-staging]') || contains(github.event.head_commit.message, '[desktop-staging-verify]')))))
           || (github.ref == 'refs/heads/codex/hf-provider-verification' &&
             ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
-              (github.event_name == 'push' && contains(github.event.head_commit.message, '[deploy-staging]'))))
+              (github.event_name == 'push' && (contains(github.event.head_commit.message, '[deploy-staging]') || contains(github.event.head_commit.message, '[desktop-staging-verify]')))))
         uses: actions/upload-artifact@v4
         with:
           name: orvyn-packaged-desktop
@@ -291,11 +292,112 @@ jobs:
           fi
           shred -u "$HOME/.ssh/ovh_deploy" 2>/dev/null || rm -f "$HOME/.ssh/ovh_deploy"
 
+  build-staging-images:
+    name: Build and publish immutable staging images
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >-
+      github.ref == 'refs/heads/codex/hf-provider-verification' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
+        (github.event_name == 'push' && (contains(github.event.head_commit.message, '[build-staging-images]') || contains(github.event.head_commit.message, '[deploy-staging]'))))
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      backend_image: ${{ steps.refs.outputs.backend_image }}
+      worker_image: ${{ steps.refs.outputs.worker_image }}
+      backend_digest: ${{ steps.backend.outputs.digest }}
+      worker_digest: ${{ steps.worker.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Stamp exact candidate revision into backend
+        run: printf '{"commit":"%s","builtAt":"%s"}\n' "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > apps/backend/build-info.json
+      - name: Export SHA tags
+        id: refs
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "backend_image=ghcr.io/$owner/orvyn-backend:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "worker_image=ghcr.io/$owner/orvyn-worker:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Build and push backend
+        id: backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/backend/Dockerfile
+          push: true
+          tags: ${{ steps.refs.outputs.backend_image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Build and push worker
+        id: worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: ${{ steps.refs.outputs.worker_image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record immutable digests
+        shell: bash
+        run: |
+          printf 'commit=%s\nbackend=%s@%s\nworker=%s@%s\n' "$GITHUB_SHA" '${{ steps.refs.outputs.backend_image }}' '${{ steps.backend.outputs.digest }}' '${{ steps.refs.outputs.worker_image }}' '${{ steps.worker.outputs.digest }}' > staging-image-manifest.txt
+          cat staging-image-manifest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-image-manifest-${{ github.sha }}
+          path: staging-image-manifest.txt
+          retention-days: 90
+
+  verify-staging-image-pull:
+    name: Verify private image pull without replacing staging services
+    needs: [build-staging-images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: >-
+      github.ref == 'refs/heads/codex/hf-provider-verification' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.deployment == 'staging') ||
+        (github.event_name == 'push' && (contains(github.event.head_commit.message, '[build-staging-images]') || contains(github.event.head_commit.message, '[deploy-staging]'))))
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify staging registry pull and rollback image preservation
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+          ORVYN_BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-backend@${{ needs.build-staging-images.outputs.backend_digest }}
+          ORVYN_WORKER_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-worker@${{ needs.build-staging-images.outputs.worker_digest }}
+          OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          [ -n "$OVH_SSH_PRIVATE_KEY" ] || { echo "::error::Staging SSH credential missing"; exit 1; }
+          mkdir -m 700 -p "$HOME/.ssh"
+          printf '%s\n' "$OVH_SSH_PRIVATE_KEY" | tr -d '\r' > "$HOME/.ssh/ovh_deploy"
+          chmod 600 "$HOME/.ssh/ovh_deploy"
+          trap 'rm -f "$HOME/.ssh/ovh_deploy"' EXIT
+          export OVH_SSH_KEY="$HOME/.ssh/ovh_deploy"
+          bash scripts/verify-ovh-staging-image-pull.sh
+
   deploy-staging:
     name: Verify isolated OVH staging
-    needs: [build-and-test, windows-installer]
+    needs: [build-and-test, windows-installer, build-staging-images, verify-staging-image-pull]
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: read
+      packages: read
     if: >-
       (github.ref == 'refs/heads/codex/shared-hf-auto' &&
         (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.deployment != 'verify')))
@@ -335,6 +437,10 @@ jobs:
           exit 1
       - name: Deploy candidate to isolated staging
         env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+          ORVYN_BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-backend@${{ needs.build-staging-images.outputs.backend_digest }}
+          ORVYN_WORKER_IMAGE: ghcr.io/${{ github.repository_owner }}/orvyn-worker@${{ needs.build-staging-images.outputs.worker_digest }}
           ORVYN_AUTHORIZE_HF_PAID_PROBE: ${{ inputs.authorize_hf_paid_probe }}
           OVH_SSH_PRIVATE_KEY: ${{ secrets.OVH_SSH_PRIVATE_KEY }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY || secrets.HF_TOKEN }}
@@ -371,6 +477,10 @@ jobs:
     needs: [deploy-staging, windows-installer]
     runs-on: windows-latest
     timeout-minutes: 15
+    if: >-
+      always() && needs.windows-installer.result == 'success' &&
+      (needs.deploy-staging.result == 'success' ||
+        (github.ref == 'refs/heads/codex/hf-provider-verification' && github.event_name == 'push' && contains(github.event.head_commit.message, '[desktop-staging-verify]')))
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

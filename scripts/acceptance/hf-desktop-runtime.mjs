@@ -72,9 +72,9 @@ try{
  const safeId=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(value)?value:undefined;
  const errorCategory=(code,error)=>{if(/^CREDITS_/.test(code||''))return'billing_rejected';if(code==='TICKET_EXPIRED'||code==='SESSION_EXPIRED')return'authentication_expired';if(/not verified|unverified|unsupported|not available|not found|inaccessible/i.test(error||''))return'model_unavailable_or_unverified';if(/timeout|timed out|stopped responding/i.test(error||''))return'provider_or_stream_timeout';if(/rate limit|429|provider|inference|HTTP 5\d\d/i.test(error||''))return'provider_failure';if(/tenant|permission|authorization/i.test(error||''))return'authorization_failure';return'backend_stream_error';};
  async function turn(model='auto',cancel=false,prompt='',surface='desktop'){return new Promise((resolve,reject)=>{
- const ws=new WebSocket(base.replace(/^http/,'ws')+'/ws/chat?token='+encodeURIComponent(token));let route,text='',eventTypes=[];const record={requestedModel:model==='auto'?'auto':model,surface,state:'connecting',eventTypes};diagnostics.turns.push(record);const timer=setTimeout(()=>{record.state=ws.readyState===WebSocket.OPEN?'open':'not_open';record.errorCategory='stream_timeout';ws.close();reject(new Error('Hosted Desktop stream timed out'));},55000);
+ const ws=new WebSocket(base.replace(/^http/,'ws')+'/ws/chat?token='+encodeURIComponent(token));let route,text='',eventTypes=[];const record={requestedModel:model==='auto'?'auto':model,surface,state:'connecting',eventTypes,lastEvent:null,expectedNext:'connection.ready'};diagnostics.turns.push(record);const timer=setTimeout(()=>{record.state=ws.readyState===WebSocket.OPEN?'open':'not_open';record.errorCategory='stream_timeout';record.expectedNext=record.expectedNext||'done';ws.close();reject(new Error('Hosted Desktop stream timed out'));},55000);
  ws.onopen=()=>{record.state='open';};ws.onclose=ev=>{record.closed={code:ev.code,clean:ev.wasClean};};
- ws.onmessage=ev=>{let c;try{c=JSON.parse(ev.data);}catch{clearTimeout(timer);record.errorCategory='invalid_stream_frame';reject(new Error('Hosted Desktop stream returned an invalid frame'));return;}const kind=c.type|| (c.done?'done':c.heartbeat?'heartbeat':c.activity?'activity':c.toolCall?'tool_call':c.routing?'routing':c.delta?'delta':'other');eventTypes.push(String(kind).slice(0,40));record.missionId ||= safeId(c.missionId||c.runId);record.eventId ||= safeId(c.eventId||c.id);record.correlationId ||= safeId(c.correlationId||c.requestId);if(c.type==='connection.ready'){record.connectionAcknowledged=true;ws.send(JSON.stringify({task:prompt?'chat':'code',surface,history:prompt.includes('Asterisk')?[{role:'user',content:'Tell me about VirPhone.'}]:[],userMessage:prompt||(cancel?'List the first 10000 positive integers, one per line.':'Reply with a short greeting.'),requestedModelId:model}));}if(c.routing){route={provider:c.routing.provider,modelId:c.routing.modelId,reason:c.routing.reason};record.route=route;}if(c.delta){text+=c.delta;if(cancel){clearTimeout(timer);record.state='cancelled_after_first_delta';ws.close();resolve({route,cancelled:true});}}if(c.done){clearTimeout(timer);record.finalState=c.error?'failed':'completed';record.responseChars=text.length;record.errorCode=typeof c.code==='string'&&/^[A-Z0-9_]{2,64}$/.test(c.code)?c.code:undefined;record.errorCategory=c.error?errorCategory(record.errorCode,String(c.error).slice(0,300)):undefined;ws.close();if(c.error)reject(new Error('Hosted Desktop stream failed'));else resolve({route,hasText:Boolean(text),text});}};ws.onerror=()=>{clearTimeout(timer);record.errorCategory='websocket_transport_error';reject(new Error('Hosted Desktop websocket failed'));};
+ ws.onmessage=ev=>{let c;try{c=JSON.parse(ev.data);}catch{clearTimeout(timer);record.errorCategory='invalid_stream_frame';record.lastEvent='invalid_frame';record.expectedNext='valid_json_event';reject(new Error('Hosted Desktop stream returned an invalid frame'));return;}const kind=c.type|| (c.done?'done':c.heartbeat?'heartbeat':c.activity?'activity':c.toolCall?'tool_call':c.routing?'routing':c.delta?'delta':'other');eventTypes.push(String(kind).slice(0,40));record.lastEvent=String(kind).slice(0,40);record.expectedNext=kind==='connection.ready'?'routing':kind==='routing'?'delta':kind==='done'?'terminal':kind==='heartbeat'?'done_or_delta':kind==='delta'?'more_delta_or_done':'next_event';record.missionId ||= safeId(c.missionId||c.runId);record.eventId ||= safeId(c.eventId||c.id);record.correlationId ||= safeId(c.correlationId||c.requestId);if(c.type==='connection.ready'){record.connectionAcknowledged=true;ws.send(JSON.stringify({task:prompt?'chat':'code',surface,history:prompt.includes('Asterisk')?[{role:'user',content:'Tell me about VirPhone.'}]:[],userMessage:prompt||(cancel?'List the first 10000 positive integers, one per line.':'Reply with a short greeting.'),requestedModelId:model}));}if(c.routing){route={provider:c.routing.provider,modelId:c.routing.modelId,reason:c.routing.reason};record.route=route;}if(c.delta){text+=c.delta;if(cancel){clearTimeout(timer);record.state='cancelled_after_first_delta';record.finalState='cancelled';record.expectedNext='cancellation_acknowledgement_or_close';ws.close();resolve({route,cancelled:true});}}if(c.done){clearTimeout(timer);record.finalState=c.error?'failed':'completed';record.missionState=record.finalState;record.billingSettlement=c.error?'failure_or_zero_charge':'usage_record_required';record.responseChars=text.length;record.errorCode=typeof c.code==='string'&&/^[A-Z0-9_]{2,64}$/.test(c.code)?c.code:undefined;record.errorCategory=c.error?errorCategory(record.errorCode,String(c.error).slice(0,300)):undefined;record.expectedNext='none';ws.close();if(c.error)reject(new Error('Hosted Desktop stream failed'));else resolve({route,hasText:Boolean(text),text});}};ws.onerror=()=>{clearTimeout(timer);record.errorCategory='websocket_transport_error';record.expectedNext=record.expectedNext||'connection_or_event';reject(new Error('Hosted Desktop websocket failed'));};
  });}
  async function trackedTurn(prompt,surface){const usageUrl=base+'/api/v1/usage';const headers={Authorization:'Bearer '+token};const before=await(await fetch(usageUrl,{headers})).json();const ids=new Set((before.events||[]).map(e=>e.id));const result=await turn('auto',false,prompt,surface);await new Promise(r=>setTimeout(r,150));const after=await(await fetch(usageUrl,{headers})).json();return {...result,surface,usageIds:(after.events||[]).filter(e=>!ids.has(e.id)).map(e=>e.id)};}
  const auto=await turn();const pinned=await turn('hf:moonshotai/Kimi-K2.7-Code:deepinfra');
@@ -83,22 +83,45 @@ try{
  const cancelled=await turn('auto',true);
  await new Promise(r=>setTimeout(r,2000));const response=await fetch(base+'/api/v1/usage',{headers:{Authorization:'Bearer '+token}});const usage=await response.json();
  diagnostics.httpStatuses.usage=response.status;
+ diagnostics.acceptanceChecks={
+  authenticatedAccount:authResponse.ok&&auth.user?.id===expectedUserId,
+  inlineEditCorrect:/return\s+(a\s*\+\s*b|b\s*\+\s*a)/.test(String(edit.edited??'')),
+  autoRoute:auto.route?.provider==='ORVYN'&&/^ORVYN/.test(auto.route?.modelId??'')&&auto.hasText===true,
+  pinnedRoute:pinned.route?.reason==='Explicit model selection',
+  cancellation:cancelled.cancelled===true,
+  providerIdentityHidden:!/(huggingface|nebius|fireworks|deepinfra|deepseek|cheaperinference|zai-org|moonshotai)/i.test(JSON.stringify([auto.route,pinned.route,writing.map(t=>t.route),research.map(t=>t.route),cancelled.route,usage.events])),
+  writingResponses:writing.every(t=>t.hasText),
+  researchMentionsAsterisk:research.map(t=>/asterisk/i.test(t.text)),
+  researchMentionsCustomer:research.map(t=>/virphone/i.test(t.text)),
+  usageHttpOk:response.ok,
+ };
  return {health,login:{authenticated:true,status:authResponse.status},edit:auto&&edit.edited,auto,pinned,writing,research,cancelled,usage:usage.events,diagnostics};
  },{base,expectedUserId:fixture.userId});
- assert.match(turns.edit,/return\s+(a\s*\+\s*b|b\s*\+\s*a)/);
- assert.equal(turns.login.authenticated,true);
- assert.equal(turns.auto.route?.provider,'ORVYN');assert.match(turns.auto.route?.modelId,/^ORVYN/);assert.equal(turns.auto.hasText,true);
- assert.equal(turns.pinned.route?.reason,'Explicit model selection');assert.equal(turns.cancelled.cancelled,true);
- assert.doesNotMatch(JSON.stringify([turns.auto.route,turns.pinned.route,turns.writing.map(t=>t.route),turns.research.map(t=>t.route),turns.cancelled.route,turns.usage]),/huggingface|nebius|fireworks|deepinfra|deepseek|cheaperinference|zai-org|moonshotai/i);
- assert.ok(turns.writing.every(t=>t.hasText));assert.ok(turns.research.every(t=>/asterisk/i.test(t.text)&&!/virphone/i.test(t.text)));
+ diagnostics.desktop=turns.diagnostics;
+ function assertAcceptance(name,passed){failureStage=`authenticated-streaming:${name}`;diagnostics.desktop.failedAssertion=name;assert.ok(passed,`Hosted Desktop acceptance check failed: ${name}`);diagnostics.desktop.lastPassedAssertion=name;delete diagnostics.desktop.failedAssertion;}
+ const checks=turns.diagnostics.acceptanceChecks;
+ assertAcceptance('authenticated-disposable-account',checks.authenticatedAccount);
+ assertAcceptance('inline-edit-result',checks.inlineEditCorrect);
+ assertAcceptance('automatic-route-and-response',checks.autoRoute);
+ assertAcceptance('pinned-model-selection',checks.pinnedRoute);
+ assertAcceptance('cancellation',checks.cancellation);
+ assertAcceptance('provider-identity-redaction',checks.providerIdentityHidden);
+ assertAcceptance('writing-responses',checks.writingResponses);
+ assertAcceptance('research-topic',checks.researchMentionsAsterisk.every(Boolean));
+ assertAcceptance('research-scope',checks.researchMentionsCustomer.every(mentioned=>!mentioned));
+ assertAcceptance('usage-endpoint',checks.usageHttpOk);
  // Actual identity is verified over the existing operator SSH path, never
  // returned through the customer API or injected into the renderer.
  telemetry=await remote('telemetry',fixture.userId);const streams=telemetry.events.filter(e=>e.ok&&e.method==='stream');
  const verifiedKimi=streams.filter(e=>e.provider==='huggingface'&&e.modelId==='hf:moonshotai/Kimi-K2.7-Code:deepinfra');
- assert.ok(streams.length>=7);assert.ok(verifiedKimi.length>=2);
- for(const writing of turns.writing){const events=streams.filter(e=>writing.usageIds.includes(e.id));assert.ok(events.length>0);assert.ok(events.every(e=>(e.provider==='deepseek'&&e.modelId==='deepseek-flash')||(e.provider==='fireworks'&&e.modelId.startsWith('fw:'))),'Writing used an unrecognized provider/model route');}
- assert.ok(streams.every(e=>e.billingRecorded&&e.creditsCharged>0&&e.providerCostUsd>0));
- assert.ok(turns.usage.some(e=>e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>!e.ok&&e.method==='stream'));assert.ok(turns.usage.some(e=>e.ok&&e.method==='generate'));
+ const writingAudit=turns.writing.map(writing=>{const events=streams.filter(e=>writing.usageIds.includes(e.id));return {surface:writing.surface,eventCount:events.length,providerModels:events.map(e=>({provider:e.provider,modelId:e.modelId})),allRoutesAllowed:events.length>0&&events.every(e=>(e.provider==='deepseek'&&e.modelId==='deepseek-flash')||(e.provider==='fireworks'&&e.modelId.startsWith('fw:')))};});
+ diagnostics.desktop.runtimeAcceptance={streamCount:streams.length,verifiedHfStreamCount:verifiedKimi.length,writing:writingAudit,billedSuccessfulStreams:streams.filter(e=>e.billingRecorded&&e.creditsCharged>0&&e.providerCostUsd>0).length,apiHasSuccessfulStream:turns.usage.some(e=>e.ok&&e.method==='stream'),apiHasFailedStream:turns.usage.some(e=>!e.ok&&e.method==='stream'),apiHasGenerate:turns.usage.some(e=>e.ok&&e.method==='generate')};
+ assertAcceptance('durable-stream-usage',streams.length>=7);
+ assertAcceptance('verified-huggingface-routing',verifiedKimi.length>=2);
+ assertAcceptance('writing-provider-events',writingAudit.every(w=>w.eventCount>0));
+ assertAcceptance('writing-provider-model-pairs',writingAudit.every(w=>w.allRoutesAllowed));
+ assertAcceptance('successful-stream-billing',streams.every(e=>e.billingRecorded&&e.creditsCharged>0&&e.providerCostUsd>0));
+ assertAcceptance('usage-outcome-categories',turns.usage.some(e=>e.ok&&e.method==='stream')&&turns.usage.some(e=>!e.ok&&e.method==='stream')&&turns.usage.some(e=>e.ok&&e.method==='generate'));
  failureStage='acceptance-assertions-passed';
  console.log(JSON.stringify({environment:'packaged Windows Desktop with hosted backend',host:base,commit:turns.health.commit,passed:true,customerProviderIdentityHidden:true,visibleDesktopStream:uiStream,auto:verifiedKimi[0],pinned:verifiedKimi[1],cancellation:true,inferenceSecretsInApp:false,usage:telemetry.events}));
 }catch(error){if(!failure)failure=error;if(window&&!diagnostics.desktop)diagnostics.desktop=await window.evaluate(()=>window.__orvynAcceptanceDiagnostics||null).catch(()=>null);}
