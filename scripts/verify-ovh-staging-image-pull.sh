@@ -30,6 +30,20 @@ set -euo pipefail
 COMMIT="$1" BACKEND_IMAGE="$2" WORKER_IMAGE="$3" AUTH_DIR="$4"
 [[ "$AUTH_DIR" =~ ^/tmp/orvyn-ghcr-verify-[A-Za-z0-9._-]+$ && -d "$AUTH_DIR" && ! -L "$AUTH_DIR" ]]
 export DOCKER_CONFIG="$AUTH_DIR"
+service_id() {
+  local service="$1" id lines
+  id="$(docker ps -q --filter 'label=com.docker.compose.project=orvyn-staging' --filter "label=com.docker.compose.service=$service")"
+  [[ -n "$id" ]] || { echo "Staging service $service is not running" >&2; return 1; }
+  lines="$(wc -l <<<"$id" | tr -d ' ')"
+  [[ "$lines" == 1 ]] || { echo "Staging service $service has multiple running containers" >&2; return 1; }
+  printf '%s\n' "$id"
+}
+service_snapshot() {
+  for service in backend-staging worker-staging postgres-staging redis-staging qdrant-staging; do
+    id="$(service_id "$service")"
+    printf '%s %s\n' "$id" "$(docker inspect --format '{{.Image}}' "$id")"
+  done | sort
+}
 DOCKER_ROOT="$(docker info --format '{{.DockerRootDir}}')"
 df -h "$DOCKER_ROOT"
 df -i "$DOCKER_ROOT"
@@ -39,10 +53,9 @@ free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 inode_used="$(df -Pi "$DOCKER_ROOT" | awk 'NR==2 {gsub(/%/, "", $5); print $5}')"
 [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 14680064 ]] || { echo "Below 14 GiB pull reserve" >&2; exit 1; }
 [[ "$inode_used" =~ ^[0-9]+$ && "$inode_used" -lt 98 ]] || { echo "Below 2% inode reserve" >&2; exit 1; }
-for container in backend-staging worker-staging postgres-staging redis-staging qdrant-staging; do docker inspect "$container" >/dev/null; done
-before_services="$(docker inspect --format '{{.Id}} {{.Image}}' backend-staging worker-staging postgres-staging redis-staging qdrant-staging | sort)"
-backend_id="$(docker inspect --format '{{.Image}}' backend-staging)"
-worker_id="$(docker inspect --format '{{.Image}}' worker-staging)"
+before_services="$(service_snapshot)"
+backend_id="$(docker inspect --format '{{.Image}}' "$(service_id backend-staging)")"
+worker_id="$(docker inspect --format '{{.Image}}' "$(service_id worker-staging)")"
 rollback_backend="orvyn-staging-backend:rollback-before-$COMMIT"
 rollback_worker="orvyn-staging-worker:rollback-before-$COMMIT"
 docker image inspect "$rollback_backend" >/dev/null 2>&1 || docker image tag "$backend_id" "$rollback_backend"
@@ -59,7 +72,7 @@ done
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$WORKER_IMAGE")" == "$COMMIT" ]]
 free_kb="$(df -Pk "$DOCKER_ROOT" | awk 'NR==2 {print $4}')"
 [[ "$free_kb" =~ ^[0-9]+$ && "$free_kb" -ge 10485760 ]] || { echo "Image pull consumed operating reserve; no services were replaced" >&2; exit 1; }
-after_services="$(docker inspect --format '{{.Id}} {{.Image}}' backend-staging worker-staging postgres-staging redis-staging qdrant-staging | sort)"
+after_services="$(service_snapshot)"
 [[ "$before_services" == "$after_services" ]] || { echo "A running staging service changed during pull-only validation" >&2; exit 1; }
 printf 'commit=%s\nbackend=%s\nworker=%s\nbackendRollback=%s (%s)\nworkerRollback=%s (%s)\n' "$COMMIT" "$BACKEND_IMAGE" "$WORKER_IMAGE" "$rollback_backend" "$backend_id" "$rollback_worker" "$worker_id"
 df -h "$DOCKER_ROOT"
