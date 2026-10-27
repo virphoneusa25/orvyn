@@ -7,7 +7,6 @@ COMMIT="$2"
 BACKEND_IMAGE="$3"
 WORKER_IMAGE="$4"
 AUTH_DIR="$5"
-HEALTH_URL="${STAGING_HEALTH_URL:-http://127.0.0.1:4570/api/v1/health}"
 MIN_PREPULL_KB="${STAGING_MIN_PREPULL_KB:-14680064}" # 14 GiB image-pull reserve
 MIN_POSTPULL_KB="${STAGING_MIN_POSTPULL_KB:-10485760}" # 10 GiB operating reserve
 WARNING_KB="${STAGING_STORAGE_WARNING_KB:-20971520}" # 20 GiB capacity warning
@@ -38,6 +37,15 @@ worker_idle() {
   local container="$1"
   docker exec "$container" node -e 'const k=process.env.ORVYN_API_KEY;if(!k)process.exit(2);fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();const workers=j.workers||[];const active=workers.reduce((n,w)=>n+(Number(w.activeRuns)||0),0);const queued=Number(j.queued)||0;console.log(`worker_active_runs=${active} queued_jobs=${queued}`);if(!r.ok||workers.length===0||active!==0||queued!==0)process.exit(1)}).catch(()=>process.exit(1))'
 }
+data_snapshot() {
+  for service in postgres-staging redis-staging qdrant-staging; do
+    local id image mounts
+    id="$(service_id "$service")"
+    image="$(docker inspect --format '{{.Image}}' "$id")"
+    mounts="$(docker inspect --format '{{range .Mounts}}{{if .Name}}{{.Name}}{{end}}:{{.Destination}};{{end}}' "$id")"
+    printf '%s %s %s %s\n' "$service" "$id" "$image" "$mounts"
+  done | sort
+}
 cleanup_auth() { rm -rf -- "$AUTH_DIR"; }
 replacement_started=false
 rollback_backend=""
@@ -60,7 +68,7 @@ restore_previous() {
       && [[ "$(docker inspect --format '{{.State.Status}}' "$worker" 2>/dev/null || true)" == running ]] \
       && docker exec "$backend" node -e 'const c=process.argv[1];fetch("http://127.0.0.1:4570/api/v1/health").then(async r=>{const j=await r.json();if(!r.ok||j.environment!=="staging"||j.commit!==c)process.exit(1)}).catch(()=>process.exit(1))' "$baseline_commit" \
       && docker exec "$backend" node -e 'const k=process.env.ORVYN_API_KEY;fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();if(!r.ok||!(j.workers||[]).some(w=>w.status!=="offline"))process.exit(1)}).catch(()=>process.exit(1))' \
-      && [[ "$(for service in postgres-staging redis-staging qdrant-staging; do id="$(service_id "$service")"; printf '%s %s\n' "$id" "$(docker inspect --format '{{.Image}}' "$id")"; done | sort)" == "$data_ids" ]]; then
+      && [[ "$(data_snapshot)" == "$data_ids" ]]; then
       echo "Rollback restored baseline commit $baseline_commit with exact backend/worker image IDs and healthy staging services"
       return 0
     fi
@@ -101,7 +109,7 @@ if (( free_kb < WARNING_KB )); then echo "::warning::Staging free disk is below 
 # touch or recreate the database, Redis, Qdrant, or persistent volumes.
 rollback_backend="orvyn-staging-backend:rollback-before-$COMMIT"
 rollback_worker="orvyn-staging-worker:rollback-before-$COMMIT"
-data_ids="$(for service in postgres-staging redis-staging qdrant-staging; do service_id "$service"; done | sort)"
+data_ids="$(data_snapshot)"
 backend_id="$(docker inspect --format '{{.Image}}' "$(service_id backend-staging)")"
 worker_id="$(docker inspect --format '{{.Image}}' "$(service_id worker-staging)")"
 if ! docker image inspect "$rollback_backend" >/dev/null 2>&1; then docker image tag "$backend_id" "$rollback_backend"; fi
@@ -153,7 +161,7 @@ healthy=false
 for _ in $(seq 1 60); do
   backend_container="$(service_id backend-staging 2>/dev/null || true)"
   if [[ -n "$backend_container" ]]; then backend_health="$(docker inspect --format '{{.State.Health.Status}}' "$backend_container" 2>/dev/null || true)"; else backend_health=''; fi
-  if [[ "$backend_health" == healthy ]] && docker exec "$backend_container" node -e 'fetch(process.env.ORVYN_STAGING_URL + "/api/v1/health").then(async r => { const j = await r.json(); if (!r.ok || j.commit !== process.argv[1] || j.environment !== "staging") process.exit(1); }).catch(() => process.exit(1))' "$COMMIT"; then
+  if [[ "$backend_health" == healthy ]] && docker exec "$backend_container" node -e 'fetch("http://127.0.0.1:4570/api/v1/health").then(async r => { const j = await r.json(); if (!r.ok || j.commit !== process.argv[1] || j.environment !== "staging") process.exit(1); }).catch(() => process.exit(1))' "$COMMIT"; then
     if docker exec "$backend_container" node -e 'const k=process.env.ORVYN_API_KEY; fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:k?{"x-api-key":k}:{}}).then(async r=>{const j=await r.json(); if(!r.ok || !(j.workers||[]).some(w=>w.status!=="offline"))process.exit(1)}).catch(()=>process.exit(1))'; then
       healthy=true
       break
@@ -169,12 +177,10 @@ if [[ "$healthy" != true ]]; then
   exit 1
 fi
 
-new_data_ids="$(for service in postgres-staging redis-staging qdrant-staging; do service_id "$service"; done | sort)"
-[[ "$data_ids" == "$new_data_ids" ]] || { echo "Persistent staging data services changed unexpectedly" >&2; exit 1; }
+[[ "$(data_snapshot)" == "$data_ids" ]] || { echo "Persistent staging data services or named volumes changed unexpectedly" >&2; exit 1; }
 docker inspect --format 'backend={{.Image}} health={{.State.Health.Status}}' "$(service_id backend-staging)"
 docker inspect --format 'worker={{.Image}} state={{.State.Status}}' "$(service_id worker-staging)"
-curl -fsS "$HEALTH_URL"
-echo
+docker exec "$(service_id backend-staging)" node -e 'const c=process.argv[1];fetch("http://127.0.0.1:4570/api/v1/health").then(async r=>{const j=await r.json();if(!r.ok||j.environment!=="staging"||j.commit!==c)process.exit(1);console.log(JSON.stringify({status:j.status,environment:j.environment,commit:j.commit}))}).catch(()=>process.exit(1))' "$COMMIT"
 df -h "$REMOTE" "$DOCKER_ROOT"
 replacement_started=false
 echo "Staging digest deployment verified at $COMMIT; rollback refs $rollback_backend and $rollback_worker retained"

@@ -41,9 +41,12 @@ worker_idle() {
   docker exec "$backend" node -e 'const k=process.env.ORVYN_API_KEY;if(!k)process.exit(2);fetch("http://127.0.0.1:4570/api/v1/worker/list",{headers:{"x-api-key":k}}).then(async r=>{const j=await r.json();const ws=j.workers||[];const active=ws.reduce((n,w)=>n+(Number(w.activeRuns)||0),0);const queued=Number(j.queued)||0;console.log(`worker_active_runs=${active} queued_jobs=${queued}`);if(!r.ok||ws.length===0||active!==0||queued!==0)process.exit(1)}).catch(()=>process.exit(1))'
 }
 data_snapshot() {
+  local service id image mounts
   for service in postgres-staging redis-staging qdrant-staging; do
     id="$(service_id "$service")"
-    printf '%s %s\n' "$id" "$(docker inspect --format '{{.Image}}' "$id")"
+    image="$(docker inspect --format '{{.Image}}' "$id")"
+    mounts="$(docker inspect --format '{{range .Mounts}}{{if .Name}}{{.Name}}{{end}}:{{.Destination}};{{end}}' "$id")"
+    printf '%s %s %s %s\n' "$service" "$id" "$image" "$mounts"
   done | sort
 }
 release_ready() {
