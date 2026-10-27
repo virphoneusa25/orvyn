@@ -50,7 +50,10 @@ try{
  await window.locator('#ov-mission-input').waitFor({state:'visible',timeout:30000});
  await window.evaluate(()=>{window.__orvynAcceptanceDiagnostics={healthCommit:null,httpStatuses:{},turns:[],uiStream:{progressSamples:[]}};window.__orvynVisibleStreamSamples=[];window.__orvynStreamObserver=new MutationObserver(()=>{const text=Array.from(document.querySelectorAll('.chat-stream__column img[alt="ORION"]')).map(img=>img.parentElement?.innerText||'').join('\n');if(text.includes('ORVYN_DESKTOP_STREAM_OK')){const samples=window.__orvynVisibleStreamSamples;if(samples[samples.length-1]!==text.length)samples.push(text.length);}});window.__orvynStreamObserver.observe(document.body,{subtree:true,childList:true,characterData:true});});
  const uiBefore=await window.evaluate(async base=>{const cfg=await window.orvyn.config.get(),r=await fetch(base+'/api/v1/usage',{headers:{Authorization:'Bearer '+cfg.apiKey}}),data=await r.json();return {status:r.status,ids:(data.events||[]).map(e=>e.id)};},base);
- await window.locator('#ov-mission-input').fill('What are five short labels, with the first exactly ORVYN_DESKTOP_STREAM_OK and the rest A, B, C, and D?');
+ // Keep the marker at the start, then require enough real response content to
+ // observe multiple user-visible updates. A short five-label answer can arrive
+ // in one provider delta even when the stream transport and UI are healthy.
+ await window.locator('#ov-mission-input').fill('Begin with the exact text ORVYN_DESKTOP_STREAM_OK on its own line. Then give five short labels: A, B, C, and D after the marker. After the labels, explain in three clear paragraphs how progressive text streaming helps a user follow an answer while it is being generated. Include practical details and do not stop after the labels.');
  await window.locator('#ov-mission-input').press('Control+Enter');
  await window.waitForFunction(()=>Array.from(document.querySelectorAll('.chat-stream__column img[alt="ORION"]')).some(img=>(img.parentElement?.innerText||'').includes('ORVYN_DESKTOP_STREAM_OK')),undefined,{timeout:55000});
  await window.locator('.orvyn-caret').waitFor({state:'detached',timeout:30000});
